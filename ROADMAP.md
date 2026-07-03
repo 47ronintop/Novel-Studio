@@ -200,9 +200,9 @@ Before any feature task is considered complete:
 - Create: `packages/repository/src/ports.ts`
 - Create: `packages/repository/src/index.ts`
 
-- [ ] Define `Result<T, E>`.
-- [ ] Define Unified Error type from schema.
-- [ ] Define repository interfaces for project, chapter, history, recovery, cache.
+- [x] Define `Result<T, E>`.
+- [x] Define Unified Error type from schema.
+- [x] Define repository interfaces for project, history, recovery, cache.
 
 **Verification:** unit tests confirm error shape and result helpers.
 
@@ -211,11 +211,11 @@ Before any feature task is considered complete:
 **Files:**
 
 - Create: `packages/repository/src/project-repository.ts`
-- Test: `packages/repository/test/project-repository.test.ts`
+- Test: `packages/repository/test/repository-core.test.ts`
 
-- [ ] Read `project.json` and `settings.json`.
-- [ ] Validate before returning typed DTO.
-- [ ] Return diagnostic for missing or invalid files.
+- [x] Read `project.json` and `settings.json`.
+- [x] Validate before returning typed DTO.
+- [x] Return diagnostic for missing or invalid files.
 
 **Verification:** temp fixture project opens; corrupted fixture returns validation error without mutation.
 
@@ -227,9 +227,9 @@ Before any feature task is considered complete:
 - Create: `packages/repository/src/history-repository.ts`
 - Test: repository tests.
 
-- [ ] Implement temp write + atomic rename.
-- [ ] Create `before-ai-apply` and `before-rollback` snapshots.
-- [ ] Ensure write failure preserves previous file.
+- [x] Implement temp write + atomic rename.
+- [x] Create `before-ai-apply` and `before-rollback` snapshots.
+- [x] Ensure write failure preserves previous file.
 
 **Verification:** tests simulate write failure and prove previous file remains intact.
 
@@ -240,9 +240,9 @@ Before any feature task is considered complete:
 - Create: `packages/repository/src/recovery-repository.ts`
 - Create: `packages/repository/src/cache-repository.ts`
 
-- [ ] Write recovery records under `history/recovery/`.
-- [ ] Implement cache clear that only touches `cache/`.
-- [ ] Add tests protecting `history/` and `memories/`.
+- [x] Write recovery records under `history/recovery/`.
+- [x] Implement cache clear that only touches `cache/`.
+- [x] Add tests protecting `history/` and `memories/`.
 
 **Verification:** cache clear test proves history and memories remain.
 
@@ -573,12 +573,12 @@ The roadmap prioritizes data integrity and tooling before AI breadth. Novel Stud
 
 ## 22. Progress Tracking
 
-| 阶段                  | 状态        | 本次产出                                                          | 未决问题                                        | 下一步                  |
-| --------------------- | ----------- | ----------------------------------------------------------------- | ----------------------------------------------- | ----------------------- |
-| Phase 1 产品设计      | Complete    | `PRODUCT_PRD.md v1.0`                                             | 无阻塞                                          | 已完成                  |
-| Phase 2 系统架构      | Complete    | `ARCHITECTURE.md v1.0`、`adr/ADR-0001-engine-runtime-language.md` | Workflow/Agent 边界需实现时用 import rules 固化 | 已完成                  |
-| Phase 3 数据结构设计  | Complete    | `DATA_SCHEMA.md v1.0`                                             | JSON Schema 文件待 Phase 7 实现                 | 已完成                  |
-| Phase 4 UI/UX 设计    | Complete    | `UI_GUIDELINES.md v1.0`                                           | CodeMirror/组件 primitive 需 spike              | 已完成                  |
-| Phase 5 开发规范      | Complete    | `CODING_STANDARDS.md v1.0`、`TESTING.md v1.0`                     | 工具配置待实现                                  | 已完成                  |
-| Phase 6 Task Planning | Complete    | `ROADMAP.md v1.0`                                                 | 后续专题文档需在相关实现前补齐                  | 已完成                  |
-| Phase 7 正式开发      | In Progress | M0、M1、M2 Schema Foundation 已完成                               | schema codegen、dependency boundary 工具待选择  | 执行 M3 Repository Core |
+| 阶段                  | 状态        | 本次产出                                                          | 未决问题                                        | 下一步                |
+| --------------------- | ----------- | ----------------------------------------------------------------- | ----------------------------------------------- | --------------------- |
+| Phase 1 产品设计      | Complete    | `PRODUCT_PRD.md v1.0`                                             | 无阻塞                                          | 已完成                |
+| Phase 2 系统架构      | Complete    | `ARCHITECTURE.md v1.0`、`adr/ADR-0001-engine-runtime-language.md` | Workflow/Agent 边界需实现时用 import rules 固化 | 已完成                |
+| Phase 3 数据结构设计  | Complete    | `DATA_SCHEMA.md v1.0`                                             | JSON Schema 文件待 Phase 7 实现                 | 已完成                |
+| Phase 4 UI/UX 设计    | Complete    | `UI_GUIDELINES.md v1.0`                                           | CodeMirror/组件 primitive 需 spike              | 已完成                |
+| Phase 5 开发规范      | Complete    | `CODING_STANDARDS.md v1.0`、`TESTING.md v1.0`                     | 工具配置待实现                                  | 已完成                |
+| Phase 6 Task Planning | Complete    | `ROADMAP.md v1.0`                                                 | 后续专题文档需在相关实现前补齐                  | 已完成                |
+| Phase 7 正式开发      | In Progress | M0、M1、M2、M3 Repository Core 已完成                             | schema codegen、dependency boundary 工具待选择  | 执行 M4 Desktop Shell |

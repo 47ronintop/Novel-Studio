@@ -28,8 +28,10 @@
 - Verified M1 commands: `typecheck`, `lint`, `format`, `test`, `test:e2e`, and `npm audit`.
 - Created M2 Schema Foundation with 15 JSON Schema contracts, Ajv validation helper, valid/invalid fixtures, and 32 contract tests.
 - Added `ajv`, `ajv-formats`, and Node type declarations required by the schema package and tests.
+- Created M3 Repository Core with shared `Result`/Unified Error utilities, Repository ports, project file validation, atomic text writes, history snapshots, recovery records, and cache boundary protection.
+- Added repository tests covering valid/missing/invalid project open, atomic write failure preservation, `before-ai-apply` and `before-rollback` snapshots, recovery writes under `history/recovery/`, and cache clear protection for `history/` and `memories/`.
 
 ## Notes
 
 - Phase 7 is active.
-- M3 Repository Core is the next implementation milestone.
+- M4 Desktop Shell is the next implementation milestone.

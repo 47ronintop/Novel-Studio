@@ -3,6 +3,7 @@
   "references": [
     { "path": "./apps/desktop" },
     { "path": "./packages/shared" },
-    { "path": "./packages/schemas" }
+    { "path": "./packages/schemas" },
+    { "path": "./packages/repository" }
   ]
 }
