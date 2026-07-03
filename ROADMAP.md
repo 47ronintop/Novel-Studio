@@ -23,18 +23,18 @@ Version: 1.0 | Status: Active | Phase: 7 Formal Development
 
 ## 2. Milestone Overview
 
-| Milestone | Name | Goal | Exit Criteria |
-|---|---|---|---|
-| M0 | Repository Baseline | Commit current documents and establish branch discipline | Initial commit exists, remote configured, docs unchanged by tooling |
-| M1 | Toolchain Foundation | Create monorepo, TypeScript strict, lint, format, test runner | `typecheck`, `lint`, `format`, `test` commands pass |
-| M2 | Schema Foundation | Implement canonical JSON Schema and generated/derived TS types | Schema fixtures validate, invalid fixtures fail |
-| M3 | Repository Core | Implement project file IO, atomic writes, history, recovery, cache boundary | Repository tests pass with temp projects |
-| M4 | Desktop Shell | Build Electron/React shell, layout, command palette skeleton | App opens local project fixture without direct FS access in UI |
-| M5 | Editor and Version UX | Build Markdown editor, autosave state, version history, diff review foundation | Chapter edit/save/recover/version path works with tests |
-| M6 | LLM Adapter | Implement provider-neutral LLM Adapter with mock and first providers | Mock provider tests pass; no real model in CI |
-| M7 | Agent/Context/Workflow | Implement structured workflow execution and context budget trace | Review workflow runs end-to-end on mock LLM |
-| M8 | Studio and Settings | Prompt/Agent/Workflow editors, model profile settings, secret references | Config edit/version/rollback path works |
-| M9 | Hardening and Alpha | Security, accessibility, performance, packaging, release checklist | Alpha candidate passes required gates |
+| Milestone | Name                   | Goal                                                                           | Exit Criteria                                                       |
+| --------- | ---------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| M0        | Repository Baseline    | Commit current documents and establish branch discipline                       | Initial commit exists, remote configured, docs unchanged by tooling |
+| M1        | Toolchain Foundation   | Create monorepo, TypeScript strict, lint, format, test runner                  | `typecheck`, `lint`, `format`, `test` commands pass                 |
+| M2        | Schema Foundation      | Implement canonical JSON Schema and generated/derived TS types                 | Schema fixtures validate, invalid fixtures fail                     |
+| M3        | Repository Core        | Implement project file IO, atomic writes, history, recovery, cache boundary    | Repository tests pass with temp projects                            |
+| M4        | Desktop Shell          | Build Electron/React shell, layout, command palette skeleton                   | App opens local project fixture without direct FS access in UI      |
+| M5        | Editor and Version UX  | Build Markdown editor, autosave state, version history, diff review foundation | Chapter edit/save/recover/version path works with tests             |
+| M6        | LLM Adapter            | Implement provider-neutral LLM Adapter with mock and first providers           | Mock provider tests pass; no real model in CI                       |
+| M7        | Agent/Context/Workflow | Implement structured workflow execution and context budget trace               | Review workflow runs end-to-end on mock LLM                         |
+| M8        | Studio and Settings    | Prompt/Agent/Workflow editors, model profile settings, secret references       | Config edit/version/rollback path works                             |
+| M9        | Hardening and Alpha    | Security, accessibility, performance, packaging, release checklist             | Alpha candidate passes required gates                               |
 
 ## 3. Cross-Cutting Gates
 
@@ -103,10 +103,10 @@ Before any feature task is considered complete:
 - Create: `packages/shared/package.json`
 - Create: `packages/schemas/package.json`
 
-- [ ] Choose package manager.
-- [ ] Define root scripts: `typecheck`, `lint`, `format`, `test`, `test:contract`, `test:e2e`.
-- [ ] Configure TypeScript strict baseline.
-- [ ] Keep workspace minimal; no business code yet.
+- [x] Choose package manager.
+- [x] Define root scripts: `typecheck`, `lint`, `format`, `test`, `test:contract`, `test:e2e`.
+- [x] Configure TypeScript strict baseline.
+- [x] Keep workspace minimal; no business code yet.
 
 **Verification:** package manager install succeeds; empty typecheck/lint/test scripts execute.
 
@@ -119,9 +119,9 @@ Before any feature task is considered complete:
 - Create: `.prettierignore`
 - Create: `.editorconfig`
 
-- [ ] Enforce no explicit `any`.
-- [ ] Enforce import boundaries or prepare boundary config.
-- [ ] Enforce formatting for Markdown, TypeScript, JSON.
+- [x] Enforce no explicit `any`.
+- [x] Enforce import boundaries or prepare boundary config.
+- [x] Enforce formatting for Markdown, TypeScript, JSON.
 
 **Verification:** `lint` and `format` pass on documentation and scaffold files.
 
@@ -129,13 +129,13 @@ Before any feature task is considered complete:
 
 **Files:**
 
-- Create: `vitest.config.ts`
+- Create: `vitest.config.mjs`
 - Create: `playwright.config.ts`
 - Create: `fixtures/README.md`
 
-- [ ] Configure Vitest workspace.
-- [ ] Configure Playwright smoke suite placeholder.
-- [ ] Add fixture safety rules.
+- [x] Configure Vitest workspace.
+- [x] Configure Playwright smoke suite placeholder.
+- [x] Add fixture safety rules.
 
 **Verification:** `test` runs with no failing tests; Playwright config loads.
 
@@ -497,16 +497,16 @@ Reasoning: OpenAI Compatible unlocks many providers early; local-first is suppor
 
 ## 15. Risk Register
 
-| Risk | Impact | Mitigation | Owner Phase |
-|---|---|---|---|
-| Toolchain setup consumes too much time | Delays vertical slice | Keep M1 minimal; defer nonessential tooling | M1 |
-| Schema/codegen drift | Runtime failures | Canonical schema + contract tests | M2 |
-| Repository write bugs | Data loss | Atomic write and temp project tests first | M3 |
-| Editor choice wrong | Rework UI | Run explicit CodeMirror/Monaco spike | M5 |
-| LLM provider variance | Adapter instability | Mock fixtures and provider-normalized errors | M6 |
-| Workflow/Agent circular dependency | Violates architecture | Boundary tests and import rules | M7 |
-| History grows too fast | Git usability issue | Archive strategy task after core history works | M9 |
-| Security leakage | User trust failure | Secret scan, redaction tests, IPC allowlist | M8/M9 |
+| Risk                                   | Impact                | Mitigation                                     | Owner Phase |
+| -------------------------------------- | --------------------- | ---------------------------------------------- | ----------- |
+| Toolchain setup consumes too much time | Delays vertical slice | Keep M1 minimal; defer nonessential tooling    | M1          |
+| Schema/codegen drift                   | Runtime failures      | Canonical schema + contract tests              | M2          |
+| Repository write bugs                  | Data loss             | Atomic write and temp project tests first      | M3          |
+| Editor choice wrong                    | Rework UI             | Run explicit CodeMirror/Monaco spike           | M5          |
+| LLM provider variance                  | Adapter instability   | Mock fixtures and provider-normalized errors   | M6          |
+| Workflow/Agent circular dependency     | Violates architecture | Boundary tests and import rules                | M7          |
+| History grows too fast                 | Git usability issue   | Archive strategy task after core history works | M9          |
+| Security leakage                       | User trust failure    | Secret scan, redaction tests, IPC allowlist    | M8/M9       |
 
 ## 16. Data Flow
 
@@ -573,12 +573,12 @@ The roadmap prioritizes data integrity and tooling before AI breadth. Novel Stud
 
 ## 22. Progress Tracking
 
-| 阶段 | 状态 | 本次产出 | 未决问题 | 下一步 |
-|---|---|---|---|---|
-| Phase 1 产品设计 | Complete | `PRODUCT_PRD.md v1.0` | 无阻塞 | 已完成 |
-| Phase 2 系统架构 | Complete | `ARCHITECTURE.md v1.0`、`adr/ADR-0001-engine-runtime-language.md` | Workflow/Agent 边界需实现时用 import rules 固化 | 已完成 |
-| Phase 3 数据结构设计 | Complete | `DATA_SCHEMA.md v1.0` | JSON Schema 文件待 Phase 7 实现 | 已完成 |
-| Phase 4 UI/UX 设计 | Complete | `UI_GUIDELINES.md v1.0` | CodeMirror/组件 primitive 需 spike | 已完成 |
-| Phase 5 开发规范 | Complete | `CODING_STANDARDS.md v1.0`、`TESTING.md v1.0` | 工具配置待实现 | 已完成 |
-| Phase 6 Task Planning | Complete | `ROADMAP.md v1.0` | 后续专题文档需在相关实现前补齐 | 已完成 |
-| Phase 7 正式开发 | In Progress | M0 已完成；准备执行 M1 Toolchain Foundation | 包管理器、schema codegen、dependency boundary 工具待选择 | 执行 M1.1-M1.3 |
+| 阶段                  | 状态        | 本次产出                                                          | 未决问题                                        | 下一步                    |
+| --------------------- | ----------- | ----------------------------------------------------------------- | ----------------------------------------------- | ------------------------- |
+| Phase 1 产品设计      | Complete    | `PRODUCT_PRD.md v1.0`                                             | 无阻塞                                          | 已完成                    |
+| Phase 2 系统架构      | Complete    | `ARCHITECTURE.md v1.0`、`adr/ADR-0001-engine-runtime-language.md` | Workflow/Agent 边界需实现时用 import rules 固化 | 已完成                    |
+| Phase 3 数据结构设计  | Complete    | `DATA_SCHEMA.md v1.0`                                             | JSON Schema 文件待 Phase 7 实现                 | 已完成                    |
+| Phase 4 UI/UX 设计    | Complete    | `UI_GUIDELINES.md v1.0`                                           | CodeMirror/组件 primitive 需 spike              | 已完成                    |
+| Phase 5 开发规范      | Complete    | `CODING_STANDARDS.md v1.0`、`TESTING.md v1.0`                     | 工具配置待实现                                  | 已完成                    |
+| Phase 6 Task Planning | Complete    | `ROADMAP.md v1.0`                                                 | 后续专题文档需在相关实现前补齐                  | 已完成                    |
+| Phase 7 正式开发      | In Progress | M0 已完成；M1 Toolchain Foundation 已完成                         | schema codegen、dependency boundary 工具待选择  | 执行 M2 Schema Foundation |

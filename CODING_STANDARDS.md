@@ -1,4 +1,5 @@
 # CODING STANDARDS — Novel Studio
+
 Version: 1.0 | Status: Draft for Review | Phase: 5 Development Standards
 
 ## 1. 文档目的
@@ -456,13 +457,13 @@ External input / project file / LLM response
 
 ## 27. Risk Analysis
 
-| 风险 | 涉及条款 | 影响 | 缓解方案 |
-|---|---|---|---|
-| 规范过重拖慢早期开发 | P10 | Phase 7 启动慢 | Phase 6 按风险拆任务，先建立最小工具链 |
-| JSON Schema 与 TS 类型漂移 | P8、第12节 | 运行时和编译时不一致 | Schema canonical + codegen 或同源生成 |
-| 分层规则靠人工执行 | P8 | 跨层调用潜入代码 | ESLint boundaries 或 dependency graph 检查 |
-| LLM mock 不充分 | 第14节 | CI 不可复现 | fixture-first 测试策略，真实模型只做离线评估 |
-| UI primitive 选型不当 | 第11节 | a11y 或主题冲突 | Phase 6 设置组件 spike 任务 |
+| 风险                       | 涉及条款   | 影响                 | 缓解方案                                     |
+| -------------------------- | ---------- | -------------------- | -------------------------------------------- |
+| 规范过重拖慢早期开发       | P10        | Phase 7 启动慢       | Phase 6 按风险拆任务，先建立最小工具链       |
+| JSON Schema 与 TS 类型漂移 | P8、第12节 | 运行时和编译时不一致 | Schema canonical + codegen 或同源生成        |
+| 分层规则靠人工执行         | P8         | 跨层调用潜入代码     | ESLint boundaries 或 dependency graph 检查   |
+| LLM mock 不充分            | 第14节     | CI 不可复现          | fixture-first 测试策略，真实模型只做离线评估 |
+| UI primitive 选型不当      | 第11节     | a11y 或主题冲突      | Phase 6 设置组件 spike 任务                  |
 
 ## 28. Phase 5 Changelog
 
@@ -472,12 +473,12 @@ External input / project file / LLM response
 
 ## 29. Progress Tracking
 
-| 阶段 | 状态 | 本次产出 | 未决问题 | 下一步 |
-|---|---|---|---|---|
-| Phase 1 产品设计 | Complete | `PRODUCT_PRD.md v1.0` | v1 Provider 首批落地顺序仍需 ROADMAP 排序 | 已完成 |
-| Phase 2 系统架构 | Complete | `ARCHITECTURE.md v1.0`、`adr/ADR-0001-engine-runtime-language.md` | Workflow/Agent 层级解释需在测试规范中固化 | 已完成 |
-| Phase 3 数据结构设计 | Complete | `DATA_SCHEMA.md v1.0` | JSON Schema 文件尚未生成 | 已完成 |
-| Phase 4 UI/UX 设计 | Complete | `UI_GUIDELINES.md v1.0` | 组件和编辑器选型需 Phase 6 spike 验证 | 已完成 |
-| Phase 5 开发规范 | Draft for Review | `CODING_STANDARDS.md v1.0`、`TESTING.md v1.0` | 具体工具配置文件尚未生成；dependency boundary 工具待选 | 等待确认后进入 Phase 6 Task Planning |
-| Phase 6 Task Planning | Not Started | 无 | 任务拆分、里程碑、风险缓冲 | Phase 5 确认后启动 |
-| Phase 7 正式开发 | Not Started | 无 | 代码实现排期 | Phase 6 后启动 |
+| 阶段                  | 状态             | 本次产出                                                          | 未决问题                                               | 下一步                               |
+| --------------------- | ---------------- | ----------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------ |
+| Phase 1 产品设计      | Complete         | `PRODUCT_PRD.md v1.0`                                             | v1 Provider 首批落地顺序仍需 ROADMAP 排序              | 已完成                               |
+| Phase 2 系统架构      | Complete         | `ARCHITECTURE.md v1.0`、`adr/ADR-0001-engine-runtime-language.md` | Workflow/Agent 层级解释需在测试规范中固化              | 已完成                               |
+| Phase 3 数据结构设计  | Complete         | `DATA_SCHEMA.md v1.0`                                             | JSON Schema 文件尚未生成                               | 已完成                               |
+| Phase 4 UI/UX 设计    | Complete         | `UI_GUIDELINES.md v1.0`                                           | 组件和编辑器选型需 Phase 6 spike 验证                  | 已完成                               |
+| Phase 5 开发规范      | Draft for Review | `CODING_STANDARDS.md v1.0`、`TESTING.md v1.0`                     | 具体工具配置文件尚未生成；dependency boundary 工具待选 | 等待确认后进入 Phase 6 Task Planning |
+| Phase 6 Task Planning | Not Started      | 无                                                                | 任务拆分、里程碑、风险缓冲                             | Phase 5 确认后启动                   |
+| Phase 7 正式开发      | Not Started      | 无                                                                | 代码实现排期                                           | Phase 6 后启动                       |

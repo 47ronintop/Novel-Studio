@@ -1,4 +1,5 @@
 # UI GUIDELINES — Novel Studio
+
 Version: 1.0 | Status: Draft for Review | Phase: 4 UI/UX Design
 
 ## 1. 文档目的
@@ -285,19 +286,19 @@ Split View 支持：
 
 ```css
 :root {
-  --ns-bg: oklch(0.105 0.000 0);
+  --ns-bg: oklch(0.105 0 0);
   --ns-surface: oklch(0.155 0.006 180);
   --ns-surface-raised: oklch(0.205 0.008 180);
-  --ns-border: oklch(0.300 0.010 180);
-  --ns-ink: oklch(0.920 0.006 180);
-  --ns-muted: oklch(0.690 0.010 180);
-  --ns-primary: oklch(0.620 0.110 180);
-  --ns-primary-strong: oklch(0.700 0.130 180);
-  --ns-accent: oklch(0.720 0.120 75);
-  --ns-danger: oklch(0.650 0.170 28);
-  --ns-warning: oklch(0.760 0.130 80);
-  --ns-success: oklch(0.670 0.120 150);
-  --ns-info: oklch(0.680 0.110 230);
+  --ns-border: oklch(0.3 0.01 180);
+  --ns-ink: oklch(0.92 0.006 180);
+  --ns-muted: oklch(0.69 0.01 180);
+  --ns-primary: oklch(0.62 0.11 180);
+  --ns-primary-strong: oklch(0.7 0.13 180);
+  --ns-accent: oklch(0.72 0.12 75);
+  --ns-danger: oklch(0.65 0.17 28);
+  --ns-warning: oklch(0.76 0.13 80);
+  --ns-success: oklch(0.67 0.12 150);
+  --ns-info: oklch(0.68 0.11 230);
 }
 ```
 
@@ -316,15 +317,15 @@ Light mode 必须支持，但不是默认优先。
 
 ```css
 :root[data-theme="light"] {
-  --ns-bg: oklch(1.000 0.000 0);
-  --ns-surface: oklch(0.970 0.004 180);
-  --ns-surface-raised: oklch(0.940 0.006 180);
-  --ns-border: oklch(0.820 0.010 180);
-  --ns-ink: oklch(0.180 0.010 180);
-  --ns-muted: oklch(0.430 0.012 180);
-  --ns-primary: oklch(0.500 0.105 180);
-  --ns-primary-strong: oklch(0.430 0.120 180);
-  --ns-accent: oklch(0.570 0.130 75);
+  --ns-bg: oklch(1 0 0);
+  --ns-surface: oklch(0.97 0.004 180);
+  --ns-surface-raised: oklch(0.94 0.006 180);
+  --ns-border: oklch(0.82 0.01 180);
+  --ns-ink: oklch(0.18 0.01 180);
+  --ns-muted: oklch(0.43 0.012 180);
+  --ns-primary: oklch(0.5 0.105 180);
+  --ns-primary-strong: oklch(0.43 0.12 180);
+  --ns-accent: oklch(0.57 0.13 75);
 }
 ```
 
@@ -521,16 +522,16 @@ AI 输出分三层：
 
 默认快捷键建议：
 
-| Action | Shortcut |
-|---|---|
-| Command Palette | Ctrl/Cmd + K |
-| Quick Open | Ctrl/Cmd + P |
-| Save | Ctrl/Cmd + S |
-| New Chapter | Ctrl/Cmd + N |
-| Run Current Workflow | Ctrl/Cmd + Enter |
-| Toggle Navigator | Ctrl/Cmd + B |
-| Toggle Inspector | Ctrl/Cmd + Shift + I |
-| Search Project | Ctrl/Cmd + Shift + F |
+| Action               | Shortcut             |
+| -------------------- | -------------------- |
+| Command Palette      | Ctrl/Cmd + K         |
+| Quick Open           | Ctrl/Cmd + P         |
+| Save                 | Ctrl/Cmd + S         |
+| New Chapter          | Ctrl/Cmd + N         |
+| Run Current Workflow | Ctrl/Cmd + Enter     |
+| Toggle Navigator     | Ctrl/Cmd + B         |
+| Toggle Inspector     | Ctrl/Cmd + Shift + I |
+| Search Project       | Ctrl/Cmd + Shift + F |
 | Show Version History | Ctrl/Cmd + Shift + H |
 
 规则：
@@ -701,14 +702,14 @@ UI 模块与架构模块关系：
 
 ## 23. Risk Analysis
 
-| 风险 | 涉及条款 | 影响 | 缓解方案 |
-|---|---|---|---|
-| UI 复杂度过高 | 第11节、P10 | 新用户难以上手 | 默认只显示写作必要面板，高级功能渐进披露 |
-| AI 面板喧宾夺主 | P1、P2 | 用户误以为 AI 是作者 | AI 结果默认建议态，编辑器主导布局 |
-| 高密度导致可读性下降 | 第11节 | 长时间写作疲劳 | Editor 字号/行高独立设置，UI 密度可配置 |
-| 多面板状态不一致 | P8 | 保存、版本、恢复状态混乱 | 状态统一来自 Application DTO |
-| 设计系统过早复杂 | P10 | Phase 7 实现负担过高 | v1 只定义必要 tokens 和组件状态 |
-| 深色模式色彩单调 | 第11节 | 产品缺乏辨识度 | 使用 restrained teal + amber 策略，避免单一深蓝/紫蓝 |
+| 风险                 | 涉及条款    | 影响                     | 缓解方案                                             |
+| -------------------- | ----------- | ------------------------ | ---------------------------------------------------- |
+| UI 复杂度过高        | 第11节、P10 | 新用户难以上手           | 默认只显示写作必要面板，高级功能渐进披露             |
+| AI 面板喧宾夺主      | P1、P2      | 用户误以为 AI 是作者     | AI 结果默认建议态，编辑器主导布局                    |
+| 高密度导致可读性下降 | 第11节      | 长时间写作疲劳           | Editor 字号/行高独立设置，UI 密度可配置              |
+| 多面板状态不一致     | P8          | 保存、版本、恢复状态混乱 | 状态统一来自 Application DTO                         |
+| 设计系统过早复杂     | P10         | Phase 7 实现负担过高     | v1 只定义必要 tokens 和组件状态                      |
+| 深色模式色彩单调     | 第11节      | 产品缺乏辨识度           | 使用 restrained teal + amber 策略，避免单一深蓝/紫蓝 |
 
 ## 24. Phase 4 Changelog
 
@@ -718,12 +719,12 @@ UI 模块与架构模块关系：
 
 ## 25. Progress Tracking
 
-| 阶段 | 状态 | 本次产出 | 未决问题 | 下一步 |
-|---|---|---|---|---|
-| Phase 1 产品设计 | Complete | `PRODUCT_PRD.md v1.0` | v1 Provider 首批落地顺序仍需 ROADMAP 排序 | 已完成 |
-| Phase 2 系统架构 | Complete | `ARCHITECTURE.md v1.0`、`adr/ADR-0001-engine-runtime-language.md` | Workflow/Agent 层级解释需在测试规范中固化 | 已完成 |
-| Phase 3 数据结构设计 | Complete | `DATA_SCHEMA.md v1.0` | JSON Schema 文件、锁策略、迁移日志后续细化 | 已完成 |
-| Phase 4 UI/UX 设计 | Draft for Review | `UI_GUIDELINES.md v1.0` | 最终组件库选型、编辑器技术选型、具体快捷键冲突表 | 等待确认后进入 Phase 5 开发规范 |
-| Phase 5 开发规范 | Not Started | 无 | Monorepo 工具链、lint/type/test/CI 规则 | Phase 4 确认后启动 |
-| Phase 6 Task Planning | Not Started | 无 | 任务拆分、里程碑、风险缓冲 | Phase 5 后启动 |
-| Phase 7 正式开发 | Not Started | 无 | 代码实现排期 | Phase 6 后启动 |
+| 阶段                  | 状态             | 本次产出                                                          | 未决问题                                         | 下一步                          |
+| --------------------- | ---------------- | ----------------------------------------------------------------- | ------------------------------------------------ | ------------------------------- |
+| Phase 1 产品设计      | Complete         | `PRODUCT_PRD.md v1.0`                                             | v1 Provider 首批落地顺序仍需 ROADMAP 排序        | 已完成                          |
+| Phase 2 系统架构      | Complete         | `ARCHITECTURE.md v1.0`、`adr/ADR-0001-engine-runtime-language.md` | Workflow/Agent 层级解释需在测试规范中固化        | 已完成                          |
+| Phase 3 数据结构设计  | Complete         | `DATA_SCHEMA.md v1.0`                                             | JSON Schema 文件、锁策略、迁移日志后续细化       | 已完成                          |
+| Phase 4 UI/UX 设计    | Draft for Review | `UI_GUIDELINES.md v1.0`                                           | 最终组件库选型、编辑器技术选型、具体快捷键冲突表 | 等待确认后进入 Phase 5 开发规范 |
+| Phase 5 开发规范      | Not Started      | 无                                                                | Monorepo 工具链、lint/type/test/CI 规则          | Phase 4 确认后启动              |
+| Phase 6 Task Planning | Not Started      | 无                                                                | 任务拆分、里程碑、风险缓冲                       | Phase 5 后启动                  |
+| Phase 7 正式开发      | Not Started      | 无                                                                | 代码实现排期                                     | Phase 6 后启动                  |

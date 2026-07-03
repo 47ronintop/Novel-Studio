@@ -1,0 +1,33 @@
+{
+  "name": "novel-studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first AI novel creation IDE.",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "typecheck": "tsc -b",
+    "lint": "eslint .",
+    "format": "prettier --check .",
+    "format:write": "prettier --write .",
+    "test": "vitest run --passWithNoTests",
+    "test:contract": "vitest run --passWithNoTests --dir packages/schemas",
+    "test:e2e": "playwright test --list --pass-with-no-tests"
+  },
+  "engines": {
+    "node": ">=20.20.0",
+    "npm": ">=10.8.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@playwright/test": "^1.49.1",
+    "eslint": "^9.17.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.2",
+    "vitest": "^2.1.8"
+  }
+}

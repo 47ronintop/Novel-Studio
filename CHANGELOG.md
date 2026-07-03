@@ -24,8 +24,10 @@
 - Updated `TECH_DEBT.md` for resolved Provider ordering and initial documentation baseline items.
 - Published the initial documentation baseline to `origin/main` and entered Phase 7.
 - Updated `INDEX.md` and `TECH_DEBT.md` for M0.2 remote branch policy closure.
+- Created M1 Toolchain Foundation with npm workspaces, TypeScript strict config, ESLint, Prettier, Vitest, Playwright, package lock, and fixture safety rules.
+- Verified M1 commands: `typecheck`, `lint`, `format`, `test`, `test:e2e`, and `npm audit`.
 
 ## Notes
 
 - Phase 7 is active.
-- M1 Toolchain Foundation is the next implementation milestone.
+- M2 Schema Foundation is the next implementation milestone.

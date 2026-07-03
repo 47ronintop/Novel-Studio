@@ -1,4 +1,5 @@
 # PRODUCT PRD — Novel Studio
+
 Version: 1.0 | Status: Draft for Review | Phase: 1 Product Design
 
 ## 1. 文档目的
@@ -269,14 +270,14 @@ Phase 1 仅定义产品模块，不定义最终代码模块：
 
 ## 16. 风险分析
 
-| 风险 | 影响 | 缓解方案 |
-|---|---|---|
-| v1 范围过大 | 延迟核心产品验证 | 将能力分为必须、应该、暂不追求，插件市场和云同步不进入 v1 |
-| AI 输出污染正式设定 | 降低项目可信度 | AI 输出默认建议态，用户确认后才能写入正式资产 |
-| 上下文组装不可解释 | 用户无法信任 AI 结果 | 每次 AI 调用记录上下文来源、预算、模型配置和结构化输出 |
-| 多模型适配复杂 | 拖慢主流程 | v1 产品要求架构兼容多模型，具体 Provider 落地顺序由 Phase 2/ROADMAP 决定 |
-| 本地数据丢失 | 破坏核心信任 | 自动保存、崩溃恢复、版本历史作为 v1 必须能力 |
-| UI 信息密度过高 | 新用户难以上手 | 默认布局聚焦章节写作，复杂面板可折叠，通过 Command Palette 快速访问 |
+| 风险                | 影响                 | 缓解方案                                                                 |
+| ------------------- | -------------------- | ------------------------------------------------------------------------ |
+| v1 范围过大         | 延迟核心产品验证     | 将能力分为必须、应该、暂不追求，插件市场和云同步不进入 v1                |
+| AI 输出污染正式设定 | 降低项目可信度       | AI 输出默认建议态，用户确认后才能写入正式资产                            |
+| 上下文组装不可解释  | 用户无法信任 AI 结果 | 每次 AI 调用记录上下文来源、预算、模型配置和结构化输出                   |
+| 多模型适配复杂      | 拖慢主流程           | v1 产品要求架构兼容多模型，具体 Provider 落地顺序由 Phase 2/ROADMAP 决定 |
+| 本地数据丢失        | 破坏核心信任         | 自动保存、崩溃恢复、版本历史作为 v1 必须能力                             |
+| UI 信息密度过高     | 新用户难以上手       | 默认布局聚焦章节写作，复杂面板可折叠，通过 Command Palette 快速访问      |
 
 ## 17. 验收标准
 
@@ -294,12 +295,12 @@ Phase 1 的产品设计完成标准：
 
 ## 19. Progress Tracking
 
-| 阶段 | 状态 | 本次产出 | 未决问题 | 下一步 |
-|---|---|---|---|---|
-| Phase 1 产品设计 | Draft for Review | `PRODUCT_PRD.md v1.0` | v1 Provider 首批落地顺序、项目初始化是否立即启用 Git、默认 Workflow 清单细节 | 等待确认后进入 Phase 2 系统架构 |
-| Phase 2 系统架构 | Not Started | 无 | Agent/Context/Workflow Engine 最终语言需 ADR 明确 | 确认后创建 `ARCHITECTURE.md` 与 ADR |
-| Phase 3 数据结构设计 | Not Started | 无 | Schema 粒度、版本历史格式、恢复策略 | Phase 2 后启动 |
-| Phase 4 UI/UX 设计 | Not Started | 无 | 默认布局、信息密度、快捷键体系 | Phase 3 后启动 |
-| Phase 5 开发规范 | Not Started | 无 | lint/type/test/CI 策略 | Phase 4 后启动 |
-| Phase 6 Task Planning | Not Started | 无 | 任务拆分与里程碑 | Phase 5 后启动 |
-| Phase 7 正式开发 | Not Started | 无 | 实现排期 | Phase 6 后启动 |
+| 阶段                  | 状态             | 本次产出              | 未决问题                                                                     | 下一步                              |
+| --------------------- | ---------------- | --------------------- | ---------------------------------------------------------------------------- | ----------------------------------- |
+| Phase 1 产品设计      | Draft for Review | `PRODUCT_PRD.md v1.0` | v1 Provider 首批落地顺序、项目初始化是否立即启用 Git、默认 Workflow 清单细节 | 等待确认后进入 Phase 2 系统架构     |
+| Phase 2 系统架构      | Not Started      | 无                    | Agent/Context/Workflow Engine 最终语言需 ADR 明确                            | 确认后创建 `ARCHITECTURE.md` 与 ADR |
+| Phase 3 数据结构设计  | Not Started      | 无                    | Schema 粒度、版本历史格式、恢复策略                                          | Phase 2 后启动                      |
+| Phase 4 UI/UX 设计    | Not Started      | 无                    | 默认布局、信息密度、快捷键体系                                               | Phase 3 后启动                      |
+| Phase 5 开发规范      | Not Started      | 无                    | lint/type/test/CI 策略                                                       | Phase 4 后启动                      |
+| Phase 6 Task Planning | Not Started      | 无                    | 任务拆分与里程碑                                                             | Phase 5 后启动                      |
+| Phase 7 正式开发      | Not Started      | 无                    | 实现排期                                                                     | Phase 6 后启动                      |

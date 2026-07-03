@@ -1,4 +1,5 @@
 # DATA SCHEMA — Novel Studio
+
 Version: 1.0 | Status: Draft for Review | Phase: 3 Data Structure Design
 
 ## 1. 文档目的
@@ -942,14 +943,14 @@ source files scan
 
 ## 27. 风险分析
 
-| 风险 | 涉及条款 | 影响 | 缓解方案 |
-|---|---|---|---|
-| JSON 文件之间引用失效 | P7、第4节 | UI 和 AI 上下文可能引用不存在资产 | Repository 提供 referential integrity check |
-| Markdown frontmatter 被手工破坏 | P7 | 章节无法解析 | 打开项目时诊断并提供修复建议，不覆盖正文 |
-| history 体积过大 | 第5节 | 项目膨胀、Git 管理困难 | 提供归档策略，但不得默认清理不可再生历史 |
-| cache 与源文件不一致 | 第4节 | 检索结果错误 | cache 记录 source checksum，失配时重建 |
-| API Key 误入 settings 或日志 | 第13节 | 隐私与安全风险 | Schema 禁止明文字段，日志脱敏在 SECURITY 中细化 |
-| AI 未确认记忆进入高置信上下文 | P1、第8节 | 污染设定和输出 | memory confidence 必须参与 Context 策略 |
+| 风险                            | 涉及条款  | 影响                              | 缓解方案                                        |
+| ------------------------------- | --------- | --------------------------------- | ----------------------------------------------- |
+| JSON 文件之间引用失效           | P7、第4节 | UI 和 AI 上下文可能引用不存在资产 | Repository 提供 referential integrity check     |
+| Markdown frontmatter 被手工破坏 | P7        | 章节无法解析                      | 打开项目时诊断并提供修复建议，不覆盖正文        |
+| history 体积过大                | 第5节     | 项目膨胀、Git 管理困难            | 提供归档策略，但不得默认清理不可再生历史        |
+| cache 与源文件不一致            | 第4节     | 检索结果错误                      | cache 记录 source checksum，失配时重建          |
+| API Key 误入 settings 或日志    | 第13节    | 隐私与安全风险                    | Schema 禁止明文字段，日志脱敏在 SECURITY 中细化 |
+| AI 未确认记忆进入高置信上下文   | P1、第8节 | 污染设定和输出                    | memory confidence 必须参与 Context 策略         |
 
 ## 28. Phase 3 Changelog
 
@@ -959,12 +960,12 @@ source files scan
 
 ## 29. Progress Tracking
 
-| 阶段 | 状态 | 本次产出 | 未决问题 | 下一步 |
-|---|---|---|---|---|
-| Phase 1 产品设计 | Complete | `PRODUCT_PRD.md v1.0` | v1 Provider 首批落地顺序仍需 ROADMAP 排序 | 已完成 |
-| Phase 2 系统架构 | Complete | `ARCHITECTURE.md v1.0`、`adr/ADR-0001-engine-runtime-language.md` | Workflow/Agent 层级解释需在测试规范中固化 | 已完成 |
-| Phase 3 数据结构设计 | Draft for Review | `DATA_SCHEMA.md v1.0` | Schema 具体 JSON Schema 文件尚未生成；锁策略和迁移日志路径需在后续规划细化 | 等待确认后进入 Phase 4 UI/UX 设计 |
-| Phase 4 UI/UX 设计 | Not Started | 无 | 默认布局、信息密度、命令体系、编辑器交互 | Phase 3 确认后启动 |
-| Phase 5 开发规范 | Not Started | 无 | Monorepo 工具链、lint/type/test/CI 规则 | Phase 4 后启动 |
-| Phase 6 Task Planning | Not Started | 无 | 任务拆分、里程碑、风险缓冲 | Phase 5 后启动 |
-| Phase 7 正式开发 | Not Started | 无 | 代码实现排期 | Phase 6 后启动 |
+| 阶段                  | 状态             | 本次产出                                                          | 未决问题                                                                   | 下一步                            |
+| --------------------- | ---------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------- | --------------------------------- |
+| Phase 1 产品设计      | Complete         | `PRODUCT_PRD.md v1.0`                                             | v1 Provider 首批落地顺序仍需 ROADMAP 排序                                  | 已完成                            |
+| Phase 2 系统架构      | Complete         | `ARCHITECTURE.md v1.0`、`adr/ADR-0001-engine-runtime-language.md` | Workflow/Agent 层级解释需在测试规范中固化                                  | 已完成                            |
+| Phase 3 数据结构设计  | Draft for Review | `DATA_SCHEMA.md v1.0`                                             | Schema 具体 JSON Schema 文件尚未生成；锁策略和迁移日志路径需在后续规划细化 | 等待确认后进入 Phase 4 UI/UX 设计 |
+| Phase 4 UI/UX 设计    | Not Started      | 无                                                                | 默认布局、信息密度、命令体系、编辑器交互                                   | Phase 3 确认后启动                |
+| Phase 5 开发规范      | Not Started      | 无                                                                | Monorepo 工具链、lint/type/test/CI 规则                                    | Phase 4 后启动                    |
+| Phase 6 Task Planning | Not Started      | 无                                                                | 任务拆分、里程碑、风险缓冲                                                 | Phase 5 后启动                    |
+| Phase 7 正式开发      | Not Started      | 无                                                                | 代码实现排期                                                               | Phase 6 后启动                    |

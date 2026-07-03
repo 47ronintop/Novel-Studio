@@ -1,4 +1,5 @@
 # ARCHITECTURE — Novel Studio
+
 Version: 1.0 | Status: Draft for Review | Phase: 2 System Architecture
 
 ## 1. 文档目的
@@ -437,14 +438,14 @@ TypeScript Strict 作为核心实现语言，可以让 Electron、Frontend、Nod
 
 ## 16. 风险分析
 
-| 风险 | 涉及条款 | 影响 | 缓解方案 |
-|---|---|---|---|
-| Workflow 与 Agent 层级关系误读 | 第6节、第7节、P8 | 可能形成循环依赖或跨层调用 | Workflow Engine 设计为状态机/计划器，Agent Engine 负责 Agent 实例执行 |
-| 多 Provider 一次性实现过多 | 第3节、P4 | 测试矩阵过大 | Adapter contract 覆盖全部供应商，首批实现顺序在 ROADMAP 明确 |
-| 本地文件写入不具备事务性 | 第5节、P5、P7 | 崩溃时可能损坏数据 | Repository 统一实现原子写入、备份、恢复和锁策略 |
-| Prompt/Agent/Workflow 版本化范围过大 | P3 | 初期实现复杂 | Phase 3 统一 VersionRecord schema，Phase 6 分批落地 |
-| 插件能力过早膨胀 | P6、第10节 | v1 偏离核心写作 | v1 只实现插件架构边界和 manifest 设计，不实现市场 |
-| Python 插件破坏核心类型边界 | 第6节、第12节 | 核心不可维护 | Python 只允许通过 Adapter/Plugin 进入，并强制 type hint 与 JSON schema |
+| 风险                                 | 涉及条款         | 影响                       | 缓解方案                                                               |
+| ------------------------------------ | ---------------- | -------------------------- | ---------------------------------------------------------------------- |
+| Workflow 与 Agent 层级关系误读       | 第6节、第7节、P8 | 可能形成循环依赖或跨层调用 | Workflow Engine 设计为状态机/计划器，Agent Engine 负责 Agent 实例执行  |
+| 多 Provider 一次性实现过多           | 第3节、P4        | 测试矩阵过大               | Adapter contract 覆盖全部供应商，首批实现顺序在 ROADMAP 明确           |
+| 本地文件写入不具备事务性             | 第5节、P5、P7    | 崩溃时可能损坏数据         | Repository 统一实现原子写入、备份、恢复和锁策略                        |
+| Prompt/Agent/Workflow 版本化范围过大 | P3               | 初期实现复杂               | Phase 3 统一 VersionRecord schema，Phase 6 分批落地                    |
+| 插件能力过早膨胀                     | P6、第10节       | v1 偏离核心写作            | v1 只实现插件架构边界和 manifest 设计，不实现市场                      |
+| Python 插件破坏核心类型边界          | 第6节、第12节    | 核心不可维护               | Python 只允许通过 Adapter/Plugin 进入，并强制 type hint 与 JSON schema |
 
 ## 17. Phase 2 Changelog
 
@@ -454,12 +455,12 @@ TypeScript Strict 作为核心实现语言，可以让 Electron、Frontend、Nod
 
 ## 18. Progress Tracking
 
-| 阶段 | 状态 | 本次产出 | 未决问题 | 下一步 |
-|---|---|---|---|---|
-| Phase 1 产品设计 | Complete | `PRODUCT_PRD.md v1.0` | v1 Provider 首批落地顺序仍需 ROADMAP 排序 | 已进入 Phase 2 |
-| Phase 2 系统架构 | Draft for Review | `ARCHITECTURE.md v1.0`、`adr/ADR-0001-engine-runtime-language.md` | Workflow/Agent 层级解释需用户确认；Git 远端为空仓库但可达 | 等待确认后进入 Phase 3 数据结构设计 |
-| Phase 3 数据结构设计 | Not Started | 无 | Schema 粒度、版本历史格式、文件事务策略 | Phase 2 确认后启动 |
-| Phase 4 UI/UX 设计 | Not Started | 无 | 默认布局、Command Palette、编辑器体验 | Phase 3 后启动 |
-| Phase 5 开发规范 | Not Started | 无 | Monorepo 工具链、lint/type/test 规则 | Phase 4 后启动 |
-| Phase 6 Task Planning | Not Started | 无 | 实现批次、里程碑、风险缓冲 | Phase 5 后启动 |
-| Phase 7 正式开发 | Not Started | 无 | 代码实现排期 | Phase 6 后启动 |
+| 阶段                  | 状态             | 本次产出                                                          | 未决问题                                                  | 下一步                              |
+| --------------------- | ---------------- | ----------------------------------------------------------------- | --------------------------------------------------------- | ----------------------------------- |
+| Phase 1 产品设计      | Complete         | `PRODUCT_PRD.md v1.0`                                             | v1 Provider 首批落地顺序仍需 ROADMAP 排序                 | 已进入 Phase 2                      |
+| Phase 2 系统架构      | Draft for Review | `ARCHITECTURE.md v1.0`、`adr/ADR-0001-engine-runtime-language.md` | Workflow/Agent 层级解释需用户确认；Git 远端为空仓库但可达 | 等待确认后进入 Phase 3 数据结构设计 |
+| Phase 3 数据结构设计  | Not Started      | 无                                                                | Schema 粒度、版本历史格式、文件事务策略                   | Phase 2 确认后启动                  |
+| Phase 4 UI/UX 设计    | Not Started      | 无                                                                | 默认布局、Command Palette、编辑器体验                     | Phase 3 后启动                      |
+| Phase 5 开发规范      | Not Started      | 无                                                                | Monorepo 工具链、lint/type/test 规则                      | Phase 4 后启动                      |
+| Phase 6 Task Planning | Not Started      | 无                                                                | 实现批次、里程碑、风险缓冲                                | Phase 5 后启动                      |
+| Phase 7 正式开发      | Not Started      | 无                                                                | 代码实现排期                                              | Phase 6 后启动                      |
