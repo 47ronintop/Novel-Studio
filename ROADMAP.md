@@ -10,7 +10,7 @@
 
 ---
 
-Version: 1.0 | Status: Draft for Review | Phase: 6 Task Planning
+Version: 1.0 | Status: Active | Phase: 7 Formal Development
 
 ## 1. Planning Principles
 
@@ -69,11 +69,11 @@ Before any feature task is considered complete:
 - Include: `INDEX.md`
 - Include: `adr/ADR-0001-engine-runtime-language.md`
 
-- [ ] Confirm `origin` is `https://github.com/47ronintop/Novel-Studio.git`.
-- [ ] Run `rg -n "\b(TODO|TBD)\b|待补|占位" -g "*.md"`.
-- [ ] Run `git status --short --branch`.
-- [ ] Commit documents with message `docs: establish Novel Studio foundation`.
-- [ ] Do not push until user confirms remote branch policy.
+- [x] Confirm `origin` is `https://github.com/47ronintop/Novel-Studio.git`.
+- [x] Run `rg -n "\b(TODO|TBD)\b|待补|占位" -g "*.md"`.
+- [x] Run `git status --short --branch`.
+- [x] Commit documents with message `docs: establish Novel Studio foundation`.
+- [x] Do not push until user confirms remote branch policy.
 
 **Verification:** Git has one local commit on `main`; working tree is clean.
 
@@ -84,11 +84,11 @@ Before any feature task is considered complete:
 - Modify: `TECH_DEBT.md`
 - Modify: `INDEX.md`
 
-- [ ] Confirm whether remote is intentionally empty.
-- [ ] If empty, push `main` with upstream after user approval.
-- [ ] Resolve or update `TD-006`.
+- [x] Confirm whether remote is intentionally empty.
+- [x] If empty, push `main` with upstream after user approval.
+- [x] Resolve or update `TD-006`.
 
-**Verification:** `git ls-remote --heads origin` returns `refs/heads/main` after push.
+**Verification:** local `main` tracks `origin/main`; external `git ls-remote --heads origin` should return `refs/heads/main` when GitHub connectivity is available.
 
 ## 5. M1 — Toolchain Foundation
 
@@ -580,5 +580,5 @@ The roadmap prioritizes data integrity and tooling before AI breadth. Novel Stud
 | Phase 3 数据结构设计 | Complete | `DATA_SCHEMA.md v1.0` | JSON Schema 文件待 Phase 7 实现 | 已完成 |
 | Phase 4 UI/UX 设计 | Complete | `UI_GUIDELINES.md v1.0` | CodeMirror/组件 primitive 需 spike | 已完成 |
 | Phase 5 开发规范 | Complete | `CODING_STANDARDS.md v1.0`、`TESTING.md v1.0` | 工具配置待实现 | 已完成 |
-| Phase 6 Task Planning | Draft for Review | `ROADMAP.md v1.0` | 是否创建初始提交并推送远端；Phase 7 是否按 M0 开始 | 等待确认后进入 Phase 7 正式开发 |
-| Phase 7 正式开发 | Not Started | 无 | 执行方式：subagent-driven 或 inline execution | Phase 6 确认后启动 |
+| Phase 6 Task Planning | Complete | `ROADMAP.md v1.0` | 后续专题文档需在相关实现前补齐 | 已完成 |
+| Phase 7 正式开发 | In Progress | M0 已完成；准备执行 M1 Toolchain Foundation | 包管理器、schema codegen、dependency boundary 工具待选择 | 执行 M1.1-M1.3 |

@@ -22,8 +22,10 @@
 - Defined implementation milestones M0-M9, provider implementation order, risk register, and Phase 7 execution gates.
 - Removed stray `text` paste artifacts from `PROJECT_CONSTITUTION.md`.
 - Updated `TECH_DEBT.md` for resolved Provider ordering and initial documentation baseline items.
+- Published the initial documentation baseline to `origin/main` and entered Phase 7.
+- Updated `INDEX.md` and `TECH_DEBT.md` for M0.2 remote branch policy closure.
 
 ## Notes
 
-- No business code has been written.
-- Phase 7 must not start until Phase 6 is reviewed and confirmed.
+- Phase 7 is active.
+- M1 Toolchain Foundation is the next implementation milestone.

@@ -7,7 +7,6 @@ Version: 1.0 | Status: Active
 | ID | Source | Debt / Risk | Impact | Planned Resolution | Status |
 |---|---|---|---|---|---|
 | TD-005 | `ARCHITECTURE.md` 第5/7节 | Workflow Engine 位于 Agent Engine 下层，需要明确“状态机/计划器”解释，避免实现时变成循环依赖 | 若团队误读，可能违反 P8 跨层调用规则 | Phase 3/5 继续用接口契约和测试规则固化方向 | Open |
-| TD-006 | Git remote verification | `origin` 已确认可访问且暂无 heads | 远端为空仓库；首次推送前需要确认默认分支策略 | 用户确认需要推送时再建立 upstream | Open |
 | TD-007 | `DATA_SCHEMA.md` 第20/21节 | 迁移日志路径、项目锁策略、多窗口冲突策略尚未定稿 | 后续实现 Repository 时可能影响恢复和并发安全 | Phase 5/6 明确锁、migration log 和冲突处理任务 | Open |
 | TD-008 | `DATA_SCHEMA.md` 第17节 | history 体积增长策略尚未量化 | 长篇项目可能产生大量快照，影响 Git 管理体验 | ROADMAP 或 Task Planning 中定义归档/压缩/手动保留策略，但默认不得误删 | Open |
 | TD-009 | `DATA_SCHEMA.md` 第3/8/23节 | 跨 JSON 文件引用完整性尚未落成具体检查规则 | 引用失效会影响 UI、Context 和 AI 工作流 | Phase 5/6 增加 Repository integrity check 任务 | Open |
@@ -29,3 +28,4 @@ Version: 1.0 | Status: Active
 | TD-003 | 2026-07-03 | `ROADMAP.md` 已定义 Provider 实现顺序：OpenAI Compatible API、OpenAI、Anthropic、Google Gemini、Ollama、OpenRouter、DeepSeek、LM Studio、vLLM、智谱、通义千问。 |
 | TD-004 | 2026-07-03 | `adr/ADR-0001-engine-runtime-language.md` 已明确核心 Engine 使用 TypeScript Strict，Python 仅限插件/外部工具边界。 |
 | TD-016 | 2026-07-03 | 已创建初始文档提交；远端推送仍等待用户确认默认分支策略。 |
+| TD-006 | 2026-07-03 | 用户已发布初始提交到远端；本地 `main` 已跟踪 `origin/main`。外部 `git ls-remote` 复验受当前网络连接限制，后续联网恢复后可再次确认。 |
