@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "schema.llm-response.v1",
+  "title": "LLM Response",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "requestId",
+    "provider",
+    "modelName",
+    "status",
+    "content",
+    "createdAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "requestId": { "type": "string" },
+    "provider": { "type": "string" },
+    "modelName": { "type": "string" },
+    "status": { "type": "string", "enum": ["success", "error"] },
+    "content": {
+      "type": "object",
+      "required": ["type", "value"],
+      "properties": {
+        "type": { "type": "string", "enum": ["text", "json"] },
+        "value": {}
+      },
+      "additionalProperties": true
+    },
+    "usage": {
+      "type": "object",
+      "properties": {
+        "inputTokens": { "type": "integer", "minimum": 0 },
+        "outputTokens": { "type": "integer", "minimum": 0 },
+        "totalTokens": { "type": "integer", "minimum": 0 },
+        "usageStatus": { "type": "string", "enum": ["missing", "estimated", "actual"] },
+        "estimatedCost": { "type": "object" }
+      },
+      "additionalProperties": true
+    },
+    "createdAt": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}

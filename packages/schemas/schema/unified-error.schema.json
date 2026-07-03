@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "schema.unified-error.v1",
+  "title": "Unified Error",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "errorId",
+    "code",
+    "category",
+    "message",
+    "recoverability",
+    "suggestedAction",
+    "traceId",
+    "createdAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "errorId": { "type": "string", "pattern": "^err_[A-Za-z0-9_-]+$" },
+    "code": { "type": "string", "pattern": "^[A-Z0-9_]+$" },
+    "category": {
+      "type": "string",
+      "enum": [
+        "UserError",
+        "ValidationError",
+        "StorageError",
+        "ModelProviderError",
+        "LLMAdapterError",
+        "WorkflowError",
+        "AgentError",
+        "PluginError"
+      ]
+    },
+    "message": { "type": "string", "minLength": 1 },
+    "recoverability": {
+      "type": "string",
+      "enum": ["retryable", "user-action", "fatal", "unknown"]
+    },
+    "suggestedAction": { "type": "string", "minLength": 1 },
+    "traceId": { "type": "string", "minLength": 1 },
+    "redactedDetail": { "type": "object" },
+    "createdAt": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}

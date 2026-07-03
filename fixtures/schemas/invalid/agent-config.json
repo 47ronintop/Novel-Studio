@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0",
+  "id": "reviewer_default",
+  "type": "agent.config",
+  "title": "",
+  "status": "running",
+  "agentRole": "reviewer",
+  "promptTemplateId": "prompt_reviewer_default",
+  "inputSchemaId": "schema.agent.reviewer.input.v1",
+  "outputSchemaId": "schema.agent.reviewer.output.v1",
+  "modelProfileId": "model_default",
+  "limits": {
+    "maxRetries": -1,
+    "timeoutMs": 10
+  },
+  "createdAt": "bad-date",
+  "updatedAt": "2026-07-03T00:00:00.000Z"
+}

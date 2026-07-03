@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "1.0",
+  "contextBundleId": "ctx_01",
+  "workflowRunId": "run_01",
+  "budget": {
+    "maxTokens": 8000,
+    "estimatedTokens": 1200
+  },
+  "items": [
+    {
+      "refType": "chapter",
+      "refId": "ch_01",
+      "content": "章节片段",
+      "tokenEstimate": 500
+    }
+  ],
+  "trace": {
+    "selectionReason": "review current chapter",
+    "excludedRefs": [
+      {
+        "entityId": "ch_99",
+        "reason": "budget_exceeded"
+      }
+    ]
+  }
+}

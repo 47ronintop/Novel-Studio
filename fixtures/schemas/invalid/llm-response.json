@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "1.0",
+  "requestId": "llmreq_01",
+  "provider": "openai-compatible",
+  "modelName": "example-model",
+  "status": "maybe",
+  "content": {
+    "type": "binary"
+  },
+  "usage": {
+    "inputTokens": -1,
+    "usageStatus": "guessed"
+  },
+  "createdAt": "bad-date"
+}

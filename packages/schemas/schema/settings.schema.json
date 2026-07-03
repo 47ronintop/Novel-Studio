@@ -1,0 +1,74 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "schema.settings.v1",
+  "title": "Novel Studio Project Settings",
+  "type": "object",
+  "required": ["schemaVersion", "autosave", "history", "models"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "autosave": {
+      "type": "object",
+      "required": ["enabled", "intervalMs"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "intervalMs": { "type": "integer", "minimum": 1000 },
+        "createHistorySnapshot": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "history": {
+      "type": "object",
+      "required": ["snapshotPolicy"],
+      "properties": {
+        "snapshotPolicy": {
+          "type": "string",
+          "enum": ["manual-only", "interval-only", "manual-and-interval", "on-save-and-manual"]
+        },
+        "intervalMinutes": { "type": "integer", "minimum": 1 },
+        "maxSnapshotsPerChapter": { "type": ["integer", "null"], "minimum": 1 }
+      },
+      "additionalProperties": true
+    },
+    "models": {
+      "type": "object",
+      "required": ["defaultProfileId", "profiles"],
+      "properties": {
+        "defaultProfileId": { "type": "string" },
+        "profiles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "provider",
+              "displayName",
+              "apiKeyRef",
+              "modelName",
+              "temperature",
+              "maxTokens",
+              "timeoutMs"
+            ],
+            "properties": {
+              "id": { "type": "string" },
+              "provider": { "type": "string" },
+              "displayName": { "type": "string", "minLength": 1 },
+              "baseUrl": { "type": "string" },
+              "apiKeyRef": { "type": "string", "pattern": "^secret://" },
+              "apiKey": false,
+              "modelName": { "type": "string", "minLength": 1 },
+              "temperature": { "type": "number", "minimum": 0 },
+              "maxTokens": { "type": "integer", "minimum": 1 },
+              "topP": { "type": "number", "minimum": 0, "maximum": 1 },
+              "timeoutMs": { "type": "integer", "minimum": 1000 },
+              "frequencyPenalty": { "type": "number" },
+              "presencePenalty": { "type": "number" }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "1.0",
+  "contextBundleId": "bundle_01",
+  "workflowRunId": "run_01",
+  "budget": {
+    "maxTokens": 0
+  },
+  "items": [
+    {
+      "refType": "chapter",
+      "refId": "ch_01",
+      "content": "章节片段",
+      "tokenEstimate": -1
+    }
+  ],
+  "trace": {
+    "selectionReason": "review current chapter",
+    "excludedRefs": []
+  }
+}

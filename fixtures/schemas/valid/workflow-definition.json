@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "1.0",
+  "id": "wf_review_chapter",
+  "type": "workflow.definition",
+  "title": "审稿当前章节",
+  "status": "active",
+  "entryStepId": "step_build_context",
+  "steps": [
+    {
+      "id": "step_build_context",
+      "kind": "context",
+      "nextStepId": "step_review"
+    },
+    {
+      "id": "step_review",
+      "kind": "agent",
+      "agentId": "agent_reviewer_default"
+    }
+  ],
+  "createdAt": "2026-07-03T00:00:00.000Z",
+  "updatedAt": "2026-07-03T00:00:00.000Z"
+}

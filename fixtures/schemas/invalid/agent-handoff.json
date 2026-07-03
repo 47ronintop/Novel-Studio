@@ -1,0 +1,10 @@
+{
+  "schemaVersion": "1.0",
+  "handoffId": "handoff_01",
+  "fromAgentId": "agent_planner_default",
+  "toAgentId": "agent_writer_default",
+  "workflowRunId": "run_01",
+  "payloadType": "",
+  "payload": "natural language handoff",
+  "createdAt": "bad-date"
+}

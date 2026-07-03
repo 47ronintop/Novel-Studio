@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "1.0",
+  "id": "agent_reviewer_default",
+  "type": "agent.config",
+  "title": "默认审稿 Agent",
+  "status": "active",
+  "agentRole": "reviewer",
+  "promptTemplateId": "prompt_reviewer_default",
+  "inputSchemaId": "schema.agent.reviewer.input.v1",
+  "outputSchemaId": "schema.agent.reviewer.output.v1",
+  "modelProfileId": "model_default",
+  "tools": [],
+  "limits": {
+    "maxRetries": 2,
+    "timeoutMs": 90000
+  },
+  "createdAt": "2026-07-03T00:00:00.000Z",
+  "updatedAt": "2026-07-03T00:00:00.000Z"
+}

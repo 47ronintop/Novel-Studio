@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "1.0",
+  "versionId": "version_01",
+  "assetType": "cache",
+  "assetId": "prompt_writer_default",
+  "reason": "cleanup",
+  "createdBy": "model",
+  "createdAt": "bad-date",
+  "checksum": "md5:abc123",
+  "snapshot": {}
+}

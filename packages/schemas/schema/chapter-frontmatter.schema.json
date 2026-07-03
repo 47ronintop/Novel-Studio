@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "schema.chapter-frontmatter.v1",
+  "title": "Chapter Frontmatter",
+  "type": "object",
+  "required": ["schemaVersion", "id", "type", "title", "order", "status", "createdAt", "updatedAt"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "id": { "type": "string", "pattern": "^ch_[A-Za-z0-9_-]+$" },
+    "type": { "const": "chapter" },
+    "title": { "type": "string", "minLength": 1 },
+    "order": { "type": "integer", "minimum": 1 },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "revision", "review", "done", "archived", "deleted"]
+    },
+    "volumeId": { "type": "string" },
+    "povCharacterIds": { "type": "array", "items": { "type": "string" } },
+    "locationIds": { "type": "array", "items": { "type": "string" } },
+    "timelineEventIds": { "type": "array", "items": { "type": "string" } },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "wordCount": { "type": "integer", "minimum": 0 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0",
+  "handoffId": "handoff_01",
+  "fromAgentId": "agent_planner_default",
+  "toAgentId": "agent_writer_default",
+  "workflowRunId": "run_01",
+  "payloadType": "chapter_plan",
+  "payload": {
+    "goal": "完成下一章规划",
+    "beats": [
+      {
+        "order": 1,
+        "summary": "开场冲突"
+      }
+    ]
+  },
+  "createdAt": "2026-07-03T00:00:00.000Z"
+}

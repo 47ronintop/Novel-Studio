@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "schema.version-record.v1",
+  "title": "Version Record",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "versionId",
+    "assetType",
+    "assetId",
+    "reason",
+    "createdBy",
+    "createdAt",
+    "checksum"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "versionId": { "type": "string", "pattern": "^ver_[A-Za-z0-9_-]+$" },
+    "assetType": { "type": "string", "enum": ["chapter", "prompt", "agent", "workflow"] },
+    "assetId": { "type": "string" },
+    "reason": {
+      "type": "string",
+      "enum": [
+        "manual-save",
+        "autosave-snapshot",
+        "interval-snapshot",
+        "before-ai-apply",
+        "before-rollback",
+        "migration"
+      ]
+    },
+    "createdBy": { "type": "string", "enum": ["user", "system", "migration"] },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "parentVersionId": { "type": ["string", "null"] },
+    "checksum": { "type": "string", "pattern": "^sha256:" },
+    "snapshot": {}
+  },
+  "additionalProperties": true
+}

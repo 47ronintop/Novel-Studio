@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "schema.memory.v1",
+  "title": "Memory",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "id",
+    "type",
+    "title",
+    "status",
+    "origin",
+    "confidence",
+    "content",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "id": { "type": "string", "pattern": "^mem_[A-Za-z0-9_-]+$" },
+    "type": { "type": "string", "enum": ["memory.long-term", "memory.style", "memory.summary"] },
+    "title": { "type": "string", "minLength": 1 },
+    "status": { "type": "string", "enum": ["active", "draft", "archived", "deleted"] },
+    "origin": { "type": "string", "enum": ["user", "user-confirmed-ai", "ai-unconfirmed"] },
+    "confidence": { "type": "string", "enum": ["confirmed", "needs-review", "deprecated"] },
+    "content": { "type": "string", "minLength": 1 },
+    "sourceRefs": { "type": "array", "items": { "type": "object" } },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}

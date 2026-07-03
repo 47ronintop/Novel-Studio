@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "1.0",
+  "versionId": "ver_01",
+  "assetType": "prompt",
+  "assetId": "prompt_writer_default",
+  "reason": "manual-save",
+  "createdBy": "user",
+  "createdAt": "2026-07-03T00:00:00.000Z",
+  "parentVersionId": "ver_00",
+  "checksum": "sha256:abc123",
+  "snapshot": {}
+}

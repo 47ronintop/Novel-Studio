@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "schema.recovery-record.v1",
+  "title": "Recovery Record",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "sessionId",
+    "projectId",
+    "openAssetId",
+    "assetType",
+    "dirty",
+    "draftContentRef",
+    "updatedAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "sessionId": { "type": "string", "pattern": "^session_[A-Za-z0-9_-]+$" },
+    "projectId": { "type": "string" },
+    "openAssetId": { "type": "string" },
+    "assetType": { "type": "string", "enum": ["chapter", "prompt", "agent", "workflow"] },
+    "dirty": { "type": "boolean" },
+    "lastPersistedVersionId": { "type": "string" },
+    "draftContentRef": {
+      "type": "object",
+      "required": ["strategy"],
+      "properties": {
+        "strategy": { "type": "string", "enum": ["inline", "file-ref"] },
+        "content": { "type": "string" },
+        "path": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "cursor": {
+      "type": "object",
+      "properties": {
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}

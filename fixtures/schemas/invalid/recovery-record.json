@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "1.0",
+  "sessionId": "recovery_01",
+  "projectId": "prj_01",
+  "openAssetId": "ch_01",
+  "assetType": "cache",
+  "dirty": "yes",
+  "draftContentRef": {
+    "strategy": "memory"
+  },
+  "updatedAt": "bad-date"
+}

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "1.0",
+  "errorId": "error_01",
+  "code": "lowercase_code",
+  "category": "UnknownError",
+  "message": "",
+  "recoverability": "maybe",
+  "suggestedAction": "",
+  "traceId": "trace_01",
+  "createdAt": "not-a-date"
+}

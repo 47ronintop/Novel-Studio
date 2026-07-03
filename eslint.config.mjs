@@ -29,5 +29,11 @@ export default tseslint.config(
         }
       ]
     }
+  },
+  {
+    files: ["**/test/**/*.ts", "**/*.test.ts"],
+    rules: {
+      "no-restricted-imports": "off"
+    }
   }
 );

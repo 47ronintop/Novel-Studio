@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "1.0",
+  "autosave": {
+    "enabled": true,
+    "intervalMs": 10
+  },
+  "history": {
+    "snapshotPolicy": "delete-history"
+  },
+  "models": {
+    "defaultProfileId": "model_default",
+    "profiles": [
+      {
+        "id": "model_default",
+        "provider": "openai-compatible",
+        "displayName": "Default Model",
+        "apiKey": "plain-secret",
+        "modelName": "example-model",
+        "temperature": 0.7,
+        "maxTokens": 0,
+        "timeoutMs": 500
+      }
+    ]
+  }
+}

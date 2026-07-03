@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "schema.prompt-template.v1",
+  "title": "Prompt Template",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "id",
+    "type",
+    "title",
+    "status",
+    "promptRole",
+    "template",
+    "variables",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "id": { "type": "string", "pattern": "^prompt_[A-Za-z0-9_-]+$" },
+    "type": { "const": "prompt.template" },
+    "title": { "type": "string", "minLength": 1 },
+    "status": { "type": "string", "enum": ["active", "draft", "archived", "deleted"] },
+    "promptRole": { "type": "string", "minLength": 1 },
+    "template": { "type": "string", "minLength": 1 },
+    "variables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "required", "type"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "required": { "type": "boolean" },
+          "type": { "type": "string", "enum": ["string", "number", "boolean", "object", "array"] }
+        },
+        "additionalProperties": true
+      }
+    },
+    "conditionalBlocks": { "type": "array", "items": { "type": "object" } },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}

@@ -151,9 +151,9 @@ Before any feature task is considered complete:
 - Create: `fixtures/schemas/valid/`
 - Create: `fixtures/schemas/invalid/`
 
-- [ ] Add schemas for project metadata, settings, chapter frontmatter, unified error.
-- [ ] Add valid and invalid fixtures.
-- [ ] Add Ajv validation helpers.
+- [x] Add schemas for project metadata, settings, chapter frontmatter, unified error.
+- [x] Add valid and invalid fixtures.
+- [x] Add Ajv validation helpers.
 
 **Verification:** valid fixtures pass; invalid fixtures fail with stable validation errors.
 
@@ -167,9 +167,9 @@ Before any feature task is considered complete:
 - Create: workflow definition schema.
 - Create: memory schema.
 
-- [ ] Cover all required fields from `DATA_SCHEMA.md`.
-- [ ] Preserve unknown field policy explicitly.
-- [ ] Add fixture tests.
+- [x] Cover all required fields from `DATA_SCHEMA.md`.
+- [x] Preserve unknown field policy explicitly.
+- [x] Add fixture tests.
 
 **Verification:** contract tests cover every schema listed in `DATA_SCHEMA.md`.
 
@@ -183,9 +183,9 @@ Before any feature task is considered complete:
 - Create: version record schema.
 - Create: recovery record schema.
 
-- [ ] Validate Agent handoff JSON.
-- [ ] Validate LLM usage/cost structures.
-- [ ] Validate recovery record safety.
+- [x] Validate Agent handoff JSON.
+- [x] Validate LLM usage/cost structures.
+- [x] Validate recovery record safety.
 
 **Verification:** contract tests fail for malformed handoff, missing schemaVersion, and plaintext secret-like fields where applicable.
 
@@ -573,12 +573,12 @@ The roadmap prioritizes data integrity and tooling before AI breadth. Novel Stud
 
 ## 22. Progress Tracking
 
-| 阶段                  | 状态        | 本次产出                                                          | 未决问题                                        | 下一步                    |
-| --------------------- | ----------- | ----------------------------------------------------------------- | ----------------------------------------------- | ------------------------- |
-| Phase 1 产品设计      | Complete    | `PRODUCT_PRD.md v1.0`                                             | 无阻塞                                          | 已完成                    |
-| Phase 2 系统架构      | Complete    | `ARCHITECTURE.md v1.0`、`adr/ADR-0001-engine-runtime-language.md` | Workflow/Agent 边界需实现时用 import rules 固化 | 已完成                    |
-| Phase 3 数据结构设计  | Complete    | `DATA_SCHEMA.md v1.0`                                             | JSON Schema 文件待 Phase 7 实现                 | 已完成                    |
-| Phase 4 UI/UX 设计    | Complete    | `UI_GUIDELINES.md v1.0`                                           | CodeMirror/组件 primitive 需 spike              | 已完成                    |
-| Phase 5 开发规范      | Complete    | `CODING_STANDARDS.md v1.0`、`TESTING.md v1.0`                     | 工具配置待实现                                  | 已完成                    |
-| Phase 6 Task Planning | Complete    | `ROADMAP.md v1.0`                                                 | 后续专题文档需在相关实现前补齐                  | 已完成                    |
-| Phase 7 正式开发      | In Progress | M0 已完成；M1 Toolchain Foundation 已完成                         | schema codegen、dependency boundary 工具待选择  | 执行 M2 Schema Foundation |
+| 阶段                  | 状态        | 本次产出                                                          | 未决问题                                        | 下一步                  |
+| --------------------- | ----------- | ----------------------------------------------------------------- | ----------------------------------------------- | ----------------------- |
+| Phase 1 产品设计      | Complete    | `PRODUCT_PRD.md v1.0`                                             | 无阻塞                                          | 已完成                  |
+| Phase 2 系统架构      | Complete    | `ARCHITECTURE.md v1.0`、`adr/ADR-0001-engine-runtime-language.md` | Workflow/Agent 边界需实现时用 import rules 固化 | 已完成                  |
+| Phase 3 数据结构设计  | Complete    | `DATA_SCHEMA.md v1.0`                                             | JSON Schema 文件待 Phase 7 实现                 | 已完成                  |
+| Phase 4 UI/UX 设计    | Complete    | `UI_GUIDELINES.md v1.0`                                           | CodeMirror/组件 primitive 需 spike              | 已完成                  |
+| Phase 5 开发规范      | Complete    | `CODING_STANDARDS.md v1.0`、`TESTING.md v1.0`                     | 工具配置待实现                                  | 已完成                  |
+| Phase 6 Task Planning | Complete    | `ROADMAP.md v1.0`                                                 | 后续专题文档需在相关实现前补齐                  | 已完成                  |
+| Phase 7 正式开发      | In Progress | M0、M1、M2 Schema Foundation 已完成                               | schema codegen、dependency boundary 工具待选择  | 执行 M3 Repository Core |

@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "1.0",
+  "requestId": "llmreq_01",
+  "provider": "openai-compatible",
+  "modelName": "example-model",
+  "status": "success",
+  "content": {
+    "type": "json",
+    "value": {}
+  },
+  "usage": {
+    "inputTokens": 1000,
+    "outputTokens": 500,
+    "totalTokens": 1500,
+    "usageStatus": "estimated",
+    "estimatedCost": {
+      "amount": 0.01,
+      "currency": "USD"
+    }
+  },
+  "createdAt": "2026-07-03T00:00:00.000Z"
+}

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0",
+  "id": "mem_01",
+  "type": "memory.long-term",
+  "title": "主角核心动机",
+  "status": "active",
+  "origin": "user-confirmed-ai",
+  "confidence": "confirmed",
+  "content": "记忆内容",
+  "sourceRefs": [
+    {
+      "entityType": "chapter",
+      "entityId": "ch_01"
+    }
+  ],
+  "createdAt": "2026-07-03T00:00:00.000Z",
+  "updatedAt": "2026-07-03T00:00:00.000Z"
+}

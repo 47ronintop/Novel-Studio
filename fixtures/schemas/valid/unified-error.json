@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "1.0",
+  "errorId": "err_01",
+  "code": "LLM_RATE_LIMITED",
+  "category": "LLMAdapterError",
+  "message": "模型服务限流，请稍后重试。",
+  "recoverability": "retryable",
+  "suggestedAction": "retry_with_backoff",
+  "traceId": "trace_01",
+  "redactedDetail": {
+    "provider": "openai-compatible",
+    "httpStatus": 429
+  },
+  "createdAt": "2026-07-03T00:00:00.000Z"
+}

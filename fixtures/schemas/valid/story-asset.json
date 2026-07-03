@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "1.0",
+  "id": "chr_hero",
+  "type": "character",
+  "title": "角色名",
+  "status": "active",
+  "summary": "角色摘要",
+  "aliases": ["别名"],
+  "details": {
+    "goals": ["外在目标"],
+    "conflicts": ["主要冲突"]
+  },
+  "relatedEntityIds": ["loc_capital"],
+  "createdAt": "2026-07-03T00:00:00.000Z",
+  "updatedAt": "2026-07-03T00:00:00.000Z"
+}

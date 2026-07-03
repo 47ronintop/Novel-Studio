@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0",
+  "sessionId": "session_01",
+  "projectId": "prj_01",
+  "openAssetId": "ch_01",
+  "assetType": "chapter",
+  "dirty": true,
+  "lastPersistedVersionId": "ver_01",
+  "draftContentRef": {
+    "strategy": "inline",
+    "content": "未保存正文"
+  },
+  "cursor": {
+    "line": 12,
+    "column": 4
+  },
+  "updatedAt": "2026-07-03T00:00:00.000Z"
+}

@@ -26,8 +26,10 @@
 - Updated `INDEX.md` and `TECH_DEBT.md` for M0.2 remote branch policy closure.
 - Created M1 Toolchain Foundation with npm workspaces, TypeScript strict config, ESLint, Prettier, Vitest, Playwright, package lock, and fixture safety rules.
 - Verified M1 commands: `typecheck`, `lint`, `format`, `test`, `test:e2e`, and `npm audit`.
+- Created M2 Schema Foundation with 15 JSON Schema contracts, Ajv validation helper, valid/invalid fixtures, and 32 contract tests.
+- Added `ajv`, `ajv-formats`, and Node type declarations required by the schema package and tests.
 
 ## Notes
 
 - Phase 7 is active.
-- M2 Schema Foundation is the next implementation milestone.
+- M3 Repository Core is the next implementation milestone.

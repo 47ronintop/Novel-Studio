@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "1.0",
+  "id": "memory_01",
+  "type": "memory.chat",
+  "title": "",
+  "status": "active",
+  "origin": "model",
+  "confidence": "certain",
+  "content": "",
+  "createdAt": "bad-date",
+  "updatedAt": "2026-07-03T00:00:00.000Z"
+}

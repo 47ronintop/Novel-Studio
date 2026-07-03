@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "1.0",
+  "requestId": "request_01",
+  "modelProfileId": "model_default",
+  "mode": "sync",
+  "messages": [],
+  "parameters": {
+    "temperature": -1,
+    "maxTokens": 0,
+    "topP": 2
+  }
+}
