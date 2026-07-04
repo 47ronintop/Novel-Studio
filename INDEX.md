@@ -1,6 +1,6 @@
 # INDEX - Novel Studio Documentation
 
-Version: 1.9 | Last Updated: 2026-07-04
+Version: 1.10 | Last Updated: 2026-07-04
 
 ## Document Priority
 
@@ -26,6 +26,7 @@ Version: 1.9 | Last Updated: 2026-07-04
 | `CONTEXT_ENGINE.md`                       | 1.0        | Accepted for M7.2           | Context bundle construction, token budget, exclusion and source trace              |
 | `AGENT_ENGINE.md`                         | 1.0        | Accepted for M7.3           | Agent input/output validation, LLM Adapter calls, structured handoff JSON          |
 | `docs/performance/m9-alpha-baseline.md`   | 1.0        | Accepted for M9             | Synthetic large project fixture and alpha performance smoke baseline               |
+| `docs/packaging/m10-beta-packaging.md`    | 1.0        | Accepted for M10            | Renderer bundling, electron-builder configuration, and package preflight gate      |
 | `adr/ADR-0001-engine-runtime-language.md` | 1.0        | Accepted for Phase 2 Review | Core Engine language decision                                                      |
 | `CHANGELOG.md`                            | 0.1.0-docs | Active                      | Running change history                                                             |
 | `TECH_DEBT.md`                            | 1.0        | Active                      | Known risks, debt, unresolved decisions                                            |
@@ -40,12 +41,12 @@ Version: 1.9 | Last Updated: 2026-07-04
 
 ## Progress Tracking
 
-| Phase                      | Status      | Current Output                                                                                                                                         | Open Issues                                                    | Next Step                         |
-| -------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- | --------------------------------- |
-| Phase 1 Product Design     | Complete    | `PRODUCT_PRD.md v1.0`, `CHANGELOG.md`, `TECH_DEBT.md`, `INDEX.md`                                                                                      | Provider rollout details remain staged by roadmap              | Complete                          |
-| Phase 2 Architecture       | Complete    | `ARCHITECTURE.md v1.0`, `adr/ADR-0001-engine-runtime-language.md`                                                                                      | Workflow/Agent boundaries require continued automated checks   | Complete                          |
-| Phase 3 Data Schema        | Complete    | `DATA_SCHEMA.md v1.0`                                                                                                                                  | Locking, migration logs, and archive policy remain future work | Complete                          |
-| Phase 4 UI/UX              | Complete    | `UI_GUIDELINES.md v1.0`                                                                                                                                | Editor and component choices continue through tests            | Complete                          |
-| Phase 5 Standards          | Complete    | `CODING_STANDARDS.md v1.0`, `TESTING.md v1.0`                                                                                                          | Remote CI and dependency tooling remain future hardening       | Complete                          |
-| Phase 6 Task Planning      | Complete    | `ROADMAP.md v1.0`                                                                                                                                      | Later technical docs are written before related implementation | Complete                          |
-| Phase 7 Formal Development | In Progress | M0-M9 local alpha hardening complete: Repository, Toolchain, Schema, Desktop Shell, Editor UX, LLM Adapter, Agent/Context/Workflow, Studio, Alpha gate | schema codegen, dependency tooling, installer-grade packaging  | Run alpha review / beta packaging |
+| Phase                      | Status      | Current Output                                                                                                                                                                                  | Open Issues                                                               | Next Step                            |
+| -------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------ |
+| Phase 1 Product Design     | Complete    | `PRODUCT_PRD.md v1.0`, `CHANGELOG.md`, `TECH_DEBT.md`, `INDEX.md`                                                                                                                               | Provider rollout details remain staged by roadmap                         | Complete                             |
+| Phase 2 Architecture       | Complete    | `ARCHITECTURE.md v1.0`, `adr/ADR-0001-engine-runtime-language.md`                                                                                                                               | Workflow/Agent boundaries require continued automated checks              | Complete                             |
+| Phase 3 Data Schema        | Complete    | `DATA_SCHEMA.md v1.0`                                                                                                                                                                           | Locking, migration logs, and archive policy remain future work            | Complete                             |
+| Phase 4 UI/UX              | Complete    | `UI_GUIDELINES.md v1.0`                                                                                                                                                                         | Editor and component choices continue through tests                       | Complete                             |
+| Phase 5 Standards          | Complete    | `CODING_STANDARDS.md v1.0`, `TESTING.md v1.0`                                                                                                                                                   | Remote CI and dependency tooling remain future hardening                  | Complete                             |
+| Phase 6 Task Planning      | Complete    | `ROADMAP.md v1.0`                                                                                                                                                                               | Later technical docs are written before related implementation            | Complete                             |
+| Phase 7 Formal Development | In Progress | M0-M10 packaging foundation complete: Repository, Toolchain, Schema, Desktop Shell, Editor UX, LLM Adapter, Agent/Context/Workflow, Studio, Alpha gate, Vite renderer bundle, package preflight | schema codegen, dependency tooling, package:dir environment stabilization | Stabilize package artifact execution |

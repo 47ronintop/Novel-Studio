@@ -570,6 +570,8 @@ The roadmap prioritizes data integrity and tooling before AI breadth. Novel Stud
 - Phase 6.1 can split M6/M7 into separate implementation plans if scope grows.
 - ROADMAP v1.1 should add explicit issue IDs after the repository is pushed.
 - ROADMAP v1.2 should add release channels and alpha/beta criteria.
+- M10 beta packaging foundation added Vite renderer bundling, electron-builder configuration,
+  and `package:check`; `package:dir` execution remains environment-dependent.
 - Future RFCs can add cloud sync, collaboration, and plugin marketplace tracks.
 
 ## 21. Phase 6 Changelog

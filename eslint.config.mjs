@@ -45,5 +45,13 @@ export default tseslint.config(
         process: "readonly"
       }
     }
+  },
+  {
+    files: ["apps/desktop/**/*.cjs"],
+    languageOptions: {
+      globals: {
+        module: "readonly"
+      }
+    }
   }
 );
