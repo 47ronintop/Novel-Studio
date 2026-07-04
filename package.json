@@ -18,7 +18,7 @@
     "format:write": "prettier --write .",
     "test": "vitest run --passWithNoTests",
     "test:contract": "vitest run packages/schemas/test --passWithNoTests",
-    "test:e2e": "playwright test --list --pass-with-no-tests",
+    "test:e2e": "npm run build && playwright test",
     "alpha:check": "npm run build && node scripts/alpha-check.mjs",
     "package:check": "npm run build && node scripts/package-check.mjs",
     "package:artifact-check": "node scripts/artifact-secret-scan.mjs",

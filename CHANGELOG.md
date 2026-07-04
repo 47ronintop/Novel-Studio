@@ -32,8 +32,9 @@
 - 完成 M10 Beta Packaging Foundation：Vite renderer bundling、electron-builder configuration、package preflight checks 和 packaging notes。
 - 完成 M11 Package Artifact Stabilization：定位 GitHub Electron 下载源不可达导致的 `package:dir` 超时，添加 Electron mirror、单一 package output wrapper、artifact secret scan，并成功生成 unpacked artifact。
 - 完成 M12 Project Workflow Vertical Slice：新增项目创建/打开、章节列表、创建/切换、active chapter editor 串联、project workflow IPC/preload、renderer bridge 和 `WorkspaceShell` 项目操作控件。
+- 完成 M13 Real E2E and CI Gate：新增真实 Electron Playwright smoke，修复 runtime package exports 与 sandbox preload 运行时问题，新增 GitHub Actions CI gate，并把 `test:e2e` 改为实际运行测试。
 
 ## Notes
 
-- Phase 7 当前定义的 M0-M12 已完成。
-- 建议下一步进入 M13：真实 Playwright e2e 与远端 CI。
+- Phase 7 当前定义的 M0-M13 已完成。
+- 建议下一步进入 M14：AI Writing Workflow UX。

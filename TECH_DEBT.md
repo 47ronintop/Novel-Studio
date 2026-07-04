@@ -4,21 +4,20 @@ Version: 1.0 | Status: Active
 
 ## Active Items
 
-| ID     | Source                                     | Debt / Risk                                                                  | Impact                                     | Planned Resolution                                           | Status |
-| ------ | ------------------------------------------ | ---------------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------ | ------ |
-| TD-005 | `ARCHITECTURE.md` 第 5/7 节                | Workflow Engine 位于 Agent Engine 下层，需要持续用接口和测试固化状态机边界   | 若团队误解，可能违反 P8 分层调用规则       | 用接口契约、import rules 和 package boundary tests 固化方向  | Open   |
-| TD-007 | `DATA_SCHEMA.md` 第 20/21 节               | migration log 路径、项目锁、多窗口冲突策略尚未定稿                           | 后续 Repository 并发和恢复策略可能受影响   | 后续 hardening 明确 locking、migration log 和冲突处理        | Open   |
-| TD-008 | `DATA_SCHEMA.md` 第 17 节                  | history 体积增长策略尚未量化                                                 | 长篇项目可能产生大量快照，影响 Git 体验    | 定义归档、压缩、手动保留策略；默认不得误删                   | Open   |
-| TD-009 | `DATA_SCHEMA.md` 第 3/8/23 节              | 跨 JSON 文件引用完整性尚未落成具体检查规则                                   | 引用失效会影响 UI、Context 和 AI workflow  | 增加 Repository integrity check                              | Open   |
-| TD-010 | `UI_GUIDELINES.md` / `CODING_STANDARDS.md` | CodeMirror 6 方向已验证基础路径，但仍缺完整大文件和 diff 体验评估            | 影响 Markdown 编辑、diff 审阅和性能体验    | 继续补齐 editor spike 的性能与交互结论                       | Open   |
-| TD-011 | `CODING_STANDARDS.md` 第 14 节             | shortcut registry 已有基础路径，但冲突矩阵尚未生成                           | 系统快捷键和编辑器快捷键可能冲突           | 补充 shortcut conflict matrix 和自动化检查                   | Open   |
-| TD-012 | `CODING_STANDARDS.md` 第 13 节             | UI 使用本地组件推进，但 headless primitive 库选择尚未最终定稿                | 影响可访问性、表单和弹层一致性             | 根据 UI 扩展需要决定是否引入 headless primitive 库           | Open   |
-| TD-014 | `CODING_STANDARDS.md` 第 6 节              | 已有相对 import 限制和 package boundary tests，但 dedicated 工具未选型       | 分层规则仍可能需要更强自动化检查           | 评估 ESLint boundaries 或 dependency graph 工具              | Open   |
-| TD-015 | `TESTING.md` 第 5/7/8 节                   | 本地门禁已建立，但远端 CI、coverage threshold 和真实 Playwright smoke 未实现 | 自动门禁尚未进入远端 CI                    | 增加 GitHub Actions、coverage threshold 和至少一个 smoke e2e | Open   |
-| TD-017 | `ROADMAP.md` M2/M3                         | JSON Schema 已落地；Repository 使用手写 DTO 接入，schema codegen 未选型      | TS 类型未由 Schema 自动派生，长期可能漂移  | 先保持 contract tests，后续评估 codegen 是否值得引入         | Open   |
-| TD-018 | `ROADMAP.md` M6                            | 除 OpenAI-compatible 外的 provider fixtures 尚未准备                         | 多 provider 扩展可能延迟                   | 后续 Provider 批次进入 roadmap 后补 fixtures 和 tests        | Open   |
-| TD-022 | `ROADMAP.md` M11+                          | Installer target、应用 icon、signing/notarization 和 release channel 未配置  | 当前只有 unpacked artifact，不是正式安装包 | 下一版 roadmap 定义 installer/signing/release channel        | Open   |
-| TD-023 | `ROADMAP.md` M13                           | M12 主流程已有单元/集成测试，但没有真实 Playwright e2e 和远端 CI             | UI 主流程回归仍可能漏测                    | M13 增加项目创建/打开/章节编辑 smoke、GitHub Actions 和门禁  | Open   |
+| ID     | Source                                     | Debt / Risk                                                                 | Impact                                     | Planned Resolution                                      | Status |
+| ------ | ------------------------------------------ | --------------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------- | ------ |
+| TD-005 | `ARCHITECTURE.md` 第 5/7 节                | Workflow Engine 位于 Agent Engine 下层，需要持续用接口和测试固化状态机边界  | 若团队误解，可能违反 P8 分层调用规则       | 用接口契约、import rules 和 package boundary tests 固化 | Open   |
+| TD-007 | `DATA_SCHEMA.md` 第 20/21 节               | migration log 路径、项目锁、多窗口冲突策略尚未定稿                          | 后续 Repository 并发和恢复策略可能受影响   | 后续 hardening 明确 locking、migration log 和冲突处理   | Open   |
+| TD-008 | `DATA_SCHEMA.md` 第 17 节                  | history 体积增长策略尚未量化                                                | 长篇项目可能产生大量快照，影响 Git 体验    | 定义归档、压缩、手动保留策略；默认不得误删              | Open   |
+| TD-009 | `DATA_SCHEMA.md` 第 3/8/23 节              | 跨 JSON 文件引用完整性尚未落成具体检查规则                                  | 引用失效会影响 UI、Context 和 AI workflow  | 增加 Repository integrity check                         | Open   |
+| TD-010 | `UI_GUIDELINES.md` / `CODING_STANDARDS.md` | CodeMirror 6 方向已验证基础路径，但仍缺完整大文件和 diff 体验评估           | 影响 Markdown 编辑、diff 审阅和性能体验    | 继续补齐 editor spike 的性能与交互结论                  | Open   |
+| TD-011 | `CODING_STANDARDS.md` 第 14 节             | shortcut registry 已有基础路径，但冲突矩阵尚未生成                          | 系统快捷键和编辑器快捷键可能冲突           | 补充 shortcut conflict matrix 和自动化检查              | Open   |
+| TD-012 | `CODING_STANDARDS.md` 第 13 节             | UI 使用本地组件推进，但 headless primitive 库选择尚未最终定稿               | 影响可访问性、表单和弹层一致性             | 根据 UI 扩展需要决定是否引入 headless primitive 库      | Open   |
+| TD-014 | `CODING_STANDARDS.md` 第 6 节              | 已有相对 import 限制和 package boundary tests，但 dedicated 工具未选型      | 分层规则仍可能需要更强自动化检查           | 评估 ESLint boundaries 或 dependency graph 工具         | Open   |
+| TD-015 | `TESTING.md` 第 7/8 节                     | GitHub Actions 已建立，但 coverage threshold 尚未实现                       | CI 能阻止回归，但不能提供覆盖率数字门槛    | 后续引入 coverage provider 并设置合理 threshold         | Open   |
+| TD-017 | `ROADMAP.md` M2/M3                         | JSON Schema 已落地；Repository 使用手写 DTO 接入，schema codegen 未选型     | TS 类型未由 Schema 自动派生，长期可能漂移  | 先保持 contract tests，后续评估 codegen 是否值得引入    | Open   |
+| TD-018 | `ROADMAP.md` M6                            | 除 OpenAI-compatible 外的 provider fixtures 尚未准备                        | 多 provider 扩展可能延迟                   | 后续 Provider 批次进入 roadmap 后补 fixtures 和 tests   | Open   |
+| TD-022 | `ROADMAP.md` M11+                          | Installer target、应用 icon、signing/notarization 和 release channel 未配置 | 当前只有 unpacked artifact，不是正式安装包 | 下一版 roadmap 定义 installer/signing/release channel   | Open   |
 
 ## Resolved Items
 
@@ -34,3 +33,4 @@ Version: 1.0 | Status: Active
 | TD-019 | 2026-07-03  | M2 已创建 15 类核心 JSON Schema、Ajv validation helper、valid/invalid fixtures 和 32 个 contract tests。                                    |
 | TD-020 | 2026-07-03  | M3 已创建 Repository Core：项目读取校验、原子写入、history snapshot、recovery record、cache clear guard 和对应 focused tests。              |
 | TD-021 | 2026-07-04  | M11 已定位 `package:dir` 超时根因为默认 GitHub Electron runtime 下载源不可达，并配置 Electron mirror、单一输出目录和 artifact secret scan。 |
+| TD-023 | 2026-07-04  | M13 已增加真实 Electron Playwright smoke、GitHub Actions CI gate、package gate 和 M13 回归测试。                                            |

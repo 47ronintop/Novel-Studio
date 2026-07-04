@@ -59,7 +59,7 @@ async function checkPackagingEnvironment() {
 async function checkBuildArtifacts() {
   const requiredFiles = [
     "apps/desktop/dist/main/index.js",
-    "apps/desktop/dist/preload/index.js",
+    "apps/desktop/dist/preload/index.cjs",
     "apps/desktop/dist/renderer/index.html",
     "packages/application/dist/src/index.js",
     "packages/repository/dist/src/index.js",

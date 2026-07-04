@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  quality-gates:
+    name: Quality Gates
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.20.0"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Format
+        run: npm run format
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit and integration tests
+        run: npm run test
+
+      - name: Schema contract tests
+        run: npm run test:contract
+
+      - name: Electron E2E smoke
+        run: npm run test:e2e
+
+      - name: Package preflight
+        run: npm run package:check
+
+      - name: Alpha gate
+        run: npm run alpha:check
+
+      - name: Dependency audit
+        run: npm audit
+
+      - name: Build unpacked package artifact
+        run: npm run package:dir
+
+      - name: Artifact secret scan
+        run: npm run package:artifact-check

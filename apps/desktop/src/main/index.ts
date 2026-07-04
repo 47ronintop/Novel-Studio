@@ -17,7 +17,7 @@ export function registerApplicationIpcHandlers(): void {
 }
 
 export function createMainWindow(): BrowserWindow {
-  const preloadPath = join(currentDirectory, "..", "preload", "index.js");
+  const preloadPath = join(currentDirectory, "..", "preload", "index.cjs");
   const rendererPath = join(currentDirectory, "..", "renderer", "index.html");
 
   const window = new BrowserWindow({
