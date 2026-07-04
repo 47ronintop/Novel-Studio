@@ -1,0 +1,22 @@
+{
+  "name": "@novel-studio/agent-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@novel-studio/context-engine": "0.1.0",
+    "@novel-studio/llm-adapter": "0.1.0",
+    "@novel-studio/shared": "0.1.0"
+  }
+}

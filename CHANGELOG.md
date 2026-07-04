@@ -47,8 +47,10 @@
 - Created M7.1 Workflow Engine with workflow definition parsing, next-action evaluation, step completion, confirmation gate enforcement, and package boundary tests.
 - Created `CONTEXT_ENGINE.md` v1.0 for M7.2 context bundle, budget, and trace design.
 - Created M7.2 Context Engine with explicit candidate bundle construction, token budget enforcement, exclusion trace, confirmed-memory filtering, source reference trace, full-novel stuffing guard, and package boundary tests.
+- Created `AGENT_ENGINE.md` v1.0 for M7.3 agent execution and handoff design.
+- Created M7.3 Agent Engine with injected input/output validation, LLM Adapter invocation, structured output extraction, malformed JSON failure handling, Agent Handoff JSON production, and package boundary tests.
 
 ## Notes
 
 - Phase 7 is active.
-- M7.2 Context Engine is the next implementation milestone.
+- M7 Agent/Context/Workflow is complete; M8 Studio and Settings is the next implementation milestone.

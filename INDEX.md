@@ -24,6 +24,7 @@ Version: 1.8 | Last Updated: 2026-07-03
 | `LLM_ADAPTER.md`                          |        1.0 | Accepted for M6             | Provider-neutral model call boundary, mock provider, errors, retry, usage/cost     |
 | `WORKFLOW_ENGINE.md`                      |        1.0 | Accepted for M7.1           | Deterministic workflow state machine, next actions, confirmation gate              |
 | `CONTEXT_ENGINE.md`                       |        1.0 | Accepted for M7.2           | Context bundle construction, token budget, exclusion and source trace              |
+| `AGENT_ENGINE.md`                         |        1.0 | Accepted for M7.3           | Agent input/output validation, LLM Adapter calls, structured handoff JSON          |
 | `adr/ADR-0001-engine-runtime-language.md` |        1.0 | Accepted for Phase 2 Review | Core Engine language decision                                                      |
 | `CHANGELOG.md`                            | 0.1.0-docs | Active                      | Running change history                                                             |
 | `TECH_DEBT.md`                            |        1.0 | Active                      | Known risks, debt, unresolved decisions                                            |

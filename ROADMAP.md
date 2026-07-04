@@ -407,13 +407,15 @@ Initial provider order:
 
 **Files:**
 
+- Create: `AGENT_ENGINE.md`
 - Create: `packages/agent-engine/src/`
 - Test: handoff and validation tests.
 
-- [ ] Validate agent input.
-- [ ] Call LLM Adapter through allowed layer.
-- [ ] Validate structured output.
-- [ ] Produce Agent Handoff JSON.
+- [x] Create M7.3 Agent Engine design contract.
+- [x] Validate agent input.
+- [x] Call LLM Adapter through allowed layer.
+- [x] Validate structured output.
+- [x] Produce Agent Handoff JSON.
 
 **Verification:** malformed JSON fixture fails safely; valid fixture produces structured result.
 
