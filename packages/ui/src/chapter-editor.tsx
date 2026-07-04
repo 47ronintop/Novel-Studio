@@ -109,6 +109,7 @@ export function ChapterEditor({
                     onClick={() => {
                       onVersionPreview?.(entry.versionId);
                     }}
+                    title={`Preview version ${entry.label}`}
                     type="button"
                   >
                     <Eye aria-hidden="true" size={13} />
@@ -119,6 +120,7 @@ export function ChapterEditor({
                     onClick={() => {
                       onVersionRestore?.(entry.versionId);
                     }}
+                    title={`Restore version ${entry.label}`}
                     type="button"
                   >
                     <RotateCcw aria-hidden="true" size={13} />

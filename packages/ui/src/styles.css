@@ -41,6 +41,14 @@ button:disabled {
   opacity: 0.55;
 }
 
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+[role="tab"]:focus-visible {
+  outline: 2px solid var(--ns-primary-strong);
+  outline-offset: 2px;
+}
+
 .ns-shell {
   min-height: 100vh;
   background: var(--ns-bg);

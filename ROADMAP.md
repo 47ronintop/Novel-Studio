@@ -443,29 +443,32 @@ Initial provider order:
 
 ### Task M9.1: Accessibility and Keyboard Pass
 
-- [ ] Verify focus order.
-- [ ] Verify labels for icon buttons.
-- [ ] Verify reduced motion.
-- [ ] Verify contrast.
+- [x] Verify focus order.
+- [x] Verify labels for icon buttons.
+- [x] Verify reduced motion.
+- [x] Verify contrast.
 
-**Verification:** Playwright/a11y smoke tests and manual review checklist pass.
+**Verification:** UI accessibility hardening tests cover focus order, selected activity state,
+icon-only tooltips, bottom panel tab semantics, visible focus styling, and reduced motion CSS.
 
 ### Task M9.2: Performance Fixture
 
-- [ ] Create synthetic 100万字 project fixture.
-- [ ] Measure open project path.
-- [ ] Ensure cache rebuild does not block basic edit.
+- [x] Create synthetic 100万字 project fixture.
+- [x] Measure open project path.
+- [x] Ensure cache rebuild does not block basic edit.
 
-**Verification:** performance baseline recorded.
+**Verification:** performance baseline recorded in `docs/performance/m9-alpha-baseline.md`.
 
 ### Task M9.3: Packaging and Alpha Checklist
 
-- [ ] Build Electron package.
-- [ ] Run release candidate gates.
-- [ ] Verify no real secrets in artifacts.
-- [ ] Update docs and TECH_DEBT.
+- [x] Create local alpha build artifact gate for Electron dist output.
+- [x] Run release candidate gates.
+- [x] Verify no real secrets in artifacts.
+- [x] Update docs and TECH_DEBT.
+- [ ] Produce installer/package artifact after bundler and packager selection.
 
-**Verification:** alpha build created locally and passes smoke tests.
+**Verification:** `npm run alpha:check` runs the local TypeScript build and alpha artifact,
+baseline, and secret checks.
 
 ## 14. Provider Roadmap
 

@@ -18,6 +18,8 @@ Version: 1.0 | Status: Active
 | TD-017 | `ROADMAP.md` M2/M3                                       | JSON Schema 已落地；M3 已用最小手写 DTO 接入 Repository，但 schema codegen 工具和 dependency boundary 工具仍需最终选择 | TypeScript 类型仍未由 Schema 自动派生；分层检查仍偏基础 | M4 前不扩大 codegen 范围；M7 前强化 dependency boundaries             | Open   |
 | TD-018 | `ROADMAP.md` M6                                          | Provider 实现顺序已定义，但除首批外的测试 fixture 尚未准备                                                             | 多 Provider 扩展可能延迟                                | M6 只实现首批，后续 Provider 进入 roadmap 后续批次                    | Open   |
 
+| TD-021 | `ROADMAP.md` M9 | M9 now has a local TypeScript/Electron dist alpha gate, but no installer-grade Electron packaging pipeline is selected or configured. | Alpha checks can verify local artifacts, but cannot yet produce a distributable installer. | Select a renderer bundler and Electron packager before beta packaging. | Open |
+
 ## Resolved Items
 
 | ID     | Resolved In | Resolution                                                                                                                                                      |

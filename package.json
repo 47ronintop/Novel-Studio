@@ -9,13 +9,15 @@
     "packages/*"
   ],
   "scripts": {
+    "build": "tsc -b",
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "format": "prettier --check .",
     "format:write": "prettier --write .",
     "test": "vitest run --passWithNoTests",
     "test:contract": "vitest run packages/schemas/test --passWithNoTests",
-    "test:e2e": "playwright test --list --pass-with-no-tests"
+    "test:e2e": "playwright test --list --pass-with-no-tests",
+    "alpha:check": "npm run build && node scripts/alpha-check.mjs"
   },
   "engines": {
     "node": ">=20.20.0",

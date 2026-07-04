@@ -43,7 +43,7 @@ export function WorkspaceShell({
           <span className="ns-project-title">{shellState.projectTitle}</span>
           <span className="ns-save-status">{shellState.saveStatus}</span>
         </div>
-        <button className="ns-command-button" type="button">
+        <button className="ns-command-button" data-focus-order="1" type="button">
           Command Palette <kbd>Ctrl/Cmd+K</kbd>
         </button>
       </header>
@@ -56,8 +56,10 @@ export function WorkspaceShell({
 
             return (
               <button
+                {...(selected ? { "aria-current": "page" as const } : {})}
                 aria-label={activity.label}
                 className="ns-activity-button"
+                data-focus-order={selected ? "2" : undefined}
                 data-selected={selected}
                 key={activity.id}
                 title={activity.label}
@@ -91,7 +93,13 @@ export function WorkspaceShell({
 
         <main aria-label="Editor Area" className="ns-editor-area" data-region="editor-area">
           <div className="ns-tabs" role="tablist" aria-label="Open assets">
-            <button aria-selected="true" className="ns-tab" role="tab" type="button">
+            <button
+              aria-selected="true"
+              className="ns-tab"
+              data-focus-order="3"
+              role="tab"
+              type="button"
+            >
               Untitled Chapter
             </button>
           </div>
@@ -141,10 +149,17 @@ export function WorkspaceShell({
           data-region="bottom-panel"
           data-visible={shellState.bottomPanelVisible}
         >
-          <div className="ns-bottom-tabs">
+          <div className="ns-bottom-tabs" role="tablist" aria-label="Bottom panel tabs">
             <PanelBottom aria-hidden="true" size={15} />
-            {shellState.bottomPanelTabs.map((tab) => (
-              <button className="ns-bottom-tab" key={tab} type="button">
+            {shellState.bottomPanelTabs.map((tab, index) => (
+              <button
+                aria-selected={index === 0}
+                className="ns-bottom-tab"
+                data-focus-order={index === 0 ? "4" : undefined}
+                key={tab}
+                role="tab"
+                type="button"
+              >
                 {tab}
               </button>
             ))}

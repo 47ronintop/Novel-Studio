@@ -36,5 +36,14 @@ export default tseslint.config(
     rules: {
       "no-restricted-imports": "off"
     }
+  },
+  {
+    files: ["scripts/**/*.mjs"],
+    languageOptions: {
+      globals: {
+        console: "readonly",
+        process: "readonly"
+      }
+    }
   }
 );

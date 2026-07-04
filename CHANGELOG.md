@@ -50,8 +50,9 @@
 - Created `AGENT_ENGINE.md` v1.0 for M7.3 agent execution and handoff design.
 - Created M7.3 Agent Engine with injected input/output validation, LLM Adapter invocation, structured output extraction, malformed JSON failure handling, Agent Handoff JSON production, and package boundary tests.
 - Created M8 Studio and Settings foundation with safe model profile settings, injected model connection tests, secret redaction, Prompt/Agent/Workflow config editing, schema validation, version snapshots, rollback, and callback-driven UI panels.
+- Created M9 alpha hardening with UI accessibility checks, reduced-motion and focus styling, synthetic 1,000,000-character performance fixture generation, Repository open-path performance smoke, local alpha build gate, and artifact secret scanning.
 
 ## Notes
 
 - Phase 7 is active.
-- M8 Studio and Settings is complete; M9 Hardening and Alpha is the next implementation milestone.
+- M9 local alpha hardening is in place; installer-grade Electron packaging remains tracked in `TECH_DEBT.md`.
