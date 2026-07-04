@@ -113,6 +113,7 @@ export interface RecoveryRecord extends JsonObject {
 
 export interface ProjectRepositoryPort {
   openProject(): Promise<Result<ProjectSnapshot, UnifiedError>>;
+  createProject(input: CreateProjectInput): Promise<Result<ProjectSnapshot, UnifiedError>>;
 }
 
 export interface HistoryRepositoryPort {
@@ -134,4 +135,12 @@ export interface SnapshotTextAssetInput {
   content: string;
   createdBy?: CreatedBy;
   parentVersionId?: string | null;
+}
+
+export interface CreateProjectInput {
+  projectId: string;
+  title: string;
+  language: string;
+  projectType?: ProjectType;
+  targetWordCount?: number;
 }

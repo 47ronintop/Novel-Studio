@@ -1,10 +1,14 @@
 import type { ApplicationCommand, DesktopShellState } from "@novel-studio/application";
+import type { ChapterSummary } from "@novel-studio/shared";
 import type { ChapterEditorProps } from "./chapter-editor.js";
 import {
   Bot,
   Boxes,
   Clock3,
+  FilePlus,
   FolderTree,
+  FolderOpen,
+  FolderPlus,
   PanelBottom,
   PanelRight,
   Search,
@@ -19,6 +23,18 @@ export interface WorkspaceShellProps {
   readonly commands: readonly ApplicationCommand[];
   readonly commandPaletteOpen: boolean;
   readonly chapterEditor?: ChapterEditorProps;
+  readonly projectWorkflow?: ProjectWorkflowProps;
+}
+
+export interface ProjectWorkflowProps {
+  readonly projectRootInput: string;
+  readonly chapters: readonly ChapterSummary[];
+  readonly activeChapterId?: string;
+  readonly onProjectRootChange: (projectRoot: string) => void;
+  readonly onOpenProject: () => void;
+  readonly onCreateProject: () => void;
+  readonly onCreateChapter: () => void;
+  readonly onSelectChapter: (chapterId: string) => void;
 }
 
 const activities = [
@@ -34,7 +50,8 @@ export function WorkspaceShell({
   shellState,
   commands,
   commandPaletteOpen,
-  chapterEditor
+  chapterEditor,
+  projectWorkflow
 }: WorkspaceShellProps) {
   return (
     <div className="ns-shell" data-theme="dark">
@@ -81,6 +98,48 @@ export function WorkspaceShell({
             <span>Project</span>
             <span>{shellState.navigatorSections.length}</span>
           </div>
+          {projectWorkflow === undefined ? null : (
+            <div className="ns-project-workflow">
+              <input
+                aria-label="Project path"
+                className="ns-project-path"
+                onChange={(event) => projectWorkflow.onProjectRootChange(event.currentTarget.value)}
+                value={projectWorkflow.projectRootInput}
+              />
+              <div className="ns-project-actions">
+                <button
+                  aria-label="Open project"
+                  className="ns-icon-text-button"
+                  onClick={projectWorkflow.onOpenProject}
+                  title="Open project"
+                  type="button"
+                >
+                  <FolderOpen aria-hidden="true" size={14} />
+                  Open
+                </button>
+                <button
+                  aria-label="Create project"
+                  className="ns-icon-text-button"
+                  onClick={projectWorkflow.onCreateProject}
+                  title="Create project"
+                  type="button"
+                >
+                  <FolderPlus aria-hidden="true" size={14} />
+                  Create
+                </button>
+                <button
+                  aria-label="Create chapter"
+                  className="ns-icon-text-button"
+                  onClick={projectWorkflow.onCreateChapter}
+                  title="Create chapter"
+                  type="button"
+                >
+                  <FilePlus aria-hidden="true" size={14} />
+                  Chapter
+                </button>
+              </div>
+            </div>
+          )}
           <ul className="ns-tree">
             {shellState.navigatorSections.map((section) => (
               <li className="ns-tree-row" key={section.id}>
@@ -89,6 +148,25 @@ export function WorkspaceShell({
               </li>
             ))}
           </ul>
+          {projectWorkflow === undefined ? null : (
+            <ul className="ns-chapter-tree" aria-label="Chapters">
+              {projectWorkflow.chapters.map((chapter) => (
+                <li key={chapter.id}>
+                  <button
+                    {...(projectWorkflow.activeChapterId === chapter.id
+                      ? { "aria-current": "true" as const }
+                      : {})}
+                    className="ns-chapter-row"
+                    onClick={() => projectWorkflow.onSelectChapter(chapter.id)}
+                    type="button"
+                  >
+                    <span>{chapter.title}</span>
+                    <span>{chapter.order}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </nav>
 
         <main aria-label="Editor Area" className="ns-editor-area" data-region="editor-area">

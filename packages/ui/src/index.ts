@@ -23,4 +23,4 @@ export type {
   ModelSettingsProfile
 } from "./model-settings-panel.js";
 export { WorkspaceShell } from "./workspace-shell.js";
-export type { WorkspaceShellProps } from "./workspace-shell.js";
+export type { ProjectWorkflowProps, WorkspaceShellProps } from "./workspace-shell.js";

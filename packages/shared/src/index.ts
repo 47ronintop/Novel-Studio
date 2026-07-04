@@ -9,8 +9,11 @@ export type {
 export { createUnifiedError } from "./errors.js";
 export type {
   ChapterHistoryRepositoryPort,
+  ChapterCatalogRepositoryPort,
   ChapterDocument,
   ChapterDraftRepositoryPort,
+  ChapterSummary,
+  CreateChapterInput,
   ChapterVersionContent,
   ChapterVersionSnapshotInput,
   ChapterVersionSummary,

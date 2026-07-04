@@ -8,6 +8,7 @@ import { WorkspaceShell } from "@novel-studio/ui";
 import { useCallback, useEffect, useState } from "react";
 
 import { createChapterEditorBridge } from "./chapter-editor-bridge.js";
+import { createProjectWorkflowBridge } from "./project-workflow-bridge.js";
 import { reduceRendererShortcut } from "./shortcuts.js";
 
 declare global {
@@ -74,9 +75,13 @@ export function App() {
   const [chapterBridge] = useState(() =>
     api === undefined ? undefined : createChapterEditorBridge(api)
   );
+  const [projectWorkflowBridge] = useState(() =>
+    api === undefined ? undefined : createProjectWorkflowBridge(api)
+  );
   const [shellState, setShellState] = useState<DesktopShellState>(rendererShellState);
   const [commands, setCommands] = useState<readonly ApplicationCommand[]>(rendererCommands);
   const [chapterEditor, setChapterEditor] = useState<ChapterEditorProps | undefined>();
+  const [projectWorkflow, setProjectWorkflow] = useState(() => projectWorkflowBridge?.getProps());
   const [shortcutState, setShortcutState] = useState({ commandPaletteOpen: false });
 
   useEffect(() => {
@@ -209,6 +214,65 @@ export function App() {
     [chapterBridge]
   );
 
+  const refreshProjectWorkflow = useCallback(
+    async (nextWorkflow: NonNullable<typeof projectWorkflow>) => {
+      setProjectWorkflow(nextWorkflow);
+      if (api !== undefined) {
+        setShellState(await api.getShellState());
+      }
+      if (chapterBridge !== undefined && nextWorkflow.activeChapterId !== undefined) {
+        setChapterEditor(await chapterBridge.load());
+      }
+    },
+    [api, chapterBridge]
+  );
+
+  const handleProjectRootChange = useCallback(
+    (projectRoot: string) => {
+      if (projectWorkflowBridge === undefined) {
+        return;
+      }
+
+      setProjectWorkflow(projectWorkflowBridge.setProjectRootInput(projectRoot));
+    },
+    [projectWorkflowBridge]
+  );
+
+  const handleOpenProject = useCallback(() => {
+    if (projectWorkflowBridge === undefined) {
+      return;
+    }
+
+    void projectWorkflowBridge.openProject().then(refreshProjectWorkflow);
+  }, [projectWorkflowBridge, refreshProjectWorkflow]);
+
+  const handleCreateProject = useCallback(() => {
+    if (projectWorkflowBridge === undefined) {
+      return;
+    }
+
+    void projectWorkflowBridge.createProject().then(refreshProjectWorkflow);
+  }, [projectWorkflowBridge, refreshProjectWorkflow]);
+
+  const handleCreateChapter = useCallback(() => {
+    if (projectWorkflowBridge === undefined) {
+      return;
+    }
+
+    void projectWorkflowBridge.createChapter().then(refreshProjectWorkflow);
+  }, [projectWorkflowBridge, refreshProjectWorkflow]);
+
+  const handleSelectChapter = useCallback(
+    (chapterId: string) => {
+      if (projectWorkflowBridge === undefined) {
+        return;
+      }
+
+      void projectWorkflowBridge.selectChapter(chapterId).then(refreshProjectWorkflow);
+    },
+    [projectWorkflowBridge, refreshProjectWorkflow]
+  );
+
   const interactiveChapterEditor =
     chapterEditor === undefined
       ? undefined
@@ -222,6 +286,18 @@ export function App() {
 
   return (
     <WorkspaceShell
+      {...(projectWorkflow === undefined
+        ? {}
+        : {
+            projectWorkflow: {
+              ...projectWorkflow,
+              onProjectRootChange: handleProjectRootChange,
+              onOpenProject: handleOpenProject,
+              onCreateProject: handleCreateProject,
+              onCreateChapter: handleCreateChapter,
+              onSelectChapter: handleSelectChapter
+            }
+          })}
       {...(interactiveChapterEditor === undefined
         ? {}
         : { chapterEditor: interactiveChapterEditor })}

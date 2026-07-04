@@ -90,4 +90,40 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("Version history");
     expect(html).toContain("AI suggestion");
   });
+
+  test("renders project workflow controls and chapter selection", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={application.getShellState()}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        projectWorkflow={{
+          projectRootInput: "D:/Novel/M12",
+          chapters: [
+            {
+              id: "ch_opening",
+              title: "开篇",
+              order: 1,
+              status: "draft",
+              updatedAt: "2026-07-04T00:00:00.000Z"
+            }
+          ],
+          activeChapterId: "ch_opening",
+          onProjectRootChange: () => undefined,
+          onOpenProject: () => undefined,
+          onCreateProject: () => undefined,
+          onCreateChapter: () => undefined,
+          onSelectChapter: () => undefined
+        }}
+      />
+    );
+
+    expect(html).toContain('aria-label="Project path"');
+    expect(html).toContain('aria-label="Open project"');
+    expect(html).toContain('aria-label="Create project"');
+    expect(html).toContain('aria-label="Create chapter"');
+    expect(html).toContain('aria-current="true"');
+    expect(html).toContain("开篇");
+  });
 });

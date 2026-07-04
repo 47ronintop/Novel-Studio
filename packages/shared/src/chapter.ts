@@ -36,9 +36,31 @@ export interface ChapterDocument {
   body: string;
 }
 
+export interface ChapterSummary extends JsonObject {
+  id: string;
+  title: string;
+  order: number;
+  status: ChapterStatus;
+  updatedAt: string;
+  wordCount?: number;
+}
+
+export interface CreateChapterInput extends JsonObject {
+  chapterId: string;
+  title: string;
+  body?: string;
+  order?: number;
+  status?: ChapterStatus;
+}
+
 export interface ChapterDraftRepositoryPort {
   readChapter(chapterId: string): Promise<Result<ChapterDocument, UnifiedError>>;
   writeChapter(chapter: ChapterDocument): Promise<Result<ChapterDocument, UnifiedError>>;
+}
+
+export interface ChapterCatalogRepositoryPort {
+  listChapters(): Promise<Result<readonly ChapterSummary[], UnifiedError>>;
+  createChapter(input: CreateChapterInput): Promise<Result<ChapterDocument, UnifiedError>>;
 }
 
 export interface ChapterVersionSummary extends JsonObject {

@@ -5,8 +5,10 @@ import type {
   ConfigAssetRestoreInput,
   ConfigAssetSaveInput,
   ConfigAssetType,
+  CreateProjectInput,
   ModelProfile
 } from "@novel-studio/application";
+import type { CreateChapterInput } from "@novel-studio/shared";
 
 export type ApplicationIpcHandlers = {
   readonly [Channel in ApplicationIpcChannel]: (...args: readonly unknown[]) => Promise<unknown>;
@@ -24,6 +26,45 @@ export function createApplicationIpcHandlers(
       }
 
       return Promise.resolve(application.executeCommand(commandId));
+    },
+    "application:project:open": (projectRoot: unknown) => {
+      if (typeof projectRoot !== "string") {
+        return application.openProject("");
+      }
+
+      return application.openProject(projectRoot);
+    },
+    "application:project:create": (input: unknown) => {
+      const createInput = toCreateProjectInput(input);
+      if (createInput === undefined) {
+        return application.createProject({
+          projectRoot: "",
+          projectId: "",
+          title: "",
+          language: ""
+        });
+      }
+
+      return application.createProject(createInput);
+    },
+    "application:project:list-chapters": () => application.listProjectChapters(),
+    "application:project:create-chapter": (input: unknown) => {
+      const createInput = toCreateChapterInput(input);
+      if (createInput === undefined) {
+        return application.createProjectChapter({
+          chapterId: "",
+          title: ""
+        });
+      }
+
+      return application.createProjectChapter(createInput);
+    },
+    "application:project:select-chapter": (chapterId: unknown) => {
+      if (typeof chapterId !== "string") {
+        return application.selectProjectChapter("");
+      }
+
+      return application.selectProjectChapter(chapterId);
     },
     "application:chapter:load": () => application.loadActiveChapter(),
     "application:chapter:edit": (nextBody: unknown) => {
@@ -186,6 +227,54 @@ function toConfigAssetSaveInput(value: unknown): ConfigAssetSaveInput | undefine
   };
 }
 
+function toCreateProjectInput(value: unknown): CreateProjectInput | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (
+    typeof value.projectRoot !== "string" ||
+    typeof value.projectId !== "string" ||
+    typeof value.title !== "string" ||
+    typeof value.language !== "string" ||
+    !isOptionalString(value.projectType) ||
+    !isOptionalNumber(value.targetWordCount)
+  ) {
+    return undefined;
+  }
+
+  return {
+    projectRoot: value.projectRoot,
+    projectId: value.projectId,
+    title: value.title,
+    language: value.language,
+    ...(value.projectType === undefined ? {} : { projectType: value.projectType }),
+    ...(value.targetWordCount === undefined ? {} : { targetWordCount: value.targetWordCount })
+  };
+}
+
+function toCreateChapterInput(value: unknown): CreateChapterInput | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (
+    typeof value.chapterId !== "string" ||
+    typeof value.title !== "string" ||
+    !isOptionalString(value.body) ||
+    !isOptionalNumber(value.order) ||
+    !isOptionalChapterStatus(value.status)
+  ) {
+    return undefined;
+  }
+
+  return {
+    chapterId: value.chapterId,
+    title: value.title,
+    ...(value.body === undefined ? {} : { body: value.body }),
+    ...(value.order === undefined ? {} : { order: value.order }),
+    ...(value.status === undefined ? {} : { status: value.status })
+  };
+}
+
 function toConfigAssetRestoreInput(value: unknown): ConfigAssetRestoreInput | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -213,6 +302,18 @@ function isOptionalString(value: unknown): value is string | undefined {
 
 function isOptionalNumber(value: unknown): value is number | undefined {
   return value === undefined || typeof value === "number";
+}
+
+function isOptionalChapterStatus(value: unknown): value is CreateChapterInput["status"] {
+  return (
+    value === undefined ||
+    value === "draft" ||
+    value === "revision" ||
+    value === "review" ||
+    value === "done" ||
+    value === "archived" ||
+    value === "deleted"
+  );
 }
 
 function isOptionalConfigCreatedBy(value: unknown): value is ConfigAssetSaveInput["createdBy"] {

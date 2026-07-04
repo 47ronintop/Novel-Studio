@@ -1,9 +1,15 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { createRequire } from "node:module";
 
 import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
-import type { ChapterDocument, ChapterDraftRepositoryPort } from "@novel-studio/shared";
+import type {
+  ChapterCatalogRepositoryPort,
+  ChapterDocument,
+  ChapterDraftRepositoryPort,
+  ChapterSummary,
+  CreateChapterInput
+} from "@novel-studio/shared";
 
 import { writeTextAtomically } from "./atomic-write.js";
 import { storageError, validationError } from "./errors.js";
@@ -21,9 +27,12 @@ const { dump: dumpYaml, load: loadYaml } = require("js-yaml") as {
 export interface ChapterFileRepositoryOptions {
   projectRoot: string;
   traceId?: string;
+  now?: () => string;
 }
 
-export class ChapterFileRepository implements ChapterDraftRepositoryPort {
+export class ChapterFileRepository
+  implements ChapterDraftRepositoryPort, ChapterCatalogRepositoryPort
+{
   private readonly traceId: string;
 
   public constructor(private readonly options: ChapterFileRepositoryOptions) {
@@ -96,6 +105,116 @@ export class ChapterFileRepository implements ChapterDraftRepositoryPort {
     return ok(parsed.value);
   }
 
+  public async listChapters(): Promise<Result<readonly ChapterSummary[], UnifiedError>> {
+    const chaptersDirectory = join(this.options.projectRoot, "chapters");
+    let entries: readonly string[];
+
+    try {
+      entries = await readdir(chaptersDirectory);
+    } catch (error) {
+      return err(
+        storageError({
+          code: "CHAPTER_DIRECTORY_MISSING",
+          message: "Chapter directory could not be read.",
+          suggestedAction: "Open a valid project folder or create a project first.",
+          traceId: this.traceId,
+          redactedDetail: {
+            reason: error instanceof Error ? error.message : "Unknown readdir error"
+          }
+        })
+      );
+    }
+
+    const summaries: ChapterSummary[] = [];
+    for (const entry of entries.filter((name) => name.endsWith(".md"))) {
+      const chapterId = entry.slice(0, -3);
+      const chapter = await this.readChapter(chapterId);
+      if (!chapter.ok) {
+        return chapter;
+      }
+
+      summaries.push({
+        id: chapter.value.frontmatter.id,
+        title: chapter.value.frontmatter.title,
+        order: chapter.value.frontmatter.order,
+        status: chapter.value.frontmatter.status,
+        updatedAt: chapter.value.frontmatter.updatedAt,
+        ...(chapter.value.frontmatter.wordCount === undefined
+          ? {}
+          : { wordCount: chapter.value.frontmatter.wordCount })
+      });
+    }
+
+    return ok(
+      summaries.sort(
+        (left, right) => left.order - right.order || left.title.localeCompare(right.title)
+      )
+    );
+  }
+
+  public async createChapter(
+    input: CreateChapterInput
+  ): Promise<Result<ChapterDocument, UnifiedError>> {
+    const now = this.options.now?.() ?? new Date().toISOString();
+    const order = input.order ?? (await this.nextChapterOrder());
+    const chapter: ChapterDocument = {
+      frontmatter: {
+        schemaVersion: "1.0",
+        id: input.chapterId,
+        type: "chapter",
+        title: input.title,
+        order,
+        status: input.status ?? "draft",
+        wordCount: countWords(input.body ?? ""),
+        createdAt: now,
+        updatedAt: now
+      },
+      body: input.body ?? ""
+    };
+
+    const existing = await fileExists(
+      join(this.options.projectRoot, "chapters", `${input.chapterId}.md`)
+    );
+    if (existing) {
+      return err(
+        storageError({
+          code: "CHAPTER_ALREADY_EXISTS",
+          message: "Chapter file already exists.",
+          suggestedAction: "Choose a new chapter id or open the existing chapter.",
+          traceId: this.traceId,
+          redactedDetail: { chapterId: input.chapterId }
+        })
+      );
+    }
+
+    try {
+      await mkdir(join(this.options.projectRoot, "chapters"), { recursive: true });
+    } catch (error) {
+      return err(
+        storageError({
+          code: "CHAPTER_CREATE_FAILED",
+          message: "Chapter directory could not be created.",
+          suggestedAction: "Choose a writable project folder and retry.",
+          traceId: this.traceId,
+          redactedDetail: {
+            reason: error instanceof Error ? error.message : "Unknown mkdir error"
+          }
+        })
+      );
+    }
+
+    return this.writeChapter(chapter);
+  }
+
+  private async nextChapterOrder(): Promise<number> {
+    const chapters = await this.listChapters();
+    if (!chapters.ok || chapters.value.length === 0) {
+      return 1;
+    }
+
+    return Math.max(...chapters.value.map((chapter) => chapter.order)) + 1;
+  }
+
   public async writeChapter(
     chapter: ChapterDocument
   ): Promise<Result<ChapterDocument, UnifiedError>> {
@@ -133,6 +252,19 @@ export class ChapterFileRepository implements ChapterDraftRepositoryPort {
 
     return ok(chapter);
   }
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await stat(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function countWords(body: string): number {
+  return body.trim().length === 0 ? 0 : body.trim().split(/\s+/).length;
 }
 
 function parseChapterDocument(

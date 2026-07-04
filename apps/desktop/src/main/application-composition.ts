@@ -1,8 +1,16 @@
 import { join } from "node:path";
 
-import { createChapterEditorSession, createDesktopApplication } from "@novel-studio/application";
+import {
+  createChapterEditorSession,
+  createDesktopApplication,
+  createProjectWorkspaceSession
+} from "@novel-studio/application";
 import type { DesktopApplication } from "@novel-studio/application";
-import { ChapterFileRepository, HistoryRepository } from "@novel-studio/repository";
+import {
+  ChapterFileRepository,
+  HistoryRepository,
+  ProjectFileRepository
+} from "@novel-studio/repository";
 
 export const DEFAULT_FIXTURE_CHAPTER_ID = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D0";
 
@@ -36,6 +44,30 @@ export function createProjectDesktopApplication(
 
   return createDesktopApplication({
     chapterEditorSession,
+    projectWorkspaceSession: createProjectWorkspaceSession({
+      ...(options.now === undefined ? {} : { now: options.now }),
+      createProjectRepository: (projectRoot) =>
+        new ProjectFileRepository({
+          projectRoot,
+          traceId: "trace_desktop_project_repository",
+          ...(options.now === undefined ? {} : { now: options.now })
+        }),
+      createChapterRepository: (projectRoot) =>
+        new ChapterFileRepository({
+          projectRoot,
+          traceId: "trace_desktop_project_chapter_repository",
+          ...(options.now === undefined ? {} : { now: options.now })
+        }),
+      createHistoryRepository: (projectRoot) =>
+        new HistoryRepository({
+          projectRoot,
+          traceId: "trace_desktop_project_history_repository",
+          ...(options.now === undefined ? {} : { now: options.now }),
+          ...(options.createVersionId === undefined
+            ? {}
+            : { createVersionId: options.createVersionId })
+        })
+    }),
     projectTitle: options.projectTitle,
     navigatorSections: [
       { id: "chapters", title: "Chapters", itemCount: 1 },

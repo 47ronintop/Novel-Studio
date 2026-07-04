@@ -1,5 +1,7 @@
 import { createUnifiedError, err, ok } from "@novel-studio/shared";
 import type {
+  ChapterSummary,
+  CreateChapterInput,
   ChapterVersionContent,
   ChapterVersionSummary,
   Result,
@@ -32,6 +34,11 @@ import type {
   ModelSettingsSession,
   ModelSettingsSnapshot
 } from "./model-settings-session.js";
+import type {
+  CreateProjectInput,
+  ProjectWorkspaceSession,
+  ProjectWorkspaceSnapshot
+} from "./project-workspace-session.js";
 
 export type ActivityId = "workspace" | "search" | "timeline" | "ai" | "studio" | "settings";
 
@@ -59,6 +66,13 @@ export interface DesktopApplication {
   getShellState(): DesktopShellState;
   listCommands(): readonly ApplicationCommand[];
   executeCommand(commandId: string): Result<DesktopShellState, UnifiedError>;
+  openProject(projectRoot: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  createProject(input: CreateProjectInput): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  listProjectChapters(): Promise<Result<readonly ChapterSummary[], UnifiedError>>;
+  createProjectChapter(
+    input: CreateChapterInput
+  ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  selectProjectChapter(chapterId: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   loadActiveChapter(): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
   editActiveChapter(nextBody: string): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
   saveActiveChapter(): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
@@ -92,6 +106,7 @@ export interface DesktopApplication {
 
 export interface DesktopApplicationOptions {
   readonly chapterEditorSession?: ChapterEditorSession;
+  readonly projectWorkspaceSession?: ProjectWorkspaceSession;
   readonly modelSettingsSession?: ModelSettingsSession;
   readonly configStudioSession?: ConfigStudioSession;
   readonly projectTitle?: string;
@@ -124,12 +139,17 @@ export function createDesktopApplication(
   options: DesktopApplicationOptions = {}
 ): DesktopApplication {
   const chapterEditorSession = options.chapterEditorSession;
+  const projectWorkspaceSession = options.projectWorkspaceSession;
   const modelSettingsSession = options.modelSettingsSession;
   const configStudioSession = options.configStudioSession;
   let shellState = createInitialShellState(options);
 
   return {
-    getShellState: () => withChapterSaveStatus(shellState, chapterEditorSession?.getState()),
+    getShellState: () =>
+      withChapterSaveStatus(
+        withProjectWorkspaceState(shellState, projectWorkspaceSession?.getSnapshot()),
+        getActiveChapterEditorSession()?.getState()
+      ),
     listCommands: () => DEFAULT_APPLICATION_COMMANDS,
     executeCommand: (commandId: string) => {
       const command = findApplicationCommand(commandId);
@@ -151,74 +171,116 @@ export function createDesktopApplication(
 
       return ok(shellState);
     },
+    async openProject(projectRoot) {
+      if (projectWorkspaceSession === undefined) {
+        return projectWorkspaceUnavailable();
+      }
+
+      return projectWorkspaceSession.openProject(projectRoot);
+    },
+    async createProject(input) {
+      if (projectWorkspaceSession === undefined) {
+        return projectWorkspaceUnavailable();
+      }
+
+      return projectWorkspaceSession.createProject(input);
+    },
+    async listProjectChapters() {
+      if (projectWorkspaceSession === undefined) {
+        return projectWorkspaceUnavailable();
+      }
+
+      return projectWorkspaceSession.listChapters();
+    },
+    async createProjectChapter(input) {
+      if (projectWorkspaceSession === undefined) {
+        return projectWorkspaceUnavailable();
+      }
+
+      return projectWorkspaceSession.createChapter(input);
+    },
+    async selectProjectChapter(chapterId) {
+      if (projectWorkspaceSession === undefined) {
+        return projectWorkspaceUnavailable();
+      }
+
+      return projectWorkspaceSession.selectChapter(chapterId);
+    },
     async loadActiveChapter() {
-      if (chapterEditorSession === undefined) {
+      const activeChapterEditorSession = getActiveChapterEditorSession();
+      if (activeChapterEditorSession === undefined) {
         return chapterEditorUnavailable();
       }
 
-      const loaded = await chapterEditorSession.load();
+      const loaded = await activeChapterEditorSession.load();
       if (!loaded.ok) {
         return loaded;
       }
 
-      return createChapterSnapshot(chapterEditorSession, loaded.value);
+      return createChapterSnapshot(activeChapterEditorSession, loaded.value);
     },
     async editActiveChapter(nextBody: string) {
-      if (chapterEditorSession === undefined) {
+      const activeChapterEditorSession = getActiveChapterEditorSession();
+      if (activeChapterEditorSession === undefined) {
         return chapterEditorUnavailable();
       }
 
-      const edited = chapterEditorSession.edit(nextBody);
+      const edited = activeChapterEditorSession.edit(nextBody);
       if (!edited.ok) {
         return edited;
       }
 
-      return createChapterSnapshot(chapterEditorSession, edited.value);
+      return createChapterSnapshot(activeChapterEditorSession, edited.value);
     },
     async saveActiveChapter() {
-      if (chapterEditorSession === undefined) {
+      const activeChapterEditorSession = getActiveChapterEditorSession();
+      if (activeChapterEditorSession === undefined) {
         return chapterEditorUnavailable();
       }
 
-      const saved = await chapterEditorSession.save();
+      const saved = await activeChapterEditorSession.save();
       if (!saved.ok) {
         return saved;
       }
 
-      return createChapterSnapshot(chapterEditorSession, saved.value);
+      return createChapterSnapshot(activeChapterEditorSession, saved.value);
     },
     async listActiveChapterVersions() {
-      if (chapterEditorSession === undefined) {
+      const activeChapterEditorSession = getActiveChapterEditorSession();
+      if (activeChapterEditorSession === undefined) {
         return chapterEditorUnavailable();
       }
 
-      return chapterEditorSession.listVersions();
+      return activeChapterEditorSession.listVersions();
     },
     async previewActiveChapterVersion(versionId: string) {
-      if (chapterEditorSession === undefined) {
+      const activeChapterEditorSession = getActiveChapterEditorSession();
+      if (activeChapterEditorSession === undefined) {
         return chapterEditorUnavailable();
       }
 
-      return chapterEditorSession.previewVersion(versionId);
+      return activeChapterEditorSession.previewVersion(versionId);
     },
     async restoreActiveChapterVersion(versionId: string) {
-      if (chapterEditorSession === undefined) {
+      const activeChapterEditorSession = getActiveChapterEditorSession();
+      if (activeChapterEditorSession === undefined) {
         return chapterEditorUnavailable();
       }
 
-      const restored = await chapterEditorSession.restoreVersion(versionId);
+      const restored = await activeChapterEditorSession.restoreVersion(versionId);
       if (!restored.ok) {
         return restored;
       }
 
-      return createChapterSnapshot(chapterEditorSession, restored.value);
+      return createChapterSnapshot(activeChapterEditorSession, restored.value);
     },
     previewActiveChapterSuggestionDiff(nextBody: string) {
-      if (chapterEditorSession === undefined) {
+      const activeChapterEditorSession = getActiveChapterEditorSession();
+      if (activeChapterEditorSession === undefined) {
         return chapterEditorUnavailable();
       }
 
-      return ok(chapterEditorSession.previewSuggestionDiff(nextBody));
+      return ok(activeChapterEditorSession.previewSuggestionDiff(nextBody));
     },
     async listModelProfiles() {
       if (modelSettingsSession === undefined) {
@@ -263,6 +325,10 @@ export function createDesktopApplication(
       return configStudioSession.restoreConfigAssetVersion(input);
     }
   };
+
+  function getActiveChapterEditorSession(): ChapterEditorSession | undefined {
+    return projectWorkspaceSession?.getActiveChapterEditorSession() ?? chapterEditorSession;
+  }
 }
 
 function createInitialShellState(options: DesktopApplicationOptions): DesktopShellState {
@@ -286,6 +352,25 @@ function withChapterSaveStatus(
   return {
     ...shellState,
     saveStatus: chapterState.saveStatus
+  };
+}
+
+function withProjectWorkspaceState(
+  shellState: DesktopShellState,
+  workspaceSnapshot: ProjectWorkspaceSnapshot | undefined
+): DesktopShellState {
+  if (workspaceSnapshot === undefined) {
+    return shellState;
+  }
+
+  return {
+    ...shellState,
+    projectTitle: workspaceSnapshot.project.title,
+    navigatorSections: shellState.navigatorSections.map((section) =>
+      section.id === "chapters"
+        ? { ...section, itemCount: workspaceSnapshot.chapters.length }
+        : section
+    )
   };
 }
 
@@ -339,6 +424,19 @@ function configStudioUnavailable<T>(): Result<T, UnifiedError> {
       recoverability: "user-action",
       suggestedAction: "Open a project with Studio support before editing configuration assets.",
       traceId: "application-config-studio"
+    })
+  );
+}
+
+function projectWorkspaceUnavailable<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "PROJECT_WORKSPACE_UNAVAILABLE",
+      category: "UserError",
+      message: "No project workspace session is available.",
+      recoverability: "user-action",
+      suggestedAction: "Create or open a project before using project workflow commands.",
+      traceId: "application-project-workspace"
     })
   );
 }

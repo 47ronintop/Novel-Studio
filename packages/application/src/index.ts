@@ -33,6 +33,18 @@ export type {
 } from "./desktop-application.js";
 export { createDesktopApplication } from "./desktop-application.js";
 export type {
+  CreateProjectInput,
+  ProjectChapterRepositoryPort,
+  ProjectMetadata,
+  ProjectRepositoryPort,
+  ProjectSnapshot,
+  ProjectWorkspaceSession,
+  ProjectWorkspaceSessionOptions,
+  ProjectWorkspaceSnapshot,
+  WorkspaceProjectSettings
+} from "./project-workspace-session.js";
+export { createProjectWorkspaceSession } from "./project-workspace-session.js";
+export type {
   ModelConnectionResult,
   ModelConnectionTester,
   ModelProfile,

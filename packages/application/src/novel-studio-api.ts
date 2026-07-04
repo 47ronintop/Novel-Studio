@@ -1,4 +1,6 @@
 import type {
+  ChapterSummary,
+  CreateChapterInput,
   ChapterVersionContent,
   ChapterVersionSummary,
   Result,
@@ -23,12 +25,22 @@ import type {
   ModelProfile,
   ModelSettingsSnapshot
 } from "./model-settings-session.js";
+import type { CreateProjectInput, ProjectWorkspaceSnapshot } from "./project-workspace-session.js";
 
 export interface NovelStudioApi {
   getShellState(): Promise<DesktopShellState>;
   commands: {
     list(): Promise<readonly ApplicationCommand[]>;
     execute(commandId: string): Promise<Result<DesktopShellState, UnifiedError>>;
+  };
+  project: {
+    open(projectRoot: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+    create(input: CreateProjectInput): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+    listChapters(): Promise<Result<readonly ChapterSummary[], UnifiedError>>;
+    createChapter(
+      input: CreateChapterInput
+    ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+    selectChapter(chapterId: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   };
   chapter: {
     load(): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;

@@ -12,9 +12,13 @@ import type {
   ModelConnectionResult,
   ModelProfile,
   ModelSettingsSnapshot,
-  NovelStudioApi
+  NovelStudioApi,
+  ProjectWorkspaceSnapshot,
+  CreateProjectInput
 } from "@novel-studio/application";
 import type {
+  ChapterSummary,
+  CreateChapterInput,
   ChapterVersionContent,
   ChapterVersionSummary,
   Result,
@@ -35,6 +39,37 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           ipc,
           "application:execute-command",
           commandId
+        )
+    },
+    project: {
+      open: (projectRoot: string) =>
+        invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
+          ipc,
+          "application:project:open",
+          projectRoot
+        ),
+      create: (input: CreateProjectInput) =>
+        invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
+          ipc,
+          "application:project:create",
+          input
+        ),
+      listChapters: () =>
+        invokeTyped<Result<readonly ChapterSummary[], UnifiedError>>(
+          ipc,
+          "application:project:list-chapters"
+        ),
+      createChapter: (input: CreateChapterInput) =>
+        invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
+          ipc,
+          "application:project:create-chapter",
+          input
+        ),
+      selectChapter: (chapterId: string) =>
+        invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
+          ipc,
+          "application:project:select-chapter",
+          chapterId
         )
     },
     chapter: {

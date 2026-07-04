@@ -89,7 +89,9 @@ textarea:focus-visible,
 
 .ns-command-button,
 .ns-tab,
-.ns-bottom-tab {
+.ns-bottom-tab,
+.ns-icon-text-button,
+.ns-chapter-row {
   background: var(--ns-surface-raised);
   border: 1px solid var(--ns-border);
   border-radius: 6px;
@@ -99,6 +101,14 @@ textarea:focus-visible,
 
 .ns-command-button {
   padding: 5px 8px;
+}
+
+.ns-icon-text-button {
+  align-items: center;
+  display: inline-flex;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 8px;
 }
 
 .ns-command-button kbd {
@@ -168,6 +178,30 @@ textarea:focus-visible,
   padding: 6px;
 }
 
+.ns-project-workflow {
+  border-bottom: 1px solid var(--ns-border);
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+}
+
+.ns-project-path {
+  background: var(--ns-bg);
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  color: var(--ns-ink);
+  min-height: 30px;
+  min-width: 0;
+  padding: 0 8px;
+  width: 100%;
+}
+
+.ns-project-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .ns-tree-row {
   align-items: center;
   border-radius: 6px;
@@ -177,6 +211,31 @@ textarea:focus-visible,
   justify-content: space-between;
   min-height: 32px;
   padding: 0 8px;
+}
+
+.ns-chapter-tree {
+  border-top: 1px solid var(--ns-border);
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+}
+
+.ns-chapter-row {
+  align-items: center;
+  color: var(--ns-muted);
+  display: flex;
+  font-size: 13px;
+  justify-content: space-between;
+  min-height: 30px;
+  padding: 0 8px;
+  width: 100%;
+}
+
+.ns-chapter-row[aria-current="true"] {
+  border-color: var(--ns-primary);
+  color: var(--ns-ink);
 }
 
 .ns-editor-area {
