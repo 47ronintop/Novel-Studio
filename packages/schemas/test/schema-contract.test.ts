@@ -91,6 +91,44 @@ describe("schema contract coverage", () => {
     expect(result.valid).toBe(true);
     expect(fixture.experimentalUserField).toBe("must stay");
   });
+
+  test("settings model profiles reject plaintext keys and unsupported providers", () => {
+    const fixture = {
+      schemaVersion: "1.0",
+      autosave: {
+        enabled: true,
+        intervalMs: 30000
+      },
+      history: {
+        snapshotPolicy: "manual-and-interval"
+      },
+      models: {
+        defaultProfileId: "model_plaintext",
+        profiles: [
+          {
+            id: "model_plaintext",
+            provider: "unsupported-provider",
+            displayName: "Plaintext Model",
+            baseUrl: "https://api.example.com/v1",
+            apiKeyRef: "secret://model_plaintext/api_key",
+            apiKey: "sk-secret",
+            modelName: "example-model",
+            temperature: 0.7,
+            maxTokens: 4096,
+            timeoutMs: 60000
+          }
+        ]
+      }
+    };
+    const validate = createSchemaValidator(readSchema("settings"));
+
+    const result = validate(fixture);
+
+    expect(result.valid).toBe(false);
+    expect(result.issues.map((issue) => issue.instancePath)).toEqual(
+      expect.arrayContaining(["/models/profiles/0/provider", "/models/profiles/0/apiKey"])
+    );
+  });
 });
 
 function expectIssueShape(issue: ValidationIssue): void {

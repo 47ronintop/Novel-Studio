@@ -7,8 +7,11 @@ import {
   type Result,
   type UnifiedError
 } from "@novel-studio/shared";
+import type { LlmModelProfile, LlmParameters } from "@novel-studio/llm-adapter";
 
-export interface ModelProfile {
+export type ModelProvider = "openai-compatible" | "openai" | "ollama";
+
+export interface ModelProfile extends JsonObject {
   readonly id: string;
   readonly provider: string;
   readonly displayName: string;
@@ -23,14 +26,29 @@ export interface ModelProfile {
   readonly presencePenalty?: number;
 }
 
-export interface ProjectSettings {
+export interface AutosaveSettings extends JsonObject {
+  readonly enabled: boolean;
+  readonly intervalMs: number;
+  readonly createHistorySnapshot?: boolean;
+}
+
+export interface HistorySettings extends JsonObject {
+  readonly snapshotPolicy:
+    "manual-only" | "interval-only" | "manual-and-interval" | "on-save-and-manual";
+  readonly intervalMinutes?: number;
+  readonly maxSnapshotsPerChapter?: number | null;
+}
+
+export interface ModelSettings extends JsonObject {
+  readonly defaultProfileId: string;
+  readonly profiles: ModelProfile[];
+}
+
+export interface ProjectSettings extends JsonObject {
   readonly schemaVersion: "1.0";
-  readonly autosave: JsonObject;
-  readonly history: JsonObject;
-  readonly models: {
-    readonly defaultProfileId: string;
-    readonly profiles: readonly ModelProfile[];
-  };
+  readonly autosave: AutosaveSettings;
+  readonly history: HistorySettings;
+  readonly models: ModelSettings;
 }
 
 export interface ProjectSettingsPort {
@@ -52,6 +70,11 @@ export interface ModelConnectionTester {
 export interface ModelSettingsSnapshot {
   readonly defaultProfileId: string;
   readonly profiles: readonly ModelProfile[];
+}
+
+export interface ModelRuntimeProfile {
+  readonly modelProfile: LlmModelProfile;
+  readonly parameters: LlmParameters;
 }
 
 export interface ModelSettingsSession {
@@ -84,6 +107,11 @@ export function createModelSettingsSession(
     },
 
     async saveModelProfile(profile, saveOptions = {}) {
+      const profileValidation = validateModelProfile(profile);
+      if (!profileValidation.ok) {
+        return profileValidation;
+      }
+
       const settings = await options.settingsPort.readSettings();
       if (!settings.ok) {
         return settings;
@@ -162,6 +190,55 @@ export function createModelSettingsSession(
   };
 }
 
+export function resolveDefaultModelRuntimeProfile(
+  settings: ProjectSettings
+): Result<ModelRuntimeProfile, UnifiedError> {
+  const profile = settings.models.profiles.find(
+    (entry) => entry.id === settings.models.defaultProfileId
+  );
+  if (profile === undefined) {
+    return err(
+      createUnifiedError({
+        code: "MODEL_PROFILE_NOT_FOUND",
+        category: "UserError",
+        message: "The default model profile does not exist.",
+        recoverability: "user-action",
+        suggestedAction: "Choose an existing default model profile in Settings.",
+        traceId: "application-model-settings",
+        redactedDetail: { defaultProfileId: settings.models.defaultProfileId }
+      })
+    );
+  }
+
+  const validation = validateModelProfile(profile);
+  if (!validation.ok) {
+    return validation;
+  }
+
+  const modelProfileBase: LlmModelProfile = {
+    id: profile.id,
+    provider: validation.value,
+    displayName: profile.displayName,
+    modelName: profile.modelName
+  };
+  const modelProfile: LlmModelProfile = {
+    ...modelProfileBase,
+    ...(profile.baseUrl === undefined ? {} : { baseUrl: profile.baseUrl }),
+    apiKeyRef: profile.apiKeyRef,
+    timeoutMs: profile.timeoutMs
+  };
+  const parameters: LlmParameters = {
+    temperature: profile.temperature,
+    maxTokens: profile.maxTokens,
+    ...(profile.topP === undefined ? {} : { topP: profile.topP })
+  };
+
+  return ok({
+    modelProfile,
+    parameters
+  });
+}
+
 function snapshotFromSettings(settings: ProjectSettings): ModelSettingsSnapshot {
   return {
     defaultProfileId: settings.models.defaultProfileId,
@@ -169,16 +246,47 @@ function snapshotFromSettings(settings: ProjectSettings): ModelSettingsSnapshot 
   };
 }
 
-function upsertProfile(
-  profiles: readonly ModelProfile[],
-  profile: ModelProfile
-): readonly ModelProfile[] {
+function upsertProfile(profiles: readonly ModelProfile[], profile: ModelProfile): ModelProfile[] {
   const existingIndex = profiles.findIndex((entry) => entry.id === profile.id);
   if (existingIndex === -1) {
     return [...profiles, profile];
   }
 
   return profiles.map((entry) => (entry.id === profile.id ? profile : entry));
+}
+
+function validateModelProfile(profile: ModelProfile): Result<ModelProvider, UnifiedError> {
+  const provider = toSupportedProvider(profile.provider);
+  if (provider === undefined || !profile.apiKeyRef.startsWith("secret://")) {
+    return err(
+      createUnifiedError({
+        code: "MODEL_PROFILE_INVALID",
+        category: "ValidationError",
+        message: "Model profile must use a supported provider and a secret reference.",
+        recoverability: "user-action",
+        suggestedAction: "Use OpenAI Compatible, OpenAI, or Ollama and store keys as secret refs.",
+        traceId: "application-model-settings",
+        redactedDetail: {
+          profileId: profile.id,
+          provider: profile.provider,
+          apiKeyRef: redactJsonValue("apiKeyRef", profile.apiKeyRef)
+        }
+      })
+    );
+  }
+
+  return ok(provider);
+}
+
+function toSupportedProvider(provider: string): ModelProvider | undefined {
+  switch (provider) {
+    case "openai-compatible":
+    case "openai":
+    case "ollama":
+      return provider;
+    default:
+      return undefined;
+  }
 }
 
 function redactJsonObject(value: JsonObject): JsonObject {

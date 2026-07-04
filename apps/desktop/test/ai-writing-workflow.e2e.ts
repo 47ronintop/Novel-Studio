@@ -34,7 +34,8 @@ test("generates an AI writing suggestion and applies it only after confirmation"
 
     await expect(page.getByText("Generated a local mock continuation for review.")).toBeVisible();
     await expect(page.getByLabel("AI suggestion diff")).toContainText("AI continuation draft.");
-    await expect(body).toHaveValue("Opening line.");
+    await expect(body).toHaveValue(/Opening line\./);
+    await expect(body).not.toHaveValue(/AI continuation draft\./);
 
     await page.getByRole("button", { name: "Apply AI suggestion" }).click();
 

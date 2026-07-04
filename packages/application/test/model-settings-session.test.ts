@@ -11,6 +11,7 @@ import {
 
 import {
   createModelSettingsSession,
+  resolveDefaultModelRuntimeProfile,
   type ModelConnectionTester,
   type ModelProfile,
   type ProjectSettings,
@@ -160,6 +161,59 @@ describe("model settings session", () => {
     expect(result.error.code).toBe("MODEL_CONNECTION_FAILED");
     expect(JSON.stringify(result.error)).not.toContain("sk-secret");
     expect(JSON.stringify(result.error)).not.toContain("secret://model_default/api_key");
+  });
+
+  test("rejects unsupported providers and non-secret key references before writing settings", async () => {
+    const writes: ProjectSettings[] = [];
+    const port: ProjectSettingsPort = {
+      async readSettings() {
+        return ok(settings);
+      },
+      async writeSettings(nextSettings) {
+        writes.push(nextSettings);
+        return ok(nextSettings);
+      }
+    };
+    const session = createModelSettingsSession({ settingsPort: port });
+
+    const result = await session.saveModelProfile({
+      ...secondaryProfile,
+      provider: "unsupported-provider",
+      apiKeyRef: "sk-plaintext"
+    });
+
+    expect(isErr(result)).toBe(true);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error.code).toBe("MODEL_PROFILE_INVALID");
+    expect(JSON.stringify(result.error)).not.toContain("sk-plaintext");
+    expect(writes).toEqual([]);
+  });
+
+  test("resolves the default settings profile into an LLM runtime profile", () => {
+    const result = resolveDefaultModelRuntimeProfile(settings);
+
+    expect(isOk(result)).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.value).toEqual({
+      modelProfile: {
+        id: "model_default",
+        provider: "openai-compatible",
+        displayName: "Default Model",
+        baseUrl: "https://api.example.com/v1",
+        apiKeyRef: "secret://model_default/api_key",
+        modelName: "example-model",
+        timeoutMs: 60000
+      },
+      parameters: {
+        temperature: 0.7,
+        maxTokens: 4096,
+        topP: 1
+      }
+    });
   });
 });
 

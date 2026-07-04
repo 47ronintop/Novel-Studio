@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import { createAgentBackedAiWritingWorkflowSession } from "../src/ai-writing-workflow-session.js";
 import { createChapterEditorSession } from "../src/chapter-editor-session.js";
 import { createLlmAdapter, createMockProvider } from "@novel-studio/llm-adapter";
+import type { LlmProvider, LlmRequest } from "@novel-studio/llm-adapter";
 import { isErr, isOk, ok, type ChapterDocument } from "@novel-studio/shared";
 import type { ChapterDraftRepositoryPort } from "../src/chapter-editor-session.js";
 
@@ -104,6 +105,129 @@ describe("M14 AI writing workflow session", () => {
     expect(applied.value.state.saveStatus).toBe("Unsaved");
     expect(writes).toEqual([]);
   });
+
+  test("uses the configured default model profile for the agent LLM request", async () => {
+    const requests: LlmRequest[] = [];
+    const chapterSession = createChapterEditorSession({
+      chapterId: "ch_m14",
+      repository: createRepository([]),
+      now: () => "2026-07-04T00:00:00.000Z"
+    });
+    const loaded = await chapterSession.load();
+    if (isErr(loaded)) {
+      throw new Error(loaded.error.message);
+    }
+
+    const aiWorkflow = createAgentBackedAiWritingWorkflowSession({
+      chapterEditorSession: chapterSession,
+      llmAdapter: createLlmAdapter({
+        provider: createCapturingProvider(requests),
+        clock: () => "2026-07-04T00:00:00.000Z"
+      }),
+      modelProfile: {
+        id: "model_openai_compatible",
+        provider: "openai-compatible",
+        displayName: "OpenAI Compatible",
+        baseUrl: "https://api.example.com/v1",
+        apiKeyRef: "secret://model_openai_compatible/api_key",
+        modelName: "example-model",
+        timeoutMs: 60000,
+        tokenPricing: {
+          inputPerMillion: 2,
+          outputPerMillion: 8,
+          currency: "USD"
+        }
+      },
+      parameters: {
+        temperature: 0.4,
+        maxTokens: 2048,
+        topP: 0.9
+      },
+      now: () => "2026-07-04T00:00:00.000Z",
+      createWorkflowRunId: () => "wfrun_m15",
+      createSuggestionId: () => "sug_m15",
+      createAgentRunId: () => "agentrun_m15",
+      createHandoffId: () => "handoff_m15"
+    });
+
+    const generated = await aiWorkflow.generateChapterSuggestion({
+      instruction: "Continue with the selected profile."
+    });
+
+    expect(isOk(generated)).toBe(true);
+    expect(requests[0]?.modelProfile).toEqual({
+      id: "model_openai_compatible",
+      provider: "openai-compatible",
+      displayName: "OpenAI Compatible",
+      baseUrl: "https://api.example.com/v1",
+      apiKeyRef: "secret://model_openai_compatible/api_key",
+      modelName: "example-model",
+      timeoutMs: 60000,
+      tokenPricing: {
+        inputPerMillion: 2,
+        outputPerMillion: 8,
+        currency: "USD"
+      }
+    });
+    expect(requests[0]?.parameters).toEqual({
+      temperature: 0.4,
+      maxTokens: 2048,
+      topP: 0.9
+    });
+  });
+
+  test("resolves the runtime model profile when generating a suggestion", async () => {
+    const requests: LlmRequest[] = [];
+    const chapterSession = createChapterEditorSession({
+      chapterId: "ch_m14",
+      repository: createRepository([]),
+      now: () => "2026-07-04T00:00:00.000Z"
+    });
+    const loaded = await chapterSession.load();
+    if (isErr(loaded)) {
+      throw new Error(loaded.error.message);
+    }
+
+    const aiWorkflow = createAgentBackedAiWritingWorkflowSession({
+      chapterEditorSession: chapterSession,
+      llmAdapter: createLlmAdapter({
+        provider: createCapturingProvider(requests),
+        clock: () => "2026-07-04T00:00:00.000Z"
+      }),
+      resolveModelRuntimeProfile: async () =>
+        ok({
+          modelProfile: {
+            id: "model_ollama",
+            provider: "ollama",
+            displayName: "Local Ollama",
+            baseUrl: "http://localhost:11434/v1",
+            apiKeyRef: "secret://model_ollama/api_key",
+            modelName: "llama3.1",
+            timeoutMs: 30000
+          },
+          parameters: {
+            temperature: 0.2,
+            maxTokens: 1024
+          }
+        }),
+      now: () => "2026-07-04T00:00:00.000Z",
+      createWorkflowRunId: () => "wfrun_m15_resolved",
+      createSuggestionId: () => "sug_m15_resolved",
+      createAgentRunId: () => "agentrun_m15_resolved",
+      createHandoffId: () => "handoff_m15_resolved"
+    });
+
+    const generated = await aiWorkflow.generateChapterSuggestion({
+      instruction: "Continue with resolved profile."
+    });
+
+    expect(isOk(generated)).toBe(true);
+    expect(requests[0]?.modelProfile.id).toBe("model_ollama");
+    expect(requests[0]?.parameters).toEqual({
+      temperature: 0.2,
+      maxTokens: 1024
+    });
+  });
 });
 
 function createRepository(writes: ChapterDocument[]): ChapterDraftRepositoryPort {
@@ -114,6 +238,30 @@ function createRepository(writes: ChapterDocument[]): ChapterDraftRepositoryPort
     async writeChapter(chapter) {
       writes.push(chapter);
       return ok(chapter);
+    }
+  };
+}
+
+function createCapturingProvider(requests: LlmRequest[]): LlmProvider {
+  return {
+    id: "openai-compatible",
+    async complete(request) {
+      requests.push(request);
+      return {
+        content: {
+          type: "json",
+          value: {
+            proposedBody,
+            summary: "Continues the current scene."
+          }
+        }
+      };
+    },
+    async *stream() {
+      yield {
+        type: "delta",
+        value: ""
+      };
     }
   };
 }

@@ -1,6 +1,11 @@
 import { buildContextBundle, type ContextBundleTrace } from "@novel-studio/context-engine";
 import { runAgent, type AgentConfig } from "@novel-studio/agent-engine";
-import type { LlmAdapter, LlmRequest } from "@novel-studio/llm-adapter";
+import type {
+  LlmAdapter,
+  LlmModelProfile,
+  LlmParameters,
+  LlmRequest
+} from "@novel-studio/llm-adapter";
 import {
   completeWorkflowStep,
   confirmWorkflowStep,
@@ -24,6 +29,7 @@ import type {
   ChapterEditorSnapshot,
   ChapterSuggestionDiffPreview
 } from "./chapter-editor-session.js";
+import type { ModelRuntimeProfile } from "./model-settings-session.js";
 
 export interface AiWritingSuggestionRequest {
   readonly instruction: string;
@@ -49,6 +55,9 @@ export interface AiWritingWorkflowSession {
 export interface AiWritingWorkflowSessionOptions {
   readonly chapterEditorSession: ChapterEditorSession;
   readonly llmAdapter: LlmAdapter;
+  readonly modelProfile?: LlmModelProfile;
+  readonly parameters?: LlmParameters;
+  readonly resolveModelRuntimeProfile?: () => Promise<Result<ModelRuntimeProfile, UnifiedError>>;
   readonly now?: () => string;
   readonly createWorkflowRunId?: () => string;
   readonly createSuggestionId?: () => string;
@@ -184,6 +193,10 @@ export function createAgentBackedAiWritingWorkflowSession(
       if (agentAction.value.kind !== "run-agent") {
         return invalidWorkflowAction(agentAction.value.kind);
       }
+      const runtimeProfile = await resolveModelRuntimeProfile(options);
+      if (!runtimeProfile.ok) {
+        return runtimeProfile;
+      }
 
       const handoff = await runAgent({
         schemaVersion: "1.0",
@@ -198,7 +211,12 @@ export function createAgentBackedAiWritingWorkflowSession(
           currentBody: chapterState.chapter.body
         },
         contextBundle: contextBundle.value,
-        llmRequest: createLlmRequest(runState.workflowRunId, request.instruction),
+        llmRequest: createLlmRequest(
+          runState.workflowRunId,
+          request.instruction,
+          runtimeProfile.value.modelProfile,
+          runtimeProfile.value.parameters
+        ),
         llmAdapter: options.llmAdapter,
         validateSchema: validateAiWritingSchema,
         now
@@ -301,18 +319,43 @@ export function createAgentBackedAiWritingWorkflowSession(
   };
 }
 
-function createLlmRequest(workflowRunId: string, instruction: string): LlmRequest {
+const defaultModelProfile: LlmModelProfile = {
+  id: "mock_m14",
+  provider: "mock",
+  displayName: "M14 Mock Writer",
+  modelName: "mock-writer"
+};
+
+const defaultParameters: LlmParameters = {
+  temperature: 0.7,
+  maxTokens: 1200
+};
+
+async function resolveModelRuntimeProfile(
+  options: AiWritingWorkflowSessionOptions
+): Promise<Result<ModelRuntimeProfile, UnifiedError>> {
+  if (options.resolveModelRuntimeProfile !== undefined) {
+    return options.resolveModelRuntimeProfile();
+  }
+
+  return ok({
+    modelProfile: options.modelProfile ?? defaultModelProfile,
+    parameters: options.parameters ?? defaultParameters
+  });
+}
+
+function createLlmRequest(
+  workflowRunId: string,
+  instruction: string,
+  modelProfile: LlmModelProfile,
+  parameters: LlmParameters
+): LlmRequest {
   return {
     schemaVersion: "1.0",
     requestId: `llm_${workflowRunId}`,
     traceId: "ai-writing-workflow",
     mode: "non-streaming",
-    modelProfile: {
-      id: "mock_m14",
-      provider: "mock",
-      displayName: "M14 Mock Writer",
-      modelName: "mock-writer"
-    },
+    modelProfile,
     messages: [
       {
         role: "system",
@@ -323,10 +366,7 @@ function createLlmRequest(workflowRunId: string, instruction: string): LlmReques
         content: instruction
       }
     ],
-    parameters: {
-      temperature: 0.7,
-      maxTokens: 1200
-    },
+    parameters,
     responseFormat: {
       type: "json_object"
     }

@@ -50,7 +50,10 @@
             ],
             "properties": {
               "id": { "type": "string" },
-              "provider": { "type": "string" },
+              "provider": {
+                "type": "string",
+                "enum": ["openai-compatible", "openai", "ollama"]
+              },
               "displayName": { "type": "string", "minLength": 1 },
               "baseUrl": { "type": "string" },
               "apiKeyRef": { "type": "string", "pattern": "^secret://" },

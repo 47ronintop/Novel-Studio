@@ -45,16 +45,24 @@ export type {
 } from "./project-workspace-session.js";
 export { createProjectWorkspaceSession } from "./project-workspace-session.js";
 export type {
+  AutosaveSettings,
+  HistorySettings,
   ModelConnectionResult,
   ModelConnectionTester,
+  ModelProvider,
   ModelProfile,
+  ModelSettings,
+  ModelRuntimeProfile,
   ModelSettingsSession,
   ModelSettingsSessionOptions,
   ModelSettingsSnapshot,
   ProjectSettings,
   ProjectSettingsPort
 } from "./model-settings-session.js";
-export { createModelSettingsSession } from "./model-settings-session.js";
+export {
+  createModelSettingsSession,
+  resolveDefaultModelRuntimeProfile
+} from "./model-settings-session.js";
 export type {
   ConfigAssetPort,
   ConfigAssetRestoreInput,
