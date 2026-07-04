@@ -18,6 +18,20 @@ import type {
   ChapterEditorState,
   ChapterSuggestionDiffPreview
 } from "./chapter-editor-session.js";
+import type {
+  ConfigAssetRestoreInput,
+  ConfigAssetSaveInput,
+  ConfigAssetSnapshot,
+  ConfigAssetType,
+  ConfigStudioSession,
+  ConfigVersionSummary
+} from "./config-studio-session.js";
+import type {
+  ModelConnectionResult,
+  ModelProfile,
+  ModelSettingsSession,
+  ModelSettingsSnapshot
+} from "./model-settings-session.js";
 
 export type ActivityId = "workspace" | "search" | "timeline" | "ai" | "studio" | "settings";
 
@@ -58,10 +72,28 @@ export interface DesktopApplication {
   previewActiveChapterSuggestionDiff(
     nextBody: string
   ): Result<ChapterSuggestionDiffPreview, UnifiedError>;
+  listModelProfiles(): Promise<Result<ModelSettingsSnapshot, UnifiedError>>;
+  saveModelProfile(
+    profile: ModelProfile,
+    options?: { readonly makeDefault?: boolean }
+  ): Promise<Result<ModelSettingsSnapshot, UnifiedError>>;
+  testModelProfileConnection(
+    profileId: string
+  ): Promise<Result<ModelConnectionResult, UnifiedError>>;
+  loadConfigAsset(
+    assetType: ConfigAssetType,
+    assetId: string
+  ): Promise<Result<ConfigAssetSnapshot, UnifiedError>>;
+  saveConfigAsset(input: ConfigAssetSaveInput): Promise<Result<ConfigVersionSummary, UnifiedError>>;
+  restoreConfigAssetVersion(
+    input: ConfigAssetRestoreInput
+  ): Promise<Result<ConfigAssetSnapshot, UnifiedError>>;
 }
 
 export interface DesktopApplicationOptions {
   readonly chapterEditorSession?: ChapterEditorSession;
+  readonly modelSettingsSession?: ModelSettingsSession;
+  readonly configStudioSession?: ConfigStudioSession;
   readonly projectTitle?: string;
   readonly navigatorSections?: readonly NavigatorSection[];
 }
@@ -92,6 +124,8 @@ export function createDesktopApplication(
   options: DesktopApplicationOptions = {}
 ): DesktopApplication {
   const chapterEditorSession = options.chapterEditorSession;
+  const modelSettingsSession = options.modelSettingsSession;
+  const configStudioSession = options.configStudioSession;
   let shellState = createInitialShellState(options);
 
   return {
@@ -185,6 +219,48 @@ export function createDesktopApplication(
       }
 
       return ok(chapterEditorSession.previewSuggestionDiff(nextBody));
+    },
+    async listModelProfiles() {
+      if (modelSettingsSession === undefined) {
+        return modelSettingsUnavailable();
+      }
+
+      return modelSettingsSession.listModelProfiles();
+    },
+    async saveModelProfile(profile, saveOptions) {
+      if (modelSettingsSession === undefined) {
+        return modelSettingsUnavailable();
+      }
+
+      return modelSettingsSession.saveModelProfile(profile, saveOptions);
+    },
+    async testModelProfileConnection(profileId) {
+      if (modelSettingsSession === undefined) {
+        return modelSettingsUnavailable();
+      }
+
+      return modelSettingsSession.testModelProfileConnection(profileId);
+    },
+    async loadConfigAsset(assetType, assetId) {
+      if (configStudioSession === undefined) {
+        return configStudioUnavailable();
+      }
+
+      return configStudioSession.loadConfigAsset(assetType, assetId);
+    },
+    async saveConfigAsset(input) {
+      if (configStudioSession === undefined) {
+        return configStudioUnavailable();
+      }
+
+      return configStudioSession.saveConfigAsset(input);
+    },
+    async restoreConfigAssetVersion(input) {
+      if (configStudioSession === undefined) {
+        return configStudioUnavailable();
+      }
+
+      return configStudioSession.restoreConfigAssetVersion(input);
     }
   };
 }
@@ -237,6 +313,32 @@ function chapterEditorUnavailable<T>(): Result<T, UnifiedError> {
       recoverability: "user-action",
       suggestedAction: "Open a project chapter before using editor commands.",
       traceId: "application-chapter-editor"
+    })
+  );
+}
+
+function modelSettingsUnavailable<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "MODEL_SETTINGS_UNAVAILABLE",
+      category: "UserError",
+      message: "No model settings session is available.",
+      recoverability: "user-action",
+      suggestedAction: "Open a project with settings support before editing model profiles.",
+      traceId: "application-model-settings"
+    })
+  );
+}
+
+function configStudioUnavailable<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "CONFIG_STUDIO_UNAVAILABLE",
+      category: "UserError",
+      message: "No config studio session is available.",
+      recoverability: "user-action",
+      suggestedAction: "Open a project with Studio support before editing configuration assets.",
+      traceId: "application-config-studio"
     })
   );
 }

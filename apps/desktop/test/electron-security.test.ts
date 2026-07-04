@@ -1,10 +1,10 @@
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 
 import { APPLICATION_IPC_CHANNELS, isApplicationIpcChannel } from "@novel-studio/application";
-import { createSecureWebPreferences } from "../src/main/security";
 import { createApplicationIpcHandlers } from "../src/main/ipc-handlers";
+import { createSecureWebPreferences } from "../src/main/security";
 import { createNovelStudioApi } from "../src/preload/api";
 
 const rendererRoot = join(process.cwd(), "apps", "desktop", "src", "renderer");
@@ -45,10 +45,18 @@ describe("Electron security baseline", () => {
       "application:chapter:list-versions",
       "application:chapter:preview-version",
       "application:chapter:restore-version",
-      "application:chapter:preview-suggestion-diff"
+      "application:chapter:preview-suggestion-diff",
+      "application:settings:list-model-profiles",
+      "application:settings:save-model-profile",
+      "application:settings:test-model-profile",
+      "application:studio:load-config-asset",
+      "application:studio:save-config-asset",
+      "application:studio:restore-config-version"
     ]);
     expect(isApplicationIpcChannel("application:list-commands")).toBe(true);
     expect(isApplicationIpcChannel("application:chapter:save")).toBe(true);
+    expect(isApplicationIpcChannel("application:settings:list-model-profiles")).toBe(true);
+    expect(isApplicationIpcChannel("application:studio:save-config-asset")).toBe(true);
     expect(isApplicationIpcChannel("fs:read-file")).toBe(false);
     expect(isApplicationIpcChannel("shell:open-path")).toBe(false);
   });
@@ -66,12 +74,35 @@ describe("Electron security baseline", () => {
     await api.commands.list();
     await api.commands.execute("workspace.toggle-navigator");
     await api.chapter.load();
-    await api.chapter.edit("修改后的章节正文。\n");
+    await api.chapter.edit("updated chapter body");
     await api.chapter.save();
     await api.chapter.listVersions();
     await api.chapter.previewVersion("ver_01");
     await api.chapter.restoreVersion("ver_01");
-    await api.chapter.previewSuggestionDiff("AI 建议正文。\n");
+    await api.chapter.previewSuggestionDiff("AI suggestion body");
+    await api.settings.listModelProfiles();
+    await api.settings.saveModelProfile({
+      id: "model_default",
+      provider: "openai-compatible",
+      displayName: "Default Model",
+      apiKeyRef: "secret://model_default/api_key",
+      modelName: "example-model",
+      temperature: 0.7,
+      maxTokens: 4096,
+      timeoutMs: 60000
+    });
+    await api.settings.testModelProfileConnection("model_default");
+    await api.studio.loadConfigAsset("workflow", "wf_review_chapter");
+    await api.studio.saveConfigAsset({
+      assetType: "workflow",
+      assetId: "wf_review_chapter",
+      content: { schemaVersion: "1.0" }
+    });
+    await api.studio.restoreConfigAssetVersion({
+      assetType: "workflow",
+      assetId: "wf_review_chapter",
+      versionId: "ver_01"
+    });
 
     expect(invokedChannels.every(isApplicationIpcChannel)).toBe(true);
     expect(invokedChannels).toEqual([
@@ -84,7 +115,13 @@ describe("Electron security baseline", () => {
       "application:chapter:list-versions",
       "application:chapter:preview-version",
       "application:chapter:restore-version",
-      "application:chapter:preview-suggestion-diff"
+      "application:chapter:preview-suggestion-diff",
+      "application:settings:list-model-profiles",
+      "application:settings:save-model-profile",
+      "application:settings:test-model-profile",
+      "application:studio:load-config-asset",
+      "application:studio:save-config-asset",
+      "application:studio:restore-config-version"
     ]);
   });
 
@@ -104,6 +141,16 @@ describe("Electron security baseline", () => {
     await expect(handlers["application:chapter:load"]()).resolves.toMatchObject({
       ok: false,
       error: { code: "CHAPTER_EDITOR_UNAVAILABLE" }
+    });
+    await expect(handlers["application:settings:list-model-profiles"]()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "MODEL_SETTINGS_UNAVAILABLE" }
+    });
+    await expect(
+      handlers["application:studio:load-config-asset"]("prompt", "prompt_01")
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "CONFIG_STUDIO_UNAVAILABLE" }
     });
   });
 

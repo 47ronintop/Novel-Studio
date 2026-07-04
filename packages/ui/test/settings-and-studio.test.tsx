@@ -1,0 +1,69 @@
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, test } from "vitest";
+
+import { ConfigStudioPanel, ModelSettingsPanel } from "../src/index.js";
+
+describe("M8 Settings and Studio UI", () => {
+  test("renders model profile settings without plaintext secrets", () => {
+    const html = renderToStaticMarkup(
+      <ModelSettingsPanel
+        defaultProfileId="model_default"
+        profiles={[
+          {
+            id: "model_default",
+            provider: "openai-compatible",
+            displayName: "Default Model",
+            modelName: "example-model",
+            apiKeyRef: "secret://model_default/api_key",
+            timeoutMs: 60000
+          }
+        ]}
+        connectionStatus={{
+          profileId: "model_default",
+          status: "idle"
+        }}
+        onTestConnection={() => undefined}
+        onMakeDefault={() => undefined}
+      />
+    );
+
+    expect(html).toContain("Default Model");
+    expect(html).toContain("openai-compatible");
+    expect(html).toContain("Stored secret reference");
+    expect(html).toContain('aria-label="Test connection for Default Model"');
+    expect(html).not.toContain("secret://model_default/api_key");
+    expect(html).not.toMatch(/sk-[A-Za-z0-9_-]+/);
+    expect(html).not.toMatch(/filesystem|node:|fs\./i);
+  });
+
+  test("renders Prompt Agent Workflow studio controls through callback-driven props", () => {
+    const html = renderToStaticMarkup(
+      <ConfigStudioPanel
+        selectedAsset={{
+          assetType: "workflow",
+          assetId: "wf_review_chapter",
+          title: "Review Chapter",
+          validationStatus: "valid",
+          content: '{\n  "schemaVersion": "1.0"\n}'
+        }}
+        versions={[
+          {
+            versionId: "ver_before_save",
+            label: "Before save",
+            createdAt: "2026-07-04T00:00:00.000Z"
+          }
+        ]}
+        onContentChange={() => undefined}
+        onSave={() => undefined}
+        onRestoreVersion={() => undefined}
+      />
+    );
+
+    expect(html).toContain("Review Chapter");
+    expect(html).toContain("workflow");
+    expect(html).toContain("Schema valid");
+    expect(html).toContain('aria-label="Save config asset"');
+    expect(html).toContain('aria-label="Restore config version Before save"');
+    expect(html).not.toMatch(/filesystem|node:|fs\./i);
+  });
+});

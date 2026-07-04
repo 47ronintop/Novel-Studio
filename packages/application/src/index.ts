@@ -32,3 +32,26 @@ export type {
   SaveStatus
 } from "./desktop-application.js";
 export { createDesktopApplication } from "./desktop-application.js";
+export type {
+  ModelConnectionResult,
+  ModelConnectionTester,
+  ModelProfile,
+  ModelSettingsSession,
+  ModelSettingsSessionOptions,
+  ModelSettingsSnapshot,
+  ProjectSettings,
+  ProjectSettingsPort
+} from "./model-settings-session.js";
+export { createModelSettingsSession } from "./model-settings-session.js";
+export type {
+  ConfigAssetPort,
+  ConfigAssetRestoreInput,
+  ConfigAssetSaveInput,
+  ConfigAssetSnapshot,
+  ConfigAssetType,
+  ConfigCreatedBy,
+  ConfigStudioSession,
+  ConfigStudioSessionOptions,
+  ConfigVersionSummary
+} from "./config-studio-session.js";
+export { createConfigStudioSession } from "./config-studio-session.js";

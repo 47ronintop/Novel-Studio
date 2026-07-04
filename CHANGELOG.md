@@ -49,8 +49,9 @@
 - Created M7.2 Context Engine with explicit candidate bundle construction, token budget enforcement, exclusion trace, confirmed-memory filtering, source reference trace, full-novel stuffing guard, and package boundary tests.
 - Created `AGENT_ENGINE.md` v1.0 for M7.3 agent execution and handoff design.
 - Created M7.3 Agent Engine with injected input/output validation, LLM Adapter invocation, structured output extraction, malformed JSON failure handling, Agent Handoff JSON production, and package boundary tests.
+- Created M8 Studio and Settings foundation with safe model profile settings, injected model connection tests, secret redaction, Prompt/Agent/Workflow config editing, schema validation, version snapshots, rollback, and callback-driven UI panels.
 
 ## Notes
 
 - Phase 7 is active.
-- M7 Agent/Context/Workflow is complete; M8 Studio and Settings is the next implementation milestone.
+- M8 Studio and Settings is complete; M9 Hardening and Alpha is the next implementation milestone.

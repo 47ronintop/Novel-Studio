@@ -3,7 +3,15 @@ import type {
   ApplicationIpcChannel,
   ChapterEditorSnapshot,
   ChapterSuggestionDiffPreview,
+  ConfigAssetRestoreInput,
+  ConfigAssetSaveInput,
+  ConfigAssetSnapshot,
+  ConfigAssetType,
+  ConfigVersionSummary,
   DesktopShellState,
+  ModelConnectionResult,
+  ModelProfile,
+  ModelSettingsSnapshot,
   NovelStudioApi
 } from "@novel-studio/application";
 import type {
@@ -62,6 +70,47 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           ipc,
           "application:chapter:preview-suggestion-diff",
           nextBody
+        )
+    },
+    settings: {
+      listModelProfiles: () =>
+        invokeTyped<Result<ModelSettingsSnapshot, UnifiedError>>(
+          ipc,
+          "application:settings:list-model-profiles"
+        ),
+      saveModelProfile: (profile: ModelProfile, options?: { readonly makeDefault?: boolean }) =>
+        invokeTyped<Result<ModelSettingsSnapshot, UnifiedError>>(
+          ipc,
+          "application:settings:save-model-profile",
+          profile,
+          options
+        ),
+      testModelProfileConnection: (profileId: string) =>
+        invokeTyped<Result<ModelConnectionResult, UnifiedError>>(
+          ipc,
+          "application:settings:test-model-profile",
+          profileId
+        )
+    },
+    studio: {
+      loadConfigAsset: (assetType: ConfigAssetType, assetId: string) =>
+        invokeTyped<Result<ConfigAssetSnapshot, UnifiedError>>(
+          ipc,
+          "application:studio:load-config-asset",
+          assetType,
+          assetId
+        ),
+      saveConfigAsset: (input: ConfigAssetSaveInput) =>
+        invokeTyped<Result<ConfigVersionSummary, UnifiedError>>(
+          ipc,
+          "application:studio:save-config-asset",
+          input
+        ),
+      restoreConfigAssetVersion: (input: ConfigAssetRestoreInput) =>
+        invokeTyped<Result<ConfigAssetSnapshot, UnifiedError>>(
+          ipc,
+          "application:studio:restore-config-version",
+          input
         )
     }
   };

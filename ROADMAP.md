@@ -423,19 +423,19 @@ Initial provider order:
 
 ### Task M8.1: Model Settings
 
-- [ ] Add model profile editor.
-- [ ] Use `apiKeyRef`, never plaintext persistence.
-- [ ] Add test connection using Adapter.
-- [ ] Redact logs and UI detail.
+- [x] Add model profile editor.
+- [x] Use `apiKeyRef`, never plaintext persistence.
+- [x] Add test connection using Adapter.
+- [x] Redact logs and UI detail.
 
 **Verification:** settings tests prove no API Key appears in project files.
 
 ### Task M8.2: Prompt / Agent / Workflow Studio
 
-- [ ] Add Prompt editor with schema validation.
-- [ ] Add Agent editor with input/output schema refs.
-- [ ] Add Workflow editor with step graph/list.
-- [ ] Add version history and rollback.
+- [x] Add Prompt editor with schema validation.
+- [x] Add Agent editor with input/output schema refs.
+- [x] Add Workflow editor with step graph/list.
+- [x] Add version history and rollback.
 
 **Verification:** invalid config cannot become active; rollback creates version record.
 
