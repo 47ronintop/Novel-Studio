@@ -2,6 +2,7 @@ import { err, ok } from "@novel-studio/shared";
 
 import {
   createLlmFailure,
+  LlmProviderFailure,
   missingUsage,
   normalizeProviderFailure,
   retryExhaustedFailure,
@@ -13,6 +14,7 @@ import type {
   LlmRetryPolicy,
   LlmRequest,
   LlmResponse,
+  LlmProviderCompletion,
   LlmStreamResult,
   LlmTokenPricing,
   LlmUsage
@@ -63,7 +65,10 @@ export function createLlmAdapter(options: LlmAdapterOptions): LlmAdapter {
 
       for (let attempt = 1; attempt <= retryPolicy.maxAttempts; attempt += 1) {
         try {
-          const completion = await options.provider.complete(request);
+          const completion = await completeWithTimeout(
+            options.provider.complete(request),
+            request.modelProfile.timeoutMs
+          );
           const response: LlmResponse = {
             schemaVersion: "1.0",
             requestId: request.requestId,
@@ -138,8 +143,19 @@ export function createLlmAdapter(options: LlmAdapterOptions): LlmAdapter {
         createdAt: now()
       });
 
-      for await (const event of options.provider.stream(request)) {
-        yield ok(event);
+      try {
+        for await (const event of options.provider.stream(request)) {
+          yield ok(event);
+        }
+      } catch (error) {
+        yield err(
+          normalizeProviderFailure({
+            error,
+            traceId: request.traceId,
+            createdAt: now()
+          }).error
+        );
+        return;
       }
 
       yield ok({
@@ -160,6 +176,36 @@ function shouldRetry(failure: NormalizedLlmFailure, retryPolicy: LlmRetryPolicy)
 function delayForAttempt(attempt: number, retryPolicy: LlmRetryPolicy): number {
   const rawDelay = retryPolicy.baseDelayMs * retryPolicy.backoffMultiplier ** (attempt - 1);
   return Math.min(rawDelay, retryPolicy.maxDelayMs);
+}
+
+async function completeWithTimeout(
+  operation: Promise<LlmProviderCompletion>,
+  timeoutMs: number | undefined
+): Promise<LlmProviderCompletion> {
+  if (timeoutMs === undefined) {
+    return operation;
+  }
+
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutOperation = new Promise<LlmProviderCompletion>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(
+        new LlmProviderFailure({
+          code: "LLM_TIMEOUT",
+          message: "The model request timed out before the provider returned a response.",
+          retryable: true
+        })
+      );
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([operation, timeoutOperation]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 async function defaultScheduler(delayMs: number): Promise<void> {

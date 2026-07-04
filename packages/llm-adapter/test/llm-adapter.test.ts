@@ -2,7 +2,12 @@ import { describe, expect, test } from "vitest";
 
 import { isErr, isOk } from "@novel-studio/shared";
 
-import { createLlmAdapter, createMockProvider, type LlmRequest } from "../src/index.js";
+import {
+  createLlmAdapter,
+  createMockProvider,
+  type LlmProvider,
+  type LlmRequest
+} from "../src/index.js";
 
 const request = {
   schemaVersion: "1.0",
@@ -220,6 +225,45 @@ describe("LLM Adapter", () => {
     expect(result.error.recoverability).toBe("retryable");
   });
 
+  test("normalizes an in-flight provider timeout", async () => {
+    const slowProvider: LlmProvider = {
+      id: "mock",
+      async complete() {
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20);
+        });
+        return {
+          content: {
+            type: "text",
+            value: "Late response."
+          }
+        };
+      },
+      stream() {
+        return createMockProvider({ streams: [] }).stream(request);
+      }
+    };
+    const adapter = createLlmAdapter({
+      provider: slowProvider,
+      clock: () => "2026-07-04T00:00:00.000Z"
+    });
+
+    const result = await adapter.complete({
+      ...request,
+      modelProfile: {
+        ...request.modelProfile,
+        timeoutMs: 1
+      }
+    });
+
+    expect(isErr(result)).toBe(true);
+    if (result.ok) {
+      return;
+    }
+
+    expect(result.error.code).toBe("LLM_TIMEOUT");
+  });
+
   test("retries retryable provider errors with injected exponential backoff", async () => {
     const delays: number[] = [];
     const adapter = createLlmAdapter({
@@ -391,5 +435,60 @@ describe("LLM Adapter", () => {
         status: "unknown"
       }
     });
+  });
+
+  test("yields normalized stream errors instead of throwing provider failures", async () => {
+    const failingStreamProvider: LlmProvider = {
+      id: "mock",
+      async complete() {
+        return {
+          content: {
+            type: "text",
+            value: "unused"
+          }
+        };
+      },
+      stream() {
+        return {
+          [Symbol.asyncIterator]() {
+            return {
+              async next() {
+                throw new Error("Stream transport failed.");
+              }
+            };
+          }
+        };
+      }
+    };
+    const adapter = createLlmAdapter({
+      provider: failingStreamProvider,
+      clock: () => "2026-07-04T00:00:00.000Z"
+    });
+
+    const events = [];
+    for await (const event of adapter.stream({ ...request, mode: "streaming" })) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      {
+        ok: true,
+        value: {
+          type: "start",
+          requestId: "llmreq_mock_01",
+          provider: "mock",
+          modelName: "mock-novelist",
+          createdAt: "2026-07-04T00:00:00.000Z"
+        }
+      },
+      {
+        ok: false,
+        error: expect.objectContaining({
+          code: "LLM_PROVIDER_ERROR",
+          category: "LLMAdapterError",
+          recoverability: "user-action"
+        })
+      }
+    ]);
   });
 });
