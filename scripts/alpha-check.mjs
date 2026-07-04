@@ -59,11 +59,11 @@ async function checkPackageScripts() {
   ) {
     failures.push("Root package.json must expose package:check script.");
   }
-  if (
-    packageJson.scripts?.["package:dir"] !==
-    "npm run build && electron-builder --dir --config apps/desktop/electron-builder.config.cjs"
-  ) {
+  if (packageJson.scripts?.["package:dir"] !== "node scripts/package-dir.mjs") {
     failures.push("Root package.json must expose package:dir script.");
+  }
+  if (packageJson.scripts?.["package:artifact-check"] !== "node scripts/artifact-secret-scan.mjs") {
+    failures.push("Root package.json must expose package:artifact-check script.");
   }
 
   const rendererHtmlPath = join(root, "apps", "desktop", "dist", "renderer", "index.html");

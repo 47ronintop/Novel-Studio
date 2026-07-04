@@ -7,6 +7,7 @@ const root = process.cwd();
 const failures = [];
 
 await checkPackageScripts();
+await checkPackagingEnvironment();
 await checkBuildArtifacts();
 await checkElectronBuilderConfig();
 
@@ -28,6 +29,30 @@ async function checkPackageScripts() {
     packageJson.scripts?.["package:check"] !== "npm run build && node scripts/package-check.mjs"
   ) {
     failures.push("Missing package:check script.");
+  }
+  if (packageJson.scripts?.["package:artifact-check"] !== "node scripts/artifact-secret-scan.mjs") {
+    failures.push("Missing package:artifact-check script.");
+  }
+  if (packageJson.scripts?.["package:dir"] !== "node scripts/package-dir.mjs") {
+    failures.push("package:dir must use the stable package-dir wrapper.");
+  }
+}
+
+async function checkPackagingEnvironment() {
+  const npmrcPath = join(root, ".npmrc");
+  if (!(await fileExists(npmrcPath))) {
+    failures.push("Missing .npmrc for Electron download mirror.");
+  } else {
+    const npmrc = await readFile(npmrcPath, "utf8");
+    if (!npmrc.includes("electron_mirror=https://npmmirror.com/mirrors/electron/")) {
+      failures.push("Electron mirror must be configured for repeatable package:dir.");
+    }
+  }
+
+  const gitignorePath = join(root, ".gitignore");
+  const gitignore = await readFile(gitignorePath, "utf8");
+  if (!/^release\/$/m.test(gitignore)) {
+    failures.push("release/ must be ignored so package artifacts are not committed.");
   }
 }
 
@@ -63,6 +88,9 @@ async function checkElectronBuilderConfig() {
   }
   if (config.extraMetadata?.main !== "apps/desktop/dist/main/index.js") {
     failures.push("Electron package main entry must point to desktop dist main.");
+  }
+  if (config.directories?.output !== "release") {
+    failures.push("Electron package output must default to release.");
   }
   if (!Array.isArray(config.files) || !config.files.includes("apps/desktop/dist/**")) {
     failures.push("Electron package files must include desktop dist artifacts.");

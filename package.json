@@ -21,7 +21,8 @@
     "test:e2e": "playwright test --list --pass-with-no-tests",
     "alpha:check": "npm run build && node scripts/alpha-check.mjs",
     "package:check": "npm run build && node scripts/package-check.mjs",
-    "package:dir": "npm run build && electron-builder --dir --config apps/desktop/electron-builder.config.cjs"
+    "package:artifact-check": "node scripts/artifact-secret-scan.mjs",
+    "package:dir": "node scripts/package-dir.mjs"
   },
   "engines": {
     "node": ">=20.20.0",

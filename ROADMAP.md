@@ -35,20 +35,20 @@ Frontend
 
 ## 3. 里程碑总览
 
-| Milestone | 名称                           | 目标                                                                       | Exit Criteria                                                   | 当前状态 |
-| --------- | ------------------------------ | -------------------------------------------------------------------------- | --------------------------------------------------------------- | -------- |
-| M0        | Repository Baseline            | 提交当前文档并建立分支纪律                                                 | 初始提交存在，remote 配置正确，文档不被工具破坏                 | Complete |
-| M1        | Toolchain Foundation           | 创建 monorepo、TypeScript strict、lint、format、test runner                | `typecheck`、`lint`、`format`、`test` 通过                      | Complete |
-| M2        | Schema Foundation              | 实现 canonical JSON Schema 和派生/手写 TS 类型边界                         | valid fixtures 通过，invalid fixtures 稳定失败                  | Complete |
-| M3        | Repository Core                | 实现项目文件 IO、atomic writes、history、recovery、cache boundary          | Repository tests 使用临时项目通过                               | Complete |
-| M4        | Desktop Shell                  | 建立 Electron/React shell、layout、command palette skeleton                | App 可打开本地项目 fixture，UI 不直接访问文件系统               | Complete |
-| M5        | Editor and Version UX          | 实现 Markdown 编辑、autosave 状态、version history、diff review foundation | Chapter edit/save/recover/version path 有测试覆盖               | Complete |
-| M6        | LLM Adapter                    | 实现 provider-neutral LLM Adapter、mock provider、首个 provider shape      | mock provider 和 fixture tests 通过；CI 不调用真实模型          | Complete |
-| M7        | Agent/Context/Workflow         | 实现结构化 workflow execution 和 context budget trace                      | mock LLM 下可产生结构化 handoff，边界测试通过                   | Complete |
-| M8        | Studio and Settings            | 实现 Prompt/Agent/Workflow editors、model profile settings、secret refs    | config edit/version/rollback path 可验证                        | Complete |
-| M9        | Hardening and Alpha            | 完成安全、可访问性、性能、alpha checklist                                  | Alpha candidate 通过本地 required gates                         | Complete |
-| M10       | Beta Packaging Foundation      | 建立 renderer bundling、packager config、package preflight                 | `package:check` 通过，packaging limitation 记录到 TECH_DEBT     | Complete |
-| M11       | Package Artifact Stabilization | 稳定真实 unpacked/installer artifact 产出                                  | `package:dir` 在 packaging host 成功，artifact secret scan 通过 | Next     |
+| Milestone | 名称                           | 目标                                                                       | Exit Criteria                                               | 当前状态 |
+| --------- | ------------------------------ | -------------------------------------------------------------------------- | ----------------------------------------------------------- | -------- |
+| M0        | Repository Baseline            | 提交当前文档并建立分支纪律                                                 | 初始提交存在，remote 配置正确，文档不被工具破坏             | Complete |
+| M1        | Toolchain Foundation           | 创建 monorepo、TypeScript strict、lint、format、test runner                | `typecheck`、`lint`、`format`、`test` 通过                  | Complete |
+| M2        | Schema Foundation              | 实现 canonical JSON Schema 和派生/手写 TS 类型边界                         | valid fixtures 通过，invalid fixtures 稳定失败              | Complete |
+| M3        | Repository Core                | 实现项目文件 IO、atomic writes、history、recovery、cache boundary          | Repository tests 使用临时项目通过                           | Complete |
+| M4        | Desktop Shell                  | 建立 Electron/React shell、layout、command palette skeleton                | App 可打开本地项目 fixture，UI 不直接访问文件系统           | Complete |
+| M5        | Editor and Version UX          | 实现 Markdown 编辑、autosave 状态、version history、diff review foundation | Chapter edit/save/recover/version path 有测试覆盖           | Complete |
+| M6        | LLM Adapter                    | 实现 provider-neutral LLM Adapter、mock provider、首个 provider shape      | mock provider 和 fixture tests 通过；CI 不调用真实模型      | Complete |
+| M7        | Agent/Context/Workflow         | 实现结构化 workflow execution 和 context budget trace                      | mock LLM 下可产生结构化 handoff，边界测试通过               | Complete |
+| M8        | Studio and Settings            | 实现 Prompt/Agent/Workflow editors、model profile settings、secret refs    | config edit/version/rollback path 可验证                    | Complete |
+| M9        | Hardening and Alpha            | 完成安全、可访问性、性能、alpha checklist                                  | Alpha candidate 通过本地 required gates                     | Complete |
+| M10       | Beta Packaging Foundation      | 建立 renderer bundling、packager config、package preflight                 | `package:check` 通过，packaging limitation 记录到 TECH_DEBT | Complete |
+| M11       | Package Artifact Stabilization | 稳定真实 unpacked artifact 产出                                            | `package:dir` 成功，artifact secret scan 通过               | Complete |
 
 ## 4. 通用完成门禁
 
@@ -309,14 +309,15 @@ Provider 顺序：
 
 ## 16. M11 - Package Artifact Stabilization
 
-下一步建议执行：
+- [x] 定位 `package:dir` 超时根因：默认 GitHub Electron runtime 下载源不可达。
+- [x] 添加 `.npmrc`，固定 `electron_mirror=https://npmmirror.com/mirrors/electron/`。
+- [x] 将 `release/` 加入 `.gitignore`，避免提交 package artifacts。
+- [x] 添加稳定 `package:dir` wrapper，每次输出到唯一目录 `release/package-dir-<timestamp>/win-unpacked`，避免 Windows 旧 artifact 文件锁影响复跑。
+- [x] 添加 artifact secret scan，扫描 unpacked directory 和 `app.asar` 中的文本资源。
+- [x] 生成真实 unpacked artifact，并写入 `release/latest-package-dir.txt`。
+- [x] 验证 `npm run package:dir` 成功，artifact secret scan 通过。
 
-- [ ] 在稳定 packaging host 上重新运行 `npm run package:dir`。
-- [ ] 如果仍超时，定位 electron-builder 卡住阶段。
-- [ ] 只在 unpacked packaging 稳定后再添加 installer targets。
-- [ ] 在 artifact 生成后运行 secret scan。
-- [ ] 更新 `docs/packaging/m10-beta-packaging.md` 或新增 M11 packaging 文档。
-- [ ] 通过完整门禁后提交。
+后续 installer targets、icon、signing/notarization 和 release channel 进入下一版 roadmap，不属于 M11 完成条件。
 
 ## 17. Provider Roadmap
 
@@ -352,17 +353,17 @@ Provider 顺序：
 
 ## 18. Risk Register
 
-| Risk                               | Impact                 | Mitigation                                  | Owner Phase |
-| ---------------------------------- | ---------------------- | ------------------------------------------- | ----------- |
-| Toolchain setup 消耗过多时间       | 延迟 vertical slice    | M1 保持最小化，非关键 tooling 延后          | M1          |
-| Schema/codegen drift               | runtime failure        | canonical schema + contract tests           | M2          |
-| Repository write bugs              | 数据丢失               | atomic write 和 temp project tests 优先     | M3          |
-| Editor choice wrong                | UI 返工                | 用 spike 和实现 slice 验证 CodeMirror 6     | M5          |
-| LLM provider variance              | Adapter 不稳定         | mock fixtures 和 provider-normalized errors | M6          |
-| Workflow/Agent circular dependency | 违反架构               | boundary tests 和 import rules              | M7          |
-| History grows too fast             | Git 管理体验变差       | 后续定义 archive/retention 策略             | M9+         |
-| Security leakage                   | 用户信任受损           | secret scan、redaction tests、IPC allowlist | M8/M9       |
-| Packaging host instability         | 无法产出 beta artifact | M11 单独稳定 `package:dir` 和 artifact scan | M11         |
+| Risk                               | Impact               | Mitigation                                                       | Owner Phase |
+| ---------------------------------- | -------------------- | ---------------------------------------------------------------- | ----------- |
+| Toolchain setup 消耗过多时间       | 延迟 vertical slice  | M1 保持最小化，非关键 tooling 延后                               | M1          |
+| Schema/codegen drift               | runtime failure      | canonical schema + contract tests                                | M2          |
+| Repository write bugs              | 数据丢失             | atomic write 和 temp project tests 优先                          | M3          |
+| Editor choice wrong                | UI 返工              | 用 spike 和实现 slice 验证 CodeMirror 6                          | M5          |
+| LLM provider variance              | Adapter 不稳定       | mock fixtures 和 provider-normalized errors                      | M6          |
+| Workflow/Agent circular dependency | 违反架构             | boundary tests 和 import rules                                   | M7          |
+| History grows too fast             | Git 管理体验变差     | 后续定义 archive/retention 策略                                  | M9+         |
+| Security leakage                   | 用户信任受损         | secret scan、redaction tests、IPC allowlist                      | M8/M9       |
+| Installer/signing 未配置           | 暂不能发布正式安装包 | 下一版 roadmap 增加 installer target、icon、signing/notarization | Future      |
 
 ## 19. 数据流
 
@@ -392,7 +393,7 @@ Documents
 - M7 建立结构化 AI workflow。
 - M8 暴露配置编辑能力。
 - M9 进入 alpha hardening。
-- M10/M11 进入 beta packaging foundation 和 artifact stabilization。
+- M10/M11 完成 beta packaging foundation 和 unpacked artifact stabilization。
 
 ## 21. 设计理由
 
@@ -417,7 +418,8 @@ Roadmap 优先保证数据完整性和工具门禁，再扩展 AI 能力。Novel
 ## 23. 当前项目状态
 
 - Phase 1-6 已完成。
-- Phase 7 正式开发进行中。
-- M0-M10 已完成并本地提交。
-- 当前下一步是 M11：稳定真实 package artifact 执行。
-- 本地 `main` 领先 `origin/main` 12 个提交；未经用户确认不得 push。
+- Phase 7 roadmap 当前定义的 M0-M11 已完成。
+- M0-M11 已完成并本地提交。
+- 当前没有未完成的既定步骤。
+- 后续建议由用户确认：推送本地提交，或启动下一版 roadmap（installer/signing、CI、真实 e2e、Provider 扩展等）。
+- 未经用户确认不得 push。

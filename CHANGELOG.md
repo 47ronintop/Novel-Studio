@@ -55,8 +55,9 @@
 - 完成 M8 Studio and Settings foundation：safe model profile settings、injected model connection tests、secret redaction、Prompt/Agent/Workflow config editing、schema validation、version snapshots、rollback 和 callback-driven UI panels。
 - 完成 M9 Alpha Hardening：UI accessibility checks、reduced-motion/focus styling、synthetic 1,000,000-character performance fixture、Repository open-path performance smoke、local alpha build gate 和 artifact secret scanning。
 - 完成 M10 Beta Packaging Foundation：Vite renderer bundling、electron-builder configuration、package preflight checks 和 packaging notes。
+- 完成 M11 Package Artifact Stabilization：定位 GitHub Electron 下载源不可达导致的 `package:dir` 超时，添加 Electron mirror、唯一 package output wrapper、artifact secret scan，并成功生成 unpacked artifact。
 
 ## Notes
 
 - Phase 7 正在进行中。
-- M10 packaging foundation 已完成；`package:dir` 在当前 Windows/Node 20.20.2 工作站执行超时，仍需稳定 packaging host 后再声明真实 package artifact 完成。
+- M11 package artifact stabilization 已完成；当前可生成 unpacked artifact。Installer target、icon 和 signing/notarization 进入后续 roadmap。

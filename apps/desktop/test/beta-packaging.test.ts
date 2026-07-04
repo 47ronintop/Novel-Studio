@@ -18,8 +18,9 @@ describe("M10 beta packaging", () => {
     expect(packageJson.scripts["package:check"]).toBe(
       "npm run build && node scripts/package-check.mjs"
     );
-    expect(packageJson.scripts["package:dir"]).toBe(
-      "npm run build && electron-builder --dir --config apps/desktop/electron-builder.config.cjs"
+    expect(packageJson.scripts["package:dir"]).toBe("node scripts/package-dir.mjs");
+    expect(packageJson.scripts["package:artifact-check"]).toBe(
+      "node scripts/artifact-secret-scan.mjs"
     );
     expect(packageJson.devDependencies.vite).toBeDefined();
     expect(packageJson.devDependencies["electron-builder"]).toBeDefined();

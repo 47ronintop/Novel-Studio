@@ -50,7 +50,8 @@ export default tseslint.config(
     files: ["apps/desktop/**/*.cjs"],
     languageOptions: {
       globals: {
-        module: "readonly"
+        module: "readonly",
+        process: "readonly"
       }
     }
   }
