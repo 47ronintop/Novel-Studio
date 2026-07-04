@@ -153,7 +153,21 @@ export function App() {
       return;
     }
 
-    void chapterBridge.save().then(setChapterEditor);
+    const savingEditor = chapterBridge.beginSave();
+    if (savingEditor !== undefined) {
+      setChapterEditor(savingEditor);
+    }
+
+    void chapterBridge.save().then(setChapterEditor, () => {
+      setChapterEditor((current) =>
+        current === undefined || current.saveStatus !== "Saving"
+          ? current
+          : {
+              ...current,
+              saveStatus: "Unsaved"
+            }
+      );
+    });
   }, [chapterBridge]);
 
   const handleVersionPreview = useCallback(

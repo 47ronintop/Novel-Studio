@@ -14,6 +14,7 @@ import type {
 export interface ChapterEditorBridge {
   load(): Promise<ChapterEditorProps>;
   edit(nextBody: string): Promise<ChapterEditorProps>;
+  beginSave(): ChapterEditorProps | undefined;
   save(): Promise<ChapterEditorProps>;
   listVersions(): Promise<readonly ChapterEditorVersionEntry[]>;
   previewVersion(versionId: string): Promise<ChapterVersionContent>;
@@ -32,6 +33,16 @@ export function createChapterEditorBridge(api: NovelStudioApi): ChapterEditorBri
     async edit(nextBody: string) {
       currentProps = toChapterEditorProps(await unwrap(api.chapter.edit(nextBody)));
       return currentProps;
+    },
+    beginSave() {
+      if (currentProps === undefined || !currentProps.dirty) {
+        return currentProps;
+      }
+
+      return {
+        ...currentProps,
+        saveStatus: "Saving"
+      };
     },
     async save() {
       currentProps = toChapterEditorProps(await unwrap(api.chapter.save()));

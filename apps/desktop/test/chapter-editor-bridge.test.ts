@@ -121,4 +121,62 @@ describe("chapter editor bridge", () => {
       "chapter.previewSuggestionDiff:AI revised opening.\n"
     ]);
   });
+
+  test("returns immediate Saving props before the save request resolves", async () => {
+    let resolveSave: (result: ReturnType<typeof ok<ChapterEditorSnapshot>>) => void = () =>
+      undefined;
+    const saveResult = new Promise<ReturnType<typeof ok<ChapterEditorSnapshot>>>((resolve) => {
+      resolveSave = resolve;
+    });
+    const api: NovelStudioApi = {
+      getShellState: async () => ({
+        projectTitle: "Minimal Chapter Project"
+      }),
+      commands: {
+        list: async () => [],
+        execute: async () => ok({ projectTitle: "Minimal Chapter Project" })
+      },
+      chapter: {
+        load: async () => ok(snapshot),
+        edit: async (body) =>
+          ok({
+            ...snapshot,
+            state: {
+              ...snapshot.state,
+              chapter: {
+                ...snapshot.state.chapter,
+                body
+              },
+              dirty: true,
+              saveStatus: "Unsaved"
+            }
+          }),
+        save: () => saveResult,
+        listVersions: async () => ok(snapshot.versions),
+        previewVersion: async (versionId) =>
+          ok({
+            versionId,
+            body: "淇濆瓨鍚庣殑绔犺妭姝ｆ枃銆俓n"
+          }),
+        restoreVersion: async () => ok(snapshot),
+        previewSuggestionDiff: async (body) =>
+          ok({
+            title: "AI suggestion",
+            changes: [{ kind: "replace", value: body }]
+          })
+      }
+    };
+    const bridge = createChapterEditorBridge(api);
+
+    await bridge.load();
+    await bridge.edit("A revised opening paragraph.\n");
+    const saving = bridge.beginSave();
+    const savePromise = bridge.save();
+    resolveSave(ok(snapshot));
+    const saved = await savePromise;
+
+    expect(saving?.saveStatus).toBe("Saving");
+    expect(saving?.dirty).toBe(true);
+    expect(saved.saveStatus).toBe("Saved");
+  });
 });
