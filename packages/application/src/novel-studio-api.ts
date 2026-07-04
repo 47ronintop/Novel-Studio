@@ -9,6 +9,10 @@ import type {
 
 import type { ApplicationCommand } from "./command-registry.js";
 import type {
+  AiWritingSuggestion,
+  AiWritingSuggestionRequest
+} from "./ai-writing-workflow-session.js";
+import type {
   ChapterEditorSnapshot,
   ChapterSuggestionDiffPreview
 } from "./chapter-editor-session.js";
@@ -41,6 +45,14 @@ export interface NovelStudioApi {
       input: CreateChapterInput
     ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
     selectChapter(chapterId: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  };
+  ai: {
+    generateChapterSuggestion(
+      request: AiWritingSuggestionRequest
+    ): Promise<Result<AiWritingSuggestion, UnifiedError>>;
+    applyChapterSuggestion(
+      suggestionId: string
+    ): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
   };
   chapter: {
     load(): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;

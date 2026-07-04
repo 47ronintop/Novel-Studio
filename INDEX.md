@@ -1,6 +1,6 @@
 # INDEX - Novel Studio 文档索引
 
-Version: 1.13 | Last Updated: 2026-07-04
+Version: 1.14 | Last Updated: 2026-07-04
 
 ## 文档优先级
 
@@ -22,7 +22,7 @@ Version: 1.13 | Last Updated: 2026-07-04
 | `UI_GUIDELINES.md`                        | 1.0        | Accepted             | UI/UX、布局、交互、设计 tokens、可访问性       |
 | `CODING_STANDARDS.md`                     | 1.0        | Accepted             | 开发规范、语言规则、分层、schema、UI 实现      |
 | `TESTING.md`                              | 1.0        | Accepted             | 测试规范、fixtures、LLM mock、CI 门禁          |
-| `ROADMAP.md`                              | 1.2        | Active               | 当前里程碑、后续路线、完成状态                 |
+| `ROADMAP.md`                              | 1.3        | Active               | 当前里程碑、后续路线、完成状态                 |
 | `LLM_ADAPTER.md`                          | 1.0        | Accepted for M6      | Provider-neutral 模型调用边界                  |
 | `WORKFLOW_ENGINE.md`                      | 1.0        | Accepted for M7.1    | 确定性 workflow 状态机                         |
 | `CONTEXT_ENGINE.md`                       | 1.0        | Accepted for M7.2    | Context Bundle、token budget、trace            |
@@ -36,19 +36,19 @@ Version: 1.13 | Last Updated: 2026-07-04
 
 ## 进度跟踪
 
-| 阶段                  | 状态     | 当前产出                            | 下一步                      |
-| --------------------- | -------- | ----------------------------------- | --------------------------- |
-| Phase 1 产品设计      | Complete | `PRODUCT_PRD.md`                    | 已完成                      |
-| Phase 2 系统架构      | Complete | `ARCHITECTURE.md`、ADR-0001         | 已完成                      |
-| Phase 3 数据结构设计  | Complete | `DATA_SCHEMA.md`                    | 已完成                      |
-| Phase 4 UI/UX 设计    | Complete | `UI_GUIDELINES.md`                  | 已完成                      |
-| Phase 5 开发规范      | Complete | `CODING_STANDARDS.md`、`TESTING.md` | 已完成                      |
-| Phase 6 Task Planning | Complete | `ROADMAP.md`                        | 已完成                      |
-| Phase 7 正式开发      | Active   | M0-M13 已完成                       | 建议进入 M14：AI 写作工作流 |
+| 阶段                  | 状态     | 当前产出                            | 下一步                     |
+| --------------------- | -------- | ----------------------------------- | -------------------------- |
+| Phase 1 产品设计      | Complete | `PRODUCT_PRD.md`                    | 已完成                     |
+| Phase 2 系统架构      | Complete | `ARCHITECTURE.md`、ADR-0001         | 已完成                     |
+| Phase 3 数据结构设计  | Complete | `DATA_SCHEMA.md`                    | 已完成                     |
+| Phase 4 UI/UX 设计    | Complete | `UI_GUIDELINES.md`                  | 已完成                     |
+| Phase 5 开发规范      | Complete | `CODING_STANDARDS.md`、`TESTING.md` | 已完成                     |
+| Phase 6 Task Planning | Complete | `ROADMAP.md`                        | 已完成                     |
+| Phase 7 正式开发      | Active   | M0-M14 已完成                       | 建议进入 M15：真实模型配置 |
 
 ## 当前本地状态
 
-- 当前已完成 M0-M13。
-- 最近完成的里程碑是 M13 Real E2E and CI Gate。
+- 当前已完成 M0-M14。
+- 最近完成的里程碑是 M14 AI Writing Workflow UX。
 - `main` 本地领先 `origin/main`，未经用户确认不得 push。
 - 当前本地 artifact 位于被忽略的 `release/` 目录，不提交到仓库。

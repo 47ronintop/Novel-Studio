@@ -6,6 +6,7 @@ import type {
   ConfigAssetSaveInput,
   ConfigAssetType,
   CreateProjectInput,
+  AiWritingSuggestionRequest,
   ModelProfile
 } from "@novel-studio/application";
 import type { CreateChapterInput } from "@novel-studio/shared";
@@ -65,6 +66,16 @@ export function createApplicationIpcHandlers(
       }
 
       return application.selectProjectChapter(chapterId);
+    },
+    "application:ai:generate-chapter-suggestion": (request: unknown) => {
+      return application.generateActiveChapterSuggestion(toAiWritingSuggestionRequest(request));
+    },
+    "application:ai:apply-chapter-suggestion": (suggestionId: unknown) => {
+      if (typeof suggestionId !== "string") {
+        return application.applyActiveChapterSuggestion("");
+      }
+
+      return application.applyActiveChapterSuggestion(suggestionId);
     },
     "application:chapter:load": () => application.loadActiveChapter(),
     "application:chapter:edit": (nextBody: unknown) => {
@@ -272,6 +283,16 @@ function toCreateChapterInput(value: unknown): CreateChapterInput | undefined {
     ...(value.body === undefined ? {} : { body: value.body }),
     ...(value.order === undefined ? {} : { order: value.order }),
     ...(value.status === undefined ? {} : { status: value.status })
+  };
+}
+
+function toAiWritingSuggestionRequest(value: unknown): AiWritingSuggestionRequest {
+  if (!isRecord(value) || typeof value.instruction !== "string") {
+    return { instruction: "" };
+  }
+
+  return {
+    instruction: value.instruction
   };
 }
 

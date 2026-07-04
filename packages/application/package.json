@@ -15,6 +15,10 @@
     "typecheck": "tsc -b"
   },
   "dependencies": {
+    "@novel-studio/agent-engine": "0.1.0",
+    "@novel-studio/context-engine": "0.1.0",
+    "@novel-studio/llm-adapter": "0.1.0",
+    "@novel-studio/workflow-engine": "0.1.0",
     "@novel-studio/shared": "0.1.0"
   }
 }

@@ -156,7 +156,7 @@ describe("chapter editor bridge", () => {
         previewVersion: async (versionId) =>
           ok({
             versionId,
-            body: "淇濆瓨鍚庣殑绔犺妭姝ｆ枃銆俓n"
+            body: "保存后的章节正文。\n"
           }),
         restoreVersion: async () => ok(snapshot),
         previewSuggestionDiff: async (body) =>

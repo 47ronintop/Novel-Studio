@@ -498,6 +498,37 @@ textarea:focus-visible,
   margin: 0;
 }
 
+.ns-ai-workflow {
+  border-top: 1px solid var(--ns-border);
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.ns-ai-instruction {
+  background: var(--ns-bg);
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  color: var(--ns-ink);
+  min-height: 82px;
+  padding: 10px;
+  resize: vertical;
+  width: 100%;
+}
+
+.ns-ai-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.ns-ai-summary,
+.ns-ai-context {
+  color: var(--ns-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+}
+
 .ns-bottom-panel {
   background: var(--ns-surface);
   border-top: 1px solid var(--ns-border);

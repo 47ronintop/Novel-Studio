@@ -4,6 +4,7 @@ import type { ChapterEditorProps } from "./chapter-editor.js";
 import {
   Bot,
   Boxes,
+  Check,
   Clock3,
   FilePlus,
   FolderTree,
@@ -12,7 +13,8 @@ import {
   PanelBottom,
   PanelRight,
   Search,
-  Settings
+  Settings,
+  Sparkles
 } from "lucide-react";
 
 import { ChapterEditor } from "./chapter-editor.js";
@@ -24,6 +26,7 @@ export interface WorkspaceShellProps {
   readonly commandPaletteOpen: boolean;
   readonly chapterEditor?: ChapterEditorProps;
   readonly projectWorkflow?: ProjectWorkflowProps;
+  readonly aiWritingWorkflow?: AiWritingWorkflowProps;
 }
 
 export interface ProjectWorkflowProps {
@@ -35,6 +38,19 @@ export interface ProjectWorkflowProps {
   readonly onCreateProject: () => void;
   readonly onCreateChapter: () => void;
   readonly onSelectChapter: (chapterId: string) => void;
+}
+
+export type AiWritingWorkflowStatus = "idle" | "generating" | "suggestion-ready" | "applied";
+
+export interface AiWritingWorkflowProps {
+  readonly status: AiWritingWorkflowStatus;
+  readonly instruction: string;
+  readonly summary?: string;
+  readonly contextTraceLabel?: string;
+  readonly diffPreview?: ChapterEditorProps["diffPreview"];
+  readonly onInstructionChange: (instruction: string) => void;
+  readonly onGenerateSuggestion: () => void;
+  readonly onApplySuggestion: () => void;
 }
 
 const activities = [
@@ -51,7 +67,8 @@ export function WorkspaceShell({
   commands,
   commandPaletteOpen,
   chapterEditor,
-  projectWorkflow
+  projectWorkflow,
+  aiWritingWorkflow
 }: WorkspaceShellProps) {
   return (
     <div className="ns-shell" data-theme="dark">
@@ -216,9 +233,55 @@ export function WorkspaceShell({
             </div>
             <div>
               <dt>Context</dt>
-              <dd>No workflow run</dd>
+              <dd>{aiWritingWorkflow?.contextTraceLabel ?? "No workflow run"}</dd>
             </div>
           </dl>
+          {aiWritingWorkflow === undefined ? null : (
+            <section className="ns-ai-workflow" aria-label="AI writing workflow">
+              <div className="ns-editor-panel-header">
+                <span>AI Workflow</span>
+                <span className="ns-muted">{statusLabel(aiWritingWorkflow.status)}</span>
+              </div>
+              <textarea
+                aria-label="AI writing instruction"
+                className="ns-ai-instruction"
+                onChange={(event) =>
+                  aiWritingWorkflow.onInstructionChange(event.currentTarget.value)
+                }
+                value={aiWritingWorkflow.instruction}
+              />
+              <div className="ns-ai-actions">
+                <button
+                  aria-label="Generate AI suggestion"
+                  className="ns-icon-text-button"
+                  disabled={aiWritingWorkflow.status === "generating"}
+                  onClick={aiWritingWorkflow.onGenerateSuggestion}
+                  title="Generate AI suggestion"
+                  type="button"
+                >
+                  <Sparkles aria-hidden="true" size={14} />
+                  Generate
+                </button>
+                <button
+                  aria-label="Apply AI suggestion"
+                  className="ns-icon-text-button"
+                  disabled={aiWritingWorkflow.status !== "suggestion-ready"}
+                  onClick={aiWritingWorkflow.onApplySuggestion}
+                  title="Apply AI suggestion"
+                  type="button"
+                >
+                  <Check aria-hidden="true" size={14} />
+                  Apply
+                </button>
+              </div>
+              {aiWritingWorkflow.summary === undefined ? null : (
+                <p className="ns-ai-summary">{aiWritingWorkflow.summary}</p>
+              )}
+              {aiWritingWorkflow.contextTraceLabel === undefined ? null : (
+                <p className="ns-ai-context">{aiWritingWorkflow.contextTraceLabel}</p>
+              )}
+            </section>
+          )}
         </aside>
 
         <section
@@ -251,4 +314,17 @@ export function WorkspaceShell({
       />
     </div>
   );
+}
+
+function statusLabel(status: AiWritingWorkflowStatus): string {
+  switch (status) {
+    case "idle":
+      return "Idle";
+    case "generating":
+      return "Generating";
+    case "suggestion-ready":
+      return "Ready";
+    case "applied":
+      return "Applied";
+  }
 }

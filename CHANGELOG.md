@@ -33,8 +33,9 @@
 - 完成 M11 Package Artifact Stabilization：定位 GitHub Electron 下载源不可达导致的 `package:dir` 超时，添加 Electron mirror、单一 package output wrapper、artifact secret scan，并成功生成 unpacked artifact。
 - 完成 M12 Project Workflow Vertical Slice：新增项目创建/打开、章节列表、创建/切换、active chapter editor 串联、project workflow IPC/preload、renderer bridge 和 `WorkspaceShell` 项目操作控件。
 - 完成 M13 Real E2E and CI Gate：新增真实 Electron Playwright smoke，修复 runtime package exports 与 sandbox preload 运行时问题，新增 GitHub Actions CI gate，并把 `test:e2e` 改为实际运行测试。
+- 完成 M14 AI Writing Workflow UX：新增章节 AI 写作建议 session、IPC/preload/API、renderer bridge、AI Workflow 面板、diff preview、用户确认后应用，并用真实 Electron E2E 验证生成不改正文、Apply 后才进入 `Unsaved` 编辑状态。
 
 ## Notes
 
-- Phase 7 当前定义的 M0-M13 已完成。
-- 建议下一步进入 M14：AI Writing Workflow UX。
+- Phase 7 当前定义的 M0-M14 已完成。
+- 建议下一步进入 M15：Real Provider Profiles。

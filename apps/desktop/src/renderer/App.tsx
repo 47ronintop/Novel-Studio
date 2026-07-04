@@ -3,10 +3,11 @@ import type {
   DesktopShellState,
   NovelStudioApi
 } from "@novel-studio/application";
-import type { ChapterEditorProps } from "@novel-studio/ui";
+import type { AiWritingWorkflowProps, ChapterEditorProps } from "@novel-studio/ui";
 import { WorkspaceShell } from "@novel-studio/ui";
 import { useCallback, useEffect, useState } from "react";
 
+import { createAiWritingWorkflowBridge } from "./ai-writing-workflow-bridge.js";
 import { createChapterEditorBridge } from "./chapter-editor-bridge.js";
 import { createProjectWorkflowBridge } from "./project-workflow-bridge.js";
 import { reduceRendererShortcut } from "./shortcuts.js";
@@ -78,10 +79,16 @@ export function App() {
   const [projectWorkflowBridge] = useState(() =>
     api === undefined ? undefined : createProjectWorkflowBridge(api)
   );
+  const [aiWritingWorkflowBridge] = useState(() =>
+    api === undefined ? undefined : createAiWritingWorkflowBridge(api)
+  );
   const [shellState, setShellState] = useState<DesktopShellState>(rendererShellState);
   const [commands, setCommands] = useState<readonly ApplicationCommand[]>(rendererCommands);
   const [chapterEditor, setChapterEditor] = useState<ChapterEditorProps | undefined>();
   const [projectWorkflow, setProjectWorkflow] = useState(() => projectWorkflowBridge?.getProps());
+  const [aiWritingWorkflow, setAiWritingWorkflow] = useState(() =>
+    aiWritingWorkflowBridge?.getProps()
+  );
   const [shortcutState, setShortcutState] = useState({ commandPaletteOpen: false });
 
   useEffect(() => {
@@ -273,6 +280,56 @@ export function App() {
     [projectWorkflowBridge, refreshProjectWorkflow]
   );
 
+  const handleAiInstructionChange = useCallback(
+    (instruction: string) => {
+      if (aiWritingWorkflowBridge === undefined) {
+        return;
+      }
+
+      setAiWritingWorkflow(aiWritingWorkflowBridge.setInstruction(instruction));
+    },
+    [aiWritingWorkflowBridge]
+  );
+
+  const handleGenerateAiSuggestion = useCallback(() => {
+    if (aiWritingWorkflowBridge === undefined || aiWritingWorkflow === undefined) {
+      return;
+    }
+
+    const instruction =
+      aiWritingWorkflow.instruction.trim().length === 0
+        ? "Continue the active chapter."
+        : aiWritingWorkflow.instruction;
+    setAiWritingWorkflow(aiWritingWorkflowBridge.beginGenerate(instruction));
+    void aiWritingWorkflowBridge.generateSuggestion(instruction).then((nextAiWritingWorkflow) => {
+      setAiWritingWorkflow(nextAiWritingWorkflow);
+      const diffPreview = nextAiWritingWorkflow.diffPreview;
+      if (diffPreview === undefined) {
+        return;
+      }
+
+      setChapterEditor((current) =>
+        current === undefined
+          ? current
+          : {
+              ...current,
+              diffPreview
+            }
+      );
+    });
+  }, [aiWritingWorkflow, aiWritingWorkflowBridge]);
+
+  const handleApplyAiSuggestion = useCallback(() => {
+    if (aiWritingWorkflowBridge === undefined) {
+      return;
+    }
+
+    void aiWritingWorkflowBridge.applySuggestion().then((nextChapterEditor) => {
+      setChapterEditor(nextChapterEditor);
+      setAiWritingWorkflow(aiWritingWorkflowBridge.getProps());
+    });
+  }, [aiWritingWorkflowBridge]);
+
   const interactiveChapterEditor =
     chapterEditor === undefined
       ? undefined
@@ -286,6 +343,16 @@ export function App() {
 
   return (
     <WorkspaceShell
+      {...(aiWritingWorkflow === undefined
+        ? {}
+        : {
+            aiWritingWorkflow: {
+              ...aiWritingWorkflow,
+              onInstructionChange: handleAiInstructionChange,
+              onGenerateSuggestion: handleGenerateAiSuggestion,
+              onApplySuggestion: handleApplyAiSuggestion
+            } satisfies AiWritingWorkflowProps
+          })}
       {...(projectWorkflow === undefined
         ? {}
         : {

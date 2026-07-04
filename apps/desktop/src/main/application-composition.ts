@@ -1,11 +1,13 @@
 import { join } from "node:path";
 
 import {
+  createAgentBackedAiWritingWorkflowSession,
   createChapterEditorSession,
   createDesktopApplication,
   createProjectWorkspaceSession
 } from "@novel-studio/application";
-import type { DesktopApplication } from "@novel-studio/application";
+import type { ChapterEditorSession, DesktopApplication } from "@novel-studio/application";
+import { createLlmAdapter, type LlmProvider } from "@novel-studio/llm-adapter";
 import {
   ChapterFileRepository,
   HistoryRepository,
@@ -68,6 +70,15 @@ export function createProjectDesktopApplication(
             : { createVersionId: options.createVersionId })
         })
     }),
+    createAiWritingWorkflowSession: (activeChapterEditorSession) =>
+      createAgentBackedAiWritingWorkflowSession({
+        chapterEditorSession: activeChapterEditorSession,
+        llmAdapter: createLlmAdapter({
+          provider: createDesktopMockAiProvider(activeChapterEditorSession),
+          clock: () => options.now?.() ?? new Date().toISOString()
+        }),
+        ...(options.now === undefined ? {} : { now: options.now })
+      }),
     projectTitle: options.projectTitle,
     navigatorSections: [
       { id: "chapters", title: "Chapters", itemCount: 1 },
@@ -81,6 +92,43 @@ export function createProjectDesktopApplication(
       { id: "workflows", title: "Workflows", itemCount: 0 }
     ]
   });
+}
+
+function createDesktopMockAiProvider(chapterEditorSession: ChapterEditorSession): LlmProvider {
+  return {
+    id: "mock",
+    async complete() {
+      const currentBody = chapterEditorSession.getState()?.chapter.body ?? "";
+      const separator = currentBody.endsWith("\n") || currentBody.length === 0 ? "" : "\n";
+
+      return {
+        content: {
+          type: "json",
+          value: {
+            proposedBody: `${currentBody}${separator}AI continuation draft.\n`,
+            summary: "Generated a local mock continuation for review."
+          }
+        },
+        usage: {
+          inputTokens: 16,
+          outputTokens: 8,
+          totalTokens: 24,
+          usageStatus: "estimated",
+          cost: {
+            amount: 0,
+            currency: "USD",
+            status: "estimated"
+          }
+        }
+      };
+    },
+    async *stream() {
+      yield {
+        type: "delta",
+        value: "AI continuation draft."
+      };
+    }
+  };
 }
 
 export function createDefaultDesktopApplication(): DesktopApplication {

@@ -35,6 +35,11 @@ import type {
   ModelSettingsSnapshot
 } from "./model-settings-session.js";
 import type {
+  AiWritingSuggestion,
+  AiWritingSuggestionRequest,
+  AiWritingWorkflowSession
+} from "./ai-writing-workflow-session.js";
+import type {
   CreateProjectInput,
   ProjectWorkspaceSession,
   ProjectWorkspaceSnapshot
@@ -73,6 +78,12 @@ export interface DesktopApplication {
     input: CreateChapterInput
   ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   selectProjectChapter(chapterId: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  generateActiveChapterSuggestion(
+    request: AiWritingSuggestionRequest
+  ): Promise<Result<AiWritingSuggestion, UnifiedError>>;
+  applyActiveChapterSuggestion(
+    suggestionId: string
+  ): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
   loadActiveChapter(): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
   editActiveChapter(nextBody: string): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
   saveActiveChapter(): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
@@ -109,6 +120,10 @@ export interface DesktopApplicationOptions {
   readonly projectWorkspaceSession?: ProjectWorkspaceSession;
   readonly modelSettingsSession?: ModelSettingsSession;
   readonly configStudioSession?: ConfigStudioSession;
+  readonly aiWritingWorkflowSession?: AiWritingWorkflowSession;
+  readonly createAiWritingWorkflowSession?: (
+    chapterEditorSession: ChapterEditorSession
+  ) => AiWritingWorkflowSession;
   readonly projectTitle?: string;
   readonly navigatorSections?: readonly NavigatorSection[];
 }
@@ -142,6 +157,10 @@ export function createDesktopApplication(
   const projectWorkspaceSession = options.projectWorkspaceSession;
   const modelSettingsSession = options.modelSettingsSession;
   const configStudioSession = options.configStudioSession;
+  const aiWritingWorkflowSession = options.aiWritingWorkflowSession;
+  const createAiWritingWorkflowSession = options.createAiWritingWorkflowSession;
+  let dynamicAiWritingWorkflowSession: AiWritingWorkflowSession | undefined;
+  let dynamicAiChapterEditorSession: ChapterEditorSession | undefined;
   let shellState = createInitialShellState(options);
 
   return {
@@ -205,6 +224,22 @@ export function createDesktopApplication(
       }
 
       return projectWorkspaceSession.selectChapter(chapterId);
+    },
+    async generateActiveChapterSuggestion(request) {
+      const activeAiWritingWorkflowSession = getAiWritingWorkflowSession();
+      if (activeAiWritingWorkflowSession === undefined) {
+        return aiWritingWorkflowUnavailable();
+      }
+
+      return activeAiWritingWorkflowSession.generateChapterSuggestion(request);
+    },
+    async applyActiveChapterSuggestion(suggestionId) {
+      const activeAiWritingWorkflowSession = getAiWritingWorkflowSession();
+      if (activeAiWritingWorkflowSession === undefined) {
+        return aiWritingWorkflowUnavailable();
+      }
+
+      return activeAiWritingWorkflowSession.applyChapterSuggestion(suggestionId);
     },
     async loadActiveChapter() {
       const activeChapterEditorSession = getActiveChapterEditorSession();
@@ -329,6 +364,26 @@ export function createDesktopApplication(
   function getActiveChapterEditorSession(): ChapterEditorSession | undefined {
     return projectWorkspaceSession?.getActiveChapterEditorSession() ?? chapterEditorSession;
   }
+
+  function getAiWritingWorkflowSession(): AiWritingWorkflowSession | undefined {
+    if (aiWritingWorkflowSession !== undefined) {
+      return aiWritingWorkflowSession;
+    }
+    if (createAiWritingWorkflowSession === undefined) {
+      return undefined;
+    }
+
+    const activeChapterEditorSession = getActiveChapterEditorSession();
+    if (activeChapterEditorSession === undefined) {
+      return undefined;
+    }
+    if (dynamicAiChapterEditorSession !== activeChapterEditorSession) {
+      dynamicAiChapterEditorSession = activeChapterEditorSession;
+      dynamicAiWritingWorkflowSession = createAiWritingWorkflowSession(activeChapterEditorSession);
+    }
+
+    return dynamicAiWritingWorkflowSession;
+  }
 }
 
 function createInitialShellState(options: DesktopApplicationOptions): DesktopShellState {
@@ -437,6 +492,19 @@ function projectWorkspaceUnavailable<T>(): Result<T, UnifiedError> {
       recoverability: "user-action",
       suggestedAction: "Create or open a project before using project workflow commands.",
       traceId: "application-project-workspace"
+    })
+  );
+}
+
+function aiWritingWorkflowUnavailable<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "AI_WRITING_WORKFLOW_UNAVAILABLE",
+      category: "UserError",
+      message: "No AI writing workflow session is available.",
+      recoverability: "user-action",
+      suggestedAction: "Open a project chapter before generating AI writing suggestions.",
+      traceId: "application-ai-writing-workflow"
     })
   );
 }

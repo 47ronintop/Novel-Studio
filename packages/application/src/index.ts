@@ -67,3 +67,10 @@ export type {
   ConfigVersionSummary
 } from "./config-studio-session.js";
 export { createConfigStudioSession } from "./config-studio-session.js";
+export type {
+  AiWritingSuggestion,
+  AiWritingSuggestionRequest,
+  AiWritingWorkflowSession,
+  AiWritingWorkflowSessionOptions
+} from "./ai-writing-workflow-session.js";
+export { createAgentBackedAiWritingWorkflowSession } from "./ai-writing-workflow-session.js";
