@@ -36,6 +36,11 @@ input {
   font: inherit;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .ns-shell {
   min-height: 100vh;
   background: var(--ns-bg);
@@ -194,6 +199,184 @@ input {
   margin: 28px auto;
   max-width: 78ch;
   padding: 0 24px;
+}
+
+.ns-editor-layout {
+  display: grid;
+  gap: 14px;
+  padding: 0 0 20px;
+}
+
+.ns-editor-header,
+.ns-editor-header-main,
+.ns-editor-subtitle,
+.ns-editor-panel-header,
+.ns-version-item,
+.ns-diff-item {
+  align-items: center;
+  display: flex;
+}
+
+.ns-editor-header,
+.ns-editor-panel-header {
+  justify-content: space-between;
+}
+
+.ns-editor-header-main {
+  gap: 10px;
+}
+
+.ns-editor-title {
+  font-size: 18px;
+  margin: 0;
+}
+
+.ns-editor-subtitle {
+  color: var(--ns-muted);
+  font-size: 12px;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.ns-editor-save {
+  align-items: center;
+  background: var(--ns-primary);
+  border: 0;
+  border-radius: 6px;
+  color: var(--ns-bg);
+  cursor: pointer;
+  display: inline-flex;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 12px;
+}
+
+.ns-icon-button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  color: var(--ns-muted);
+  cursor: pointer;
+  display: inline-flex;
+  height: 24px;
+  justify-content: center;
+  width: 24px;
+}
+
+.ns-icon-button:hover {
+  color: var(--ns-ink);
+}
+
+.ns-editor-body {
+  border: 1px solid var(--ns-border);
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: 1fr 52px;
+  overflow: hidden;
+  min-height: 220px;
+}
+
+.ns-editor-textarea {
+  background: var(--ns-bg);
+  border: 0;
+  color: var(--ns-ink);
+  min-height: 220px;
+  outline: none;
+  padding: 16px 18px;
+  resize: vertical;
+  width: 100%;
+}
+
+.ns-editor-gutter {
+  background: var(--ns-surface);
+  border-left: 1px solid var(--ns-border);
+  color: var(--ns-muted);
+  display: grid;
+  font-size: 12px;
+  gap: 4px;
+  padding: 16px 10px;
+}
+
+.ns-editor-line-number {
+  text-align: right;
+}
+
+.ns-editor-panels {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.ns-editor-panel {
+  background: var(--ns-surface);
+  border: 1px solid var(--ns-border);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.ns-version-list,
+.ns-diff-list {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ns-version-item {
+  justify-content: space-between;
+  color: var(--ns-muted);
+  font-size: 12px;
+  gap: 12px;
+}
+
+.ns-version-main {
+  display: grid;
+  gap: 3px;
+}
+
+.ns-version-actions {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.ns-preview-only {
+  color: var(--ns-accent);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.ns-diff-item {
+  align-items: flex-start;
+  display: grid;
+  gap: 6px;
+}
+
+.ns-diff-item pre {
+  background: var(--ns-bg);
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  color: var(--ns-ink);
+  margin: 0;
+  padding: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ns-diff-insert pre {
+  border-color: var(--ns-success);
+}
+
+.ns-diff-delete pre {
+  border-color: var(--ns-danger);
+}
+
+.ns-diff-replace pre {
+  border-color: var(--ns-warning);
 }
 
 .ns-document-title {

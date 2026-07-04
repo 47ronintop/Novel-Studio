@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@novel-studio/application": "0.1.0",
+    "@novel-studio/shared": "0.1.0",
     "lucide-react": "^1.23.0",
     "react": "^19.2.7"
   }

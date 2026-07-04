@@ -1,6 +1,7 @@
 export type { AtomicWriteFileSystem, AtomicWriteInput } from "./atomic-write.js";
 export { writeTextAtomically } from "./atomic-write.js";
 export { CacheRepository } from "./cache-repository.js";
+export { ChapterFileRepository } from "./chapter-repository.js";
 export { HistoryRepository } from "./history-repository.js";
 export type {
   AssetType,
@@ -25,3 +26,12 @@ export type {
 } from "./ports.js";
 export { ProjectFileRepository } from "./project-repository.js";
 export { RecoveryRepository } from "./recovery-repository.js";
+export type {
+  ChapterDocument,
+  ChapterDraftRepositoryPort,
+  ChapterFrontmatter,
+  ChapterHistoryRepositoryPort,
+  ChapterVersionContent,
+  ChapterVersionSnapshotInput,
+  ChapterVersionSummary
+} from "@novel-studio/shared";

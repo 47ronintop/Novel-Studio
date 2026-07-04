@@ -38,9 +38,17 @@ describe("Electron security baseline", () => {
     expect(APPLICATION_IPC_CHANNELS).toEqual([
       "application:get-shell-state",
       "application:list-commands",
-      "application:execute-command"
+      "application:execute-command",
+      "application:chapter:load",
+      "application:chapter:edit",
+      "application:chapter:save",
+      "application:chapter:list-versions",
+      "application:chapter:preview-version",
+      "application:chapter:restore-version",
+      "application:chapter:preview-suggestion-diff"
     ]);
     expect(isApplicationIpcChannel("application:list-commands")).toBe(true);
+    expect(isApplicationIpcChannel("application:chapter:save")).toBe(true);
     expect(isApplicationIpcChannel("fs:read-file")).toBe(false);
     expect(isApplicationIpcChannel("shell:open-path")).toBe(false);
   });
@@ -57,12 +65,26 @@ describe("Electron security baseline", () => {
     await api.getShellState();
     await api.commands.list();
     await api.commands.execute("workspace.toggle-navigator");
+    await api.chapter.load();
+    await api.chapter.edit("修改后的章节正文。\n");
+    await api.chapter.save();
+    await api.chapter.listVersions();
+    await api.chapter.previewVersion("ver_01");
+    await api.chapter.restoreVersion("ver_01");
+    await api.chapter.previewSuggestionDiff("AI 建议正文。\n");
 
     expect(invokedChannels.every(isApplicationIpcChannel)).toBe(true);
     expect(invokedChannels).toEqual([
       "application:get-shell-state",
       "application:list-commands",
-      "application:execute-command"
+      "application:execute-command",
+      "application:chapter:load",
+      "application:chapter:edit",
+      "application:chapter:save",
+      "application:chapter:list-versions",
+      "application:chapter:preview-version",
+      "application:chapter:restore-version",
+      "application:chapter:preview-suggestion-diff"
     ]);
   });
 
@@ -78,6 +100,10 @@ describe("Electron security baseline", () => {
       handlers["application:execute-command"]("workspace.toggle-inspector")
     ).resolves.toMatchObject({
       ok: true
+    });
+    await expect(handlers["application:chapter:load"]()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "CHAPTER_EDITOR_UNAVAILABLE" }
     });
   });
 

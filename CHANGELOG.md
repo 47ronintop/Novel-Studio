@@ -34,6 +34,9 @@
 - Added Application command registry with safe command `riskLevel`, shell state DTOs, and command execution boundary.
 - Added UI package with Activity Bar, Navigator, Editor Area, Inspector, Bottom Panel, Command Palette, OKLCH design tokens, and Ctrl/Cmd+K shortcut handling.
 - Upgraded Vitest to clear current audit findings and keep the verification gate at 0 vulnerabilities.
+- Created M5 Editor and Version UX with Application-backed chapter editor sessions, IPC chapter commands, preload API expansion, renderer bridge, version history preview/restore, and fixture-backed desktop chapter flow.
+- Added Chapter Editor UI controls for save, version preview, version restore, and preview-only AI diffs while keeping all file access behind Application/Repository boundaries.
+- Verified M5 gates: `typecheck`, `lint`, `format`, `test`, `test:contract`, and `npm audit` all pass with 0 vulnerabilities.
 
 ## Notes
 

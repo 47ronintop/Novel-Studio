@@ -1,5 +1,10 @@
 import { createUnifiedError, err, ok } from "@novel-studio/shared";
-import type { Result, UnifiedError } from "@novel-studio/shared";
+import type {
+  ChapterVersionContent,
+  ChapterVersionSummary,
+  Result,
+  UnifiedError
+} from "@novel-studio/shared";
 
 import {
   DEFAULT_APPLICATION_COMMANDS,
@@ -7,6 +12,12 @@ import {
   isSafeCommand
 } from "./command-registry.js";
 import type { ApplicationCommand, ApplicationCommandId } from "./command-registry.js";
+import type {
+  ChapterEditorSession,
+  ChapterEditorSnapshot,
+  ChapterEditorState,
+  ChapterSuggestionDiffPreview
+} from "./chapter-editor-session.js";
 
 export type ActivityId = "workspace" | "search" | "timeline" | "ai" | "studio" | "settings";
 
@@ -34,6 +45,25 @@ export interface DesktopApplication {
   getShellState(): DesktopShellState;
   listCommands(): readonly ApplicationCommand[];
   executeCommand(commandId: string): Result<DesktopShellState, UnifiedError>;
+  loadActiveChapter(): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
+  editActiveChapter(nextBody: string): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
+  saveActiveChapter(): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
+  listActiveChapterVersions(): Promise<Result<readonly ChapterVersionSummary[], UnifiedError>>;
+  previewActiveChapterVersion(
+    versionId: string
+  ): Promise<Result<ChapterVersionContent, UnifiedError>>;
+  restoreActiveChapterVersion(
+    versionId: string
+  ): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
+  previewActiveChapterSuggestionDiff(
+    nextBody: string
+  ): Result<ChapterSuggestionDiffPreview, UnifiedError>;
+}
+
+export interface DesktopApplicationOptions {
+  readonly chapterEditorSession?: ChapterEditorSession;
+  readonly projectTitle?: string;
+  readonly navigatorSections?: readonly NavigatorSection[];
 }
 
 const DEFAULT_SHELL_STATE: DesktopShellState = {
@@ -58,11 +88,14 @@ const DEFAULT_SHELL_STATE: DesktopShellState = {
   bottomPanelTabs: ["Workflow Run", "Problems", "Search", "Logs"]
 };
 
-export function createDesktopApplication(): DesktopApplication {
-  let shellState = DEFAULT_SHELL_STATE;
+export function createDesktopApplication(
+  options: DesktopApplicationOptions = {}
+): DesktopApplication {
+  const chapterEditorSession = options.chapterEditorSession;
+  let shellState = createInitialShellState(options);
 
   return {
-    getShellState: () => shellState,
+    getShellState: () => withChapterSaveStatus(shellState, chapterEditorSession?.getState()),
     listCommands: () => DEFAULT_APPLICATION_COMMANDS,
     executeCommand: (commandId: string) => {
       const command = findApplicationCommand(commandId);
@@ -83,8 +116,129 @@ export function createDesktopApplication(): DesktopApplication {
       shellState = reduceShellState(shellState, command.id);
 
       return ok(shellState);
+    },
+    async loadActiveChapter() {
+      if (chapterEditorSession === undefined) {
+        return chapterEditorUnavailable();
+      }
+
+      const loaded = await chapterEditorSession.load();
+      if (!loaded.ok) {
+        return loaded;
+      }
+
+      return createChapterSnapshot(chapterEditorSession, loaded.value);
+    },
+    async editActiveChapter(nextBody: string) {
+      if (chapterEditorSession === undefined) {
+        return chapterEditorUnavailable();
+      }
+
+      const edited = chapterEditorSession.edit(nextBody);
+      if (!edited.ok) {
+        return edited;
+      }
+
+      return createChapterSnapshot(chapterEditorSession, edited.value);
+    },
+    async saveActiveChapter() {
+      if (chapterEditorSession === undefined) {
+        return chapterEditorUnavailable();
+      }
+
+      const saved = await chapterEditorSession.save();
+      if (!saved.ok) {
+        return saved;
+      }
+
+      return createChapterSnapshot(chapterEditorSession, saved.value);
+    },
+    async listActiveChapterVersions() {
+      if (chapterEditorSession === undefined) {
+        return chapterEditorUnavailable();
+      }
+
+      return chapterEditorSession.listVersions();
+    },
+    async previewActiveChapterVersion(versionId: string) {
+      if (chapterEditorSession === undefined) {
+        return chapterEditorUnavailable();
+      }
+
+      return chapterEditorSession.previewVersion(versionId);
+    },
+    async restoreActiveChapterVersion(versionId: string) {
+      if (chapterEditorSession === undefined) {
+        return chapterEditorUnavailable();
+      }
+
+      const restored = await chapterEditorSession.restoreVersion(versionId);
+      if (!restored.ok) {
+        return restored;
+      }
+
+      return createChapterSnapshot(chapterEditorSession, restored.value);
+    },
+    previewActiveChapterSuggestionDiff(nextBody: string) {
+      if (chapterEditorSession === undefined) {
+        return chapterEditorUnavailable();
+      }
+
+      return ok(chapterEditorSession.previewSuggestionDiff(nextBody));
     }
   };
+}
+
+function createInitialShellState(options: DesktopApplicationOptions): DesktopShellState {
+  return {
+    ...DEFAULT_SHELL_STATE,
+    ...(options.projectTitle === undefined ? {} : { projectTitle: options.projectTitle }),
+    ...(options.navigatorSections === undefined
+      ? {}
+      : { navigatorSections: options.navigatorSections })
+  };
+}
+
+function withChapterSaveStatus(
+  shellState: DesktopShellState,
+  chapterState: ChapterEditorState | undefined
+): DesktopShellState {
+  if (chapterState === undefined) {
+    return shellState;
+  }
+
+  return {
+    ...shellState,
+    saveStatus: chapterState.saveStatus
+  };
+}
+
+async function createChapterSnapshot(
+  session: ChapterEditorSession,
+  state: ChapterEditorState
+): Promise<Result<ChapterEditorSnapshot, UnifiedError>> {
+  const versions = await session.listVersions();
+  if (!versions.ok) {
+    return versions;
+  }
+
+  return ok({
+    state,
+    versions: versions.value
+  });
+}
+
+function chapterEditorUnavailable<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "CHAPTER_EDITOR_UNAVAILABLE",
+      category: "UserError",
+      message: "No chapter editor session is available.",
+      recoverability: "user-action",
+      suggestedAction: "Open a project chapter before using editor commands.",
+      traceId: "application-chapter-editor"
+    })
+  );
 }
 
 function reduceShellState(

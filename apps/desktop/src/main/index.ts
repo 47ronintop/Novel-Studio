@@ -2,13 +2,14 @@ import { app, BrowserWindow, ipcMain } from "electron";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { createDefaultDesktopApplication } from "./application-composition.js";
 import { createApplicationIpcHandlers } from "./ipc-handlers.js";
 import { createSecureWebPreferences } from "./security.js";
 
 const currentDirectory = fileURLToPath(new URL(".", import.meta.url));
 
 export function registerApplicationIpcHandlers(): void {
-  const handlers = createApplicationIpcHandlers();
+  const handlers = createApplicationIpcHandlers(createDefaultDesktopApplication());
 
   for (const [channel, handler] of Object.entries(handlers)) {
     ipcMain.handle(channel, (_event, ...args: readonly unknown[]) => handler(...args));

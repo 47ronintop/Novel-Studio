@@ -1,9 +1,9 @@
 import type { ApplicationCommand, DesktopShellState } from "@novel-studio/application";
+import type { ChapterEditorProps } from "./chapter-editor.js";
 import {
   Bot,
   Boxes,
   Clock3,
-  FileText,
   FolderTree,
   PanelBottom,
   PanelRight,
@@ -11,12 +11,14 @@ import {
   Settings
 } from "lucide-react";
 
+import { ChapterEditor } from "./chapter-editor.js";
 import { CommandPalette } from "./command-palette.js";
 
 export interface WorkspaceShellProps {
   readonly shellState: DesktopShellState;
   readonly commands: readonly ApplicationCommand[];
   readonly commandPaletteOpen: boolean;
+  readonly chapterEditor?: ChapterEditorProps;
 }
 
 const activities = [
@@ -28,7 +30,12 @@ const activities = [
   { id: "settings", label: "Settings", icon: Settings }
 ] as const;
 
-export function WorkspaceShell({ shellState, commands, commandPaletteOpen }: WorkspaceShellProps) {
+export function WorkspaceShell({
+  shellState,
+  commands,
+  commandPaletteOpen,
+  chapterEditor
+}: WorkspaceShellProps) {
   return (
     <div className="ns-shell" data-theme="dark">
       <header className="ns-titlebar">
@@ -85,15 +92,20 @@ export function WorkspaceShell({ shellState, commands, commandPaletteOpen }: Wor
         <main aria-label="Editor Area" className="ns-editor-area" data-region="editor-area">
           <div className="ns-tabs" role="tablist" aria-label="Open assets">
             <button aria-selected="true" className="ns-tab" role="tab" type="button">
-              <FileText aria-hidden="true" size={14} />
               Untitled Chapter
             </button>
           </div>
-          <section className="ns-editor-surface" aria-label="Chapter editor placeholder">
-            <div className="ns-document-title">Untitled Chapter</div>
-            <p>Write the next scene</p>
-            <div className="ns-editor-line" />
-            <div className="ns-editor-line ns-editor-line-short" />
+          <section className="ns-editor-surface" aria-label="Chapter editor surface">
+            {chapterEditor ? (
+              <ChapterEditor {...chapterEditor} />
+            ) : (
+              <>
+                <div className="ns-document-title">Untitled Chapter</div>
+                <p>Write the next scene</p>
+                <div className="ns-editor-line" />
+                <div className="ns-editor-line ns-editor-line-short" />
+              </>
+            )}
           </section>
         </main>
 

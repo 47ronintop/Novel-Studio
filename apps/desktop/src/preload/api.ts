@@ -1,23 +1,76 @@
-import type { ApplicationIpcChannel } from "@novel-studio/application";
+import type {
+  ApplicationCommand,
+  ApplicationIpcChannel,
+  ChapterEditorSnapshot,
+  ChapterSuggestionDiffPreview,
+  DesktopShellState,
+  NovelStudioApi
+} from "@novel-studio/application";
+import type {
+  ChapterVersionContent,
+  ChapterVersionSummary,
+  Result,
+  UnifiedError
+} from "@novel-studio/shared";
 
 export interface IpcInvoker {
   invoke(channel: ApplicationIpcChannel, ...args: readonly unknown[]): Promise<unknown>;
 }
 
-export interface NovelStudioApi {
-  getShellState(): Promise<unknown>;
-  commands: {
-    list(): Promise<unknown>;
-    execute(commandId: string): Promise<unknown>;
+export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
+  return {
+    getShellState: () => invokeTyped<DesktopShellState>(ipc, "application:get-shell-state"),
+    commands: {
+      list: () => invokeTyped<readonly ApplicationCommand[]>(ipc, "application:list-commands"),
+      execute: (commandId: string) =>
+        invokeTyped<Result<DesktopShellState, UnifiedError>>(
+          ipc,
+          "application:execute-command",
+          commandId
+        )
+    },
+    chapter: {
+      load: () =>
+        invokeTyped<Result<ChapterEditorSnapshot, UnifiedError>>(ipc, "application:chapter:load"),
+      edit: (nextBody: string) =>
+        invokeTyped<Result<ChapterEditorSnapshot, UnifiedError>>(
+          ipc,
+          "application:chapter:edit",
+          nextBody
+        ),
+      save: () =>
+        invokeTyped<Result<ChapterEditorSnapshot, UnifiedError>>(ipc, "application:chapter:save"),
+      listVersions: () =>
+        invokeTyped<Result<readonly ChapterVersionSummary[], UnifiedError>>(
+          ipc,
+          "application:chapter:list-versions"
+        ),
+      previewVersion: (versionId: string) =>
+        invokeTyped<Result<ChapterVersionContent, UnifiedError>>(
+          ipc,
+          "application:chapter:preview-version",
+          versionId
+        ),
+      restoreVersion: (versionId: string) =>
+        invokeTyped<Result<ChapterEditorSnapshot, UnifiedError>>(
+          ipc,
+          "application:chapter:restore-version",
+          versionId
+        ),
+      previewSuggestionDiff: (nextBody: string) =>
+        invokeTyped<Result<ChapterSuggestionDiffPreview, UnifiedError>>(
+          ipc,
+          "application:chapter:preview-suggestion-diff",
+          nextBody
+        )
+    }
   };
 }
 
-export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
-  return {
-    getShellState: () => ipc.invoke("application:get-shell-state"),
-    commands: {
-      list: () => ipc.invoke("application:list-commands"),
-      execute: (commandId: string) => ipc.invoke("application:execute-command", commandId)
-    }
-  };
+async function invokeTyped<T>(
+  ipc: IpcInvoker,
+  channel: ApplicationIpcChannel,
+  ...args: readonly unknown[]
+): Promise<T> {
+  return (await ipc.invoke(channel, ...args)) as T;
 }
