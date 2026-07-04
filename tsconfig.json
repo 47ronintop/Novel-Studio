@@ -6,6 +6,7 @@
     { "path": "./packages/shared" },
     { "path": "./packages/schemas" },
     { "path": "./packages/llm-adapter" },
+    { "path": "./packages/workflow-engine" },
     { "path": "./packages/repository" },
     { "path": "./packages/ui" }
   ]

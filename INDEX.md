@@ -22,19 +22,19 @@ Version: 1.8 | Last Updated: 2026-07-03
 | `TESTING.md`                              |        1.0 | Accepted                    | Phase 5 testing standards, test pyramid, fixtures, LLM mocks, CI gates             |
 | `ROADMAP.md`                              |        1.0 | Active                      | Phase 6 task planning, milestones, provider order, implementation gates            |
 | `LLM_ADAPTER.md`                          |        1.0 | Accepted for M6             | Provider-neutral model call boundary, mock provider, errors, retry, usage/cost     |
+| `WORKFLOW_ENGINE.md`                      |        1.0 | Accepted for M7.1           | Deterministic workflow state machine, next actions, confirmation gate              |
 | `adr/ADR-0001-engine-runtime-language.md` |        1.0 | Accepted for Phase 2 Review | Core Engine language decision                                                      |
 | `CHANGELOG.md`                            | 0.1.0-docs | Active                      | Running change history                                                             |
 | `TECH_DEBT.md`                            |        1.0 | Active                      | Known risks, debt, unresolved decisions                                            |
 
 ## Planned Documents
 
-| Document             | Phase                  | Status      |
-| -------------------- | ---------------------- | ----------- |
-| `PROMPT_SYSTEM.md`   | Later technical design | Not Started |
-| `CONTEXT_ENGINE.md`  | Later technical design | Not Started |
-| `WORKFLOW_ENGINE.md` | Later technical design | Not Started |
-| `PLUGIN_SYSTEM.md`   | Later technical design | Not Started |
-| `SECURITY.md`        | Later technical design | Not Started |
+| Document            | Phase                  | Status      |
+| ------------------- | ---------------------- | ----------- |
+| `PROMPT_SYSTEM.md`  | Later technical design | Not Started |
+| `CONTEXT_ENGINE.md` | Later technical design | Not Started |
+| `PLUGIN_SYSTEM.md`  | Later technical design | Not Started |
+| `SECURITY.md`       | Later technical design | Not Started |
 
 ## Progress Tracking
 

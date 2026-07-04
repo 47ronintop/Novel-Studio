@@ -380,10 +380,10 @@ Initial provider order:
 - Create: `packages/workflow-engine/src/`
 - Test: workflow state tests.
 
-- [ ] Parse Workflow Definition.
-- [ ] Evaluate next step.
-- [ ] Enforce user confirmation gate.
-- [ ] Keep Workflow Engine from calling Agent Engine upward.
+- [x] Parse Workflow Definition.
+- [x] Evaluate next step.
+- [x] Enforce user confirmation gate.
+- [x] Keep Workflow Engine from calling Agent Engine upward.
 
 **Verification:** dependency boundary and unit tests prove state machine behavior.
 

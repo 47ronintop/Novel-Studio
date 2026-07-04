@@ -42,8 +42,11 @@
 - Created M6 LLM Adapter with strict TypeScript contracts, deterministic mock provider, streaming/non-streaming entrypoints, timeout/retry/rate-limit normalization, usage/cost reporting, and OpenAI-compatible fixture mapping.
 - Added LLM adapter tests covering mock streaming, mock non-streaming, timeout, retry backoff, rate limits, retry exhaustion, secret redaction, missing usage, OpenAI-compatible response mapping, cost estimation, and malformed provider payloads.
 - Verified M6 gates: `typecheck`, `lint`, `format`, `test`, `test:contract`, and `npm audit` all pass with 0 vulnerabilities.
+- Hardened M6 review findings by enforcing in-flight adapter timeouts and yielding normalized streaming errors instead of throwing provider failures.
+- Created `WORKFLOW_ENGINE.md` v1.0 for M7.1 deterministic workflow state machine design.
+- Created M7.1 Workflow Engine with workflow definition parsing, next-action evaluation, step completion, confirmation gate enforcement, and package boundary tests.
 
 ## Notes
 
 - Phase 7 is active.
-- M7 Agent/Context/Workflow is the next implementation milestone.
+- M7.2 Context Engine is the next implementation milestone.
