@@ -341,9 +341,9 @@ Before any feature task is considered complete:
 - Create: `packages/llm-adapter/src/`
 - Test: adapter contract tests.
 
-- [ ] Define provider-neutral request/response.
-- [ ] Implement mock provider.
-- [ ] Implement streaming and non-streaming interfaces.
+- [x] Define provider-neutral request/response.
+- [x] Implement mock provider.
+- [x] Implement streaming and non-streaming interfaces.
 
 **Verification:** mock provider passes streaming and non-streaming tests.
 
@@ -357,17 +357,17 @@ Initial provider order:
 4. Google Gemini
 5. Ollama
 
-- [ ] Implement OpenAI Compatible first.
-- [ ] Add provider normalization tests.
-- [ ] Add rate limit and timeout fixtures.
+- [x] Implement OpenAI Compatible first.
+- [x] Add provider normalization tests.
+- [x] Add rate limit and timeout fixtures.
 
 **Verification:** provider tests use fixtures only; no real network in CI.
 
 ### Task M6.3: Cost and Token Reporting
 
-- [ ] Add token usage model.
-- [ ] Add cost estimate model.
-- [ ] Surface unknown/estimated/actual status.
+- [x] Add token usage model.
+- [x] Add cost estimate model.
+- [x] Surface unknown/estimated/actual status.
 
 **Verification:** adapter returns usage reports for fixture responses.
 
@@ -573,12 +573,12 @@ The roadmap prioritizes data integrity and tooling before AI breadth. Novel Stud
 
 ## 22. Progress Tracking
 
-| 阶段                  | 状态        | 本次产出                                                                          | 未决问题                                        | 下一步              |
-| --------------------- | ----------- | --------------------------------------------------------------------------------- | ----------------------------------------------- | ------------------- |
-| Phase 1 产品设计      | Complete    | `PRODUCT_PRD.md v1.0`                                                             | 无阻塞                                          | 已完成              |
-| Phase 2 系统架构      | Complete    | `ARCHITECTURE.md v1.0`、`adr/ADR-0001-engine-runtime-language.md`                 | Workflow/Agent 边界需实现时用 import rules 固化 | 已完成              |
-| Phase 3 数据结构设计  | Complete    | `DATA_SCHEMA.md v1.0`                                                             | JSON Schema 文件待 Phase 7 实现                 | 已完成              |
-| Phase 4 UI/UX 设计    | Complete    | `UI_GUIDELINES.md v1.0`                                                           | CodeMirror/组件 primitive 需 spike              | 已完成              |
-| Phase 5 开发规范      | Complete    | `CODING_STANDARDS.md v1.0`、`TESTING.md v1.0`                                     | 工具配置待实现                                  | 已完成              |
-| Phase 6 Task Planning | Complete    | `ROADMAP.md v1.0`                                                                 | 后续专题文档需在相关实现前补齐                  | 已完成              |
-| Phase 7 正式开发      | In Progress | M0、M1、M2、M3 Repository Core、M4 Desktop Shell、M5 Editor and Version UX 已完成 | schema codegen、dependency boundary 工具待选择  | 执行 M6 LLM Adapter |
+| 阶段                  | 状态        | 本次产出                                                                                          | 未决问题                                        | 下一步                         |
+| --------------------- | ----------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------- | ------------------------------ |
+| Phase 1 产品设计      | Complete    | `PRODUCT_PRD.md v1.0`                                                                             | 无阻塞                                          | 已完成                         |
+| Phase 2 系统架构      | Complete    | `ARCHITECTURE.md v1.0`、`adr/ADR-0001-engine-runtime-language.md`                                 | Workflow/Agent 边界需实现时用 import rules 固化 | 已完成                         |
+| Phase 3 数据结构设计  | Complete    | `DATA_SCHEMA.md v1.0`                                                                             | JSON Schema 文件待 Phase 7 实现                 | 已完成                         |
+| Phase 4 UI/UX 设计    | Complete    | `UI_GUIDELINES.md v1.0`                                                                           | CodeMirror/组件 primitive 需 spike              | 已完成                         |
+| Phase 5 开发规范      | Complete    | `CODING_STANDARDS.md v1.0`、`TESTING.md v1.0`                                                     | 工具配置待实现                                  | 已完成                         |
+| Phase 6 Task Planning | Complete    | `ROADMAP.md v1.0`                                                                                 | 后续专题文档需在相关实现前补齐                  | 已完成                         |
+| Phase 7 正式开发      | In Progress | M0、M1、M2、M3 Repository Core、M4 Desktop Shell、M5 Editor and Version UX、M6 LLM Adapter 已完成 | schema codegen、dependency boundary 工具待选择  | 执行 M7 Agent/Context/Workflow |

@@ -1,0 +1,21 @@
+{
+  "id": "chatcmpl_fixture_01",
+  "object": "chat.completion",
+  "created": 1783123200,
+  "model": "fixture-model",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "The city answered with rain."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 14,
+    "completion_tokens": 7,
+    "total_tokens": 21
+  }
+}

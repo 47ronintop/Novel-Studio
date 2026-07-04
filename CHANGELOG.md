@@ -38,8 +38,12 @@
 - Added Chapter Editor UI controls for save, version preview, version restore, and preview-only AI diffs while keeping all file access behind Application/Repository boundaries.
 - Tightened M5 renderer save UX so dirty chapter saves immediately show `Saving` before resolving to `Saved` or back to `Unsaved` on failure.
 - Verified M5 gates: `typecheck`, `lint`, `format`, `test`, `test:contract`, and `npm audit` all pass with 0 vulnerabilities.
+- Created `LLM_ADAPTER.md` v1.0 for M6 provider-neutral model call design.
+- Created M6 LLM Adapter with strict TypeScript contracts, deterministic mock provider, streaming/non-streaming entrypoints, timeout/retry/rate-limit normalization, usage/cost reporting, and OpenAI-compatible fixture mapping.
+- Added LLM adapter tests covering mock streaming, mock non-streaming, timeout, retry backoff, rate limits, retry exhaustion, secret redaction, missing usage, OpenAI-compatible response mapping, cost estimation, and malformed provider payloads.
+- Verified M6 gates: `typecheck`, `lint`, `format`, `test`, `test:contract`, and `npm audit` all pass with 0 vulnerabilities.
 
 ## Notes
 
 - Phase 7 is active.
-- M6 LLM Adapter is the next implementation milestone.
+- M7 Agent/Context/Workflow is the next implementation milestone.

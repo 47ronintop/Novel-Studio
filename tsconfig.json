@@ -5,6 +5,7 @@
     { "path": "./packages/application" },
     { "path": "./packages/shared" },
     { "path": "./packages/schemas" },
+    { "path": "./packages/llm-adapter" },
     { "path": "./packages/repository" },
     { "path": "./packages/ui" }
   ]
