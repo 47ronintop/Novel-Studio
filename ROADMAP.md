@@ -391,13 +391,15 @@ Initial provider order:
 
 **Files:**
 
+- Create: `CONTEXT_ENGINE.md`
 - Create: `packages/context-engine/src/`
 - Test: context budget tests.
 
-- [ ] Build Context Bundle from chapter, memory, character, world, timeline refs.
-- [ ] Enforce budget.
-- [ ] Record exclusions and reasons.
-- [ ] Filter unconfirmed memories.
+- [x] Create M7.2 Context Engine design contract.
+- [x] Build Context Bundle from chapter, memory, character, world, timeline refs.
+- [x] Enforce budget.
+- [x] Record exclusions and reasons.
+- [x] Filter unconfirmed memories.
 
 **Verification:** tests prove no full-novel blind stuffing and trace is produced.
 

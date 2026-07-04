@@ -45,6 +45,8 @@
 - Hardened M6 review findings by enforcing in-flight adapter timeouts and yielding normalized streaming errors instead of throwing provider failures.
 - Created `WORKFLOW_ENGINE.md` v1.0 for M7.1 deterministic workflow state machine design.
 - Created M7.1 Workflow Engine with workflow definition parsing, next-action evaluation, step completion, confirmation gate enforcement, and package boundary tests.
+- Created `CONTEXT_ENGINE.md` v1.0 for M7.2 context bundle, budget, and trace design.
+- Created M7.2 Context Engine with explicit candidate bundle construction, token budget enforcement, exclusion trace, confirmed-memory filtering, source reference trace, full-novel stuffing guard, and package boundary tests.
 
 ## Notes
 

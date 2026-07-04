@@ -10,16 +10,35 @@
     {
       "refType": "chapter",
       "refId": "ch_01",
-      "content": "章节片段",
-      "tokenEstimate": 500
+      "content": "Chapter fragment",
+      "tokenEstimate": 500,
+      "sourceRefs": [
+        {
+          "entityType": "chapter",
+          "entityId": "ch_01",
+          "range": {
+            "startLine": 1,
+            "endLine": 8
+          }
+        }
+      ]
     }
   ],
   "trace": {
     "selectionReason": "review current chapter",
+    "includedRefs": [
+      {
+        "refType": "chapter",
+        "refId": "ch_01",
+        "tokenEstimate": 500
+      }
+    ],
     "excludedRefs": [
       {
-        "entityId": "ch_99",
-        "reason": "budget_exceeded"
+        "refType": "chapter",
+        "refId": "ch_99",
+        "reason": "budget_exceeded",
+        "tokenEstimate": 3000
       }
     ]
   }

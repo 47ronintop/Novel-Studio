@@ -4,6 +4,47 @@
   "title": "Context Bundle",
   "type": "object",
   "required": ["schemaVersion", "contextBundleId", "workflowRunId", "budget", "items", "trace"],
+  "definitions": {
+    "sourceRef": {
+      "type": "object",
+      "required": ["entityType", "entityId"],
+      "properties": {
+        "entityType": { "type": "string", "minLength": 1 },
+        "entityId": { "type": "string", "minLength": 1 },
+        "range": {
+          "type": "object",
+          "required": ["startLine", "endLine"],
+          "properties": {
+            "startLine": { "type": "integer", "minimum": 1 },
+            "endLine": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "contextRef": {
+      "type": "object",
+      "required": ["refType", "refId", "tokenEstimate"],
+      "properties": {
+        "refType": { "type": "string", "minLength": 1 },
+        "refId": { "type": "string", "minLength": 1 },
+        "tokenEstimate": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "excludedRef": {
+      "type": "object",
+      "required": ["refType", "refId", "reason", "tokenEstimate"],
+      "properties": {
+        "refType": { "type": "string", "minLength": 1 },
+        "refId": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1 },
+        "tokenEstimate": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    }
+  },
   "properties": {
     "schemaVersion": { "const": "1.0" },
     "contextBundleId": { "type": "string", "pattern": "^ctx_[A-Za-z0-9_-]+$" },
@@ -21,22 +62,33 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["refType", "refId", "content", "tokenEstimate"],
+        "required": ["refType", "refId", "content", "tokenEstimate", "sourceRefs"],
         "properties": {
           "refType": { "type": "string" },
           "refId": { "type": "string" },
           "content": { "type": "string" },
-          "tokenEstimate": { "type": "integer", "minimum": 0 }
+          "tokenEstimate": { "type": "integer", "minimum": 0 },
+          "sourceRefs": {
+            "type": "array",
+            "items": { "$ref": "#/definitions/sourceRef" }
+          }
         },
         "additionalProperties": true
       }
     },
     "trace": {
       "type": "object",
-      "required": ["selectionReason", "excludedRefs"],
+      "required": ["selectionReason", "includedRefs", "excludedRefs"],
       "properties": {
         "selectionReason": { "type": "string" },
-        "excludedRefs": { "type": "array", "items": { "type": "object" } }
+        "includedRefs": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/contextRef" }
+        },
+        "excludedRefs": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/excludedRef" }
+        }
       },
       "additionalProperties": true
     }
