@@ -1,0 +1,337 @@
+:root {
+  --ns-bg: oklch(0.105 0 0);
+  --ns-surface: oklch(0.155 0.006 180);
+  --ns-surface-raised: oklch(0.205 0.008 180);
+  --ns-border: oklch(0.3 0.01 180);
+  --ns-ink: oklch(0.92 0.006 180);
+  --ns-muted: oklch(0.69 0.01 180);
+  --ns-primary: oklch(0.62 0.11 180);
+  --ns-primary-strong: oklch(0.7 0.13 180);
+  --ns-accent: oklch(0.72 0.12 75);
+  --ns-danger: oklch(0.65 0.17 28);
+  --ns-warning: oklch(0.76 0.13 80);
+  --ns-success: oklch(0.67 0.12 150);
+  --ns-info: oklch(0.68 0.11 230);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--ns-bg);
+  color: var(--ns-ink);
+  font-family:
+    Inter,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.ns-shell {
+  min-height: 100vh;
+  background: var(--ns-bg);
+  color: var(--ns-ink);
+  display: grid;
+  grid-template-rows: 38px minmax(0, 1fr);
+}
+
+.ns-titlebar {
+  align-items: center;
+  background: var(--ns-surface);
+  border-bottom: 1px solid var(--ns-border);
+  display: flex;
+  justify-content: space-between;
+  padding: 0 12px;
+}
+
+.ns-project-status,
+.ns-command-meta,
+.ns-bottom-tabs {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.ns-project-title,
+.ns-panel-header,
+.ns-document-title {
+  font-weight: 600;
+}
+
+.ns-save-status,
+.ns-command-meta,
+.ns-muted {
+  color: var(--ns-muted);
+  font-size: 12px;
+}
+
+.ns-command-button,
+.ns-tab,
+.ns-bottom-tab {
+  background: var(--ns-surface-raised);
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  color: var(--ns-ink);
+  cursor: pointer;
+}
+
+.ns-command-button {
+  padding: 5px 8px;
+}
+
+.ns-command-button kbd {
+  color: var(--ns-muted);
+  margin-left: 8px;
+}
+
+.ns-workspace-grid {
+  display: grid;
+  grid-template-areas:
+    "activity navigator editor inspector"
+    "bottom bottom bottom bottom";
+  grid-template-columns: 48px 260px minmax(0, 1fr) 320px;
+  grid-template-rows: minmax(0, 1fr) 220px;
+  min-height: 0;
+}
+
+.ns-activity-bar {
+  align-items: center;
+  background: oklch(0.13 0.004 180);
+  border-right: 1px solid var(--ns-border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  grid-area: activity;
+  padding: 8px 6px;
+}
+
+.ns-activity-button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--ns-muted);
+  display: inline-flex;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+.ns-activity-button[data-selected="true"] {
+  border-color: color-mix(in oklch, var(--ns-primary) 55%, transparent);
+  color: var(--ns-primary-strong);
+}
+
+.ns-navigator {
+  background: var(--ns-surface);
+  border-right: 1px solid var(--ns-border);
+  grid-area: navigator;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ns-panel-header {
+  align-items: center;
+  border-bottom: 1px solid var(--ns-border);
+  display: flex;
+  font-size: 13px;
+  justify-content: space-between;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.ns-tree {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+}
+
+.ns-tree-row {
+  align-items: center;
+  border-radius: 6px;
+  color: var(--ns-muted);
+  display: flex;
+  font-size: 13px;
+  justify-content: space-between;
+  min-height: 32px;
+  padding: 0 8px;
+}
+
+.ns-editor-area {
+  background: var(--ns-bg);
+  grid-area: editor;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ns-tabs {
+  align-items: center;
+  background: var(--ns-surface);
+  border-bottom: 1px solid var(--ns-border);
+  display: flex;
+  min-height: 34px;
+  padding: 0 8px;
+}
+
+.ns-tab {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 9px;
+}
+
+.ns-editor-surface {
+  margin: 28px auto;
+  max-width: 78ch;
+  padding: 0 24px;
+}
+
+.ns-document-title {
+  font-size: 18px;
+  margin-bottom: 16px;
+}
+
+.ns-editor-surface p {
+  color: var(--ns-muted);
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+.ns-editor-line {
+  background: var(--ns-surface-raised);
+  border-radius: 6px;
+  height: 13px;
+  margin-top: 14px;
+  width: 100%;
+}
+
+.ns-editor-line-short {
+  width: 62%;
+}
+
+.ns-inspector {
+  background: var(--ns-surface);
+  border-left: 1px solid var(--ns-border);
+  grid-area: inspector;
+  min-width: 0;
+}
+
+.ns-meta-list {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 12px;
+}
+
+.ns-meta-list div {
+  display: grid;
+  gap: 4px;
+}
+
+.ns-meta-list dt {
+  color: var(--ns-muted);
+  font-size: 12px;
+}
+
+.ns-meta-list dd {
+  font-size: 13px;
+  margin: 0;
+}
+
+.ns-bottom-panel {
+  background: var(--ns-surface);
+  border-top: 1px solid var(--ns-border);
+  grid-area: bottom;
+}
+
+.ns-bottom-tabs {
+  min-height: 36px;
+  padding: 0 10px;
+}
+
+.ns-bottom-tab {
+  min-height: 26px;
+  padding: 0 9px;
+}
+
+.ns-command-palette {
+  background: var(--ns-surface-raised);
+  border: 1px solid var(--ns-border);
+  border-radius: 8px;
+  left: 50%;
+  max-width: 640px;
+  overflow: hidden;
+  position: fixed;
+  top: 72px;
+  transform: translateX(-50%);
+  width: min(640px, calc(100vw - 32px));
+  z-index: 40;
+}
+
+.ns-command-search {
+  align-items: center;
+  border-bottom: 1px solid var(--ns-border);
+  display: flex;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 12px;
+}
+
+.ns-command-search input {
+  background: transparent;
+  border: 0;
+  color: var(--ns-ink);
+  flex: 1;
+  outline: none;
+}
+
+.ns-command-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+}
+
+.ns-command-item {
+  align-items: center;
+  border-radius: 6px;
+  display: flex;
+  justify-content: space-between;
+  min-height: 34px;
+  padding: 0 8px;
+}
+
+.ns-risk-level {
+  color: var(--ns-success);
+}
+
+@media (max-width: 1279px) {
+  .ns-workspace-grid {
+    grid-template-columns: 48px 250px minmax(0, 1fr);
+    grid-template-areas:
+      "activity navigator editor"
+      "bottom bottom bottom";
+  }
+
+  .ns-inspector {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

@@ -32,7 +32,7 @@ export default tseslint.config(
     }
   },
   {
-    files: ["**/test/**/*.ts", "**/*.test.ts"],
+    files: ["**/test/**/*.ts", "**/test/**/*.tsx", "**/*.test.ts", "**/*.test.tsx"],
     rules: {
       "no-restricted-imports": "off"
     }

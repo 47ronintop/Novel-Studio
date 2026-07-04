@@ -256,9 +256,9 @@ Before any feature task is considered complete:
 - Create: `apps/desktop/src/preload/`
 - Create: `apps/desktop/src/renderer/`
 
-- [ ] Disable direct Node access in renderer.
-- [ ] Define IPC allowlist.
-- [ ] Expose Application Layer commands through preload only.
+- [x] Disable direct Node access in renderer.
+- [x] Define IPC allowlist.
+- [x] Expose Application Layer commands through preload only.
 
 **Verification:** security tests confirm renderer cannot directly access filesystem.
 
@@ -270,9 +270,9 @@ Before any feature task is considered complete:
 - Create: `apps/desktop/src/renderer/App.tsx`
 - Create: design token CSS.
 
-- [ ] Implement Activity Bar, Navigator, Editor Area, Inspector, Bottom Panel skeleton.
-- [ ] Use OKLCH tokens from `UI_GUIDELINES.md`.
-- [ ] Keep UI components business-free.
+- [x] Implement Activity Bar, Navigator, Editor Area, Inspector, Bottom Panel skeleton.
+- [x] Use OKLCH tokens from `UI_GUIDELINES.md`.
+- [x] Keep UI components business-free.
 
 **Verification:** Playwright smoke opens app shell and verifies landmark regions.
 
@@ -284,9 +284,9 @@ Before any feature task is considered complete:
 - Create: command registry.
 - Create: Command Palette component.
 
-- [ ] Add `Ctrl/Cmd + K`.
-- [ ] Add safe commands only.
-- [ ] Add command risk level.
+- [x] Add `Ctrl/Cmd + K`.
+- [x] Add safe commands only.
+- [x] Add command risk level.
 
 **Verification:** keyboard test opens palette and executes safe command.
 
@@ -573,12 +573,12 @@ The roadmap prioritizes data integrity and tooling before AI breadth. Novel Stud
 
 ## 22. Progress Tracking
 
-| 阶段                  | 状态        | 本次产出                                                          | 未决问题                                        | 下一步                |
-| --------------------- | ----------- | ----------------------------------------------------------------- | ----------------------------------------------- | --------------------- |
-| Phase 1 产品设计      | Complete    | `PRODUCT_PRD.md v1.0`                                             | 无阻塞                                          | 已完成                |
-| Phase 2 系统架构      | Complete    | `ARCHITECTURE.md v1.0`、`adr/ADR-0001-engine-runtime-language.md` | Workflow/Agent 边界需实现时用 import rules 固化 | 已完成                |
-| Phase 3 数据结构设计  | Complete    | `DATA_SCHEMA.md v1.0`                                             | JSON Schema 文件待 Phase 7 实现                 | 已完成                |
-| Phase 4 UI/UX 设计    | Complete    | `UI_GUIDELINES.md v1.0`                                           | CodeMirror/组件 primitive 需 spike              | 已完成                |
-| Phase 5 开发规范      | Complete    | `CODING_STANDARDS.md v1.0`、`TESTING.md v1.0`                     | 工具配置待实现                                  | 已完成                |
-| Phase 6 Task Planning | Complete    | `ROADMAP.md v1.0`                                                 | 后续专题文档需在相关实现前补齐                  | 已完成                |
-| Phase 7 正式开发      | In Progress | M0、M1、M2、M3 Repository Core 已完成                             | schema codegen、dependency boundary 工具待选择  | 执行 M4 Desktop Shell |
+| 阶段                  | 状态        | 本次产出                                                          | 未决问题                                        | 下一步                        |
+| --------------------- | ----------- | ----------------------------------------------------------------- | ----------------------------------------------- | ----------------------------- |
+| Phase 1 产品设计      | Complete    | `PRODUCT_PRD.md v1.0`                                             | 无阻塞                                          | 已完成                        |
+| Phase 2 系统架构      | Complete    | `ARCHITECTURE.md v1.0`、`adr/ADR-0001-engine-runtime-language.md` | Workflow/Agent 边界需实现时用 import rules 固化 | 已完成                        |
+| Phase 3 数据结构设计  | Complete    | `DATA_SCHEMA.md v1.0`                                             | JSON Schema 文件待 Phase 7 实现                 | 已完成                        |
+| Phase 4 UI/UX 设计    | Complete    | `UI_GUIDELINES.md v1.0`                                           | CodeMirror/组件 primitive 需 spike              | 已完成                        |
+| Phase 5 开发规范      | Complete    | `CODING_STANDARDS.md v1.0`、`TESTING.md v1.0`                     | 工具配置待实现                                  | 已完成                        |
+| Phase 6 Task Planning | Complete    | `ROADMAP.md v1.0`                                                 | 后续专题文档需在相关实现前补齐                  | 已完成                        |
+| Phase 7 正式开发      | In Progress | M0、M1、M2、M3 Repository Core、M4 Desktop Shell 已完成           | schema codegen、dependency boundary 工具待选择  | 执行 M5 Editor and Version UX |
