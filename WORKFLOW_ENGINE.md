@@ -1,173 +1,125 @@
-# WORKFLOW ENGINE - Novel Studio
+# WORKFLOW_ENGINE - Novel Studio
 
 Version: 1.0 | Status: Accepted for M7.1 | Phase: 7 Formal Development
 
-## 1. Purpose
+## 1. 目的
 
-The Workflow Engine is the deterministic state machine for Novel Studio workflows. It parses workflow definitions, tracks run state, evaluates the next executable step, enforces user confirmation gates, and returns structured instructions for upper layers.
+Workflow Engine 是 Novel Studio workflow 的确定性状态机。它负责解析 workflow definition、维护 run state、评估下一步可执行动作、强制 user confirmation gate，并向上层返回结构化 instructions。
 
-The Workflow Engine does not execute Agents, build context, call models, write files, or call upward into Agent Engine. It only decides what should happen next.
+Workflow Engine 不执行 Agent，不构建 context，不调用模型，不写文件，也不向上调用 Agent Engine。它只回答“下一步应该发生什么”。
 
-## 2. Scope For M7.1
+## 2. 范围
 
-M7.1 implements:
+M7.1 已实现：
 
-- Workflow definition parsing and structural validation.
-- Workflow run initialization.
-- Next-step evaluation for `context`, `agent`, `confirmation`, and `save` steps.
-- Step completion and deterministic transition to `nextStepId`.
-- Confirmation gate enforcement.
-- Unified Error results for invalid definitions, invalid run state, missing steps, and missing confirmation.
+- Workflow definition parsing 和结构校验。
+- Workflow run initialization。
+- `context`、`agent`、`confirmation`、`save` steps 的 next-step evaluation。
+- Step completion 和到 `nextStepId` 的确定性 transition。
+- Confirmation gate enforcement。
+- Invalid definition、invalid run state、missing step、missing confirmation 的 Unified Error results。
+- Package boundary test，防止依赖 Agent/Context/LLM/Repository。
 
-M7.1 does not implement:
+M7.1 不包含：
 
-- Branch expression evaluation.
-- Retry/failure policy execution.
-- Agent execution.
-- Context bundle construction.
-- Repository writes.
-- UI workflow panels.
+- Branch expression evaluation。
+- Retry/failure policy execution。
+- Agent execution。
+- Context bundle construction。
+- Repository writes。
+- UI workflow panels。
 
 ## 3. Package Boundary
 
-The implementation lives in `packages/workflow-engine`.
+实现位于 `packages/workflow-engine`。
 
-Allowed dependencies:
+允许依赖：
 
-- `@novel-studio/shared` for `Result` and `UnifiedError`.
+- `@novel-studio/shared`
+- `@novel-studio/schemas`
 
-Disallowed dependencies:
+禁止依赖：
 
 - `@novel-studio/agent-engine`
 - `@novel-studio/context-engine`
 - `@novel-studio/llm-adapter`
 - `@novel-studio/repository`
-- UI, Electron, Application, or Service packages
+- `@novel-studio/application`
+- `@novel-studio/ui`
 
-This package must stay pure and deterministic. Time and ids are injected when needed.
+Workflow Engine 必须保持纯状态机属性，便于测试和复现。
 
-## 4. Core Data Flow
+## 4. 输入与输出
 
-```text
-Workflow Definition JSON
--> parseWorkflowDefinition
--> WorkflowDefinition
--> startWorkflowRun
--> WorkflowRunState
--> evaluateNextWorkflowAction
--> structured next action
--> upper layer executes action
--> completeWorkflowStep / confirmWorkflowStep
--> new WorkflowRunState
-```
+输入：
 
-## 5. Workflow Definition Contract
+- Workflow definition JSON。
+- 当前 workflow run state。
+- 可选 completion payload。
+- 可选 confirmation decision。
 
-M7.1 consumes the existing `schema.workflow-definition.v1` shape:
+输出：
 
-- `schemaVersion`
-- `id`
-- `type`
-- `title`
-- `status`
-- `entryStepId`
-- `steps`
-- `createdAt`
-- `updatedAt`
+- `NextWorkflowAction`
+- 更新后的 run state。
+- 或 normalized failure `Result`。
 
-Each step has:
+`NextWorkflowAction` 必须是结构化对象，常见类型包括：
 
-- `id`
-- `kind`: `context`, `agent`, `confirmation`, `save`, or `branch`
-- optional `agentId`
-- optional `nextStepId`
-- optional extension fields preserved as unknown data
+- `build-context`
+- `run-agent`
+- `wait-for-confirmation`
+- `save-result`
+- `complete`
 
-Additional M7.1 structural rules:
+上层根据 action type 调用 Context Engine、Agent Engine、Repository 或 UI confirmation。
 
-- `entryStepId` must reference an existing step.
-- `nextStepId`, when present, must reference an existing step.
-- `agent` steps must include `agentId`.
-- Step ids must be unique.
+## 5. 状态机规则
 
-## 6. Run State
+- Workflow run 必须从 definition 中声明的 start step 初始化。
+- 当前 step 不存在时返回 stable error，不猜测 fallback。
+- Step completion 必须只推进到明确的 `nextStepId`。
+- Confirmation step 未获得允许时，不得进入后续 mutating step。
+- 已完成 workflow 再次推进时必须返回 complete action 或 invalid state error，不能重复执行。
+- State transition 必须 deterministic，同一输入得到同一输出。
 
-A workflow run state includes:
+## 6. Confirmation Gate
 
-- `schemaVersion`
-- `workflowRunId`
-- `workflowId`
-- `status`: `running`, `waiting-for-confirmation`, `completed`, or `failed`
-- `currentStepId`
-- `completedStepIds`
-- `confirmedStepIds`
-- `createdAt`
-- `updatedAt`
+Confirmation gate 用于保护高风险动作，例如应用 AI diff、保存自动生成内容或执行 rollback。
 
-The state is immutable from the caller perspective. State transition functions return a new state.
+规则：
 
-## 7. Next Actions
+- Gate step 必须显式声明。
+- 未确认时只能返回 `wait-for-confirmation`。
+- 拒绝确认时 workflow 不得继续进入 mutating action。
+- 确认记录应保留在 run state 中，供上层审计。
 
-`evaluateNextWorkflowAction` returns one of:
+## 7. 错误策略
 
-- `build-context`: upper layer should ask Context Engine to build a context bundle.
-- `run-agent`: upper layer should ask Agent Engine to run a specific agent.
-- `wait-for-confirmation`: upper layer should ask the user to approve before continuing.
-- `save`: upper layer should execute an approved save/apply operation.
-- `complete`: workflow run has no more steps.
+Workflow Engine 返回 Unified Error，不抛 provider 或 UI 错误。常见错误：
 
-These actions are instructions only. The Workflow Engine does not execute them.
-
-## 8. Confirmation Gate
-
-For a `confirmation` step:
-
-- Evaluation returns `wait-for-confirmation`.
-- `completeWorkflowStep` must fail with `WORKFLOW_CONFIRMATION_REQUIRED` until `confirmWorkflowStep` records approval for that step.
-- After confirmation, completion may advance to `nextStepId` or complete the run.
-
-This ensures AI-produced or workflow-produced changes cannot be applied without an explicit user gate.
-
-## 9. Error Handling
-
-Workflow Engine errors use `UnifiedError` with category `WorkflowError`.
-
-Required stable codes:
-
-- `WORKFLOW_DEFINITION_INVALID`
+- `WORKFLOW_INVALID_DEFINITION`
+- `WORKFLOW_INVALID_STATE`
 - `WORKFLOW_STEP_NOT_FOUND`
-- `WORKFLOW_DUPLICATE_STEP`
-- `WORKFLOW_AGENT_STEP_MISSING_AGENT`
-- `WORKFLOW_RUN_STATE_INVALID`
 - `WORKFLOW_CONFIRMATION_REQUIRED`
-- `WORKFLOW_STEP_MISMATCH`
+- `WORKFLOW_CONFIRMATION_REJECTED`
+- `WORKFLOW_UNSUPPORTED_STEP`
 
-Errors include `traceId` and redacted structured detail where useful.
+错误 details 必须只包含可审计的结构化信息，不包含用户 secret。
 
-## 10. Testing Requirements
+## 8. 测试要求
 
-M7.1 tests must cover:
+M7.1 测试必须覆盖：
 
-- Valid workflow definition parsing.
-- Invalid entry step rejection.
-- Duplicate step rejection.
-- Agent step without `agentId` rejection.
-- Next action for context step.
-- Next action for agent step.
-- Confirmation gate blocks completion until confirmed.
-- Save step can complete the workflow.
-- Package boundary does not depend on Agent/Context/LLM/Repository packages.
+- 有效 workflow definition parsing。
+- 非法 definition 失败。
+- run initialization。
+- next action evaluation。
+- step completion。
+- confirmation gate required。
+- confirmation rejected。
+- package boundary 不依赖上层包。
 
-## 11. Definition Of Done
+## 9. 验收状态
 
-M7.1 is complete when:
-
-- `packages/workflow-engine` exists and is included in the root TypeScript build graph.
-- Workflow parser and state machine functions are exported from one package entrypoint.
-- Tests cover the M7.1 state transitions and confirmation gate.
-- Documentation, roadmap, index, and changelog are updated.
-- `typecheck`, `lint`, `format`, `test`, `test:contract`, and `npm audit` pass.
-
-## 12. Changelog
-
-- v1.0 - 2026-07-04: Created M7.1 Workflow Engine contract.
+M7.1 已完成并通过本地门禁。后续如果加入 branching、retry 或 failure policy，必须先更新本文和 schema，再扩展状态机测试。

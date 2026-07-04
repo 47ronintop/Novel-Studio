@@ -1,113 +1,83 @@
-# Editor Spike
+# Editor Spike - Novel Studio
 
-Status: Accepted for M5
-Date: 2026-07-04
+Version: 1.0 | Status: Accepted for M5 | Phase: 7 Formal Development
 
-## Decision
+## 1. 目的
 
-Use CodeMirror 6 for the Novel Studio chapter editor and diff review foundation.
+本文记录 M5 编辑器选型 spike。目标不是做完整编辑器评测，而是确认 v1 章节 Markdown 编辑、保存状态、快捷键和 diff review foundation 应优先采用哪条技术路线。
 
-M5 will implement the editor vertical slice behind an Application DTO and Repository-backed
-chapter save path. The initial UI may use a controlled React text surface while the
-CodeMirror runtime dependency is installed and wired in a later M5 slice. The public boundary
-must already match the intended CodeMirror integration: a string document value, explicit
-change events, save commands routed through Application, and diff candidates that remain
-suggestion-only until the user confirms.
-
-## Requirements
-
-- Markdown-first prose editing for long chapters.
-- Dirty, saving, saved, and recovery-visible states.
-- Keyboard-first operation, including command palette integration.
-- UI cannot read or write project files directly.
-- Save, restore, and AI apply flows must go through Application and Repository.
-- Version previews and AI suggestions need diff review before any write.
-- Editor implementation must remain replaceable behind local UI props and Application DTOs.
-
-## Options Compared
+## 2. 候选方案
 
 ### CodeMirror 6
 
-Strengths:
+优点：
 
-- Modular package model allows a small Markdown-focused editor instead of a full code IDE.
-- Functional state and transaction model fits React state boundaries and testable update flow.
-- Viewport rendering is designed for large documents and avoids rendering the full document.
-- Extensions cover keymaps, history, gutters, decorations, language support, linting, and custom
-  editor behavior without forcing a monolithic shell.
-- `@codemirror/merge` provides side-by-side and unified diff primitives, including changed chunks,
-  accept/reject controls, and presentable diff utilities.
+- 面向文本编辑器，Markdown 支持成熟。
+- 扩展模型适合后续接入 lint、selection、diff、inline decorations。
+- Bundle 相对轻，适合 Electron renderer。
+- 快捷键和 editor state 可控，便于和 Command Palette 协调。
+- 对大文本编辑的性能路径更适合 v1 目标。
 
-Risks:
+风险：
 
-- Requires deliberate extension assembly; a minimal editor is too primitive for production.
-- Browser use requires a bundler/module loader, so the desktop app needs a renderer build step
-  before the real CodeMirror component can ship.
-- Novel Studio must own Markdown/frontmatter validation; CodeMirror should not become a business
-  rules layer.
+- 需要自己组合 UI、toolbar、diff 和 history 面板。
+- 对复杂 IDE 功能需要逐步补 extension。
 
 ### Monaco
 
-Strengths:
+优点：
 
-- Mature standalone editor with a built-in diff editor.
-- Strong code-editing ergonomics, actions, context keys, layout APIs, and accessible diff
-  navigation.
-- Familiar to users coming from VS Code.
+- IDE 功能完整。
+- 内建大量编辑器能力。
+- 对代码编辑体验成熟。
 
-Risks:
+风险：
 
-- Heavier and more code-IDE-oriented than the v1 chapter writing surface needs.
-- Markdown/prose customization is possible but less aligned with Novel Studio's long-form authoring
-  and low-distraction editor direction.
-- More likely to pull UI behavior toward VS Code compatibility rather than Novel Studio's
-  writing-focused workflow.
+- Bundle 和运行时复杂度更高。
+- 对小说 Markdown 写作场景偏重。
+- 与 Electron renderer、主题、快捷键和轻量 diff review 的整合成本更高。
 
-## Recommendation
+## 3. v1 决策
 
-CodeMirror 6 is the better default for Novel Studio v1 because the core document is Markdown prose,
-not source code. Its extension model lets the product add only the editing, history, Markdown,
-frontmatter, and diff behaviors needed for an authoring IDE. Monaco remains a fallback only if
-CodeMirror fails large-chapter performance or diff review requirements in later smoke testing.
+M5 采用 CodeMirror 6 方向。
 
-## M5 Implementation Boundary
+理由：
 
-M5 should not couple Repository code to CodeMirror APIs. The boundary is:
+- Novel Studio v1 的核心是长文本 Markdown 写作，不是代码 IDE。
+- 需要稳定的保存状态、版本历史和 AI diff review，而不是完整代码智能。
+- CodeMirror 6 更容易保持 UI 简洁、可控、可测试。
+- 后续如果需要更复杂的编辑能力，可以通过 extension 逐步扩展。
 
-```text
-Editor UI
--> Application chapter DTOs
--> Chapter service/use case
--> Repository chapter read/write/history/recovery
--> Storage
-```
+## 4. 当前实现取舍
 
-The editor component receives:
+M5 已先完成 Application-backed chapter editor vertical slice：
 
-- `chapterId`
-- `title`
-- `content`
-- `saveStatus`
-- `versionHistory`
-- optional `diffPreview`
-- callbacks for edit, save, preview version, restore version, and apply suggestion
+- 打开 fixture chapter。
+- 编辑内容。
+- 显示 dirty/saving/saved。
+- 通过 Repository 保存。
+- 列出 version history。
+- 预览和 restore snapshot。
+- AI suggestion diff 默认 preview-only。
 
-Only the Application layer may decide when a save is valid, when a snapshot is created, and when a
-Repository write occurs.
+当前实现没有把完整 CodeMirror 集成作为阻塞项；它先验证数据流、保存状态和版本 UX。完整编辑器集成可以在后续 UI hardening 中继续补。
 
-## Diff UX
+## 5. 后续验证项
 
-Version preview and AI suggestions use the same principle: preview first, write only after explicit
-user action.
+- 真实 CodeMirror 6 集成。
+- 大章节输入性能。
+- 与 Command Palette 的快捷键冲突矩阵。
+- Selection/range metadata，用于 AI rewrite 和 diff。
+- Markdown preview 或 split view。
+- 更完整的 diff component。
 
-- Version restore creates a `before-rollback` snapshot before writing restored content.
-- AI suggestion review creates no write by default.
-- Applying an AI suggestion later must create a `before-ai-apply` snapshot before writing content.
-- The UI must label suggestions as suggestions, not saved project state.
+## 6. 验收标准
 
-## Sources Checked
+M5 完成时必须满足：
 
-- CodeMirror system guide: https://codemirror.net/docs/guide/
-- CodeMirror reference manual, including merge APIs: https://codemirror.net/docs/ref/#merge
-- Monaco diff editor API: https://microsoft.github.io/monaco-editor/typedoc/functions/editor.createDiffEditor.html
-- Monaco standalone diff editor interface: https://microsoft.github.io/monaco-editor/typedoc/interfaces/editor.IStandaloneDiffEditor.html
+- UI 不直接访问文件系统。
+- 保存路径只经过 Application/Repository。
+- Dirty/saving/saved 状态可见。
+- Restore 前创建 `before-rollback` snapshot。
+- AI diff 默认不自动应用。
+- 测试覆盖 chapter edit/save/version path。

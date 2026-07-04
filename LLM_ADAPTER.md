@@ -1,193 +1,165 @@
-# LLM ADAPTER - Novel Studio
+# LLM_ADAPTER - Novel Studio
 
 Version: 1.0 | Status: Accepted for M6 | Phase: 7 Formal Development
 
-## 1. Purpose
+## 1. 目的
 
-This document defines the v1 LLM Adapter contract for Novel Studio. The adapter is the only model-call boundary in the core runtime. Upper layers must not call provider SDKs, fetch provider endpoints, or parse provider-specific errors directly.
+本文定义 Novel Studio v1 的 LLM Adapter 契约。LLM Adapter 是核心运行时中唯一允许发起模型调用的边界；上层不得直接调用 provider SDK、直接请求 provider endpoint，也不得直接解析 provider-specific errors。
 
-The adapter must support provider-neutral requests and responses, mock-first testing, streaming and non-streaming execution, normalized errors, timeout and retry policy, rate-limit handling, and usage/cost reporting.
+Adapter 必须支持 provider-neutral request/response、mock-first testing、streaming 与 non-streaming 调用、normalized errors、timeout/retry/rate-limit 处理、usage/cost reporting 和 secret redaction。
 
-## 2. Scope
+## 2. 范围
 
-M6 implements:
+M6 已实现：
 
-- Provider-neutral TypeScript interfaces for LLM requests, responses, stream events, model profiles, retry policy, and usage.
-- A deterministic mock provider used by tests and future CI workflows.
-- A first OpenAI-compatible provider shape without real network calls in CI.
-- Error normalization for provider failures, timeout, retry exhaustion, rate limits, and malformed provider payloads.
-- Usage and cost reporting with explicit `missing`, `estimated`, or `actual` status.
+- Provider-neutral TypeScript interfaces：LLM request、response、stream event、model profile、retry policy、usage。
+- 测试和 CI 使用的 deterministic mock provider。
+- OpenAI-compatible provider shape，并用 fixture 覆盖映射逻辑。
+- Provider failures、timeout、retry exhaustion、rate limits、malformed provider payloads 的错误规范化。
+- Usage/cost reporting，状态支持 `missing`、`estimated`、`actual`。
+- Streaming errors 以 `Result` 形式返回，不直接抛出 provider failure。
 
-M6 does not implement:
+M6 不包含：
 
-- Prompt authoring, prompt storage, or prompt variable expansion.
-- Agent output repair.
-- Context selection.
-- Workflow orchestration.
-- Secret storage UI.
-- Real model calls in CI.
+- Prompt authoring、prompt storage、prompt variable expansion。
+- Agent output repair。
+- Context selection。
+- Workflow orchestration。
+- Secret storage UI。
+- CI 中真实模型调用。
 
 ## 3. Package Boundary
 
-The implementation lives in `packages/llm-adapter`.
+实现位于 `packages/llm-adapter`。
 
-Allowed dependencies:
+允许依赖：
 
-- `@novel-studio/shared` for `Result`, `UnifiedError`, and JSON value types.
-- Standard TypeScript and Web/Node runtime primitives.
+- `@novel-studio/shared`：`Result`、`UnifiedError`、JSON value types。
+- TypeScript、Web/Node runtime primitives。
 
-Disallowed dependencies:
+禁止依赖：
 
-- Repository package access for direct project reads or writes.
-- Application, Service, Agent, Context, Workflow, UI, Electron, or renderer imports.
-- Provider SDKs during the first M6 contract slice.
+- `@novel-studio/repository`
+- `@novel-studio/workflow-engine`
+- `@novel-studio/context-engine`
+- `@novel-studio/agent-engine`
+- `@novel-studio/ui`
+- Electron renderer 或 preload API
 
-Provider credentials are passed as redacted references or injected runtime secrets. They must not be logged, persisted to project files, or committed as fixtures.
+LLM Adapter 不读写项目文件，不访问 UI，不知道 workflow 或 agent 的业务语义。
 
-## 4. Core Data Flow
+## 4. 核心契约
 
-```text
-Upper layer
--> LLM Adapter request
--> provider-neutral validation
--> provider implementation
--> normalized response or UnifiedError
--> usage/cost report
--> upper layer
-```
+### Model Profile
 
-Streaming preview is presentation data. It is not an Agent handoff contract. Final Agent handoff remains structured JSON in later M7 work.
+`ModelProfile` 描述 provider、model、base URL、timeout、retry policy 和 cost policy。Secret 只能通过 `apiKeyRef` 引用，不能以 plaintext 出现在 project file、fixture、日志或错误对象中。
 
-## 5. Request Contract
+### Request
 
-An adapter request includes:
+`LlmRequest` 必须是 provider-neutral 的结构化 JSON：
 
-- `schemaVersion`: currently `1.0`.
-- `requestId`: stable id for traceability.
-- `modelProfile`: provider, model name, endpoint, timeout, and generation defaults.
-- `mode`: `streaming` or `non-streaming`.
-- `messages`: ordered role/content messages.
-- `parameters`: temperature, max tokens, top-p, and reserved future parameters.
-- `responseFormat`: optional structured output hint.
-- `traceId`: error/log correlation id.
+- `profile`
+- `messages`
+- `responseFormat`
+- `temperature`
+- `maxOutputTokens`
+- `metadata`
 
-Provider-specific fields are isolated to provider implementations. Core callers use the provider-neutral request only.
+Provider-specific fields 只能放在明确命名的 extension 区域，并且必须先经过 schema/类型约束。
 
-## 6. Response Contract
+### Response
 
-A non-streaming response returns:
+`LlmResponse` 返回：
 
-- `schemaVersion`.
-- `requestId`.
-- `provider`.
-- `modelName`.
-- `status`.
-- `content` as text or JSON value.
-- `usage`.
-- `createdAt`.
+- `text`
+- `structured`
+- `finishReason`
+- `usage`
+- `cost`
+- `providerMetadata`
 
-A streaming response yields ordered events:
+上层必须依赖这些 normalized fields，而不是 provider 原始 payload。
 
-- `start`.
-- `delta`.
-- `usage`.
-- `done`.
+### Streaming
 
-Errors are returned as `Result` errors, not thrown through business logic. Provider transport exceptions are caught and normalized.
+Streaming interface 返回 async iterable event stream。事件类型包括：
 
-## 7. Error Normalization
+- `delta`
+- `usage`
+- `done`
+- `error`
 
-The adapter converts provider failures into `UnifiedError` with category `LLMAdapterError` or `ModelProviderError`.
+Provider failure、timeout、rate limit 等问题必须转换为 `error` event 或 `Result` failure，不能越过 Adapter 边界直接抛出 provider-specific error。
 
-Required stable codes:
+## 5. Error Policy
 
+所有错误必须使用 Unified Error shape，错误 code 必须稳定。Adapter 至少覆盖：
+
+- `LLM_PROVIDER_ERROR`
 - `LLM_TIMEOUT`
 - `LLM_RATE_LIMITED`
 - `LLM_RETRY_EXHAUSTED`
-- `LLM_PROVIDER_ERROR`
 - `LLM_MALFORMED_RESPONSE`
-- `LLM_UNSUPPORTED_MODE`
+- `LLM_SECRET_MISSING`
 - `LLM_ABORTED`
 
-The adapter may include redacted provider metadata in `redactedDetail`, but must not include API keys, Authorization headers, full user manuscript text, or raw unredacted provider payloads.
+错误 details 中不得包含 API key、Authorization header、完整 secret、provider raw request body 中的敏感片段。
 
-## 8. Timeout, Retry, And Rate Limit Policy
+## 6. Timeout / Retry / Rate Limit
 
-Timeouts are enforced per request. Retry is controlled by injected policy:
+- Timeout 必须覆盖等待 provider response 的 in-flight 阶段。
+- Retry 只允许用于明确可重试的错误，例如 transient network failure 或 rate limit。
+- Retry policy 必须有最大次数和 backoff。
+- Rate limit 必须返回 normalized error，并尽量保留 provider 可公开的 retry-after 信息。
+- Retry exhaustion 返回 `LLM_RETRY_EXHAUSTED`，并保留可审计的 attempt count。
 
-- `maxAttempts`
-- `baseDelayMs`
-- `maxDelayMs`
-- `backoffMultiplier`
-- `retryableCodes`
+## 7. Usage / Cost
 
-Retry delay uses exponential backoff capped by `maxDelayMs`. Tests inject a no-wait scheduler so CI remains deterministic.
+Usage report 包含 input tokens、output tokens、total tokens 和状态。
 
-Rate-limit responses normalize to `LLM_RATE_LIMITED`. If retry attempts are exhausted after rate-limit or transient failures, the final error code is `LLM_RETRY_EXHAUSTED` and `redactedDetail.lastCode` records the last normalized code.
+Cost report 包含 estimated/actual cost、currency、pricing source 和状态。
 
-## 9. Usage And Cost Reporting
+当 provider 不返回 usage 时，不允许伪造 actual usage；必须返回 `missing` 或 `estimated`。
 
-Usage reporting must distinguish:
+## 8. Secret Redaction
 
-- `actual`: provider returned token counts.
-- `estimated`: adapter estimated token counts.
-- `missing`: no trustworthy usage available.
+Adapter 必须在以下位置做 redaction：
 
-Cost reporting must distinguish:
+- error message
+- error details
+- provider metadata
+- retry diagnostics
+- streaming error event
+- test fixture failure output
 
-- `actual`: provider returned billable cost.
-- `estimated`: adapter calculated cost from configured token rates.
-- `unknown`: no rate or usage basis exists.
+Redaction 后可以保留 secret ref，例如 `apiKeyRef:openai-main`，但不能保留 secret value。
 
-Costs use decimal numbers and ISO currency codes. UI may display estimates, but must not treat them as billing-grade data unless status is `actual`.
+## 9. 测试要求
 
-## 10. Mock Provider
+M6 测试必须覆盖：
 
-The mock provider is the default M6 provider for tests. It must support:
+- mock provider non-streaming 成功路径。
+- mock provider streaming 成功路径。
+- OpenAI-compatible fixture mapping。
+- timeout enforcement。
+- retry backoff 和 retry exhaustion。
+- rate limit normalization。
+- malformed provider payload。
+- missing usage/cost reporting。
+- secret redaction。
+- streaming error normalization。
 
-- Successful non-streaming response.
-- Successful streaming response.
-- Timeout fixture.
-- Retry-then-success fixture.
-- Rate-limit fixture.
-- Provider error fixture.
-- Usage/cost fixture.
+CI 不允许访问真实 provider endpoint，不允许依赖真实 API key。
 
-Mock behavior is deterministic and configured through explicit fixtures, never random output.
+## 10. 验收状态
 
-## 11. OpenAI-Compatible Provider Slice
+M6 已完成并通过本地门禁：
 
-The first real provider target is OpenAI-compatible HTTP shape because it unlocks multiple providers behind one contract. The M6 contract slice defines request/response mapping and fixture normalization. Real network calls are excluded from CI and must be opt-in offline evaluation only.
+- `npm run typecheck`
+- `npm run lint`
+- `npm run format`
+- `npm run test`
+- `npm run test:contract`
+- `npm audit`
 
-## 12. Testing Requirements
-
-M6 must add tests for:
-
-- Non-streaming success.
-- Streaming success.
-- Timeout normalization.
-- Retry with exponential backoff.
-- Rate-limit normalization.
-- Retry exhaustion.
-- Provider error normalization.
-- Malformed provider payload normalization.
-- Usage and cost status.
-- Secret redaction.
-
-All tests must use mock providers or local fixtures. CI must not require real API keys or network access.
-
-## 13. Definition Of Done
-
-M6 is complete when:
-
-- `packages/llm-adapter` exists with strict TypeScript.
-- Public adapter interfaces are exported from one package entrypoint.
-- Mock provider tests cover streaming and non-streaming paths.
-- Timeout, retry, rate-limit, error normalization, usage, and cost tests pass.
-- No real model call is required by tests.
-- Documentation, changelog, and index are updated.
-- `typecheck`, `lint`, `format`, `test`, `test:contract`, and `npm audit` pass.
-
-## 14. Changelog
-
-- v1.0 - 2026-07-04: Created M6 LLM Adapter contract.
+后续 provider 扩展必须继续沿用本契约和 fixture-first 测试策略。

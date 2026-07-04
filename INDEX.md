@@ -1,52 +1,61 @@
-# INDEX - Novel Studio Documentation
+# INDEX - Novel Studio 文档索引
 
-Version: 1.10 | Last Updated: 2026-07-04
+Version: 1.11 | Last Updated: 2026-07-04
 
-## Document Priority
+## 文档优先级
 
 1. `PROJECT_CONSTITUTION.md`
 2. `PRODUCT_PRD.md`
 3. `ARCHITECTURE.md`
-4. Other technical documents
+4. 其他技术文档
 
-## Active Documents
+当文档之间出现冲突时，按以上顺序解释；实现必须优先遵守项目宪法、产品范围和架构边界。
 
-| Document                                  | Version    | Status                      | Purpose                                                                            |
-| ----------------------------------------- | ---------- | --------------------------- | ---------------------------------------------------------------------------------- |
-| `PROJECT_CONSTITUTION.md`                 | 1.0        | Active                      | Project principles, constraints, architecture rules, document order                |
-| `PRODUCT_PRD.md`                          | 1.0        | Accepted                    | Phase 1 product design, scope, user journeys, requirements                         |
-| `ARCHITECTURE.md`                         | 1.0        | Accepted                    | Phase 2 system architecture, layer boundaries, runtime flow                        |
-| `DATA_SCHEMA.md`                          | 1.0        | Accepted                    | Phase 3 data schema, file layout, versioning, recovery, cache boundary             |
-| `UI_GUIDELINES.md`                        | 1.0        | Accepted                    | Phase 4 UI/UX design, layout, interaction, design tokens, accessibility            |
-| `CODING_STANDARDS.md`                     | 1.0        | Accepted                    | Phase 5 development standards, language rules, layering, schema, UI implementation |
-| `TESTING.md`                              | 1.0        | Accepted                    | Phase 5 testing standards, test pyramid, fixtures, LLM mocks, CI gates             |
-| `ROADMAP.md`                              | 1.0        | Active                      | Phase 6 task planning, milestones, provider order, implementation gates            |
-| `LLM_ADAPTER.md`                          | 1.0        | Accepted for M6             | Provider-neutral model call boundary, mock provider, errors, retry, usage/cost     |
-| `WORKFLOW_ENGINE.md`                      | 1.0        | Accepted for M7.1           | Deterministic workflow state machine, next actions, confirmation gate              |
-| `CONTEXT_ENGINE.md`                       | 1.0        | Accepted for M7.2           | Context bundle construction, token budget, exclusion and source trace              |
-| `AGENT_ENGINE.md`                         | 1.0        | Accepted for M7.3           | Agent input/output validation, LLM Adapter calls, structured handoff JSON          |
-| `docs/performance/m9-alpha-baseline.md`   | 1.0        | Accepted for M9             | Synthetic large project fixture and alpha performance smoke baseline               |
-| `docs/packaging/m10-beta-packaging.md`    | 1.0        | Accepted for M10            | Renderer bundling, electron-builder configuration, and package preflight gate      |
-| `adr/ADR-0001-engine-runtime-language.md` | 1.0        | Accepted for Phase 2 Review | Core Engine language decision                                                      |
-| `CHANGELOG.md`                            | 0.1.0-docs | Active                      | Running change history                                                             |
-| `TECH_DEBT.md`                            | 1.0        | Active                      | Known risks, debt, unresolved decisions                                            |
+## 当前有效文档
 
-## Planned Documents
+| 文档                                      | 版本       | 状态                        | 用途                                                                 |
+| ----------------------------------------- | ---------- | --------------------------- | -------------------------------------------------------------------- |
+| `PROJECT_CONSTITUTION.md`                 | 1.0        | Active                      | 项目原则、约束、架构规则、文档优先级                                 |
+| `PRODUCT_PRD.md`                          | 1.0        | Accepted                    | Phase 1 产品设计、范围、用户路径、需求                               |
+| `ARCHITECTURE.md`                         | 1.0        | Accepted                    | Phase 2 系统架构、分层边界、运行时流程                               |
+| `DATA_SCHEMA.md`                          | 1.0        | Accepted                    | Phase 3 数据结构、文件布局、版本、恢复、缓存边界                     |
+| `UI_GUIDELINES.md`                        | 1.0        | Accepted                    | Phase 4 UI/UX、布局、交互、设计 tokens、可访问性                     |
+| `CODING_STANDARDS.md`                     | 1.0        | Accepted                    | Phase 5 开发规范、语言规则、分层、schema、UI 实现                    |
+| `TESTING.md`                              | 1.0        | Accepted                    | Phase 5 测试规范、测试金字塔、fixtures、LLM mock、CI 门禁            |
+| `ROADMAP.md`                              | 1.0        | Active                      | Phase 6 任务规划、里程碑、Provider 顺序、实现门禁                    |
+| `LLM_ADAPTER.md`                          | 1.0        | Accepted for M6             | Provider-neutral 模型调用边界、mock provider、错误、重试、usage/cost |
+| `WORKFLOW_ENGINE.md`                      | 1.0        | Accepted for M7.1           | 确定性工作流状态机、next action、确认 gate                           |
+| `CONTEXT_ENGINE.md`                       | 1.0        | Accepted for M7.2           | Context Bundle 构建、token budget、exclusion/source trace            |
+| `AGENT_ENGINE.md`                         | 1.0        | Accepted for M7.3           | Agent 输入/输出校验、LLM Adapter 调用、结构化 handoff JSON           |
+| `docs/spikes/editor.md`                   | 1.0        | Accepted for M5             | Markdown 编辑器选型 spike 和结论                                     |
+| `docs/performance/m9-alpha-baseline.md`   | 1.0        | Accepted for M9             | 大型项目 fixture 与 alpha 性能基线                                   |
+| `docs/packaging/m10-beta-packaging.md`    | 1.0        | Accepted for M10            | Renderer 打包、electron-builder 配置、package preflight gate         |
+| `adr/ADR-0001-engine-runtime-language.md` | 1.0        | Accepted for Phase 2 Review | Core Engine 运行时语言决策                                           |
+| `CHANGELOG.md`                            | 0.1.0-docs | Active                      | 变更记录                                                             |
+| `TECH_DEBT.md`                            | 1.0        | Active                      | 已知风险、技术债、未决决策                                           |
 
-| Document           | Phase                  | Status      |
-| ------------------ | ---------------------- | ----------- |
-| `PROMPT_SYSTEM.md` | Later technical design | Not Started |
-| `PLUGIN_SYSTEM.md` | Later technical design | Not Started |
-| `SECURITY.md`      | Later technical design | Not Started |
+## 计划中文档
 
-## Progress Tracking
+| 文档               | 阶段         | 状态        |
+| ------------------ | ------------ | ----------- |
+| `PROMPT_SYSTEM.md` | 后续技术设计 | Not Started |
+| `PLUGIN_SYSTEM.md` | 后续技术设计 | Not Started |
+| `SECURITY.md`      | 后续技术设计 | Not Started |
 
-| Phase                      | Status      | Current Output                                                                                                                                                                                  | Open Issues                                                               | Next Step                            |
-| -------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------ |
-| Phase 1 Product Design     | Complete    | `PRODUCT_PRD.md v1.0`, `CHANGELOG.md`, `TECH_DEBT.md`, `INDEX.md`                                                                                                                               | Provider rollout details remain staged by roadmap                         | Complete                             |
-| Phase 2 Architecture       | Complete    | `ARCHITECTURE.md v1.0`, `adr/ADR-0001-engine-runtime-language.md`                                                                                                                               | Workflow/Agent boundaries require continued automated checks              | Complete                             |
-| Phase 3 Data Schema        | Complete    | `DATA_SCHEMA.md v1.0`                                                                                                                                                                           | Locking, migration logs, and archive policy remain future work            | Complete                             |
-| Phase 4 UI/UX              | Complete    | `UI_GUIDELINES.md v1.0`                                                                                                                                                                         | Editor and component choices continue through tests                       | Complete                             |
-| Phase 5 Standards          | Complete    | `CODING_STANDARDS.md v1.0`, `TESTING.md v1.0`                                                                                                                                                   | Remote CI and dependency tooling remain future hardening                  | Complete                             |
-| Phase 6 Task Planning      | Complete    | `ROADMAP.md v1.0`                                                                                                                                                                               | Later technical docs are written before related implementation            | Complete                             |
-| Phase 7 Formal Development | In Progress | M0-M10 packaging foundation complete: Repository, Toolchain, Schema, Desktop Shell, Editor UX, LLM Adapter, Agent/Context/Workflow, Studio, Alpha gate, Vite renderer bundle, package preflight | schema codegen, dependency tooling, package:dir environment stabilization | Stabilize package artifact execution |
+## 进度跟踪
+
+| 阶段                  | 状态        | 当前产出                                                                                                                                                                 | 未决问题                                                           | 下一步                         |
+| --------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------ |
+| Phase 1 产品设计      | Complete    | `PRODUCT_PRD.md v1.0`、`CHANGELOG.md`、`TECH_DEBT.md`、`INDEX.md`                                                                                                        | Provider rollout 细节按 roadmap 分批推进                           | 已完成                         |
+| Phase 2 系统架构      | Complete    | `ARCHITECTURE.md v1.0`、`adr/ADR-0001-engine-runtime-language.md`                                                                                                        | Workflow/Agent 边界继续用自动化检查固化                            | 已完成                         |
+| Phase 3 数据结构设计  | Complete    | `DATA_SCHEMA.md v1.0`                                                                                                                                                    | locking、migration log、archive policy 是后续 hardening            | 已完成                         |
+| Phase 4 UI/UX 设计    | Complete    | `UI_GUIDELINES.md v1.0`                                                                                                                                                  | 编辑器与组件选择已通过实现继续验证                                 | 已完成                         |
+| Phase 5 开发规范      | Complete    | `CODING_STANDARDS.md v1.0`、`TESTING.md v1.0`                                                                                                                            | 远端 CI、coverage、dependency boundary 工具继续补强                | 已完成                         |
+| Phase 6 Task Planning | Complete    | `ROADMAP.md v1.0`                                                                                                                                                        | 后续专题文档在相关实现前补齐                                       | 已完成                         |
+| Phase 7 正式开发      | In Progress | M0-M10 已完成：Repository、Toolchain、Schema、Desktop Shell、Editor UX、LLM Adapter、Agent/Context/Workflow、Studio、Alpha gate、Vite renderer bundle、package preflight | schema codegen、dependency boundary 工具、`package:dir` 环境稳定性 | 稳定真实 package artifact 执行 |
+
+## 当前本地提交状态
+
+- `main` 本地领先 `origin/main` 12 个提交。
+- 不允许擅自 push；需要推送前必须先告知用户。
+- 最近完成的里程碑是 M10 Beta Packaging Foundation。

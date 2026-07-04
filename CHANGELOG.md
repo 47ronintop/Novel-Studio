@@ -1,59 +1,62 @@
-# CHANGELOG — Novel Studio
+# CHANGELOG - Novel Studio
 
-## v0.1.0-docs — 2026-07-03
+## v0.1.0-docs - 2026-07-03
 
-- Created `PROJECT_CONSTITUTION.md` v1.0.
-- Created `PRODUCT_PRD.md` v1.0 for Phase 1 product design.
-- Created initial `INDEX.md`.
-- Created initial `TECH_DEBT.md`.
-- Connected Git remote `origin` to `https://github.com/47ronintop/Novel-Studio.git`.
-- Created `ARCHITECTURE.md` v1.0 for Phase 2 system architecture.
-- Created `adr/ADR-0001-engine-runtime-language.md`.
-- Resolved the Git repository status item recorded as `TD-002`.
-- Created `DATA_SCHEMA.md` v1.0 for Phase 3 data structure design.
-- Defined source-of-truth rules for Markdown, JSON, history, memories, recovery records, and cache.
-- Recorded that SQLite is restricted to `cache/` as a rebuildable index layer.
-- Created `UI_GUIDELINES.md` v1.0 for Phase 4 UI/UX design.
-- Defined the desktop IDE workspace, dark-first visual system, Command Palette, AI review UX, and core interaction states.
-- Created `CODING_STANDARDS.md` v1.0 for Phase 5 development standards.
-- Created `TESTING.md` v1.0 for Phase 5 testing standards.
-- Defined TypeScript Strict, JSON Schema canonical contracts, Ajv validation, Repository/Adapter boundaries, CodeMirror 6 editor preference, headless UI primitive preference, shortcut registry, and fixture-first testing.
-- Created `ROADMAP.md` v1.0 for Phase 6 task planning.
-- Defined implementation milestones M0-M9, provider implementation order, risk register, and Phase 7 execution gates.
-- Removed stray `text` paste artifacts from `PROJECT_CONSTITUTION.md`.
-- Updated `TECH_DEBT.md` for resolved Provider ordering and initial documentation baseline items.
-- Published the initial documentation baseline to `origin/main` and entered Phase 7.
-- Updated `INDEX.md` and `TECH_DEBT.md` for M0.2 remote branch policy closure.
-- Created M1 Toolchain Foundation with npm workspaces, TypeScript strict config, ESLint, Prettier, Vitest, Playwright, package lock, and fixture safety rules.
-- Verified M1 commands: `typecheck`, `lint`, `format`, `test`, `test:e2e`, and `npm audit`.
-- Created M2 Schema Foundation with 15 JSON Schema contracts, Ajv validation helper, valid/invalid fixtures, and 32 contract tests.
-- Added `ajv`, `ajv-formats`, and Node type declarations required by the schema package and tests.
-- Created M3 Repository Core with shared `Result`/Unified Error utilities, Repository ports, project file validation, atomic text writes, history snapshots, recovery records, and cache boundary protection.
-- Added repository tests covering valid/missing/invalid project open, atomic write failure preservation, `before-ai-apply` and `before-rollback` snapshots, recovery writes under `history/recovery/`, and cache clear protection for `history/` and `memories/`.
-- Created M4 Desktop Shell with Electron security defaults, Application IPC allowlist, preload API, React renderer entry, and desktop workspace skeleton.
-- Added Application command registry with safe command `riskLevel`, shell state DTOs, and command execution boundary.
-- Added UI package with Activity Bar, Navigator, Editor Area, Inspector, Bottom Panel, Command Palette, OKLCH design tokens, and Ctrl/Cmd+K shortcut handling.
-- Upgraded Vitest to clear current audit findings and keep the verification gate at 0 vulnerabilities.
-- Created M5 Editor and Version UX with Application-backed chapter editor sessions, IPC chapter commands, preload API expansion, renderer bridge, version history preview/restore, and fixture-backed desktop chapter flow.
-- Added Chapter Editor UI controls for save, version preview, version restore, and preview-only AI diffs while keeping all file access behind Application/Repository boundaries.
-- Tightened M5 renderer save UX so dirty chapter saves immediately show `Saving` before resolving to `Saved` or back to `Unsaved` on failure.
-- Verified M5 gates: `typecheck`, `lint`, `format`, `test`, `test:contract`, and `npm audit` all pass with 0 vulnerabilities.
-- Created `LLM_ADAPTER.md` v1.0 for M6 provider-neutral model call design.
-- Created M6 LLM Adapter with strict TypeScript contracts, deterministic mock provider, streaming/non-streaming entrypoints, timeout/retry/rate-limit normalization, usage/cost reporting, and OpenAI-compatible fixture mapping.
-- Added LLM adapter tests covering mock streaming, mock non-streaming, timeout, retry backoff, rate limits, retry exhaustion, secret redaction, missing usage, OpenAI-compatible response mapping, cost estimation, and malformed provider payloads.
-- Verified M6 gates: `typecheck`, `lint`, `format`, `test`, `test:contract`, and `npm audit` all pass with 0 vulnerabilities.
-- Hardened M6 review findings by enforcing in-flight adapter timeouts and yielding normalized streaming errors instead of throwing provider failures.
-- Created `WORKFLOW_ENGINE.md` v1.0 for M7.1 deterministic workflow state machine design.
-- Created M7.1 Workflow Engine with workflow definition parsing, next-action evaluation, step completion, confirmation gate enforcement, and package boundary tests.
-- Created `CONTEXT_ENGINE.md` v1.0 for M7.2 context bundle, budget, and trace design.
-- Created M7.2 Context Engine with explicit candidate bundle construction, token budget enforcement, exclusion trace, confirmed-memory filtering, source reference trace, full-novel stuffing guard, and package boundary tests.
-- Created `AGENT_ENGINE.md` v1.0 for M7.3 agent execution and handoff design.
-- Created M7.3 Agent Engine with injected input/output validation, LLM Adapter invocation, structured output extraction, malformed JSON failure handling, Agent Handoff JSON production, and package boundary tests.
-- Created M8 Studio and Settings foundation with safe model profile settings, injected model connection tests, secret redaction, Prompt/Agent/Workflow config editing, schema validation, version snapshots, rollback, and callback-driven UI panels.
-- Created M9 alpha hardening with UI accessibility checks, reduced-motion and focus styling, synthetic 1,000,000-character performance fixture generation, Repository open-path performance smoke, local alpha build gate, and artifact secret scanning.
-- Created M10 beta packaging foundation with Vite renderer bundling, electron-builder configuration, package preflight checks, and packaging notes.
+- 创建 `PROJECT_CONSTITUTION.md` v1.0。
+- 创建 `PRODUCT_PRD.md` v1.0，完成 Phase 1 产品设计。
+- 创建初始 `INDEX.md`。
+- 创建初始 `TECH_DEBT.md`。
+- 连接 Git remote `origin` 到 `https://github.com/47ronintop/Novel-Studio.git`。
+- 创建 `ARCHITECTURE.md` v1.0，完成 Phase 2 系统架构。
+- 创建 `adr/ADR-0001-engine-runtime-language.md`。
+- 解决 `TD-002` 记录的 Git 仓库状态问题。
+- 创建 `DATA_SCHEMA.md` v1.0，完成 Phase 3 数据结构设计。
+- 定义 Markdown、JSON、history、memories、recovery records、cache 的 source-of-truth 规则。
+- 明确 SQLite 只允许作为 `cache/` 下可重建索引层。
+- 创建 `UI_GUIDELINES.md` v1.0，完成 Phase 4 UI/UX 设计。
+- 定义桌面 IDE 工作区、dark-first 视觉系统、Command Palette、AI review UX 和核心交互状态。
+- 创建 `CODING_STANDARDS.md` v1.0，完成 Phase 5 开发规范。
+- 创建 `TESTING.md` v1.0，完成 Phase 5 测试规范。
+- 定义 TypeScript Strict、JSON Schema canonical contracts、Ajv validation、Repository/Adapter 边界、CodeMirror 6 编辑器倾向、headless UI primitive 倾向、shortcut registry 和 fixture-first testing。
+- 创建 `ROADMAP.md` v1.0，完成 Phase 6 Task Planning。
+- 定义实现里程碑 M0-M9、Provider 实现顺序、risk register 和 Phase 7 execution gates。
+- 删除 `PROJECT_CONSTITUTION.md` 中误粘贴的独立 `text` 残留。
+- 更新 `TECH_DEBT.md`，关闭 Provider 顺序和初始文档 baseline 相关事项。
+- 将初始文档 baseline 发布到 `origin/main`，进入 Phase 7。
+- 更新 `INDEX.md` 和 `TECH_DEBT.md`，关闭 M0.2 remote branch policy。
+
+## Phase 7 本地开发记录
+
+- 完成 M1 Toolchain Foundation：npm workspaces、TypeScript strict、ESLint、Prettier、Vitest、Playwright、package lock 和 fixture safety rules。
+- 验证 M1 命令：`typecheck`、`lint`、`format`、`test`、`test:e2e` 和 `npm audit`。
+- 完成 M2 Schema Foundation：15 类 JSON Schema contracts、Ajv validation helper、valid/invalid fixtures 和 32 个 contract tests。
+- 添加 `ajv`、`ajv-formats` 和 Node type declarations，支撑 schema package 与测试。
+- 完成 M3 Repository Core：shared `Result`/Unified Error、Repository ports、project file validation、atomic text writes、history snapshots、recovery records 和 cache boundary protection。
+- 添加 Repository 测试，覆盖有效/缺失/非法项目打开、atomic write failure preservation、`before-ai-apply`/`before-rollback` snapshots、`history/recovery/` 写入、cache clear 不触碰 `history/` 和 `memories/`。
+- 完成 M4 Desktop Shell：Electron security defaults、Application IPC allowlist、preload API、React renderer entry 和 desktop workspace skeleton。
+- 添加 Application command registry，包含 safe command `riskLevel`、shell state DTOs 和 command execution boundary。
+- 添加 UI package：Activity Bar、Navigator、Editor Area、Inspector、Bottom Panel、Command Palette、OKLCH design tokens 和 Ctrl/Cmd+K shortcut handling。
+- 升级 Vitest，清除当时 audit findings 并保持 0 vulnerabilities 门禁。
+- 完成 M5 Editor and Version UX：Application-backed chapter editor sessions、IPC chapter commands、preload API expansion、renderer bridge、version history preview/restore 和 fixture-backed desktop chapter flow。
+- 添加 Chapter Editor UI 控件：save、version preview、version restore 和 preview-only AI diffs，同时保持所有文件访问只经 Application/Repository。
+- 加强 M5 renderer 保存状态 UX，使 dirty chapter 保存时立即显示 `Saving`，成功后变为 `Saved`，失败后回到 `Unsaved`。
+- 验证 M5 门禁：`typecheck`、`lint`、`format`、`test`、`test:contract`、`npm audit` 均通过，0 vulnerabilities。
+- 创建 `LLM_ADAPTER.md` v1.0，定义 M6 provider-neutral model call 设计。
+- 完成 M6 LLM Adapter：strict TypeScript contracts、deterministic mock provider、streaming/non-streaming entrypoints、timeout/retry/rate-limit normalization、usage/cost reporting 和 OpenAI-compatible fixture mapping。
+- 添加 LLM Adapter 测试，覆盖 mock streaming/non-streaming、timeout、retry backoff、rate limits、retry exhaustion、secret redaction、missing usage、OpenAI-compatible response mapping、cost estimation 和 malformed provider payloads。
+- 验证 M6 门禁：`typecheck`、`lint`、`format`、`test`、`test:contract`、`npm audit` 均通过，0 vulnerabilities。
+- 修复 M6 review findings：强制 in-flight adapter timeout，并把 streaming errors 规范化为 `Result`，避免直接抛出 provider failures。
+- 创建 `WORKFLOW_ENGINE.md` v1.0，定义 M7.1 deterministic workflow state machine。
+- 完成 M7.1 Workflow Engine：workflow definition parsing、next-action evaluation、step completion、confirmation gate enforcement 和 package boundary tests。
+- 创建 `CONTEXT_ENGINE.md` v1.0，定义 M7.2 context bundle、budget 和 trace。
+- 完成 M7.2 Context Engine：explicit candidate bundle construction、token budget enforcement、exclusion trace、confirmed-memory filtering、source reference trace、full-novel stuffing guard 和 package boundary tests。
+- 创建 `AGENT_ENGINE.md` v1.0，定义 M7.3 agent execution 和 handoff。
+- 完成 M7.3 Agent Engine：injected input/output validation、LLM Adapter invocation、structured output extraction、malformed JSON failure handling、Agent Handoff JSON production 和 package boundary tests。
+- 完成 M8 Studio and Settings foundation：safe model profile settings、injected model connection tests、secret redaction、Prompt/Agent/Workflow config editing、schema validation、version snapshots、rollback 和 callback-driven UI panels。
+- 完成 M9 Alpha Hardening：UI accessibility checks、reduced-motion/focus styling、synthetic 1,000,000-character performance fixture、Repository open-path performance smoke、local alpha build gate 和 artifact secret scanning。
+- 完成 M10 Beta Packaging Foundation：Vite renderer bundling、electron-builder configuration、package preflight checks 和 packaging notes。
 
 ## Notes
 
-- Phase 7 is active.
-- M10 packaging foundation is in place; `package:dir` execution still needs packaging environment stabilization.
+- Phase 7 正在进行中。
+- M10 packaging foundation 已完成；`package:dir` 在当前 Windows/Node 20.20.2 工作站执行超时，仍需稳定 packaging host 后再声明真实 package artifact 完成。

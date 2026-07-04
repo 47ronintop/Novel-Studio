@@ -1,37 +1,42 @@
 # M9 Alpha Performance Baseline
 
-Date: 2026-07-04
+Version: 1.0 | Status: Accepted for M9 | Phase: 7 Formal Development
 
-## Scope
+## 1. 目的
 
-M9 records a first alpha baseline for large local projects without committing a large generated
-manuscript to the repository.
+本文记录 M9 alpha hardening 的性能基线。目标是用可重复的 synthetic fixture 验证大型项目的基础打开路径，不让 cache rebuild 或大文本 fixture 阻塞基本编辑能力。
 
-The synthetic fixture is generated on demand with:
+## 2. Fixture
 
-```bash
-node scripts/create-performance-fixture.mjs <target-root> --target-character-count 1000000 --chapter-count 20
-```
+M9 创建 synthetic 1,000,000-character project fixture。
 
-## Baseline
+Fixture 目的：
 
-Command:
+- 模拟长篇小说项目中的大章节文本。
+- 验证 Repository open path 不依赖全量 UI 渲染。
+- 给后续性能优化提供稳定输入。
 
-```bash
-npx vitest run apps/desktop/test/performance-fixture.test.ts
-```
+Fixture 不是产品示例内容，不用于真实写作体验评估。
 
-Result on 2026-07-04:
+## 3. Baseline Checks
 
-- Test files: 1 passed
-- Tests: 2 passed
-- Duration: 1.06s
-- Generated project size: 1,000,000 synthetic chapter characters across 20 chapters
-- Repository baseline path: `ProjectFileRepository.openProject()` reads and validates
-  `project.json` and `settings.json` without scanning or blocking on `cache/`
+M9 覆盖：
 
-## Boundary
+- 生成大型 fixture。
+- Repository open project path smoke。
+- 确认基本 edit/save path 不被 cache rebuild 阻塞。
+- 将性能检查纳入 alpha gate。
 
-This is a smoke baseline, not a release-grade benchmark suite. It proves that the alpha open path
-does not require cache rebuild before project metadata and settings can load. Search index rebuild,
-semantic retrieval, and editor rendering of all chapters remain future benchmark targets.
+## 4. 当前结论
+
+- Alpha 性能基线已建立。
+- 当前测试重点是“路径可执行且不越界”，不是最终性能指标。
+- 后续需要补充真实 UI 打开、editor mount、scroll、diff preview 的性能测量。
+
+## 5. 后续工作
+
+- 增加真实 renderer smoke。
+- 增加 CodeMirror 6 大文本编辑测量。
+- 增加 version history 大量 snapshot 场景。
+- 增加 cache rebuild 与编辑并行场景。
+- 形成可比较的性能阈值。

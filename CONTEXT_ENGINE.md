@@ -1,188 +1,137 @@
-# CONTEXT ENGINE - Novel Studio
+# CONTEXT_ENGINE - Novel Studio
 
 Version: 1.0 | Status: Accepted for M7.2 | Phase: 7 Formal Development
 
-## 1. Purpose
+## 1. 目的
 
-The Context Engine builds auditable context bundles for AI workflow steps. It selects bounded,
-source-referenced project context, enforces a token budget, records excluded candidates with reasons,
-and filters memories by confidence.
+Context Engine 为 AI workflow steps 构建可审计的 Context Bundle。它负责从显式候选项中选择有界、带 source reference 的项目上下文，执行 token budget，记录被排除项及原因，并按 confidence 过滤 memories。
 
-The Context Engine does not call models, execute agents, advance workflow state, write project files,
-or blindly pack the full novel into a prompt.
+Context Engine 不调用模型，不执行 Agent，不推进 workflow state，不写项目文件，也不盲目把整本小说塞进 prompt。
 
-## 2. Scope For M7.2
+## 2. 范围
 
-M7.2 implements:
+M7.2 已实现：
 
-- Context bundle construction from provided chapter, memory, character, world, timeline, and goal
-  candidates.
-- Deterministic token budget enforcement.
-- Exclusion trace records for candidates that are skipped or trimmed out.
-- Memory confidence filtering so unconfirmed memories are excluded by default.
-- Source reference trace for every included item.
-- A guard against full-novel blind stuffing by requiring explicit candidate refs and by rejecting
-  bulk chapter candidates that exceed configured policy.
+- 从 chapter、memory、character、world、timeline、goal candidates 构建 Context Bundle。
+- 确定性 token budget enforcement。
+- 对 skipped 或 trimmed out 的 candidates 记录 exclusion trace。
+- 默认过滤 unconfirmed memories。
+- 为每个 included item 记录 source reference trace。
+- 通过 explicit candidate refs 和 bulk chapter policy 防止 full-novel blind stuffing。
+- Package boundary test，防止依赖 Agent/Workflow/LLM/Repository。
 
-M7.2 does not implement:
+M7.2 不包含：
 
-- Semantic vector retrieval.
-- Cache or SQLite index reads.
-- Prompt rendering.
-- Agent execution.
-- Workflow state transitions.
-- Repository project scanning.
-- UI context trace panels.
+- Semantic vector retrieval。
+- Cache 或 SQLite index reads。
+- Prompt rendering。
+- Agent execution。
+- Workflow state transition。
+- Repository project scanning。
+- UI context trace panel。
 
 ## 3. Package Boundary
 
-The implementation lives in `packages/context-engine`.
+实现位于 `packages/context-engine`。
 
-Allowed dependencies:
+允许依赖：
 
-- `@novel-studio/shared` for `Result`, `UnifiedError`, and JSON value types.
+- `@novel-studio/shared`
+- `@novel-studio/schemas`
 
-Disallowed dependencies:
+禁止依赖：
 
 - `@novel-studio/agent-engine`
+- `@novel-studio/workflow-engine`
 - `@novel-studio/llm-adapter`
 - `@novel-studio/repository`
-- UI, Electron, Application, or Service packages
+- `@novel-studio/application`
+- `@novel-studio/ui`
 
-The package is deterministic. Callers inject candidate context and token estimation behavior. Future
-Repository-backed retrieval belongs in Service or Repository-facing ports outside this package.
+Context Engine 接收上层传入的 candidates，不主动扫描项目目录。
 
-## 4. Core Data Flow
+## 4. Context Bundle
 
-```text
-Context build input
--> explicit candidates
--> memory confidence filter
--> full-novel stuffing guard
--> priority ordering
--> token budget selection
--> Context Bundle with trace
-```
-
-## 5. Build Input Contract
-
-A build request includes:
-
-- `schemaVersion`: currently `1.0`.
-- `contextBundleId`: stable id beginning with `ctx_`.
-- `workflowRunId`: workflow run id for traceability.
-- `traceId`: error correlation id.
-- `goal`: planner or workflow step goal.
-- `budget.maxTokens`: hard upper bound for included item token estimates.
-- `policy.memoryConfidence`: allowed memory confidence values.
-- `policy.maxChapterCandidates`: maximum explicit chapter candidates accepted for one bundle.
-- `candidates`: ordered context candidates supplied by upper layers.
-
-Candidates include:
-
-- `refType`: `chapter`, `memory`, `character`, `world`, `timeline`, or `goal`.
-- `refId`: stable project entity id.
-- `content`: text fragment or structured summary already selected by the caller.
-- `priority`: positive integer; lower values are selected first.
-- `sourceRefs`: source references that explain where the content came from.
-- `memoryConfidence`: required only for memory candidates.
-
-The engine treats candidate content as already validated project data from upper layers. It still
-validates its own contract and returns `UnifiedError` on invalid build input.
-
-## 6. Context Bundle Output
-
-The output follows `schema.context-bundle.v1` and includes:
+Context Bundle 是结构化 JSON，必须包含：
 
 - `schemaVersion`
-- `contextBundleId`
-- `workflowRunId`
-- `budget.maxTokens`
-- `budget.estimatedTokens`
+- `goal`
+- `budget`
 - `items`
-- `trace.selectionReason`
-- `trace.includedRefs`
-- `trace.excludedRefs`
-
-Every included item records:
-
-- `refType`
-- `refId`
-- `content`
-- `tokenEstimate`
+- `exclusions`
 - `sourceRefs`
+- `trace`
 
-Every excluded item records:
+每个 included item 必须有稳定 id、type、content、token estimate 和 source reference。Bundle 必须能解释为什么某个 item 被包含、被排除或被截断。
 
-- `refType`
-- `refId`
-- `reason`
-- `tokenEstimate`
+## 5. Token Budget
 
-## 7. Budget Policy
+Budget enforcement 必须 deterministic：
 
-Token estimates are deterministic. The default estimator is intentionally conservative and local:
+- 候选项按上层提供的 priority/order 处理。
+- 超出预算的项必须被排除或截断，并写入 exclusion trace。
+- 剩余预算不能为负。
+- 输出中必须记录 requested budget、used budget、remaining budget。
+- 不允许为了“更完整”而绕过 budget。
 
-```text
-ceil(non-whitespace character count / 4)
-```
+Token 估算可以是 deterministic approximation，但必须在 trace 中标明估算策略。
 
-Callers may inject a different deterministic estimator later. The engine never exceeds
-`budget.maxTokens`. If an item cannot fit, it is excluded with `budget_exceeded`; it is not partially
-included in M7.2.
+## 6. Memory Confidence Filtering
 
-## 8. Memory Confidence Policy
+默认规则：
 
-By default, only memories with `confidence: "confirmed"` are eligible. Memories marked
-`"ai-unconfirmed"` or `"low"` are excluded with `memory_confidence_filtered` unless the caller
-explicitly allows those confidence values in the build policy.
+- `confirmed` memory 可以进入候选选择。
+- `unconfirmed` memory 默认排除。
+- `rejected` memory 必须排除。
+- 若后续允许上层覆盖 confidence policy，必须在 bundle trace 中记录 override reason。
 
-This protects user-owned canon from unconfirmed AI-generated memory pollution.
+过滤结果必须写入 `exclusions`，不能静默丢弃。
 
-## 9. Full-Novel Stuffing Guard
+## 7. Full-Novel Blind Stuffing Guard
 
-The engine rejects build requests that attempt to pass too many chapter candidates at once. M7.2 uses
-`policy.maxChapterCandidates` with a conservative default of `3`.
+Context Engine 必须防止未经筛选的全文灌入：
 
-If the request exceeds the limit, the engine returns `CONTEXT_FULL_NOVEL_STUFFING_BLOCKED`. This is a
-hard failure because silent truncation would hide a dangerous context strategy.
+- 上层必须传入 explicit candidates。
+- Bulk chapter candidate 必须受 policy 限制。
+- 超出 bulk policy 的 chapter candidate 返回 failure 或 exclusion，不得自动塞入。
+- Bundle trace 必须能证明上下文来源和选择过程。
 
-## 10. Error Handling
+## 8. Source Reference Trace
 
-Context Engine errors use `UnifiedError` with category `ValidationError`.
+每个 included item 必须记录 source reference，例如：
 
-Required stable codes:
+- chapter id/path/range
+- memory id
+- character id
+- world item id
+- timeline event id
 
-- `CONTEXT_BUILD_INPUT_INVALID`
-- `CONTEXT_BUDGET_INVALID`
+Source reference 不等同于文件系统访问。UI 或 Agent 只能读取 trace，不能据此绕过 Application/Repository 边界直接访问文件。
+
+## 9. 错误策略
+
+常见错误：
+
+- `CONTEXT_INVALID_INPUT`
+- `CONTEXT_BUDGET_EXCEEDED`
 - `CONTEXT_FULL_NOVEL_STUFFING_BLOCKED`
+- `CONTEXT_INVALID_MEMORY_CONFIDENCE`
+- `CONTEXT_SOURCE_REFERENCE_MISSING`
 
-Errors include `traceId` and redacted structured detail. User manuscript content must not be placed in
-error details.
+错误必须使用 Unified Error shape，并包含可审计 details。
 
-## 11. Testing Requirements
+## 10. 测试要求
 
-M7.2 tests must cover:
+M7.2 测试必须覆盖：
 
-- Context bundle build from chapter, memory, character, world, timeline, and goal candidates.
-- Budget enforcement.
-- Exclusion trace.
-- Memory confidence filtering.
-- No full-novel blind stuffing.
-- Source reference trace for included items.
-- Package boundary does not depend on Agent, LLM Adapter, or Repository packages.
+- 构建包含 chapter、memory、character、world、timeline、goal 的 bundle。
+- token budget enforcement。
+- exclusion trace。
+- unconfirmed memory filtering。
+- source reference trace。
+- full-novel blind stuffing guard。
+- package boundary 不依赖上层包。
 
-## 12. Definition Of Done
+## 11. 验收状态
 
-M7.2 is complete when:
-
-- `CONTEXT_ENGINE.md` exists and is indexed.
-- `packages/context-engine` exists and is included in the root TypeScript build graph.
-- Public context engine interfaces are exported from one package entrypoint.
-- Tests cover budget, trace, memory filtering, source refs, and full-novel guard.
-- Documentation, roadmap, index, and changelog are updated.
-- `typecheck`, `lint`, `format`, `test`, `test:contract`, and `npm audit` pass.
-
-## 13. Changelog
-
-- v1.0 - 2026-07-04: Created M7.2 Context Engine contract.
+M7.2 已完成并通过本地门禁。后续如果加入 retrieval、ranking、cache index 或 UI trace panel，必须先更新本文和 schema。
