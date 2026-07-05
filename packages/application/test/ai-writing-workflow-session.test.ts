@@ -174,7 +174,7 @@ describe("M14 AI writing workflow session", () => {
       })
     ]);
 
-    const applied = aiWorkflow.applyChapterSuggestion("sug_m14");
+    const applied = await aiWorkflow.applyChapterSuggestion("sug_m14");
 
     expect(isOk(applied)).toBe(true);
     if (isErr(applied)) {

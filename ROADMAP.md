@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.20 | Status: Active | Last Updated: 2026-07-05
+Version: 1.24 | Status: Active | Last Updated: 2026-07-05
 
 ## 目标
 
@@ -52,6 +52,11 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M32       | 时间线主视图             | 时间线入口显示真实条目列表，并可跳到故事圣经时间线编辑器         | Complete |
 | M33       | 插件管理 UI              | 设置页显示项目插件注册表、授权摘要和刷新入口                     | Complete |
 | M34       | 多标签编辑器             | 工作区章节标签可点击切换，不再显示禁用补齐提示                   | Complete |
+| M35       | 宪法差距审计与路线图重排 | 区分切片完成和产品完整，按宪法/UI 指南重排 M36+                  | Complete |
+| M36       | Workspace Layout         | Split View、面板尺寸状态和安全布局命令                           | Complete |
+| M37       | Editor Tabs              | 运行期打开标签集合、dirty 标记和关闭标签                         | Complete |
+| M38       | Autosave Recovery        | 章节编辑写入恢复记录，项目打开显示可恢复草稿提示                 | Complete |
+| M39       | Timeline Workspace       | 时间线入口显示结构化事件轨道、指标和父时间线编辑入口             | Complete |
 
 ## M15 完成内容
 
@@ -203,17 +208,55 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - 点击章节标签复用现有 `project.selectChapter` renderer bridge 和 Application/preload 边界。
 - M34 不新增持久化 tab 集合、关闭 tab、拖拽排序、Split View 或多窗口编辑。
 
+## M35 完成内容
+
+- 新增 `docs/productization/m35-constitution-gap-audit.md`，明确 M0-M34 的 `Complete` 表示里程碑切片完成，不等于产品级完整。
+- 建立 `Complete`、`Slice Complete`、`Product Gap`、`Deferred`、`Product Ready` 五类完成度口径。
+- 按 `PROJECT_CONSTITUTION.md` 第5/10/11/14节、`UI_GUIDELINES.md` 和当前实现列出 Workspace Layout、多 Tab、自动保存恢复、时间线、项目健康、命令面板、插件、Provider、Streaming、Workflow Branch、编辑器、多窗口与首次使用引导缺口。
+- 将后续路线重排为 M36 Workspace Layout、M37 Editor Tabs、M38 Autosave Recovery、M39 Timeline Workspace、M40 Project Health、M41 Command Palette、M42 Plugin Management、M43-M47 能力补齐和 M48 Onboarding。
+- M35 不新增业务代码、不修改发布产物，先修正产品化计划和验收口径。
+
+## M36/M37 完成内容
+
+- 新增 `docs/productization/m36-m37-workspace-layout-editor-tabs.md`，合并记录工作区布局和编辑器标签的产品化范围。
+- `DesktopShellState` 新增 `workspaceLayout`，包含 Split View 开关、导航宽度、检查器宽度和底部面板高度。
+- Application safe command 新增 Split View 切换、导航宽度调整和检查器宽度调整；继续通过既有命令桥接返回 shell state。
+- `WorkspaceShell` 根据布局状态渲染 CSS 变量、Split View 参考窗格和布局控制按钮。
+- `ProjectWorkflowBridge` 维护运行期打开章节标签集合；创建/选择章节会加入标签，关闭当前标签会选择相邻标签。
+- 编辑器标签显示 dirty 标记和关闭按钮；左侧章节树仍保留完整章节列表，不与打开标签集合混淆。
+
+## M38 完成内容
+
+- 新增 `docs/productization/m38-autosave-recovery.md`，明确自动保存恢复的首个产品化切片。
+- `RecoveryRepository` 新增 `listRecoveryRecords()`，可从 `history/recovery/` 读取恢复记录并按更新时间倒序返回。
+- `ChapterEditorSession` 在正文编辑时写入 `dirty: true` recovery record，在保存或恢复版本后写入 `dirty: false` clean marker。
+- `ProjectWorkspaceSession` 将 dirty chapter recovery records 汇总到 `ProjectWorkspaceSnapshot.recovery`，不把草稿正文传给 UI。
+- Desktop composition 注入 `RecoveryRepository`；renderer 继续复用既有 chapter/project IPC，不新增 UI 文件系统访问。
+- `WorkspaceShell` 显示 Autosave recovery notice，并用 recovery chapter id 标记对应 editor tab dirty。
+- M38 不包含恢复内容 apply/discard 面板、后台定时器、多窗口冲突处理或 recovery pruning。
+
+## M39 完成内容
+
+- 新增 `docs/productization/m39-timeline-workspace.md`，明确时间线工作区的事件级展示范围和非目标。
+- Renderer `StoryBibleBridge` 从现有 `timeline.events` asset 的 `details.events` 解析结构化时间线事件，并按 `sequence` 排序。
+- `StoryBibleEditorEntry` 新增可选 `timelineEvents`，UI 继续只消费 renderer bridge 的结构化 props，不直接读取项目文件。
+- Timeline Activity 从父时间线条目列表升级为事件轨道，显示事件数、关联章节数、active/draft 指标、事件标题、摘要、状态和章节引用。
+- 每个事件保留“编辑父时间线”入口，复用既有 Story Bible timeline asset 编辑闭环。
+- M39 不包含事件级表单编辑、拖拽排序、独立事件 schema 或正文双向定位。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转、M32 时间线主视图、M33 插件管理 UI 与 M34 多标签编辑器。
+- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转、M32 时间线主视图、M33 插件管理 UI、M34 多标签编辑器、M35 宪法差距审计、M36 Workspace Layout、M37 Editor Tabs、M38 Autosave Recovery 与 M39 Timeline Workspace。
 - M27 安装后首次使用引导已暂缓，需在核心可见功能更稳定后回补。
+- 当前产品状态是 beta productization：主干闭环可运行，但多个宪法/UI 指南能力仍是 Product Gap。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M35 Split View / 资产并排查看，或 M36 项目健康检查与问题面板真实诊断，继续处理用户能直接看到但仍缺闭环的工作台能力。
+- 下一步建议进入 M40 Project Health：真实问题面板、引用完整性和 cache/history/recovery 健康检查。
+- M39-M48 按 `docs/productization/m35-constitution-gap-audit.md` 的缺口排序推进，不再把切片完成误写成产品完整。
 
 ## 当前技术债重点
 

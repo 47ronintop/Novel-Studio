@@ -75,6 +75,13 @@ export interface NavigatorSection {
   readonly itemCount: number;
 }
 
+export interface WorkspaceLayoutState {
+  readonly splitView: boolean;
+  readonly navigatorWidth: number;
+  readonly inspectorWidth: number;
+  readonly bottomPanelHeight: number;
+}
+
 export interface DesktopShellState {
   readonly projectTitle: string;
   readonly activeActivity: ActivityId;
@@ -82,6 +89,7 @@ export interface DesktopShellState {
   readonly inspectorCollapsed: boolean;
   readonly bottomPanelVisible: boolean;
   readonly activeBottomPanelTab: string;
+  readonly workspaceLayout: WorkspaceLayoutState;
   readonly commandPaletteOpen: boolean;
   readonly saveStatus: SaveStatus;
   readonly navigatorSections: readonly NavigatorSection[];
@@ -171,6 +179,12 @@ const DEFAULT_SHELL_STATE: DesktopShellState = {
   inspectorCollapsed: false,
   bottomPanelVisible: true,
   activeBottomPanelTab: "工作流运行",
+  workspaceLayout: {
+    splitView: false,
+    navigatorWidth: 260,
+    inspectorWidth: 320,
+    bottomPanelHeight: 220
+  },
   commandPaletteOpen: false,
   saveStatus: "Saved",
   navigatorSections: [
@@ -362,7 +376,7 @@ export function createDesktopApplication(
         return chapterEditorUnavailable();
       }
 
-      const edited = activeChapterEditorSession.edit(nextBody);
+      const edited = await activeChapterEditorSession.edit(nextBody);
       if (!edited.ok) {
         return edited;
       }
@@ -708,5 +722,49 @@ function reduceShellState(
       return { ...shellState, inspectorCollapsed: !shellState.inspectorCollapsed };
     case "workspace.toggle-bottom-panel":
       return { ...shellState, bottomPanelVisible: !shellState.bottomPanelVisible };
+    case "workspace.toggle-split-view":
+      return {
+        ...shellState,
+        workspaceLayout: {
+          ...shellState.workspaceLayout,
+          splitView: !shellState.workspaceLayout.splitView
+        }
+      };
+    case "workspace.narrow-navigator":
+      return {
+        ...shellState,
+        workspaceLayout: {
+          ...shellState.workspaceLayout,
+          navigatorWidth: clampPanelWidth(shellState.workspaceLayout.navigatorWidth - 40, 200, 360)
+        }
+      };
+    case "workspace.widen-navigator":
+      return {
+        ...shellState,
+        workspaceLayout: {
+          ...shellState.workspaceLayout,
+          navigatorWidth: clampPanelWidth(shellState.workspaceLayout.navigatorWidth + 40, 200, 360)
+        }
+      };
+    case "workspace.narrow-inspector":
+      return {
+        ...shellState,
+        workspaceLayout: {
+          ...shellState.workspaceLayout,
+          inspectorWidth: clampPanelWidth(shellState.workspaceLayout.inspectorWidth - 40, 240, 440)
+        }
+      };
+    case "workspace.widen-inspector":
+      return {
+        ...shellState,
+        workspaceLayout: {
+          ...shellState.workspaceLayout,
+          inspectorWidth: clampPanelWidth(shellState.workspaceLayout.inspectorWidth + 40, 240, 440)
+        }
+      };
   }
+}
+
+function clampPanelWidth(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }

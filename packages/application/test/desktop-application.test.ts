@@ -52,6 +52,12 @@ describe("desktop application command bridge", () => {
       inspectorCollapsed: false,
       bottomPanelVisible: true,
       activeBottomPanelTab: "工作流运行",
+      workspaceLayout: {
+        splitView: false,
+        navigatorWidth: 260,
+        inspectorWidth: 320,
+        bottomPanelHeight: 220
+      },
       saveStatus: "Saved"
     });
   });
@@ -85,6 +91,41 @@ describe("desktop application command bridge", () => {
         scope: "workspace",
         riskLevel: "safe",
         defaultShortcut: "Ctrl/Cmd+J"
+      },
+      {
+        id: "workspace.toggle-split-view",
+        title: "切换拆分视图",
+        scope: "workspace",
+        riskLevel: "safe",
+        defaultShortcut: "Ctrl/Cmd+\\"
+      },
+      {
+        id: "workspace.narrow-navigator",
+        title: "收窄项目导航",
+        scope: "workspace",
+        riskLevel: "safe",
+        defaultShortcut: "Ctrl/Cmd+Alt+["
+      },
+      {
+        id: "workspace.widen-navigator",
+        title: "加宽项目导航",
+        scope: "workspace",
+        riskLevel: "safe",
+        defaultShortcut: "Ctrl/Cmd+Alt+]"
+      },
+      {
+        id: "workspace.narrow-inspector",
+        title: "收窄检查器",
+        scope: "workspace",
+        riskLevel: "safe",
+        defaultShortcut: "Ctrl/Cmd+Alt+Shift+["
+      },
+      {
+        id: "workspace.widen-inspector",
+        title: "加宽检查器",
+        scope: "workspace",
+        riskLevel: "safe",
+        defaultShortcut: "Ctrl/Cmd+Alt+Shift+]"
       }
     ]);
     expect(DEFAULT_APPLICATION_COMMANDS.every(isSafeCommand)).toBe(true);
@@ -108,6 +149,24 @@ describe("desktop application command bridge", () => {
     expect(application.getShellState()).toMatchObject({
       bottomPanelVisible: false,
       activeBottomPanelTab: "工作流运行"
+    });
+  });
+
+  test("executes safe workspace layout commands without filesystem access", () => {
+    const application = createDesktopApplication();
+
+    const split = application.executeCommand("workspace.toggle-split-view");
+    const widerNavigator = application.executeCommand("workspace.widen-navigator");
+    const narrowInspector = application.executeCommand("workspace.narrow-inspector");
+
+    expect(split.ok).toBe(true);
+    expect(widerNavigator.ok).toBe(true);
+    expect(narrowInspector.ok).toBe(true);
+    expect(application.getShellState().workspaceLayout).toEqual({
+      splitView: true,
+      navigatorWidth: 300,
+      inspectorWidth: 280,
+      bottomPanelHeight: 220
     });
   });
 

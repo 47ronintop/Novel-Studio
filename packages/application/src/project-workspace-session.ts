@@ -6,6 +6,7 @@ import type {
   ChapterSummary,
   CreateChapterInput,
   JsonObject,
+  RecoveryRepositoryPort,
   Result,
   UnifiedError
 } from "@novel-studio/shared";
@@ -49,7 +50,18 @@ export interface ProjectWorkspaceSnapshot {
   project: ProjectMetadata;
   settings: WorkspaceProjectSettings;
   chapters: readonly ChapterSummary[];
+  recovery: ProjectWorkspaceRecoverySummary;
   activeChapterId?: string;
+}
+
+export interface ProjectWorkspaceRecoverySummary extends JsonObject {
+  availableItems: ProjectWorkspaceRecoveryItem[];
+}
+
+export interface ProjectWorkspaceRecoveryItem extends JsonObject {
+  sessionId: string;
+  chapterId: string;
+  updatedAt: string;
 }
 
 export interface ProjectRepositoryPort {
@@ -66,6 +78,7 @@ export interface ProjectWorkspaceSessionOptions {
   createProjectRepository(projectRoot: string): ProjectRepositoryPort;
   createChapterRepository(projectRoot: string): ProjectChapterRepositoryPort;
   createHistoryRepository(projectRoot: string): ChapterHistoryRepositoryPort;
+  createRecoveryRepository(projectRoot: string): RecoveryRepositoryPort;
   now?: () => string;
 }
 
@@ -85,6 +98,7 @@ export function createProjectWorkspaceSession(
   let state: ProjectWorkspaceSnapshot | undefined;
   let chapterRepository: ProjectChapterRepositoryPort | undefined;
   let historyRepository: ChapterHistoryRepositoryPort | undefined;
+  let recoveryRepository: RecoveryRepositoryPort | undefined;
   let activeChapterEditorSession: ChapterEditorSession | undefined;
 
   return {
@@ -148,9 +162,14 @@ export function createProjectWorkspaceSession(
   ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>> {
     chapterRepository = options.createChapterRepository(projectRoot);
     historyRepository = options.createHistoryRepository(projectRoot);
+    recoveryRepository = options.createRecoveryRepository(projectRoot);
     const chapters = await chapterRepository.listChapters();
     if (!chapters.ok) {
       return chapters;
+    }
+    const recovery = await loadRecoverySummary(projectSnapshot.project.projectId);
+    if (!recovery.ok) {
+      return recovery;
     }
 
     const activeChapterId = chapters.value[0]?.id;
@@ -159,6 +178,7 @@ export function createProjectWorkspaceSession(
       project: projectSnapshot.project,
       settings: projectSnapshot.settings,
       chapters: chapters.value,
+      recovery: recovery.value,
       ...(activeChapterId === undefined ? {} : { activeChapterId })
     };
     activeChapterEditorSession =
@@ -193,9 +213,15 @@ export function createProjectWorkspaceSession(
       );
     }
 
+    const recovery = await loadRecoverySummary(state.project.projectId);
+    if (!recovery.ok) {
+      return recovery;
+    }
+
     state = {
       ...state,
       chapters: chapters.value,
+      recovery: recovery.value,
       activeChapterId: selected.id
     };
     activeChapterEditorSession = createActiveChapterEditorSession(selected.id);
@@ -204,7 +230,12 @@ export function createProjectWorkspaceSession(
   }
 
   function createActiveChapterEditorSession(chapterId: string): ChapterEditorSession {
-    if (chapterRepository === undefined || historyRepository === undefined) {
+    if (
+      chapterRepository === undefined ||
+      historyRepository === undefined ||
+      recoveryRepository === undefined ||
+      state === undefined
+    ) {
       throw new Error("Project workspace is not active.");
     }
 
@@ -212,9 +243,47 @@ export function createProjectWorkspaceSession(
       chapterId,
       repository: chapterRepository,
       historyRepository,
+      recoveryRepository,
+      projectId: state.project.projectId,
+      sessionId: createRecoverySessionId(state.project.projectId, chapterId),
       ...(options.now === undefined ? {} : { now: options.now })
     });
   }
+
+  async function loadRecoverySummary(
+    projectId: string
+  ): Promise<Result<ProjectWorkspaceRecoverySummary, UnifiedError>> {
+    if (recoveryRepository === undefined) {
+      return ok({ availableItems: [] });
+    }
+
+    const records = await recoveryRepository.listRecoveryRecords();
+    if (!records.ok) {
+      return records;
+    }
+
+    return ok({
+      availableItems: records.value
+        .filter(
+          (record) =>
+            record.projectId === projectId && record.assetType === "chapter" && record.dirty
+        )
+        .map((record) => ({
+          sessionId: record.sessionId,
+          chapterId: record.openAssetId,
+          updatedAt: record.updatedAt
+        }))
+    });
+  }
+}
+
+function createRecoverySessionId(projectId: string, chapterId: string): string {
+  return `session_${sanitizeRecoveryId(projectId)}_${sanitizeRecoveryId(chapterId)}`;
+}
+
+function sanitizeRecoveryId(value: string): string {
+  const sanitized = value.replace(/[^A-Za-z0-9_-]/g, "_");
+  return sanitized.length === 0 ? "unknown" : sanitized;
 }
 
 function workspaceUnavailable<T>(): Result<T, UnifiedError> {

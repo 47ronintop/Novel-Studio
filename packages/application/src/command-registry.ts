@@ -2,7 +2,12 @@ export type ApplicationCommandId =
   | "workspace.open-command-palette"
   | "workspace.toggle-navigator"
   | "workspace.toggle-inspector"
-  | "workspace.toggle-bottom-panel";
+  | "workspace.toggle-bottom-panel"
+  | "workspace.toggle-split-view"
+  | "workspace.narrow-navigator"
+  | "workspace.widen-navigator"
+  | "workspace.narrow-inspector"
+  | "workspace.widen-inspector";
 
 export type ApplicationCommandScope = "workspace";
 
@@ -44,6 +49,41 @@ export const DEFAULT_APPLICATION_COMMANDS: readonly ApplicationCommand[] = [
     scope: "workspace",
     riskLevel: "safe",
     defaultShortcut: "Ctrl/Cmd+J"
+  },
+  {
+    id: "workspace.toggle-split-view",
+    title: "切换拆分视图",
+    scope: "workspace",
+    riskLevel: "safe",
+    defaultShortcut: "Ctrl/Cmd+\\"
+  },
+  {
+    id: "workspace.narrow-navigator",
+    title: "收窄项目导航",
+    scope: "workspace",
+    riskLevel: "safe",
+    defaultShortcut: "Ctrl/Cmd+Alt+["
+  },
+  {
+    id: "workspace.widen-navigator",
+    title: "加宽项目导航",
+    scope: "workspace",
+    riskLevel: "safe",
+    defaultShortcut: "Ctrl/Cmd+Alt+]"
+  },
+  {
+    id: "workspace.narrow-inspector",
+    title: "收窄检查器",
+    scope: "workspace",
+    riskLevel: "safe",
+    defaultShortcut: "Ctrl/Cmd+Alt+Shift+["
+  },
+  {
+    id: "workspace.widen-inspector",
+    title: "加宽检查器",
+    scope: "workspace",
+    riskLevel: "safe",
+    defaultShortcut: "Ctrl/Cmd+Alt+Shift+]"
   }
 ];
 

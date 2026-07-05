@@ -85,7 +85,7 @@ describe("chapter version history", () => {
     });
 
     await session.load();
-    session.edit("当前编辑草稿。\n");
+    await session.edit("当前编辑草稿。\n");
 
     const versions = await session.listVersions();
     expect(versions.ok).toBe(true);

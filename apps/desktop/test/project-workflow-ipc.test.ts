@@ -17,6 +17,13 @@ const shellState: DesktopShellState = {
   navigatorCollapsed: false,
   inspectorCollapsed: false,
   bottomPanelVisible: true,
+  activeBottomPanelTab: "Logs",
+  workspaceLayout: {
+    splitView: false,
+    navigatorWidth: 260,
+    inspectorWidth: 320,
+    bottomPanelHeight: 220
+  },
   commandPaletteOpen: false,
   saveStatus: "Saved",
   navigatorSections: [{ id: "chapters", title: "Chapters", itemCount: 1 }],
@@ -49,6 +56,9 @@ const workspaceSnapshot: ProjectWorkspaceSnapshot = {
       updatedAt: "2026-07-04T00:00:00.000Z"
     }
   ],
+  recovery: {
+    availableItems: []
+  },
   activeChapterId: "ch_opening"
 };
 

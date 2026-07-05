@@ -10,6 +10,7 @@ import type {
   StoryBibleEditorEntry,
   StoryBibleEditorKind,
   StoryBibleEditorProps,
+  StoryTimelineEvent,
   StoryBibleSummaryAsset,
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
@@ -229,8 +230,54 @@ function assetEntry(
     kind,
     title: asset.title,
     status: asset.status,
-    body: asset.summary
+    body: asset.summary,
+    ...(kind === "timeline" ? { timelineEvents: timelineEventsFromAsset(asset) } : {})
   };
+}
+
+function timelineEventsFromAsset(asset: StoryBibleAsset): readonly StoryTimelineEvent[] {
+  const events = asset.details?.["events"];
+  if (!Array.isArray(events)) {
+    return [];
+  }
+
+  return events
+    .map((event, index) => toTimelineEvent(event, index))
+    .filter((event): event is StoryTimelineEvent => event !== undefined)
+    .sort((left, right) => left.sequence - right.sequence || left.title.localeCompare(right.title));
+}
+
+function toTimelineEvent(value: unknown, index: number): StoryTimelineEvent | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const id = typeof value.id === "string" && value.id.length > 0 ? value.id : undefined;
+  if (id === undefined) {
+    return undefined;
+  }
+
+  const sequence = typeof value.sequence === "number" ? value.sequence : index + 1;
+  const title = typeof value.title === "string" && value.title.length > 0 ? value.title : id;
+  const status =
+    typeof value.status === "string" && value.status.length > 0 ? value.status : "active";
+  const summary = typeof value.summary === "string" ? value.summary : "";
+  const chapterIds = Array.isArray(value.chapterIds)
+    ? value.chapterIds.filter((chapterId): chapterId is string => typeof chapterId === "string")
+    : [];
+
+  return {
+    id,
+    sequence,
+    title,
+    status,
+    summary,
+    chapterIds
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function emptyDraft(kind: StoryBibleEditorKind): StoryBibleEditorDraft {

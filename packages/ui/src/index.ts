@@ -51,5 +51,6 @@ export type {
   StoryBibleEditorStatus,
   StoryBibleSummaryAsset,
   StoryBibleSummaryProps,
+  StoryTimelineEvent,
   WorkspaceShellProps
 } from "./workspace-shell.js";

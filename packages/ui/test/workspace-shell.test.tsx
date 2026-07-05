@@ -4,6 +4,7 @@ import type { ReactElement, ReactNode } from "react";
 import { describe, expect, test } from "vitest";
 
 import { createDesktopApplication } from "@novel-studio/application";
+import type { ApplicationCommandId } from "@novel-studio/application";
 import type { ModelSettingsPanelProps } from "../src/index.js";
 import { WorkspaceShell } from "../src/index.js";
 
@@ -438,6 +439,140 @@ describe("WorkspaceShell", () => {
     expect(html).not.toContain("标签切换会在后续里程碑补齐");
   });
 
+  test("renders split view layout controls and shell-owned panel dimensions", () => {
+    const application = createDesktopApplication();
+    const executedCommands: ApplicationCommandId[] = [];
+    const tree = WorkspaceShell({
+      shellState: {
+        ...application.getShellState(),
+        workspaceLayout: {
+          splitView: true,
+          navigatorWidth: 300,
+          inspectorWidth: 360,
+          bottomPanelHeight: 240
+        }
+      },
+      commands: application.listCommands(),
+      commandPaletteOpen: false,
+      onCommandExecute: (commandId) => executedCommands.push(commandId)
+    });
+    const splitToggle = findElementByAriaLabel(tree, "切换 Split View");
+
+    expect(splitToggle).toBeDefined();
+    splitToggle?.props.onClick?.();
+    expect(executedCommands).toEqual(["workspace.toggle-split-view"]);
+
+    const html = renderToStaticMarkup(tree);
+    expect(html).toContain('data-split-view="true"');
+    expect(html).toContain("--ns-navigator-width:300px");
+    expect(html).toContain("--ns-inspector-width:360px");
+    expect(html).toContain("--ns-bottom-panel-height:240px");
+    expect(html).toContain('aria-label="拆分参考窗格"');
+  });
+
+  test("renders only runtime-open chapter tabs with dirty and close affordances", () => {
+    const application = createDesktopApplication();
+    const closedTabs: string[] = [];
+    const tree = WorkspaceShell({
+      shellState: application.getShellState(),
+      commands: application.listCommands(),
+      commandPaletteOpen: false,
+      projectWorkflow: {
+        projectRootInput: "D:/Novel/M37",
+        chapters: [
+          {
+            id: "ch_opening",
+            title: "开篇",
+            order: 1,
+            status: "draft",
+            updatedAt: "2026-07-04T00:00:00.000Z"
+          },
+          {
+            id: "ch_second",
+            title: "第二章",
+            order: 2,
+            status: "draft",
+            updatedAt: "2026-07-04T00:00:00.000Z"
+          },
+          {
+            id: "ch_third",
+            title: "第三章",
+            order: 3,
+            status: "draft",
+            updatedAt: "2026-07-04T00:00:00.000Z"
+          }
+        ],
+        openChapterTabIds: ["ch_opening", "ch_second"],
+        dirtyChapterIds: ["ch_second"],
+        activeChapterId: "ch_opening",
+        onProjectRootChange: () => undefined,
+        onOpenProject: () => undefined,
+        onCreateProject: () => undefined,
+        onCreateChapter: () => undefined,
+        onSelectChapter: () => undefined,
+        onCloseChapterTab: (chapterId) => closedTabs.push(chapterId)
+      }
+    });
+    const closeSecond = findElementByAriaLabel(tree, "关闭章节标签：第二章");
+
+    expect(closeSecond).toBeDefined();
+    closeSecond?.props.onClick?.();
+    expect(closedTabs).toEqual(["ch_second"]);
+
+    const html = renderToStaticMarkup(tree);
+    expect(html).toContain("开篇");
+    expect(html).toContain("第二章");
+    expect(html).toContain('data-dirty="true"');
+    expect(html).toContain('aria-label="关闭章节标签：第二章"');
+    expect(html).not.toContain('aria-label="切换章节标签：第三章"');
+    expect(html).not.toContain('aria-label="关闭章节标签：第三章"');
+  });
+
+  test("renders an autosave recovery notice from project workflow recovery state", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={application.getShellState()}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        projectWorkflow={{
+          projectRootInput: "D:/Novel/M38",
+          chapters: [
+            {
+              id: "ch_opening",
+              title: "Opening",
+              order: 1,
+              status: "draft",
+              updatedAt: "2026-07-04T00:00:00.000Z"
+            }
+          ],
+          openChapterTabIds: ["ch_opening"],
+          dirtyChapterIds: ["ch_opening"],
+          activeChapterId: "ch_opening",
+          recovery: {
+            availableItems: [
+              {
+                sessionId: "session_prj_m38_ch_opening",
+                chapterId: "ch_opening",
+                updatedAt: "2026-07-05T00:05:00.000Z"
+              }
+            ]
+          },
+          onProjectRootChange: () => undefined,
+          onOpenProject: () => undefined,
+          onCreateProject: () => undefined,
+          onCreateChapter: () => undefined,
+          onSelectChapter: () => undefined
+        }}
+      />
+    );
+
+    expect(html).toContain('aria-label="Autosave recovery"');
+    expect(html).toContain("Recoverable drafts 1");
+    expect(html).toContain("Opening");
+    expect(html).toContain('data-dirty="true"');
+  });
+
   test("renders Story Bible summaries and context eligibility", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
@@ -564,6 +699,70 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("主线时间线");
     expect(html).toContain("第一幕到第三幕的关键事件。");
     expect(html).not.toContain("完整可视化编辑会在后续里程碑补齐");
+  });
+
+  test("renders the timeline workspace as an ordered event rail with metrics", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "timeline" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        storyBibleEditor={{
+          activeKind: "timeline",
+          status: "idle",
+          entries: [
+            {
+              id: "timeline_main",
+              kind: "timeline",
+              title: "Main Timeline",
+              status: "active",
+              body: "Arrival happens before the council summons.",
+              timelineEvents: [
+                {
+                  id: "evt_council",
+                  sequence: 20,
+                  title: "Council summons",
+                  status: "draft",
+                  summary: "The council asks for the sealed archive.",
+                  chapterIds: ["ch_02"]
+                },
+                {
+                  id: "evt_arrival",
+                  sequence: 10,
+                  title: "Hero arrives",
+                  status: "active",
+                  summary: "The hero enters the capital.",
+                  chapterIds: ["ch_01"]
+                }
+              ]
+            }
+          ],
+          draft: {
+            kind: "timeline",
+            title: "Main Timeline",
+            body: "Arrival happens before the council summons.",
+            status: "active"
+          },
+          onKindSelect: () => undefined,
+          onEntrySelect: () => undefined,
+          onDraftChange: () => undefined,
+          onNewDraft: () => undefined,
+          onSave: () => undefined
+        }}
+        onTimelineEntryOpen={() => undefined}
+      />
+    );
+
+    expect(html).toContain('aria-label="Timeline event rail"');
+    expect(html.indexOf("Hero arrives")).toBeLessThan(html.indexOf("Council summons"));
+    expect(html).toContain("Events 2");
+    expect(html).toContain("Linked chapters 2");
+    expect(html).toContain("active");
+    expect(html).toContain("draft");
+    expect(html).toContain("ch_01");
+    expect(html).toContain("ch_02");
+    expect(html).toContain('aria-label="Edit timeline: Main Timeline"');
   });
 
   test("renders the M23 Studio editor view", () => {

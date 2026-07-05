@@ -32,8 +32,9 @@ test("creates a project, creates a chapter, edits it, and saves through Electron
 
     await expect(page.getByText("Project Smoke")).toBeVisible();
 
+    const projectNavigator = page.getByLabel("项目导航");
     await page.getByRole("button", { name: "新建章节" }).click();
-    await expect(page.getByRole("button", { name: /未命名章节 1/ })).toBeVisible();
+    await expect(projectNavigator.getByRole("button", { name: /未命名章节 1/ })).toBeVisible();
 
     const body = page.getByLabel("章节正文");
     await expect(body).toBeVisible();

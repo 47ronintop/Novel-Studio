@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { isErr, isOk } from "@novel-studio/shared";
+import type { RecoveryRecord, RecoveryRepositoryPort } from "@novel-studio/shared";
 import {
   ChapterFileRepository,
   HistoryRepository,
@@ -40,7 +41,8 @@ describe("M12 project workflow session", () => {
           projectRoot: root,
           now: () => "2026-07-04T00:00:00.000Z",
           createVersionId: () => "ver_m12"
-        })
+        }),
+      createRecoveryRepository: () => emptyRecoveryRepository()
     });
 
     const createdProject = await session.createProject({
@@ -83,7 +85,101 @@ describe("M12 project workflow session", () => {
     }
     expect(loaded.value.chapter.frontmatter.title).toBe("第二章");
   });
+
+  test("exposes dirty chapter recovery records in the workspace snapshot", async () => {
+    const projectRoot = await createTempRoot();
+    const recoveryRecords: RecoveryRecord[] = [
+      {
+        schemaVersion: "1.0",
+        sessionId: "session_prj_m38_ch_opening",
+        projectId: "prj_m38_app",
+        openAssetId: "ch_opening",
+        assetType: "chapter",
+        dirty: true,
+        draftContentRef: {
+          strategy: "inline",
+          content: "unsaved opening\n"
+        },
+        updatedAt: "2026-07-05T00:05:00.000Z"
+      },
+      {
+        schemaVersion: "1.0",
+        sessionId: "session_prj_m38_ch_clean",
+        projectId: "prj_m38_app",
+        openAssetId: "ch_clean",
+        assetType: "chapter",
+        dirty: false,
+        draftContentRef: {
+          strategy: "inline",
+          content: "saved chapter\n"
+        },
+        updatedAt: "2026-07-05T00:04:00.000Z"
+      }
+    ];
+    const recoveryRepository: RecoveryRepositoryPort = {
+      async writeRecoveryRecord(record) {
+        recoveryRecords.unshift(record);
+        return { ok: true, value: record };
+      },
+      async listRecoveryRecords() {
+        return { ok: true, value: recoveryRecords };
+      }
+    };
+    const session = createProjectWorkspaceSession({
+      now: () => "2026-07-05T00:00:00.000Z",
+      createProjectRepository: (root) =>
+        new ProjectFileRepository({
+          projectRoot: root,
+          now: () => "2026-07-05T00:00:00.000Z"
+        }),
+      createChapterRepository: (root) =>
+        new ChapterFileRepository({
+          projectRoot: root,
+          now: () => "2026-07-05T00:00:00.000Z"
+        }),
+      createHistoryRepository: (root) =>
+        new HistoryRepository({
+          projectRoot: root,
+          now: () => "2026-07-05T00:00:00.000Z",
+          createVersionId: () => "ver_m38"
+        }),
+      createRecoveryRepository: () => recoveryRepository
+    });
+
+    await session.createProject({
+      projectRoot,
+      projectId: "prj_m38_app",
+      title: "M38 App Project",
+      language: "zh-CN"
+    });
+    await session.createChapter({
+      chapterId: "ch_opening",
+      title: "Opening",
+      body: "persisted opening\n"
+    });
+
+    const snapshot = session.getSnapshot();
+
+    expect(snapshot?.recovery.availableItems).toEqual([
+      {
+        sessionId: "session_prj_m38_ch_opening",
+        chapterId: "ch_opening",
+        updatedAt: "2026-07-05T00:05:00.000Z"
+      }
+    ]);
+  });
 });
+
+function emptyRecoveryRepository(): RecoveryRepositoryPort {
+  return {
+    async writeRecoveryRecord(record) {
+      return { ok: true, value: record };
+    },
+    async listRecoveryRecords() {
+      return { ok: true, value: [] };
+    }
+  };
+}
 
 async function createTempRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "novel-studio-m12-app-"));

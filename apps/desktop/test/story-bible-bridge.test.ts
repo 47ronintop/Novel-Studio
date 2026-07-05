@@ -89,10 +89,67 @@ describe("Story Bible bridge", () => {
 
     expect(calls).toContain("storyBible.saveMemory:mem_hidden_oath:Hidden Oath");
   });
+
+  test("maps structured timeline events for the timeline workspace", async () => {
+    const bridge = createStoryBibleBridge(
+      createApi([], {
+        ...snapshot,
+        timeline: {
+          schemaVersion: "1.0",
+          id: "timeline_main",
+          type: "timeline.events",
+          title: "Main Timeline",
+          status: "active",
+          summary: "Arrival happens before the council summons.",
+          details: {
+            events: [
+              {
+                id: "evt_council",
+                sequence: 20,
+                title: "Council summons",
+                status: "draft",
+                summary: "The council asks for the sealed archive.",
+                chapterIds: ["ch_02"]
+              },
+              {
+                id: "evt_arrival",
+                sequence: 10,
+                title: "Hero arrives",
+                status: "active",
+                summary: "The hero enters the capital.",
+                chapterIds: ["ch_01"]
+              }
+            ]
+          },
+          createdAt: "2026-07-05T00:00:00.000Z",
+          updatedAt: "2026-07-05T00:00:00.000Z"
+        }
+      })
+    );
+
+    await bridge.load();
+    const timelineEntry = bridge
+      .getEditorProps()
+      .entries.find((entry) => entry.id === "timeline_main");
+
+    expect(timelineEntry?.timelineEvents?.map((event) => event.id)).toEqual([
+      "evt_arrival",
+      "evt_council"
+    ]);
+    expect(timelineEntry?.timelineEvents?.[0]).toMatchObject({
+      title: "Hero arrives",
+      status: "active",
+      sequence: 10,
+      chapterIds: ["ch_01"]
+    });
+  });
 });
 
-function createApi(calls: string[]): NovelStudioApi {
-  let currentSnapshot = snapshot;
+function createApi(
+  calls: string[],
+  initialSnapshot: StoryBibleSnapshot = snapshot
+): NovelStudioApi {
+  let currentSnapshot = initialSnapshot;
 
   return {
     getShellState: async () => ({

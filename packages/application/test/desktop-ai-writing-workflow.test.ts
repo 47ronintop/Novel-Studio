@@ -103,7 +103,7 @@ function createFakeAiSession(calls: string[]): AiWritingWorkflowSession {
       calls.push(`generate:${request.instruction}`);
       return ok(suggestion);
     },
-    applyChapterSuggestion(suggestionId) {
+    async applyChapterSuggestion(suggestionId) {
       calls.push(`apply:${suggestionId}`);
       return ok({
         state: {

@@ -13,7 +13,6 @@ export type {
   AssetType,
   CacheRepositoryPort,
   CreatedBy,
-  DraftContentRef,
   HistoryRepositoryPort,
   ModelProfile,
   ModelSettings,
@@ -23,9 +22,6 @@ export type {
   ProjectSnapshot,
   ProjectStats,
   ProjectType,
-  RecoveryCursor,
-  RecoveryRecord,
-  RecoveryRepositoryPort,
   SnapshotReason,
   SnapshotTextAssetInput,
   VersionRecord,
@@ -42,6 +38,12 @@ export type {
   WorkflowRunSummary,
   WorkflowRunUsageSummary
 } from "./ports.js";
+export type {
+  DraftContentRef,
+  RecoveryCursor,
+  RecoveryRecord,
+  RecoveryRepositoryPort
+} from "@novel-studio/shared";
 export { ProjectFileRepository } from "./project-repository.js";
 export { PluginRegistryFileRepository } from "./plugin-registry-repository.js";
 export type {

@@ -193,11 +193,21 @@ describe("Electron security baseline", () => {
     await expect(handlers["application:get-shell-state"]()).resolves.toMatchObject({
       projectTitle: "未打开项目"
     });
-    await expect(handlers["application:list-commands"]()).resolves.toHaveLength(4);
+    await expect(handlers["application:list-commands"]()).resolves.toHaveLength(9);
     await expect(
       handlers["application:execute-command"]("workspace.toggle-inspector")
     ).resolves.toMatchObject({
       ok: true
+    });
+    await expect(
+      handlers["application:execute-command"]("workspace.toggle-split-view")
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        workspaceLayout: {
+          splitView: true
+        }
+      }
     });
     await expect(handlers["application:chapter:load"]()).resolves.toMatchObject({
       ok: false,

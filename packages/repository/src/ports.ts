@@ -6,6 +6,13 @@ import type {
   UnifiedError
 } from "@novel-studio/shared";
 
+export type {
+  DraftContentRef,
+  RecoveryCursor,
+  RecoveryRecord,
+  RecoveryRepositoryPort
+} from "@novel-studio/shared";
+
 export type ProjectType = "novel" | "screenplay" | "comic-script" | "game-narrative";
 export type SnapshotReason =
   | "manual-save"
@@ -97,30 +104,6 @@ export interface VersionRecord extends JsonObject {
   snapshot?: JsonValue;
 }
 
-export interface DraftContentRef extends JsonObject {
-  strategy: "inline" | "file-ref";
-  content?: string;
-  path?: string;
-}
-
-export interface RecoveryCursor extends JsonObject {
-  line?: number;
-  column?: number;
-}
-
-export interface RecoveryRecord extends JsonObject {
-  schemaVersion: "1.0";
-  sessionId: string;
-  projectId: string;
-  openAssetId: string;
-  assetType: AssetType;
-  dirty: boolean;
-  draftContentRef: DraftContentRef;
-  updatedAt: string;
-  lastPersistedVersionId?: string;
-  cursor?: RecoveryCursor;
-}
-
 export interface WorkflowRunContextSummary extends JsonObject {
   sourceCount: number;
   tokenEstimate: number;
@@ -206,10 +189,6 @@ export interface HistoryRepositoryPort {
   recordWorkflowRun(record: WorkflowRunRecord): Promise<Result<WorkflowRunRecord, UnifiedError>>;
   listWorkflowRuns(): Promise<Result<WorkflowRunSummary[], UnifiedError>>;
   readWorkflowRun(workflowRunId: string): Promise<Result<WorkflowRunRecord, UnifiedError>>;
-}
-
-export interface RecoveryRepositoryPort {
-  writeRecoveryRecord(record: RecoveryRecord): Promise<Result<RecoveryRecord, UnifiedError>>;
 }
 
 export interface CacheRepositoryPort {

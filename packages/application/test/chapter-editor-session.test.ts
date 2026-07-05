@@ -54,7 +54,7 @@ describe("chapter editor session", () => {
     expect(loaded.value.saveStatus).toBe("Saved");
     expect(loaded.value.dirty).toBe(false);
 
-    const edited = session.edit("A revised opening paragraph.\n");
+    const edited = await session.edit("A revised opening paragraph.\n");
 
     expect(isOk(edited)).toBe(true);
     if (isErr(edited)) {

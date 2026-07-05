@@ -5,7 +5,8 @@ import type {
   ChapterFrontmatter,
   ChapterHistoryRepositoryPort,
   ChapterVersionContent,
-  ChapterVersionSummary
+  ChapterVersionSummary,
+  RecoveryRepositoryPort
 } from "@novel-studio/shared";
 
 export type ChapterEditorSaveStatus = "Saved" | "Saving" | "Unsaved" | "Recovery available";
@@ -25,13 +26,16 @@ export interface ChapterEditorSessionOptions {
   readonly chapterId: string;
   readonly repository: ChapterDraftRepositoryPort;
   readonly historyRepository?: ChapterHistoryRepositoryPort;
+  readonly recoveryRepository?: RecoveryRepositoryPort;
+  readonly projectId?: string;
+  readonly sessionId?: string;
   readonly now?: () => string;
 }
 
 export interface ChapterEditorSession {
   getState(): ChapterEditorState | undefined;
   load(): Promise<Result<ChapterEditorState, UnifiedError>>;
-  edit(nextBody: string): Result<ChapterEditorState, UnifiedError>;
+  edit(nextBody: string): Promise<Result<ChapterEditorState, UnifiedError>>;
   save(): Promise<Result<ChapterEditorState, UnifiedError>>;
   listVersions(): Promise<Result<readonly ChapterVersionSummary[], UnifiedError>>;
   previewVersion(versionId: string): Promise<Result<ChapterVersionContent, UnifiedError>>;
@@ -55,6 +59,9 @@ export function createChapterEditorSession(
   options: ChapterEditorSessionOptions
 ): ChapterEditorSession {
   const now = options.now ?? (() => new Date().toISOString());
+  const sessionId =
+    options.sessionId ??
+    `session_${sanitizeRecoveryId(options.projectId ?? "project")}_${sanitizeRecoveryId(options.chapterId)}`;
   let state: ChapterEditorState | undefined;
   let persistedBody = "";
 
@@ -75,7 +82,7 @@ export function createChapterEditorSession(
 
       return ok(state);
     },
-    edit(nextBody: string) {
+    async edit(nextBody: string) {
       if (state === undefined) {
         return err(createChapterSessionError("CHAPTER_SESSION_NOT_LOADED"));
       }
@@ -91,6 +98,11 @@ export function createChapterEditorSession(
         dirty,
         saveStatus: dirty ? "Unsaved" : "Saved"
       };
+
+      const recoveryResult = await writeRecoveryRecord(true);
+      if (!recoveryResult.ok) {
+        return recoveryResult;
+      }
 
       return ok(state);
     },
@@ -142,6 +154,11 @@ export function createChapterEditorSession(
         if (!snapshotResult.ok) {
           return snapshotResult;
         }
+      }
+
+      const recoveryResult = await writeRecoveryRecord(false);
+      if (!recoveryResult.ok) {
+        return recoveryResult;
       }
 
       return ok(state);
@@ -203,12 +220,47 @@ export function createChapterEditorSession(
       };
       persistedBody = restoredChapter.body;
 
+      const recoveryResult = await writeRecoveryRecord(false);
+      if (!recoveryResult.ok) {
+        return recoveryResult;
+      }
+
       return ok(state);
     },
     previewSuggestionDiff(nextBody: string) {
       return buildSuggestionDiff(state?.chapter.body ?? "", nextBody);
     }
   };
+
+  async function writeRecoveryRecord(dirty: boolean): Promise<Result<void, UnifiedError>> {
+    if (
+      options.recoveryRepository === undefined ||
+      options.projectId === undefined ||
+      state === undefined
+    ) {
+      return ok(undefined);
+    }
+
+    const result = await options.recoveryRepository.writeRecoveryRecord({
+      schemaVersion: "1.0",
+      sessionId,
+      projectId: options.projectId,
+      openAssetId: options.chapterId,
+      assetType: "chapter",
+      dirty,
+      draftContentRef: {
+        strategy: "inline",
+        content: state.chapter.body
+      },
+      updatedAt: now()
+    });
+
+    if (!result.ok) {
+      return result;
+    }
+
+    return ok(undefined);
+  }
 }
 
 function updateChapterFrontmatter(
@@ -233,6 +285,11 @@ function createChapterSessionError(code: string): UnifiedError {
     traceId: "chapter-editor-session",
     createdAt: new Date().toISOString()
   };
+}
+
+function sanitizeRecoveryId(value: string): string {
+  const sanitized = value.replace(/[^A-Za-z0-9_-]/g, "_");
+  return sanitized.length === 0 ? "unknown" : sanitized;
 }
 
 function buildSuggestionDiff(currentBody: string, nextBody: string): ChapterSuggestionDiffPreview {

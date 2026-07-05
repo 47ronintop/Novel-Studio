@@ -168,7 +168,9 @@ export interface AiWritingWorkflowSession {
   generateChapterSuggestion(
     request: AiWritingSuggestionRequest
   ): Promise<Result<AiWritingSuggestion, UnifiedError>>;
-  applyChapterSuggestion(suggestionId: string): Result<ChapterEditorSnapshot, UnifiedError>;
+  applyChapterSuggestion(
+    suggestionId: string
+  ): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
 }
 
 export interface AiWritingWorkflowSessionOptions {
@@ -439,7 +441,7 @@ export function createAgentBackedAiWritingWorkflowSession(
 
       return ok(suggestion);
     },
-    applyChapterSuggestion(suggestionId) {
+    async applyChapterSuggestion(suggestionId) {
       const stored = suggestions.get(suggestionId);
       if (stored === undefined) {
         return aiWorkflowError({
@@ -467,7 +469,7 @@ export function createAgentBackedAiWritingWorkflowSession(
         return completed;
       }
 
-      const edited = options.chapterEditorSession.edit(stored.suggestion.proposedBody);
+      const edited = await options.chapterEditorSession.edit(stored.suggestion.proposedBody);
       if (!edited.ok) {
         return edited;
       }

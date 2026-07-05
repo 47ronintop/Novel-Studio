@@ -38,7 +38,10 @@ describe("DesktopApplication project search", () => {
             history: {},
             models: {}
           },
-          chapters: []
+          chapters: [],
+          recovery: {
+            availableItems: []
+          }
         }),
         getActiveChapterEditorSession: () => undefined,
         openProject: async () => {

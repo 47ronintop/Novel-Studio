@@ -22,7 +22,10 @@ const emptySnapshot: ProjectWorkspaceSnapshot = {
     history: {},
     models: {}
   },
-  chapters: []
+  chapters: [],
+  recovery: {
+    availableItems: []
+  }
 };
 
 describe("project workflow bridge", () => {
@@ -48,12 +51,86 @@ describe("project workflow bridge", () => {
 
     expect(createdProject.projectRootInput).toBe("D:/Novel/M12");
     expect(createdChapter.chapters[0]?.title).toBe("未命名章节 1");
+    expect(createdChapter.openChapterTabIds).toEqual(["ch_generated"]);
     expect(selected.activeChapterId).toBe("ch_generated");
+    expect(selected.openChapterTabIds).toEqual(["ch_generated"]);
     expect(calls).toEqual([
       "project.create:prj_generated:M12",
       "project.createChapter:ch_generated:未命名章节 1",
       "project.selectChapter:ch_generated"
     ]);
+  });
+
+  test("tracks runtime open chapter tabs and selects a neighbor when closing the active tab", async () => {
+    const calls: string[] = [];
+    let chapters: readonly ChapterSummary[] = [
+      {
+        id: "ch_opening",
+        title: "开篇",
+        order: 1,
+        status: "draft",
+        updatedAt: "2026-07-04T00:00:00.000Z"
+      },
+      {
+        id: "ch_second",
+        title: "第二章",
+        order: 2,
+        status: "draft",
+        updatedAt: "2026-07-04T00:00:00.000Z"
+      }
+    ];
+    const api = createApi({
+      record: calls,
+      getChapters: () => chapters,
+      setChapters: (nextChapters) => {
+        chapters = nextChapters;
+      },
+      chooseOpenProjectRoot: "D:/Novel/M37"
+    });
+    const bridge = createProjectWorkflowBridge(api);
+
+    await bridge.openProject();
+    await bridge.selectChapter("ch_opening");
+    await bridge.selectChapter("ch_second");
+    const closed = await bridge.closeChapterTab("ch_second");
+
+    expect(closed.openChapterTabIds).toEqual(["ch_opening"]);
+    expect(closed.activeChapterId).toBe("ch_opening");
+    expect(calls).toContain("project.selectChapter:ch_opening");
+  });
+
+  test("maps workspace recovery records to dirty chapter tabs and a recovery notice", async () => {
+    const calls: string[] = [];
+    const chapters: readonly ChapterSummary[] = [
+      {
+        id: "ch_opening",
+        title: "Opening",
+        order: 1,
+        status: "draft",
+        updatedAt: "2026-07-04T00:00:00.000Z"
+      }
+    ];
+    const api = createApi({
+      record: calls,
+      getChapters: () => chapters,
+      setChapters: () => undefined,
+      chooseOpenProjectRoot: "D:/Novel/M38",
+      recovery: {
+        availableItems: [
+          {
+            sessionId: "session_prj_m38_ch_opening",
+            chapterId: "ch_opening",
+            updatedAt: "2026-07-05T00:05:00.000Z"
+          }
+        ]
+      }
+    });
+    const bridge = createProjectWorkflowBridge(api);
+
+    const opened = await bridge.openProject();
+
+    expect(opened.dirtyChapterIds).toEqual(["ch_opening"]);
+    expect(opened.recovery?.availableItems[0]?.chapterId).toBe("ch_opening");
   });
 
   test("uses native directory selection when no project path is typed", async () => {
@@ -119,6 +196,7 @@ function createApi(options: {
   readonly chooseOpenProjectRoot?: string;
   readonly chooseCreateProjectRoot?: string;
   readonly openErrorMessage?: string;
+  readonly recovery?: ProjectWorkspaceSnapshot["recovery"];
 }): NovelStudioApi {
   return {
     getShellState: async () => ({
@@ -127,6 +205,13 @@ function createApi(options: {
       navigatorCollapsed: false,
       inspectorCollapsed: false,
       bottomPanelVisible: true,
+      activeBottomPanelTab: "工作流运行",
+      workspaceLayout: {
+        splitView: false,
+        navigatorWidth: 260,
+        inspectorWidth: 320,
+        bottomPanelHeight: 220
+      },
       commandPaletteOpen: false,
       saveStatus: "Saved",
       navigatorSections: [],
@@ -141,6 +226,13 @@ function createApi(options: {
           navigatorCollapsed: false,
           inspectorCollapsed: false,
           bottomPanelVisible: true,
+          activeBottomPanelTab: "工作流运行",
+          workspaceLayout: {
+            splitView: false,
+            navigatorWidth: 260,
+            inspectorWidth: 320,
+            bottomPanelHeight: 220
+          },
           commandPaletteOpen: false,
           saveStatus: "Saved",
           navigatorSections: [],
@@ -182,7 +274,12 @@ function createApi(options: {
             }
           };
         }
-        return ok({ ...emptySnapshot, projectRoot, chapters: options.getChapters() });
+        return ok({
+          ...emptySnapshot,
+          projectRoot,
+          chapters: options.getChapters(),
+          ...(options.recovery === undefined ? {} : { recovery: options.recovery })
+        });
       },
       create: async (input) => {
         options.record.push(`project.create:${input.projectId}:${input.title}`);

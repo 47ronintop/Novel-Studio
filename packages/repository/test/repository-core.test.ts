@@ -180,6 +180,66 @@ describe("RecoveryRepository and CacheRepository", () => {
     ).toContain("unsaved draft");
   });
 
+  test("lists dirty recovery records newest first without reading cache", async () => {
+    const projectRoot = await createTempProject();
+    const repository = new RecoveryRepository({ projectRoot, traceId: "trace_recovery_list" });
+
+    await repository.writeRecoveryRecord({
+      schemaVersion: "1.0",
+      sessionId: "session_old",
+      projectId: "prj_01",
+      openAssetId: "ch_01",
+      assetType: "chapter",
+      dirty: true,
+      draftContentRef: {
+        strategy: "inline",
+        content: "old draft"
+      },
+      updatedAt: "2026-07-03T00:00:00.000Z"
+    });
+    await repository.writeRecoveryRecord({
+      schemaVersion: "1.0",
+      sessionId: "session_clean",
+      projectId: "prj_01",
+      openAssetId: "ch_02",
+      assetType: "chapter",
+      dirty: false,
+      draftContentRef: {
+        strategy: "inline",
+        content: "saved draft"
+      },
+      updatedAt: "2026-07-03T00:10:00.000Z"
+    });
+    await repository.writeRecoveryRecord({
+      schemaVersion: "1.0",
+      sessionId: "session_new",
+      projectId: "prj_01",
+      openAssetId: "ch_03",
+      assetType: "chapter",
+      dirty: true,
+      draftContentRef: {
+        strategy: "inline",
+        content: "new draft"
+      },
+      updatedAt: "2026-07-03T00:20:00.000Z"
+    });
+
+    const listed = await repository.listRecoveryRecords();
+
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) {
+      throw new Error(listed.error.message);
+    }
+    expect(listed.value.map((record) => record.sessionId)).toEqual([
+      "session_new",
+      "session_clean",
+      "session_old"
+    ]);
+    expect(
+      listed.value.filter((record) => record.dirty).map((record) => record.openAssetId)
+    ).toEqual(["ch_03", "ch_01"]);
+  });
+
   test("clears only cache data and preserves history and memories", async () => {
     const projectRoot = await createTempProject();
     await mkdir(join(projectRoot, "cache", "indexes"), { recursive: true });

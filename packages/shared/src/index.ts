@@ -22,5 +22,12 @@ export type {
   ChapterStatus,
   SnapshotReason
 } from "./chapter.js";
+export type {
+  DraftContentRef,
+  RecoveryAssetType,
+  RecoveryCursor,
+  RecoveryRecord,
+  RecoveryRepositoryPort
+} from "./recovery.js";
 export type { Err, Ok, Result } from "./result.js";
 export { err, isErr, isOk, ok, unwrapOr } from "./result.js";

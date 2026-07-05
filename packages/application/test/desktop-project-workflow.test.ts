@@ -7,7 +7,8 @@ import { isErr, isOk } from "@novel-studio/shared";
 import {
   ChapterFileRepository,
   HistoryRepository,
-  ProjectFileRepository
+  ProjectFileRepository,
+  RecoveryRepository
 } from "@novel-studio/repository";
 
 import { createDesktopApplication } from "../src/desktop-application.js";
@@ -42,6 +43,10 @@ describe("M12 desktop project workflow", () => {
             projectRoot: root,
             now: () => "2026-07-04T00:00:00.000Z",
             createVersionId: () => "ver_m12_desktop"
+          }),
+        createRecoveryRepository: (root) =>
+          new RecoveryRepository({
+            projectRoot: root
           })
       })
     });

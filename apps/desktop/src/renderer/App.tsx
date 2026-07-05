@@ -44,6 +44,12 @@ const rendererShellState: DesktopShellState = {
   inspectorCollapsed: false,
   bottomPanelVisible: true,
   activeBottomPanelTab: "工作流运行",
+  workspaceLayout: {
+    splitView: false,
+    navigatorWidth: 260,
+    inspectorWidth: 320,
+    bottomPanelHeight: 220
+  },
   commandPaletteOpen: false,
   saveStatus: "Saved",
   navigatorSections: [
@@ -88,6 +94,41 @@ const rendererCommands: readonly ApplicationCommand[] = [
     scope: "workspace",
     riskLevel: "safe",
     defaultShortcut: "Ctrl/Cmd+J"
+  },
+  {
+    id: "workspace.toggle-split-view",
+    title: "切换拆分视图",
+    scope: "workspace",
+    riskLevel: "safe",
+    defaultShortcut: "Ctrl/Cmd+\\"
+  },
+  {
+    id: "workspace.narrow-navigator",
+    title: "收窄项目导航",
+    scope: "workspace",
+    riskLevel: "safe",
+    defaultShortcut: "Ctrl/Cmd+Alt+["
+  },
+  {
+    id: "workspace.widen-navigator",
+    title: "加宽项目导航",
+    scope: "workspace",
+    riskLevel: "safe",
+    defaultShortcut: "Ctrl/Cmd+Alt+]"
+  },
+  {
+    id: "workspace.narrow-inspector",
+    title: "收窄检查器",
+    scope: "workspace",
+    riskLevel: "safe",
+    defaultShortcut: "Ctrl/Cmd+Alt+Shift+["
+  },
+  {
+    id: "workspace.widen-inspector",
+    title: "加宽检查器",
+    scope: "workspace",
+    riskLevel: "safe",
+    defaultShortcut: "Ctrl/Cmd+Alt+Shift+]"
   }
 ];
 
@@ -392,6 +433,17 @@ export function App() {
       }
 
       void projectWorkflowBridge.selectChapter(chapterId).then(refreshProjectWorkflow);
+    },
+    [projectWorkflowBridge, refreshProjectWorkflow]
+  );
+
+  const handleCloseChapterTab = useCallback(
+    (chapterId: string) => {
+      if (projectWorkflowBridge === undefined) {
+        return;
+      }
+
+      void projectWorkflowBridge.closeChapterTab(chapterId).then(refreshProjectWorkflow);
     },
     [projectWorkflowBridge, refreshProjectWorkflow]
   );
@@ -762,7 +814,8 @@ export function App() {
               onOpenProject: handleOpenProject,
               onCreateProject: handleCreateProject,
               onCreateChapter: handleCreateChapter,
-              onSelectChapter: handleSelectChapter
+              onSelectChapter: handleSelectChapter,
+              onCloseChapterTab: handleCloseChapterTab
             }
           })}
       {...(projectSearch === undefined

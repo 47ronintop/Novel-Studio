@@ -11,6 +11,13 @@ const nextShellState: DesktopShellState = {
   navigatorCollapsed: true,
   inspectorCollapsed: false,
   bottomPanelVisible: true,
+  activeBottomPanelTab: "工作流运行",
+  workspaceLayout: {
+    splitView: true,
+    navigatorWidth: 300,
+    inspectorWidth: 320,
+    bottomPanelHeight: 220
+  },
   commandPaletteOpen: false,
   saveStatus: "Saved",
   navigatorSections: [],

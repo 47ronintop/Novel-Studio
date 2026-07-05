@@ -29,7 +29,8 @@ export type {
   DesktopApplicationOptions,
   DesktopShellState,
   NavigatorSection,
-  SaveStatus
+  SaveStatus,
+  WorkspaceLayoutState
 } from "./desktop-application.js";
 export { createProjectSearchSession } from "./project-search-session.js";
 export type {
@@ -51,6 +52,8 @@ export type {
   ProjectMetadata,
   ProjectRepositoryPort,
   ProjectSnapshot,
+  ProjectWorkspaceRecoveryItem,
+  ProjectWorkspaceRecoverySummary,
   ProjectWorkspaceSession,
   ProjectWorkspaceSessionOptions,
   ProjectWorkspaceSnapshot,

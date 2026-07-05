@@ -27,6 +27,7 @@ import {
   PluginRegistryFileRepository,
   ProjectFileRepository,
   ProjectSettingsRepository,
+  RecoveryRepository,
   SearchIndexFileRepository,
   StoryBibleFileRepository
 } from "@novel-studio/repository";
@@ -66,10 +67,17 @@ export function createProjectDesktopApplication(
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.createVersionId === undefined ? {} : { createVersionId: options.createVersionId })
   });
+  const recoveryRepository = new RecoveryRepository({
+    projectRoot: options.projectRoot,
+    traceId: "trace_desktop_recovery_repository"
+  });
   const chapterEditorSession = createChapterEditorSession({
     chapterId: options.chapterId,
     repository: chapterRepository,
     historyRepository,
+    recoveryRepository,
+    projectId: DEFAULT_PROJECT_ID,
+    sessionId: `session_${DEFAULT_PROJECT_ID}_${options.chapterId}`,
     ...(options.now === undefined ? {} : { now: options.now })
   });
   const projectWorkspaceSession = createProjectWorkspaceSession({
@@ -94,6 +102,11 @@ export function createProjectDesktopApplication(
         ...(options.createVersionId === undefined
           ? {}
           : { createVersionId: options.createVersionId })
+      }),
+    createRecoveryRepository: (projectRoot) =>
+      new RecoveryRepository({
+        projectRoot,
+        traceId: "trace_desktop_project_recovery_repository"
       })
   });
   const settingsPort: ProjectSettingsPort = {

@@ -14,6 +14,7 @@ export interface ProjectWorkflowBridge {
   createProject(): Promise<ProjectWorkflowProps>;
   createChapter(): Promise<ProjectWorkflowProps>;
   selectChapter(chapterId: string): Promise<ProjectWorkflowProps>;
+  closeChapterTab(chapterId: string): Promise<ProjectWorkflowProps>;
 }
 
 export function createProjectWorkflowBridge(
@@ -26,6 +27,7 @@ export function createProjectWorkflowBridge(
   let snapshot: ProjectWorkspaceSnapshot | undefined;
   let status: ProjectWorkflowProps["status"] = "idle";
   let feedback: ProjectWorkflowProps["feedback"] | undefined;
+  let openChapterTabIds: string[] = [];
 
   return {
     getProps: () => toProps(),
@@ -53,6 +55,8 @@ export function createProjectWorkflowBridge(
 
         snapshot = opened.value;
         projectRootInput = snapshot.projectRoot;
+        openChapterTabIds =
+          snapshot.activeChapterId === undefined ? [] : [snapshot.activeChapterId];
       });
     },
     async createProject() {
@@ -79,6 +83,8 @@ export function createProjectWorkflowBridge(
 
         snapshot = created.value;
         projectRootInput = snapshot.projectRoot;
+        openChapterTabIds =
+          snapshot.activeChapterId === undefined ? [] : [snapshot.activeChapterId];
       });
     },
     async createChapter() {
@@ -92,11 +98,36 @@ export function createProjectWorkflowBridge(
         })
       );
       projectRootInput = snapshot.projectRoot;
+      addOpenChapterTab(snapshot.activeChapterId);
       return toProps();
     },
     async selectChapter(chapterId) {
       snapshot = await unwrap(api.project.selectChapter(chapterId));
       projectRootInput = snapshot.projectRoot;
+      addOpenChapterTab(chapterId);
+      return toProps();
+    },
+    async closeChapterTab(chapterId) {
+      if (!openChapterTabIds.includes(chapterId) || openChapterTabIds.length <= 1) {
+        return toProps();
+      }
+
+      const closingIndex = openChapterTabIds.indexOf(chapterId);
+      const nextOpenChapterTabIds = openChapterTabIds.filter(
+        (openChapterId) => openChapterId !== chapterId
+      );
+      openChapterTabIds = nextOpenChapterTabIds;
+
+      if (snapshot?.activeChapterId === chapterId) {
+        const nextActiveChapterId =
+          nextOpenChapterTabIds[Math.min(closingIndex, nextOpenChapterTabIds.length - 1)];
+        if (nextActiveChapterId !== undefined) {
+          snapshot = await unwrap(api.project.selectChapter(nextActiveChapterId));
+          projectRootInput = snapshot.projectRoot;
+          openChapterTabIds = nextOpenChapterTabIds;
+        }
+      }
+
       return toProps();
     }
   };
@@ -152,6 +183,9 @@ export function createProjectWorkflowBridge(
       ...(status === undefined ? {} : { status }),
       ...(feedback === undefined ? {} : { feedback }),
       chapters: snapshot?.chapters ?? [],
+      openChapterTabIds,
+      dirtyChapterIds: snapshot?.recovery.availableItems.map((item) => item.chapterId) ?? [],
+      ...(snapshot?.recovery === undefined ? {} : { recovery: snapshot.recovery }),
       ...(snapshot?.activeChapterId === undefined
         ? {}
         : { activeChapterId: snapshot.activeChapterId }),
@@ -159,8 +193,17 @@ export function createProjectWorkflowBridge(
       onOpenProject: () => undefined,
       onCreateProject: () => undefined,
       onCreateChapter: () => undefined,
-      onSelectChapter: () => undefined
+      onSelectChapter: () => undefined,
+      onCloseChapterTab: () => undefined
     };
+  }
+
+  function addOpenChapterTab(chapterId: string | undefined): void {
+    if (chapterId === undefined || openChapterTabIds.includes(chapterId)) {
+      return;
+    }
+
+    openChapterTabIds = [...openChapterTabIds, chapterId];
   }
 }
 

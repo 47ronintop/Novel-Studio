@@ -6,6 +6,7 @@ import type {
   ProjectSearchResultItem
 } from "@novel-studio/application";
 import type { ChapterSummary } from "@novel-studio/shared";
+import type { CSSProperties } from "react";
 import type { ChapterEditorProps } from "./chapter-editor.js";
 import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
 import type { ModelSettingsPanelProps } from "./model-settings-panel.js";
@@ -23,7 +24,8 @@ import {
   PanelRight,
   Search,
   Settings,
-  Sparkles
+  Sparkles,
+  X
 } from "lucide-react";
 
 import { ChapterEditor } from "./chapter-editor.js";
@@ -57,11 +59,25 @@ export interface ProjectWorkflowProps {
   readonly feedback?: ProjectWorkflowFeedback;
   readonly chapters: readonly ChapterSummary[];
   readonly activeChapterId?: string;
+  readonly openChapterTabIds?: readonly string[];
+  readonly dirtyChapterIds?: readonly string[];
+  readonly recovery?: ProjectWorkflowRecoveryProps;
   readonly onProjectRootChange: (projectRoot: string) => void;
   readonly onOpenProject: () => void;
   readonly onCreateProject: () => void;
   readonly onCreateChapter: () => void;
   readonly onSelectChapter: (chapterId: string) => void;
+  readonly onCloseChapterTab?: (chapterId: string) => void;
+}
+
+export interface ProjectWorkflowRecoveryProps {
+  readonly availableItems: readonly ProjectWorkflowRecoveryItemProps[];
+}
+
+export interface ProjectWorkflowRecoveryItemProps {
+  readonly sessionId: string;
+  readonly chapterId: string;
+  readonly updatedAt: string;
 }
 
 export type ProjectWorkflowStatus = "idle" | "opening" | "creating";
@@ -186,6 +202,16 @@ export interface StoryBibleEditorEntry {
   readonly title: string;
   readonly status: string;
   readonly body: string;
+  readonly timelineEvents?: readonly StoryTimelineEvent[];
+}
+
+export interface StoryTimelineEvent {
+  readonly id: string;
+  readonly sequence: number;
+  readonly title: string;
+  readonly status: string;
+  readonly summary: string;
+  readonly chapterIds: readonly string[];
 }
 
 export interface StoryBibleEditorDraft {
@@ -238,6 +264,13 @@ const bottomPanelLabels: ReadonlyMap<string, string> = new Map([
   ["Logs", "日志"]
 ]);
 
+const defaultWorkspaceLayout: DesktopShellState["workspaceLayout"] = {
+  splitView: false,
+  navigatorWidth: 260,
+  inspectorWidth: 320,
+  bottomPanelHeight: 220
+};
+
 export function WorkspaceShell({
   shellState,
   commands,
@@ -261,6 +294,12 @@ export function WorkspaceShell({
     shellState.bottomPanelTabs.includes(shellState.activeBottomPanelTab) === true
       ? shellState.activeBottomPanelTab
       : (shellState.bottomPanelTabs[0] ?? "工作流运行");
+  const workspaceLayout = shellState.workspaceLayout ?? defaultWorkspaceLayout;
+  const workspaceGridStyle = {
+    "--ns-navigator-width": `${workspaceLayout.navigatorWidth}px`,
+    "--ns-inspector-width": `${workspaceLayout.inspectorWidth}px`,
+    "--ns-bottom-panel-height": `${workspaceLayout.bottomPanelHeight}px`
+  } as CSSProperties;
 
   return (
     <div className="ns-shell" data-theme="dark">
@@ -279,9 +318,60 @@ export function WorkspaceShell({
         >
           命令面板 <kbd>Ctrl/Cmd+K</kbd>
         </button>
+        <div className="ns-layout-controls" aria-label="布局控制">
+          <button
+            aria-label="切换 Split View"
+            className="ns-icon-button"
+            onClick={() => onCommandExecute?.("workspace.toggle-split-view")}
+            title="切换 Split View"
+            type="button"
+          >
+            <PanelRight aria-hidden="true" size={14} />
+          </button>
+          <button
+            aria-label="收窄导航面板"
+            className="ns-icon-button"
+            onClick={() => onCommandExecute?.("workspace.narrow-navigator")}
+            title="收窄导航面板"
+            type="button"
+          >
+            -
+          </button>
+          <button
+            aria-label="加宽导航面板"
+            className="ns-icon-button"
+            onClick={() => onCommandExecute?.("workspace.widen-navigator")}
+            title="加宽导航面板"
+            type="button"
+          >
+            +
+          </button>
+          <button
+            aria-label="收窄检查器"
+            className="ns-icon-button"
+            onClick={() => onCommandExecute?.("workspace.narrow-inspector")}
+            title="收窄检查器"
+            type="button"
+          >
+            [
+          </button>
+          <button
+            aria-label="加宽检查器"
+            className="ns-icon-button"
+            onClick={() => onCommandExecute?.("workspace.widen-inspector")}
+            title="加宽检查器"
+            type="button"
+          >
+            ]
+          </button>
+        </div>
       </header>
 
-      <div className="ns-workspace-grid">
+      <div
+        className="ns-workspace-grid"
+        data-split-view={workspaceLayout.splitView}
+        style={workspaceGridStyle}
+      >
         <aside className="ns-activity-bar" data-region="activity-bar" aria-label="活动栏">
           {activities.map((activity) => {
             const Icon = activity.icon;
@@ -405,6 +495,7 @@ export function WorkspaceShell({
             <WorkspaceEditorSurface
               chapterEditor={chapterEditor}
               projectWorkflow={projectWorkflow}
+              splitView={workspaceLayout.splitView}
             />
           ) : (
             <ActivityEmptyState
@@ -615,7 +706,7 @@ function BottomPanelContent({
       <div className="ns-bottom-panel-content" aria-label="底部面板内容：问题">
         <strong>问题</strong>
         <span>底部面板已进入可切换状态。</span>
-        <span>仍待补齐：多 tab 编辑器、时间线主视图、插件管理 UI。</span>
+        <span>仍待补齐：自动保存恢复、时间线可视化、项目健康诊断。</span>
         <span>当前问题均为产品化缺口，不阻断章节编辑和保存。</span>
       </div>
     );
@@ -816,19 +907,27 @@ function AiWorkflowObservabilityView({
 
 function WorkspaceEditorSurface({
   chapterEditor,
-  projectWorkflow
+  projectWorkflow,
+  splitView
 }: {
   readonly chapterEditor: ChapterEditorProps | undefined;
   readonly projectWorkflow: ProjectWorkflowProps | undefined;
+  readonly splitView: boolean;
 }) {
   const activeChapterId =
     projectWorkflow?.activeChapterId ?? chapterEditor?.chapter.frontmatter.id ?? undefined;
   const chapterTabs = projectWorkflow?.chapters ?? [];
+  const openChapterTabIds =
+    projectWorkflow?.openChapterTabIds ?? chapterTabs.map((chapter) => chapter.id);
+  const visibleTabs = openChapterTabIds
+    .map((chapterId) => chapterTabs.find((chapter) => chapter.id === chapterId))
+    .filter((chapter): chapter is ChapterSummary => chapter !== undefined);
+  const dirtyChapterIds = new Set(projectWorkflow?.dirtyChapterIds ?? []);
 
   return (
     <>
       <div className="ns-tabs" role="tablist" aria-label="章节标签">
-        {chapterTabs.length === 0 ? (
+        {visibleTabs.length === 0 ? (
           <span
             aria-selected="true"
             className="ns-tab ns-tab-static"
@@ -838,35 +937,91 @@ function WorkspaceEditorSurface({
             {chapterEditor?.chapter.frontmatter.title ?? "未命名章节"}
           </span>
         ) : (
-          chapterTabs.map((chapter, index) => (
-            <button
-              aria-label={`切换章节标签：${chapter.title}`}
+          visibleTabs.map((chapter, index) => (
+            <div
               aria-selected={chapter.id === activeChapterId}
               className="ns-tab"
+              data-dirty={dirtyChapterIds.has(chapter.id)}
               data-focus-order={index === 0 ? "3" : undefined}
               key={chapter.id}
-              onClick={() => projectWorkflow?.onSelectChapter(chapter.id)}
               role="tab"
-              type="button"
             >
-              {chapter.title}
-            </button>
+              <button
+                aria-label={`切换章节标签：${chapter.title}`}
+                className="ns-tab-select"
+                onClick={() => projectWorkflow?.onSelectChapter(chapter.id)}
+                type="button"
+              >
+                <span>{chapter.title}</span>
+                {dirtyChapterIds.has(chapter.id) ? <span aria-label="未保存">●</span> : null}
+              </button>
+              {visibleTabs.length <= 1 ? null : (
+                <button
+                  aria-label={`关闭章节标签：${chapter.title}`}
+                  className="ns-tab-close"
+                  onClick={() => projectWorkflow?.onCloseChapterTab?.(chapter.id)}
+                  title={`关闭章节标签：${chapter.title}`}
+                  type="button"
+                >
+                  <X aria-hidden="true" size={13} />
+                </button>
+              )}
+            </div>
           ))
         )}
       </div>
-      <section className="ns-editor-surface" aria-label="章节编辑器表面">
-        {chapterEditor ? (
-          <ChapterEditor {...chapterEditor} />
-        ) : (
-          <>
-            <div className="ns-document-title">未命名章节</div>
-            <p>继续写下一场</p>
-            <div className="ns-editor-line" />
-            <div className="ns-editor-line ns-editor-line-short" />
-          </>
-        )}
-      </section>
+      <div className="ns-editor-panes" data-split-view={splitView}>
+        <section className="ns-editor-surface" aria-label="章节编辑器表面">
+          <AutosaveRecoveryNotice projectWorkflow={projectWorkflow} />
+          {chapterEditor ? (
+            <ChapterEditor {...chapterEditor} />
+          ) : (
+            <>
+              <div className="ns-document-title">未命名章节</div>
+              <p>继续写下一场</p>
+              <div className="ns-editor-line" />
+              <div className="ns-editor-line ns-editor-line-short" />
+            </>
+          )}
+        </section>
+        {splitView ? (
+          <aside className="ns-split-reference-pane" aria-label="拆分参考窗格">
+            <div className="ns-editor-panel-header">
+              <span>参考窗格</span>
+              <span className="ns-muted">Split View</span>
+            </div>
+            <p>保留当前章节编辑器，同时为故事圣经、搜索结果或版本对照预留并排空间。</p>
+          </aside>
+        ) : null}
+      </div>
     </>
+  );
+}
+
+function AutosaveRecoveryNotice({
+  projectWorkflow
+}: {
+  readonly projectWorkflow: ProjectWorkflowProps | undefined;
+}) {
+  const recoveryItems = projectWorkflow?.recovery?.availableItems ?? [];
+  if (recoveryItems.length === 0) {
+    return null;
+  }
+
+  const recoveredTitles = recoveryItems
+    .map(
+      (item) => projectWorkflow?.chapters.find((chapter) => chapter.id === item.chapterId)?.title
+    )
+    .filter((title): title is string => title !== undefined);
+
+  return (
+    <section className="ns-recovery-notice" aria-label="Autosave recovery">
+      <div>
+        <strong>Recoverable drafts {recoveryItems.length}</strong>
+        <span>{recoveredTitles.join(", ")}</span>
+      </div>
+      <span>{recoveryItems[0]?.updatedAt}</span>
+    </section>
   );
 }
 
@@ -961,6 +1116,18 @@ function TimelineMainView({
   readonly onTimelineEntryOpen: ((entryId: string) => void) | undefined;
 }) {
   const timelineEntries = editor?.entries.filter((entry) => entry.kind === "timeline") ?? [];
+  const timelineEvents = timelineEntries
+    .flatMap((entry) =>
+      (entry.timelineEvents ?? []).map((event) => ({
+        ...event,
+        parentEntryId: entry.id,
+        parentTitle: entry.title
+      }))
+    )
+    .sort((left, right) => left.sequence - right.sequence || left.title.localeCompare(right.title));
+  const linkedChapterCount = new Set(timelineEvents.flatMap((event) => event.chapterIds)).size;
+  const activeCount = timelineEvents.filter((event) => event.status === "active").length;
+  const draftCount = timelineEvents.filter((event) => event.status === "draft").length;
 
   return (
     <section className="ns-timeline-view" aria-label="时间线主视图">
@@ -972,7 +1139,44 @@ function TimelineMainView({
         <span>{timelineEntries.length} 条</span>
       </div>
 
-      {timelineEntries.length === 0 ? (
+      {timelineEvents.length > 0 ? (
+        <>
+          <div className="ns-timeline-summary" aria-label="Timeline metrics">
+            <span>Events {timelineEvents.length}</span>
+            <span>Linked chapters {linkedChapterCount}</span>
+            <span>active {activeCount}</span>
+            <span>draft {draftCount}</span>
+          </div>
+          <ol className="ns-timeline-event-rail" aria-label="Timeline event rail">
+            {timelineEvents.map((event) => (
+              <li className="ns-timeline-event" key={event.id}>
+                <span className="ns-timeline-sequence">{event.sequence}</span>
+                <div className="ns-timeline-event-body">
+                  <div className="ns-timeline-entry-header">
+                    <strong>{event.title}</strong>
+                    <span>{event.status}</span>
+                  </div>
+                  <p>{event.summary}</p>
+                  <div className="ns-timeline-event-meta">
+                    <span>{event.parentTitle}</span>
+                    {event.chapterIds.map((chapterId) => (
+                      <span key={chapterId}>{chapterId}</span>
+                    ))}
+                  </div>
+                </div>
+                <button
+                  aria-label={`Edit timeline: ${event.parentTitle}`}
+                  className="ns-icon-text-button"
+                  onClick={() => onTimelineEntryOpen?.(event.parentEntryId)}
+                  type="button"
+                >
+                  Edit
+                </button>
+              </li>
+            ))}
+          </ol>
+        </>
+      ) : timelineEntries.length === 0 ? (
         <div className="ns-timeline-empty">当前项目还没有时间线条目。</div>
       ) : (
         <ol className="ns-timeline-list" aria-label="时间线条目">
