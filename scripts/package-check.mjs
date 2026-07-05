@@ -36,6 +36,15 @@ async function checkPackageScripts() {
   if (packageJson.scripts?.["package:dir"] !== "node scripts/package-dir.mjs") {
     failures.push("package:dir must use the stable package-dir wrapper.");
   }
+  if (packageJson.scripts?.["package:installer"] !== "node scripts/package-installer.mjs") {
+    failures.push("Missing package:installer script.");
+  }
+  if (packageJson.scripts?.["release:notes"] !== "node scripts/release-notes.mjs") {
+    failures.push("Missing release:notes script.");
+  }
+  if (packageJson.scripts?.["release:check"] !== "node scripts/release-check.mjs") {
+    failures.push("Missing release:check script.");
+  }
 }
 
 async function checkPackagingEnvironment() {
@@ -97,6 +106,38 @@ async function checkElectronBuilderConfig() {
   }
   if (!Array.isArray(config.files) || !config.files.includes("packages/*/dist/**")) {
     failures.push("Electron package files must include workspace package dist artifacts.");
+  }
+  if (config.artifactName !== "Novel-Studio-${version}-${os}-${arch}.${ext}") {
+    failures.push("Electron package artifactName must be stable and include version/os/arch.");
+  }
+  if (config.directories?.buildResources !== "apps/desktop/build") {
+    failures.push("Electron package buildResources must point to desktop build assets.");
+  }
+  if (config.win?.icon !== "apps/desktop/build/icon.svg") {
+    failures.push("Windows package must declare the Novel Studio icon asset.");
+  }
+  if (!(await fileExists(join(root, "apps", "desktop", "build", "icon.svg")))) {
+    failures.push("Missing desktop icon asset.");
+  }
+  if (config.win?.forceCodeSigning !== false) {
+    failures.push("Local beta packaging must not require code signing in CI.");
+  }
+  const winTargets = new Set(
+    (Array.isArray(config.win?.target) ? config.win.target : []).map((target) =>
+      typeof target === "string" ? target : target.target
+    )
+  );
+  if (!winTargets.has("dir")) {
+    failures.push("Windows package target must keep dir output for artifact scanning.");
+  }
+  if (!winTargets.has("nsis")) {
+    failures.push("Windows package target must include NSIS installer output.");
+  }
+  if (config.nsis?.oneClick !== false) {
+    failures.push("NSIS installer must use assisted install mode.");
+  }
+  if (config.nsis?.allowToChangeInstallationDirectory !== true) {
+    failures.push("NSIS installer must allow changing installation directory.");
   }
 }
 

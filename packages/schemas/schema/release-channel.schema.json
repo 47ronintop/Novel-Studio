@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "schema.release-channel.v1",
+  "title": "Novel Studio Release Channel",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "channel",
+    "appId",
+    "productName",
+    "version",
+    "artifactKinds",
+    "publishMode",
+    "releaseNotesPath",
+    "signing"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "channel": { "type": "string", "enum": ["beta", "stable"] },
+    "appId": { "type": "string", "minLength": 1 },
+    "productName": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[A-Za-z0-9.-]+)?$" },
+    "artifactKinds": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "enum": ["win-unpacked", "win-nsis"] },
+      "uniqueItems": true
+    },
+    "publishMode": { "type": "string", "enum": ["manual"] },
+    "releaseNotesPath": { "type": "string", "pattern": "^docs/releases/.+\\.md$" },
+    "signing": {
+      "type": "object",
+      "required": ["required", "policy", "windowsCertificateEnv", "notarization"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "policy": { "type": "string", "enum": ["unsigned-local-beta", "certificate-env-gated"] },
+        "windowsCertificateEnv": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["CSC_LINK", "CSC_KEY_PASSWORD"] },
+          "uniqueItems": true
+        },
+        "notarization": { "type": "string", "enum": ["not-applicable-for-windows-beta"] }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

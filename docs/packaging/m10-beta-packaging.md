@@ -1,4 +1,4 @@
-# M10-M13 Beta Packaging and CI
+﻿# M10-M13 Beta Packaging and CI
 
 Version: 1.2 | Status: Accepted for M10-M13 | Phase: 7 Formal Development
 
@@ -81,3 +81,9 @@ M10 时 `npm run package:dir` 在当前 Windows/Node 20.20.2 工作站超时。M
 - release channel
 
 这些后续项已记录到 `TECH_DEBT.md`。
+
+## 7. M17 Update
+
+`docs/packaging/m17-installer-release-channel.md` supersedes the M10-M13 limitation for installer target, custom icon, and local beta release channel. M17 adds an NSIS target, `apps/desktop/build/icon.svg`, `release-channel/beta.json`, release notes, and release validation scripts.
+
+Production signing/notarization and hosted update publishing are still not claimed. M17 only defines an unsigned local beta channel and environment-gated future signing policy.

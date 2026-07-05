@@ -23,7 +23,8 @@ const schemaNames = [
   "llm-request",
   "llm-response",
   "version-record",
-  "recovery-record"
+  "recovery-record",
+  "release-channel"
 ] as const;
 
 type SchemaName = (typeof schemaNames)[number];

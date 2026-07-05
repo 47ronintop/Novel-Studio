@@ -45,6 +45,9 @@ jobs:
       - name: Package preflight
         run: npm run package:check
 
+      - name: Release channel check
+        run: npm run release:check
+
       - name: Alpha gate
         run: npm run alpha:check
 

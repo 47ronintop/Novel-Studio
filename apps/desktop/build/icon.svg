@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Novel Studio">
+  <rect width="256" height="256" rx="48" fill="#111717"/>
+  <path d="M72 58h82c22 0 40 18 40 40v100H92c-11 0-20-9-20-20V58z" fill="#1f2a2a"/>
+  <path d="M92 82h60c11 0 20 9 20 20v72H98c-5 0-9-4-9-9V85c0-2 1-3 3-3z" fill="#d8f3ee"/>
+  <path d="M111 109h42M111 132h42M111 155h29" stroke="#143332" stroke-width="12" stroke-linecap="round"/>
+  <path d="M58 72h22v108c0 10 8 18 18 18H76c-10 0-18-8-18-18V72z" fill="#20b2a8"/>
+</svg>

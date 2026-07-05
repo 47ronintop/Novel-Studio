@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "1.0",
+  "channel": "nightly",
+  "appId": "",
+  "productName": "Novel Studio",
+  "version": "0.1",
+  "artifactKinds": ["zip"],
+  "publishMode": "automatic",
+  "releaseNotesPath": "release/latest.md",
+  "signing": {
+    "required": true,
+    "policy": "plain-secret",
+    "windowsCertificateEnv": ["API_KEY"],
+    "notarization": "required"
+  }
+}
