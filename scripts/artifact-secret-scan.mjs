@@ -92,6 +92,8 @@ async function scanAsar(asarPath) {
     return;
   }
 
+  assertRequiredAsarFiles(files);
+
   for (const filePath of files) {
     if (!shouldScanTextFile(filePath)) {
       continue;
@@ -104,6 +106,27 @@ async function scanAsar(asarPath) {
     }
     scanContent(buffer.toString("utf8"), `app.asar${sep}${filePath}`);
   }
+}
+
+function assertRequiredAsarFiles(files) {
+  const fileSet = new Set(files.map(normalizeAsarPath));
+  const requiredFiles = [
+    "/packages/schemas/schema/project.schema.json",
+    "/packages/schemas/schema/settings.schema.json",
+    "/packages/schemas/schema/chapter-frontmatter.schema.json",
+    "/packages/schemas/schema/plugin-registry.schema.json"
+  ];
+
+  for (const requiredFile of requiredFiles) {
+    if (!fileSet.has(requiredFile)) {
+      failures.push(`Required runtime schema missing from app.asar: ${requiredFile}`);
+    }
+  }
+}
+
+function normalizeAsarPath(filePath) {
+  const normalized = filePath.replace(/\\/g, "/");
+  return normalized.startsWith("/") ? normalized : `/${normalized}`;
 }
 
 async function scanText(filePath, displayPath) {

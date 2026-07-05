@@ -8,6 +8,7 @@ const require = createRequire(import.meta.url);
 
 interface ElectronBuilderConfig {
   readonly artifactName?: string;
+  readonly files?: readonly string[];
   readonly directories?: {
     readonly output?: string;
     readonly buildResources?: string;
@@ -51,6 +52,7 @@ describe("M17 installer and release channel", () => {
     expect(targets.has("dir")).toBe(true);
     expect(targets.has("nsis")).toBe(true);
     expect(config.artifactName).toBe("Novel-Studio-${version}-${os}-${arch}.${ext}");
+    expect(config.files).toContain("packages/schemas/schema/**");
     expect(config.directories?.buildResources).toBe("apps/desktop/build");
     expect(config.win?.icon).toBe("apps/desktop/build/icon.svg");
     expect(config.win?.forceCodeSigning).toBe(false);

@@ -108,6 +108,9 @@ async function checkElectronBuilderConfig() {
   if (!Array.isArray(config.files) || !config.files.includes("packages/*/dist/**")) {
     failures.push("Electron package files must include workspace package dist artifacts.");
   }
+  if (!Array.isArray(config.files) || !config.files.includes("packages/schemas/schema/**")) {
+    failures.push("Electron package files must include JSON Schema runtime contracts.");
+  }
   if (config.artifactName !== "Novel-Studio-${version}-${os}-${arch}.${ext}") {
     failures.push("Electron package artifactName must be stable and include version/os/arch.");
   }

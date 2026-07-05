@@ -6,7 +6,13 @@ module.exports = {
     output: process.env.NOVEL_STUDIO_PACKAGE_OUTPUT ?? "release",
     buildResources: "apps/desktop/build"
   },
-  files: ["apps/desktop/dist/**", "packages/*/dist/**", "package.json", "package-lock.json"],
+  files: [
+    "apps/desktop/dist/**",
+    "packages/*/dist/**",
+    "packages/schemas/schema/**",
+    "package.json",
+    "package-lock.json"
+  ],
   extraMetadata: {
     main: "apps/desktop/dist/main/index.js"
   },
