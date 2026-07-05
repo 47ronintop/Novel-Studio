@@ -125,7 +125,9 @@ export function createProjectDesktopApplication(
     }),
     pluginSettingsSession: createPluginSettingsSession({
       pluginRegistryPort: {
-        readPluginRegistry: () => createPluginRegistryRepository().readPluginRegistry()
+        readPluginSettings: () => createPluginRegistryRepository().readPluginSettings(),
+        setPluginEnabled: (pluginId, enabled) =>
+          createPluginRegistryRepository().setPluginEnabled(pluginId, enabled)
       }
     }),
     configStudioSession: createConfigStudioSession({

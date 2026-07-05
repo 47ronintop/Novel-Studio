@@ -100,6 +100,10 @@ export interface NovelStudioApi {
   };
   plugins: {
     loadRegistry(): Promise<Result<PluginSettingsSnapshot, UnifiedError>>;
+    setEnabled(
+      pluginId: string,
+      enabled: boolean
+    ): Promise<Result<PluginSettingsSnapshot, UnifiedError>>;
   };
   storyBible: {
     load(): Promise<Result<StoryBibleSnapshot, UnifiedError>>;

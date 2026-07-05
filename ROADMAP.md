@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.25 | Status: Active | Last Updated: 2026-07-05
+Version: 1.26 | Status: Active | Last Updated: 2026-07-06
 
 ## 目标
 
@@ -59,6 +59,7 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M39       | Timeline Workspace       | 时间线入口显示结构化事件轨道、指标和父时间线编辑入口             | Complete |
 | M40       | Project Health           | 问题面板显示 Application 层项目健康诊断和恢复引用问题            | Complete |
 | M41       | Command Palette          | 命令面板支持搜索过滤、分组、键盘选择和执行错误反馈               | Complete |
+| M42       | Plugin Management        | 插件 manifest 摘要、权限详情和项目级启用/禁用状态管理            | Complete |
 
 ## M15 完成内容
 
@@ -257,19 +258,28 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - Renderer 执行命令失败时保留命令面板并显示错误反馈，不再静默无响应。
 - M40 不包含完整跨文件引用图扫描或自动修复；M41 不包含危险命令确认流或用户自定义快捷键注册表。
 
+## M42 完成内容
+
+- 新增 `docs/productization/m42-plugin-management.md`，明确插件 manifest 摘要与启停管理的范围和非目标。
+- `PluginRegistryFileRepository` 新增 `readPluginSettings()`，读取并校验 `plugins/plugins.json` 与本地 `plugin.json` manifest，缺失/无效 manifest 以条目状态反馈给 UI。
+- `PluginRegistryFileRepository.setPluginEnabled()` 通过 schema 校验和原子写更新项目级 `plugins/plugins.json`。
+- Application、IPC、preload 和 renderer bridge 增加插件启用状态更新通道，Renderer 不直接访问文件系统。
+- Settings 插件管理区显示 display name、version、entry kind、兼容范围、requested/granted permissions、capabilities、commands/workflow steps，并提供启用/禁用按钮。
+- M42 不包含插件 marketplace、远程安装/更新、插件沙箱执行或 Workflow contribution 激活。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转、M32 时间线主视图、M33 插件管理 UI、M34 多标签编辑器、M35 宪法差距审计、M36 Workspace Layout、M37 Editor Tabs、M38 Autosave Recovery、M39 Timeline Workspace、M40 Project Health 与 M41 Command Palette。
+- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转、M32 时间线主视图、M33 插件管理 UI、M34 多标签编辑器、M35 宪法差距审计、M36 Workspace Layout、M37 Editor Tabs、M38 Autosave Recovery、M39 Timeline Workspace、M40 Project Health、M41 Command Palette 与 M42 Plugin Management。
 - M27 安装后首次使用引导已暂缓，需在核心可见功能更稳定后回补。
 - 当前产品状态是 beta productization：主干闭环可运行，但多个宪法/UI 指南能力仍是 Product Gap。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M42 Plugin Management：从只读注册表走向插件 manifest 摘要、启停状态和更明确的授权边界。
-- M39-M48 按 `docs/productization/m35-constitution-gap-audit.md` 的缺口排序推进，不再把切片完成误写成产品完整。
+- 下一步建议进入 M43 Provider Matrix：补齐宪法第3节要求的多 provider fixtures、契约测试和 UI 验证口径。
+- M43-M48 按 `docs/productization/m35-constitution-gap-audit.md` 的缺口排序推进，不再把切片完成误写成产品完整。
 
 ## 当前技术债重点
 

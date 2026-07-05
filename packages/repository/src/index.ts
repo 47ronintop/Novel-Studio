@@ -49,8 +49,14 @@ export { PluginRegistryFileRepository } from "./plugin-registry-repository.js";
 export type {
   PluginRegistryEntry,
   PluginRegistryFileRepositoryOptions,
+  PluginManifestCapability,
+  PluginManifestContribution,
+  PluginManifestPermission,
+  PluginManifestSummary,
   PluginRegistryPermissionGrant,
-  PluginRegistrySnapshot
+  PluginRegistrySnapshot,
+  PluginSettingsEntry,
+  PluginSettingsSnapshot
 } from "./plugin-registry-repository.js";
 export { RecoveryRepository } from "./recovery-repository.js";
 export { ProjectSettingsRepository } from "./settings-repository.js";

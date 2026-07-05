@@ -606,6 +606,20 @@ textarea:focus-visible,
   font-size: 12px;
 }
 
+.plugin-settings-title > div,
+.plugin-settings-meta,
+.plugin-settings-detail {
+  display: grid;
+  gap: 4px;
+}
+
+.plugin-settings-meta,
+.plugin-settings-detail {
+  color: var(--ns-muted);
+  font-size: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
 .plugin-settings-empty {
   padding: 12px;
 }

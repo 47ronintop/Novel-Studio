@@ -158,6 +158,13 @@ export function createApplicationIpcHandlers(
       return application.testModelProfileConnection(profileId);
     },
     "application:plugins:load-registry": () => application.loadPluginRegistry(),
+    "application:plugins:set-enabled": (pluginId: unknown, enabled: unknown) => {
+      if (typeof pluginId !== "string" || typeof enabled !== "boolean") {
+        return application.setPluginEnabled("", false);
+      }
+
+      return application.setPluginEnabled(pluginId, enabled);
+    },
     "application:story-bible:load": () => application.loadStoryBible(),
     "application:story-bible:save-asset": (asset: unknown) => {
       const storyBibleAsset = toStoryBibleAsset(asset);

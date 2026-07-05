@@ -145,6 +145,10 @@ export interface DesktopApplication {
     profileId: string
   ): Promise<Result<ModelConnectionResult, UnifiedError>>;
   loadPluginRegistry(): Promise<Result<PluginSettingsSnapshot, UnifiedError>>;
+  setPluginEnabled(
+    pluginId: string,
+    enabled: boolean
+  ): Promise<Result<PluginSettingsSnapshot, UnifiedError>>;
   loadConfigAsset(
     assetType: ConfigAssetType,
     assetId: string
@@ -460,6 +464,13 @@ export function createDesktopApplication(
       }
 
       return pluginSettingsSession.load();
+    },
+    async setPluginEnabled(pluginId, enabled) {
+      if (pluginSettingsSession === undefined) {
+        return pluginRegistryUnavailable();
+      }
+
+      return pluginSettingsSession.setEnabled(pluginId, enabled);
     },
     async loadConfigAsset(assetType, assetId) {
       if (configStudioSession === undefined) {

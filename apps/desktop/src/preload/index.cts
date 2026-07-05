@@ -155,7 +155,15 @@ const api: NovelStudioApi = {
   },
   plugins: {
     loadRegistry: () =>
-      invokeTyped<Result<PluginSettingsSnapshot, UnifiedError>>("application:plugins:load-registry")
+      invokeTyped<Result<PluginSettingsSnapshot, UnifiedError>>(
+        "application:plugins:load-registry"
+      ),
+    setEnabled: (pluginId: string, enabled: boolean) =>
+      invokeTyped<Result<PluginSettingsSnapshot, UnifiedError>>(
+        "application:plugins:set-enabled",
+        pluginId,
+        enabled
+      )
   },
   storyBible: {
     load: () =>

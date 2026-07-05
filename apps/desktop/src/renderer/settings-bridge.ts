@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   ModelProfile,
   NovelStudioApi,
   PluginSettingsSnapshot
@@ -17,6 +17,7 @@ export interface SettingsBridge {
   getProps(): ModelSettingsPanelProps;
   load(): Promise<ModelSettingsPanelProps>;
   loadPlugins(): Promise<ModelSettingsPanelProps>;
+  setPluginEnabled(pluginId: string, enabled: boolean): Promise<ModelSettingsPanelProps>;
   selectProfile(profileId: string): ModelSettingsPanelProps;
   updateDraft(draft: Partial<ModelSettingsDraft>): ModelSettingsPanelProps;
   newProfile(): ModelSettingsPanelProps;
@@ -65,6 +66,25 @@ export function createSettingsBridge(
     },
     async loadPlugins() {
       await loadPlugins();
+      return toProps();
+    },
+    async setPluginEnabled(pluginId, enabled) {
+      plugins = {
+        ...plugins,
+        status: "loading",
+        feedback: { kind: "info", message: "正在更新插件状态..." }
+      };
+      const result = await api.plugins.setEnabled(pluginId, enabled);
+      if (!result.ok) {
+        plugins = {
+          ...plugins,
+          status: "error",
+          feedback: { kind: "error", message: result.error.message }
+        };
+        return toProps();
+      }
+
+      plugins = toPluginProps(result.value, "插件状态已更新。");
       return toProps();
     },
     selectProfile(profileId) {
@@ -240,7 +260,8 @@ export function createSettingsBridge(
       ...(connectionStatus === undefined ? {} : { connectionStatus }),
       plugins: {
         ...plugins,
-        onRefresh: () => undefined
+        onRefresh: () => undefined,
+        onSetEnabled: () => undefined
       },
       ...(feedback === undefined ? {} : { feedback }),
       onSelectProfile: () => undefined,
@@ -263,7 +284,10 @@ function toPluginProps(
       pluginId: plugin.pluginId,
       enabled: plugin.enabled,
       manifestPath: plugin.manifestPath,
-      grantedPermissions: plugin.grantedPermissions
+      grantedPermissions: plugin.grantedPermissions,
+      manifestStatus: plugin.manifestStatus,
+      ...(plugin.manifest === undefined ? {} : { manifest: plugin.manifest }),
+      ...(plugin.manifestError === undefined ? {} : { manifestError: plugin.manifestError })
     })),
     feedback: { kind: "info", message }
   };

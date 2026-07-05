@@ -1,4 +1,4 @@
-import { CheckCircle, FilePlus, PlugZap, RefreshCw, Save, Shield, Star } from "lucide-react";
+import { CheckCircle, FilePlus, PlugZap, Power, RefreshCw, Save, Shield, Star } from "lucide-react";
 import type { ReactNode } from "react";
 
 export interface ModelSettingsProfile {
@@ -48,6 +48,36 @@ export interface PluginSettingsEntry {
   readonly enabled: boolean;
   readonly manifestPath: string;
   readonly grantedPermissions: readonly PluginSettingsPermissionGrant[];
+  readonly manifestStatus: "valid" | "missing" | "invalid";
+  readonly manifest?: {
+    readonly displayName: string;
+    readonly version: string;
+    readonly entryKind: "local-process" | "webview" | "none";
+    readonly compatibleAppVersion: {
+      readonly min: string;
+      readonly max?: string;
+    };
+    readonly capabilities: readonly {
+      readonly type: "command" | "workflow-step" | "asset-view";
+      readonly id: string;
+      readonly title: string;
+    }[];
+    readonly requestedPermissions: readonly PluginSettingsPermissionGrant[];
+    readonly contributes: {
+      readonly commands: readonly {
+        readonly id: string;
+        readonly title: string;
+      }[];
+      readonly workflowSteps: readonly {
+        readonly id: string;
+        readonly title: string;
+      }[];
+    };
+  };
+  readonly manifestError?: {
+    readonly code: string;
+    readonly message: string;
+  };
 }
 
 export interface PluginSettingsPanelProps {
@@ -55,6 +85,7 @@ export interface PluginSettingsPanelProps {
   readonly entries: readonly PluginSettingsEntry[];
   readonly feedback?: { readonly kind: "info" | "error"; readonly message: string };
   readonly onRefresh?: () => void;
+  readonly onSetEnabled?: (pluginId: string, enabled: boolean) => void;
 }
 
 export interface ModelSettingsPanelProps {
@@ -378,11 +409,68 @@ function PluginSettingsSection({
           {entries.map((plugin) => (
             <li className="plugin-settings-row" key={plugin.pluginId}>
               <div className="plugin-settings-title">
-                <strong>{plugin.pluginId}</strong>
+                <div>
+                  <strong>{plugin.manifest?.displayName ?? plugin.pluginId}</strong>
+                  <span>{plugin.pluginId}</span>
+                </div>
                 <span>{plugin.enabled ? "已启用" : "已禁用"}</span>
               </div>
-              <span>{plugin.manifestPath}</span>
-              <span>{permissionSummary(plugin.grantedPermissions)}</span>
+              <div className="plugin-settings-meta">
+                <span>Manifest: {plugin.manifestStatus}</span>
+                <span>{plugin.manifestPath}</span>
+                <span>Granted {permissionSummary(plugin.grantedPermissions)}</span>
+                {plugin.manifest === undefined ? null : (
+                  <>
+                    <span>Version {plugin.manifest.version}</span>
+                    <span>Entry {plugin.manifest.entryKind}</span>
+                    <span>
+                      App {plugin.manifest.compatibleAppVersion.min}
+                      {plugin.manifest.compatibleAppVersion.max === undefined
+                        ? "+"
+                        : ` - ${plugin.manifest.compatibleAppVersion.max}`}
+                    </span>
+                  </>
+                )}
+                {plugin.manifestError === undefined ? null : (
+                  <span>{`${plugin.manifestError.code}: ${plugin.manifestError.message}`}</span>
+                )}
+              </div>
+              {plugin.manifest === undefined ? null : (
+                <div className="plugin-settings-detail">
+                  <span>Requested {permissionSummary(plugin.manifest.requestedPermissions)}</span>
+                  <span>
+                    Capabilities{" "}
+                    {plugin.manifest.capabilities
+                      .map((capability) => `${capability.id} (${capability.type})`)
+                      .join(", ")}
+                  </span>
+                  <span>
+                    Commands{" "}
+                    {plugin.manifest.contributes.commands.length === 0
+                      ? "none"
+                      : plugin.manifest.contributes.commands
+                          .map((command) => command.id)
+                          .join(", ")}
+                  </span>
+                  <span>
+                    Workflow steps{" "}
+                    {plugin.manifest.contributes.workflowSteps.length === 0
+                      ? "none"
+                      : plugin.manifest.contributes.workflowSteps.map((step) => step.id).join(", ")}
+                  </span>
+                </div>
+              )}
+              <button
+                aria-label={`${plugin.enabled ? "Disable" : "Enable"} plugin ${
+                  plugin.manifest?.displayName ?? plugin.pluginId
+                }`}
+                className="ns-icon-text-button"
+                onClick={() => plugins?.onSetEnabled?.(plugin.pluginId, !plugin.enabled)}
+                type="button"
+              >
+                <Power aria-hidden="true" size={14} />
+                {plugin.enabled ? "Disable" : "Enable"}
+              </button>
             </li>
           ))}
         </ol>

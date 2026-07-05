@@ -404,11 +404,13 @@ describe("WorkspaceShell", () => {
             pluginId: "novel.timeline-tools",
             enabled: true,
             manifestPath: "plugins/novel.timeline-tools/plugin.json",
-            grantedPermissions: [{ permission: "asset:read", scopes: ["timeline"] }]
+            grantedPermissions: [{ permission: "asset:read", scopes: ["timeline"] }],
+            manifestStatus: "valid"
           }
         ],
         feedback: { kind: "info", message: "插件注册表已加载。" },
-        onRefresh: () => refreshCalls.push("refresh")
+        onRefresh: () => refreshCalls.push("refresh"),
+        onSetEnabled: () => refreshCalls.push("toggle")
       }
     } satisfies ModelSettingsPanelProps & {
       readonly plugins: {
@@ -421,9 +423,11 @@ describe("WorkspaceShell", () => {
             readonly permission: string;
             readonly scopes: readonly string[];
           }[];
+          readonly manifestStatus: "valid";
         }[];
         readonly feedback: { readonly kind: "info"; readonly message: string };
         readonly onRefresh: () => void;
+        readonly onSetEnabled: () => void;
       };
     };
     const tree = WorkspaceShell({

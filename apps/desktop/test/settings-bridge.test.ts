@@ -33,6 +33,8 @@ describe("M22 settings bridge", () => {
     expect(calls).toEqual(["settings.listModelProfiles", "plugins.loadRegistry"]);
     expect(props.profiles[0]?.displayName).toBe("Default Model");
     expect(props.plugins?.entries[0]?.pluginId).toBe("novel.timeline-tools");
+    expect(props.plugins?.entries[0]?.manifest?.displayName).toBe("Timeline Tools");
+    expect(props.plugins?.entries[0]?.manifest?.version).toBe("1.2.3");
     expect(props.draft.apiKeyRefInput).toBe("");
     expect(props.feedback).toEqual({
       kind: "info",
@@ -102,6 +104,18 @@ describe("M22 settings bridge", () => {
       message: "插件注册表已加载。"
     });
   });
+
+  test("toggles plugin enabled state through the preload API", async () => {
+    const calls: string[] = [];
+    const bridge = createSettingsBridge(createApi(calls));
+    await bridge.load();
+
+    const updated = await bridge.setPluginEnabled("novel.timeline-tools", false);
+
+    expect(calls).toContain("plugins.setEnabled:novel.timeline-tools:false");
+    expect(updated.plugins?.entries[0]?.enabled).toBe(false);
+    expect(updated.plugins?.feedback).toMatchObject({ kind: "info" });
+  });
 });
 
 function createApi(calls: string[]): NovelStudioApi {
@@ -109,6 +123,7 @@ function createApi(calls: string[]): NovelStudioApi {
     defaultProfileId: "model_default",
     profiles: [defaultProfile]
   };
+  let pluginEnabled = true;
 
   return {
     getShellState: async () => ({
@@ -229,17 +244,12 @@ function createApi(calls: string[]): NovelStudioApi {
     plugins: {
       loadRegistry: async () => {
         calls.push("plugins.loadRegistry");
-        return ok({
-          schemaVersion: "1.0",
-          plugins: [
-            {
-              pluginId: "novel.timeline-tools",
-              enabled: true,
-              manifestPath: "plugins/novel.timeline-tools/plugin.json",
-              grantedPermissions: [{ permission: "asset:read", scopes: ["timeline"] }]
-            }
-          ]
-        });
+        return ok(pluginSnapshot(pluginEnabled));
+      },
+      setEnabled: async (pluginId, enabled) => {
+        calls.push(`plugins.setEnabled:${pluginId}:${enabled}`);
+        pluginEnabled = enabled;
+        return ok(pluginSnapshot(pluginEnabled));
       }
     },
     storyBible: {
@@ -267,5 +277,34 @@ function createApi(calls: string[]): NovelStudioApi {
         throw new Error("not used");
       }
     }
+  };
+}
+
+function pluginSnapshot(enabled: boolean) {
+  return {
+    schemaVersion: "1.0" as const,
+    plugins: [
+      {
+        pluginId: "novel.timeline-tools",
+        enabled,
+        manifestPath: "plugins/novel.timeline-tools/plugin.json",
+        grantedPermissions: [{ permission: "asset:read", scopes: ["timeline"] }],
+        manifestStatus: "valid" as const,
+        manifest: {
+          displayName: "Timeline Tools",
+          version: "1.2.3",
+          entryKind: "none" as const,
+          compatibleAppVersion: { min: "0.1.0", max: "0.2.0" },
+          capabilities: [
+            { type: "asset-view" as const, id: "timeline.rail", title: "Timeline Rail" }
+          ],
+          requestedPermissions: [{ permission: "asset:read", scopes: ["timeline"] }],
+          contributes: {
+            commands: [{ id: "timeline.open-map", title: "Open timeline map" }],
+            workflowSteps: []
+          }
+        }
+      }
+    ]
   };
 }

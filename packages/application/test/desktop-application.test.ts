@@ -24,6 +24,35 @@ interface PluginSettingsEntry {
     readonly permission: string;
     readonly scopes: readonly string[];
   }[];
+  readonly manifestStatus: "valid" | "missing" | "invalid";
+  readonly manifest?: {
+    readonly displayName: string;
+    readonly version: string;
+    readonly entryKind: "local-process" | "webview" | "none";
+    readonly compatibleAppVersion: {
+      readonly min: string;
+      readonly max?: string;
+    };
+    readonly capabilities: readonly {
+      readonly type: "command" | "workflow-step" | "asset-view";
+      readonly id: string;
+      readonly title: string;
+    }[];
+    readonly requestedPermissions: readonly {
+      readonly permission: string;
+      readonly scopes: readonly string[];
+    }[];
+    readonly contributes: {
+      readonly commands: readonly {
+        readonly id: string;
+        readonly title: string;
+      }[];
+      readonly workflowSteps: readonly {
+        readonly id: string;
+        readonly title: string;
+      }[];
+    };
+  };
 }
 
 const chapterId = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D0";
@@ -178,17 +207,32 @@ describe("desktop application command bridge", () => {
           pluginId: "novel.timeline-tools",
           enabled: true,
           manifestPath: "plugins/novel.timeline-tools/plugin.json",
-          grantedPermissions: [{ permission: "asset:read", scopes: ["timeline"] }]
+          grantedPermissions: [{ permission: "asset:read", scopes: ["timeline"] }],
+          manifestStatus: "valid",
+          manifest: {
+            displayName: "Timeline Tools",
+            version: "1.2.3",
+            entryKind: "none",
+            compatibleAppVersion: { min: "0.1.0", max: "0.2.0" },
+            capabilities: [{ type: "asset-view", id: "timeline.rail", title: "Timeline Rail" }],
+            requestedPermissions: [{ permission: "asset:read", scopes: ["timeline"] }],
+            contributes: {
+              commands: [{ id: "timeline.open-map", title: "Open timeline map" }],
+              workflowSteps: []
+            }
+          }
         }
       ]
     };
     const application = createDesktopApplication({
       pluginSettingsSession: {
-        load: async () => ok(pluginRegistry)
+        load: async () => ok(pluginRegistry),
+        setEnabled: async () => ok(pluginRegistry)
       }
     } as Parameters<typeof createDesktopApplication>[0] & {
       readonly pluginSettingsSession: {
         load(): Promise<ReturnType<typeof ok<PluginSettingsSnapshot>>>;
+        setEnabled(): Promise<ReturnType<typeof ok<PluginSettingsSnapshot>>>;
       };
     });
     const pluginAwareApplication = application as typeof application & {
@@ -198,6 +242,50 @@ describe("desktop application command bridge", () => {
     const loaded = await pluginAwareApplication.loadPluginRegistry();
 
     expect(loaded).toEqual(ok(pluginRegistry));
+  });
+
+  test("delegates project plugin enabled changes through an injected Application session", async () => {
+    const calls: string[] = [];
+    const disabledRegistry: PluginSettingsSnapshot = {
+      schemaVersion: "1.0",
+      plugins: [
+        {
+          pluginId: "novel.timeline-tools",
+          enabled: false,
+          manifestPath: "plugins/novel.timeline-tools/plugin.json",
+          grantedPermissions: [{ permission: "asset:read", scopes: ["timeline"] }],
+          manifestStatus: "valid"
+        }
+      ]
+    };
+    const application = createDesktopApplication({
+      pluginSettingsSession: {
+        load: async () => ok(disabledRegistry),
+        setEnabled: async (pluginId: string, enabled: boolean) => {
+          calls.push(`${pluginId}:${enabled}`);
+          return ok(disabledRegistry);
+        }
+      }
+    } as Parameters<typeof createDesktopApplication>[0] & {
+      readonly pluginSettingsSession: {
+        load(): Promise<ReturnType<typeof ok<PluginSettingsSnapshot>>>;
+        setEnabled(
+          pluginId: string,
+          enabled: boolean
+        ): Promise<ReturnType<typeof ok<PluginSettingsSnapshot>>>;
+      };
+    });
+    const pluginAwareApplication = application as typeof application & {
+      setPluginEnabled(
+        pluginId: string,
+        enabled: boolean
+      ): Promise<ReturnType<typeof ok<PluginSettingsSnapshot>>>;
+    };
+
+    const updated = await pluginAwareApplication.setPluginEnabled("novel.timeline-tools", false);
+
+    expect(updated).toEqual(ok(disabledRegistry));
+    expect(calls).toEqual(["novel.timeline-tools:false"]);
   });
 
   test("rejects unknown commands at the Application boundary", () => {

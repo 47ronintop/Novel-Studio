@@ -194,6 +194,13 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
         invokeTyped<Result<PluginSettingsSnapshot, UnifiedError>>(
           ipc,
           "application:plugins:load-registry"
+        ),
+      setEnabled: (pluginId: string, enabled: boolean) =>
+        invokeTyped<Result<PluginSettingsSnapshot, UnifiedError>>(
+          ipc,
+          "application:plugins:set-enabled",
+          pluginId,
+          enabled
         )
     },
     storyBible: {

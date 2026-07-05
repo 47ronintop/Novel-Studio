@@ -39,6 +39,31 @@ describe("M8 Settings and Studio UI", () => {
           profileId: "model_default",
           status: "idle"
         }}
+        plugins={{
+          status: "loaded",
+          entries: [
+            {
+              pluginId: "novel.timeline-tools",
+              enabled: true,
+              manifestPath: "plugins/novel.timeline-tools/plugin.json",
+              grantedPermissions: [{ permission: "asset:read", scopes: ["timeline"] }],
+              manifestStatus: "valid",
+              manifest: {
+                displayName: "Timeline Tools",
+                version: "1.2.3",
+                entryKind: "none",
+                compatibleAppVersion: { min: "0.1.0", max: "0.2.0" },
+                capabilities: [{ type: "asset-view", id: "timeline.rail", title: "Timeline Rail" }],
+                requestedPermissions: [{ permission: "asset:read", scopes: ["timeline"] }],
+                contributes: {
+                  commands: [{ id: "timeline.open-map", title: "Open timeline map" }],
+                  workflowSteps: []
+                }
+              }
+            }
+          ],
+          onSetEnabled: () => undefined
+        }}
         saveStatus="idle"
         onDraftChange={() => undefined}
         onNewProfile={() => undefined}
@@ -50,6 +75,11 @@ describe("M8 Settings and Studio UI", () => {
     );
 
     expect(html).toContain("Default Model");
+    expect(html).toContain("Timeline Tools");
+    expect(html).toContain("1.2.3");
+    expect(html).toContain("timeline.rail");
+    expect(html).toContain("timeline.open-map");
+    expect(html).toContain('aria-label="Disable plugin Timeline Tools"');
     expect(html).toContain("设置");
     expect(html).toContain("模型配置");
     expect(html).toContain("隐私与安全");
