@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.18 | Status: Active | Last Updated: 2026-07-05
+Version: 1.19 | Status: Active | Last Updated: 2026-07-05
 
 ## 目标
 
@@ -48,6 +48,8 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M28       | 全局功能可用性盘点       | 高可见入口要么可用，要么明确禁用并显示中文原因                   | Complete |
 | M29       | 功能完成度盘点与命令执行 | 可见入口完成度审计、核心缺口排序、命令面板真实执行闭环           | Complete |
 | M30       | 底部面板工作区           | 底部面板 tabs 真实切换、工作流/问题/搜索/日志最小内容闭环        | Complete |
+| M31       | 搜索结果点击跳转         | 搜索结果可点击打开章节或故事圣经条目                             | Complete |
+| M32       | 时间线主视图             | 时间线入口显示真实条目列表，并可跳到故事圣经时间线编辑器         | Complete |
 
 ## M15 完成内容
 
@@ -167,17 +169,33 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - 底部面板新增工作流运行、问题、搜索、日志四个最小内容区。
 - Renderer 通过内存 shell state 切换底部 tab；UI 不直接访问文件系统，不新增真实模型调用或 AI 自动写入。
 
+## M31 完成内容
+
+- 新增 `docs/productization/m31-search-result-navigation.md`，明确搜索结果点击跳转范围和验收标准。
+- 搜索结果列表项从静态展示升级为可点击按钮，并具备中文可访问名称。
+- 点击章节结果时切回工作区，并复用 `ProjectWorkflowBridge.selectChapter` 选中章节。
+- 点击 Story Bible 或 memory 结果时切到故事圣经，并复用 `StoryBibleBridge.selectEntry` 选中条目。
+- UI 只回传结构化 `ProjectSearchResultItem`，renderer 负责桥接；不新增文件系统直连或真实模型调用。
+
+## M32 完成内容
+
+- 新增 `docs/productization/m32-timeline-main-view.md`，明确时间线主视图范围和非范围。
+- Timeline Activity 从占位说明升级为真实主视图，列出 Story Bible 中的 timeline 条目。
+- 时间线主视图支持空状态、条目标题、状态和摘要展示。
+- 点击时间线条目后切到故事圣经，并选中对应 timeline 条目进入可编辑详情。
+- M32 复用现有 Story Bible 数据结构，不新增时间轴画布、拖拽排序或文件系统直连。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点与 M30 底部面板工作区。
+- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转与 M32 时间线主视图。
 - M27 安装后首次使用引导已暂缓，需在核心可见功能更稳定后回补。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M31 核心功能缺口补齐，优先处理搜索结果跳转、时间线主视图或插件管理 UI 中最影响试用体验的一项。
+- 下一步建议进入 M33 插件管理 UI 或 M34 多标签编辑器，继续优先处理用户能直接点击但尚未形成完整闭环的高可见功能。
 
 ## 当前技术债重点
 

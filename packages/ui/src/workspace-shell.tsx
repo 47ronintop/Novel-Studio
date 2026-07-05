@@ -47,6 +47,7 @@ export interface WorkspaceShellProps {
   readonly onCommandExecute?: (commandId: ApplicationCommandId) => void;
   readonly onBottomPanelTabSelect?: ((tab: string) => void) | undefined;
   readonly onSearchResultOpen?: ((result: ProjectSearchResultItem) => void) | undefined;
+  readonly onTimelineEntryOpen?: ((entryId: string) => void) | undefined;
   readonly onActivitySelect?: (activityId: ActivityId) => void;
 }
 
@@ -253,6 +254,7 @@ export function WorkspaceShell({
   onCommandExecute,
   onBottomPanelTabSelect,
   onSearchResultOpen,
+  onTimelineEntryOpen,
   onActivitySelect
 }: WorkspaceShellProps) {
   const activeBottomPanelTab =
@@ -410,6 +412,7 @@ export function WorkspaceShell({
               studio={studio}
               storyBibleEditor={storyBibleEditor}
               onSearchResultOpen={onSearchResultOpen}
+              onTimelineEntryOpen={onTimelineEntryOpen}
             />
           )}
         </main>
@@ -853,7 +856,8 @@ function ActivityEmptyState({
   settings,
   studio,
   storyBibleEditor,
-  onSearchResultOpen
+  onSearchResultOpen,
+  onTimelineEntryOpen
 }: {
   readonly activityId: ActivityId;
   readonly aiWritingWorkflow: AiWritingWorkflowProps | undefined;
@@ -862,6 +866,7 @@ function ActivityEmptyState({
   readonly studio: ConfigStudioPanelProps | undefined;
   readonly storyBibleEditor: StoryBibleEditorProps | undefined;
   readonly onSearchResultOpen: ((result: ProjectSearchResultItem) => void) | undefined;
+  readonly onTimelineEntryOpen: ((entryId: string) => void) | undefined;
 }) {
   if (activityId === "search" && search !== undefined) {
     return <ProjectSearchView search={{ ...search, onResultOpen: onSearchResultOpen }} />;
@@ -877,6 +882,10 @@ function ActivityEmptyState({
 
   if (activityId === "studio" && studio !== undefined) {
     return <ConfigStudioPanel {...studio} />;
+  }
+
+  if (activityId === "timeline") {
+    return <TimelineMainView editor={storyBibleEditor} onTimelineEntryOpen={onTimelineEntryOpen} />;
   }
 
   if (activityId === "storyBible") {
@@ -919,6 +928,51 @@ function ActivityEmptyState({
       <div className="ns-activity-view-actions">
         <span>{copy.nextAction}</span>
       </div>
+    </section>
+  );
+}
+
+function TimelineMainView({
+  editor,
+  onTimelineEntryOpen
+}: {
+  readonly editor: StoryBibleEditorProps | undefined;
+  readonly onTimelineEntryOpen: ((entryId: string) => void) | undefined;
+}) {
+  const timelineEntries = editor?.entries.filter((entry) => entry.kind === "timeline") ?? [];
+
+  return (
+    <section className="ns-timeline-view" aria-label="时间线主视图">
+      <div className="ns-timeline-header">
+        <div>
+          <h1>时间线</h1>
+          <p>集中查看故事圣经中的时间线条目，点击后进入可编辑详情。</p>
+        </div>
+        <span>{timelineEntries.length} 条</span>
+      </div>
+
+      {timelineEntries.length === 0 ? (
+        <div className="ns-timeline-empty">当前项目还没有时间线条目。</div>
+      ) : (
+        <ol className="ns-timeline-list" aria-label="时间线条目">
+          {timelineEntries.map((entry) => (
+            <li key={entry.id}>
+              <button
+                aria-label={`打开时间线条目：${entry.title}`}
+                className="ns-timeline-entry-button"
+                onClick={() => onTimelineEntryOpen?.(entry.id)}
+                type="button"
+              >
+                <span className="ns-timeline-entry-header">
+                  <strong>{entry.title}</strong>
+                  <span>{entry.status}</span>
+                </span>
+                <span>{entry.body}</span>
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
     </section>
   );
 }

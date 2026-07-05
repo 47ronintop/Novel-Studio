@@ -389,6 +389,52 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("Hero");
   });
 
+  test("renders the timeline activity as a real main view with entry navigation", () => {
+    const application = createDesktopApplication();
+    const openedEntries: string[] = [];
+    const tree = WorkspaceShell({
+      shellState: { ...application.getShellState(), activeActivity: "timeline" },
+      commands: application.listCommands(),
+      commandPaletteOpen: false,
+      storyBibleEditor: {
+        activeKind: "timeline",
+        status: "idle",
+        entries: [
+          {
+            id: "timeline_main",
+            kind: "timeline",
+            title: "主线时间线",
+            status: "active",
+            body: "第一幕到第三幕的关键事件。"
+          }
+        ],
+        draft: {
+          kind: "timeline",
+          title: "主线时间线",
+          body: "第一幕到第三幕的关键事件。",
+          status: "active"
+        },
+        onKindSelect: () => undefined,
+        onEntrySelect: () => undefined,
+        onDraftChange: () => undefined,
+        onNewDraft: () => undefined,
+        onSave: () => undefined
+      },
+      onTimelineEntryOpen: (entryId) => openedEntries.push(entryId)
+    });
+    const openTimeline = findElementByAriaLabel(tree, "打开时间线条目：主线时间线");
+
+    expect(openTimeline).toBeDefined();
+    openTimeline?.props.onClick?.();
+    expect(openedEntries).toEqual(["timeline_main"]);
+
+    const html = renderToStaticMarkup(tree);
+    expect(html).toContain('aria-label="时间线主视图"');
+    expect(html).toContain("主线时间线");
+    expect(html).toContain("第一幕到第三幕的关键事件。");
+    expect(html).not.toContain("完整可视化编辑会在后续里程碑补齐");
+  });
+
   test("renders the M23 Studio editor view", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(

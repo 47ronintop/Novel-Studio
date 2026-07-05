@@ -53,8 +53,10 @@
 - 按用户指令跳过 M27 先完成 M28 全局功能可用性盘点：命令面板按钮接入打开行为，编辑器单 tab 与底部面板 tabs 明确禁用并显示中文原因，避免高可见入口无反馈。
 - 按用户反馈暂缓 M27 并完成 M29 功能完成度盘点与命令面板执行闭环：新增可见入口完成度审计，命令面板 safe command 支持真实执行并同步桌面 shell state。
 - 完成 M30 底部面板工作区：底部面板 tabs 支持真实切换，工作流运行、问题、搜索和日志面板提供最小中文内容闭环。
+- 完成 M31 搜索结果点击跳转：搜索结果项升级为可点击按钮，章节结果跳回工作区并选中章节，Story Bible 和 memory 结果跳到故事圣经并选中条目。
+- 完成 M32 时间线主视图：Timeline Activity 显示 Story Bible timeline 条目列表，支持空状态和点击进入故事圣经时间线编辑器。
 
 ## Notes
 
 - Phase 7 当前定义的 M0-M18 已完成。
-- 当前已完成 Post-M18 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点与 M30 底部面板工作区；M27 安装后首次使用引导暂缓；未经用户确认不得 push。
+- 当前已完成 Post-M18 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转与 M32 时间线主视图；M27 安装后首次使用引导暂缓；未经用户确认不得 push。

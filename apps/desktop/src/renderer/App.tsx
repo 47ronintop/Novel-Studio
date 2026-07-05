@@ -565,6 +565,21 @@ export function App() {
     [storyBibleBridge]
   );
 
+  const handleTimelineEntryOpen = useCallback(
+    (entryId: string) => {
+      setShellState((current) => ({
+        ...current,
+        activeActivity: "storyBible"
+      }));
+      if (storyBibleBridge === undefined) {
+        return;
+      }
+
+      setStoryBibleEditor(storyBibleBridge.selectEntry(entryId));
+    },
+    [storyBibleBridge]
+  );
+
   const handleStoryBibleDraftChange = useCallback(
     (draft: Partial<StoryBibleEditorDraft>) => {
       if (storyBibleBridge === undefined) {
@@ -799,6 +814,7 @@ export function App() {
       onCommandPaletteOpen={handleCommandPaletteOpen}
       onBottomPanelTabSelect={handleBottomPanelTabSelect}
       onSearchResultOpen={handleSearchResultOpen}
+      onTimelineEntryOpen={handleTimelineEntryOpen}
       onActivitySelect={handleActivitySelect}
     />
   );
