@@ -82,6 +82,7 @@ describe("M17 installer and release channel", () => {
     expect(manifest.signing.required).toBe(false);
     expect(manifest.signing.policy).toBe("unsigned-local-beta");
     expect(readFileSync(manifest.releaseNotesPath, "utf8")).toContain("M17 安装器与发布通道");
+    expect(readFileSync(manifest.releaseNotesPath, "utf8")).toContain("M18 插件系统边界");
   });
 
   test("release check validates the local M17 publishing contract", () => {

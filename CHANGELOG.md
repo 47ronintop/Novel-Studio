@@ -39,6 +39,7 @@
 - 完成 M17 Installer and Release Channel：新增 Windows NSIS installer 配置、应用 icon、schema 校验的 beta channel manifest、release notes、release validation scripts、installer wrapper 和 CI release channel check；发布仍为手动流程，本地 beta 签名明确为可选。
 - 完成 M18 Plugin System：新增 `PLUGIN_SYSTEM.md`、plugin manifest/registry schema 与 fixtures、`@novel-studio/plugin-engine` 权限策略、项目 `plugins/plugins.json` 默认注册表，以及插件引擎 package boundary tests。
 - 发布前文档整理：将 `STORY_BIBLE.md` 统一为中文说明，收口 `PLUGIN_SYSTEM.md` 状态，并同步 `INDEX.md` 中的文档版本和 M17 中文描述。
+- 进入 v0.1.0 beta 发布验收：更新 release notes 覆盖 M18，增强 release check 与 M17 发布通道测试，并记录最新本地 installer artifact、验证证据和非阻塞风险。
 
 ## Notes
 

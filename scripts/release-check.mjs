@@ -105,6 +105,9 @@ async function checkReleaseNotes() {
   if (!notes.includes("M17 安装器与发布通道")) {
     failures.push("Release notes must include M17 installer and release channel notes.");
   }
+  if (!notes.includes("M18 插件系统边界")) {
+    failures.push("Release notes must include M18 plugin system boundary notes.");
+  }
 }
 
 function expectScript(scripts, name, expected) {

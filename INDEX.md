@@ -33,6 +33,7 @@ Version: 1.18 | Last Updated: 2026-07-05
 | `docs/spikes/editor.md`                           | 1.0        | Accepted for M5      | 编辑器选型 spike                                        |
 | `docs/performance/m9-alpha-baseline.md`           | 1.0        | Accepted for M9      | 大型项目 fixture 与 alpha 性能基线                      |
 | `docs/packaging/m10-beta-packaging.md`            | 1.2        | Accepted for M10-M13 | 打包配置、artifact 稳定化、真实 e2e 与 CI gate          |
+| `docs/releases/v0.1.0-beta-readiness.md`          | 1.0        | Review Complete      | v0.1.0 beta 发布验收记录、产物、验证证据和剩余风险      |
 | `adr/ADR-0001-engine-runtime-language.md`         | 1.0        | Accepted             | Core Engine 运行时语言决策                              |
 | `CHANGELOG.md`                                    | 0.1.0-docs | Active               | 变更记录                                                |
 | `TECH_DEBT.md`                                    | 1.0        | Active               | 已知风险、技术债、未决项                                |
