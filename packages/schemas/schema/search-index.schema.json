@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://novel-studio.local/schemas/search-index.schema.json",
+  "title": "Novel Studio Search Index",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "generatedAt", "entryCount", "entries"],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "entryCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entry"
+      }
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "title", "text", "updatedAt", "sourceRef"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "enum": [
+            "chapter",
+            "story.character",
+            "story.world",
+            "story.outline",
+            "story.timeline",
+            "memory"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "sourceRef": {
+          "$ref": "#/$defs/sourceRef"
+        }
+      }
+    },
+    "sourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "relativePath"],
+      "properties": {
+        "kind": {
+          "enum": ["chapter", "story-asset", "memory"]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "relativePath": {
+          "type": "string",
+          "pattern": "^(?!\\.\\.)(?![A-Za-z]:)(?!/)(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$)).+"
+        }
+      }
+    }
+  }
+}

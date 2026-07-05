@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.8 | Status: Active | Last Updated: 2026-07-05
+Version: 1.9 | Status: Active | Last Updated: 2026-07-05
 
 ## 目标
 
@@ -34,9 +34,10 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 
 ## Post-M18 产品化里程碑
 
-| Milestone | 名称               | 作用                                                             | 状态     |
-| --------- | ------------------ | ---------------------------------------------------------------- | -------- |
-| M19       | Beta UX 产品化打磨 | 安装版入口可点击、顶部菜单中文化、主要 UI 文案中文化和空状态补齐 | Complete |
+| Milestone | 名称                | 作用                                                             | 状态     |
+| --------- | ------------------- | ---------------------------------------------------------------- | -------- |
+| M19       | Beta UX 产品化打磨  | 安装版入口可点击、顶部菜单中文化、主要 UI 文案中文化和空状态补齐 | Complete |
+| M20       | Search and Index UX | 项目全文搜索、可重建本地索引、Search 视图真实结果展示            | Complete |
 
 ## M15 完成内容
 
@@ -72,16 +73,25 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - 项目创建流程新增 `plugins/` 目录和默认 `plugins/plugins.json`，插件注册表落点进入 local-first 项目结构。
 - package/typecheck/build gate 纳入 `plugin-engine`，并增加 package boundary test，确保插件引擎不依赖 Repository/UI/Electron/LLM/Agent/Context/Workflow。
 
+## M20 完成内容
+
+- 新增 `docs/productization/m20-search-index-ux.md`，明确搜索索引 cache 边界、UI 行为和验收标准。
+- 新增 `search-index` JSON Schema 与 valid/invalid fixtures，搜索索引进入 schema-first contract tests。
+- 新增 `SearchIndexFileRepository`，从章节正文与 Story Bible 人物、世界观、大纲、时间线、记忆构建 `cache/indexes/search.json`。
+- 新增 `ProjectSearchSession` 与 DesktopApplication 搜索方法，未打开项目时返回稳定脱敏错误。
+- Desktop IPC/preload 增加搜索 allowlist channels，renderer 不直接访问文件系统。
+- Search Activity 从空状态升级为真实搜索面板，支持关键词查询、重建索引、索引状态和结果列表。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨。
+- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨与 M20 Search and Index UX。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议拆 M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion，不在 M19 内追加大范围业务扩展。
+- 下一步建议进入 M21 Story Bible Editing UX，随后补 M22 Settings UX Completion。
 
 ## 当前技术债重点
 

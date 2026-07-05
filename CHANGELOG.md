@@ -43,8 +43,9 @@
 - 修复安装版首次启动不可编辑/无窗口：默认 beta 项目改为在可写本地目录启动时创建/打开，运行时 JSON Schema contracts 随 `app.asar` 打包，不再依赖未打包的源码 fixture，并新增无 fixture 启动的单元测试、Electron E2E 和 packaged executable smoke。
 - 补强 beta 启动 UX：Open/Create project 接入系统文件夹选择器，Navigator 显示取消/错误反馈和 busy 状态，并用 IPC allowlist、bridge、UI 与 Electron E2E 测试覆盖正式软件式项目入口。
 - 完成 M19 Beta UX 产品化打磨：左侧 Activity Bar 可点击并切换主视图，Electron 顶部菜单中文化，工作区、命令面板、章节编辑器、模型设置和 Studio 主要 UI 文案中文化，未完成入口显示中文空状态，并重新生成本地安装器。
+- 完成 M20 Search and Index UX：新增 schema-first 搜索索引、`SearchIndexFileRepository`、Project Search Application Session、Desktop IPC/preload、Search Activity 查询面板和本地 cache 重建闭环。
 
 ## Notes
 
 - Phase 7 当前定义的 M0-M18 已完成。
-- 当前已完成 Post-M18 M19 Beta UX 产品化打磨；未经用户确认不得 push。
+- 当前已完成 Post-M18 M19 Beta UX 产品化打磨与 M20 Search and Index UX；未经用户确认不得 push。

@@ -45,6 +45,12 @@ import type {
   ProjectWorkspaceSnapshot
 } from "./project-workspace-session.js";
 import type {
+  ProjectSearchIndex,
+  ProjectSearchQuery,
+  ProjectSearchResults,
+  ProjectSearchSession
+} from "./project-search-session.js";
+import type {
   MemoryRecord,
   StoryBibleAsset,
   StoryBibleContextCandidateOptions,
@@ -86,6 +92,8 @@ export interface DesktopApplication {
     input: CreateChapterInput
   ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   selectProjectChapter(chapterId: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  rebuildProjectSearchIndex(): Promise<Result<ProjectSearchIndex, UnifiedError>>;
+  searchProject(input: ProjectSearchQuery): Promise<Result<ProjectSearchResults, UnifiedError>>;
   loadStoryBible(): Promise<Result<StoryBibleSnapshot, UnifiedError>>;
   saveStoryBibleAsset(asset: StoryBibleAsset): Promise<Result<StoryBibleAsset, UnifiedError>>;
   saveStoryBibleMemory(memory: MemoryRecord): Promise<Result<MemoryRecord, UnifiedError>>;
@@ -135,6 +143,7 @@ export interface DesktopApplicationOptions {
   readonly modelSettingsSession?: ModelSettingsSession;
   readonly configStudioSession?: ConfigStudioSession;
   readonly storyBibleSession?: StoryBibleSession;
+  readonly createProjectSearchSession?: (projectRoot: string) => ProjectSearchSession;
   readonly aiWritingWorkflowSession?: AiWritingWorkflowSession;
   readonly createAiWritingWorkflowSession?: (
     chapterEditorSession: ChapterEditorSession
@@ -173,6 +182,7 @@ export function createDesktopApplication(
   const modelSettingsSession = options.modelSettingsSession;
   const configStudioSession = options.configStudioSession;
   const storyBibleSession = options.storyBibleSession;
+  const createProjectSearchSession = options.createProjectSearchSession;
   const aiWritingWorkflowSession = options.aiWritingWorkflowSession;
   const createAiWritingWorkflowSession = options.createAiWritingWorkflowSession;
   let dynamicAiWritingWorkflowSession: AiWritingWorkflowSession | undefined;
@@ -244,6 +254,22 @@ export function createDesktopApplication(
       }
 
       return projectWorkspaceSession.selectChapter(chapterId);
+    },
+    async rebuildProjectSearchIndex() {
+      const searchSession = getProjectSearchSession();
+      if (searchSession === undefined) {
+        return projectSearchUnavailable();
+      }
+
+      return searchSession.rebuildIndex();
+    },
+    async searchProject(input) {
+      const searchSession = getProjectSearchSession();
+      if (searchSession === undefined) {
+        return projectSearchUnavailable();
+      }
+
+      return searchSession.search(input);
     },
     async loadStoryBible() {
       if (storyBibleSession === undefined) {
@@ -432,6 +458,15 @@ export function createDesktopApplication(
 
     return dynamicAiWritingWorkflowSession;
   }
+
+  function getProjectSearchSession(): ProjectSearchSession | undefined {
+    const projectRoot = projectWorkspaceSession?.getSnapshot()?.projectRoot;
+    if (projectRoot === undefined || createProjectSearchSession === undefined) {
+      return undefined;
+    }
+
+    return createProjectSearchSession(projectRoot);
+  }
 }
 
 function createInitialShellState(options: DesktopApplicationOptions): DesktopShellState {
@@ -582,6 +617,19 @@ function projectWorkspaceUnavailable<T>(): Result<T, UnifiedError> {
       recoverability: "user-action",
       suggestedAction: "Create or open a project before using project workflow commands.",
       traceId: "application-project-workspace"
+    })
+  );
+}
+
+function projectSearchUnavailable<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "PROJECT_SEARCH_UNAVAILABLE",
+      category: "UserError",
+      message: "No project search session is available.",
+      recoverability: "user-action",
+      suggestedAction: "Open a project before using project search.",
+      traceId: "application-project-search"
     })
   );
 }

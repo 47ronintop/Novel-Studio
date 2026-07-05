@@ -19,6 +19,9 @@ import type {
   ModelSettingsSnapshot,
   NovelStudioApi,
   ProjectDirectorySelection,
+  ProjectSearchIndex,
+  ProjectSearchQuery,
+  ProjectSearchResults,
   ProjectWorkspaceSnapshot,
   StoryBibleAsset,
   StoryBibleContextCandidate,
@@ -86,6 +89,12 @@ const api: NovelStudioApi = {
         "application:ai:apply-chapter-suggestion",
         suggestionId
       )
+  },
+  search: {
+    rebuildIndex: () =>
+      invokeTyped<Result<ProjectSearchIndex, UnifiedError>>("application:search:rebuild-index"),
+    query: (input: ProjectSearchQuery) =>
+      invokeTyped<Result<ProjectSearchResults, UnifiedError>>("application:search:query", input)
   },
   chapter: {
     load: () =>

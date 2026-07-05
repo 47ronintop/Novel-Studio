@@ -31,6 +31,19 @@ export type {
   NavigatorSection,
   SaveStatus
 } from "./desktop-application.js";
+export { createProjectSearchSession } from "./project-search-session.js";
+export type {
+  ProjectSearchEntryType,
+  ProjectSearchIndex,
+  ProjectSearchIndexEntry,
+  ProjectSearchQuery,
+  ProjectSearchRepositoryPort,
+  ProjectSearchResultItem,
+  ProjectSearchResults,
+  ProjectSearchSession,
+  ProjectSearchSessionOptions,
+  ProjectSearchSourceRef
+} from "./project-search-session.js";
 export { createDesktopApplication } from "./desktop-application.js";
 export type {
   CreateProjectInput,

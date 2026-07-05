@@ -31,6 +31,11 @@ import type {
 } from "./model-settings-session.js";
 import type { CreateProjectInput, ProjectWorkspaceSnapshot } from "./project-workspace-session.js";
 import type {
+  ProjectSearchIndex,
+  ProjectSearchQuery,
+  ProjectSearchResults
+} from "./project-search-session.js";
+import type {
   MemoryRecord,
   StoryBibleAsset,
   StoryBibleContextCandidate,
@@ -62,6 +67,10 @@ export interface NovelStudioApi {
     applyChapterSuggestion(
       suggestionId: string
     ): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
+  };
+  search: {
+    rebuildIndex(): Promise<Result<ProjectSearchIndex, UnifiedError>>;
+    query(input: ProjectSearchQuery): Promise<Result<ProjectSearchResults, UnifiedError>>;
   };
   chapter: {
     load(): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;

@@ -26,7 +26,8 @@ const schemaNames = [
   "recovery-record",
   "release-channel",
   "plugin-manifest",
-  "plugin-registry"
+  "plugin-registry",
+  "search-index"
 ] as const;
 
 type SchemaName = (typeof schemaNames)[number];

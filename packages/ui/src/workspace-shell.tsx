@@ -1,4 +1,9 @@
-import type { ActivityId, ApplicationCommand, DesktopShellState } from "@novel-studio/application";
+import type {
+  ActivityId,
+  ApplicationCommand,
+  DesktopShellState,
+  ProjectSearchResultItem
+} from "@novel-studio/application";
 import type { ChapterSummary } from "@novel-studio/shared";
 import type { ChapterEditorProps } from "./chapter-editor.js";
 import {
@@ -27,6 +32,7 @@ export interface WorkspaceShellProps {
   readonly chapterEditor?: ChapterEditorProps;
   readonly projectWorkflow?: ProjectWorkflowProps;
   readonly aiWritingWorkflow?: AiWritingWorkflowProps;
+  readonly search?: ProjectSearchProps;
   readonly storyBible?: StoryBibleSummaryProps;
   readonly onActivitySelect?: (activityId: ActivityId) => void;
 }
@@ -66,6 +72,21 @@ export interface AiWritingWorkflowProps {
 
 export interface StoryBibleSummaryProps {
   readonly assets: readonly StoryBibleSummaryAsset[];
+}
+
+export type ProjectSearchStatus =
+  "idle" | "indexing" | "searching" | "results-ready" | "empty" | "error";
+
+export interface ProjectSearchProps {
+  readonly query: string;
+  readonly status: ProjectSearchStatus;
+  readonly entryCount?: number;
+  readonly generatedAt?: string;
+  readonly feedback?: ProjectWorkflowFeedback;
+  readonly results: readonly ProjectSearchResultItem[];
+  readonly onQueryChange: (query: string) => void;
+  readonly onSearch: () => void;
+  readonly onRebuildIndex: () => void;
 }
 
 export interface StoryBibleSummaryAsset {
@@ -112,6 +133,7 @@ export function WorkspaceShell({
   chapterEditor,
   projectWorkflow,
   aiWritingWorkflow,
+  search,
   storyBible,
   onActivitySelect
 }: WorkspaceShellProps) {
@@ -253,6 +275,7 @@ export function WorkspaceShell({
             <ActivityEmptyState
               activityId={shellState.activeActivity}
               aiWritingWorkflow={aiWritingWorkflow}
+              search={search}
             />
           )}
         </main>
@@ -420,11 +443,17 @@ function WorkspaceEditorSurface({
 
 function ActivityEmptyState({
   activityId,
-  aiWritingWorkflow
+  aiWritingWorkflow,
+  search
 }: {
   readonly activityId: ActivityId;
   readonly aiWritingWorkflow: AiWritingWorkflowProps | undefined;
+  readonly search: ProjectSearchProps | undefined;
 }) {
+  if (activityId === "search" && search !== undefined) {
+    return <ProjectSearchView search={search} />;
+  }
+
   if (activityId === "ai") {
     return (
       <section className="ns-activity-view" aria-label="AI 工作流主视图">
@@ -455,6 +484,105 @@ function ActivityEmptyState({
       </div>
     </section>
   );
+}
+
+function ProjectSearchView({ search }: { readonly search: ProjectSearchProps }) {
+  const busy = search.status === "indexing" || search.status === "searching";
+
+  return (
+    <section className="ns-search-view" aria-label="项目全文搜索">
+      <h1>搜索项目</h1>
+      <form
+        className="ns-search-toolbar"
+        onSubmit={(event) => {
+          event.preventDefault();
+          search.onSearch();
+        }}
+      >
+        <label className="ns-search-input-label">
+          <span>关键词</span>
+          <input
+            aria-label="搜索关键词"
+            className="ns-search-input"
+            onChange={(event) => search.onQueryChange(event.currentTarget.value)}
+            placeholder="搜索章节、人物、世界观和记忆"
+            value={search.query}
+          />
+        </label>
+        <button
+          className="ns-icon-text-button"
+          disabled={busy || search.query.trim().length === 0}
+          type="submit"
+        >
+          <Search aria-hidden="true" size={14} />
+          {search.status === "searching" ? "搜索中" : "搜索"}
+        </button>
+        <button
+          className="ns-icon-text-button"
+          disabled={busy}
+          onClick={search.onRebuildIndex}
+          type="button"
+        >
+          <Clock3 aria-hidden="true" size={14} />
+          {search.status === "indexing" ? "重建中" : "重建索引"}
+        </button>
+      </form>
+
+      <div className="ns-search-meta" role="status">
+        <span>索引条目 {search.entryCount ?? 0}</span>
+        <span>
+          {search.generatedAt === undefined ? "尚未重建" : formatSearchDate(search.generatedAt)}
+        </span>
+      </div>
+
+      {search.feedback === undefined ? null : (
+        <p className="ns-project-feedback" data-kind={search.feedback.kind} role="status">
+          {search.feedback.message}
+        </p>
+      )}
+
+      {search.results.length === 0 ? (
+        <div className="ns-search-empty">
+          {search.status === "empty" ? "没有找到匹配结果。" : "输入关键词后搜索，或先重建索引。"}
+        </div>
+      ) : (
+        <ol className="ns-search-results" aria-label="搜索结果">
+          {search.results.map((result) => (
+            <li className="ns-search-result" key={result.id}>
+              <div className="ns-search-result-header">
+                <span>{searchResultTypeLabel(result.type)}</span>
+                <strong>{result.title}</strong>
+                <span>分数 {result.score}</span>
+              </div>
+              <p>{result.snippet}</p>
+              <div className="ns-search-result-source">{result.sourceRef.relativePath}</div>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+function searchResultTypeLabel(type: ProjectSearchResultItem["type"]): string {
+  switch (type) {
+    case "chapter":
+      return "章节";
+    case "story.character":
+      return "人物";
+    case "story.world":
+      return "世界观";
+    case "story.outline":
+      return "大纲";
+    case "story.timeline":
+      return "时间线";
+    case "memory":
+      return "记忆";
+  }
+}
+
+function formatSearchDate(value: string): string {
+  return `索引 ${value.slice(0, 10)} ${value.slice(11, 16)}`;
 }
 
 function activityViewCopy(activityId: Exclude<ActivityId, "workspace" | "ai">): {

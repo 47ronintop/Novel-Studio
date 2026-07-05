@@ -9,6 +9,8 @@ export const APPLICATION_IPC_CHANNELS = [
   "application:project:list-chapters",
   "application:project:create-chapter",
   "application:project:select-chapter",
+  "application:search:rebuild-index",
+  "application:search:query",
   "application:ai:generate-chapter-suggestion",
   "application:ai:apply-chapter-suggestion",
   "application:chapter:load",

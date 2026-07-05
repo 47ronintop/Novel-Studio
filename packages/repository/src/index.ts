@@ -46,6 +46,17 @@ export type {
   StoryBibleRepositoryPort,
   StoryBibleSnapshot
 } from "./story-bible-repository.js";
+export { SearchIndexFileRepository } from "./search-index-repository.js";
+export type {
+  SearchIndexEntry,
+  SearchIndexEntryType,
+  SearchIndexFileRepositoryOptions,
+  SearchIndexSnapshot,
+  SearchQueryInput,
+  SearchResultItem,
+  SearchResults,
+  SearchSourceRef
+} from "./search-index-repository.js";
 export type {
   ChapterDocument,
   ChapterDraftRepositoryPort,

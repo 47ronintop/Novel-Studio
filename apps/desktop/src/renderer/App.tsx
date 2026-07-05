@@ -7,6 +7,7 @@ import type {
 import type {
   AiWritingWorkflowProps,
   ChapterEditorProps,
+  ProjectSearchProps,
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
 import { WorkspaceShell } from "@novel-studio/ui";
@@ -15,6 +16,7 @@ import { useCallback, useEffect, useState } from "react";
 import { createAiWritingWorkflowBridge } from "./ai-writing-workflow-bridge.js";
 import { createChapterEditorBridge } from "./chapter-editor-bridge.js";
 import { createProjectWorkflowBridge } from "./project-workflow-bridge.js";
+import { createProjectSearchBridge } from "./project-search-bridge.js";
 import { createStoryBibleBridge } from "./story-bible-bridge.js";
 import { reduceRendererShortcut } from "./shortcuts.js";
 
@@ -85,6 +87,9 @@ export function App() {
   const [projectWorkflowBridge] = useState(() =>
     api === undefined ? undefined : createProjectWorkflowBridge(api)
   );
+  const [projectSearchBridge] = useState(() =>
+    api === undefined ? undefined : createProjectSearchBridge(api)
+  );
   const [storyBibleBridge] = useState(() =>
     api === undefined ? undefined : createStoryBibleBridge(api)
   );
@@ -95,6 +100,7 @@ export function App() {
   const [commands, setCommands] = useState<readonly ApplicationCommand[]>(rendererCommands);
   const [chapterEditor, setChapterEditor] = useState<ChapterEditorProps | undefined>();
   const [projectWorkflow, setProjectWorkflow] = useState(() => projectWorkflowBridge?.getProps());
+  const [projectSearch, setProjectSearch] = useState(() => projectSearchBridge?.getProps());
   const [storyBible, setStoryBible] = useState<StoryBibleSummaryProps | undefined>(() =>
     storyBibleBridge?.getProps()
   );
@@ -328,6 +334,35 @@ export function App() {
     }));
   }, []);
 
+  const handleSearchQueryChange = useCallback(
+    (query: string) => {
+      if (projectSearchBridge === undefined) {
+        return;
+      }
+
+      setProjectSearch(projectSearchBridge.setQuery(query));
+    },
+    [projectSearchBridge]
+  );
+
+  const handleProjectSearch = useCallback(() => {
+    if (projectSearchBridge === undefined) {
+      return;
+    }
+
+    setProjectSearch(projectSearchBridge.beginSearch());
+    void projectSearchBridge.search().then(setProjectSearch);
+  }, [projectSearchBridge]);
+
+  const handleRebuildSearchIndex = useCallback(() => {
+    if (projectSearchBridge === undefined) {
+      return;
+    }
+
+    setProjectSearch(projectSearchBridge.beginRebuildIndex());
+    void projectSearchBridge.rebuildIndex().then(setProjectSearch);
+  }, [projectSearchBridge]);
+
   const handleAiInstructionChange = useCallback(
     (instruction: string) => {
       if (aiWritingWorkflowBridge === undefined) {
@@ -412,6 +447,16 @@ export function App() {
               onCreateChapter: handleCreateChapter,
               onSelectChapter: handleSelectChapter
             }
+          })}
+      {...(projectSearch === undefined
+        ? {}
+        : {
+            search: {
+              ...projectSearch,
+              onQueryChange: handleSearchQueryChange,
+              onSearch: handleProjectSearch,
+              onRebuildIndex: handleRebuildSearchIndex
+            } satisfies ProjectSearchProps
           })}
       {...(interactiveChapterEditor === undefined
         ? {}

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0",
+  "generatedAt": "not-a-date",
+  "entryCount": 1,
+  "entries": [
+    {
+      "id": "chapter:ch_opening",
+      "type": "secret",
+      "title": "开篇",
+      "text": "The hero keeps a hidden oath.",
+      "sourceRef": {
+        "kind": "chapter",
+        "id": "ch_opening",
+        "relativePath": "../settings.json"
+      }
+    }
+  ]
+}

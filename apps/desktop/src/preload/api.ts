@@ -16,6 +16,9 @@ import type {
   ModelSettingsSnapshot,
   NovelStudioApi,
   ProjectDirectorySelection,
+  ProjectSearchIndex,
+  ProjectSearchQuery,
+  ProjectSearchResults,
   ProjectWorkspaceSnapshot,
   CreateProjectInput,
   MemoryRecord,
@@ -102,6 +105,19 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           ipc,
           "application:ai:apply-chapter-suggestion",
           suggestionId
+        )
+    },
+    search: {
+      rebuildIndex: () =>
+        invokeTyped<Result<ProjectSearchIndex, UnifiedError>>(
+          ipc,
+          "application:search:rebuild-index"
+        ),
+      query: (input: ProjectSearchQuery) =>
+        invokeTyped<Result<ProjectSearchResults, UnifiedError>>(
+          ipc,
+          "application:search:query",
+          input
         )
     },
     chapter: {

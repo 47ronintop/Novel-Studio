@@ -5,6 +5,7 @@ import {
   createChapterEditorSession,
   createDesktopApplication,
   createModelSettingsSession,
+  createProjectSearchSession,
   createProjectWorkspaceSession,
   createStoryBibleSession,
   resolveDefaultModelRuntimeProfile
@@ -22,6 +23,7 @@ import {
   HistoryRepository,
   ProjectFileRepository,
   ProjectSettingsRepository,
+  SearchIndexFileRepository,
   StoryBibleFileRepository
 } from "@novel-studio/repository";
 
@@ -111,6 +113,14 @@ export function createProjectDesktopApplication(
         saveMemory: (memory) => createStoryBibleRepository().saveMemory(memory)
       }
     }),
+    createProjectSearchSession: (projectRoot) =>
+      createProjectSearchSession({
+        repository: new SearchIndexFileRepository({
+          projectRoot,
+          traceId: "trace_desktop_search_index_repository",
+          ...(options.now === undefined ? {} : { now: options.now })
+        })
+      }),
     createAiWritingWorkflowSession: (activeChapterEditorSession) =>
       createAgentBackedAiWritingWorkflowSession({
         chapterEditorSession: activeChapterEditorSession,

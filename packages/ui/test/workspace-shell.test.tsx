@@ -77,6 +77,48 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("全文搜索将在索引完成后显示结果。");
   });
 
+  test("renders the M20 project search panel with results", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "search" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        search={{
+          query: "oath",
+          status: "results-ready",
+          entryCount: 4,
+          generatedAt: "2026-07-05T00:00:00.000Z",
+          results: [
+            {
+              id: "chapter:ch_opening",
+              type: "chapter",
+              title: "开篇",
+              snippet: "The hero keeps a hidden oath.",
+              score: 2,
+              sourceRef: {
+                kind: "chapter",
+                id: "ch_opening",
+                relativePath: "chapters/ch_opening.md"
+              }
+            }
+          ],
+          onQueryChange: () => undefined,
+          onSearch: () => undefined,
+          onRebuildIndex: () => undefined
+        }}
+      />
+    );
+
+    expect(html).toContain('aria-label="项目全文搜索"');
+    expect(html).toContain('aria-label="搜索关键词"');
+    expect(html).toContain("重建索引");
+    expect(html).toContain("索引条目 4");
+    expect(html).toContain("开篇");
+    expect(html).toContain("chapters/ch_opening.md");
+    expect(html).toContain("The hero keeps a hidden oath.");
+  });
+
   test("renders a chapter editor when chapter data is available", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(

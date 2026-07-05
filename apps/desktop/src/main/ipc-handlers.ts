@@ -9,6 +9,7 @@ import type {
   AiWritingSuggestionRequest,
   ModelProfile,
   MemoryRecord,
+  ProjectSearchQuery,
   StoryBibleAsset,
   StoryBibleContextCandidateOptions
 } from "@novel-studio/application";
@@ -86,6 +87,8 @@ export function createApplicationIpcHandlers(
 
       return application.selectProjectChapter(chapterId);
     },
+    "application:search:rebuild-index": () => application.rebuildProjectSearchIndex(),
+    "application:search:query": (input: unknown) => application.searchProject(toSearchQuery(input)),
     "application:ai:generate-chapter-suggestion": (request: unknown) => {
       return application.generateActiveChapterSuggestion(toAiWritingSuggestionRequest(request));
     },
@@ -416,6 +419,17 @@ function toAiWritingSuggestionRequest(value: unknown): AiWritingSuggestionReques
 
   return {
     instruction: value.instruction
+  };
+}
+
+function toSearchQuery(value: unknown): ProjectSearchQuery {
+  if (!isRecord(value) || typeof value.query !== "string") {
+    return { query: "" };
+  }
+
+  return {
+    query: value.query,
+    ...(typeof value.limit === "number" ? { limit: value.limit } : {})
   };
 }
 
