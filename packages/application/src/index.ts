@@ -11,7 +11,7 @@ export {
 } from "./command-registry.js";
 export type { ApplicationIpcChannel } from "./ipc-contract.js";
 export { APPLICATION_IPC_CHANNELS, isApplicationIpcChannel } from "./ipc-contract.js";
-export type { NovelStudioApi } from "./novel-studio-api.js";
+export type { NovelStudioApi, ProjectDirectorySelection } from "./novel-studio-api.js";
 export type {
   ChapterEditorSaveStatus,
   ChapterEditorSession,

@@ -1,6 +1,6 @@
 import { createDesktopApplication } from "@novel-studio/application";
 import type { ApplicationIpcChannel, DesktopApplication } from "@novel-studio/application";
-import type { JsonObject, JsonValue } from "@novel-studio/shared";
+import { ok, type JsonObject, type JsonValue } from "@novel-studio/shared";
 import type {
   ConfigAssetRestoreInput,
   ConfigAssetSaveInput,
@@ -18,8 +18,14 @@ export type ApplicationIpcHandlers = {
   readonly [Channel in ApplicationIpcChannel]: (...args: readonly unknown[]) => Promise<unknown>;
 };
 
+export interface ApplicationIpcHandlerOptions {
+  readonly chooseOpenProjectDirectory?: () => Promise<string | undefined>;
+  readonly chooseCreateProjectDirectory?: () => Promise<string | undefined>;
+}
+
 export function createApplicationIpcHandlers(
-  application: DesktopApplication = createDesktopApplication()
+  application: DesktopApplication = createDesktopApplication(),
+  options: ApplicationIpcHandlerOptions = {}
 ): ApplicationIpcHandlers {
   return {
     "application:get-shell-state": () => Promise.resolve(application.getShellState()),
@@ -30,6 +36,16 @@ export function createApplicationIpcHandlers(
       }
 
       return Promise.resolve(application.executeCommand(commandId));
+    },
+    "application:project:choose-open-directory": async () => {
+      const projectRoot = await options.chooseOpenProjectDirectory?.();
+
+      return ok(projectRoot === undefined ? { canceled: true } : { canceled: false, projectRoot });
+    },
+    "application:project:choose-create-directory": async () => {
+      const projectRoot = await options.chooseCreateProjectDirectory?.();
+
+      return ok(projectRoot === undefined ? { canceled: true } : { canceled: false, projectRoot });
     },
     "application:project:open": (projectRoot: unknown) => {
       if (typeof projectRoot !== "string") {

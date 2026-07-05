@@ -32,6 +32,8 @@ export interface WorkspaceShellProps {
 
 export interface ProjectWorkflowProps {
   readonly projectRootInput: string;
+  readonly status?: ProjectWorkflowStatus;
+  readonly feedback?: ProjectWorkflowFeedback;
   readonly chapters: readonly ChapterSummary[];
   readonly activeChapterId?: string;
   readonly onProjectRootChange: (projectRoot: string) => void;
@@ -39,6 +41,13 @@ export interface ProjectWorkflowProps {
   readonly onCreateProject: () => void;
   readonly onCreateChapter: () => void;
   readonly onSelectChapter: (chapterId: string) => void;
+}
+
+export type ProjectWorkflowStatus = "idle" | "opening" | "creating";
+
+export interface ProjectWorkflowFeedback {
+  readonly kind: "info" | "error";
+  readonly message: string;
 }
 
 export type AiWritingWorkflowStatus = "idle" | "generating" | "suggestion-ready" | "applied";
@@ -136,32 +145,36 @@ export function WorkspaceShell({
                 aria-label="Project path"
                 className="ns-project-path"
                 onChange={(event) => projectWorkflow.onProjectRootChange(event.currentTarget.value)}
+                placeholder="Select or type a project folder"
                 value={projectWorkflow.projectRootInput}
               />
               <div className="ns-project-actions">
                 <button
                   aria-label="Open project"
                   className="ns-icon-text-button"
+                  disabled={isProjectWorkflowBusy(projectWorkflow)}
                   onClick={projectWorkflow.onOpenProject}
                   title="Open project"
                   type="button"
                 >
                   <FolderOpen aria-hidden="true" size={14} />
-                  Open
+                  {projectWorkflow.status === "opening" ? "Opening" : "Open"}
                 </button>
                 <button
                   aria-label="Create project"
                   className="ns-icon-text-button"
+                  disabled={isProjectWorkflowBusy(projectWorkflow)}
                   onClick={projectWorkflow.onCreateProject}
                   title="Create project"
                   type="button"
                 >
                   <FolderPlus aria-hidden="true" size={14} />
-                  Create
+                  {projectWorkflow.status === "creating" ? "Creating" : "Create"}
                 </button>
                 <button
                   aria-label="Create chapter"
                   className="ns-icon-text-button"
+                  disabled={isProjectWorkflowBusy(projectWorkflow)}
                   onClick={projectWorkflow.onCreateChapter}
                   title="Create chapter"
                   type="button"
@@ -170,6 +183,15 @@ export function WorkspaceShell({
                   Chapter
                 </button>
               </div>
+              {projectWorkflow.feedback === undefined ? null : (
+                <p
+                  className="ns-project-feedback"
+                  data-kind={projectWorkflow.feedback.kind}
+                  role="status"
+                >
+                  {projectWorkflow.feedback.message}
+                </p>
+              )}
             </div>
           )}
           <ul className="ns-tree">
@@ -352,6 +374,10 @@ export function WorkspaceShell({
       />
     </div>
   );
+}
+
+function isProjectWorkflowBusy(projectWorkflow: ProjectWorkflowProps): boolean {
+  return projectWorkflow.status === "opening" || projectWorkflow.status === "creating";
 }
 
 function statusLabel(status: AiWritingWorkflowStatus): string {

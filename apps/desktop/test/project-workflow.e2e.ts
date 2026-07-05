@@ -23,6 +23,10 @@ test("creates a project, creates a chapter, edits it, and saves through Electron
 
     await expect(page.getByLabel("Project Navigator")).toBeVisible();
 
+    await page.getByLabel("Project path").fill(join(tempRoot, "Missing Project"));
+    await page.getByRole("button", { name: "Open project" }).click();
+    await expect(page.getByText("project.json could not be read.")).toBeVisible();
+
     await page.getByLabel("Project path").fill(projectRoot);
     await page.getByRole("button", { name: "Create project" }).click();
 

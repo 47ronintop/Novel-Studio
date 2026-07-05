@@ -202,6 +202,25 @@ textarea:focus-visible,
   gap: 6px;
 }
 
+.ns-project-feedback {
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  color: var(--ns-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+  padding: 7px 8px;
+}
+
+.ns-project-feedback[data-kind="error"] {
+  border-color: color-mix(in oklch, var(--ns-danger) 65%, var(--ns-border));
+  color: var(--ns-ink);
+}
+
+.ns-project-feedback[data-kind="info"] {
+  border-color: color-mix(in oklch, var(--ns-info) 65%, var(--ns-border));
+}
+
 .ns-tree-row {
   align-items: center;
   border-radius: 6px;

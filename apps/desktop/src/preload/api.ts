@@ -15,6 +15,7 @@ import type {
   ModelProfile,
   ModelSettingsSnapshot,
   NovelStudioApi,
+  ProjectDirectorySelection,
   ProjectWorkspaceSnapshot,
   CreateProjectInput,
   MemoryRecord,
@@ -49,6 +50,16 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
         )
     },
     project: {
+      chooseOpenDirectory: () =>
+        invokeTyped<Result<ProjectDirectorySelection, UnifiedError>>(
+          ipc,
+          "application:project:choose-open-directory"
+        ),
+      chooseCreateDirectory: () =>
+        invokeTyped<Result<ProjectDirectorySelection, UnifiedError>>(
+          ipc,
+          "application:project:choose-create-directory"
+        ),
       open: (projectRoot: string) =>
         invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
           ipc,

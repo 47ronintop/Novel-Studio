@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -13,12 +13,25 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     process.env["NOVEL_STUDIO_PROJECT_ROOT"] ??
     join(app.getPath("userData"), "projects", "minimal-chapter");
   const handlers = createApplicationIpcHandlers(
-    await createBootstrappedDefaultDesktopApplication({ projectRoot })
+    await createBootstrappedDefaultDesktopApplication({ projectRoot }),
+    {
+      chooseOpenProjectDirectory: () => chooseProjectDirectory("Open Novel Studio project"),
+      chooseCreateProjectDirectory: () => chooseProjectDirectory("Create Novel Studio project")
+    }
   );
 
   for (const [channel, handler] of Object.entries(handlers)) {
     ipcMain.handle(channel, (_event, ...args: readonly unknown[]) => handler(...args));
   }
+}
+
+async function chooseProjectDirectory(title: string): Promise<string | undefined> {
+  const result = await dialog.showOpenDialog({
+    title,
+    properties: ["openDirectory", "createDirectory"]
+  });
+
+  return result.canceled ? undefined : result.filePaths[0];
 }
 
 export function createMainWindow(): BrowserWindow {

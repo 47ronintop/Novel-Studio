@@ -41,6 +41,7 @@
 - 发布前文档整理：将 `STORY_BIBLE.md` 统一为中文说明，收口 `PLUGIN_SYSTEM.md` 状态，并同步 `INDEX.md` 中的文档版本和 M17 中文描述。
 - 进入 v0.1.0 beta 发布验收：更新 release notes 覆盖 M18，增强 release check 与 M17 发布通道测试，并记录最新本地 installer artifact、验证证据和非阻塞风险。
 - 修复安装版首次启动不可编辑/无窗口：默认 beta 项目改为在可写本地目录启动时创建/打开，运行时 JSON Schema contracts 随 `app.asar` 打包，不再依赖未打包的源码 fixture，并新增无 fixture 启动的单元测试、Electron E2E 和 packaged executable smoke。
+- 补强 beta 启动 UX：Open/Create project 接入系统文件夹选择器，Navigator 显示取消/错误反馈和 busy 状态，并用 IPC allowlist、bridge、UI 与 Electron E2E 测试覆盖正式软件式项目入口。
 
 ## Notes
 

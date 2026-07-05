@@ -24,29 +24,62 @@ export function createProjectWorkflowBridge(
   const createChapterId = options.createChapterId ?? (() => `ch_${Date.now().toString(36)}`);
   let projectRootInput = "";
   let snapshot: ProjectWorkspaceSnapshot | undefined;
+  let status: ProjectWorkflowProps["status"] = "idle";
+  let feedback: ProjectWorkflowProps["feedback"] | undefined;
 
   return {
     getProps: () => toProps(),
     setProjectRootInput(projectRoot) {
       projectRootInput = projectRoot;
+      feedback = undefined;
       return toProps();
     },
     async openProject() {
-      snapshot = await unwrap(api.project.open(projectRootInput));
-      projectRootInput = snapshot.projectRoot;
-      return toProps();
+      return runProjectOperation("opening", async () => {
+        const selectedProjectRoot = await resolveProjectRoot(
+          () => api.project.chooseOpenDirectory(),
+          "Open project canceled.",
+          true
+        );
+        if (selectedProjectRoot === undefined) {
+          return;
+        }
+
+        const opened = await api.project.open(selectedProjectRoot);
+        if (!opened.ok) {
+          feedback = { kind: "error", message: opened.error.message };
+          return;
+        }
+
+        snapshot = opened.value;
+        projectRootInput = snapshot.projectRoot;
+      });
     },
     async createProject() {
-      snapshot = await unwrap(
-        api.project.create({
-          projectRoot: projectRootInput,
+      return runProjectOperation("creating", async () => {
+        const selectedProjectRoot = await resolveProjectRoot(
+          () => api.project.chooseCreateDirectory(),
+          "Create project canceled.",
+          shouldUseTypedCreateRoot()
+        );
+        if (selectedProjectRoot === undefined) {
+          return;
+        }
+
+        const created = await api.project.create({
+          projectRoot: selectedProjectRoot,
           projectId: createProjectId(),
-          title: projectTitleFromRoot(projectRootInput),
+          title: projectTitleFromRoot(selectedProjectRoot),
           language: "zh-CN"
-        })
-      );
-      projectRootInput = snapshot.projectRoot;
-      return toProps();
+        });
+        if (!created.ok) {
+          feedback = { kind: "error", message: created.error.message };
+          return;
+        }
+
+        snapshot = created.value;
+        projectRootInput = snapshot.projectRoot;
+      });
     },
     async createChapter() {
       const nextOrder = (snapshot?.chapters.length ?? 0) + 1;
@@ -68,9 +101,56 @@ export function createProjectWorkflowBridge(
     }
   };
 
+  async function runProjectOperation(
+    nextStatus: NonNullable<ProjectWorkflowProps["status"]>,
+    operation: () => Promise<void>
+  ): Promise<ProjectWorkflowProps> {
+    status = nextStatus;
+    feedback = undefined;
+    try {
+      await operation();
+    } finally {
+      status = "idle";
+    }
+    return toProps();
+  }
+
+  async function resolveProjectRoot(
+    chooseDirectory: () => Promise<
+      Result<{ readonly canceled: boolean; readonly projectRoot?: string }, UnifiedError>
+    >,
+    canceledMessage: string,
+    useTypedProjectRoot: boolean
+  ): Promise<string | undefined> {
+    const typedProjectRoot = projectRootInput.trim();
+    if (useTypedProjectRoot && typedProjectRoot.length > 0) {
+      return typedProjectRoot;
+    }
+
+    const selection = await chooseDirectory();
+    if (!selection.ok) {
+      feedback = { kind: "error", message: selection.error.message };
+      return undefined;
+    }
+    if (selection.value.canceled || selection.value.projectRoot === undefined) {
+      feedback = { kind: "info", message: canceledMessage };
+      return undefined;
+    }
+
+    projectRootInput = selection.value.projectRoot;
+    return selection.value.projectRoot;
+  }
+
+  function shouldUseTypedCreateRoot(): boolean {
+    const typedProjectRoot = projectRootInput.trim();
+    return typedProjectRoot.length > 0 && typedProjectRoot !== snapshot?.projectRoot;
+  }
+
   function toProps(): ProjectWorkflowProps {
     return {
       projectRootInput,
+      ...(status === undefined ? {} : { status }),
+      ...(feedback === undefined ? {} : { feedback }),
       chapters: snapshot?.chapters ?? [],
       ...(snapshot?.activeChapterId === undefined
         ? {}

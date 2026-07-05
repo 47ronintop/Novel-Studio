@@ -282,6 +282,10 @@ export function App() {
       return;
     }
 
+    setProjectWorkflow({
+      ...projectWorkflowBridge.getProps(),
+      status: "opening"
+    });
     void projectWorkflowBridge.openProject().then(refreshProjectWorkflow);
   }, [projectWorkflowBridge, refreshProjectWorkflow]);
 
@@ -290,6 +294,10 @@ export function App() {
       return;
     }
 
+    setProjectWorkflow({
+      ...projectWorkflowBridge.getProps(),
+      status: "creating"
+    });
     void projectWorkflowBridge.createProject().then(refreshProjectWorkflow);
   }, [projectWorkflowBridge, refreshProjectWorkflow]);
 

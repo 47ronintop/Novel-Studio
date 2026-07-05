@@ -100,6 +100,11 @@ describe("WorkspaceShell", () => {
         commandPaletteOpen={false}
         projectWorkflow={{
           projectRootInput: "D:/Novel/M12",
+          status: "creating",
+          feedback: {
+            kind: "error",
+            message: "project.json could not be read."
+          },
           chapters: [
             {
               id: "ch_opening",
@@ -123,6 +128,9 @@ describe("WorkspaceShell", () => {
     expect(html).toContain('aria-label="Open project"');
     expect(html).toContain('aria-label="Create project"');
     expect(html).toContain('aria-label="Create chapter"');
+    expect(html).toContain("Creating");
+    expect(html).toContain('role="status"');
+    expect(html).toContain("project.json could not be read.");
     expect(html).toContain('aria-current="true"');
     expect(html).toContain("开篇");
   });

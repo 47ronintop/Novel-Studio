@@ -18,6 +18,7 @@ import type {
   ModelProfile,
   ModelSettingsSnapshot,
   NovelStudioApi,
+  ProjectDirectorySelection,
   ProjectWorkspaceSnapshot,
   StoryBibleAsset,
   StoryBibleContextCandidate,
@@ -41,6 +42,14 @@ const api: NovelStudioApi = {
       invokeTyped<Result<DesktopShellState, UnifiedError>>("application:execute-command", commandId)
   },
   project: {
+    chooseOpenDirectory: () =>
+      invokeTyped<Result<ProjectDirectorySelection, UnifiedError>>(
+        "application:project:choose-open-directory"
+      ),
+    chooseCreateDirectory: () =>
+      invokeTyped<Result<ProjectDirectorySelection, UnifiedError>>(
+        "application:project:choose-create-directory"
+      ),
     open: (projectRoot: string) =>
       invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
         "application:project:open",

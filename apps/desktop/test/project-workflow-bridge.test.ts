@@ -55,12 +55,70 @@ describe("project workflow bridge", () => {
       "project.selectChapter:ch_generated"
     ]);
   });
+
+  test("uses native directory selection when no project path is typed", async () => {
+    const calls: string[] = [];
+    let chapters: readonly ChapterSummary[] = [];
+    const api = createApi({
+      record: calls,
+      getChapters: () => chapters,
+      setChapters: (nextChapters) => {
+        chapters = nextChapters;
+      },
+      chooseOpenProjectRoot: "D:/Novel/Dialog Open",
+      chooseCreateProjectRoot: "D:/Novel/Dialog Create"
+    });
+    const bridge = createProjectWorkflowBridge(api, {
+      createProjectId: () => "prj_dialog"
+    });
+
+    const opened = await bridge.openProject();
+    const created = await bridge.createProject();
+
+    expect(opened.projectRootInput).toBe("D:/Novel/Dialog Open");
+    expect(created.projectRootInput).toBe("D:/Novel/Dialog Create");
+    expect(calls).toEqual([
+      "project.chooseOpenDirectory",
+      "project.open:D:/Novel/Dialog Open",
+      "project.chooseCreateDirectory",
+      "project.create:prj_dialog:Dialog Create"
+    ]);
+  });
+
+  test("reports directory selection cancellation and project errors without throwing", async () => {
+    const calls: string[] = [];
+    const api = createApi({
+      record: calls,
+      getChapters: () => [],
+      setChapters: () => undefined,
+      chooseOpenProjectRoot: undefined,
+      openErrorMessage: "project.json could not be read."
+    });
+    const bridge = createProjectWorkflowBridge(api);
+
+    const canceled = await bridge.openProject();
+    bridge.setProjectRootInput("D:/Broken Project");
+    const failed = await bridge.openProject();
+
+    expect(canceled.feedback).toEqual({
+      kind: "info",
+      message: "Open project canceled."
+    });
+    expect(failed.feedback).toEqual({
+      kind: "error",
+      message: "project.json could not be read."
+    });
+    expect(calls).toEqual(["project.chooseOpenDirectory", "project.open:D:/Broken Project"]);
+  });
 });
 
 function createApi(options: {
   readonly record: string[];
   readonly getChapters: () => readonly ChapterSummary[];
   readonly setChapters: (chapters: readonly ChapterSummary[]) => void;
+  readonly chooseOpenProjectRoot?: string;
+  readonly chooseCreateProjectRoot?: string;
+  readonly openErrorMessage?: string;
 }): NovelStudioApi {
   return {
     getShellState: async () => ({
@@ -90,8 +148,40 @@ function createApi(options: {
         })
     },
     project: {
+      chooseOpenDirectory: async () => {
+        options.record.push("project.chooseOpenDirectory");
+        return ok(
+          options.chooseOpenProjectRoot === undefined
+            ? { canceled: true }
+            : { canceled: false, projectRoot: options.chooseOpenProjectRoot }
+        );
+      },
+      chooseCreateDirectory: async () => {
+        options.record.push("project.chooseCreateDirectory");
+        return ok(
+          options.chooseCreateProjectRoot === undefined
+            ? { canceled: true }
+            : { canceled: false, projectRoot: options.chooseCreateProjectRoot }
+        );
+      },
       open: async (projectRoot) => {
         options.record.push(`project.open:${projectRoot}`);
+        if (options.openErrorMessage !== undefined) {
+          return {
+            ok: false,
+            error: {
+              schemaVersion: "1.0",
+              errorId: "err_open_failed",
+              code: "PROJECT_FILE_MISSING",
+              category: "StorageError",
+              message: options.openErrorMessage,
+              recoverability: "user-action",
+              suggestedAction: "Choose a valid Novel Studio project folder.",
+              traceId: "test",
+              createdAt: "2026-07-05T00:00:00.000Z"
+            }
+          };
+        }
         return ok({ ...emptySnapshot, projectRoot, chapters: options.getChapters() });
       },
       create: async (input) => {

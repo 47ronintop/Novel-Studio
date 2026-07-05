@@ -45,6 +45,8 @@ export interface NovelStudioApi {
     execute(commandId: string): Promise<Result<DesktopShellState, UnifiedError>>;
   };
   project: {
+    chooseOpenDirectory(): Promise<Result<ProjectDirectorySelection, UnifiedError>>;
+    chooseCreateDirectory(): Promise<Result<ProjectDirectorySelection, UnifiedError>>;
     open(projectRoot: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
     create(input: CreateProjectInput): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
     listChapters(): Promise<Result<readonly ChapterSummary[], UnifiedError>>;
@@ -102,4 +104,9 @@ export interface NovelStudioApi {
       input: ConfigAssetRestoreInput
     ): Promise<Result<ConfigAssetSnapshot, UnifiedError>>;
   };
+}
+
+export interface ProjectDirectorySelection {
+  readonly canceled: boolean;
+  readonly projectRoot?: string;
 }

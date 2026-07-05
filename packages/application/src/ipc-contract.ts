@@ -2,6 +2,8 @@ export const APPLICATION_IPC_CHANNELS = [
   "application:get-shell-state",
   "application:list-commands",
   "application:execute-command",
+  "application:project:choose-open-directory",
+  "application:project:choose-create-directory",
   "application:project:open",
   "application:project:create",
   "application:project:list-chapters",

@@ -39,6 +39,8 @@ describe("Electron security baseline", () => {
       "application:get-shell-state",
       "application:list-commands",
       "application:execute-command",
+      "application:project:choose-open-directory",
+      "application:project:choose-create-directory",
       "application:project:open",
       "application:project:create",
       "application:project:list-chapters",
@@ -85,6 +87,8 @@ describe("Electron security baseline", () => {
     await api.getShellState();
     await api.commands.list();
     await api.commands.execute("workspace.toggle-navigator");
+    await api.project.chooseOpenDirectory();
+    await api.project.chooseCreateDirectory();
     await api.chapter.load();
     await api.ai.generateChapterSuggestion({ instruction: "Continue." });
     await api.ai.applyChapterSuggestion("sug_01");
@@ -147,6 +151,8 @@ describe("Electron security baseline", () => {
       "application:get-shell-state",
       "application:list-commands",
       "application:execute-command",
+      "application:project:choose-open-directory",
+      "application:project:choose-create-directory",
       "application:chapter:load",
       "application:ai:generate-chapter-suggestion",
       "application:ai:apply-chapter-suggestion",
