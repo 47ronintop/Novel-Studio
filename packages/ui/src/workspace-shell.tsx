@@ -6,6 +6,7 @@ import type {
 } from "@novel-studio/application";
 import type { ChapterSummary } from "@novel-studio/shared";
 import type { ChapterEditorProps } from "./chapter-editor.js";
+import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
 import type { ModelSettingsPanelProps } from "./model-settings-panel.js";
 import {
   Bot,
@@ -26,6 +27,7 @@ import {
 
 import { ChapterEditor } from "./chapter-editor.js";
 import { CommandPalette } from "./command-palette.js";
+import { ConfigStudioPanel } from "./config-studio-panel.js";
 import { ModelSettingsPanel } from "./model-settings-panel.js";
 
 export interface WorkspaceShellProps {
@@ -37,6 +39,7 @@ export interface WorkspaceShellProps {
   readonly aiWritingWorkflow?: AiWritingWorkflowProps;
   readonly search?: ProjectSearchProps;
   readonly settings?: ModelSettingsPanelProps;
+  readonly studio?: ConfigStudioPanelProps;
   readonly storyBible?: StoryBibleSummaryProps;
   readonly storyBibleEditor?: StoryBibleEditorProps;
   readonly onActivitySelect?: (activityId: ActivityId) => void;
@@ -173,6 +176,7 @@ export function WorkspaceShell({
   aiWritingWorkflow,
   search,
   settings,
+  studio,
   storyBible,
   storyBibleEditor,
   onActivitySelect
@@ -317,6 +321,7 @@ export function WorkspaceShell({
               aiWritingWorkflow={aiWritingWorkflow}
               search={search}
               settings={settings}
+              studio={studio}
               storyBibleEditor={storyBibleEditor}
             />
           )}
@@ -488,12 +493,14 @@ function ActivityEmptyState({
   aiWritingWorkflow,
   search,
   settings,
+  studio,
   storyBibleEditor
 }: {
   readonly activityId: ActivityId;
   readonly aiWritingWorkflow: AiWritingWorkflowProps | undefined;
   readonly search: ProjectSearchProps | undefined;
   readonly settings: ModelSettingsPanelProps | undefined;
+  readonly studio: ConfigStudioPanelProps | undefined;
   readonly storyBibleEditor: StoryBibleEditorProps | undefined;
 }) {
   if (activityId === "search" && search !== undefined) {
@@ -506,6 +513,10 @@ function ActivityEmptyState({
 
   if (activityId === "settings" && settings !== undefined) {
     return <ModelSettingsPanel {...settings} />;
+  }
+
+  if (activityId === "studio" && studio !== undefined) {
+    return <ConfigStudioPanel {...studio} />;
   }
   if (activityId === "storyBible") {
     return (

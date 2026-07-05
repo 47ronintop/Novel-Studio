@@ -1,6 +1,6 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
+import { err, ok, type JsonObject, type Result, type UnifiedError } from "@novel-studio/shared";
 import type {
   CreateProjectInput,
   ProjectMetadata,
@@ -12,7 +12,7 @@ import { storageError, validationError } from "./errors.js";
 import { validateWithSchema } from "./schema-validation.js";
 import { writeTextAtomically } from "./atomic-write.js";
 
-interface PluginRegistryFile {
+interface PluginRegistryFile extends JsonObject {
   schemaVersion: "1.0";
   plugins: [];
 }
@@ -103,6 +103,7 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
       schemaVersion: "1.0",
       plugins: []
     };
+    const defaultConfigAssets = createDefaultConfigAssets(now);
 
     const projectValidation = await validateWithSchema("project", project);
     if (!projectValidation.valid) {
@@ -163,6 +164,28 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
         })
       );
     }
+    for (const asset of defaultConfigAssets) {
+      const validation = await validateWithSchema(asset.schemaName, asset.content);
+      if (!validation.valid) {
+        return err(
+          validationError({
+            code: "PROJECT_FILE_INVALID",
+            message: "Project default config asset failed schema validation.",
+            suggestedAction: "Fix default Studio config assets and retry.",
+            traceId: this.traceId,
+            redactedDetail: {
+              assetPath: asset.relativePath,
+              issues: validation.issues.map((issue) => ({
+                instancePath: issue.instancePath,
+                schemaPath: issue.schemaPath,
+                keyword: issue.keyword,
+                message: issue.message
+              }))
+            }
+          })
+        );
+      }
+    }
 
     try {
       await mkdir(this.options.projectRoot, { recursive: true });
@@ -176,6 +199,7 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
           "memories",
           "prompts",
           "agents",
+          "workflow",
           "workflows",
           "plugins",
           "history",
@@ -223,6 +247,17 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
     );
     if (!pluginRegistryWrite.ok) {
       return pluginRegistryWrite;
+    }
+
+    for (const asset of defaultConfigAssets) {
+      const write = await writeJsonFile(
+        join(this.options.projectRoot, asset.relativePath),
+        asset.content,
+        this.traceId
+      );
+      if (!write.ok) {
+        return write;
+      }
     }
 
     return ok({ project, settings });
@@ -279,7 +314,7 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
 
 async function writeJsonFile(
   targetPath: string,
-  content: ProjectMetadata | ProjectSettings | PluginRegistryFile,
+  content: JsonObject,
   traceId: string
 ): Promise<Result<void, UnifiedError>> {
   return writeTextAtomically({
@@ -287,4 +322,84 @@ async function writeJsonFile(
     content: `${JSON.stringify(content, null, 2)}\n`,
     traceId
   });
+}
+
+function createDefaultConfigAssets(now: string): readonly {
+  readonly schemaName: "prompt-template" | "agent-config" | "workflow-definition";
+  readonly relativePath: string;
+  readonly content: JsonObject;
+}[] {
+  return [
+    {
+      schemaName: "prompt-template",
+      relativePath: join("prompts", "prompt_reviewer_default.json"),
+      content: {
+        schemaVersion: "1.0",
+        id: "prompt_reviewer_default",
+        type: "prompt.template",
+        title: "默认审稿 Prompt",
+        status: "active",
+        promptRole: "reviewer",
+        template: "请根据 {{context.goal}} 和上下文审阅当前章节，输出结构化修改建议。",
+        variables: [
+          {
+            name: "context.goal",
+            required: true,
+            type: "string"
+          }
+        ],
+        createdAt: now,
+        updatedAt: now
+      }
+    },
+    {
+      schemaName: "agent-config",
+      relativePath: join("agents", "agent_reviewer_default.json"),
+      content: {
+        schemaVersion: "1.0",
+        id: "agent_reviewer_default",
+        type: "agent.config",
+        title: "默认审稿 Agent",
+        status: "active",
+        agentRole: "reviewer",
+        promptTemplateId: "prompt_reviewer_default",
+        inputSchemaId: "schema.agent.reviewer.input.v1",
+        outputSchemaId: "schema.agent.reviewer.output.v1",
+        modelProfileId: "model_default",
+        tools: [],
+        limits: {
+          maxRetries: 2,
+          timeoutMs: 90000
+        },
+        createdAt: now,
+        updatedAt: now
+      }
+    },
+    {
+      schemaName: "workflow-definition",
+      relativePath: join("workflow", "wf_review_chapter.json"),
+      content: {
+        schemaVersion: "1.0",
+        id: "wf_review_chapter",
+        type: "workflow.definition",
+        title: "审稿当前章节",
+        status: "active",
+        entryStepId: "step_build_context",
+        steps: [
+          {
+            id: "step_build_context",
+            kind: "context",
+            nextStepId: "step_review"
+          },
+          {
+            id: "step_review",
+            kind: "agent",
+            agentId: "agent_reviewer_default"
+          }
+        ],
+        createdAt: now,
+        updatedAt: now
+      }
+    }
+  ];
 }

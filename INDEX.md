@@ -1,6 +1,6 @@
 ﻿# INDEX - Novel Studio 文档索引
 
-Version: 1.22 | Last Updated: 2026-07-05
+Version: 1.23 | Last Updated: 2026-07-05
 
 ## 文档优先级
 
@@ -22,7 +22,7 @@ Version: 1.22 | Last Updated: 2026-07-05
 | `UI_GUIDELINES.md`                                  | 1.0        | Accepted             | UI/UX、布局、交互、设计 tokens、可访问性                |
 | `CODING_STANDARDS.md`                               | 1.0        | Accepted             | 开发规范、语言规则、分层、schema、UI 实现               |
 | `TESTING.md`                                        | 1.0        | Accepted             | 测试规范、fixtures、LLM mock、CI 门禁                   |
-| `ROADMAP.md`                                        | 1.10       | Active               | 当前里程碑、后续路线、完成状态                          |
+| `ROADMAP.md`                                        | 1.12       | Active               | 当前里程碑、后续路线、完成状态                          |
 | `STORY_BIBLE.md`                                    | 1.0        | Accepted for M16     | Story Bible 资产、仓储、Context 候选和最小 UI 闭环      |
 | `docs/packaging/m17-installer-release-channel.md`   | 1.0        | Accepted for M17     | 安装器目标、发布通道 manifest、release notes 和签名策略 |
 | `PLUGIN_SYSTEM.md`                                  | 1.0        | Accepted for M18     | 插件 manifest、权限、注册表、运行时边界和测试要求       |
@@ -30,6 +30,7 @@ Version: 1.22 | Last Updated: 2026-07-05
 | `docs/productization/m20-search-index-ux.md`        | 1.0        | Complete             | 项目全文搜索、可重建索引、Search UI 和验收标准          |
 | `docs/productization/m21-story-bible-editing-ux.md` | 1.0        | Complete             | Story Bible 编辑入口、表单、保存闭环和验收标准          |
 | `docs/productization/m22-settings-ux-completion.md` | 1.0        | Complete             | 设置页模型配置、连接测试、隐私安全提示和验收标准        |
+| `docs/productization/m23-studio-ux-completion.md`   | 1.0        | Complete             | Studio 配置资产选择、JSON 编辑、保存和版本恢复闭环      |
 | `LLM_ADAPTER.md`                                    | 1.0        | Accepted for M6      | Provider-neutral 模型调用边界                           |
 | `WORKFLOW_ENGINE.md`                                | 1.0        | Accepted for M7.1    | 确定性 workflow 状态机                                  |
 | `CONTEXT_ENGINE.md`                                 | 1.0        | Accepted for M7.2    | Context Bundle、token budget、trace                     |
@@ -53,7 +54,7 @@ Version: 1.22 | Last Updated: 2026-07-05
 | Phase 5 开发规范      | Complete | `CODING_STANDARDS.md`、`TESTING.md` | 已完成     |
 | Phase 6 Task Planning | Complete | `ROADMAP.md`                        | 已完成     |
 | Phase 7 正式开发      | Complete | M0-M18 已完成                       | 已完成     |
-| Post-M18 产品化打磨   | Active   | M19-M22 已完成                      | 下一步 M23 |
+| Post-M18 产品化打磨   | Active   | M19-M23 已完成                      | 下一步 M24 |
 
 ## 当前本地状态
 
@@ -62,5 +63,6 @@ Version: 1.22 | Last Updated: 2026-07-05
 - 当前已完成 M20 Search and Index UX。
 - 当前已完成 M21 Story Bible Editing UX。
 - 当前已完成 M22 Settings UX Completion。
+- 当前已完成 M23 Studio UX Completion。
 - 未经用户确认不得 push。
 - 当前本地 artifact 位于被忽略的 `release/` 目录，不提交到仓库。

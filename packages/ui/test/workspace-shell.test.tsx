@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 
 import { createDesktopApplication } from "@novel-studio/application";
-import { WorkspaceShell } from "@novel-studio/ui";
+import { WorkspaceShell } from "../src/index.js";
 
 describe("WorkspaceShell", () => {
   test("renders the desktop IDE workspace regions", () => {
@@ -292,5 +292,43 @@ describe("WorkspaceShell", () => {
     expect(html).toContain('aria-label="设定正文"');
     expect(html).toContain("保存设定");
     expect(html).toContain("Hero");
+  });
+
+  test("renders the M23 Studio editor view", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "studio" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        studio={{
+          assets: [
+            {
+              assetType: "prompt",
+              assetId: "prompt_reviewer_default",
+              title: "默认审稿 Prompt"
+            }
+          ],
+          selectedAsset: {
+            assetType: "prompt",
+            assetId: "prompt_reviewer_default",
+            title: "默认审稿 Prompt",
+            validationStatus: "valid",
+            content: '{\n  "schemaVersion": "1.0"\n}'
+          },
+          versions: [],
+          status: "idle",
+          onAssetSelect: () => undefined,
+          onContentChange: () => undefined,
+          onSave: () => undefined,
+          onRestoreVersion: () => undefined
+        }}
+      />
+    );
+
+    expect(html).toContain('aria-label="创作系统工作台"');
+    expect(html).toContain("默认审稿 Prompt");
+    expect(html).toContain("保存配置资产");
+    expect(html).toContain("版本历史");
   });
 });

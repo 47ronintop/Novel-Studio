@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.11 | Status: Active | Last Updated: 2026-07-05
+Version: 1.12 | Status: Active | Last Updated: 2026-07-05
 
 ## 目标
 
@@ -40,6 +40,7 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M20       | Search and Index UX    | 项目全文搜索、可重建本地索引、Search 视图真实结果展示            | Complete |
 | M21       | Story Bible Editing UX | 人物、世界观、大纲、时间线和记忆的可编辑 UI 闭环                 | Complete |
 | M22       | Settings UX Completion | 设置页模型配置、默认 profile、连接测试、隐私安全提示的可用闭环   | Complete |
+| M23       | Studio UX Completion   | Prompt/Agent/Workflow 配置资产的可选择、可编辑、可保存工作台     | Complete |
 
 ## M15 完成内容
 
@@ -100,16 +101,24 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - 新增 renderer `SettingsBridge`，通过 preload API 加载、保存、设默认和测试 model profile；UI 不直接访问文件系统。
 - 密钥值仍不显示、不落盘；编辑表单留空时沿用已有 `secret://` 引用，连接测试继续通过注入 tester。
 
+## M23 完成内容
+
+- 新增 `docs/productization/m23-studio-ux-completion.md`，明确 Studio 工作台范围、交互、数据边界和验收标准。
+- 新建项目默认创建 `prompt_reviewer_default`、`agent_reviewer_default` 和 `wf_review_chapter` 三个可编辑配置资产。
+- Studio Activity 从空状态升级为真实工作台，支持配置资产列表、JSON 编辑器、保存按钮和版本历史区域。
+- 新增 renderer `StudioBridge`，通过 preload API 加载、切换、编辑、保存和恢复 Prompt/Agent/Workflow 配置资产。
+- 保存前会阻止无效 JSON；schema 校验、历史快照和恢复仍由 Application/Repository 边界完成，UI 不直接访问文件系统。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX 与 M22 Settings UX Completion。
+- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion 与 M23 Studio UX Completion。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M23 Studio UX Completion。
+- 下一步建议进入 M24 Workflow Run Observability，补齐工作流运行 trace、Context bundle 摘要、Agent step 状态和错误诊断视图。
 
 ## 当前技术债重点
 

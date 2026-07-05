@@ -49,6 +49,15 @@ describe("M12 project workflow repository support", () => {
       schemaVersion: "1.0",
       plugins: []
     });
+    expect(
+      await readFile(join(projectRoot, "prompts", "prompt_reviewer_default.json"), "utf8")
+    ).toContain("默认审稿 Prompt");
+    expect(
+      await readFile(join(projectRoot, "agents", "agent_reviewer_default.json"), "utf8")
+    ).toContain("默认审稿 Agent");
+    expect(
+      await readFile(join(projectRoot, "workflow", "wf_review_chapter.json"), "utf8")
+    ).toContain("审稿当前章节");
   });
 
   test("creates, lists, and reads chapters in project order", async () => {

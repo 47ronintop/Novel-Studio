@@ -10,8 +10,10 @@ export type {
 export { ConfigStudioPanel } from "./config-studio-panel.js";
 export type {
   ConfigStudioAsset,
+  ConfigStudioAssetSummary,
   ConfigStudioAssetType,
   ConfigStudioPanelProps,
+  ConfigStudioStatus,
   ConfigStudioVersionEntry,
   ConfigValidationStatus
 } from "./config-studio-panel.js";

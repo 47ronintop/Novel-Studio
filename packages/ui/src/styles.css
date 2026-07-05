@@ -1055,6 +1055,179 @@ textarea:focus-visible,
   justify-content: space-between;
 }
 
+.config-studio-panel {
+  display: grid;
+  gap: 14px;
+  height: 100%;
+  min-height: 0;
+  padding: 18px;
+}
+
+.config-studio-header {
+  align-items: start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.config-studio-header h1,
+.config-studio-editor-header h2,
+.config-studio-versions h3 {
+  margin: 0;
+}
+
+.config-studio-header h1 {
+  font-size: 20px;
+}
+
+.config-studio-header p,
+.config-studio-editor-header p,
+.config-studio-versions p {
+  color: var(--ns-muted);
+  line-height: 1.45;
+  margin: 6px 0 0;
+}
+
+.config-studio-status {
+  border: 1px solid color-mix(in oklch, var(--ns-primary) 45%, var(--ns-border));
+  border-radius: 999px;
+  color: var(--ns-primary-strong);
+  flex: 0 0 auto;
+  font-size: 12px;
+  min-height: 26px;
+  padding: 4px 10px;
+}
+
+.config-studio-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(200px, 260px) minmax(0, 1fr) minmax(220px, 280px);
+  min-height: 0;
+}
+
+.config-studio-assets,
+.config-studio-editor,
+.config-studio-versions {
+  background: var(--ns-surface);
+  border: 1px solid var(--ns-border);
+  border-radius: 8px;
+  min-width: 0;
+}
+
+.config-studio-assets {
+  align-content: start;
+  display: grid;
+  gap: 6px;
+  overflow: auto;
+  padding: 10px;
+}
+
+.config-studio-section-title {
+  align-items: center;
+  color: var(--ns-muted);
+  display: flex;
+  font-size: 12px;
+  gap: 6px;
+  min-height: 26px;
+}
+
+.config-studio-asset-button {
+  background: transparent;
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  color: var(--ns-muted);
+  cursor: pointer;
+  display: grid;
+  gap: 5px;
+  min-height: 54px;
+  padding: 8px 9px;
+  text-align: left;
+}
+
+.config-studio-asset-button:hover,
+.config-studio-asset-button[data-selected="true"] {
+  border-color: color-mix(in oklch, var(--ns-primary) 70%, var(--ns-border));
+  color: var(--ns-ink);
+}
+
+.config-studio-asset-button span:first-child {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.config-studio-asset-button span:last-child,
+.config-studio-editor-header > span {
+  color: var(--ns-muted);
+  font-size: 12px;
+}
+
+.config-studio-editor {
+  display: grid;
+  gap: 10px;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  padding: 12px;
+}
+
+.config-studio-editor-header {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.config-studio-editor textarea {
+  background: var(--ns-bg);
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  color: var(--ns-ink);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  min-height: 0;
+  padding: 12px;
+  resize: none;
+  width: 100%;
+}
+
+.config-studio-versions {
+  align-content: start;
+  display: grid;
+  gap: 10px;
+  overflow: auto;
+  padding: 12px;
+}
+
+.config-studio-versions article {
+  align-items: center;
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 9px;
+}
+
+.config-studio-versions time {
+  color: var(--ns-muted);
+  font-size: 12px;
+  grid-column: 1;
+}
+
+.config-studio-versions button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  color: var(--ns-ink);
+  cursor: pointer;
+  display: inline-flex;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
+}
+
 .ns-bottom-panel {
   background: var(--ns-surface);
   border-top: 1px solid var(--ns-border);
@@ -1130,6 +1303,14 @@ textarea:focus-visible,
   }
 
   .ns-inspector {
+    display: none;
+  }
+
+  .config-studio-grid {
+    grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  }
+
+  .config-studio-versions {
     display: none;
   }
 }

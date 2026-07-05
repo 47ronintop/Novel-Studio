@@ -7,6 +7,7 @@ import type {
 import type {
   AiWritingWorkflowProps,
   ChapterEditorProps,
+  ConfigStudioPanelProps,
   ModelSettingsDraft,
   ModelSettingsPanelProps,
   ProjectSearchProps,
@@ -24,6 +25,7 @@ import { createProjectWorkflowBridge } from "./project-workflow-bridge.js";
 import { createProjectSearchBridge } from "./project-search-bridge.js";
 import { createStoryBibleBridge } from "./story-bible-bridge.js";
 import { createSettingsBridge } from "./settings-bridge.js";
+import { createStudioBridge } from "./studio-bridge.js";
 import { reduceRendererShortcut } from "./shortcuts.js";
 
 declare global {
@@ -105,6 +107,7 @@ export function App() {
   const [aiWritingWorkflowBridge] = useState(() =>
     api === undefined ? undefined : createAiWritingWorkflowBridge(api)
   );
+  const [studioBridge] = useState(() => (api === undefined ? undefined : createStudioBridge(api)));
   const [shellState, setShellState] = useState<DesktopShellState>(rendererShellState);
   const [commands, setCommands] = useState<readonly ApplicationCommand[]>(rendererCommands);
   const [chapterEditor, setChapterEditor] = useState<ChapterEditorProps | undefined>();
@@ -120,6 +123,7 @@ export function App() {
   const [aiWritingWorkflow, setAiWritingWorkflow] = useState(() =>
     aiWritingWorkflowBridge?.getProps()
   );
+  const [studio, setStudio] = useState(() => studioBridge?.getProps());
   const [shortcutState, setShortcutState] = useState({ commandPaletteOpen: false });
 
   useEffect(() => {
@@ -217,6 +221,24 @@ export function App() {
     };
   }, [settingsBridge]);
 
+  useEffect(() => {
+    if (studioBridge === undefined) {
+      return;
+    }
+
+    let active = true;
+
+    void studioBridge.load().then((nextStudio) => {
+      if (active) {
+        setStudio(nextStudio);
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [studioBridge]);
+
   const handleBodyChange = useCallback(
     (nextBody: string) => {
       if (chapterBridge === undefined) {
@@ -306,8 +328,11 @@ export function App() {
       if (settingsBridge !== undefined) {
         setSettings(await settingsBridge.load());
       }
+      if (studioBridge !== undefined) {
+        setStudio(await studioBridge.load());
+      }
     },
-    [api, chapterBridge, storyBibleBridge, settingsBridge]
+    [api, chapterBridge, settingsBridge, storyBibleBridge, studioBridge]
   );
 
   const handleProjectRootChange = useCallback(
@@ -566,6 +591,53 @@ export function App() {
     [settingsBridge]
   );
 
+  const handleStudioAssetSelect = useCallback<NonNullable<ConfigStudioPanelProps["onAssetSelect"]>>(
+    (assetType, assetId) => {
+      if (studioBridge === undefined) {
+        return;
+      }
+
+      void studioBridge.selectAsset(assetType, assetId).then(setStudio);
+    },
+    [studioBridge]
+  );
+
+  const handleStudioContentChange = useCallback<
+    NonNullable<ConfigStudioPanelProps["onContentChange"]>
+  >(
+    (nextContent) => {
+      if (studioBridge === undefined) {
+        return;
+      }
+
+      setStudio(studioBridge.updateContent(nextContent));
+    },
+    [studioBridge]
+  );
+
+  const handleStudioSave = useCallback<NonNullable<ConfigStudioPanelProps["onSave"]>>(() => {
+    if (studioBridge === undefined) {
+      return;
+    }
+
+    setStudio(studioBridge.beginSave());
+    void studioBridge.save().then(setStudio);
+  }, [studioBridge]);
+
+  const handleStudioRestoreVersion = useCallback<
+    NonNullable<ConfigStudioPanelProps["onRestoreVersion"]>
+  >(
+    (versionId) => {
+      if (studioBridge === undefined) {
+        return;
+      }
+
+      setStudio(studioBridge.beginRestore());
+      void studioBridge.restoreVersion(versionId).then(setStudio);
+    },
+    [studioBridge]
+  );
+
   const interactiveChapterEditor =
     chapterEditor === undefined
       ? undefined
@@ -623,6 +695,17 @@ export function App() {
               onTestConnection: handleTestSettingsConnection,
               onMakeDefault: handleMakeSettingsDefault
             } satisfies ModelSettingsPanelProps
+          })}
+      {...(studio === undefined
+        ? {}
+        : {
+            studio: {
+              ...studio,
+              onAssetSelect: handleStudioAssetSelect,
+              onContentChange: handleStudioContentChange,
+              onSave: handleStudioSave,
+              onRestoreVersion: handleStudioRestoreVersion
+            } satisfies ConfigStudioPanelProps
           })}
       {...(interactiveChapterEditor === undefined
         ? {}

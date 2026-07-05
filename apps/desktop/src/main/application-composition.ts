@@ -3,6 +3,7 @@ import { join } from "node:path";
 import {
   createAgentBackedAiWritingWorkflowSession,
   createChapterEditorSession,
+  createConfigStudioSession,
   createDesktopApplication,
   createModelSettingsSession,
   createProjectSearchSession,
@@ -20,6 +21,7 @@ import type {
 import { createLlmAdapter, type LlmProvider } from "@novel-studio/llm-adapter";
 import {
   ChapterFileRepository,
+  ConfigAssetRepository,
   HistoryRepository,
   ProjectFileRepository,
   ProjectSettingsRepository,
@@ -106,6 +108,15 @@ export function createProjectDesktopApplication(
         ? {}
         : { connectionTester: options.modelConnectionTester })
     }),
+    configStudioSession: createConfigStudioSession({
+      configAssetPort: {
+        readConfigAsset: (assetType, assetId) =>
+          createConfigAssetRepository().readConfigAsset(assetType, assetId),
+        writeConfigAsset: (input) => createConfigAssetRepository().writeConfigAsset(input),
+        restoreConfigAssetVersion: (input) =>
+          createConfigAssetRepository().restoreConfigAssetVersion(input)
+      }
+    }),
     storyBibleSession: createStoryBibleSession({
       repository: {
         readStoryBible: () => createStoryBibleRepository().readStoryBible(),
@@ -163,6 +174,14 @@ export function createProjectDesktopApplication(
     return new StoryBibleFileRepository({
       projectRoot: projectWorkspaceSession.getSnapshot()?.projectRoot ?? options.projectRoot,
       traceId: "trace_desktop_story_bible_repository"
+    });
+  }
+
+  function createConfigAssetRepository(): ConfigAssetRepository {
+    return new ConfigAssetRepository({
+      projectRoot: projectWorkspaceSession.getSnapshot()?.projectRoot ?? options.projectRoot,
+      traceId: "trace_desktop_config_asset_repository",
+      historyRepository
     });
   }
 }
