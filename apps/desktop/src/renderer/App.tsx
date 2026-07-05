@@ -8,6 +8,9 @@ import type {
   AiWritingWorkflowProps,
   ChapterEditorProps,
   ProjectSearchProps,
+  StoryBibleEditorDraft,
+  StoryBibleEditorKind,
+  StoryBibleEditorProps,
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
 import { WorkspaceShell } from "@novel-studio/ui";
@@ -104,6 +107,9 @@ export function App() {
   const [storyBible, setStoryBible] = useState<StoryBibleSummaryProps | undefined>(() =>
     storyBibleBridge?.getProps()
   );
+  const [storyBibleEditor, setStoryBibleEditor] = useState(() =>
+    storyBibleBridge?.getEditorProps()
+  );
   const [aiWritingWorkflow, setAiWritingWorkflow] = useState(() =>
     aiWritingWorkflowBridge?.getProps()
   );
@@ -177,6 +183,7 @@ export function App() {
     void storyBibleBridge.load().then((nextStoryBible) => {
       if (active) {
         setStoryBible(nextStoryBible);
+        setStoryBibleEditor(storyBibleBridge.getEditorProps());
       }
     });
 
@@ -264,10 +271,12 @@ export function App() {
         setShellState(await api.getShellState());
       }
       if (chapterBridge !== undefined && nextWorkflow.activeChapterId !== undefined) {
+        setChapterEditor(undefined);
         setChapterEditor(await chapterBridge.load());
       }
       if (storyBibleBridge !== undefined) {
         setStoryBible(await storyBibleBridge.load());
+        setStoryBibleEditor(storyBibleBridge.getEditorProps());
       }
     },
     [api, chapterBridge, storyBibleBridge]
@@ -413,6 +422,59 @@ export function App() {
     });
   }, [aiWritingWorkflowBridge]);
 
+  const handleStoryBibleKindSelect = useCallback(
+    (kind: StoryBibleEditorKind) => {
+      if (storyBibleBridge === undefined) {
+        return;
+      }
+
+      setStoryBibleEditor(storyBibleBridge.selectKind(kind));
+    },
+    [storyBibleBridge]
+  );
+
+  const handleStoryBibleEntrySelect = useCallback(
+    (entryId: string) => {
+      if (storyBibleBridge === undefined) {
+        return;
+      }
+
+      setStoryBibleEditor(storyBibleBridge.selectEntry(entryId));
+    },
+    [storyBibleBridge]
+  );
+
+  const handleStoryBibleDraftChange = useCallback(
+    (draft: Partial<StoryBibleEditorDraft>) => {
+      if (storyBibleBridge === undefined) {
+        return;
+      }
+
+      setStoryBibleEditor(storyBibleBridge.updateDraft(draft));
+    },
+    [storyBibleBridge]
+  );
+
+  const handleNewStoryBibleDraft = useCallback(() => {
+    if (storyBibleBridge === undefined || storyBibleEditor === undefined) {
+      return;
+    }
+
+    setStoryBibleEditor(storyBibleBridge.selectKind(storyBibleEditor.activeKind));
+  }, [storyBibleBridge, storyBibleEditor]);
+
+  const handleSaveStoryBibleDraft = useCallback(() => {
+    if (storyBibleBridge === undefined) {
+      return;
+    }
+
+    setStoryBibleEditor(storyBibleBridge.beginSave());
+    void storyBibleBridge.saveDraft().then((nextStoryBibleEditor) => {
+      setStoryBibleEditor(nextStoryBibleEditor);
+      setStoryBible(storyBibleBridge.getProps());
+    });
+  }, [storyBibleBridge]);
+
   const interactiveChapterEditor =
     chapterEditor === undefined
       ? undefined
@@ -462,6 +524,18 @@ export function App() {
         ? {}
         : { chapterEditor: interactiveChapterEditor })}
       {...(storyBible === undefined ? {} : { storyBible })}
+      {...(storyBibleEditor === undefined
+        ? {}
+        : {
+            storyBibleEditor: {
+              ...storyBibleEditor,
+              onKindSelect: handleStoryBibleKindSelect,
+              onEntrySelect: handleStoryBibleEntrySelect,
+              onDraftChange: handleStoryBibleDraftChange,
+              onNewDraft: handleNewStoryBibleDraft,
+              onSave: handleSaveStoryBibleDraft
+            } satisfies StoryBibleEditorProps
+          })}
       shellState={shellState}
       commands={commands}
       commandPaletteOpen={shortcutState.commandPaletteOpen}

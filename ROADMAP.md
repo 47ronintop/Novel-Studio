@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.9 | Status: Active | Last Updated: 2026-07-05
+Version: 1.10 | Status: Active | Last Updated: 2026-07-05
 
 ## 目标
 
@@ -34,10 +34,11 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 
 ## Post-M18 产品化里程碑
 
-| Milestone | 名称                | 作用                                                             | 状态     |
-| --------- | ------------------- | ---------------------------------------------------------------- | -------- |
-| M19       | Beta UX 产品化打磨  | 安装版入口可点击、顶部菜单中文化、主要 UI 文案中文化和空状态补齐 | Complete |
-| M20       | Search and Index UX | 项目全文搜索、可重建本地索引、Search 视图真实结果展示            | Complete |
+| Milestone | 名称                   | 作用                                                             | 状态     |
+| --------- | ---------------------- | ---------------------------------------------------------------- | -------- |
+| M19       | Beta UX 产品化打磨     | 安装版入口可点击、顶部菜单中文化、主要 UI 文案中文化和空状态补齐 | Complete |
+| M20       | Search and Index UX    | 项目全文搜索、可重建本地索引、Search 视图真实结果展示            | Complete |
+| M21       | Story Bible Editing UX | 人物、世界观、大纲、时间线和记忆的可编辑 UI 闭环                 | Complete |
 
 ## M15 完成内容
 
@@ -82,16 +83,24 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - Desktop IPC/preload 增加搜索 allowlist channels，renderer 不直接访问文件系统。
 - Search Activity 从空状态升级为真实搜索面板，支持关键词查询、重建索引、索引状态和结果列表。
 
+## M21 完成内容
+
+- 新增 `docs/productization/m21-story-bible-editing-ux.md`，明确 Story Bible 编辑体验范围、交互、数据边界和验收标准。
+- Activity Bar 新增“故事圣经”入口，主视图提供人物、世界观、大纲、时间线和记忆五类编辑入口。
+- `WorkspaceShell` 新增 Story Bible 编辑器表单，支持分类切换、条目选择、新建草稿、编辑标题/正文和保存反馈。
+- Renderer `StoryBibleBridge` 支持选择分类、选择条目、更新草稿、保存 asset/memory，并在保存后重新加载 snapshot。
+- 保存仍走既有 `storyBible.saveAsset` / `storyBible.saveMemory` preload API；UI 不直接访问文件系统，不引入 AI 自动写入。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨与 M20 Search and Index UX。
+- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX 与 M21 Story Bible Editing UX。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M21 Story Bible Editing UX，随后补 M22 Settings UX Completion。
+- 下一步建议进入 M22 Settings UX Completion。
 
 ## 当前技术债重点
 

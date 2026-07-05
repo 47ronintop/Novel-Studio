@@ -59,7 +59,8 @@ import type {
 } from "./story-bible-session.js";
 import type { ContextCandidate } from "@novel-studio/context-engine";
 
-export type ActivityId = "workspace" | "search" | "timeline" | "ai" | "studio" | "settings";
+export type ActivityId =
+  "workspace" | "search" | "storyBible" | "timeline" | "ai" | "studio" | "settings";
 
 export type SaveStatus = "Saved" | "Saving" | "Unsaved" | "Recovery available";
 

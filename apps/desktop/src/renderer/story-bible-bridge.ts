@@ -1,21 +1,127 @@
-import type { MemoryRecord, NovelStudioApi, StoryBibleSnapshot } from "@novel-studio/application";
+import type {
+  MemoryRecord,
+  NovelStudioApi,
+  StoryBibleAsset,
+  StoryBibleSnapshot
+} from "@novel-studio/application";
 import type { Result, UnifiedError } from "@novel-studio/shared";
-import type { StoryBibleSummaryAsset, StoryBibleSummaryProps } from "@novel-studio/ui";
+import type {
+  StoryBibleEditorDraft,
+  StoryBibleEditorEntry,
+  StoryBibleEditorKind,
+  StoryBibleEditorProps,
+  StoryBibleSummaryAsset,
+  StoryBibleSummaryProps
+} from "@novel-studio/ui";
 
 export interface StoryBibleBridge {
   getProps(): StoryBibleSummaryProps;
+  getEditorProps(): StoryBibleEditorProps;
   load(): Promise<StoryBibleSummaryProps>;
+  selectKind(kind: StoryBibleEditorKind): StoryBibleEditorProps;
+  selectEntry(entryId: string): StoryBibleEditorProps;
+  updateDraft(draft: Partial<StoryBibleEditorDraft>): StoryBibleEditorProps;
+  beginSave(): StoryBibleEditorProps;
+  saveDraft(): Promise<StoryBibleEditorProps>;
 }
 
 export function createStoryBibleBridge(api: NovelStudioApi): StoryBibleBridge {
   let props: StoryBibleSummaryProps = { assets: [] };
+  let snapshot: StoryBibleSnapshot = {
+    characters: [],
+    worldAssets: [],
+    memories: []
+  };
+  let editorProps = createEditorProps(snapshot, "character", emptyDraft("character"), "idle");
 
   return {
     getProps: () => props,
+    getEditorProps: () => editorProps,
     async load() {
-      const snapshot = await unwrap(api.storyBible.load());
+      snapshot = await unwrap(api.storyBible.load());
       props = toProps(snapshot);
+      editorProps = createEditorProps(
+        snapshot,
+        editorProps.activeKind,
+        draftFromSnapshot(snapshot, editorProps.draft),
+        "idle"
+      );
       return props;
+    },
+    selectKind(kind) {
+      editorProps = createEditorProps(snapshot, kind, emptyDraft(kind), "idle");
+      return editorProps;
+    },
+    selectEntry(entryId) {
+      const entry = createEditorEntries(snapshot).find((candidate) => candidate.id === entryId);
+      if (entry === undefined) {
+        return editorProps;
+      }
+
+      editorProps = createEditorProps(
+        snapshot,
+        entry.kind,
+        {
+          id: entry.id,
+          kind: entry.kind,
+          title: entry.title,
+          body: entry.body,
+          status: entry.status
+        },
+        "idle"
+      );
+      return editorProps;
+    },
+    updateDraft(draft) {
+      editorProps = createEditorProps(
+        snapshot,
+        draft.kind ?? editorProps.activeKind,
+        {
+          ...editorProps.draft,
+          ...draft
+        },
+        "idle"
+      );
+      return editorProps;
+    },
+    beginSave() {
+      editorProps = createEditorProps(
+        snapshot,
+        editorProps.activeKind,
+        editorProps.draft,
+        "saving"
+      );
+      return editorProps;
+    },
+    async saveDraft() {
+      const now = new Date().toISOString();
+      const draft = normalizeDraft(editorProps.draft);
+      const saved =
+        draft.kind === "memory"
+          ? await api.storyBible.saveMemory(toMemoryRecord(draft, now, snapshot))
+          : await api.storyBible.saveAsset(toStoryAsset(draft, now, snapshot));
+
+      if (!saved.ok) {
+        editorProps = createEditorProps(snapshot, editorProps.activeKind, draft, "error", {
+          kind: "error",
+          message: saved.error.message
+        });
+        return editorProps;
+      }
+
+      snapshot = await unwrap(api.storyBible.load());
+      props = toProps(snapshot);
+      editorProps = createEditorProps(
+        snapshot,
+        draft.kind,
+        draftFromSnapshot(snapshot, draft),
+        "saved",
+        {
+          kind: "info",
+          message: "故事圣经已保存。"
+        }
+      );
+      return editorProps;
     }
   };
 }
@@ -75,6 +181,198 @@ function toProps(snapshot: StoryBibleSnapshot): StoryBibleSummaryProps {
       ...snapshot.memories.map(memorySummary)
     ]
   };
+}
+
+function createEditorProps(
+  snapshot: StoryBibleSnapshot,
+  activeKind: StoryBibleEditorKind,
+  draft: StoryBibleEditorDraft,
+  status: StoryBibleEditorProps["status"],
+  feedback?: StoryBibleEditorProps["feedback"]
+): StoryBibleEditorProps {
+  return {
+    activeKind,
+    status,
+    entries: createEditorEntries(snapshot),
+    draft,
+    ...(feedback === undefined ? {} : { feedback }),
+    onKindSelect: () => undefined,
+    onEntrySelect: () => undefined,
+    onDraftChange: () => undefined,
+    onNewDraft: () => undefined,
+    onSave: () => undefined
+  };
+}
+
+function createEditorEntries(snapshot: StoryBibleSnapshot): readonly StoryBibleEditorEntry[] {
+  return [
+    ...snapshot.characters.map((asset) => assetEntry(asset, "character")),
+    ...snapshot.worldAssets.map((asset) => assetEntry(asset, "world")),
+    ...(snapshot.outline === undefined ? [] : [assetEntry(snapshot.outline, "outline")]),
+    ...(snapshot.timeline === undefined ? [] : [assetEntry(snapshot.timeline, "timeline")]),
+    ...snapshot.memories.map((memory) => ({
+      id: memory.id,
+      kind: "memory" as const,
+      title: memory.title,
+      status: memory.status,
+      body: memory.content
+    }))
+  ];
+}
+
+function assetEntry(
+  asset: StoryBibleAsset,
+  kind: Exclude<StoryBibleEditorKind, "memory">
+): StoryBibleEditorEntry {
+  return {
+    id: asset.id,
+    kind,
+    title: asset.title,
+    status: asset.status,
+    body: asset.summary
+  };
+}
+
+function emptyDraft(kind: StoryBibleEditorKind): StoryBibleEditorDraft {
+  return {
+    kind,
+    title: "",
+    body: "",
+    status: "active"
+  };
+}
+
+function normalizeDraft(draft: StoryBibleEditorDraft): StoryBibleEditorDraft {
+  return {
+    ...draft,
+    title: draft.title.trim(),
+    body: draft.body.trim()
+  };
+}
+
+function draftFromSnapshot(
+  snapshot: StoryBibleSnapshot,
+  fallback: StoryBibleEditorDraft
+): StoryBibleEditorDraft {
+  if (fallback.id === undefined) {
+    return fallback;
+  }
+
+  const entry = createEditorEntries(snapshot).find((candidate) => candidate.id === fallback.id);
+  if (entry === undefined) {
+    return fallback;
+  }
+
+  return {
+    id: entry.id,
+    kind: entry.kind,
+    title: entry.title,
+    body: entry.body,
+    status: entry.status
+  };
+}
+
+function toStoryAsset(
+  draft: StoryBibleEditorDraft,
+  now: string,
+  snapshot: StoryBibleSnapshot
+): StoryBibleAsset {
+  if (draft.kind === "memory") {
+    throw new Error("Memory drafts must be saved with saveMemory.");
+  }
+  const existing = findExistingAsset(snapshot, draft.id);
+  const id = draft.id ?? defaultAssetId(draft);
+  return {
+    schemaVersion: "1.0",
+    id,
+    type: existing?.type ?? storyAssetType(draft.kind),
+    title: draft.title,
+    status: "active",
+    summary: draft.body,
+    ...(existing?.aliases === undefined ? {} : { aliases: existing.aliases }),
+    ...(existing?.details === undefined ? {} : { details: existing.details }),
+    ...(existing?.relatedEntityIds === undefined
+      ? {}
+      : { relatedEntityIds: existing.relatedEntityIds }),
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now
+  };
+}
+
+function toMemoryRecord(
+  draft: StoryBibleEditorDraft,
+  now: string,
+  snapshot: StoryBibleSnapshot
+): MemoryRecord {
+  const existing = snapshot.memories.find((memory) => memory.id === draft.id);
+  return {
+    schemaVersion: "1.0",
+    id: draft.id ?? defaultAssetId(draft),
+    type: existing?.type ?? "memory.long-term",
+    title: draft.title,
+    status: "active",
+    origin: existing?.origin ?? "user-confirmed-ai",
+    confidence: existing?.confidence ?? "confirmed",
+    content: draft.body,
+    ...(existing?.sourceRefs === undefined ? {} : { sourceRefs: existing.sourceRefs }),
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now
+  };
+}
+
+function findExistingAsset(
+  snapshot: StoryBibleSnapshot,
+  id: string | undefined
+): StoryBibleAsset | undefined {
+  if (id === undefined) {
+    return undefined;
+  }
+
+  return [
+    ...snapshot.characters,
+    ...snapshot.worldAssets,
+    ...(snapshot.outline === undefined ? [] : [snapshot.outline]),
+    ...(snapshot.timeline === undefined ? [] : [snapshot.timeline])
+  ].find((asset) => asset.id === id);
+}
+
+function storyAssetType(kind: Exclude<StoryBibleEditorKind, "memory">): StoryBibleAsset["type"] {
+  switch (kind) {
+    case "character":
+      return "character";
+    case "world":
+      return "world.location";
+    case "outline":
+      return "outline";
+    case "timeline":
+      return "timeline.events";
+  }
+}
+
+function defaultAssetId(draft: StoryBibleEditorDraft): string {
+  const slug = slugify(draft.title);
+  switch (draft.kind) {
+    case "character":
+      return `chr_${slug}`;
+    case "world":
+      return `world_${slug}`;
+    case "outline":
+      return "outline_main";
+    case "timeline":
+      return "timeline_main";
+    case "memory":
+      return `mem_${slug}`;
+  }
+}
+
+function slugify(value: string): string {
+  const slug = value
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+  return slug.length === 0 ? "untitled" : slug;
 }
 
 function memorySummary(memory: MemoryRecord): StoryBibleSummaryAsset {

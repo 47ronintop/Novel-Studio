@@ -29,6 +29,11 @@ export type {
   ProjectSearchProps,
   ProjectSearchStatus,
   ProjectWorkflowProps,
+  StoryBibleEditorDraft,
+  StoryBibleEditorEntry,
+  StoryBibleEditorKind,
+  StoryBibleEditorProps,
+  StoryBibleEditorStatus,
   StoryBibleSummaryAsset,
   StoryBibleSummaryProps,
   WorkspaceShellProps

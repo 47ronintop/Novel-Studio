@@ -15,6 +15,7 @@ import {
   FolderTree,
   FolderOpen,
   FolderPlus,
+  BookOpen,
   PanelBottom,
   PanelRight,
   Search,
@@ -34,6 +35,7 @@ export interface WorkspaceShellProps {
   readonly aiWritingWorkflow?: AiWritingWorkflowProps;
   readonly search?: ProjectSearchProps;
   readonly storyBible?: StoryBibleSummaryProps;
+  readonly storyBibleEditor?: StoryBibleEditorProps;
   readonly onActivitySelect?: (activityId: ActivityId) => void;
 }
 
@@ -98,9 +100,42 @@ export interface StoryBibleSummaryAsset {
   readonly contextEligible?: boolean;
 }
 
+export type StoryBibleEditorKind = "character" | "world" | "outline" | "timeline" | "memory";
+export type StoryBibleEditorStatus = "idle" | "saving" | "saved" | "error";
+
+export interface StoryBibleEditorEntry {
+  readonly id: string;
+  readonly kind: StoryBibleEditorKind;
+  readonly title: string;
+  readonly status: string;
+  readonly body: string;
+}
+
+export interface StoryBibleEditorDraft {
+  readonly id?: string;
+  readonly kind: StoryBibleEditorKind;
+  readonly title: string;
+  readonly body: string;
+  readonly status: string;
+}
+
+export interface StoryBibleEditorProps {
+  readonly activeKind: StoryBibleEditorKind;
+  readonly status: StoryBibleEditorStatus;
+  readonly entries: readonly StoryBibleEditorEntry[];
+  readonly draft: StoryBibleEditorDraft;
+  readonly feedback?: ProjectWorkflowFeedback;
+  readonly onKindSelect: (kind: StoryBibleEditorKind) => void;
+  readonly onEntrySelect: (entryId: string) => void;
+  readonly onDraftChange: (draft: Partial<StoryBibleEditorDraft>) => void;
+  readonly onNewDraft: () => void;
+  readonly onSave: () => void;
+}
+
 const activities = [
   { id: "workspace", label: "工作区", icon: FolderTree },
   { id: "search", label: "搜索", icon: Search },
+  { id: "storyBible", label: "故事圣经", icon: BookOpen },
   { id: "timeline", label: "时间线", icon: Clock3 },
   { id: "ai", label: "AI 工作流", icon: Bot },
   { id: "studio", label: "创作系统", icon: Boxes },
@@ -135,6 +170,7 @@ export function WorkspaceShell({
   aiWritingWorkflow,
   search,
   storyBible,
+  storyBibleEditor,
   onActivitySelect
 }: WorkspaceShellProps) {
   return (
@@ -276,6 +312,7 @@ export function WorkspaceShell({
               activityId={shellState.activeActivity}
               aiWritingWorkflow={aiWritingWorkflow}
               search={search}
+              storyBibleEditor={storyBibleEditor}
             />
           )}
         </main>
@@ -444,14 +481,31 @@ function WorkspaceEditorSurface({
 function ActivityEmptyState({
   activityId,
   aiWritingWorkflow,
-  search
+  search,
+  storyBibleEditor
 }: {
   readonly activityId: ActivityId;
   readonly aiWritingWorkflow: AiWritingWorkflowProps | undefined;
   readonly search: ProjectSearchProps | undefined;
+  readonly storyBibleEditor: StoryBibleEditorProps | undefined;
 }) {
   if (activityId === "search" && search !== undefined) {
     return <ProjectSearchView search={search} />;
+  }
+
+  if (activityId === "storyBible" && storyBibleEditor !== undefined) {
+    return <StoryBibleEditorView editor={storyBibleEditor} />;
+  }
+  if (activityId === "storyBible") {
+    return (
+      <section className="ns-activity-view" aria-label="故事圣经视图">
+        <h1>故事圣经</h1>
+        <p>打开项目后可以编辑人物、世界观、大纲、时间线和记忆。</p>
+        <div className="ns-activity-view-actions">
+          <span>下一步：打开项目并加载故事圣经。</span>
+        </div>
+      </section>
+    );
   }
 
   if (activityId === "ai") {
@@ -484,6 +538,120 @@ function ActivityEmptyState({
       </div>
     </section>
   );
+}
+
+function StoryBibleEditorView({ editor }: { readonly editor: StoryBibleEditorProps }) {
+  const visibleEntries = editor.entries.filter((entry) => entry.kind === editor.activeKind);
+
+  return (
+    <section className="ns-story-editor" aria-label="故事圣经编辑器">
+      <div className="ns-story-editor-header">
+        <div>
+          <h1>故事圣经</h1>
+          <p>维护人物、世界观、大纲、时间线和记忆。保存前始终由你确认。</p>
+        </div>
+        <button className="ns-icon-text-button" onClick={editor.onNewDraft} type="button">
+          <FilePlus aria-hidden="true" size={14} />
+          新建设定
+        </button>
+      </div>
+
+      <div className="ns-story-editor-grid">
+        <aside className="ns-story-editor-list" aria-label="故事圣经分类">
+          <div className="ns-story-kind-tabs" role="tablist" aria-label="故事圣经分类">
+            {storyBibleKindOptions.map((option) => (
+              <button
+                aria-selected={editor.activeKind === option.kind}
+                className="ns-story-kind-tab"
+                key={option.kind}
+                onClick={() => editor.onKindSelect(option.kind)}
+                role="tab"
+                type="button"
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <ol className="ns-story-entry-list" aria-label="故事圣经条目">
+            {visibleEntries.length === 0 ? (
+              <li className="ns-story-entry-empty">当前分类还没有条目。</li>
+            ) : (
+              visibleEntries.map((entry) => (
+                <li key={entry.id}>
+                  <button
+                    className="ns-story-entry-button"
+                    onClick={() => editor.onEntrySelect(entry.id)}
+                    type="button"
+                  >
+                    <span>{entry.title}</span>
+                    <span>{entry.status}</span>
+                  </button>
+                </li>
+              ))
+            )}
+          </ol>
+        </aside>
+
+        <form
+          className="ns-story-editor-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            editor.onSave();
+          }}
+        >
+          <label className="ns-story-field">
+            <span>标题</span>
+            <input
+              aria-label="设定标题"
+              className="ns-search-input"
+              onChange={(event) => editor.onDraftChange({ title: event.currentTarget.value })}
+              value={editor.draft.title}
+            />
+          </label>
+          <label className="ns-story-field">
+            <span>{editor.activeKind === "memory" ? "记忆内容" : "摘要"}</span>
+            <textarea
+              aria-label="设定正文"
+              className="ns-story-textarea"
+              onChange={(event) => editor.onDraftChange({ body: event.currentTarget.value })}
+              value={editor.draft.body}
+            />
+          </label>
+          <div className="ns-story-editor-actions">
+            <span className="ns-muted">{storyBibleKindLabel(editor.activeKind)}</span>
+            <button
+              className="ns-icon-text-button"
+              disabled={editor.status === "saving" || editor.draft.title.trim().length === 0}
+              type="submit"
+            >
+              <Check aria-hidden="true" size={14} />
+              {editor.status === "saving" ? "保存中" : "保存设定"}
+            </button>
+          </div>
+          {editor.feedback === undefined ? null : (
+            <p className="ns-project-feedback" data-kind={editor.feedback.kind} role="status">
+              {editor.feedback.message}
+            </p>
+          )}
+        </form>
+      </div>
+    </section>
+  );
+}
+
+const storyBibleKindOptions: readonly {
+  readonly kind: StoryBibleEditorKind;
+  readonly label: string;
+}[] = [
+  { kind: "character", label: "人物" },
+  { kind: "world", label: "世界观" },
+  { kind: "outline", label: "大纲" },
+  { kind: "timeline", label: "时间线" },
+  { kind: "memory", label: "记忆" }
+];
+
+function storyBibleKindLabel(kind: StoryBibleEditorKind): string {
+  return storyBibleKindOptions.find((option) => option.kind === kind)?.label ?? "故事圣经";
 }
 
 function ProjectSearchView({ search }: { readonly search: ProjectSearchProps }) {
@@ -585,7 +753,7 @@ function formatSearchDate(value: string): string {
   return `索引 ${value.slice(0, 10)} ${value.slice(11, 16)}`;
 }
 
-function activityViewCopy(activityId: Exclude<ActivityId, "workspace" | "ai">): {
+function activityViewCopy(activityId: Exclude<ActivityId, "workspace" | "ai" | "storyBible">): {
   readonly title: string;
   readonly description: string;
   readonly nextAction: string;

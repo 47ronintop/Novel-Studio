@@ -47,5 +47,5 @@ Electron 菜单由 main process 构建，使用标准 role 保留复制、粘贴
 M19 只让入口可点击、可理解，不代表 Search、Timeline、Studio、Settings 的完整业务闭环已全部实现。后续应继续拆分：
 
 - M20 Search and Index UX：项目全文搜索与可重建索引。
-- M21 Story Bible Editing UX：人物、世界观、大纲、时间线和记忆的完整编辑表单。
+- M21 Story Bible Editing UX：人物、世界观、大纲、时间线和记忆的完整编辑表单。（已完成）
 - M22 Settings UX Completion：模型 profile、快捷键、插件和隐私设置的完整界面。

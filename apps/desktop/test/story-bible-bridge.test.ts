@@ -61,9 +61,39 @@ describe("Story Bible bridge", () => {
       contextEligible: true
     });
   });
+
+  test("edits and saves Story Bible asset drafts through the preload API", async () => {
+    const calls: string[] = [];
+    const bridge = createStoryBibleBridge(createApi(calls));
+    await bridge.load();
+
+    bridge.selectEntry("chr_hero");
+    bridge.updateDraft({ title: "Hero Revised", body: "A revised oath holder." });
+    const editor = await bridge.saveDraft();
+
+    expect(calls).toContain("storyBible.saveAsset:chr_hero:Hero Revised");
+    expect(editor.feedback).toEqual({
+      kind: "info",
+      message: "故事圣经已保存。"
+    });
+    expect(bridge.getProps().assets[0]?.title).toBe("Hero Revised");
+  });
+
+  test("creates confirmed memory drafts through the preload API", async () => {
+    const calls: string[] = [];
+    const bridge = createStoryBibleBridge(createApi(calls));
+
+    bridge.selectKind("memory");
+    bridge.updateDraft({ title: "Hidden Oath", body: "The oath is never spoken aloud." });
+    await bridge.saveDraft();
+
+    expect(calls).toContain("storyBible.saveMemory:mem_hidden_oath:Hidden Oath");
+  });
 });
 
 function createApi(calls: string[]): NovelStudioApi {
+  let currentSnapshot = snapshot;
+
   return {
     getShellState: async () => ({
       projectTitle: "M16",
@@ -92,6 +122,12 @@ function createApi(calls: string[]): NovelStudioApi {
         })
     },
     project: {
+      chooseOpenDirectory: async () => {
+        throw new Error("not used");
+      },
+      chooseCreateDirectory: async () => {
+        throw new Error("not used");
+      },
       open: async () => {
         throw new Error("not used");
       },
@@ -105,6 +141,14 @@ function createApi(calls: string[]): NovelStudioApi {
         throw new Error("not used");
       },
       selectChapter: async () => {
+        throw new Error("not used");
+      }
+    },
+    search: {
+      rebuildIndex: async () => {
+        throw new Error("not used");
+      },
+      query: async () => {
         throw new Error("not used");
       }
     },
@@ -153,13 +197,31 @@ function createApi(calls: string[]): NovelStudioApi {
     storyBible: {
       load: async () => {
         calls.push("storyBible.load");
-        return ok(snapshot);
+        return ok(currentSnapshot);
       },
-      saveAsset: async () => {
-        throw new Error("not used");
+      saveAsset: async (asset) => {
+        calls.push(`storyBible.saveAsset:${asset.id}:${asset.title}`);
+        currentSnapshot = {
+          ...currentSnapshot,
+          characters:
+            asset.type === "character"
+              ? replaceAsset(currentSnapshot.characters, asset)
+              : currentSnapshot.characters,
+          worldAssets: asset.type.startsWith("world.")
+            ? replaceAsset(currentSnapshot.worldAssets, asset)
+            : currentSnapshot.worldAssets,
+          ...(asset.type === "outline" ? { outline: asset } : {}),
+          ...(asset.type === "timeline.events" ? { timeline: asset } : {})
+        };
+        return ok(asset);
       },
-      saveMemory: async () => {
-        throw new Error("not used");
+      saveMemory: async (memory) => {
+        calls.push(`storyBible.saveMemory:${memory.id}:${memory.title}`);
+        currentSnapshot = {
+          ...currentSnapshot,
+          memories: replaceMemory(currentSnapshot.memories, memory)
+        };
+        return ok(memory);
       },
       buildContextCandidates: async () => {
         throw new Error("not used");
@@ -177,4 +239,28 @@ function createApi(calls: string[]): NovelStudioApi {
       }
     }
   };
+}
+
+function replaceAsset<T extends StoryBibleSnapshot["characters"][number]>(
+  assets: readonly T[],
+  asset: T
+): readonly T[] {
+  const exists = assets.some((entry) => entry.id === asset.id);
+  if (!exists) {
+    return [...assets, asset];
+  }
+
+  return assets.map((entry) => (entry.id === asset.id ? asset : entry));
+}
+
+function replaceMemory(
+  memories: StoryBibleSnapshot["memories"],
+  memory: StoryBibleSnapshot["memories"][number]
+): StoryBibleSnapshot["memories"] {
+  const exists = memories.some((entry) => entry.id === memory.id);
+  if (!exists) {
+    return [...memories, memory];
+  }
+
+  return memories.map((entry) => (entry.id === memory.id ? memory : entry));
 }

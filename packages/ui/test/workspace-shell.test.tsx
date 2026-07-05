@@ -246,4 +246,51 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("Oath");
     expect(html).toContain("可进入上下文");
   });
+
+  test("renders the M21 Story Bible editor view", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        storyBibleEditor={{
+          activeKind: "character",
+          status: "idle",
+          entries: [
+            {
+              id: "chr_hero",
+              kind: "character",
+              title: "Hero",
+              status: "active",
+              body: "A procedural protagonist with a hidden oath."
+            }
+          ],
+          draft: {
+            kind: "character",
+            title: "Hero",
+            body: "A procedural protagonist with a hidden oath.",
+            status: "active"
+          },
+          onKindSelect: () => undefined,
+          onEntrySelect: () => undefined,
+          onDraftChange: () => undefined,
+          onNewDraft: () => undefined,
+          onSave: () => undefined
+        }}
+      />
+    );
+
+    expect(html).toContain('aria-label="故事圣经"');
+    expect(html).toContain('aria-label="故事圣经编辑器"');
+    expect(html).toContain("人物");
+    expect(html).toContain("世界观");
+    expect(html).toContain("大纲");
+    expect(html).toContain("时间线");
+    expect(html).toContain("记忆");
+    expect(html).toContain('aria-label="设定标题"');
+    expect(html).toContain('aria-label="设定正文"');
+    expect(html).toContain("保存设定");
+    expect(html).toContain("Hero");
+  });
 });
