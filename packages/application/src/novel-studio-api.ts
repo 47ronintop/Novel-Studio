@@ -31,6 +31,7 @@ import type {
   ModelProfile,
   ModelSettingsSnapshot
 } from "./model-settings-session.js";
+import type { PluginSettingsSnapshot } from "./plugin-settings-session.js";
 import type { CreateProjectInput, ProjectWorkspaceSnapshot } from "./project-workspace-session.js";
 import type {
   ProjectSearchIndex,
@@ -96,6 +97,9 @@ export interface NovelStudioApi {
     testModelProfileConnection(
       profileId: string
     ): Promise<Result<ModelConnectionResult, UnifiedError>>;
+  };
+  plugins: {
+    loadRegistry(): Promise<Result<PluginSettingsSnapshot, UnifiedError>>;
   };
   storyBible: {
     load(): Promise<Result<StoryBibleSnapshot, UnifiedError>>;

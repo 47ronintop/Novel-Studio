@@ -674,6 +674,14 @@ export function App() {
     [settingsBridge]
   );
 
+  const handleRefreshPluginRegistry = useCallback(() => {
+    if (settingsBridge === undefined) {
+      return;
+    }
+
+    void settingsBridge.loadPlugins().then(setSettings);
+  }, [settingsBridge]);
+
   const handleStudioAssetSelect = useCallback<NonNullable<ConfigStudioPanelProps["onAssetSelect"]>>(
     (assetType, assetId) => {
       if (studioBridge === undefined) {
@@ -777,7 +785,15 @@ export function App() {
               onNewProfile: handleNewSettingsProfile,
               onSaveProfile: handleSaveSettingsProfile,
               onTestConnection: handleTestSettingsConnection,
-              onMakeDefault: handleMakeSettingsDefault
+              onMakeDefault: handleMakeSettingsDefault,
+              ...(settings.plugins === undefined
+                ? {}
+                : {
+                    plugins: {
+                      ...settings.plugins,
+                      onRefresh: handleRefreshPluginRegistry
+                    }
+                  })
             } satisfies ModelSettingsPanelProps
           })}
       {...(studio === undefined

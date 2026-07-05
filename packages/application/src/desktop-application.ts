@@ -34,6 +34,8 @@ import type {
   ModelSettingsSession,
   ModelSettingsSnapshot
 } from "./model-settings-session.js";
+import { pluginRegistryUnavailable } from "./plugin-settings-session.js";
+import type { PluginSettingsSession, PluginSettingsSnapshot } from "./plugin-settings-session.js";
 import type {
   AiWritingSuggestion,
   AiWritingSuggestionRequest,
@@ -134,6 +136,7 @@ export interface DesktopApplication {
   testModelProfileConnection(
     profileId: string
   ): Promise<Result<ModelConnectionResult, UnifiedError>>;
+  loadPluginRegistry(): Promise<Result<PluginSettingsSnapshot, UnifiedError>>;
   loadConfigAsset(
     assetType: ConfigAssetType,
     assetId: string
@@ -148,6 +151,7 @@ export interface DesktopApplicationOptions {
   readonly chapterEditorSession?: ChapterEditorSession;
   readonly projectWorkspaceSession?: ProjectWorkspaceSession;
   readonly modelSettingsSession?: ModelSettingsSession;
+  readonly pluginSettingsSession?: PluginSettingsSession;
   readonly configStudioSession?: ConfigStudioSession;
   readonly storyBibleSession?: StoryBibleSession;
   readonly createProjectSearchSession?: (projectRoot: string) => ProjectSearchSession;
@@ -189,6 +193,7 @@ export function createDesktopApplication(
   const chapterEditorSession = options.chapterEditorSession;
   const projectWorkspaceSession = options.projectWorkspaceSession;
   const modelSettingsSession = options.modelSettingsSession;
+  const pluginSettingsSession = options.pluginSettingsSession;
   const configStudioSession = options.configStudioSession;
   const storyBibleSession = options.storyBibleSession;
   const createProjectSearchSession = options.createProjectSearchSession;
@@ -434,6 +439,13 @@ export function createDesktopApplication(
       }
 
       return modelSettingsSession.testModelProfileConnection(profileId);
+    },
+    async loadPluginRegistry() {
+      if (pluginSettingsSession === undefined) {
+        return pluginRegistryUnavailable();
+      }
+
+      return pluginSettingsSession.load();
     },
     async loadConfigAsset(assetType, assetId) {
       if (configStudioSession === undefined) {

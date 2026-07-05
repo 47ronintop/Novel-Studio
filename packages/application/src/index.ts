@@ -93,6 +93,15 @@ export {
   resolveDefaultModelRuntimeProfile
 } from "./model-settings-session.js";
 export type {
+  PluginRegistryPort,
+  PluginSettingsEntry,
+  PluginSettingsPermissionGrant,
+  PluginSettingsSession,
+  PluginSettingsSessionOptions,
+  PluginSettingsSnapshot
+} from "./plugin-settings-session.js";
+export { createPluginSettingsSession } from "./plugin-settings-session.js";
+export type {
   ConfigAssetPort,
   ConfigAssetRestoreInput,
   ConfigAssetSaveInput,

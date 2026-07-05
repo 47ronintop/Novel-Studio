@@ -1,4 +1,4 @@
-import { CheckCircle, FilePlus, PlugZap, Save, Shield, Star } from "lucide-react";
+import { CheckCircle, FilePlus, PlugZap, RefreshCw, Save, Shield, Star } from "lucide-react";
 import type { ReactNode } from "react";
 
 export interface ModelSettingsProfile {
@@ -36,6 +36,27 @@ export interface ModelConnectionStatus {
   readonly detail?: string;
 }
 
+export type PluginSettingsStatus = "idle" | "loading" | "loaded" | "error";
+
+export interface PluginSettingsPermissionGrant {
+  readonly permission: string;
+  readonly scopes: readonly string[];
+}
+
+export interface PluginSettingsEntry {
+  readonly pluginId: string;
+  readonly enabled: boolean;
+  readonly manifestPath: string;
+  readonly grantedPermissions: readonly PluginSettingsPermissionGrant[];
+}
+
+export interface PluginSettingsPanelProps {
+  readonly status: PluginSettingsStatus;
+  readonly entries: readonly PluginSettingsEntry[];
+  readonly feedback?: { readonly kind: "info" | "error"; readonly message: string };
+  readonly onRefresh?: () => void;
+}
+
 export interface ModelSettingsPanelProps {
   readonly defaultProfileId: string;
   readonly selectedProfileId?: string;
@@ -43,6 +64,7 @@ export interface ModelSettingsPanelProps {
   readonly draft: ModelSettingsDraft;
   readonly saveStatus: ModelSettingsSaveStatus;
   readonly connectionStatus?: ModelConnectionStatus;
+  readonly plugins?: PluginSettingsPanelProps;
   readonly feedback?: { readonly kind: "info" | "error"; readonly message: string };
   readonly onSelectProfile?: (profileId: string) => void;
   readonly onDraftChange?: (draft: Partial<ModelSettingsDraft>) => void;
@@ -59,6 +81,7 @@ export function ModelSettingsPanel({
   draft,
   saveStatus,
   connectionStatus,
+  plugins,
   feedback,
   onSelectProfile,
   onDraftChange,
@@ -298,6 +321,8 @@ export function ModelSettingsPanel({
             </p>
           </section>
 
+          <PluginSettingsSection plugins={plugins} />
+
           <section className="model-settings-card" aria-label="隐私与安全">
             <h2>隐私与安全</h2>
             <div className="model-security-note">
@@ -312,6 +337,66 @@ export function ModelSettingsPanel({
       </div>
     </section>
   );
+}
+
+function PluginSettingsSection({
+  plugins
+}: {
+  readonly plugins: PluginSettingsPanelProps | undefined;
+}) {
+  const entries = plugins?.entries ?? [];
+
+  return (
+    <section className="model-settings-card" aria-label="插件管理">
+      <div className="model-settings-section-header">
+        <div>
+          <h2>插件管理</h2>
+          <p>查看当前项目插件注册表。这里不安装、不下载、不执行第三方插件代码。</p>
+        </div>
+        <button
+          aria-label="刷新插件注册表"
+          className="ns-icon-text-button"
+          disabled={plugins?.status === "loading"}
+          onClick={plugins?.onRefresh}
+          type="button"
+        >
+          <RefreshCw aria-hidden="true" size={14} />
+          {plugins?.status === "loading" ? "刷新中" : "刷新"}
+        </button>
+      </div>
+
+      {plugins?.feedback === undefined ? null : (
+        <p className="ns-project-feedback" data-kind={plugins.feedback.kind} role="status">
+          {plugins.feedback.message}
+        </p>
+      )}
+
+      {entries.length === 0 ? (
+        <div className="plugin-settings-empty">当前项目还没有注册插件。</div>
+      ) : (
+        <ol className="plugin-settings-list" aria-label="插件注册表">
+          {entries.map((plugin) => (
+            <li className="plugin-settings-row" key={plugin.pluginId}>
+              <div className="plugin-settings-title">
+                <strong>{plugin.pluginId}</strong>
+                <span>{plugin.enabled ? "已启用" : "已禁用"}</span>
+              </div>
+              <span>{plugin.manifestPath}</span>
+              <span>{permissionSummary(plugin.grantedPermissions)}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+function permissionSummary(grants: readonly PluginSettingsPermissionGrant[]): string {
+  if (grants.length === 0) {
+    return "未授权权限";
+  }
+
+  return grants.map((grant) => `${grant.permission} · ${grant.scopes.join(", ")}`).join("；");
 }
 
 function ModelField({ label, children }: { readonly label: string; readonly children: ReactNode }) {

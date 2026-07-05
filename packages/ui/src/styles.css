@@ -465,6 +465,50 @@ textarea:focus-visible,
   border-color: color-mix(in oklch, var(--ns-primary) 70%, var(--ns-border));
 }
 
+.plugin-settings-list {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.plugin-settings-row,
+.plugin-settings-empty {
+  background: var(--ns-bg);
+  border: 1px solid var(--ns-border);
+  border-radius: 8px;
+}
+
+.plugin-settings-row {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+}
+
+.plugin-settings-title {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.plugin-settings-title strong {
+  color: var(--ns-ink);
+  font-size: 13px;
+}
+
+.plugin-settings-title span,
+.plugin-settings-row > span,
+.plugin-settings-empty {
+  color: var(--ns-muted);
+  font-size: 12px;
+}
+
+.plugin-settings-empty {
+  padding: 12px;
+}
+
 .model-profile-select {
   background: transparent;
   border: 0;

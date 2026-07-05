@@ -6,6 +6,7 @@ import {
   createConfigStudioSession,
   createDesktopApplication,
   createModelSettingsSession,
+  createPluginSettingsSession,
   createProjectSearchSession,
   createProjectWorkspaceSession,
   createStoryBibleSession,
@@ -23,6 +24,7 @@ import {
   ChapterFileRepository,
   ConfigAssetRepository,
   HistoryRepository,
+  PluginRegistryFileRepository,
   ProjectFileRepository,
   ProjectSettingsRepository,
   SearchIndexFileRepository,
@@ -108,6 +110,11 @@ export function createProjectDesktopApplication(
         ? {}
         : { connectionTester: options.modelConnectionTester })
     }),
+    pluginSettingsSession: createPluginSettingsSession({
+      pluginRegistryPort: {
+        readPluginRegistry: () => createPluginRegistryRepository().readPluginRegistry()
+      }
+    }),
     configStudioSession: createConfigStudioSession({
       configAssetPort: {
         readConfigAsset: (assetType, assetId) =>
@@ -177,6 +184,13 @@ export function createProjectDesktopApplication(
     return new ProjectSettingsRepository({
       projectRoot: projectWorkspaceSession.getSnapshot()?.projectRoot ?? options.projectRoot,
       traceId: "trace_desktop_settings_repository"
+    });
+  }
+
+  function createPluginRegistryRepository(): PluginRegistryFileRepository {
+    return new PluginRegistryFileRepository({
+      projectRoot: projectWorkspaceSession.getSnapshot()?.projectRoot ?? options.projectRoot,
+      traceId: "trace_desktop_plugin_registry_repository"
     });
   }
 

@@ -4,6 +4,7 @@ import type { ReactElement, ReactNode } from "react";
 import { describe, expect, test } from "vitest";
 
 import { createDesktopApplication } from "@novel-studio/application";
+import type { ModelSettingsPanelProps } from "../src/index.js";
 import { WorkspaceShell } from "../src/index.js";
 
 describe("WorkspaceShell", () => {
@@ -305,6 +306,91 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("project.json could not be read.");
     expect(html).toContain('aria-current="true"');
     expect(html).toContain("开篇");
+  });
+
+  test("renders plugin management inside settings with refresh wiring", () => {
+    const application = createDesktopApplication();
+    const refreshCalls: string[] = [];
+    const settings = {
+      defaultProfileId: "model_default",
+      selectedProfileId: "model_default",
+      profiles: [
+        {
+          id: "model_default",
+          provider: "openai-compatible",
+          displayName: "Default Model",
+          baseUrl: "https://api.example.com/v1",
+          modelName: "example-model",
+          apiKeyRef: "secret://model_default/api_key",
+          temperature: 0.7,
+          maxTokens: 4096,
+          timeoutMs: 60000
+        }
+      ],
+      draft: {
+        id: "model_default",
+        provider: "openai-compatible",
+        displayName: "Default Model",
+        baseUrl: "https://api.example.com/v1",
+        modelName: "example-model",
+        apiKeyRefInput: "",
+        temperature: "0.7",
+        maxTokens: "4096",
+        topP: "",
+        timeoutMs: "60000"
+      },
+      saveStatus: "idle",
+      plugins: {
+        status: "loaded",
+        entries: [
+          {
+            pluginId: "novel.timeline-tools",
+            enabled: true,
+            manifestPath: "plugins/novel.timeline-tools/plugin.json",
+            grantedPermissions: [{ permission: "asset:read", scopes: ["timeline"] }]
+          }
+        ],
+        feedback: { kind: "info", message: "插件注册表已加载。" },
+        onRefresh: () => refreshCalls.push("refresh")
+      }
+    } satisfies ModelSettingsPanelProps & {
+      readonly plugins: {
+        readonly status: "loaded";
+        readonly entries: readonly {
+          readonly pluginId: string;
+          readonly enabled: boolean;
+          readonly manifestPath: string;
+          readonly grantedPermissions: readonly {
+            readonly permission: string;
+            readonly scopes: readonly string[];
+          }[];
+        }[];
+        readonly feedback: { readonly kind: "info"; readonly message: string };
+        readonly onRefresh: () => void;
+      };
+    };
+    const tree = WorkspaceShell({
+      shellState: { ...application.getShellState(), activeActivity: "settings" },
+      commands: application.listCommands(),
+      commandPaletteOpen: false,
+      settings
+    });
+    const refreshButton = findElementByAriaLabel(tree, "刷新插件注册表");
+
+    expect(refreshButton).toBeDefined();
+    refreshButton?.props.onClick?.();
+    expect(refreshCalls).toEqual(["refresh"]);
+
+    const html = renderToStaticMarkup(tree);
+    expect(html).toContain('aria-label="插件管理"');
+    expect(html).toContain("novel.timeline-tools");
+    expect(html).toContain("plugins/novel.timeline-tools/plugin.json");
+    expect(html).toContain("asset:read · timeline");
+    const pluginSection = html.slice(
+      html.indexOf('aria-label="插件管理"'),
+      html.indexOf('aria-label="隐私与安全"')
+    );
+    expect(pluginSection).not.toContain("secret://");
   });
 
   test("renders Story Bible summaries and context eligibility", () => {

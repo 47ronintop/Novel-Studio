@@ -157,6 +157,7 @@ export function createApplicationIpcHandlers(
 
       return application.testModelProfileConnection(profileId);
     },
+    "application:plugins:load-registry": () => application.loadPluginRegistry(),
     "application:story-bible:load": () => application.loadStoryBible(),
     "application:story-bible:save-asset": (asset: unknown) => {
       const storyBibleAsset = toStoryBibleAsset(asset);

@@ -43,6 +43,13 @@ export type {
   WorkflowRunUsageSummary
 } from "./ports.js";
 export { ProjectFileRepository } from "./project-repository.js";
+export { PluginRegistryFileRepository } from "./plugin-registry-repository.js";
+export type {
+  PluginRegistryEntry,
+  PluginRegistryFileRepositoryOptions,
+  PluginRegistryPermissionGrant,
+  PluginRegistrySnapshot
+} from "./plugin-registry-repository.js";
 export { RecoveryRepository } from "./recovery-repository.js";
 export { ProjectSettingsRepository } from "./settings-repository.js";
 export { StoryBibleFileRepository } from "./story-bible-repository.js";

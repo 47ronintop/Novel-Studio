@@ -30,8 +30,9 @@ describe("M22 settings bridge", () => {
 
     const props = await bridge.load();
 
-    expect(calls).toEqual(["settings.listModelProfiles"]);
+    expect(calls).toEqual(["settings.listModelProfiles", "plugins.loadRegistry"]);
     expect(props.profiles[0]?.displayName).toBe("Default Model");
+    expect(props.plugins?.entries[0]?.pluginId).toBe("novel.timeline-tools");
     expect(props.draft.apiKeyRefInput).toBe("");
     expect(props.feedback).toEqual({
       kind: "info",
@@ -85,6 +86,20 @@ describe("M22 settings bridge", () => {
       profileId: "model_default",
       status: "success",
       detail: "Profile validated by injected tester"
+    });
+  });
+
+  test("refreshes plugin registry through the preload API without blocking model settings", async () => {
+    const calls: string[] = [];
+    const bridge = createSettingsBridge(createApi(calls));
+    await bridge.load();
+
+    const refreshed = await bridge.loadPlugins();
+
+    expect(calls.filter((call) => call === "plugins.loadRegistry")).toHaveLength(2);
+    expect(refreshed.plugins?.feedback).toEqual({
+      kind: "info",
+      message: "插件注册表已加载。"
     });
   });
 });
@@ -209,6 +224,22 @@ function createApi(calls: string[]): NovelStudioApi {
           detail: "Profile validated by injected tester"
         };
         return ok(result);
+      }
+    },
+    plugins: {
+      loadRegistry: async () => {
+        calls.push("plugins.loadRegistry");
+        return ok({
+          schemaVersion: "1.0",
+          plugins: [
+            {
+              pluginId: "novel.timeline-tools",
+              enabled: true,
+              manifestPath: "plugins/novel.timeline-tools/plugin.json",
+              grantedPermissions: [{ permission: "asset:read", scopes: ["timeline"] }]
+            }
+          ]
+        });
       }
     },
     storyBible: {

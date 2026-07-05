@@ -11,6 +11,21 @@ import { createChapterEditorSession } from "../src/chapter-editor-session.js";
 import { createDesktopApplication } from "../src/desktop-application.js";
 import { DEFAULT_APPLICATION_COMMANDS, isSafeCommand } from "../src/command-registry.js";
 
+interface PluginSettingsSnapshot {
+  readonly schemaVersion: "1.0";
+  readonly plugins: readonly PluginSettingsEntry[];
+}
+
+interface PluginSettingsEntry {
+  readonly pluginId: string;
+  readonly enabled: boolean;
+  readonly manifestPath: string;
+  readonly grantedPermissions: readonly {
+    readonly permission: string;
+    readonly scopes: readonly string[];
+  }[];
+}
+
 const chapterId = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D0";
 const chapter = {
   frontmatter: {
@@ -94,6 +109,36 @@ describe("desktop application command bridge", () => {
       bottomPanelVisible: false,
       activeBottomPanelTab: "工作流运行"
     });
+  });
+
+  test("loads project plugin registry summaries through an injected Application session", async () => {
+    const pluginRegistry: PluginSettingsSnapshot = {
+      schemaVersion: "1.0",
+      plugins: [
+        {
+          pluginId: "novel.timeline-tools",
+          enabled: true,
+          manifestPath: "plugins/novel.timeline-tools/plugin.json",
+          grantedPermissions: [{ permission: "asset:read", scopes: ["timeline"] }]
+        }
+      ]
+    };
+    const application = createDesktopApplication({
+      pluginSettingsSession: {
+        load: async () => ok(pluginRegistry)
+      }
+    } as Parameters<typeof createDesktopApplication>[0] & {
+      readonly pluginSettingsSession: {
+        load(): Promise<ReturnType<typeof ok<PluginSettingsSnapshot>>>;
+      };
+    });
+    const pluginAwareApplication = application as typeof application & {
+      loadPluginRegistry(): Promise<ReturnType<typeof ok<PluginSettingsSnapshot>>>;
+    };
+
+    const loaded = await pluginAwareApplication.loadPluginRegistry();
+
+    expect(loaded).toEqual(ok(pluginRegistry));
   });
 
   test("rejects unknown commands at the Application boundary", () => {

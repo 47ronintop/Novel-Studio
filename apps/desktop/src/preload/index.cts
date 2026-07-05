@@ -18,6 +18,7 @@ import type {
   ModelProfile,
   ModelSettingsSnapshot,
   NovelStudioApi,
+  PluginSettingsSnapshot,
   ProjectDirectorySelection,
   ProjectSearchIndex,
   ProjectSearchQuery,
@@ -151,6 +152,10 @@ const api: NovelStudioApi = {
         "application:settings:test-model-profile",
         profileId
       )
+  },
+  plugins: {
+    loadRegistry: () =>
+      invokeTyped<Result<PluginSettingsSnapshot, UnifiedError>>("application:plugins:load-registry")
   },
   storyBible: {
     load: () =>

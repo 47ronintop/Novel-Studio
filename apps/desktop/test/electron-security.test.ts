@@ -62,6 +62,7 @@ describe("Electron security baseline", () => {
       "application:settings:list-model-profiles",
       "application:settings:save-model-profile",
       "application:settings:test-model-profile",
+      "application:plugins:load-registry",
       "application:story-bible:load",
       "application:story-bible:save-asset",
       "application:story-bible:save-memory",
@@ -116,6 +117,7 @@ describe("Electron security baseline", () => {
       timeoutMs: 60000
     });
     await api.settings.testModelProfileConnection("model_default");
+    await api.plugins.loadRegistry();
     await api.storyBible.load();
     await api.storyBible.saveAsset({
       schemaVersion: "1.0",
@@ -173,6 +175,7 @@ describe("Electron security baseline", () => {
       "application:settings:list-model-profiles",
       "application:settings:save-model-profile",
       "application:settings:test-model-profile",
+      "application:plugins:load-registry",
       "application:story-bible:load",
       "application:story-bible:save-asset",
       "application:story-bible:save-memory",
@@ -203,6 +206,10 @@ describe("Electron security baseline", () => {
     await expect(handlers["application:settings:list-model-profiles"]()).resolves.toMatchObject({
       ok: false,
       error: { code: "MODEL_SETTINGS_UNAVAILABLE" }
+    });
+    await expect(handlers["application:plugins:load-registry"]()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "PLUGIN_REGISTRY_UNAVAILABLE" }
     });
     await expect(handlers["application:story-bible:load"]()).resolves.toMatchObject({
       ok: false,

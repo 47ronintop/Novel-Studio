@@ -15,6 +15,7 @@ import type {
   ModelProfile,
   ModelSettingsSnapshot,
   NovelStudioApi,
+  PluginSettingsSnapshot,
   ProjectDirectorySelection,
   ProjectSearchIndex,
   ProjectSearchQuery,
@@ -186,6 +187,13 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           ipc,
           "application:settings:test-model-profile",
           profileId
+        )
+    },
+    plugins: {
+      loadRegistry: () =>
+        invokeTyped<Result<PluginSettingsSnapshot, UnifiedError>>(
+          ipc,
+          "application:plugins:load-registry"
         )
     },
     storyBible: {
