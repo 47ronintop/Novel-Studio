@@ -186,6 +186,7 @@ export function createProjectWorkflowBridge(
       openChapterTabIds,
       dirtyChapterIds: snapshot?.recovery.availableItems.map((item) => item.chapterId) ?? [],
       ...(snapshot?.recovery === undefined ? {} : { recovery: snapshot.recovery }),
+      ...(snapshot?.health === undefined ? {} : { health: snapshot.health }),
       ...(snapshot?.activeChapterId === undefined
         ? {}
         : { activeChapterId: snapshot.activeChapterId }),

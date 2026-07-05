@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.24 | Status: Active | Last Updated: 2026-07-05
+Version: 1.25 | Status: Active | Last Updated: 2026-07-05
 
 ## 目标
 
@@ -57,6 +57,8 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M37       | Editor Tabs              | 运行期打开标签集合、dirty 标记和关闭标签                         | Complete |
 | M38       | Autosave Recovery        | 章节编辑写入恢复记录，项目打开显示可恢复草稿提示                 | Complete |
 | M39       | Timeline Workspace       | 时间线入口显示结构化事件轨道、指标和父时间线编辑入口             | Complete |
+| M40       | Project Health           | 问题面板显示 Application 层项目健康诊断和恢复引用问题            | Complete |
+| M41       | Command Palette          | 命令面板支持搜索过滤、分组、键盘选择和执行错误反馈               | Complete |
 
 ## M15 完成内容
 
@@ -244,18 +246,29 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - 每个事件保留“编辑父时间线”入口，复用既有 Story Bible timeline asset 编辑闭环。
 - M39 不包含事件级表单编辑、拖拽排序、独立事件 schema 或正文双向定位。
 
+## M40/M41 完成内容
+
+- 新增 `docs/productization/m40-m41-project-health-command-palette.md`，明确 Project Health 与 Command Palette 的联合产品化切片。
+- `ProjectWorkspaceSnapshot` 新增 `health` DTO，包含 `healthy/attention/blocked` 状态、severity 汇总和结构化 issue rows。
+- `ProjectWorkspaceSession` 在项目打开、创建和章节切换后生成 schema/cache/history/recovery/reference 初版健康诊断。
+- Problems 底部面板显示 Project Health 摘要、错误/警告/信息计数和具体诊断项。
+- `ProjectWorkflowBridge` 将 Application health DTO 传给 UI，前端不扫描项目文件。
+- Command Palette 支持 safe command 搜索过滤、按 scope 分组、活动项标记、ArrowUp/ArrowDown 选择和 Enter 执行。
+- Renderer 执行命令失败时保留命令面板并显示错误反馈，不再静默无响应。
+- M40 不包含完整跨文件引用图扫描或自动修复；M41 不包含危险命令确认流或用户自定义快捷键注册表。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转、M32 时间线主视图、M33 插件管理 UI、M34 多标签编辑器、M35 宪法差距审计、M36 Workspace Layout、M37 Editor Tabs、M38 Autosave Recovery 与 M39 Timeline Workspace。
+- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转、M32 时间线主视图、M33 插件管理 UI、M34 多标签编辑器、M35 宪法差距审计、M36 Workspace Layout、M37 Editor Tabs、M38 Autosave Recovery、M39 Timeline Workspace、M40 Project Health 与 M41 Command Palette。
 - M27 安装后首次使用引导已暂缓，需在核心可见功能更稳定后回补。
 - 当前产品状态是 beta productization：主干闭环可运行，但多个宪法/UI 指南能力仍是 Product Gap。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M40 Project Health：真实问题面板、引用完整性和 cache/history/recovery 健康检查。
+- 下一步建议进入 M42 Plugin Management：从只读注册表走向插件 manifest 摘要、启停状态和更明确的授权边界。
 - M39-M48 按 `docs/productization/m35-constitution-gap-audit.md` 的缺口排序推进，不再把切片完成误写成产品完整。
 
 ## 当前技术债重点

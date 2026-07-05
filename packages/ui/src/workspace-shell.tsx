@@ -3,6 +3,7 @@ import type {
   ApplicationCommand,
   ApplicationCommandId,
   DesktopShellState,
+  ProjectWorkspaceHealth,
   ProjectSearchResultItem
 } from "@novel-studio/application";
 import type { ChapterSummary } from "@novel-studio/shared";
@@ -30,6 +31,7 @@ import {
 
 import { ChapterEditor } from "./chapter-editor.js";
 import { CommandPalette } from "./command-palette.js";
+import type { CommandPaletteFeedback } from "./command-palette.js";
 import { ConfigStudioPanel } from "./config-studio-panel.js";
 import { ModelSettingsPanel } from "./model-settings-panel.js";
 
@@ -37,6 +39,9 @@ export interface WorkspaceShellProps {
   readonly shellState: DesktopShellState;
   readonly commands: readonly ApplicationCommand[];
   readonly commandPaletteOpen: boolean;
+  readonly commandPaletteFeedback?: CommandPaletteFeedback | undefined;
+  readonly commandPaletteQuery?: string | undefined;
+  readonly commandPaletteSelectedCommandId?: ApplicationCommandId | undefined;
   readonly chapterEditor?: ChapterEditorProps;
   readonly projectWorkflow?: ProjectWorkflowProps;
   readonly aiWritingWorkflow?: AiWritingWorkflowProps;
@@ -46,6 +51,9 @@ export interface WorkspaceShellProps {
   readonly storyBible?: StoryBibleSummaryProps;
   readonly storyBibleEditor?: StoryBibleEditorProps;
   readonly onCommandPaletteOpen?: () => void;
+  readonly onCommandPaletteQueryChange?: ((query: string) => void) | undefined;
+  readonly onCommandPaletteActiveCommandChange?:
+    ((commandId: ApplicationCommandId) => void) | undefined;
   readonly onCommandExecute?: (commandId: ApplicationCommandId) => void;
   readonly onBottomPanelTabSelect?: ((tab: string) => void) | undefined;
   readonly onSearchResultOpen?: ((result: ProjectSearchResultItem) => void) | undefined;
@@ -62,6 +70,7 @@ export interface ProjectWorkflowProps {
   readonly openChapterTabIds?: readonly string[];
   readonly dirtyChapterIds?: readonly string[];
   readonly recovery?: ProjectWorkflowRecoveryProps;
+  readonly health?: ProjectWorkspaceHealth;
   readonly onProjectRootChange: (projectRoot: string) => void;
   readonly onOpenProject: () => void;
   readonly onCreateProject: () => void;
@@ -275,6 +284,9 @@ export function WorkspaceShell({
   shellState,
   commands,
   commandPaletteOpen,
+  commandPaletteFeedback,
+  commandPaletteQuery,
+  commandPaletteSelectedCommandId,
   chapterEditor,
   projectWorkflow,
   aiWritingWorkflow,
@@ -284,6 +296,8 @@ export function WorkspaceShell({
   storyBible,
   storyBibleEditor,
   onCommandPaletteOpen,
+  onCommandPaletteQueryChange,
+  onCommandPaletteActiveCommandChange,
   onCommandExecute,
   onBottomPanelTabSelect,
   onSearchResultOpen,
@@ -657,6 +671,7 @@ export function WorkspaceShell({
           <BottomPanelContent
             activeTab={activeBottomPanelTab}
             aiWritingWorkflow={aiWritingWorkflow}
+            projectWorkflow={projectWorkflow}
             search={search}
           />
         </section>
@@ -664,8 +679,13 @@ export function WorkspaceShell({
 
       <CommandPalette
         commands={commands}
+        executionFeedback={commandPaletteFeedback}
+        onActiveCommandChange={onCommandPaletteActiveCommandChange}
         onCommandExecute={onCommandExecute}
+        onQueryChange={onCommandPaletteQueryChange}
         open={commandPaletteOpen || shellState.commandPaletteOpen}
+        query={commandPaletteQuery}
+        selectedCommandId={commandPaletteSelectedCommandId}
       />
     </div>
   );
@@ -674,10 +694,12 @@ export function WorkspaceShell({
 function BottomPanelContent({
   activeTab,
   aiWritingWorkflow,
+  projectWorkflow,
   search
 }: {
   readonly activeTab: string;
   readonly aiWritingWorkflow: AiWritingWorkflowProps | undefined;
+  readonly projectWorkflow: ProjectWorkflowProps | undefined;
   readonly search: ProjectSearchProps | undefined;
 }) {
   const label = bottomPanelLabels.get(activeTab) ?? activeTab;
@@ -702,6 +724,33 @@ function BottomPanelContent({
   }
 
   if (activeTab === "问题") {
+    if (projectWorkflow?.health !== undefined) {
+      const health = projectWorkflow.health;
+      return (
+        <div className="ns-project-health" aria-label="Project health diagnostics">
+          <div className="ns-project-health-summary">
+            <strong>Project Health {health.status}</strong>
+            <span>Checked {health.checkedAt}</span>
+            <span>Errors {health.summary.errorCount}</span>
+            <span>Warnings {health.summary.warningCount}</span>
+            <span>Info {health.summary.infoCount}</span>
+          </div>
+          <ol className="ns-project-health-list">
+            {health.issues.map((issue) => (
+              <li className="ns-project-health-issue" data-severity={issue.severity} key={issue.id}>
+                <div>
+                  <strong>{issue.title}</strong>
+                  <span>{issue.source}</span>
+                </div>
+                <p>{issue.message}</p>
+                <span>{issue.suggestedAction}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      );
+    }
+
     return (
       <div className="ns-bottom-panel-content" aria-label="底部面板内容：问题">
         <strong>问题</strong>

@@ -9,6 +9,7 @@ import type {
 import type {
   AiWritingWorkflowProps,
   ChapterEditorProps,
+  CommandPaletteFeedback,
   ConfigStudioPanelProps,
   ModelSettingsDraft,
   ModelSettingsPanelProps,
@@ -173,6 +174,13 @@ export function App() {
   );
   const [studio, setStudio] = useState(() => studioBridge?.getProps());
   const [shortcutState, setShortcutState] = useState({ commandPaletteOpen: false });
+  const [commandPaletteFeedback, setCommandPaletteFeedback] = useState<
+    CommandPaletteFeedback | undefined
+  >(undefined);
+  const [commandPaletteQuery, setCommandPaletteQuery] = useState("");
+  const [commandPaletteSelectedCommandId, setCommandPaletteSelectedCommandId] = useState<
+    ApplicationCommandId | undefined
+  >(undefined);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -463,10 +471,22 @@ export function App() {
   }, []);
 
   const handleCommandPaletteOpen = useCallback(() => {
+    setCommandPaletteFeedback(undefined);
+    setCommandPaletteQuery("");
+    setCommandPaletteSelectedCommandId(undefined);
     setShortcutState((current) => ({
       ...current,
       commandPaletteOpen: true
     }));
+  }, []);
+
+  const handleCommandPaletteQueryChange = useCallback((query: string) => {
+    setCommandPaletteQuery(query);
+    setCommandPaletteSelectedCommandId(undefined);
+  }, []);
+
+  const handleCommandPaletteActiveCommandChange = useCallback((commandId: ApplicationCommandId) => {
+    setCommandPaletteSelectedCommandId(commandId);
   }, []);
 
   const handleCommandExecute = useCallback(
@@ -477,10 +497,21 @@ export function App() {
 
       void commandExecutionBridge.execute(commandId).then((result) => {
         if (!result.ok) {
+          setCommandPaletteFeedback({
+            kind: "error",
+            message: result.error.message
+          });
+          setShortcutState((current) => ({
+            ...current,
+            commandPaletteOpen: true
+          }));
           return;
         }
 
         setShellState(result.value);
+        setCommandPaletteFeedback(undefined);
+        setCommandPaletteQuery("");
+        setCommandPaletteSelectedCommandId(undefined);
         setShortcutState((current) => ({
           ...current,
           commandPaletteOpen: false
@@ -879,8 +910,13 @@ export function App() {
       shellState={shellState}
       commands={commands}
       commandPaletteOpen={shortcutState.commandPaletteOpen}
+      commandPaletteFeedback={commandPaletteFeedback}
+      commandPaletteQuery={commandPaletteQuery}
+      commandPaletteSelectedCommandId={commandPaletteSelectedCommandId}
       onCommandExecute={handleCommandExecute}
+      onCommandPaletteActiveCommandChange={handleCommandPaletteActiveCommandChange}
       onCommandPaletteOpen={handleCommandPaletteOpen}
+      onCommandPaletteQueryChange={handleCommandPaletteQueryChange}
       onBottomPanelTabSelect={handleBottomPanelTabSelect}
       onSearchResultOpen={handleSearchResultOpen}
       onTimelineEntryOpen={handleTimelineEntryOpen}

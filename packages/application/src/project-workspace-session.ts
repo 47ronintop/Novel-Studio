@@ -51,6 +51,7 @@ export interface ProjectWorkspaceSnapshot {
   settings: WorkspaceProjectSettings;
   chapters: readonly ChapterSummary[];
   recovery: ProjectWorkspaceRecoverySummary;
+  health: ProjectWorkspaceHealth;
   activeChapterId?: string;
 }
 
@@ -62,6 +63,32 @@ export interface ProjectWorkspaceRecoveryItem extends JsonObject {
   sessionId: string;
   chapterId: string;
   updatedAt: string;
+}
+
+export type ProjectHealthStatus = "healthy" | "attention" | "blocked";
+export type ProjectHealthSeverity = "info" | "warning" | "error";
+export type ProjectHealthSource = "schema" | "cache" | "history" | "recovery" | "references";
+
+export interface ProjectWorkspaceHealth extends JsonObject {
+  status: ProjectHealthStatus;
+  checkedAt: string;
+  summary: ProjectWorkspaceHealthSummary;
+  issues: ProjectWorkspaceHealthIssue[];
+}
+
+export interface ProjectWorkspaceHealthSummary extends JsonObject {
+  errorCount: number;
+  warningCount: number;
+  infoCount: number;
+}
+
+export interface ProjectWorkspaceHealthIssue extends JsonObject {
+  id: string;
+  severity: ProjectHealthSeverity;
+  source: ProjectHealthSource;
+  title: string;
+  message: string;
+  suggestedAction: string;
 }
 
 export interface ProjectRepositoryPort {
@@ -173,12 +200,18 @@ export function createProjectWorkspaceSession(
     }
 
     const activeChapterId = chapters.value[0]?.id;
+    const recoverySummary = recovery.value;
     state = {
       projectRoot,
       project: projectSnapshot.project,
       settings: projectSnapshot.settings,
       chapters: chapters.value,
-      recovery: recovery.value,
+      recovery: recoverySummary,
+      health: buildProjectHealth({
+        checkedAt: currentTimestamp(),
+        chapters: chapters.value,
+        recovery: recoverySummary
+      }),
       ...(activeChapterId === undefined ? {} : { activeChapterId })
     };
     activeChapterEditorSession =
@@ -222,6 +255,11 @@ export function createProjectWorkspaceSession(
       ...state,
       chapters: chapters.value,
       recovery: recovery.value,
+      health: buildProjectHealth({
+        checkedAt: currentTimestamp(),
+        chapters: chapters.value,
+        recovery: recovery.value
+      }),
       activeChapterId: selected.id
     };
     activeChapterEditorSession = createActiveChapterEditorSession(selected.id);
@@ -275,6 +313,84 @@ export function createProjectWorkspaceSession(
         }))
     });
   }
+
+  function currentTimestamp(): string {
+    return options.now?.() ?? new Date().toISOString();
+  }
+}
+
+interface ProjectHealthInput {
+  checkedAt: string;
+  chapters: readonly ChapterSummary[];
+  recovery: ProjectWorkspaceRecoverySummary;
+}
+
+function buildProjectHealth(input: ProjectHealthInput): ProjectWorkspaceHealth {
+  const chapterIds = new Set(input.chapters.map((chapter) => chapter.id));
+  const issues: ProjectWorkspaceHealthIssue[] = [
+    {
+      id: "schema.project_opened",
+      severity: "info",
+      source: "schema",
+      title: "Project schema validated",
+      message: "Project metadata and settings passed repository validation during open/create.",
+      suggestedAction: "No action required."
+    },
+    {
+      id: "cache.search_rebuildable",
+      severity: "info",
+      source: "cache",
+      title: "Cache is rebuildable",
+      message:
+        "Search and derived indexes are treated as cache and can be rebuilt from project files.",
+      suggestedAction: "Use rebuild index if search results look stale."
+    },
+    {
+      id: "history.protected",
+      severity: "info",
+      source: "history",
+      title: "History is protected",
+      message: "Version history and recovery data are outside cache cleanup scope.",
+      suggestedAction: "Keep history cleanup explicit and separate from cache actions."
+    }
+  ];
+
+  if (input.recovery.availableItems.length > 0) {
+    issues.push({
+      id: "recovery.dirty_drafts",
+      severity: "warning",
+      source: "recovery",
+      title: "Recoverable drafts available",
+      message: `There are ${input.recovery.availableItems.length} dirty recovery draft(s).`,
+      suggestedAction: "Review recovery drafts before continuing long edits."
+    });
+  }
+
+  for (const recoveryItem of input.recovery.availableItems) {
+    if (!chapterIds.has(recoveryItem.chapterId)) {
+      issues.push({
+        id: `references.recovery_missing_chapter.${recoveryItem.chapterId}`,
+        severity: "error",
+        source: "references",
+        title: "Recovery record points to a missing chapter",
+        message: `Recovery draft ${recoveryItem.chapterId} no longer matches a chapter.`,
+        suggestedAction: "Review recovery history before clearing or archiving it."
+      });
+    }
+  }
+
+  const summary = {
+    errorCount: issues.filter((issue) => issue.severity === "error").length,
+    warningCount: issues.filter((issue) => issue.severity === "warning").length,
+    infoCount: issues.filter((issue) => issue.severity === "info").length
+  };
+
+  return {
+    status: summary.errorCount > 0 ? "blocked" : summary.warningCount > 0 ? "attention" : "healthy",
+    checkedAt: input.checkedAt,
+    summary,
+    issues
+  };
 }
 
 function createRecoverySessionId(projectId: string, chapterId: string): string {

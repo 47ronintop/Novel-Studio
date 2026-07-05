@@ -1760,6 +1760,80 @@ textarea:focus-visible,
   white-space: nowrap;
 }
 
+.ns-project-health {
+  border-top: 1px solid var(--ns-border);
+  display: grid;
+  gap: 8px;
+  max-height: var(--ns-bottom-panel-height);
+  overflow: auto;
+  padding: 8px 12px;
+}
+
+.ns-project-health-summary {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ns-project-health-summary strong {
+  color: var(--ns-ink);
+}
+
+.ns-project-health-summary span {
+  border: 1px solid var(--ns-border);
+  border-radius: 999px;
+  color: var(--ns-muted);
+  font-size: 12px;
+  min-height: 24px;
+  padding: 3px 8px;
+}
+
+.ns-project-health-list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ns-project-health-issue {
+  background: var(--ns-surface);
+  border: 1px solid var(--ns-border);
+  border-radius: 8px;
+  display: grid;
+  gap: 5px;
+  padding: 8px 10px;
+}
+
+.ns-project-health-issue[data-severity="error"] {
+  border-color: color-mix(in oklch, var(--ns-danger) 64%, var(--ns-border));
+}
+
+.ns-project-health-issue[data-severity="warning"] {
+  border-color: color-mix(in oklch, var(--ns-warning) 64%, var(--ns-border));
+}
+
+.ns-project-health-issue > div {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.ns-project-health-issue strong {
+  color: var(--ns-ink);
+  font-size: 13px;
+}
+
+.ns-project-health-issue p,
+.ns-project-health-issue span {
+  color: var(--ns-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+}
+
 .ns-command-palette {
   background: var(--ns-surface-raised);
   border: 1px solid var(--ns-border);
@@ -1791,10 +1865,41 @@ textarea:focus-visible,
   outline: none;
 }
 
+.ns-command-feedback {
+  border-bottom: 1px solid var(--ns-border);
+  color: var(--ns-muted);
+  font-size: 12px;
+  margin: 0;
+  padding: 8px 12px;
+}
+
+.ns-command-feedback[data-kind="error"] {
+  color: var(--ns-danger);
+}
+
+.ns-command-groups {
+  display: grid;
+  max-height: min(420px, calc(100vh - 160px));
+  overflow: auto;
+  padding: 6px;
+}
+
+.ns-command-group {
+  display: grid;
+  gap: 4px;
+}
+
+.ns-command-group h2 {
+  color: var(--ns-muted);
+  font-size: 11px;
+  font-weight: 600;
+  margin: 6px 8px 2px;
+}
+
 .ns-command-list {
   list-style: none;
   margin: 0;
-  padding: 6px;
+  padding: 0;
 }
 
 .ns-command-item {
@@ -1819,6 +1924,16 @@ textarea:focus-visible,
 
 .ns-command-action:hover {
   background: color-mix(in srgb, var(--ns-ink) 8%, transparent);
+}
+
+.ns-command-action[data-active="true"] {
+  background: color-mix(in srgb, var(--ns-accent) 18%, transparent);
+}
+
+.ns-command-empty {
+  color: var(--ns-muted);
+  font-size: 13px;
+  padding: 14px 12px;
 }
 
 .ns-risk-level {

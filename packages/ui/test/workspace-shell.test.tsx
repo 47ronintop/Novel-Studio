@@ -84,6 +84,63 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("当前查询 oath");
   });
 
+  test("renders project health diagnostics in the problems panel", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{
+          ...application.getShellState(),
+          activeBottomPanelTab: "问题"
+        }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        projectWorkflow={{
+          projectRootInput: "D:/Novel",
+          chapters: [],
+          health: {
+            status: "blocked",
+            checkedAt: "2026-07-05T00:10:00.000Z",
+            summary: {
+              errorCount: 1,
+              warningCount: 1,
+              infoCount: 3
+            },
+            issues: [
+              {
+                id: "references.recovery_missing_chapter.ch_missing",
+                severity: "error",
+                source: "references",
+                title: "Recovery record points to a missing chapter",
+                message: "Recovery draft ch_missing no longer matches a chapter.",
+                suggestedAction: "Review recovery history before clearing it."
+              },
+              {
+                id: "recovery.dirty_drafts",
+                severity: "warning",
+                source: "recovery",
+                title: "Recoverable drafts available",
+                message: "There is 1 dirty recovery draft.",
+                suggestedAction: "Open recovery review before continuing long edits."
+              }
+            ]
+          },
+          onProjectRootChange: () => undefined,
+          onOpenProject: () => undefined,
+          onCreateProject: () => undefined,
+          onCreateChapter: () => undefined,
+          onSelectChapter: () => undefined
+        }}
+      />
+    );
+
+    expect(html).toContain('aria-label="Project health diagnostics"');
+    expect(html).toContain("Project Health blocked");
+    expect(html).toContain("Errors 1");
+    expect(html).toContain("Warnings 1");
+    expect(html).toContain("Recovery record points to a missing chapter");
+    expect(html).toContain("Recoverable drafts available");
+  });
+
   test("opens directly into the writing workspace instead of a marketing page", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(

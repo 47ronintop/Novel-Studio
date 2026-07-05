@@ -9,7 +9,7 @@ Version: 1.0 | Status: Active
 | TD-005 | `ARCHITECTURE.md` 第 5/7 节                | Workflow Engine 位于 Agent Engine 下层，需要持续用接口和测试固化状态机边界  | 若团队误解，可能违反 P8 分层调用规则      | 用接口契约、import rules 和 package boundary tests 固化 | Open   |
 | TD-007 | `DATA_SCHEMA.md` 第 20/21 节               | migration log 路径、项目锁、多窗口冲突策略尚未定稿                          | 后续 Repository 并发和恢复策略可能受影响  | 后续 hardening 明确 locking、migration log 和冲突处理   | Open   |
 | TD-008 | `DATA_SCHEMA.md` 第 17 节                  | history 体积增长策略尚未量化                                                | 长篇项目可能产生大量快照，影响 Git 体验   | 定义归档、压缩、手动保留策略；默认不得误删              | Open   |
-| TD-009 | `DATA_SCHEMA.md` 第 3/8/23 节              | 跨 JSON 文件引用完整性尚未落成具体检查规则                                  | 引用失效会影响 UI、Context 和 AI workflow | 增加 Repository integrity check                         | Open   |
+| TD-009 | `DATA_SCHEMA.md` 第 3/8/23 节              | M40 已加入初版 Project Health，但完整跨 JSON 文件引用图检查尚未落成         | 引用失效会影响 UI、Context 和 AI workflow | 后续增加 Repository integrity check 和完整引用图诊断    | Open   |
 | TD-010 | `UI_GUIDELINES.md` / `CODING_STANDARDS.md` | CodeMirror 6 方向已验证基础路径，但仍缺完整大文件和 diff 体验评估           | 影响 Markdown 编辑、diff 审阅和性能体验   | 继续补齐 editor spike 的性能与交互结论                  | Open   |
 | TD-011 | `CODING_STANDARDS.md` 第 14 节             | shortcut registry 已有基础路径，但冲突矩阵尚未生成                          | 系统快捷键和编辑器快捷键可能冲突          | 补充 shortcut conflict matrix 和自动化检查              | Open   |
 | TD-012 | `CODING_STANDARDS.md` 第 13 节             | UI 使用本地组件推进，但 headless primitive 库选择尚未最终定稿               | 影响可访问性、表单和弹层一致性            | 根据 UI 扩展需要决定是否引入 headless primitive 库      | Open   |

@@ -168,6 +168,78 @@ describe("M12 project workflow session", () => {
       }
     ]);
   });
+
+  test("builds project health diagnostics for recovery and reference issues", async () => {
+    const projectRoot = await createTempRoot();
+    const recoveryRecords: RecoveryRecord[] = [
+      {
+        schemaVersion: "1.0",
+        sessionId: "session_prj_m40_ch_missing",
+        projectId: "prj_m40_app",
+        openAssetId: "ch_missing",
+        assetType: "chapter",
+        dirty: true,
+        draftContentRef: {
+          strategy: "inline",
+          content: "orphan draft\n"
+        },
+        updatedAt: "2026-07-05T00:05:00.000Z"
+      }
+    ];
+    const session = createProjectWorkspaceSession({
+      now: () => "2026-07-05T00:10:00.000Z",
+      createProjectRepository: (root) =>
+        new ProjectFileRepository({
+          projectRoot: root,
+          now: () => "2026-07-05T00:00:00.000Z"
+        }),
+      createChapterRepository: (root) =>
+        new ChapterFileRepository({
+          projectRoot: root,
+          now: () => "2026-07-05T00:00:00.000Z"
+        }),
+      createHistoryRepository: (root) =>
+        new HistoryRepository({
+          projectRoot: root,
+          now: () => "2026-07-05T00:00:00.000Z",
+          createVersionId: () => "ver_m40"
+        }),
+      createRecoveryRepository: () => ({
+        async writeRecoveryRecord(record) {
+          recoveryRecords.unshift(record);
+          return { ok: true, value: record };
+        },
+        async listRecoveryRecords() {
+          return { ok: true, value: recoveryRecords };
+        }
+      })
+    });
+
+    const createdProject = await session.createProject({
+      projectRoot,
+      projectId: "prj_m40_app",
+      title: "M40 App Project",
+      language: "zh-CN"
+    });
+
+    expect(isOk(createdProject)).toBe(true);
+    if (isErr(createdProject)) {
+      throw new Error(createdProject.error.message);
+    }
+
+    expect(createdProject.value.health).toMatchObject({
+      status: "blocked",
+      checkedAt: "2026-07-05T00:10:00.000Z",
+      summary: {
+        errorCount: 1,
+        warningCount: 1
+      }
+    });
+    expect(createdProject.value.health.issues.map((issue) => issue.id)).toContain(
+      "references.recovery_missing_chapter.ch_missing"
+    );
+    expect(createdProject.value.health.issues.map((issue) => issue.source)).toContain("recovery");
+  });
 });
 
 function emptyRecoveryRepository(): RecoveryRepositoryPort {

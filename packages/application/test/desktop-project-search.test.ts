@@ -41,6 +41,16 @@ describe("DesktopApplication project search", () => {
           chapters: [],
           recovery: {
             availableItems: []
+          },
+          health: {
+            status: "healthy",
+            checkedAt: "2026-07-05T00:00:00.000Z",
+            summary: {
+              errorCount: 0,
+              warningCount: 0,
+              infoCount: 0
+            },
+            issues: []
           }
         }),
         getActiveChapterEditorSession: () => undefined,

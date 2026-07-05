@@ -61,8 +61,9 @@
 - 完成 M36/M37 Workspace Layout 与 Editor Tabs：新增 shell 布局状态、安全布局命令、Split View 参考窗格、运行期打开章节标签集合、dirty 标记和关闭标签行为。
 - 完成 M38 Autosave Recovery：章节编辑写入 `history/recovery/` 恢复记录，项目打开显示可恢复草稿提示，保存后写入 clean marker。
 - 完成 M39 Timeline Workspace：Timeline Activity 解析 Story Bible 时间线结构化事件，显示事件轨道、指标、章节引用和父时间线编辑入口。
+- 完成 M40/M41 Project Health 与 Command Palette：问题面板显示 Application 层健康诊断，命令面板支持搜索过滤、分组、键盘选择和执行错误反馈。
 
 ## Notes
 
 - Phase 7 当前定义的 M0-M18 已完成。
-- 当前已完成 Post-M18 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转、M32 时间线主视图、M33 插件管理 UI、M34 多标签编辑器、M35 宪法差距审计、M36 Workspace Layout、M37 Editor Tabs、M38 Autosave Recovery 与 M39 Timeline Workspace；M27 安装后首次使用引导暂缓；未经用户确认不得 push。
+- 当前已完成 Post-M18 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转、M32 时间线主视图、M33 插件管理 UI、M34 多标签编辑器、M35 宪法差距审计、M36 Workspace Layout、M37 Editor Tabs、M38 Autosave Recovery、M39 Timeline Workspace、M40 Project Health 与 M41 Command Palette；M27 安装后首次使用引导暂缓；未经用户确认不得 push。
