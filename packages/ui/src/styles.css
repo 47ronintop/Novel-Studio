@@ -888,6 +888,63 @@ textarea:focus-visible,
   padding-top: 10px;
 }
 
+.ns-ai-run-history {
+  border-top: 1px solid var(--ns-border);
+  display: grid;
+  gap: 10px;
+  padding-top: 10px;
+}
+
+.ns-ai-history-empty {
+  color: var(--ns-muted);
+  font-size: 12px;
+  margin: 0;
+}
+
+.ns-ai-history-list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ns-ai-history-row {
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+}
+
+.ns-ai-history-row div {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.ns-ai-history-row span {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.ns-ai-history-row div:first-child span:first-child {
+  color: var(--ns-ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ns-ai-history-row span:not(:first-child),
+.ns-ai-history-row div:not(:first-child) span {
+  color: var(--ns-muted);
+}
+
+.ns-ai-history-detail {
+  display: grid;
+  gap: 8px;
+}
+
 .ns-ai-observability-header {
   align-items: center;
   display: flex;

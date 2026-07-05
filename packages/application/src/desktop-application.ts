@@ -37,7 +37,10 @@ import type {
 import type {
   AiWritingSuggestion,
   AiWritingSuggestionRequest,
-  AiWritingWorkflowSession
+  AiWritingWorkflowSession,
+  WorkflowRunHistoryPort,
+  WorkflowRunRecord,
+  WorkflowRunSummary
 } from "./ai-writing-workflow-session.js";
 import type {
   CreateProjectInput,
@@ -107,6 +110,8 @@ export interface DesktopApplication {
   applyActiveChapterSuggestion(
     suggestionId: string
   ): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
+  listWorkflowRuns(): Promise<Result<WorkflowRunSummary[], UnifiedError>>;
+  readWorkflowRun(workflowRunId: string): Promise<Result<WorkflowRunRecord, UnifiedError>>;
   loadActiveChapter(): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
   editActiveChapter(nextBody: string): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
   saveActiveChapter(): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
@@ -146,6 +151,7 @@ export interface DesktopApplicationOptions {
   readonly storyBibleSession?: StoryBibleSession;
   readonly createProjectSearchSession?: (projectRoot: string) => ProjectSearchSession;
   readonly aiWritingWorkflowSession?: AiWritingWorkflowSession;
+  readonly workflowRunHistory?: WorkflowRunHistoryPort;
   readonly createAiWritingWorkflowSession?: (
     chapterEditorSession: ChapterEditorSession
   ) => AiWritingWorkflowSession;
@@ -315,6 +321,20 @@ export function createDesktopApplication(
       }
 
       return activeAiWritingWorkflowSession.applyChapterSuggestion(suggestionId);
+    },
+    async listWorkflowRuns() {
+      if (options.workflowRunHistory === undefined) {
+        return workflowRunHistoryUnavailable();
+      }
+
+      return options.workflowRunHistory.listWorkflowRuns();
+    },
+    async readWorkflowRun(workflowRunId) {
+      if (options.workflowRunHistory === undefined) {
+        return workflowRunHistoryUnavailable();
+      }
+
+      return options.workflowRunHistory.readWorkflowRun(workflowRunId);
     },
     async loadActiveChapter() {
       const activeChapterEditorSession = getActiveChapterEditorSession();
@@ -644,6 +664,19 @@ function aiWritingWorkflowUnavailable<T>(): Result<T, UnifiedError> {
       recoverability: "user-action",
       suggestedAction: "Open a project chapter before generating AI writing suggestions.",
       traceId: "application-ai-writing-workflow"
+    })
+  );
+}
+
+function workflowRunHistoryUnavailable<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "WORKFLOW_RUN_HISTORY_UNAVAILABLE",
+      category: "UserError",
+      message: "No workflow run history is available.",
+      recoverability: "user-action",
+      suggestedAction: "Open a project before viewing workflow run history.",
+      traceId: "application-workflow-run-history"
     })
   );
 }

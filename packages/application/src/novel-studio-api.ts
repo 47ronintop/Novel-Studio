@@ -10,7 +10,9 @@ import type {
 import type { ApplicationCommand } from "./command-registry.js";
 import type {
   AiWritingSuggestion,
-  AiWritingSuggestionRequest
+  AiWritingSuggestionRequest,
+  WorkflowRunRecord,
+  WorkflowRunSummary
 } from "./ai-writing-workflow-session.js";
 import type {
   ChapterEditorSnapshot,
@@ -67,6 +69,8 @@ export interface NovelStudioApi {
     applyChapterSuggestion(
       suggestionId: string
     ): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
+    listWorkflowRuns(): Promise<Result<WorkflowRunSummary[], UnifiedError>>;
+    readWorkflowRun(workflowRunId: string): Promise<Result<WorkflowRunRecord, UnifiedError>>;
   };
   search: {
     rebuildIndex(): Promise<Result<ProjectSearchIndex, UnifiedError>>;

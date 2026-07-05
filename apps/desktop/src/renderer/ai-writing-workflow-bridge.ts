@@ -2,7 +2,10 @@ import type {
   AiWritingWorkflowObservability,
   AiWritingSuggestion,
   ChapterEditorSnapshot,
-  NovelStudioApi
+  NovelStudioApi,
+  WorkflowRunRecord,
+  WorkflowRunRecordStatus,
+  WorkflowRunSummary
 } from "@novel-studio/application";
 import type {
   ChapterVersionSummary,
@@ -12,6 +15,7 @@ import type {
 } from "@novel-studio/shared";
 import type {
   AiWorkflowObservabilityProps,
+  AiWorkflowRunHistoryProps,
   AiWritingWorkflowProps,
   ChapterEditorProps,
   ChapterEditorVersionEntry
@@ -52,7 +56,8 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
     async generateSuggestion(instruction) {
       const suggestion = await unwrap(api.ai.generateChapterSuggestion({ instruction }));
       currentSuggestionId = suggestion.suggestionId;
-      props = toProps(suggestion, instruction);
+      const history = await loadHistory(api, suggestion.workflowRunId);
+      props = toProps(suggestion, instruction, history);
       return props;
     },
     async applySuggestion() {
@@ -79,13 +84,18 @@ async function unwrap<T>(promise: Promise<Result<T, UnifiedError>>): Promise<T> 
   throw new Error(result.error.message);
 }
 
-function toProps(suggestion: AiWritingSuggestion, instruction: string): AiWritingWorkflowProps {
+function toProps(
+  suggestion: AiWritingSuggestion,
+  instruction: string,
+  history: AiWorkflowRunHistoryProps | undefined
+): AiWritingWorkflowProps {
   return createProps({
     status: "suggestion-ready",
     instruction,
     summary: suggestion.summary,
     contextTraceLabel: traceLabel(suggestion),
     observability: toObservabilityProps(suggestion.observability),
+    ...(history === undefined ? {} : { history }),
     diffPreview: suggestion.diffPreview
   });
 }
@@ -132,6 +142,66 @@ function toObservabilityProps(
     generatedAtLabel: formatDateTime(observability.generatedAt),
     steps: observability.steps
   };
+}
+
+async function loadHistory(
+  api: NovelStudioApi,
+  workflowRunId: string
+): Promise<AiWorkflowRunHistoryProps | undefined> {
+  const list = await api.ai.listWorkflowRuns();
+  if (!list.ok) {
+    return undefined;
+  }
+
+  const detail = await api.ai.readWorkflowRun(workflowRunId);
+  return toHistoryProps(list.value, detail.ok ? detail.value : undefined);
+}
+
+function toHistoryProps(
+  runs: readonly WorkflowRunSummary[],
+  selectedRun: WorkflowRunRecord | undefined
+): AiWorkflowRunHistoryProps {
+  return {
+    runs: runs.map((run) => ({
+      workflowRunId: run.workflowRunId,
+      workflowTitle: run.workflowTitle,
+      statusLabel: workflowRunStatusLabel(run.status),
+      updatedAtLabel: formatDateTime(run.updatedAt),
+      modelLabel: run.modelLabel,
+      usageLabel: run.usageLabel,
+      costLabel: run.costLabel
+    })),
+    ...(selectedRun === undefined
+      ? {}
+      : {
+          selectedRun: {
+            workflowRunId: selectedRun.workflowRunId,
+            workflowTitle: selectedRun.workflowTitle,
+            statusLabel: workflowRunStatusLabel(selectedRun.status),
+            updatedAtLabel: formatDateTime(selectedRun.updatedAt),
+            contextLabel: `${selectedRun.context.sourceCount} ${sourceLabel(
+              selectedRun.context.sourceCount
+            )} / ${selectedRun.context.tokenEstimate} tokens`,
+            modelLabel: `${selectedRun.model.displayName} / ${selectedRun.model.modelName}`,
+            usageLabel: `${selectedRun.usage.totalTokens} tokens · ${selectedRun.usage.usageStatus}`,
+            costLabel: `${selectedRun.usage.cost.currency} ${selectedRun.usage.cost.amount.toFixed(
+              6
+            )} · ${selectedRun.usage.cost.status}`,
+            steps: selectedRun.steps
+          }
+        })
+  };
+}
+
+function workflowRunStatusLabel(status: WorkflowRunRecordStatus): string {
+  switch (status) {
+    case "pending-confirmation":
+      return "待确认";
+    case "applied":
+      return "已应用";
+    case "failed":
+      return "失败";
+  }
 }
 
 function sourceLabel(count: number): string {

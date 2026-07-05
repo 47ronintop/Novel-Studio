@@ -6,7 +6,9 @@ import type {
   ApplicationCommand,
   ChapterEditorSnapshot,
   DesktopApplication,
-  DesktopShellState
+  DesktopShellState,
+  WorkflowRunRecord,
+  WorkflowRunSummary
 } from "@novel-studio/application";
 
 import { createApplicationIpcHandlers } from "../src/main/ipc-handlers.js";
@@ -100,6 +102,37 @@ describe("M14 AI writing workflow IPC", () => {
       ok(chapterSnapshot())
     );
   });
+
+  test("exposes workflow run history through the preload API", async () => {
+    const calls: string[] = [];
+    const api = createNovelStudioApi({
+      async invoke(channel, ...args) {
+        calls.push(`${channel}:${args.length}`);
+        return channel === "application:ai:read-workflow-run"
+          ? ok(workflowRunRecord())
+          : ok([workflowRunSummary()]);
+      }
+    });
+
+    await api.ai.listWorkflowRuns();
+    await api.ai.readWorkflowRun("wfrun_m14");
+
+    expect(calls).toEqual([
+      "application:ai:list-workflow-runs:0",
+      "application:ai:read-workflow-run:1"
+    ]);
+  });
+
+  test("routes workflow run history IPC channels to the Application layer", async () => {
+    const handlers = createApplicationIpcHandlers(createFakeApplication());
+
+    await expect(handlers["application:ai:list-workflow-runs"]()).resolves.toEqual(
+      ok([workflowRunSummary()])
+    );
+    await expect(handlers["application:ai:read-workflow-run"]("wfrun_m14")).resolves.toEqual(
+      ok(workflowRunRecord())
+    );
+  });
 });
 
 function createFakeApplication(): DesktopApplication {
@@ -114,6 +147,8 @@ function createFakeApplication(): DesktopApplication {
     selectProjectChapter: unsupported,
     generateActiveChapterSuggestion: async () => ok(suggestion),
     applyActiveChapterSuggestion: async () => ok(chapterSnapshot()),
+    listWorkflowRuns: async () => ok([workflowRunSummary()]),
+    readWorkflowRun: async () => ok(workflowRunRecord()),
     loadActiveChapter: unsupported,
     editActiveChapter: unsupported,
     saveActiveChapter: unsupported,
@@ -127,6 +162,53 @@ function createFakeApplication(): DesktopApplication {
     loadConfigAsset: unsupported,
     saveConfigAsset: unsupported,
     restoreConfigAssetVersion: unsupported
+  };
+}
+
+function workflowRunSummary(): WorkflowRunSummary {
+  return {
+    workflowRunId: "wfrun_m14",
+    workflowTitle: "Continue Chapter",
+    status: "pending-confirmation",
+    updatedAt: "2026-07-04T00:00:00.000Z",
+    modelLabel: "M14 Mock Writer / mock-writer",
+    usageLabel: "0 tokens · missing",
+    costLabel: "USD 0.000000 · unknown"
+  };
+}
+
+function workflowRunRecord(): WorkflowRunRecord {
+  return {
+    schemaVersion: "1.0",
+    workflowRunId: "wfrun_m14",
+    workflowId: "wf_ai_continue_chapter",
+    workflowTitle: "Continue Chapter",
+    status: "pending-confirmation",
+    startedAt: "2026-07-04T00:00:00.000Z",
+    updatedAt: "2026-07-04T00:00:00.000Z",
+    context: {
+      sourceCount: 0,
+      tokenEstimate: 0,
+      selectionReason: "Continue."
+    },
+    model: {
+      profileId: "mock_m14",
+      displayName: "M14 Mock Writer",
+      provider: "mock",
+      modelName: "mock-writer"
+    },
+    usage: {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      usageStatus: "missing",
+      cost: {
+        amount: 0,
+        currency: "USD",
+        status: "unknown"
+      }
+    },
+    steps: []
   };
 }
 

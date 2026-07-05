@@ -3,7 +3,9 @@ import { describe, expect, test } from "vitest";
 import type {
   AiWritingSuggestion,
   ChapterEditorSnapshot,
-  NovelStudioApi
+  NovelStudioApi,
+  WorkflowRunRecord,
+  WorkflowRunSummary
 } from "@novel-studio/application";
 import { ok } from "@novel-studio/shared";
 
@@ -123,6 +125,16 @@ describe("AI writing workflow bridge", () => {
     expect(generated.contextTraceLabel).toBe("1 source / 4 tokens");
     expect(generated.observability?.usageLabel).toBe("24 tokens · estimated");
     expect(generated.observability?.modelLabel).toBe("M14 Mock Writer / mock-writer");
+    expect(generated.history?.runs[0]).toMatchObject({
+      workflowRunId: "wfrun_m14",
+      workflowTitle: "Continue Chapter",
+      statusLabel: "待确认"
+    });
+    expect(generated.history?.selectedRun?.steps.map((step) => step.label)).toEqual([
+      "构建上下文",
+      "运行写作 Agent",
+      "等待用户确认"
+    ]);
     expect(generated.observability?.steps.map((step) => step.label)).toEqual([
       "构建上下文",
       "运行写作 Agent",
@@ -164,6 +176,12 @@ function createApi(calls: string[]): NovelStudioApi {
         })
     },
     project: {
+      chooseOpenDirectory: async () => {
+        throw new Error("not used");
+      },
+      chooseCreateDirectory: async () => {
+        throw new Error("not used");
+      },
       open: async () => {
         throw new Error("not used");
       },
@@ -188,6 +206,30 @@ function createApi(calls: string[]): NovelStudioApi {
       applyChapterSuggestion: async (suggestionId) => {
         calls.push(`ai.apply:${suggestionId}`);
         return ok(appliedSnapshot);
+      },
+      listWorkflowRuns: async () => ok([workflowRunSummary()]),
+      readWorkflowRun: async () => ok(workflowRunRecord())
+    },
+    search: {
+      rebuildIndex: async () => {
+        throw new Error("not used");
+      },
+      query: async () => {
+        throw new Error("not used");
+      }
+    },
+    storyBible: {
+      load: async () => {
+        throw new Error("not used");
+      },
+      saveAsset: async () => {
+        throw new Error("not used");
+      },
+      saveMemory: async () => {
+        throw new Error("not used");
+      },
+      buildContextCandidates: async () => {
+        throw new Error("not used");
       }
     },
     chapter: {
@@ -235,5 +277,71 @@ function createApi(calls: string[]): NovelStudioApi {
         throw new Error("not used");
       }
     }
+  };
+}
+
+function workflowRunSummary(): WorkflowRunSummary {
+  return {
+    workflowRunId: "wfrun_m14",
+    workflowTitle: "Continue Chapter",
+    status: "pending-confirmation",
+    updatedAt: "2026-07-05T00:00:00.000Z",
+    modelLabel: "M14 Mock Writer / mock-writer",
+    usageLabel: "24 tokens · estimated",
+    costLabel: "USD 0.000000 · estimated"
+  };
+}
+
+function workflowRunRecord(): WorkflowRunRecord {
+  return {
+    schemaVersion: "1.0",
+    workflowRunId: "wfrun_m14",
+    workflowId: "wf_ai_continue_chapter",
+    workflowTitle: "Continue Chapter",
+    status: "pending-confirmation",
+    startedAt: "2026-07-05T00:00:00.000Z",
+    updatedAt: "2026-07-05T00:00:00.000Z",
+    context: {
+      sourceCount: 1,
+      tokenEstimate: 4,
+      selectionReason: "priority_then_budget"
+    },
+    model: {
+      profileId: "mock_m14",
+      displayName: "M14 Mock Writer",
+      provider: "mock",
+      modelName: "mock-writer"
+    },
+    usage: {
+      inputTokens: 16,
+      outputTokens: 8,
+      totalTokens: 24,
+      usageStatus: "estimated",
+      cost: {
+        amount: 0,
+        currency: "USD",
+        status: "estimated"
+      }
+    },
+    steps: [
+      {
+        stepId: "build_context",
+        label: "构建上下文",
+        kind: "context",
+        status: "completed"
+      },
+      {
+        stepId: "write_suggestion",
+        label: "运行写作 Agent",
+        kind: "agent",
+        status: "completed"
+      },
+      {
+        stepId: "confirm_apply",
+        label: "等待用户确认",
+        kind: "confirmation",
+        status: "waiting-confirmation"
+      }
+    ]
   };
 }

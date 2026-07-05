@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.13 | Status: Active | Last Updated: 2026-07-05
+Version: 1.14 | Status: Active | Last Updated: 2026-07-05
 
 ## 目标
 
@@ -42,6 +42,7 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M22       | Settings UX Completion | 设置页模型配置、默认 profile、连接测试、隐私安全提示的可用闭环   | Complete |
 | M23       | Studio UX Completion   | Prompt/Agent/Workflow 配置资产的可选择、可编辑、可保存工作台     | Complete |
 | M24       | 工作流运行观测         | AI 工作流运行 trace、上下文、模型、token/cost 和步骤状态可见     | Complete |
+| M25       | 工作流运行历史         | 最近 AI 工作流运行历史、脱敏详情、步骤状态和本地审计记录         | Complete |
 
 ## M15 完成内容
 
@@ -118,16 +119,25 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - Renderer `AiWritingWorkflowBridge` 将结构化观测数据转换为 UI 标签，不显示密钥引用或明文密钥。
 - Inspector 的 AI Workflow 面板新增“AI 工作流运行观测”，展示上下文、模型、Token、成本和步骤状态。
 
+## M25 完成内容
+
+- 新增 `docs/productization/m25-workflow-run-history.md`，明确工作流运行历史的数据落点、安全边界、UI 行为和验收标准。
+- 新增 `workflow-run-record` schema 与 valid/invalid fixtures，运行历史进入 schema-first contract tests。
+- `HistoryRepository` 支持在 `history/workflows/runs/` 写入、列出和读取 workflow run record，写入前进行 schema 校验。
+- AI 写作建议生成成功后记录本地 workflow run history，内容只包含脱敏 workflow/context/model/usage/step 摘要。
+- Desktop IPC/preload 增加列出和读取 workflow run history 的白名单通道。
+- AI Workflow Inspector 新增“工作流运行历史”，展示最近运行、状态、模型、token/cost 和选中运行步骤详情。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion 与 M24 工作流运行观测。
+- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测与 M25 工作流运行历史。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M25 工作流运行历史，补齐多次运行历史、失败记录、trace 回放和可导出的本地审计日志。
+- 下一步建议进入 M26 工作流失败诊断与重试策略，补齐失败运行记录、可解释错误原因、用户触发重试和 retry policy 展示。
 
 ## 当前技术债重点
 

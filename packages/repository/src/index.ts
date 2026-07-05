@@ -28,7 +28,18 @@ export type {
   RecoveryRepositoryPort,
   SnapshotReason,
   SnapshotTextAssetInput,
-  VersionRecord
+  VersionRecord,
+  WorkflowRunContextSummary,
+  WorkflowRunCostSummary,
+  WorkflowRunErrorSummary,
+  WorkflowRunModelSummary,
+  WorkflowRunRecord,
+  WorkflowRunRecordStatus,
+  WorkflowRunStepKind,
+  WorkflowRunStepRecord,
+  WorkflowRunStepStatus,
+  WorkflowRunSummary,
+  WorkflowRunUsageSummary
 } from "./ports.js";
 export { ProjectFileRepository } from "./project-repository.js";
 export { RecoveryRepository } from "./recovery-repository.js";

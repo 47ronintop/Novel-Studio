@@ -1,6 +1,6 @@
 ﻿# INDEX - Novel Studio 文档索引
 
-Version: 1.24 | Last Updated: 2026-07-05
+Version: 1.25 | Last Updated: 2026-07-05
 
 ## 文档优先级
 
@@ -32,6 +32,7 @@ Version: 1.24 | Last Updated: 2026-07-05
 | `docs/productization/m22-settings-ux-completion.md`     | 1.0        | Complete             | 设置页模型配置、连接测试、隐私安全提示和验收标准        |
 | `docs/productization/m23-studio-ux-completion.md`       | 1.0        | Complete             | Studio 配置资产选择、JSON 编辑、保存和版本恢复闭环      |
 | `docs/productization/m24-workflow-run-observability.md` | 1.0        | Complete             | AI 工作流运行 trace、模型、token/cost 和步骤状态展示    |
+| `docs/productization/m25-workflow-run-history.md`       | 1.0        | Complete             | AI 工作流最近运行历史、脱敏详情和本地审计记录           |
 | `LLM_ADAPTER.md`                                        | 1.0        | Accepted for M6      | Provider-neutral 模型调用边界                           |
 | `WORKFLOW_ENGINE.md`                                    | 1.0        | Accepted for M7.1    | 确定性 workflow 状态机                                  |
 | `CONTEXT_ENGINE.md`                                     | 1.0        | Accepted for M7.2    | Context Bundle、token budget、trace                     |
@@ -55,7 +56,7 @@ Version: 1.24 | Last Updated: 2026-07-05
 | Phase 5 开发规范      | Complete | `CODING_STANDARDS.md`、`TESTING.md` | 已完成     |
 | Phase 6 Task Planning | Complete | `ROADMAP.md`                        | 已完成     |
 | Phase 7 正式开发      | Complete | M0-M18 已完成                       | 已完成     |
-| Post-M18 产品化打磨   | Active   | M19-M24 已完成                      | 下一步 M25 |
+| Post-M18 产品化打磨   | Active   | M19-M25 已完成                      | 下一步 M26 |
 
 ## 当前本地状态
 
@@ -66,5 +67,6 @@ Version: 1.24 | Last Updated: 2026-07-05
 - 当前已完成 M22 Settings UX Completion。
 - 当前已完成 M23 Studio UX Completion。
 - 当前已完成 M24 工作流运行观测。
+- 当前已完成 M25 工作流运行历史。
 - 未经用户确认不得 push。
 - 当前本地 artifact 位于被忽略的 `release/` 目录，不提交到仓库。

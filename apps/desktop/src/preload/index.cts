@@ -26,7 +26,9 @@ import type {
   StoryBibleAsset,
   StoryBibleContextCandidate,
   StoryBibleContextCandidateOptions,
-  StoryBibleSnapshot
+  StoryBibleSnapshot,
+  WorkflowRunRecord,
+  WorkflowRunSummary
 } from "@novel-studio/application";
 import type {
   ChapterSummary,
@@ -88,6 +90,13 @@ const api: NovelStudioApi = {
       invokeTyped<Result<ChapterEditorSnapshot, UnifiedError>>(
         "application:ai:apply-chapter-suggestion",
         suggestionId
+      ),
+    listWorkflowRuns: () =>
+      invokeTyped<Result<WorkflowRunSummary[], UnifiedError>>("application:ai:list-workflow-runs"),
+    readWorkflowRun: (workflowRunId: string) =>
+      invokeTyped<Result<WorkflowRunRecord, UnifiedError>>(
+        "application:ai:read-workflow-run",
+        workflowRunId
       )
   },
   search: {

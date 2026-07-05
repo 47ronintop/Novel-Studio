@@ -132,6 +132,12 @@ export function createProjectDesktopApplication(
           ...(options.now === undefined ? {} : { now: options.now })
         })
       }),
+    workflowRunHistory: {
+      recordWorkflowRun: (record) => createWorkflowRunHistoryRepository().recordWorkflowRun(record),
+      listWorkflowRuns: () => createWorkflowRunHistoryRepository().listWorkflowRuns(),
+      readWorkflowRun: (workflowRunId) =>
+        createWorkflowRunHistoryRepository().readWorkflowRun(workflowRunId)
+    },
     createAiWritingWorkflowSession: (activeChapterEditorSession) =>
       createAgentBackedAiWritingWorkflowSession({
         chapterEditorSession: activeChapterEditorSession,
@@ -147,7 +153,11 @@ export function createProjectDesktopApplication(
 
           return resolveDefaultModelRuntimeProfile(settings.value);
         },
-        ...(options.now === undefined ? {} : { now: options.now })
+        ...(options.now === undefined ? {} : { now: options.now }),
+        workflowRunHistory: {
+          recordWorkflowRun: (record) =>
+            createWorkflowRunHistoryRepository().recordWorkflowRun(record)
+        }
       }),
     projectTitle: options.projectTitle,
     navigatorSections: [
@@ -182,6 +192,15 @@ export function createProjectDesktopApplication(
       projectRoot: projectWorkspaceSession.getSnapshot()?.projectRoot ?? options.projectRoot,
       traceId: "trace_desktop_config_asset_repository",
       historyRepository
+    });
+  }
+
+  function createWorkflowRunHistoryRepository(): HistoryRepository {
+    return new HistoryRepository({
+      projectRoot: projectWorkspaceSession.getSnapshot()?.projectRoot ?? options.projectRoot,
+      traceId: "trace_desktop_workflow_run_history_repository",
+      ...(options.now === undefined ? {} : { now: options.now }),
+      ...(options.createVersionId === undefined ? {} : { createVersionId: options.createVersionId })
     });
   }
 }

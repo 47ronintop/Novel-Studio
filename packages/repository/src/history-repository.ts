@@ -10,7 +10,13 @@ import type {
 } from "@novel-studio/shared";
 import { writeTextAtomically } from "./atomic-write.js";
 import { validationError } from "./errors.js";
-import type { HistoryRepositoryPort, SnapshotTextAssetInput, VersionRecord } from "./ports.js";
+import type {
+  HistoryRepositoryPort,
+  SnapshotTextAssetInput,
+  VersionRecord,
+  WorkflowRunRecord,
+  WorkflowRunSummary
+} from "./ports.js";
 import { validateWithSchema } from "./schema-validation.js";
 
 export interface HistoryRepositoryOptions {
@@ -149,6 +155,115 @@ export class HistoryRepository implements HistoryRepositoryPort, ChapterHistoryR
     });
   }
 
+  public async recordWorkflowRun(
+    record: WorkflowRunRecord
+  ): Promise<Result<WorkflowRunRecord, UnifiedError>> {
+    const idValidation = validateWorkflowRunId(record.workflowRunId);
+    if (!idValidation.ok) {
+      return idValidation;
+    }
+
+    const validation = await validateWithSchema("workflow-run-record", record);
+    if (!validation.valid) {
+      return err(
+        validationError({
+          code: "WORKFLOW_RUN_RECORD_INVALID",
+          message: "Workflow run record failed schema validation.",
+          suggestedAction: "Check workflow run history metadata generation and retry.",
+          traceId: this.traceId,
+          redactedDetail: {
+            issues: validation.issues.map((issue) => ({
+              instancePath: issue.instancePath,
+              schemaPath: issue.schemaPath,
+              keyword: issue.keyword,
+              message: issue.message
+            }))
+          }
+        })
+      );
+    }
+
+    const write = await writeTextAtomically({
+      targetPath: this.workflowRunPath(record.workflowRunId),
+      content: `${JSON.stringify(record, null, 2)}\n`,
+      traceId: this.traceId
+    });
+    if (!write.ok) {
+      return write;
+    }
+
+    return ok(record);
+  }
+
+  public async listWorkflowRuns(): Promise<Result<WorkflowRunSummary[], UnifiedError>> {
+    const runsDir = this.workflowRunsDirectory();
+
+    try {
+      const entries = await readdir(runsDir, { withFileTypes: true });
+      const records = await Promise.all(
+        entries
+          .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+          .map(async (entry) => this.readWorkflowRunRecordFromPath(join(runsDir, entry.name)))
+      );
+
+      const summaries = records.map(toWorkflowRunSummary);
+      summaries.sort((left, right) => {
+        const updatedAtDiff = right.updatedAt.localeCompare(left.updatedAt);
+        if (updatedAtDiff !== 0) {
+          return updatedAtDiff;
+        }
+
+        return right.workflowRunId.localeCompare(left.workflowRunId);
+      });
+
+      return ok(summaries);
+    } catch (error) {
+      if (isNodeMissingFileError(error)) {
+        return ok([]);
+      }
+
+      return err(
+        validationError({
+          code: "WORKFLOW_RUN_HISTORY_LIST_FAILED",
+          message: "Workflow run history could not be read.",
+          suggestedAction: "Generate a new AI workflow run and retry.",
+          traceId: this.traceId,
+          redactedDetail: {
+            runsDir,
+            reason: error instanceof Error ? error.message : "Unknown workflow history read error"
+          }
+        })
+      );
+    }
+  }
+
+  public async readWorkflowRun(
+    workflowRunId: string
+  ): Promise<Result<WorkflowRunRecord, UnifiedError>> {
+    const idValidation = validateWorkflowRunId(workflowRunId);
+    if (!idValidation.ok) {
+      return idValidation;
+    }
+
+    try {
+      const record = await this.readWorkflowRunRecordFromPath(this.workflowRunPath(workflowRunId));
+      return ok(record);
+    } catch (error) {
+      return err(
+        validationError({
+          code: "WORKFLOW_RUN_RECORD_MISSING",
+          message: "Workflow run record could not be read.",
+          suggestedAction: "Select an available workflow run from history and retry.",
+          traceId: this.traceId,
+          redactedDetail: {
+            workflowRunId,
+            reason: error instanceof Error ? error.message : "Unknown workflow run read error"
+          }
+        })
+      );
+    }
+  }
+
   public async listTextAssetSnapshots(input: {
     assetType: "chapter";
     assetId: string;
@@ -263,8 +378,59 @@ export class HistoryRepository implements HistoryRepositoryPort, ChapterHistoryR
   private assetHistoryDirectory(assetType: string): string {
     return assetType === "workflow" ? "workflow" : `${assetType}s`;
   }
+
+  private workflowRunsDirectory(): string {
+    return join(this.options.projectRoot, "history", "workflows", "runs");
+  }
+
+  private workflowRunPath(workflowRunId: string): string {
+    return join(this.workflowRunsDirectory(), `${workflowRunId}.json`);
+  }
+
+  private async readWorkflowRunRecordFromPath(path: string): Promise<WorkflowRunRecord> {
+    const value = JSON.parse(await readFile(path, "utf8")) as unknown;
+    const validation = await validateWithSchema("workflow-run-record", value);
+    if (!validation.valid) {
+      throw new Error("Workflow run record failed schema validation.");
+    }
+
+    return value as WorkflowRunRecord;
+  }
 }
 
 function isNodeMissingFileError(error: unknown): error is NodeJS.ErrnoException {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+function validateWorkflowRunId(workflowRunId: string): Result<void, UnifiedError> {
+  if (/^[A-Za-z0-9_-]+$/.test(workflowRunId)) {
+    return ok(undefined);
+  }
+
+  return err(
+    validationError({
+      code: "WORKFLOW_RUN_ID_INVALID",
+      message: "Workflow run id is not a safe history file name.",
+      suggestedAction:
+        "Use a workflow run id containing only letters, numbers, dashes and underscores.",
+      traceId: "trace_repository_history",
+      redactedDetail: {
+        workflowRunId
+      }
+    })
+  );
+}
+
+function toWorkflowRunSummary(record: WorkflowRunRecord): WorkflowRunSummary {
+  return {
+    workflowRunId: record.workflowRunId,
+    workflowTitle: record.workflowTitle,
+    status: record.status,
+    updatedAt: record.updatedAt,
+    modelLabel: `${record.model.displayName} / ${record.model.modelName}`,
+    usageLabel: `${record.usage.totalTokens} tokens · ${record.usage.usageStatus}`,
+    costLabel: `${record.usage.cost.currency} ${record.usage.cost.amount.toFixed(6)} · ${
+      record.usage.cost.status
+    }`
+  };
 }

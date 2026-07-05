@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import { createAgentBackedAiWritingWorkflowSession } from "../src/ai-writing-workflow-session.js";
+import type { WorkflowRunRecord } from "../src/ai-writing-workflow-session.js";
 import { createChapterEditorSession } from "../src/chapter-editor-session.js";
 import { createLlmAdapter, createMockProvider } from "@novel-studio/llm-adapter";
 import type { LlmProvider, LlmRequest } from "@novel-studio/llm-adapter";
@@ -26,6 +27,7 @@ const proposedBody = "Opening line.\nAI continuation.\n";
 describe("M14 AI writing workflow session", () => {
   test("generates a preview-only suggestion and applies it only after confirmation", async () => {
     const writes: ChapterDocument[] = [];
+    const workflowRunRecords: WorkflowRunRecord[] = [];
     const chapterSession = createChapterEditorSession({
       chapterId: "ch_m14",
       repository: createRepository(writes),
@@ -59,7 +61,13 @@ describe("M14 AI writing workflow session", () => {
       createWorkflowRunId: () => "wfrun_m14",
       createSuggestionId: () => "sug_m14",
       createAgentRunId: () => "agentrun_m14",
-      createHandoffId: () => "handoff_m14"
+      createHandoffId: () => "handoff_m14",
+      workflowRunHistory: {
+        async recordWorkflowRun(record) {
+          workflowRunRecords.push(record);
+          return ok(record);
+        }
+      }
     });
 
     const generated = await aiWorkflow.generateChapterSuggestion({
@@ -133,6 +141,38 @@ describe("M14 AI writing workflow session", () => {
     expect(chapterSession.getState()?.chapter.body).toBe("Opening line.\n");
     expect(chapterSession.getState()?.dirty).toBe(false);
     expect(writes).toEqual([]);
+    expect(workflowRunRecords).toEqual([
+      expect.objectContaining({
+        schemaVersion: "1.0",
+        workflowRunId: "wfrun_m14",
+        workflowId: "wf_ai_continue_chapter",
+        workflowTitle: "Continue Chapter",
+        status: "pending-confirmation",
+        startedAt: "2026-07-04T00:00:00.000Z",
+        updatedAt: "2026-07-04T00:00:00.000Z",
+        context: {
+          sourceCount: 1,
+          tokenEstimate: 4,
+          selectionReason: "Continue the chapter."
+        },
+        model: {
+          profileId: "mock_m14",
+          displayName: "M14 Mock Writer",
+          provider: "mock",
+          modelName: "mock-writer"
+        },
+        usage: expect.objectContaining({
+          totalTokens: 0,
+          usageStatus: "missing"
+        }),
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            stepId: "confirm_apply",
+            status: "waiting-confirmation"
+          })
+        ])
+      })
+    ]);
 
     const applied = aiWorkflow.applyChapterSuggestion("sug_m14");
 

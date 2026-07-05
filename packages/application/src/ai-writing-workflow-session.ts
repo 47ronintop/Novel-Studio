@@ -2,11 +2,13 @@ import { buildContextBundle, type ContextBundleTrace } from "@novel-studio/conte
 import { runAgent, type AgentConfig } from "@novel-studio/agent-engine";
 import type {
   LlmAdapter,
+  LlmCostStatus,
   LlmModelProfile,
   LlmParameters,
   LlmProviderId,
   LlmRequest,
-  LlmUsage
+  LlmUsage,
+  LlmUsageStatus
 } from "@novel-studio/llm-adapter";
 import {
   completeWorkflowStep,
@@ -78,6 +80,78 @@ export interface AiWritingWorkflowObservability {
   readonly steps: readonly AiWorkflowObservedStep[];
 }
 
+export type WorkflowRunRecordStatus = "pending-confirmation" | "applied" | "failed";
+
+export interface WorkflowRunContextSummary extends JsonObject {
+  sourceCount: number;
+  tokenEstimate: number;
+  selectionReason: string;
+}
+
+export interface WorkflowRunModelSummary extends JsonObject {
+  profileId: string;
+  displayName: string;
+  provider: string;
+  modelName: string;
+}
+
+export interface WorkflowRunCostSummary extends JsonObject {
+  amount: number;
+  currency: string;
+  status: LlmCostStatus;
+}
+
+export interface WorkflowRunUsageSummary extends JsonObject {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  usageStatus: LlmUsageStatus;
+  cost: WorkflowRunCostSummary;
+}
+
+export interface WorkflowRunStepRecord extends JsonObject {
+  stepId: string;
+  label: string;
+  kind: AiWorkflowObservedStepKind;
+  status: AiWorkflowObservedStepStatus;
+}
+
+export interface WorkflowRunErrorSummary extends JsonObject {
+  code: string;
+  message: string;
+}
+
+export interface WorkflowRunRecord extends JsonObject {
+  schemaVersion: "1.0";
+  workflowRunId: string;
+  workflowId: string;
+  workflowTitle: string;
+  status: WorkflowRunRecordStatus;
+  startedAt: string;
+  updatedAt: string;
+  context: WorkflowRunContextSummary;
+  model: WorkflowRunModelSummary;
+  usage: WorkflowRunUsageSummary;
+  steps: WorkflowRunStepRecord[];
+  error?: WorkflowRunErrorSummary;
+}
+
+export interface WorkflowRunSummary extends JsonObject {
+  workflowRunId: string;
+  workflowTitle: string;
+  status: WorkflowRunRecordStatus;
+  updatedAt: string;
+  modelLabel: string;
+  usageLabel: string;
+  costLabel: string;
+}
+
+export interface WorkflowRunHistoryPort {
+  recordWorkflowRun(record: WorkflowRunRecord): Promise<Result<WorkflowRunRecord, UnifiedError>>;
+  listWorkflowRuns(): Promise<Result<WorkflowRunSummary[], UnifiedError>>;
+  readWorkflowRun(workflowRunId: string): Promise<Result<WorkflowRunRecord, UnifiedError>>;
+}
+
 export interface AiWritingWorkflowSession {
   generateChapterSuggestion(
     request: AiWritingSuggestionRequest
@@ -96,6 +170,7 @@ export interface AiWritingWorkflowSessionOptions {
   readonly createSuggestionId?: () => string;
   readonly createAgentRunId?: () => string;
   readonly createHandoffId?: () => string;
+  readonly workflowRunHistory?: Pick<WorkflowRunHistoryPort, "recordWorkflowRun">;
 }
 
 interface StoredSuggestion {
@@ -285,6 +360,15 @@ export function createAgentBackedAiWritingWorkflowSession(
         return invalidWorkflowAction(confirmationAction.value.kind);
       }
 
+      const generatedAt = now();
+      const observability = createObservability({
+        workflowRunId: runState.workflowRunId,
+        workflowTitle: parsedWorkflow.value.title,
+        generatedAt,
+        contextTrace: contextBundle.value.trace,
+        modelProfile: runtimeProfile.value.modelProfile,
+        usage: handoff.value.usage
+      });
       const suggestion: AiWritingSuggestion = {
         suggestionId: createSuggestionId(),
         workflowRunId: runState.workflowRunId,
@@ -293,15 +377,24 @@ export function createAgentBackedAiWritingWorkflowSession(
         summary: output.summary,
         diffPreview: options.chapterEditorSession.previewSuggestionDiff(output.proposedBody),
         contextTrace: contextBundle.value.trace,
-        observability: createObservability({
-          workflowRunId: runState.workflowRunId,
-          workflowTitle: parsedWorkflow.value.title,
-          generatedAt: now(),
-          contextTrace: contextBundle.value.trace,
-          modelProfile: runtimeProfile.value.modelProfile,
-          usage: handoff.value.usage
-        })
+        observability
       };
+
+      if (options.workflowRunHistory !== undefined) {
+        const recorded = await options.workflowRunHistory.recordWorkflowRun(
+          createWorkflowRunRecord({
+            workflowId: parsedWorkflow.value.id,
+            status: suggestion.status,
+            startedAt: runState.createdAt,
+            updatedAt: generatedAt,
+            observability
+          })
+        );
+        if (!recorded.ok) {
+          return recorded;
+        }
+      }
+
       suggestions.set(suggestion.suggestionId, {
         suggestion,
         workflow: parsedWorkflow.value,
@@ -357,6 +450,52 @@ export function createAgentBackedAiWritingWorkflowSession(
         versions: []
       });
     }
+  };
+}
+
+function createWorkflowRunRecord(input: {
+  readonly workflowId: string;
+  readonly status: WorkflowRunRecordStatus;
+  readonly startedAt: string;
+  readonly updatedAt: string;
+  readonly observability: AiWritingWorkflowObservability;
+}): WorkflowRunRecord {
+  return {
+    schemaVersion: "1.0",
+    workflowRunId: input.observability.workflowRunId,
+    workflowId: input.workflowId,
+    workflowTitle: input.observability.workflowTitle,
+    status: input.status,
+    startedAt: input.startedAt,
+    updatedAt: input.updatedAt,
+    context: {
+      sourceCount: input.observability.context.sourceCount,
+      tokenEstimate: input.observability.context.tokenEstimate,
+      selectionReason: input.observability.context.selectionReason
+    },
+    model: {
+      profileId: input.observability.model.profileId,
+      displayName: input.observability.model.displayName,
+      provider: input.observability.model.provider,
+      modelName: input.observability.model.modelName
+    },
+    usage: {
+      inputTokens: input.observability.usage.inputTokens,
+      outputTokens: input.observability.usage.outputTokens,
+      totalTokens: input.observability.usage.totalTokens,
+      usageStatus: input.observability.usage.usageStatus,
+      cost: {
+        amount: input.observability.usage.cost.amount,
+        currency: input.observability.usage.cost.currency,
+        status: input.observability.usage.cost.status
+      }
+    },
+    steps: input.observability.steps.map((step) => ({
+      stepId: step.stepId,
+      label: step.label,
+      kind: step.kind,
+      status: step.status
+    }))
   };
 }
 

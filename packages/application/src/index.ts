@@ -112,6 +112,16 @@ export type {
   AiWritingSuggestionRequest,
   AiWritingWorkflowObservability,
   AiWritingWorkflowSession,
-  AiWritingWorkflowSessionOptions
+  AiWritingWorkflowSessionOptions,
+  WorkflowRunContextSummary,
+  WorkflowRunCostSummary,
+  WorkflowRunErrorSummary,
+  WorkflowRunHistoryPort,
+  WorkflowRunModelSummary,
+  WorkflowRunRecord,
+  WorkflowRunRecordStatus,
+  WorkflowRunStepRecord,
+  WorkflowRunSummary,
+  WorkflowRunUsageSummary
 } from "./ai-writing-workflow-session.js";
 export { createAgentBackedAiWritingWorkflowSession } from "./ai-writing-workflow-session.js";

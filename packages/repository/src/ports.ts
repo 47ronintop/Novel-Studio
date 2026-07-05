@@ -10,6 +10,10 @@ export type SnapshotReason =
   | "migration";
 export type AssetType = "chapter" | "prompt" | "agent" | "workflow";
 export type CreatedBy = "user" | "system" | "migration";
+export type WorkflowRunRecordStatus = "pending-confirmation" | "applied" | "failed";
+export type WorkflowRunStepKind = "context" | "agent" | "confirmation";
+export type WorkflowRunStepStatus =
+  "pending" | "running" | "completed" | "waiting-confirmation" | "failed";
 
 export interface ProjectStats extends JsonObject {
   targetWordCount?: number;
@@ -111,6 +115,70 @@ export interface RecoveryRecord extends JsonObject {
   cursor?: RecoveryCursor;
 }
 
+export interface WorkflowRunContextSummary extends JsonObject {
+  sourceCount: number;
+  tokenEstimate: number;
+  selectionReason: string;
+}
+
+export interface WorkflowRunModelSummary extends JsonObject {
+  profileId: string;
+  displayName: string;
+  provider: string;
+  modelName: string;
+}
+
+export interface WorkflowRunCostSummary extends JsonObject {
+  amount: number;
+  currency: string;
+  status: "unknown" | "estimated" | "actual";
+}
+
+export interface WorkflowRunUsageSummary extends JsonObject {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  usageStatus: "missing" | "estimated" | "actual";
+  cost: WorkflowRunCostSummary;
+}
+
+export interface WorkflowRunStepRecord extends JsonObject {
+  stepId: string;
+  label: string;
+  kind: WorkflowRunStepKind;
+  status: WorkflowRunStepStatus;
+}
+
+export interface WorkflowRunErrorSummary extends JsonObject {
+  code: string;
+  message: string;
+}
+
+export interface WorkflowRunRecord extends JsonObject {
+  schemaVersion: "1.0";
+  workflowRunId: string;
+  workflowId: string;
+  workflowTitle: string;
+  status: WorkflowRunRecordStatus;
+  startedAt: string;
+  updatedAt: string;
+  context: WorkflowRunContextSummary;
+  model: WorkflowRunModelSummary;
+  usage: WorkflowRunUsageSummary;
+  steps: WorkflowRunStepRecord[];
+  error?: WorkflowRunErrorSummary;
+}
+
+export interface WorkflowRunSummary extends JsonObject {
+  workflowRunId: string;
+  workflowTitle: string;
+  status: WorkflowRunRecordStatus;
+  updatedAt: string;
+  modelLabel: string;
+  usageLabel: string;
+  costLabel: string;
+}
+
 export interface ProjectRepositoryPort {
   openProject(): Promise<Result<ProjectSnapshot, UnifiedError>>;
   createProject(input: CreateProjectInput): Promise<Result<ProjectSnapshot, UnifiedError>>;
@@ -118,6 +186,9 @@ export interface ProjectRepositoryPort {
 
 export interface HistoryRepositoryPort {
   snapshotTextAsset(input: SnapshotTextAssetInput): Promise<Result<VersionRecord, UnifiedError>>;
+  recordWorkflowRun(record: WorkflowRunRecord): Promise<Result<WorkflowRunRecord, UnifiedError>>;
+  listWorkflowRuns(): Promise<Result<WorkflowRunSummary[], UnifiedError>>;
+  readWorkflowRun(workflowRunId: string): Promise<Result<WorkflowRunRecord, UnifiedError>>;
 }
 
 export interface RecoveryRepositoryPort {

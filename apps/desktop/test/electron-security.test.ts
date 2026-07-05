@@ -50,6 +50,8 @@ describe("Electron security baseline", () => {
       "application:search:query",
       "application:ai:generate-chapter-suggestion",
       "application:ai:apply-chapter-suggestion",
+      "application:ai:list-workflow-runs",
+      "application:ai:read-workflow-run",
       "application:chapter:load",
       "application:chapter:edit",
       "application:chapter:save",
@@ -94,6 +96,8 @@ describe("Electron security baseline", () => {
     await api.chapter.load();
     await api.ai.generateChapterSuggestion({ instruction: "Continue." });
     await api.ai.applyChapterSuggestion("sug_01");
+    await api.ai.listWorkflowRuns();
+    await api.ai.readWorkflowRun("run_01");
     await api.chapter.edit("updated chapter body");
     await api.chapter.save();
     await api.chapter.listVersions();
@@ -158,6 +162,8 @@ describe("Electron security baseline", () => {
       "application:chapter:load",
       "application:ai:generate-chapter-suggestion",
       "application:ai:apply-chapter-suggestion",
+      "application:ai:list-workflow-runs",
+      "application:ai:read-workflow-run",
       "application:chapter:edit",
       "application:chapter:save",
       "application:chapter:list-versions",

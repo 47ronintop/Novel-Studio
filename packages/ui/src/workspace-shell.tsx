@@ -73,6 +73,7 @@ export interface AiWritingWorkflowProps {
   readonly summary?: string;
   readonly contextTraceLabel?: string;
   readonly observability?: AiWorkflowObservabilityProps;
+  readonly history?: AiWorkflowRunHistoryProps;
   readonly diffPreview?: ChapterEditorProps["diffPreview"];
   readonly onInstructionChange: (instruction: string) => void;
   readonly onGenerateSuggestion: () => void;
@@ -98,6 +99,26 @@ export interface AiWorkflowObservabilityProps {
   readonly usageLabel: string;
   readonly costLabel: string;
   readonly generatedAtLabel: string;
+  readonly steps: readonly AiWorkflowObservedStepProps[];
+}
+
+export interface AiWorkflowRunHistoryProps {
+  readonly runs: readonly AiWorkflowRunHistoryItemProps[];
+  readonly selectedRun?: AiWorkflowRunHistoryDetailProps;
+}
+
+export interface AiWorkflowRunHistoryItemProps {
+  readonly workflowRunId: string;
+  readonly workflowTitle: string;
+  readonly statusLabel: string;
+  readonly updatedAtLabel: string;
+  readonly modelLabel: string;
+  readonly usageLabel: string;
+  readonly costLabel: string;
+}
+
+export interface AiWorkflowRunHistoryDetailProps extends AiWorkflowRunHistoryItemProps {
+  readonly contextLabel: string;
   readonly steps: readonly AiWorkflowObservedStepProps[];
 }
 
@@ -421,6 +442,9 @@ export function WorkspaceShell({
               {aiWritingWorkflow.observability === undefined ? null : (
                 <AiWorkflowObservabilityView observability={aiWritingWorkflow.observability} />
               )}
+              {aiWritingWorkflow.history === undefined ? null : (
+                <AiWorkflowRunHistoryView history={aiWritingWorkflow.history} />
+              )}
             </section>
           )}
           {storyBible === undefined ? null : (
@@ -477,6 +501,65 @@ export function WorkspaceShell({
         open={commandPaletteOpen || shellState.commandPaletteOpen}
       />
     </div>
+  );
+}
+
+function AiWorkflowRunHistoryView({ history }: { readonly history: AiWorkflowRunHistoryProps }) {
+  return (
+    <section className="ns-ai-run-history" aria-label="工作流运行历史">
+      <div className="ns-ai-observability-header">
+        <span>工作流运行历史</span>
+        <span>{history.runs.length}</span>
+      </div>
+      {history.runs.length === 0 ? (
+        <p className="ns-ai-history-empty">暂无工作流运行记录</p>
+      ) : (
+        <ol className="ns-ai-history-list" aria-label="最近工作流运行">
+          {history.runs.map((run) => (
+            <li className="ns-ai-history-row" key={run.workflowRunId}>
+              <div>
+                <span>{run.workflowTitle}</span>
+                <span>{run.updatedAtLabel}</span>
+              </div>
+              <div>
+                <span>{run.statusLabel}</span>
+                <span>{run.modelLabel}</span>
+              </div>
+              <div>
+                <span>{run.usageLabel}</span>
+                <span>{run.costLabel}</span>
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+      {history.selectedRun === undefined ? null : (
+        <div className="ns-ai-history-detail" aria-label="工作流运行详情">
+          <dl className="ns-ai-observability-metrics">
+            <div>
+              <dt>上下文</dt>
+              <dd>{history.selectedRun.contextLabel}</dd>
+            </div>
+            <div>
+              <dt>模型</dt>
+              <dd>{history.selectedRun.modelLabel}</dd>
+            </div>
+            <div>
+              <dt>Token</dt>
+              <dd>{history.selectedRun.usageLabel}</dd>
+            </div>
+          </dl>
+          <ol className="ns-ai-step-list" aria-label="历史工作流步骤">
+            {history.selectedRun.steps.map((step) => (
+              <li className="ns-ai-step" data-status={step.status} key={step.stepId}>
+                <span>{step.label}</span>
+                <span>{aiStepStatusLabel(step.status)}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+    </section>
   );
 }
 

@@ -99,6 +99,14 @@ export function createApplicationIpcHandlers(
 
       return application.applyActiveChapterSuggestion(suggestionId);
     },
+    "application:ai:list-workflow-runs": () => application.listWorkflowRuns(),
+    "application:ai:read-workflow-run": (workflowRunId: unknown) => {
+      if (typeof workflowRunId !== "string") {
+        return application.readWorkflowRun("");
+      }
+
+      return application.readWorkflowRun(workflowRunId);
+    },
     "application:chapter:load": () => application.loadActiveChapter(),
     "application:chapter:edit": (nextBody: unknown) => {
       if (typeof nextBody !== "string") {
