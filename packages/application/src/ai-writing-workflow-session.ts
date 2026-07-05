@@ -4,7 +4,9 @@ import type {
   LlmAdapter,
   LlmModelProfile,
   LlmParameters,
-  LlmRequest
+  LlmProviderId,
+  LlmRequest,
+  LlmUsage
 } from "@novel-studio/llm-adapter";
 import {
   completeWorkflowStep,
@@ -43,6 +45,37 @@ export interface AiWritingSuggestion {
   readonly summary: string;
   readonly diffPreview: ChapterSuggestionDiffPreview;
   readonly contextTrace: ContextBundleTrace;
+  readonly observability: AiWritingWorkflowObservability;
+}
+
+export type AiWorkflowObservedStepKind = "context" | "agent" | "confirmation";
+export type AiWorkflowObservedStepStatus =
+  "pending" | "running" | "completed" | "waiting-confirmation" | "failed";
+
+export interface AiWorkflowObservedStep {
+  readonly stepId: string;
+  readonly label: string;
+  readonly kind: AiWorkflowObservedStepKind;
+  readonly status: AiWorkflowObservedStepStatus;
+}
+
+export interface AiWritingWorkflowObservability {
+  readonly workflowRunId: string;
+  readonly workflowTitle: string;
+  readonly generatedAt: string;
+  readonly context: {
+    readonly sourceCount: number;
+    readonly tokenEstimate: number;
+    readonly selectionReason: string;
+  };
+  readonly model: {
+    readonly profileId: string;
+    readonly displayName: string;
+    readonly provider: LlmProviderId;
+    readonly modelName: string;
+  };
+  readonly usage: LlmUsage;
+  readonly steps: readonly AiWorkflowObservedStep[];
 }
 
 export interface AiWritingWorkflowSession {
@@ -259,7 +292,15 @@ export function createAgentBackedAiWritingWorkflowSession(
         proposedBody: output.proposedBody,
         summary: output.summary,
         diffPreview: options.chapterEditorSession.previewSuggestionDiff(output.proposedBody),
-        contextTrace: contextBundle.value.trace
+        contextTrace: contextBundle.value.trace,
+        observability: createObservability({
+          workflowRunId: runState.workflowRunId,
+          workflowTitle: parsedWorkflow.value.title,
+          generatedAt: now(),
+          contextTrace: contextBundle.value.trace,
+          modelProfile: runtimeProfile.value.modelProfile,
+          usage: handoff.value.usage
+        })
       };
       suggestions.set(suggestion.suggestionId, {
         suggestion,
@@ -316,6 +357,56 @@ export function createAgentBackedAiWritingWorkflowSession(
         versions: []
       });
     }
+  };
+}
+
+function createObservability(input: {
+  readonly workflowRunId: string;
+  readonly workflowTitle: string;
+  readonly generatedAt: string;
+  readonly contextTrace: ContextBundleTrace;
+  readonly modelProfile: LlmModelProfile;
+  readonly usage: LlmUsage;
+}): AiWritingWorkflowObservability {
+  return {
+    workflowRunId: input.workflowRunId,
+    workflowTitle: input.workflowTitle,
+    generatedAt: input.generatedAt,
+    context: {
+      sourceCount: input.contextTrace.includedRefs.length,
+      tokenEstimate: input.contextTrace.includedRefs.reduce(
+        (total, ref) => total + ref.tokenEstimate,
+        0
+      ),
+      selectionReason: input.contextTrace.selectionReason
+    },
+    model: {
+      profileId: input.modelProfile.id,
+      displayName: input.modelProfile.displayName,
+      provider: input.modelProfile.provider,
+      modelName: input.modelProfile.modelName
+    },
+    usage: input.usage,
+    steps: [
+      {
+        stepId: "build_context",
+        label: "构建上下文",
+        kind: "context",
+        status: "completed"
+      },
+      {
+        stepId: "write_suggestion",
+        label: "运行写作 Agent",
+        kind: "agent",
+        status: "completed"
+      },
+      {
+        stepId: "confirm_apply",
+        label: "等待用户确认",
+        kind: "confirmation",
+        status: "waiting-confirmation"
+      }
+    ]
   };
 }
 

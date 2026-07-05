@@ -72,10 +72,33 @@ export interface AiWritingWorkflowProps {
   readonly instruction: string;
   readonly summary?: string;
   readonly contextTraceLabel?: string;
+  readonly observability?: AiWorkflowObservabilityProps;
   readonly diffPreview?: ChapterEditorProps["diffPreview"];
   readonly onInstructionChange: (instruction: string) => void;
   readonly onGenerateSuggestion: () => void;
   readonly onApplySuggestion: () => void;
+}
+
+export type AiWorkflowObservedStepKind = "context" | "agent" | "confirmation";
+export type AiWorkflowObservedStepStatus =
+  "pending" | "running" | "completed" | "waiting-confirmation" | "failed";
+
+export interface AiWorkflowObservedStepProps {
+  readonly stepId: string;
+  readonly label: string;
+  readonly kind: AiWorkflowObservedStepKind;
+  readonly status: AiWorkflowObservedStepStatus;
+}
+
+export interface AiWorkflowObservabilityProps {
+  readonly workflowRunId: string;
+  readonly workflowTitle: string;
+  readonly contextLabel: string;
+  readonly modelLabel: string;
+  readonly usageLabel: string;
+  readonly costLabel: string;
+  readonly generatedAtLabel: string;
+  readonly steps: readonly AiWorkflowObservedStepProps[];
 }
 
 export interface StoryBibleSummaryProps {
@@ -395,6 +418,9 @@ export function WorkspaceShell({
               {aiWritingWorkflow.contextTraceLabel === undefined ? null : (
                 <p className="ns-ai-context">{aiWritingWorkflow.contextTraceLabel}</p>
               )}
+              {aiWritingWorkflow.observability === undefined ? null : (
+                <AiWorkflowObservabilityView observability={aiWritingWorkflow.observability} />
+              )}
             </section>
           )}
           {storyBible === undefined ? null : (
@@ -451,6 +477,47 @@ export function WorkspaceShell({
         open={commandPaletteOpen || shellState.commandPaletteOpen}
       />
     </div>
+  );
+}
+
+function AiWorkflowObservabilityView({
+  observability
+}: {
+  readonly observability: AiWorkflowObservabilityProps;
+}) {
+  return (
+    <section className="ns-ai-observability" aria-label="AI 工作流运行观测">
+      <div className="ns-ai-observability-header">
+        <span>{observability.workflowTitle}</span>
+        <span>{observability.generatedAtLabel}</span>
+      </div>
+      <dl className="ns-ai-observability-metrics">
+        <div>
+          <dt>上下文</dt>
+          <dd>{observability.contextLabel}</dd>
+        </div>
+        <div>
+          <dt>模型</dt>
+          <dd>{observability.modelLabel}</dd>
+        </div>
+        <div>
+          <dt>Token</dt>
+          <dd>{observability.usageLabel}</dd>
+        </div>
+        <div>
+          <dt>成本</dt>
+          <dd>{observability.costLabel}</dd>
+        </div>
+      </dl>
+      <ol className="ns-ai-step-list" aria-label="AI 工作流步骤">
+        {observability.steps.map((step) => (
+          <li className="ns-ai-step" data-status={step.status} key={step.stepId}>
+            <span>{step.label}</span>
+            <span>{aiStepStatusLabel(step.status)}</span>
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
 
@@ -822,6 +889,21 @@ function statusLabel(status: AiWritingWorkflowStatus): string {
       return "待确认";
     case "applied":
       return "已应用";
+  }
+}
+
+function aiStepStatusLabel(status: AiWorkflowObservedStepStatus): string {
+  switch (status) {
+    case "pending":
+      return "待执行";
+    case "running":
+      return "运行中";
+    case "completed":
+      return "已完成";
+    case "waiting-confirmation":
+      return "待确认";
+    case "failed":
+      return "失败";
   }
 }
 

@@ -1,4 +1,5 @@
 import type {
+  AiWritingWorkflowObservability,
   AiWritingSuggestion,
   ChapterEditorSnapshot,
   NovelStudioApi
@@ -10,6 +11,7 @@ import type {
   UnifiedError
 } from "@novel-studio/shared";
 import type {
+  AiWorkflowObservabilityProps,
   AiWritingWorkflowProps,
   ChapterEditorProps,
   ChapterEditorVersionEntry
@@ -83,6 +85,7 @@ function toProps(suggestion: AiWritingSuggestion, instruction: string): AiWritin
     instruction,
     summary: suggestion.summary,
     contextTraceLabel: traceLabel(suggestion),
+    observability: toObservabilityProps(suggestion.observability),
     diffPreview: suggestion.diffPreview
   });
 }
@@ -110,6 +113,33 @@ function traceLabel(suggestion: AiWritingSuggestion): string {
   const sourceLabel = sourceCount === 1 ? "source" : "sources";
 
   return `${sourceCount} ${sourceLabel} / ${tokenCount} tokens`;
+}
+
+function toObservabilityProps(
+  observability: AiWritingWorkflowObservability
+): AiWorkflowObservabilityProps {
+  return {
+    workflowRunId: observability.workflowRunId,
+    workflowTitle: observability.workflowTitle,
+    contextLabel: `${observability.context.sourceCount} ${sourceLabel(
+      observability.context.sourceCount
+    )} / ${observability.context.tokenEstimate} tokens`,
+    modelLabel: `${observability.model.displayName} / ${observability.model.modelName}`,
+    usageLabel: `${observability.usage.totalTokens} tokens · ${observability.usage.usageStatus}`,
+    costLabel: `${observability.usage.cost.currency} ${observability.usage.cost.amount.toFixed(
+      6
+    )} · ${observability.usage.cost.status}`,
+    generatedAtLabel: formatDateTime(observability.generatedAt),
+    steps: observability.steps
+  };
+}
+
+function sourceLabel(count: number): string {
+  return count === 1 ? "source" : "sources";
+}
+
+function formatDateTime(value: string): string {
+  return `${value.slice(0, 10)} ${value.slice(11, 16)}`;
 }
 
 function toChapterEditorProps(snapshot: ChapterEditorSnapshot): ChapterEditorProps {

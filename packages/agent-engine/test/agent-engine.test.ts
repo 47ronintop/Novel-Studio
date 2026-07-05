@@ -161,6 +161,21 @@ describe("Agent Engine", () => {
       workflowRunId: "wfrun_01",
       payloadType: "schema.agent.reviewer.output.v1",
       payload: validOutput,
+      model: {
+        provider: "mock",
+        modelName: "mock-agent"
+      },
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        usageStatus: "missing",
+        cost: {
+          amount: 0,
+          currency: "USD",
+          status: "unknown"
+        }
+      },
       createdAt: "2026-07-04T00:00:00.000Z"
     });
   });

@@ -90,6 +90,11 @@ export async function runAgent(input: AgentRunInput): Promise<Result<AgentHandof
     workflowRunId: input.workflowRunId,
     payloadType: input.agent.outputSchemaId,
     payload: outputResult.value,
+    model: {
+      provider: llmResult.value.provider,
+      modelName: llmResult.value.modelName
+    },
+    usage: llmResult.value.usage,
     createdAt: input.now()
   });
 }

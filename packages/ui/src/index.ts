@@ -28,6 +28,10 @@ export type {
 } from "./model-settings-panel.js";
 export { WorkspaceShell } from "./workspace-shell.js";
 export type {
+  AiWorkflowObservabilityProps,
+  AiWorkflowObservedStepKind,
+  AiWorkflowObservedStepProps,
+  AiWorkflowObservedStepStatus,
   AiWritingWorkflowProps,
   AiWritingWorkflowStatus,
   ProjectSearchProps,

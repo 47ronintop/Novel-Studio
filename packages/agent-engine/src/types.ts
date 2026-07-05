@@ -1,5 +1,5 @@
 import type { ContextBundle } from "@novel-studio/context-engine";
-import type { LlmAdapter, LlmRequest } from "@novel-studio/llm-adapter";
+import type { LlmAdapter, LlmProviderId, LlmRequest, LlmUsage } from "@novel-studio/llm-adapter";
 import type { JsonObject } from "@novel-studio/shared";
 
 export type AgentStatus = "active" | "draft" | "archived" | "deleted";
@@ -58,5 +58,10 @@ export interface AgentHandoff {
   readonly workflowRunId: string;
   readonly payloadType: string;
   readonly payload: JsonObject;
+  readonly model: {
+    readonly provider: LlmProviderId;
+    readonly modelName: string;
+  };
+  readonly usage: LlmUsage;
   readonly createdAt: string;
 }

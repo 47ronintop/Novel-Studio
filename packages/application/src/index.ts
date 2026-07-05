@@ -105,8 +105,12 @@ export type {
 } from "./config-studio-session.js";
 export { createConfigStudioSession } from "./config-studio-session.js";
 export type {
+  AiWorkflowObservedStep,
+  AiWorkflowObservedStepKind,
+  AiWorkflowObservedStepStatus,
   AiWritingSuggestion,
   AiWritingSuggestionRequest,
+  AiWritingWorkflowObservability,
   AiWritingWorkflowSession,
   AiWritingWorkflowSessionOptions
 } from "./ai-writing-workflow-session.js";

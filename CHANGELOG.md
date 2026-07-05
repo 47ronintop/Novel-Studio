@@ -47,8 +47,9 @@
 - 完成 M21 Story Bible Editing UX：新增故事圣经主入口、五类资产编辑表单、renderer 草稿桥接、保存 asset/memory 后刷新 snapshot，并继续保持 UI 不直接访问文件系统。
 - 完成 M22 Settings UX Completion：Settings Activity 升级为正式设置页，支持模型 profile 编辑、保存、设默认、连接测试和隐私安全提示，保存仍通过 preload/IPC/Application settings session。
 - 完成 M23 Studio UX Completion：新增默认 Prompt/Agent/Workflow 配置资产，Studio Activity 升级为可选择、可编辑、可保存和可恢复版本的真实工作台，保存仍通过 preload/IPC/Application config studio session。
+- 完成 M24 工作流运行观测：AI 写作建议结果新增运行观测数据，Inspector 显示 workflow、context、model、token/cost 和 step 状态，继续保持建议态与用户确认。
 
 ## Notes
 
 - Phase 7 当前定义的 M0-M18 已完成。
-- 当前已完成 Post-M18 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion 与 M23 Studio UX Completion；未经用户确认不得 push。
+- 当前已完成 Post-M18 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion 与 M24 工作流运行观测；未经用户确认不得 push。

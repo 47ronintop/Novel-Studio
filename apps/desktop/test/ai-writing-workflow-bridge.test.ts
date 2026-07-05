@@ -55,6 +55,53 @@ const suggestion: AiWritingSuggestion = {
       }
     ],
     excludedRefs: []
+  },
+  observability: {
+    workflowRunId: "wfrun_m14",
+    workflowTitle: "Continue Chapter",
+    generatedAt: "2026-07-05T00:00:00.000Z",
+    context: {
+      sourceCount: 1,
+      tokenEstimate: 4,
+      selectionReason: "priority_then_budget"
+    },
+    model: {
+      profileId: "mock_m14",
+      displayName: "M14 Mock Writer",
+      provider: "mock",
+      modelName: "mock-writer"
+    },
+    usage: {
+      inputTokens: 16,
+      outputTokens: 8,
+      totalTokens: 24,
+      usageStatus: "estimated",
+      cost: {
+        amount: 0,
+        currency: "USD",
+        status: "estimated"
+      }
+    },
+    steps: [
+      {
+        stepId: "build_context",
+        label: "构建上下文",
+        kind: "context",
+        status: "completed"
+      },
+      {
+        stepId: "write_suggestion",
+        label: "运行写作 Agent",
+        kind: "agent",
+        status: "completed"
+      },
+      {
+        stepId: "confirm_apply",
+        label: "等待用户确认",
+        kind: "confirmation",
+        status: "waiting-confirmation"
+      }
+    ]
   }
 };
 
@@ -74,6 +121,13 @@ describe("AI writing workflow bridge", () => {
     expect(generated.summary).toBe("Generated a local mock continuation for review.");
     expect(generated.diffPreview?.changes[0]?.value).toContain("AI continuation draft.");
     expect(generated.contextTraceLabel).toBe("1 source / 4 tokens");
+    expect(generated.observability?.usageLabel).toBe("24 tokens · estimated");
+    expect(generated.observability?.modelLabel).toBe("M14 Mock Writer / mock-writer");
+    expect(generated.observability?.steps.map((step) => step.label)).toEqual([
+      "构建上下文",
+      "运行写作 Agent",
+      "等待用户确认"
+    ]);
     expect(applied.chapter.body).toContain("AI continuation draft.");
     expect(applied.dirty).toBe(true);
     expect(applied.saveStatus).toBe("Unsaved");

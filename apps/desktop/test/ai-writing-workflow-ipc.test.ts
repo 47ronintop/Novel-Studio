@@ -38,6 +38,34 @@ const suggestion: AiWritingSuggestion = {
     selectionReason: "Continue.",
     includedRefs: [],
     excludedRefs: []
+  },
+  observability: {
+    workflowRunId: "wfrun_m14",
+    workflowTitle: "Continue Chapter",
+    generatedAt: "2026-07-04T00:00:00.000Z",
+    context: {
+      sourceCount: 0,
+      tokenEstimate: 0,
+      selectionReason: "Continue."
+    },
+    model: {
+      profileId: "mock_m14",
+      displayName: "M14 Mock Writer",
+      provider: "mock",
+      modelName: "mock-writer"
+    },
+    usage: {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      usageStatus: "missing",
+      cost: {
+        amount: 0,
+        currency: "USD",
+        status: "unknown"
+      }
+    },
+    steps: []
   }
 };
 

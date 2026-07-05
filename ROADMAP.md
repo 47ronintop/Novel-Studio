@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.12 | Status: Active | Last Updated: 2026-07-05
+Version: 1.13 | Status: Active | Last Updated: 2026-07-05
 
 ## 目标
 
@@ -41,6 +41,7 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M21       | Story Bible Editing UX | 人物、世界观、大纲、时间线和记忆的可编辑 UI 闭环                 | Complete |
 | M22       | Settings UX Completion | 设置页模型配置、默认 profile、连接测试、隐私安全提示的可用闭环   | Complete |
 | M23       | Studio UX Completion   | Prompt/Agent/Workflow 配置资产的可选择、可编辑、可保存工作台     | Complete |
+| M24       | 工作流运行观测         | AI 工作流运行 trace、上下文、模型、token/cost 和步骤状态可见     | Complete |
 
 ## M15 完成内容
 
@@ -109,16 +110,24 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - 新增 renderer `StudioBridge`，通过 preload API 加载、切换、编辑、保存和恢复 Prompt/Agent/Workflow 配置资产。
 - 保存前会阻止无效 JSON；schema 校验、历史快照和恢复仍由 Application/Repository 边界完成，UI 不直接访问文件系统。
 
+## M24 完成内容
+
+- 新增 `docs/productization/m24-workflow-run-observability.md`，明确 AI 工作流运行观测范围、交互、安全边界和验收标准。
+- Agent handoff 增加脱敏模型 metadata 与 LLM usage/cost，供上层审计展示。
+- `AiWritingSuggestion` 新增 `observability`，汇总 workflow run、Context trace、model profile、token/cost 和 step 状态。
+- Renderer `AiWritingWorkflowBridge` 将结构化观测数据转换为 UI 标签，不显示密钥引用或明文密钥。
+- Inspector 的 AI Workflow 面板新增“AI 工作流运行观测”，展示上下文、模型、Token、成本和步骤状态。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion 与 M23 Studio UX Completion。
+- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion 与 M24 工作流运行观测。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M24 Workflow Run Observability，补齐工作流运行 trace、Context bundle 摘要、Agent step 状态和错误诊断视图。
+- 下一步建议进入 M25 工作流运行历史，补齐多次运行历史、失败记录、trace 回放和可导出的本地审计日志。
 
 ## 当前技术债重点
 

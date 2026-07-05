@@ -90,6 +90,46 @@ describe("M14 AI writing workflow session", () => {
         tokenEstimate: 4
       }
     ]);
+    expect(generated.value.observability).toMatchObject({
+      workflowRunId: "wfrun_m14",
+      workflowTitle: "Continue Chapter",
+      context: {
+        sourceCount: 1,
+        tokenEstimate: 4,
+        selectionReason: "Continue the chapter."
+      },
+      model: {
+        profileId: "mock_m14",
+        provider: "mock",
+        modelName: "mock-writer"
+      },
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        usageStatus: "missing"
+      },
+      steps: [
+        {
+          stepId: "build_context",
+          label: "构建上下文",
+          kind: "context",
+          status: "completed"
+        },
+        {
+          stepId: "write_suggestion",
+          label: "运行写作 Agent",
+          kind: "agent",
+          status: "completed"
+        },
+        {
+          stepId: "confirm_apply",
+          label: "等待用户确认",
+          kind: "confirmation",
+          status: "waiting-confirmation"
+        }
+      ]
+    });
     expect(chapterSession.getState()?.chapter.body).toBe("Opening line.\n");
     expect(chapterSession.getState()?.dirty).toBe(false);
     expect(writes).toEqual([]);
@@ -223,6 +263,15 @@ describe("M14 AI writing workflow session", () => {
 
     expect(isOk(generated)).toBe(true);
     expect(requests[0]?.modelProfile.id).toBe("model_ollama");
+    if (isErr(generated)) {
+      throw new Error(generated.error.message);
+    }
+    expect(generated.value.observability.model).toEqual({
+      profileId: "model_ollama",
+      displayName: "Local Ollama",
+      provider: "ollama",
+      modelName: "llama3.1"
+    });
     expect(requests[0]?.parameters).toEqual({
       temperature: 0.2,
       maxTokens: 1024
