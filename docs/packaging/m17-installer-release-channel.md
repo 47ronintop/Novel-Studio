@@ -1,24 +1,24 @@
-# M17 Installer and Release Channel
+# M17 安装器与发布通道
 
 Version: 1.0 | Status: Accepted for M17 | Phase: 7 Formal Development
 
-## Purpose
+## 目的
 
-M17 turns the existing unpacked beta packaging foundation into a local installer and release-channel workflow. It does not publish artifacts, push tags, upload files, or require real signing credentials.
+M17 将此前只有 unpacked artifact 的 beta 打包基础，推进为可本地验证的安装器与发布通道闭环。该闭环不发布产物、不 push tag、不上传文件，也不要求真实签名凭证。
 
-## Scope
+## 范围
 
-- Windows packaging keeps `dir` output for artifact inspection and adds `nsis` for installer output.
-- The desktop app declares a custom icon asset at `apps/desktop/build/icon.svg`.
-- The beta release channel is a structured JSON manifest at `release-channel/beta.json`.
-- Release notes are maintained in `docs/releases/v0.1.0-beta.md` and can be copied into ignored `release/notes/` output by `npm run release:notes`.
-- `npm run release:check` validates package scripts, builder config, release channel schema, release notes, icon metadata, and signing policy.
+- Windows 打包继续保留 `dir` 输出，便于 artifact 检查和 secret scan；同时新增 `nsis` 安装器输出。
+- 桌面应用声明自定义 icon 资源：`apps/desktop/build/icon.svg`。
+- beta 发布通道使用结构化 JSON manifest：`release-channel/beta.json`。
+- release notes 维护在 `docs/releases/v0.1.0-beta.md`，`npm run release:notes` 会将其复制到被忽略的 `release/notes/` 输出目录。
+- `npm run release:check` 校验 package scripts、electron-builder 配置、release channel schema、release notes、icon 元数据和签名策略。
 
-## Signing Policy
+## 签名策略
 
-M17 local beta artifacts are explicitly allowed to be unsigned. The release manifest records future Windows signing environment variables, `CSC_LINK` and `CSC_KEY_PASSWORD`, but CI and local checks do not require them. Notarization is not applicable to the Windows beta path.
+M17 本地 beta artifact 明确允许未签名。release manifest 记录未来 Windows 证书签名所需的环境变量 `CSC_LINK` 与 `CSC_KEY_PASSWORD`，但 CI 和本地检查不会要求这些变量存在。notarization 不适用于当前 Windows beta 路径。
 
-## Commands
+## 命令
 
 ```bash
 npm run release:check
@@ -26,11 +26,11 @@ npm run release:notes
 npm run package:installer
 ```
 
-`package:installer` builds the app, runs release checks, generates release notes output, invokes electron-builder for `nsis` and `dir`, scans the unpacked artifact for secret-like values, and writes `release/latest-installer.txt`.
+`package:installer` 会构建应用、运行 release 检查、生成 release notes 输出、调用 electron-builder 生成 `nsis` 和 `dir` 产物、扫描 unpacked artifact 中的疑似密钥，并写入 `release/latest-installer.txt`。
 
-## Acceptance
+## 验收标准
 
-- Release channel data validates through JSON Schema.
-- Installer configuration is checked by tests and `release:check`.
-- CI remains offline with respect to model providers and signing services.
-- Publishing remains manual and requires a separate user-approved action.
+- Release channel 数据通过 JSON Schema 校验。
+- 安装器配置由测试和 `release:check` 覆盖。
+- CI 不访问真实模型服务，也不依赖签名服务。
+- 发布保持手动流程；任何 push、上传或对外发布都必须由用户另行确认。
