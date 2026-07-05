@@ -79,6 +79,7 @@ export interface DesktopShellState {
   readonly navigatorCollapsed: boolean;
   readonly inspectorCollapsed: boolean;
   readonly bottomPanelVisible: boolean;
+  readonly activeBottomPanelTab: string;
   readonly commandPaletteOpen: boolean;
   readonly saveStatus: SaveStatus;
   readonly navigatorSections: readonly NavigatorSection[];
@@ -165,6 +166,7 @@ const DEFAULT_SHELL_STATE: DesktopShellState = {
   navigatorCollapsed: false,
   inspectorCollapsed: false,
   bottomPanelVisible: true,
+  activeBottomPanelTab: "工作流运行",
   commandPaletteOpen: false,
   saveStatus: "Saved",
   navigatorSections: [

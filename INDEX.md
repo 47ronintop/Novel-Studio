@@ -1,6 +1,6 @@
 ﻿# INDEX - Novel Studio 文档索引
 
-Version: 1.28 | Last Updated: 2026-07-05
+Version: 1.29 | Last Updated: 2026-07-05
 
 ## 文档优先级
 
@@ -22,7 +22,7 @@ Version: 1.28 | Last Updated: 2026-07-05
 | `UI_GUIDELINES.md`                                       | 1.0        | Accepted             | UI/UX、布局、交互、设计 tokens、可访问性                |
 | `CODING_STANDARDS.md`                                    | 1.0        | Accepted             | 开发规范、语言规则、分层、schema、UI 实现               |
 | `TESTING.md`                                             | 1.0        | Accepted             | 测试规范、fixtures、LLM mock、CI 门禁                   |
-| `ROADMAP.md`                                             | 1.17       | Active               | 当前里程碑、后续路线、完成状态                          |
+| `ROADMAP.md`                                             | 1.18       | Active               | 当前里程碑、后续路线、完成状态                          |
 | `STORY_BIBLE.md`                                         | 1.0        | Accepted for M16     | Story Bible 资产、仓储、Context 候选和最小 UI 闭环      |
 | `docs/packaging/m17-installer-release-channel.md`        | 1.0        | Accepted for M17     | 安装器目标、发布通道 manifest、release notes 和签名策略 |
 | `PLUGIN_SYSTEM.md`                                       | 1.0        | Accepted for M18     | 插件 manifest、权限、注册表、运行时边界和测试要求       |
@@ -36,6 +36,7 @@ Version: 1.28 | Last Updated: 2026-07-05
 | `docs/productization/m26-workflow-failure-retry.md`      | 1.0        | Complete             | 工作流失败诊断、重试策略展示和用户触发重试入口          |
 | `docs/productization/m28-global-usability-audit.md`      | 1.0        | Complete             | 全局高可见入口可用性盘点、禁用原因和无反馈入口治理      |
 | `docs/productization/m29-functional-completion-audit.md` | 1.0        | Complete             | 可见入口完成度审计、核心缺口排序和命令面板执行闭环      |
+| `docs/productization/m30-bottom-panel-workspace.md`      | 1.0        | Complete             | 底部面板 tabs 真实切换和最小内容闭环                    |
 | `LLM_ADAPTER.md`                                         | 1.0        | Accepted for M6      | Provider-neutral 模型调用边界                           |
 | `WORKFLOW_ENGINE.md`                                     | 1.0        | Accepted for M7.1    | 确定性 workflow 状态机                                  |
 | `CONTEXT_ENGINE.md`                                      | 1.0        | Accepted for M7.2    | Context Bundle、token budget、trace                     |
@@ -50,16 +51,16 @@ Version: 1.28 | Last Updated: 2026-07-05
 
 ## 进度跟踪
 
-| 阶段                  | 状态     | 当前产出                             | 下一步     |
-| --------------------- | -------- | ------------------------------------ | ---------- |
-| Phase 1 产品设计      | Complete | `PRODUCT_PRD.md`                     | 已完成     |
-| Phase 2 系统架构      | Complete | `ARCHITECTURE.md`、ADR-0001          | 已完成     |
-| Phase 3 数据结构设计  | Complete | `DATA_SCHEMA.md`                     | 已完成     |
-| Phase 4 UI/UX 设计    | Complete | `UI_GUIDELINES.md`                   | 已完成     |
-| Phase 5 开发规范      | Complete | `CODING_STANDARDS.md`、`TESTING.md`  | 已完成     |
-| Phase 6 Task Planning | Complete | `ROADMAP.md`                         | 已完成     |
-| Phase 7 正式开发      | Complete | M0-M18 已完成                        | 已完成     |
-| Post-M18 产品化打磨   | Active   | M19-M26、M28 与 M29 已完成，M27 暂缓 | 下一步 M30 |
+| 阶段                  | 状态     | 当前产出                            | 下一步     |
+| --------------------- | -------- | ----------------------------------- | ---------- |
+| Phase 1 产品设计      | Complete | `PRODUCT_PRD.md`                    | 已完成     |
+| Phase 2 系统架构      | Complete | `ARCHITECTURE.md`、ADR-0001         | 已完成     |
+| Phase 3 数据结构设计  | Complete | `DATA_SCHEMA.md`                    | 已完成     |
+| Phase 4 UI/UX 设计    | Complete | `UI_GUIDELINES.md`                  | 已完成     |
+| Phase 5 开发规范      | Complete | `CODING_STANDARDS.md`、`TESTING.md` | 已完成     |
+| Phase 6 Task Planning | Complete | `ROADMAP.md`                        | 已完成     |
+| Phase 7 正式开发      | Complete | M0-M18 已完成                       | 已完成     |
+| Post-M18 产品化打磨   | Active   | M19-M26、M28-M30 已完成，M27 暂缓   | 下一步 M31 |
 
 ## 当前本地状态
 
@@ -74,6 +75,7 @@ Version: 1.28 | Last Updated: 2026-07-05
 - 当前已完成 M26 工作流失败诊断与重试策略。
 - 当前已完成 M28 全局功能可用性盘点。
 - 当前已完成 M29 功能完成度盘点与命令面板执行闭环。
+- 当前已完成 M30 底部面板工作区。
 - M27 安装后首次使用引导暂缓，等待核心可见功能继续补齐。
 - 未经用户确认不得 push。
 - 当前本地 artifact 位于被忽略的 `release/` 目录，不提交到仓库。

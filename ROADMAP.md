@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.17 | Status: Active | Last Updated: 2026-07-05
+Version: 1.18 | Status: Active | Last Updated: 2026-07-05
 
 ## 目标
 
@@ -47,6 +47,7 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M27       | 安装后首次使用引导       | 欢迎页、示例项目入口、创建/打开项目引导和关键空状态行动按钮      | Deferred |
 | M28       | 全局功能可用性盘点       | 高可见入口要么可用，要么明确禁用并显示中文原因                   | Complete |
 | M29       | 功能完成度盘点与命令执行 | 可见入口完成度审计、核心缺口排序、命令面板真实执行闭环           | Complete |
+| M30       | 底部面板工作区           | 底部面板 tabs 真实切换、工作流/问题/搜索/日志最小内容闭环        | Complete |
 
 ## M15 完成内容
 
@@ -158,17 +159,25 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - Renderer 新增命令执行 bridge，通过 preload API 执行命令并同步 `DesktopShellState`。
 - 命令面板执行后可真实折叠项目导航、检查器和底部面板；未知命令仍由 Application safe-command 边界拒绝。
 
+## M30 完成内容
+
+- 新增 `docs/productization/m30-bottom-panel-workspace.md`，明确底部面板真实切换范围、非范围和验收标准。
+- `DesktopShellState` 新增 `activeBottomPanelTab`，默认显示“工作流运行”。
+- 底部面板 tabs 从禁用状态升级为可点击切换，并具备 `aria-selected` 和中文可访问标签。
+- 底部面板新增工作流运行、问题、搜索、日志四个最小内容区。
+- Renderer 通过内存 shell state 切换底部 tab；UI 不直接访问文件系统，不新增真实模型调用或 AI 自动写入。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点与 M29 功能完成度盘点。
+- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点与 M30 底部面板工作区。
 - M27 安装后首次使用引导已暂缓，需在核心可见功能更稳定后回补。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M30 核心功能缺口补齐，优先处理底部面板真实切换、搜索结果跳转、时间线主视图或插件管理 UI 中最影响试用体验的一项。
+- 下一步建议进入 M31 核心功能缺口补齐，优先处理搜索结果跳转、时间线主视图或插件管理 UI 中最影响试用体验的一项。
 
 ## 当前技术债重点
 

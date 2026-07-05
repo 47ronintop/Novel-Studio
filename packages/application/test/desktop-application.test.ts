@@ -36,6 +36,7 @@ describe("desktop application command bridge", () => {
       navigatorCollapsed: false,
       inspectorCollapsed: false,
       bottomPanelVisible: true,
+      activeBottomPanelTab: "工作流运行",
       saveStatus: "Saved"
     });
   });
@@ -81,6 +82,18 @@ describe("desktop application command bridge", () => {
 
     expect(result.ok).toBe(true);
     expect(application.getShellState().navigatorCollapsed).toBe(true);
+  });
+
+  test("toggles bottom panel visibility without changing the active bottom tab", () => {
+    const application = createDesktopApplication();
+
+    const result = application.executeCommand("workspace.toggle-bottom-panel");
+
+    expect(result.ok).toBe(true);
+    expect(application.getShellState()).toMatchObject({
+      bottomPanelVisible: false,
+      activeBottomPanelTab: "工作流运行"
+    });
   });
 
   test("rejects unknown commands at the Application boundary", () => {

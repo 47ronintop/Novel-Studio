@@ -42,6 +42,7 @@ const rendererShellState: DesktopShellState = {
   navigatorCollapsed: false,
   inspectorCollapsed: false,
   bottomPanelVisible: true,
+  activeBottomPanelTab: "工作流运行",
   commandPaletteOpen: false,
   saveStatus: "Saved",
   navigatorSections: [
@@ -398,6 +399,13 @@ export function App() {
     setShellState((current) => ({
       ...current,
       activeActivity: activityId
+    }));
+  }, []);
+
+  const handleBottomPanelTabSelect = useCallback((tab: string) => {
+    setShellState((current) => ({
+      ...current,
+      activeBottomPanelTab: tab
     }));
   }, []);
 
@@ -762,6 +770,7 @@ export function App() {
       commandPaletteOpen={shortcutState.commandPaletteOpen}
       onCommandExecute={handleCommandExecute}
       onCommandPaletteOpen={handleCommandPaletteOpen}
+      onBottomPanelTabSelect={handleBottomPanelTabSelect}
       onActivitySelect={handleActivitySelect}
     />
   );

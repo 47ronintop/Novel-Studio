@@ -1,4 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { isValidElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { describe, expect, test } from "vitest";
 
 import { createDesktopApplication } from "@novel-studio/application";
@@ -27,7 +29,7 @@ describe("WorkspaceShell", () => {
     expect(html).toContain('aria-label="底部面板"');
   });
 
-  test("marks unfinished global controls as disabled with reasons", () => {
+  test("marks unfinished editor tabs as disabled with reasons", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
@@ -42,9 +44,43 @@ describe("WorkspaceShell", () => {
     expect(html).toContain('aria-label="当前打开的章节标签"');
     expect(html).toContain('aria-disabled="true"');
     expect(html).toContain('title="当前只有一个打开资产，标签切换会在后续里程碑补齐。"');
-    expect(html).toContain('aria-label="底部面板标签：工作流运行（暂不可切换）"');
-    expect(html).toContain('title="底部面板切换会在后续里程碑补齐。"');
     expect(html).toContain("disabled");
+  });
+
+  test("switches bottom panel tabs and renders the active panel content", () => {
+    const application = createDesktopApplication();
+    const selectedTabs: string[] = [];
+    const tree = WorkspaceShell({
+      shellState: {
+        ...application.getShellState(),
+        activeBottomPanelTab: "搜索"
+      },
+      commands: application.listCommands(),
+      commandPaletteOpen: false,
+      search: {
+        query: "oath",
+        status: "results-ready",
+        entryCount: 4,
+        results: [],
+        onQueryChange: () => undefined,
+        onSearch: () => undefined,
+        onRebuildIndex: () => undefined
+      },
+      onBottomPanelTabSelect: (tab) => selectedTabs.push(tab)
+    });
+    const searchTab = findElementByAriaLabel(tree, "切换底部面板：搜索");
+
+    expect(searchTab).toBeDefined();
+    expect(searchTab?.props.disabled).toBeUndefined();
+    searchTab?.props.onClick?.();
+
+    expect(selectedTabs).toEqual(["搜索"]);
+
+    const html = renderToStaticMarkup(tree);
+    expect(html).toContain('aria-label="底部面板内容：搜索"');
+    expect(html).toContain("搜索摘要");
+    expect(html).toContain("索引条目 4");
+    expect(html).toContain("当前查询 oath");
   });
 
   test("opens directly into the writing workspace instead of a marketing page", () => {
@@ -352,3 +388,35 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("版本历史");
   });
 });
+
+interface InspectableElementProps {
+  readonly children?: ReactNode;
+  readonly disabled?: boolean;
+  readonly onClick?: () => void;
+  readonly "aria-label"?: string;
+}
+
+function findElementByAriaLabel(
+  node: ReactNode,
+  ariaLabel: string
+): ReactElement<InspectableElementProps> | undefined {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const match = findElementByAriaLabel(child, ariaLabel);
+      if (match !== undefined) {
+        return match;
+      }
+    }
+    return undefined;
+  }
+
+  if (!isValidElement<InspectableElementProps>(node)) {
+    return undefined;
+  }
+
+  if (node.props["aria-label"] === ariaLabel) {
+    return node;
+  }
+
+  return findElementByAriaLabel(node.props.children, ariaLabel);
+}

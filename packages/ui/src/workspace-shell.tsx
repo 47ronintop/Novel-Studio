@@ -45,6 +45,7 @@ export interface WorkspaceShellProps {
   readonly storyBibleEditor?: StoryBibleEditorProps;
   readonly onCommandPaletteOpen?: () => void;
   readonly onCommandExecute?: (commandId: ApplicationCommandId) => void;
+  readonly onBottomPanelTabSelect?: ((tab: string) => void) | undefined;
   readonly onActivitySelect?: (activityId: ActivityId) => void;
 }
 
@@ -248,8 +249,14 @@ export function WorkspaceShell({
   storyBibleEditor,
   onCommandPaletteOpen,
   onCommandExecute,
+  onBottomPanelTabSelect,
   onActivitySelect
 }: WorkspaceShellProps) {
+  const activeBottomPanelTab =
+    shellState.bottomPanelTabs.includes(shellState.activeBottomPanelTab) === true
+      ? shellState.activeBottomPanelTab
+      : (shellState.bottomPanelTabs[0] ?? "工作流运行");
+
   return (
     <div className="ns-shell" data-theme="dark">
       <header className="ns-titlebar">
@@ -532,20 +539,25 @@ export function WorkspaceShell({
             <PanelBottom aria-hidden="true" size={15} />
             {shellState.bottomPanelTabs.map((tab, index) => (
               <button
-                aria-label={`底部面板标签：${bottomPanelLabels.get(tab) ?? tab}（暂不可切换）`}
-                aria-selected={index === 0}
+                aria-label={`切换底部面板：${bottomPanelLabels.get(tab) ?? tab}`}
+                aria-selected={tab === activeBottomPanelTab}
                 className="ns-bottom-tab"
                 data-focus-order={index === 0 ? "4" : undefined}
-                disabled
                 key={tab}
+                onClick={() => onBottomPanelTabSelect?.(tab)}
                 role="tab"
-                title="底部面板切换会在后续里程碑补齐。"
+                title={`切换到底部面板：${bottomPanelLabels.get(tab) ?? tab}`}
                 type="button"
               >
                 {bottomPanelLabels.get(tab) ?? tab}
               </button>
             ))}
           </div>
+          <BottomPanelContent
+            activeTab={activeBottomPanelTab}
+            aiWritingWorkflow={aiWritingWorkflow}
+            search={search}
+          />
         </section>
       </div>
 
@@ -554,6 +566,79 @@ export function WorkspaceShell({
         onCommandExecute={onCommandExecute}
         open={commandPaletteOpen || shellState.commandPaletteOpen}
       />
+    </div>
+  );
+}
+
+function BottomPanelContent({
+  activeTab,
+  aiWritingWorkflow,
+  search
+}: {
+  readonly activeTab: string;
+  readonly aiWritingWorkflow: AiWritingWorkflowProps | undefined;
+  readonly search: ProjectSearchProps | undefined;
+}) {
+  const label = bottomPanelLabels.get(activeTab) ?? activeTab;
+
+  if (activeTab === "工作流运行") {
+    const runCount = aiWritingWorkflow?.history?.runs.length ?? 0;
+    return (
+      <div className="ns-bottom-panel-content" aria-label="底部面板内容：工作流运行">
+        <strong>工作流运行</strong>
+        <span>
+          当前状态{" "}
+          {aiWritingWorkflow === undefined ? "未加载" : statusLabel(aiWritingWorkflow.status)}
+        </span>
+        <span>最近运行 {runCount}</span>
+        <span>
+          {aiWritingWorkflow?.failure === undefined
+            ? "暂无失败诊断"
+            : `失败诊断 ${aiWritingWorkflow.failure.code}`}
+        </span>
+      </div>
+    );
+  }
+
+  if (activeTab === "问题") {
+    return (
+      <div className="ns-bottom-panel-content" aria-label="底部面板内容：问题">
+        <strong>问题</strong>
+        <span>底部面板已进入可切换状态。</span>
+        <span>仍待补齐：多 tab 编辑器、时间线主视图、插件管理 UI。</span>
+        <span>当前问题均为产品化缺口，不阻断章节编辑和保存。</span>
+      </div>
+    );
+  }
+
+  if (activeTab === "搜索") {
+    return (
+      <div className="ns-bottom-panel-content" aria-label="底部面板内容：搜索">
+        <strong>搜索摘要</strong>
+        <span>索引条目 {search?.entryCount ?? 0}</span>
+        <span>
+          当前查询 {search?.query.trim() === "" || search === undefined ? "未输入" : search.query}
+        </span>
+        <span>结果数量 {search?.results.length ?? 0}</span>
+      </div>
+    );
+  }
+
+  if (activeTab === "日志") {
+    return (
+      <div className="ns-bottom-panel-content" aria-label="底部面板内容：日志">
+        <strong>日志</strong>
+        <span>本地 beta 不采集 telemetry。</span>
+        <span>CI 和默认工作流不会访问真实模型 endpoint。</span>
+        <span>安装产物通过 artifact secret scan 后才记录为可用。</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="ns-bottom-panel-content" aria-label={`底部面板内容：${label}`}>
+      <strong>{label}</strong>
+      <span>该面板暂无内容。</span>
     </div>
   );
 }

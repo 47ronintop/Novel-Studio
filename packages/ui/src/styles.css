@@ -1404,6 +1404,28 @@ textarea:focus-visible,
   padding: 0 9px;
 }
 
+.ns-bottom-tab[aria-selected="true"] {
+  background: color-mix(in srgb, var(--ns-accent) 18%, transparent);
+  color: var(--ns-ink);
+}
+
+.ns-bottom-panel-content {
+  align-items: center;
+  border-top: 1px solid var(--ns-border);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 160px repeat(3, minmax(0, 1fr));
+  min-height: 42px;
+  padding: 8px 12px;
+}
+
+.ns-bottom-panel-content span {
+  color: var(--ns-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ns-command-palette {
   background: var(--ns-surface-raised);
   border: 1px solid var(--ns-border);
