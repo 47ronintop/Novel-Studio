@@ -396,6 +396,13 @@ export function App() {
     }));
   }, []);
 
+  const handleCommandPaletteOpen = useCallback(() => {
+    setShortcutState((current) => ({
+      ...current,
+      commandPaletteOpen: true
+    }));
+  }, []);
+
   const handleSearchQueryChange = useCallback(
     (query: string) => {
       if (projectSearchBridge === undefined) {
@@ -727,6 +734,7 @@ export function App() {
       shellState={shellState}
       commands={commands}
       commandPaletteOpen={shortcutState.commandPaletteOpen}
+      onCommandPaletteOpen={handleCommandPaletteOpen}
       onActivitySelect={handleActivitySelect}
     />
   );

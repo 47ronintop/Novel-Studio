@@ -27,6 +27,26 @@ describe("WorkspaceShell", () => {
     expect(html).toContain('aria-label="底部面板"');
   });
 
+  test("marks unfinished global controls as disabled with reasons", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={application.getShellState()}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+      />
+    );
+
+    expect(html).toContain('aria-label="打开命令面板"');
+    expect(html).toContain('title="打开命令面板"');
+    expect(html).toContain('aria-label="当前打开的章节标签"');
+    expect(html).toContain('aria-disabled="true"');
+    expect(html).toContain('title="当前只有一个打开资产，标签切换会在后续里程碑补齐。"');
+    expect(html).toContain('aria-label="底部面板标签：工作流运行（暂不可切换）"');
+    expect(html).toContain('title="底部面板切换会在后续里程碑补齐。"');
+    expect(html).toContain("disabled");
+  });
+
   test("opens directly into the writing workspace instead of a marketing page", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(

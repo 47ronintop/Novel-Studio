@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.15 | Status: Active | Last Updated: 2026-07-05
+Version: 1.16 | Status: Active | Last Updated: 2026-07-05
 
 ## 目标
 
@@ -44,6 +44,8 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M24       | 工作流运行观测           | AI 工作流运行 trace、上下文、模型、token/cost 和步骤状态可见     | Complete |
 | M25       | 工作流运行历史           | 最近 AI 工作流运行历史、脱敏详情、步骤状态和本地审计记录         | Complete |
 | M26       | 工作流失败诊断与重试策略 | 失败运行记录、可解释错误原因、重试策略展示和用户触发重试入口     | Complete |
+| M27       | 安装后首次使用引导       | 欢迎页、示例项目入口、创建/打开项目引导和关键空状态行动按钮      | Pending  |
+| M28       | 全局功能可用性盘点       | 高可见入口要么可用，要么明确禁用并显示中文原因                   | Complete |
 
 ## M15 完成内容
 
@@ -138,11 +140,21 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - AI Workflow Inspector 新增“失败诊断”和“重试策略”，并提供“重试 AI 工作流”用户触发入口。
 - 重试复用当前指令重新生成；AI 输出仍保持建议态，应用到正文前继续要求用户确认。
 
+## M28 完成内容
+
+- 新增 `docs/productization/m28-global-usability-audit.md`，明确全局可用性盘点范围、UI 行为和验收标准。
+- 标题栏“命令面板”按钮补齐可访问名称、tooltip，并接入打开命令面板状态。
+- 当前唯一打开资产的编辑器 tab 明确标记为禁用，说明多 tab 切换将在后续里程碑补齐。
+- 底部面板 tabs 明确标记为禁用，说明面板切换将在后续里程碑补齐。
+- 新增 WorkspaceShell 静态渲染测试，防止高可见入口回退为无反馈按钮。
+- 本次按用户指令先进入 M28；M27 安装后首次使用引导仍待回补。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史与 M26 工作流失败诊断与重试策略。
+- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略与 M28 全局功能可用性盘点。
+- M27 安装后首次使用引导尚未完成，需后续回补。
 - 未经用户确认不得 push。
 
 ## 建议后续路线

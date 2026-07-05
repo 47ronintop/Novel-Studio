@@ -42,6 +42,7 @@ export interface WorkspaceShellProps {
   readonly studio?: ConfigStudioPanelProps;
   readonly storyBible?: StoryBibleSummaryProps;
   readonly storyBibleEditor?: StoryBibleEditorProps;
+  readonly onCommandPaletteOpen?: () => void;
   readonly onActivitySelect?: (activityId: ActivityId) => void;
 }
 
@@ -243,6 +244,7 @@ export function WorkspaceShell({
   studio,
   storyBible,
   storyBibleEditor,
+  onCommandPaletteOpen,
   onActivitySelect
 }: WorkspaceShellProps) {
   return (
@@ -252,7 +254,14 @@ export function WorkspaceShell({
           <span className="ns-project-title">{shellState.projectTitle}</span>
           <span className="ns-save-status">{shellState.saveStatus}</span>
         </div>
-        <button className="ns-command-button" data-focus-order="1" type="button">
+        <button
+          aria-label="打开命令面板"
+          className="ns-command-button"
+          data-focus-order="1"
+          onClick={onCommandPaletteOpen}
+          title="打开命令面板"
+          type="button"
+        >
           命令面板 <kbd>Ctrl/Cmd+K</kbd>
         </button>
       </header>
@@ -520,11 +529,14 @@ export function WorkspaceShell({
             <PanelBottom aria-hidden="true" size={15} />
             {shellState.bottomPanelTabs.map((tab, index) => (
               <button
+                aria-label={`底部面板标签：${bottomPanelLabels.get(tab) ?? tab}（暂不可切换）`}
                 aria-selected={index === 0}
                 className="ns-bottom-tab"
                 data-focus-order={index === 0 ? "4" : undefined}
+                disabled
                 key={tab}
                 role="tab"
+                title="底部面板切换会在后续里程碑补齐。"
                 type="button"
               >
                 {bottomPanelLabels.get(tab) ?? tab}
@@ -712,10 +724,14 @@ function WorkspaceEditorSurface({
     <>
       <div className="ns-tabs" role="tablist" aria-label="打开的资产">
         <button
+          aria-disabled="true"
+          aria-label="当前打开的章节标签"
           aria-selected="true"
           className="ns-tab"
           data-focus-order="3"
+          disabled
           role="tab"
+          title="当前只有一个打开资产，标签切换会在后续里程碑补齐。"
           type="button"
         >
           {chapterEditor?.chapter.frontmatter.title ?? "未命名章节"}
