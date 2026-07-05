@@ -1,6 +1,7 @@
 import type {
   ActivityId,
   ApplicationCommand,
+  ApplicationCommandId,
   DesktopShellState,
   NovelStudioApi
 } from "@novel-studio/application";
@@ -21,6 +22,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { createAiWritingWorkflowBridge } from "./ai-writing-workflow-bridge.js";
 import { createChapterEditorBridge } from "./chapter-editor-bridge.js";
+import { createCommandExecutionBridge } from "./command-execution-bridge.js";
 import { createProjectWorkflowBridge } from "./project-workflow-bridge.js";
 import { createProjectSearchBridge } from "./project-search-bridge.js";
 import { createStoryBibleBridge } from "./story-bible-bridge.js";
@@ -108,6 +110,9 @@ export function App() {
     api === undefined ? undefined : createAiWritingWorkflowBridge(api)
   );
   const [studioBridge] = useState(() => (api === undefined ? undefined : createStudioBridge(api)));
+  const [commandExecutionBridge] = useState(() =>
+    api === undefined ? undefined : createCommandExecutionBridge(api)
+  );
   const [shellState, setShellState] = useState<DesktopShellState>(rendererShellState);
   const [commands, setCommands] = useState<readonly ApplicationCommand[]>(rendererCommands);
   const [chapterEditor, setChapterEditor] = useState<ChapterEditorProps | undefined>();
@@ -402,6 +407,27 @@ export function App() {
       commandPaletteOpen: true
     }));
   }, []);
+
+  const handleCommandExecute = useCallback(
+    (commandId: ApplicationCommandId) => {
+      if (commandExecutionBridge === undefined) {
+        return;
+      }
+
+      void commandExecutionBridge.execute(commandId).then((result) => {
+        if (!result.ok) {
+          return;
+        }
+
+        setShellState(result.value);
+        setShortcutState((current) => ({
+          ...current,
+          commandPaletteOpen: false
+        }));
+      });
+    },
+    [commandExecutionBridge]
+  );
 
   const handleSearchQueryChange = useCallback(
     (query: string) => {
@@ -734,6 +760,7 @@ export function App() {
       shellState={shellState}
       commands={commands}
       commandPaletteOpen={shortcutState.commandPaletteOpen}
+      onCommandExecute={handleCommandExecute}
       onCommandPaletteOpen={handleCommandPaletteOpen}
       onActivitySelect={handleActivitySelect}
     />

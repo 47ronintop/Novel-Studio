@@ -51,8 +51,9 @@
 - 完成 M25 工作流运行历史：AI 写作建议生成后写入本地 workflow run history，Inspector 显示最近运行、脱敏详情、token/cost 和步骤状态。
 - 完成 M26 工作流失败诊断与重试策略：模型/Agent 失败会写入脱敏 failed workflow run history，Inspector 显示失败诊断、重试策略和用户触发重试入口，失败不会自动写入正文。
 - 按用户指令跳过 M27 先完成 M28 全局功能可用性盘点：命令面板按钮接入打开行为，编辑器单 tab 与底部面板 tabs 明确禁用并显示中文原因，避免高可见入口无反馈。
+- 按用户反馈暂缓 M27 并完成 M29 功能完成度盘点与命令面板执行闭环：新增可见入口完成度审计，命令面板 safe command 支持真实执行并同步桌面 shell state。
 
 ## Notes
 
 - Phase 7 当前定义的 M0-M18 已完成。
-- 当前已完成 Post-M18 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略与 M28 全局功能可用性盘点；M27 安装后首次使用引导尚未完成；未经用户确认不得 push。
+- 当前已完成 Post-M18 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点与 M29 功能完成度盘点；M27 安装后首次使用引导暂缓；未经用户确认不得 push。

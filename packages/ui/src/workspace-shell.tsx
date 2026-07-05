@@ -1,6 +1,7 @@
 import type {
   ActivityId,
   ApplicationCommand,
+  ApplicationCommandId,
   DesktopShellState,
   ProjectSearchResultItem
 } from "@novel-studio/application";
@@ -43,6 +44,7 @@ export interface WorkspaceShellProps {
   readonly storyBible?: StoryBibleSummaryProps;
   readonly storyBibleEditor?: StoryBibleEditorProps;
   readonly onCommandPaletteOpen?: () => void;
+  readonly onCommandExecute?: (commandId: ApplicationCommandId) => void;
   readonly onActivitySelect?: (activityId: ActivityId) => void;
 }
 
@@ -245,6 +247,7 @@ export function WorkspaceShell({
   storyBible,
   storyBibleEditor,
   onCommandPaletteOpen,
+  onCommandExecute,
   onActivitySelect
 }: WorkspaceShellProps) {
   return (
@@ -548,6 +551,7 @@ export function WorkspaceShell({
 
       <CommandPalette
         commands={commands}
+        onCommandExecute={onCommandExecute}
         open={commandPaletteOpen || shellState.commandPaletteOpen}
       />
     </div>

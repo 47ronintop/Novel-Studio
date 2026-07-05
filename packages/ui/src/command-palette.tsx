@@ -9,6 +9,7 @@ export interface CommandPaletteShortcutEvent {
 
 export interface CommandPaletteProps {
   readonly commands: readonly ApplicationCommand[];
+  readonly onCommandExecute?: ((commandId: ApplicationCommand["id"]) => void) | undefined;
   readonly open: boolean;
 }
 
@@ -16,7 +17,7 @@ export function isCommandPaletteShortcut(event: CommandPaletteShortcutEvent): bo
   return event.key.toLowerCase() === "k" && (event.ctrlKey || event.metaKey);
 }
 
-export function CommandPalette({ commands, open }: CommandPaletteProps) {
+export function CommandPalette({ commands, onCommandExecute, open }: CommandPaletteProps) {
   if (!open) {
     return null;
   }
@@ -32,11 +33,18 @@ export function CommandPalette({ commands, open }: CommandPaletteProps) {
       <ul className="ns-command-list" aria-label="可用命令">
         {safeCommands.map((command) => (
           <li className="ns-command-item" key={command.id}>
-            <span className="ns-command-title">{command.title}</span>
-            <span className="ns-command-meta">
-              <span>{command.defaultShortcut}</span>
-              <span className="ns-risk-level">{riskLevelLabel(command.riskLevel)}</span>
-            </span>
+            <button
+              aria-label={`执行命令：${command.title}`}
+              className="ns-command-action"
+              onClick={() => onCommandExecute?.(command.id)}
+              type="button"
+            >
+              <span className="ns-command-title">{command.title}</span>
+              <span className="ns-command-meta">
+                <span>{command.defaultShortcut}</span>
+                <span className="ns-risk-level">{riskLevelLabel(command.riskLevel)}</span>
+              </span>
+            </button>
           </li>
         ))}
       </ul>

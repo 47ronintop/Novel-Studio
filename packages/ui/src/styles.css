@@ -1442,12 +1442,27 @@ textarea:focus-visible,
 }
 
 .ns-command-item {
+  padding: 0;
+}
+
+.ns-command-action {
   align-items: center;
+  background: transparent;
+  border: 0;
   border-radius: 6px;
+  color: var(--ns-ink);
+  cursor: pointer;
   display: flex;
+  font: inherit;
   justify-content: space-between;
   min-height: 34px;
   padding: 0 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.ns-command-action:hover {
+  background: color-mix(in srgb, var(--ns-ink) 8%, transparent);
 }
 
 .ns-risk-level {

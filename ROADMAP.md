@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.16 | Status: Active | Last Updated: 2026-07-05
+Version: 1.17 | Status: Active | Last Updated: 2026-07-05
 
 ## 目标
 
@@ -44,8 +44,9 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M24       | 工作流运行观测           | AI 工作流运行 trace、上下文、模型、token/cost 和步骤状态可见     | Complete |
 | M25       | 工作流运行历史           | 最近 AI 工作流运行历史、脱敏详情、步骤状态和本地审计记录         | Complete |
 | M26       | 工作流失败诊断与重试策略 | 失败运行记录、可解释错误原因、重试策略展示和用户触发重试入口     | Complete |
-| M27       | 安装后首次使用引导       | 欢迎页、示例项目入口、创建/打开项目引导和关键空状态行动按钮      | Pending  |
+| M27       | 安装后首次使用引导       | 欢迎页、示例项目入口、创建/打开项目引导和关键空状态行动按钮      | Deferred |
 | M28       | 全局功能可用性盘点       | 高可见入口要么可用，要么明确禁用并显示中文原因                   | Complete |
+| M29       | 功能完成度盘点与命令执行 | 可见入口完成度审计、核心缺口排序、命令面板真实执行闭环           | Complete |
 
 ## M15 完成内容
 
@@ -149,17 +150,25 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - 新增 WorkspaceShell 静态渲染测试，防止高可见入口回退为无反馈按钮。
 - 本次按用户指令先进入 M28；M27 安装后首次使用引导仍待回补。
 
+## M29 完成内容
+
+- 新增 `docs/productization/m29-functional-completion-audit.md`，明确当前可见入口的完成度、M29 处置和后续建议。
+- 新增 M29 设计规格和实施计划，将 M27 首次使用引导暂缓到核心功能更稳定之后。
+- 命令面板 safe command 从只读列表升级为可点击按钮。
+- Renderer 新增命令执行 bridge，通过 preload API 执行命令并同步 `DesktopShellState`。
+- 命令面板执行后可真实折叠项目导航、检查器和底部面板；未知命令仍由 Application safe-command 边界拒绝。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略与 M28 全局功能可用性盘点。
-- M27 安装后首次使用引导尚未完成，需后续回补。
+- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点与 M29 功能完成度盘点。
+- M27 安装后首次使用引导已暂缓，需在核心可见功能更稳定后回补。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M27 安装后首次使用引导，补齐欢迎页、示例项目入口、创建/打开项目引导和关键空状态行动按钮。
+- 下一步建议进入 M30 核心功能缺口补齐，优先处理底部面板真实切换、搜索结果跳转、时间线主视图或插件管理 UI 中最影响试用体验的一项。
 
 ## 当前技术债重点
 
