@@ -21,27 +21,27 @@ test("creates a project, creates a chapter, edits it, and saves through Electron
   try {
     const page = await electronApp.firstWindow();
 
-    await expect(page.getByLabel("Project Navigator")).toBeVisible();
+    await expect(page.getByLabel("项目导航")).toBeVisible();
 
-    await page.getByLabel("Project path").fill(join(tempRoot, "Missing Project"));
-    await page.getByRole("button", { name: "Open project" }).click();
+    await page.getByLabel("项目路径").fill(join(tempRoot, "Missing Project"));
+    await page.getByRole("button", { name: "打开项目" }).click();
     await expect(page.getByText("project.json could not be read.")).toBeVisible();
 
-    await page.getByLabel("Project path").fill(projectRoot);
-    await page.getByRole("button", { name: "Create project" }).click();
+    await page.getByLabel("项目路径").fill(projectRoot);
+    await page.getByRole("button", { name: "创建项目" }).click();
 
     await expect(page.getByText("Project Smoke")).toBeVisible();
 
-    await page.getByRole("button", { name: "Create chapter" }).click();
-    await expect(page.getByRole("button", { name: /Untitled Chapter 1/ })).toBeVisible();
+    await page.getByRole("button", { name: "新建章节" }).click();
+    await expect(page.getByRole("button", { name: /未命名章节 1/ })).toBeVisible();
 
-    const body = page.getByLabel("Chapter body");
+    const body = page.getByLabel("章节正文");
     await expect(body).toBeVisible();
     await body.fill("E2E opening line.");
 
-    await expect(page.getByText("Unsaved").first()).toBeVisible();
-    await page.getByRole("button", { name: "Save chapter" }).click();
-    await expect(page.getByText("Saved").first()).toBeVisible();
+    await expect(page.getByText("未保存").first()).toBeVisible();
+    await page.getByRole("button", { name: "保存章节" }).click();
+    await expect(page.getByText("已保存").first()).toBeVisible();
 
     const chapterFiles = await readdir(join(projectRoot, "chapters"));
     expect(chapterFiles).toHaveLength(1);
@@ -56,5 +56,33 @@ test("creates a project, creates a chapter, edits it, and saves through Electron
   } finally {
     await electronApp.close();
     await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("switches visible beta activity views from the left activity bar", async () => {
+  const electronApp = await electron.launch({
+    args: [electronMain],
+    env: {
+      ...process.env,
+      NOVEL_STUDIO_PROJECT_ROOT: join(repositoryRoot, "fixtures", "projects", "minimal-chapter")
+    }
+  });
+
+  try {
+    const page = await electronApp.firstWindow();
+
+    await page.getByRole("button", { name: "搜索" }).click();
+    await expect(page.getByRole("heading", { name: "搜索项目" })).toBeVisible();
+
+    await page.getByRole("button", { name: "时间线" }).click();
+    await expect(page.getByRole("heading", { name: "时间线" })).toBeVisible();
+
+    await page.getByRole("button", { name: "设置" }).click();
+    await expect(page.getByRole("heading", { name: "设置" })).toBeVisible();
+
+    await page.getByRole("button", { name: "工作区" }).click();
+    await expect(page.getByLabel("编辑区")).toBeVisible();
+  } finally {
+    await electronApp.close();
   }
 });

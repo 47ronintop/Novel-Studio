@@ -130,15 +130,15 @@ export function createProjectDesktopApplication(
       }),
     projectTitle: options.projectTitle,
     navigatorSections: [
-      { id: "chapters", title: "Chapters", itemCount: 1 },
-      { id: "characters", title: "Characters", itemCount: 0 },
-      { id: "world", title: "World", itemCount: 0 },
-      { id: "outline", title: "Outline", itemCount: 0 },
-      { id: "timeline", title: "Timeline", itemCount: 0 },
-      { id: "memories", title: "Memories", itemCount: 0 },
-      { id: "prompts", title: "Prompts", itemCount: 0 },
-      { id: "agents", title: "Agents", itemCount: 0 },
-      { id: "workflows", title: "Workflows", itemCount: 0 }
+      { id: "chapters", title: "章节", itemCount: 1 },
+      { id: "characters", title: "人物", itemCount: 0 },
+      { id: "world", title: "世界观", itemCount: 0 },
+      { id: "outline", title: "大纲", itemCount: 0 },
+      { id: "timeline", title: "时间线", itemCount: 0 },
+      { id: "memories", title: "记忆", itemCount: 0 },
+      { id: "prompts", title: "提示词", itemCount: 0 },
+      { id: "agents", title: "Agent", itemCount: 0 },
+      { id: "workflows", title: "工作流", itemCount: 0 }
     ]
   });
 

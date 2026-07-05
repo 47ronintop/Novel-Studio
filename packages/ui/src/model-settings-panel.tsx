@@ -33,9 +33,9 @@ export function ModelSettingsPanel({
   onMakeDefault
 }: ModelSettingsPanelProps) {
   return (
-    <section className="model-settings-panel" aria-label="Model profile settings">
+    <section className="model-settings-panel" aria-label="模型 Profile 设置">
       <header className="panel-header">
-        <h2>Model Profiles</h2>
+        <h2>模型 Profile</h2>
       </header>
       <div className="model-profile-list">
         {profiles.map((profile) => {
@@ -49,18 +49,18 @@ export function ModelSettingsPanel({
                 <p>
                   {profile.provider} · {profile.modelName}
                 </p>
-                <p>Stored secret reference</p>
-                <p>{profile.timeoutMs}ms timeout</p>
+                <p>已保存密钥引用</p>
+                <p>{profile.timeoutMs}ms 超时</p>
               </div>
               <div className="model-profile-actions">
                 {isDefault ? (
                   <span className="default-profile-badge">
-                    <CheckCircle aria-hidden="true" size={14} /> Default
+                    <CheckCircle aria-hidden="true" size={14} /> 默认
                   </span>
                 ) : (
                   <button
                     type="button"
-                    aria-label={`Make ${profile.displayName} default`}
+                    aria-label={`设为默认模型 ${profile.displayName}`}
                     onClick={() => onMakeDefault?.(profile.id)}
                   >
                     <Star aria-hidden="true" size={14} />
@@ -68,7 +68,7 @@ export function ModelSettingsPanel({
                 )}
                 <button
                   type="button"
-                  aria-label={`Test connection for ${profile.displayName}`}
+                  aria-label={`测试连接 ${profile.displayName}`}
                   onClick={() => onTestConnection?.(profile.id)}
                 >
                   <PlugZap aria-hidden="true" size={14} />
@@ -86,12 +86,12 @@ export function ModelSettingsPanel({
 function statusLabel(status: ModelConnectionStatusValue): string {
   switch (status) {
     case "idle":
-      return "Not tested";
+      return "未测试";
     case "testing":
-      return "Testing";
+      return "测试中";
     case "success":
-      return "Connected";
+      return "已连接";
     case "failed":
-      return "Failed";
+      return "失败";
   }
 }

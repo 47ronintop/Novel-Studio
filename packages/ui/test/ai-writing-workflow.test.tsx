@@ -24,10 +24,10 @@ describe("AI writing workflow UI", () => {
       />
     );
 
-    expect(html).toContain('aria-label="AI writing workflow"');
-    expect(html).toContain('aria-label="AI writing instruction"');
-    expect(html).toContain('aria-label="Generate AI suggestion"');
-    expect(html).toContain('aria-label="Apply AI suggestion"');
+    expect(html).toContain('aria-label="AI 写作工作流"');
+    expect(html).toContain('aria-label="AI 写作指令"');
+    expect(html).toContain('aria-label="生成 AI 建议"');
+    expect(html).toContain('aria-label="应用 AI 建议"');
     expect(html).toContain("补写了主角推门后的动作。");
     expect(html).toContain("1 source / 4 tokens");
   });

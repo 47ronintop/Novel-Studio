@@ -1,4 +1,4 @@
-import type { ApplicationCommand, DesktopShellState } from "@novel-studio/application";
+import type { ActivityId, ApplicationCommand, DesktopShellState } from "@novel-studio/application";
 import type { ChapterSummary } from "@novel-studio/shared";
 import type { ChapterEditorProps } from "./chapter-editor.js";
 import {
@@ -28,6 +28,7 @@ export interface WorkspaceShellProps {
   readonly projectWorkflow?: ProjectWorkflowProps;
   readonly aiWritingWorkflow?: AiWritingWorkflowProps;
   readonly storyBible?: StoryBibleSummaryProps;
+  readonly onActivitySelect?: (activityId: ActivityId) => void;
 }
 
 export interface ProjectWorkflowProps {
@@ -77,13 +78,32 @@ export interface StoryBibleSummaryAsset {
 }
 
 const activities = [
-  { id: "workspace", label: "Workspace", icon: FolderTree },
-  { id: "search", label: "Search", icon: Search },
-  { id: "timeline", label: "Timeline", icon: Clock3 },
-  { id: "ai", label: "AI Workflow", icon: Bot },
-  { id: "studio", label: "Studio", icon: Boxes },
-  { id: "settings", label: "Settings", icon: Settings }
+  { id: "workspace", label: "工作区", icon: FolderTree },
+  { id: "search", label: "搜索", icon: Search },
+  { id: "timeline", label: "时间线", icon: Clock3 },
+  { id: "ai", label: "AI 工作流", icon: Bot },
+  { id: "studio", label: "创作系统", icon: Boxes },
+  { id: "settings", label: "设置", icon: Settings }
 ] as const;
+
+const navigatorSectionLabels: ReadonlyMap<string, string> = new Map([
+  ["chapters", "章节"],
+  ["characters", "人物"],
+  ["world", "世界观"],
+  ["outline", "大纲"],
+  ["timeline", "时间线"],
+  ["memories", "记忆"],
+  ["prompts", "提示词"],
+  ["agents", "Agent"],
+  ["workflows", "工作流"]
+]);
+
+const bottomPanelLabels: ReadonlyMap<string, string> = new Map([
+  ["Workflow Run", "工作流运行"],
+  ["Problems", "问题"],
+  ["Search", "搜索"],
+  ["Logs", "日志"]
+]);
 
 export function WorkspaceShell({
   shellState,
@@ -92,7 +112,8 @@ export function WorkspaceShell({
   chapterEditor,
   projectWorkflow,
   aiWritingWorkflow,
-  storyBible
+  storyBible,
+  onActivitySelect
 }: WorkspaceShellProps) {
   return (
     <div className="ns-shell" data-theme="dark">
@@ -102,12 +123,12 @@ export function WorkspaceShell({
           <span className="ns-save-status">{shellState.saveStatus}</span>
         </div>
         <button className="ns-command-button" data-focus-order="1" type="button">
-          Command Palette <kbd>Ctrl/Cmd+K</kbd>
+          命令面板 <kbd>Ctrl/Cmd+K</kbd>
         </button>
       </header>
 
       <div className="ns-workspace-grid">
-        <aside className="ns-activity-bar" data-region="activity-bar" aria-label="Activity Bar">
+        <aside className="ns-activity-bar" data-region="activity-bar" aria-label="活动栏">
           {activities.map((activity) => {
             const Icon = activity.icon;
             const selected = activity.id === shellState.activeActivity;
@@ -117,9 +138,11 @@ export function WorkspaceShell({
                 {...(selected ? { "aria-current": "page" as const } : {})}
                 aria-label={activity.label}
                 className="ns-activity-button"
+                data-activity-id={activity.id}
                 data-focus-order={selected ? "2" : undefined}
                 data-selected={selected}
                 key={activity.id}
+                onClick={() => onActivitySelect?.(activity.id)}
                 title={activity.label}
                 type="button"
               >
@@ -130,57 +153,57 @@ export function WorkspaceShell({
         </aside>
 
         <nav
-          aria-label="Project Navigator"
+          aria-label="项目导航"
           className="ns-navigator"
           data-collapsed={shellState.navigatorCollapsed}
           data-region="navigator"
         >
           <div className="ns-panel-header">
-            <span>Project</span>
+            <span>项目</span>
             <span>{shellState.navigatorSections.length}</span>
           </div>
           {projectWorkflow === undefined ? null : (
             <div className="ns-project-workflow">
               <input
-                aria-label="Project path"
+                aria-label="项目路径"
                 className="ns-project-path"
                 onChange={(event) => projectWorkflow.onProjectRootChange(event.currentTarget.value)}
-                placeholder="Select or type a project folder"
+                placeholder="选择或输入项目文件夹"
                 value={projectWorkflow.projectRootInput}
               />
               <div className="ns-project-actions">
                 <button
-                  aria-label="Open project"
+                  aria-label="打开项目"
                   className="ns-icon-text-button"
                   disabled={isProjectWorkflowBusy(projectWorkflow)}
                   onClick={projectWorkflow.onOpenProject}
-                  title="Open project"
+                  title="打开项目"
                   type="button"
                 >
                   <FolderOpen aria-hidden="true" size={14} />
-                  {projectWorkflow.status === "opening" ? "Opening" : "Open"}
+                  {projectWorkflow.status === "opening" ? "正在打开" : "打开项目"}
                 </button>
                 <button
-                  aria-label="Create project"
+                  aria-label="创建项目"
                   className="ns-icon-text-button"
                   disabled={isProjectWorkflowBusy(projectWorkflow)}
                   onClick={projectWorkflow.onCreateProject}
-                  title="Create project"
+                  title="创建项目"
                   type="button"
                 >
                   <FolderPlus aria-hidden="true" size={14} />
-                  {projectWorkflow.status === "creating" ? "Creating" : "Create"}
+                  {projectWorkflow.status === "creating" ? "正在创建" : "创建项目"}
                 </button>
                 <button
-                  aria-label="Create chapter"
+                  aria-label="新建章节"
                   className="ns-icon-text-button"
                   disabled={isProjectWorkflowBusy(projectWorkflow)}
                   onClick={projectWorkflow.onCreateChapter}
-                  title="Create chapter"
+                  title="新建章节"
                   type="button"
                 >
                   <FilePlus aria-hidden="true" size={14} />
-                  Chapter
+                  新建章节
                 </button>
               </div>
               {projectWorkflow.feedback === undefined ? null : (
@@ -197,13 +220,13 @@ export function WorkspaceShell({
           <ul className="ns-tree">
             {shellState.navigatorSections.map((section) => (
               <li className="ns-tree-row" key={section.id}>
-                <span>{section.title}</span>
+                <span>{navigatorSectionLabels.get(section.id) ?? section.title}</span>
                 <span>{section.itemCount}</span>
               </li>
             ))}
           </ul>
           {projectWorkflow === undefined ? null : (
-            <ul className="ns-chapter-tree" aria-label="Chapters">
+            <ul className="ns-chapter-tree" aria-label="章节">
               {projectWorkflow.chapters.map((chapter) => (
                 <li key={chapter.id}>
                   <button
@@ -223,64 +246,49 @@ export function WorkspaceShell({
           )}
         </nav>
 
-        <main aria-label="Editor Area" className="ns-editor-area" data-region="editor-area">
-          <div className="ns-tabs" role="tablist" aria-label="Open assets">
-            <button
-              aria-selected="true"
-              className="ns-tab"
-              data-focus-order="3"
-              role="tab"
-              type="button"
-            >
-              Untitled Chapter
-            </button>
-          </div>
-          <section className="ns-editor-surface" aria-label="Chapter editor surface">
-            {chapterEditor ? (
-              <ChapterEditor {...chapterEditor} />
-            ) : (
-              <>
-                <div className="ns-document-title">Untitled Chapter</div>
-                <p>Write the next scene</p>
-                <div className="ns-editor-line" />
-                <div className="ns-editor-line ns-editor-line-short" />
-              </>
-            )}
-          </section>
+        <main aria-label="编辑区" className="ns-editor-area" data-region="editor-area">
+          {shellState.activeActivity === "workspace" ? (
+            <WorkspaceEditorSurface chapterEditor={chapterEditor} />
+          ) : (
+            <ActivityEmptyState
+              activityId={shellState.activeActivity}
+              aiWritingWorkflow={aiWritingWorkflow}
+            />
+          )}
         </main>
 
         <aside
-          aria-label="Inspector"
+          aria-label="检查器"
           className="ns-inspector"
           data-collapsed={shellState.inspectorCollapsed}
           data-region="inspector"
         >
           <div className="ns-panel-header">
-            <span>Inspector</span>
+            <span>检查器</span>
             <PanelRight aria-hidden="true" size={15} />
           </div>
           <dl className="ns-meta-list">
             <div>
-              <dt>Status</dt>
-              <dd>{shellState.saveStatus}</dd>
+              <dt>状态</dt>
+              <dd>{saveStatusLabel(shellState.saveStatus)}</dd>
             </div>
             <div>
-              <dt>History</dt>
-              <dd>No snapshots yet</dd>
+              <dt>历史</dt>
+              <dd>暂无快照</dd>
             </div>
             <div>
-              <dt>Context</dt>
-              <dd>{aiWritingWorkflow?.contextTraceLabel ?? "No workflow run"}</dd>
+              <dt>上下文</dt>
+              <dd>{aiWritingWorkflow?.contextTraceLabel ?? "暂无工作流运行"}</dd>
             </div>
           </dl>
           {aiWritingWorkflow === undefined ? null : (
-            <section className="ns-ai-workflow" aria-label="AI writing workflow">
+            <section className="ns-ai-workflow" aria-label="AI 写作工作流">
               <div className="ns-editor-panel-header">
-                <span>AI Workflow</span>
+                <span>AI 工作流</span>
                 <span className="ns-muted">{statusLabel(aiWritingWorkflow.status)}</span>
               </div>
               <textarea
-                aria-label="AI writing instruction"
+                aria-label="AI 写作指令"
                 className="ns-ai-instruction"
                 onChange={(event) =>
                   aiWritingWorkflow.onInstructionChange(event.currentTarget.value)
@@ -289,26 +297,26 @@ export function WorkspaceShell({
               />
               <div className="ns-ai-actions">
                 <button
-                  aria-label="Generate AI suggestion"
+                  aria-label="生成 AI 建议"
                   className="ns-icon-text-button"
                   disabled={aiWritingWorkflow.status === "generating"}
                   onClick={aiWritingWorkflow.onGenerateSuggestion}
-                  title="Generate AI suggestion"
+                  title="生成 AI 建议"
                   type="button"
                 >
                   <Sparkles aria-hidden="true" size={14} />
-                  Generate
+                  生成
                 </button>
                 <button
-                  aria-label="Apply AI suggestion"
+                  aria-label="应用 AI 建议"
                   className="ns-icon-text-button"
                   disabled={aiWritingWorkflow.status !== "suggestion-ready"}
                   onClick={aiWritingWorkflow.onApplySuggestion}
-                  title="Apply AI suggestion"
+                  title="应用 AI 建议"
                   type="button"
                 >
                   <Check aria-hidden="true" size={14} />
-                  Apply
+                  应用
                 </button>
               </div>
               {aiWritingWorkflow.summary === undefined ? null : (
@@ -320,9 +328,9 @@ export function WorkspaceShell({
             </section>
           )}
           {storyBible === undefined ? null : (
-            <section className="ns-story-bible-summary" aria-label="Story Bible summary">
+            <section className="ns-story-bible-summary" aria-label="故事圣经摘要">
               <div className="ns-editor-panel-header">
-                <span>Story Bible</span>
+                <span>故事圣经</span>
                 <span className="ns-muted">{storyBible.assets.length}</span>
               </div>
               <ul className="ns-story-bible-list">
@@ -335,7 +343,7 @@ export function WorkspaceShell({
                     <p>{asset.summary}</p>
                     <div className="ns-story-bible-meta">
                       <span>{asset.status}</span>
-                      {asset.contextEligible === true ? <span>Context eligible</span> : null}
+                      {asset.contextEligible === true ? <span>可进入上下文</span> : null}
                     </div>
                   </li>
                 ))}
@@ -345,12 +353,12 @@ export function WorkspaceShell({
         </aside>
 
         <section
-          aria-label="Bottom Panel"
+          aria-label="底部面板"
           className="ns-bottom-panel"
           data-region="bottom-panel"
           data-visible={shellState.bottomPanelVisible}
         >
-          <div className="ns-bottom-tabs" role="tablist" aria-label="Bottom panel tabs">
+          <div className="ns-bottom-tabs" role="tablist" aria-label="底部面板标签">
             <PanelBottom aria-hidden="true" size={15} />
             {shellState.bottomPanelTabs.map((tab, index) => (
               <button
@@ -361,7 +369,7 @@ export function WorkspaceShell({
                 role="tab"
                 type="button"
               >
-                {tab}
+                {bottomPanelLabels.get(tab) ?? tab}
               </button>
             ))}
           </div>
@@ -376,6 +384,112 @@ export function WorkspaceShell({
   );
 }
 
+function WorkspaceEditorSurface({
+  chapterEditor
+}: {
+  readonly chapterEditor: ChapterEditorProps | undefined;
+}) {
+  return (
+    <>
+      <div className="ns-tabs" role="tablist" aria-label="打开的资产">
+        <button
+          aria-selected="true"
+          className="ns-tab"
+          data-focus-order="3"
+          role="tab"
+          type="button"
+        >
+          {chapterEditor?.chapter.frontmatter.title ?? "未命名章节"}
+        </button>
+      </div>
+      <section className="ns-editor-surface" aria-label="章节编辑器表面">
+        {chapterEditor ? (
+          <ChapterEditor {...chapterEditor} />
+        ) : (
+          <>
+            <div className="ns-document-title">未命名章节</div>
+            <p>继续写下一场</p>
+            <div className="ns-editor-line" />
+            <div className="ns-editor-line ns-editor-line-short" />
+          </>
+        )}
+      </section>
+    </>
+  );
+}
+
+function ActivityEmptyState({
+  activityId,
+  aiWritingWorkflow
+}: {
+  readonly activityId: ActivityId;
+  readonly aiWritingWorkflow: AiWritingWorkflowProps | undefined;
+}) {
+  if (activityId === "ai") {
+    return (
+      <section className="ns-activity-view" aria-label="AI 工作流主视图">
+        <h1>AI 工作流</h1>
+        <p>AI 输出保持建议态，应用到正文前需要你确认。</p>
+        {aiWritingWorkflow === undefined ? (
+          <p>打开项目章节后可以生成写作建议。</p>
+        ) : (
+          <div className="ns-activity-view-actions">
+            <span>当前状态：{statusLabel(aiWritingWorkflow.status)}</span>
+          </div>
+        )}
+      </section>
+    );
+  }
+  if (activityId === "workspace") {
+    return null;
+  }
+
+  const copy = activityViewCopy(activityId);
+
+  return (
+    <section className="ns-activity-view" aria-label={`${copy.title}视图`}>
+      <h1>{copy.title}</h1>
+      <p>{copy.description}</p>
+      <div className="ns-activity-view-actions">
+        <span>{copy.nextAction}</span>
+      </div>
+    </section>
+  );
+}
+
+function activityViewCopy(activityId: Exclude<ActivityId, "workspace" | "ai">): {
+  readonly title: string;
+  readonly description: string;
+  readonly nextAction: string;
+} {
+  switch (activityId) {
+    case "search":
+      return {
+        title: "搜索项目",
+        description: "全文搜索将在索引完成后显示结果。",
+        nextAction: "下一步：接入可重建搜索索引。"
+      };
+    case "timeline":
+      return {
+        title: "时间线",
+        description: "时间线事件已进入 Story Bible 数据层，完整可视化编辑会在后续里程碑补齐。",
+        nextAction: "下一步：打开故事圣经时间线编辑器。"
+      };
+    case "studio":
+      return {
+        title: "创作系统",
+        description: "提示词、Agent 和工作流配置已经有安全边界，完整编辑体验会继续产品化。",
+        nextAction: "下一步：完善 Prompt / Agent / Workflow Studio。"
+      };
+    case "settings":
+      return {
+        title: "设置",
+        description: "模型 profile、插件和隐私设置将集中在这里管理。",
+        nextAction: "下一步：补齐设置分区和连接测试入口。"
+      };
+  }
+}
+
 function isProjectWorkflowBusy(projectWorkflow: ProjectWorkflowProps): boolean {
   return projectWorkflow.status === "opening" || projectWorkflow.status === "creating";
 }
@@ -383,12 +497,25 @@ function isProjectWorkflowBusy(projectWorkflow: ProjectWorkflowProps): boolean {
 function statusLabel(status: AiWritingWorkflowStatus): string {
   switch (status) {
     case "idle":
-      return "Idle";
+      return "空闲";
     case "generating":
-      return "Generating";
+      return "生成中";
     case "suggestion-ready":
-      return "Ready";
+      return "待确认";
     case "applied":
-      return "Applied";
+      return "已应用";
+  }
+}
+
+function saveStatusLabel(status: DesktopShellState["saveStatus"]): string {
+  switch (status) {
+    case "Saved":
+      return "已保存";
+    case "Saving":
+      return "保存中";
+    case "Unsaved":
+      return "未保存";
+    case "Recovery available":
+      return "有可恢复内容";
   }
 }

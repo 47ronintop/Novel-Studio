@@ -41,11 +41,11 @@ export function ChapterEditor({
   onVersionPreview,
   onVersionRestore
 }: ChapterEditorProps) {
-  const editorStateLabel = dirty ? "Dirty" : "Clean";
+  const editorStateLabel = dirty ? "已修改" : "未修改";
   const documentLines = useMemo(() => chapter.body.split("\n"), [chapter.body]);
 
   return (
-    <section className="ns-editor-layout" aria-label="Chapter editor">
+    <section className="ns-editor-layout" aria-label="章节编辑器">
       <header className="ns-editor-header">
         <div className="ns-editor-header-main">
           <SquarePen aria-hidden="true" size={15} />
@@ -53,25 +53,25 @@ export function ChapterEditor({
             <h2 className="ns-editor-title">{chapter.frontmatter.title}</h2>
             <p className="ns-editor-subtitle">
               <span>{editorStateLabel}</span>
-              <span>{saveStatus}</span>
+              <span>{saveStatusLabel(saveStatus)}</span>
             </p>
           </div>
         </div>
         <button
-          aria-label="Save chapter"
+          aria-label="保存章节"
           className="ns-editor-save"
           disabled={!dirty || saveStatus === "Saving"}
           onClick={onSave}
           type="button"
         >
           <Save aria-hidden="true" size={15} />
-          Save
+          保存
         </button>
       </header>
 
       <div className="ns-editor-body" data-dirty={dirty}>
         <textarea
-          aria-label="Chapter body"
+          aria-label="章节正文"
           className="ns-editor-textarea"
           onChange={(event) => {
             onBodyChange?.(event.currentTarget.value);
@@ -90,10 +90,10 @@ export function ChapterEditor({
       </div>
 
       <div className="ns-editor-panels">
-        <section className="ns-editor-panel" aria-label="Version history">
+        <section className="ns-editor-panel" aria-label="版本历史">
           <div className="ns-editor-panel-header">
             <History aria-hidden="true" size={14} />
-            <span>Version history</span>
+            <span>版本历史</span>
           </div>
           <ul className="ns-version-list">
             {versionHistory.map((entry) => (
@@ -104,23 +104,23 @@ export function ChapterEditor({
                 </div>
                 <div className="ns-version-actions">
                   <button
-                    aria-label={`Preview version ${entry.label}`}
+                    aria-label={`预览版本 ${entry.label}`}
                     className="ns-icon-button"
                     onClick={() => {
                       onVersionPreview?.(entry.versionId);
                     }}
-                    title={`Preview version ${entry.label}`}
+                    title={`预览版本 ${entry.label}`}
                     type="button"
                   >
                     <Eye aria-hidden="true" size={13} />
                   </button>
                   <button
-                    aria-label={`Restore version ${entry.label}`}
+                    aria-label={`恢复版本 ${entry.label}`}
                     className="ns-icon-button"
                     onClick={() => {
                       onVersionRestore?.(entry.versionId);
                     }}
-                    title={`Restore version ${entry.label}`}
+                    title={`恢复版本 ${entry.label}`}
                     type="button"
                   >
                     <RotateCcw aria-hidden="true" size={13} />
@@ -132,10 +132,10 @@ export function ChapterEditor({
         </section>
 
         {diffPreview ? (
-          <section className="ns-editor-panel" aria-label="AI suggestion diff">
+          <section className="ns-editor-panel" aria-label="AI 建议差异">
             <div className="ns-editor-panel-header">
               <span>{diffPreview.title}</span>
-              <span className="ns-preview-only">Preview only</span>
+              <span className="ns-preview-only">仅预览</span>
             </div>
             <ul className="ns-diff-list">
               {diffPreview.changes.map((change, index) => (
@@ -143,7 +143,7 @@ export function ChapterEditor({
                   className={`ns-diff-item ns-diff-${change.kind}`}
                   key={`${change.kind}-${index}`}
                 >
-                  <span>{change.kind}</span>
+                  <span>{diffKindLabel(change.kind)}</span>
                   <pre>{change.value}</pre>
                 </li>
               ))}
@@ -153,4 +153,28 @@ export function ChapterEditor({
       </div>
     </section>
   );
+}
+
+function saveStatusLabel(status: ChapterEditorProps["saveStatus"]): string {
+  switch (status) {
+    case "Saved":
+      return "已保存";
+    case "Saving":
+      return "保存中";
+    case "Unsaved":
+      return "未保存";
+    case "Recovery available":
+      return "有可恢复内容";
+  }
+}
+
+function diffKindLabel(kind: ChapterEditorDiffChange["kind"]): string {
+  switch (kind) {
+    case "insert":
+      return "新增";
+    case "delete":
+      return "删除";
+    case "replace":
+      return "替换";
+  }
 }

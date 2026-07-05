@@ -144,7 +144,7 @@ export interface DesktopApplicationOptions {
 }
 
 const DEFAULT_SHELL_STATE: DesktopShellState = {
-  projectTitle: "No project open",
+  projectTitle: "未打开项目",
   activeActivity: "workspace",
   navigatorCollapsed: false,
   inspectorCollapsed: false,
@@ -152,17 +152,17 @@ const DEFAULT_SHELL_STATE: DesktopShellState = {
   commandPaletteOpen: false,
   saveStatus: "Saved",
   navigatorSections: [
-    { id: "chapters", title: "Chapters", itemCount: 0 },
-    { id: "characters", title: "Characters", itemCount: 0 },
-    { id: "world", title: "World", itemCount: 0 },
-    { id: "outline", title: "Outline", itemCount: 0 },
-    { id: "timeline", title: "Timeline", itemCount: 0 },
-    { id: "memories", title: "Memories", itemCount: 0 },
-    { id: "prompts", title: "Prompts", itemCount: 0 },
-    { id: "agents", title: "Agents", itemCount: 0 },
-    { id: "workflows", title: "Workflows", itemCount: 0 }
+    { id: "chapters", title: "章节", itemCount: 0 },
+    { id: "characters", title: "人物", itemCount: 0 },
+    { id: "world", title: "世界观", itemCount: 0 },
+    { id: "outline", title: "大纲", itemCount: 0 },
+    { id: "timeline", title: "时间线", itemCount: 0 },
+    { id: "memories", title: "记忆", itemCount: 0 },
+    { id: "prompts", title: "提示词", itemCount: 0 },
+    { id: "agents", title: "Agent", itemCount: 0 },
+    { id: "workflows", title: "工作流", itemCount: 0 }
   ],
-  bottomPanelTabs: ["Workflow Run", "Problems", "Search", "Logs"]
+  bottomPanelTabs: ["工作流运行", "问题", "搜索", "日志"]
 };
 
 export function createDesktopApplication(

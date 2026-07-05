@@ -33,32 +33,32 @@ export function ConfigStudioPanel({
   onRestoreVersion
 }: ConfigStudioPanelProps) {
   return (
-    <section className="config-studio-panel" aria-label="Prompt Agent Workflow Studio">
+    <section className="config-studio-panel" aria-label="提示词 Agent 工作流创作系统">
       <header className="panel-header">
         <div>
           <h2>{selectedAsset.title}</h2>
           <p>{selectedAsset.assetType}</p>
         </div>
         <span>{validationLabel(selectedAsset.validationStatus)}</span>
-        <button type="button" aria-label="Save config asset" onClick={() => onSave?.()}>
+        <button type="button" aria-label="保存配置资产" onClick={() => onSave?.()}>
           <Save aria-hidden="true" size={14} />
         </button>
       </header>
       <textarea
-        aria-label={`${selectedAsset.assetType} JSON editor`}
+        aria-label={`${assetTypeLabel(selectedAsset.assetType)} JSON 编辑器`}
         value={selectedAsset.content}
         onChange={(event) => onContentChange?.(event.currentTarget.value)}
         readOnly={onContentChange === undefined}
       />
-      <aside aria-label="Config version history">
-        <h3>Version history</h3>
+      <aside aria-label="配置版本历史">
+        <h3>版本历史</h3>
         {versions.map((version) => (
           <article key={version.versionId}>
             <span>{version.label}</span>
             <time dateTime={version.createdAt}>{version.createdAt}</time>
             <button
               type="button"
-              aria-label={`Restore config version ${version.label}`}
+              aria-label={`恢复配置版本 ${version.label}`}
               onClick={() => onRestoreVersion?.(version.versionId)}
             >
               <RotateCcw aria-hidden="true" size={14} />
@@ -73,10 +73,21 @@ export function ConfigStudioPanel({
 function validationLabel(status: ConfigValidationStatus): string {
   switch (status) {
     case "valid":
-      return "Schema valid";
+      return "Schema 有效";
     case "invalid":
-      return "Schema invalid";
+      return "Schema 无效";
     case "dirty":
-      return "Unsaved changes";
+      return "有未保存修改";
+  }
+}
+
+function assetTypeLabel(assetType: ConfigStudioAssetType): string {
+  switch (assetType) {
+    case "prompt":
+      return "提示词";
+    case "agent":
+      return "Agent";
+    case "workflow":
+      return "工作流";
   }
 }

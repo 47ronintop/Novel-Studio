@@ -31,7 +31,7 @@ describe("desktop application command bridge", () => {
     const application = createDesktopApplication();
 
     expect(application.getShellState()).toMatchObject({
-      projectTitle: "No project open",
+      projectTitle: "未打开项目",
       activeActivity: "workspace",
       navigatorCollapsed: false,
       inspectorCollapsed: false,
@@ -44,28 +44,28 @@ describe("desktop application command bridge", () => {
     expect(DEFAULT_APPLICATION_COMMANDS).toEqual([
       {
         id: "workspace.open-command-palette",
-        title: "Open Command Palette",
+        title: "打开命令面板",
         scope: "workspace",
         riskLevel: "safe",
         defaultShortcut: "Ctrl/Cmd+K"
       },
       {
         id: "workspace.toggle-navigator",
-        title: "Toggle Navigator",
+        title: "切换项目导航",
         scope: "workspace",
         riskLevel: "safe",
         defaultShortcut: "Ctrl/Cmd+B"
       },
       {
         id: "workspace.toggle-inspector",
-        title: "Toggle Inspector",
+        title: "切换检查器",
         scope: "workspace",
         riskLevel: "safe",
         defaultShortcut: "Ctrl/Cmd+Shift+I"
       },
       {
         id: "workspace.toggle-bottom-panel",
-        title: "Toggle Bottom Panel",
+        title: "切换底部面板",
         scope: "workspace",
         riskLevel: "safe",
         defaultShortcut: "Ctrl/Cmd+J"

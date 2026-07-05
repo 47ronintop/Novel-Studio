@@ -43,9 +43,9 @@ describe("ChapterEditor", () => {
       />
     );
 
-    expect(html).toContain("Unsaved");
-    expect(html).toContain("Dirty");
-    expect(html).toContain("Version history");
+    expect(html).toContain("未保存");
+    expect(html).toContain("已修改");
+    expect(html).toContain("版本历史");
     expect(html).toContain("AI suggestion");
     expect(html).not.toMatch(/fs|filesystem|node:/i);
   });
@@ -79,10 +79,10 @@ describe("ChapterEditor", () => {
       />
     );
 
-    expect(html).toContain('aria-label="Save chapter"');
-    expect(html).toContain('aria-label="Preview version Manual save"');
-    expect(html).toContain('aria-label="Restore version Manual save"');
-    expect(html).toContain("Preview only");
+    expect(html).toContain('aria-label="保存章节"');
+    expect(html).toContain('aria-label="预览版本 Manual save"');
+    expect(html).toContain('aria-label="恢复版本 Manual save"');
+    expect(html).toContain("仅预览");
     expect(html).not.toContain("Apply suggestion");
   });
 });

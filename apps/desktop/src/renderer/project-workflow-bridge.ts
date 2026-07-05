@@ -38,7 +38,7 @@ export function createProjectWorkflowBridge(
       return runProjectOperation("opening", async () => {
         const selectedProjectRoot = await resolveProjectRoot(
           () => api.project.chooseOpenDirectory(),
-          "Open project canceled.",
+          "已取消打开项目。",
           true
         );
         if (selectedProjectRoot === undefined) {
@@ -59,7 +59,7 @@ export function createProjectWorkflowBridge(
       return runProjectOperation("creating", async () => {
         const selectedProjectRoot = await resolveProjectRoot(
           () => api.project.chooseCreateDirectory(),
-          "Create project canceled.",
+          "已取消创建项目。",
           shouldUseTypedCreateRoot()
         );
         if (selectedProjectRoot === undefined) {
@@ -86,7 +86,7 @@ export function createProjectWorkflowBridge(
       snapshot = await unwrap(
         api.project.createChapter({
           chapterId: createChapterId(),
-          title: `Untitled Chapter ${nextOrder}`,
+          title: `未命名章节 ${nextOrder}`,
           order: nextOrder,
           body: ""
         })
@@ -176,5 +176,5 @@ async function unwrap<T>(promise: Promise<Result<T, UnifiedError>>): Promise<T> 
 function projectTitleFromRoot(projectRoot: string): string {
   const normalized = projectRoot.replace(/\\/g, "/").replace(/\/$/, "");
   const title = normalized.split("/").filter(Boolean).at(-1);
-  return title === undefined || title.length === 0 ? "Untitled Project" : title;
+  return title === undefined || title.length === 0 ? "未命名项目" : title;
 }

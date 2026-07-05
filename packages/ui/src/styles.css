@@ -287,6 +287,33 @@ textarea:focus-visible,
   padding: 0 24px;
 }
 
+.ns-activity-view {
+  display: grid;
+  gap: 12px;
+  margin: 34px auto;
+  max-width: 72ch;
+  padding: 0 24px;
+}
+
+.ns-activity-view h1 {
+  font-size: 20px;
+  margin: 0;
+}
+
+.ns-activity-view p {
+  color: var(--ns-muted);
+  line-height: 1.65;
+  margin: 0;
+}
+
+.ns-activity-view-actions {
+  border: 1px solid var(--ns-border);
+  border-radius: 8px;
+  color: var(--ns-muted);
+  font-size: 13px;
+  padding: 10px 12px;
+}
+
 .ns-editor-layout {
   display: grid;
   gap: 14px;

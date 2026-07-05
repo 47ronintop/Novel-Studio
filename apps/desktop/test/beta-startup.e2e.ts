@@ -19,14 +19,14 @@ test("starts with an editable bootstrapped beta project when no source fixtures 
 
   try {
     const page = await electronApp.firstWindow();
-    const body = page.getByLabel("Chapter body");
+    const body = page.getByLabel("章节正文");
 
     await expect(page.getByText("Minimal Chapter Project")).toBeVisible();
     await expect(body).toBeVisible();
     await expect(body).toHaveValue("原始章节正文。\n");
 
     await body.fill("安装版启动后可以编辑。\n");
-    await expect(page.getByText("Unsaved").first()).toBeVisible();
+    await expect(page.getByText("未保存").first()).toBeVisible();
   } finally {
     await electronApp.close();
     await rm(projectRoot, { recursive: true, force: true });

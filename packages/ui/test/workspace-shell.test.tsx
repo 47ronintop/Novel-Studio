@@ -20,11 +20,11 @@ describe("WorkspaceShell", () => {
     expect(html).toContain('data-region="editor-area"');
     expect(html).toContain('data-region="inspector"');
     expect(html).toContain('data-region="bottom-panel"');
-    expect(html).toContain('aria-label="Activity Bar"');
-    expect(html).toContain('aria-label="Project Navigator"');
-    expect(html).toContain('aria-label="Editor Area"');
-    expect(html).toContain('aria-label="Inspector"');
-    expect(html).toContain('aria-label="Bottom Panel"');
+    expect(html).toContain('aria-label="活动栏"');
+    expect(html).toContain('aria-label="项目导航"');
+    expect(html).toContain('aria-label="编辑区"');
+    expect(html).toContain('aria-label="检查器"');
+    expect(html).toContain('aria-label="底部面板"');
   });
 
   test("opens directly into the writing workspace instead of a marketing page", () => {
@@ -37,9 +37,44 @@ describe("WorkspaceShell", () => {
       />
     );
 
-    expect(html).toContain("Untitled Chapter");
-    expect(html).toContain("Write the next scene");
+    expect(html).toContain("未命名章节");
+    expect(html).toContain("继续写下一场");
     expect(html).not.toMatch(/hero|marketing|landing/i);
+  });
+
+  test("renders localized activity buttons with active state and click wiring", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={application.getShellState()}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        onActivitySelect={() => undefined}
+      />
+    );
+
+    expect(html).toContain('aria-label="工作区"');
+    expect(html).toContain('aria-label="搜索"');
+    expect(html).toContain('aria-label="时间线"');
+    expect(html).toContain('aria-label="AI 工作流"');
+    expect(html).toContain('aria-label="创作系统"');
+    expect(html).toContain('aria-label="设置"');
+    expect(html).toContain('data-activity-id="workspace"');
+    expect(html).toContain('aria-current="page"');
+  });
+
+  test("renders localized empty states for non-workspace activities", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "search" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+      />
+    );
+
+    expect(html).toContain("搜索项目");
+    expect(html).toContain("全文搜索将在索引完成后显示结果。");
   });
 
   test("renders a chapter editor when chapter data is available", () => {
@@ -86,8 +121,8 @@ describe("WorkspaceShell", () => {
     );
 
     expect(html).toContain("第一章");
-    expect(html).toContain("Dirty");
-    expect(html).toContain("Version history");
+    expect(html).toContain("已修改");
+    expect(html).toContain("版本历史");
     expect(html).toContain("AI suggestion");
   });
 
@@ -124,11 +159,11 @@ describe("WorkspaceShell", () => {
       />
     );
 
-    expect(html).toContain('aria-label="Project path"');
-    expect(html).toContain('aria-label="Open project"');
-    expect(html).toContain('aria-label="Create project"');
-    expect(html).toContain('aria-label="Create chapter"');
-    expect(html).toContain("Creating");
+    expect(html).toContain('aria-label="项目路径"');
+    expect(html).toContain('aria-label="打开项目"');
+    expect(html).toContain('aria-label="创建项目"');
+    expect(html).toContain('aria-label="新建章节"');
+    expect(html).toContain("正在创建");
     expect(html).toContain('role="status"');
     expect(html).toContain("project.json could not be read.");
     expect(html).toContain('aria-current="true"');
@@ -164,9 +199,9 @@ describe("WorkspaceShell", () => {
       />
     );
 
-    expect(html).toContain('aria-label="Story Bible summary"');
+    expect(html).toContain('aria-label="故事圣经摘要"');
     expect(html).toContain("Hero");
     expect(html).toContain("Oath");
-    expect(html).toContain("Context eligible");
+    expect(html).toContain("可进入上下文");
   });
 });

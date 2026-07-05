@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.7 | Status: Active | Last Updated: 2026-07-05
+Version: 1.8 | Status: Active | Last Updated: 2026-07-05
 
 ## 目标
 
@@ -31,6 +31,12 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M16       | Story Bible Modules             | 人物、世界观、大纲、时间线、记忆管理，给 Context Engine 提供高质量素材            | Complete |
 | M17       | Installer and Release Channel   | Windows NSIS installer、本地 beta release channel、release notes、icon 和签名策略 | Complete |
 | M18       | Plugin System                   | 插件 manifest、项目插件注册表、权限授权策略、插件引擎边界和 contract tests        | Complete |
+
+## Post-M18 产品化里程碑
+
+| Milestone | 名称               | 作用                                                             | 状态     |
+| --------- | ------------------ | ---------------------------------------------------------------- | -------- |
+| M19       | Beta UX 产品化打磨 | 安装版入口可点击、顶部菜单中文化、主要 UI 文案中文化和空状态补齐 | Complete |
 
 ## M15 完成内容
 
@@ -70,14 +76,12 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- 当前定义的 Phase 7 M0-M18 已完成；后续建议进入发布整理或下一轮 roadmap 规划。
+- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 当前定义的 M0-M18 已全部完成。
-- 下一步建议先做 release readiness review：复核 installer artifact、release notes、未 push 提交和本地验证记录。
-- 若继续扩展能力，应新开下一轮 roadmap，而不是在当前 M0-M18 范围内追加隐性里程碑。
+- 下一步建议拆 M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion，不在 M19 内追加大范围业务扩展。
 
 ## 当前技术债重点
 

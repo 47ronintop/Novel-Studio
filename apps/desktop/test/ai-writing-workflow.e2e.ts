@@ -21,26 +21,26 @@ test("generates an AI writing suggestion and applies it only after confirmation"
   try {
     const page = await electronApp.firstWindow();
 
-    await page.getByLabel("Project path").fill(projectRoot);
-    await page.getByRole("button", { name: "Create project" }).click();
-    await page.getByRole("button", { name: "Create chapter" }).click();
+    await page.getByLabel("项目路径").fill(projectRoot);
+    await page.getByRole("button", { name: "创建项目" }).click();
+    await page.getByRole("button", { name: "新建章节" }).click();
 
-    const body = page.getByLabel("Chapter body");
+    const body = page.getByLabel("章节正文");
     await expect(body).toBeVisible();
     await body.fill("Opening line.");
 
-    await page.getByLabel("AI writing instruction").fill("Continue the active scene.");
-    await page.getByRole("button", { name: "Generate AI suggestion" }).click();
+    await page.getByLabel("AI 写作指令").fill("Continue the active scene.");
+    await page.getByRole("button", { name: "生成 AI 建议" }).click();
 
     await expect(page.getByText("Generated a local mock continuation for review.")).toBeVisible();
-    await expect(page.getByLabel("AI suggestion diff")).toContainText("AI continuation draft.");
+    await expect(page.getByLabel("AI 建议差异")).toContainText("AI continuation draft.");
     await expect(body).toHaveValue(/Opening line\./);
     await expect(body).not.toHaveValue(/AI continuation draft\./);
 
-    await page.getByRole("button", { name: "Apply AI suggestion" }).click();
+    await page.getByRole("button", { name: "应用 AI 建议" }).click();
 
     await expect(body).toHaveValue("Opening line.\nAI continuation draft.\n");
-    await expect(page.getByText("Unsaved").first()).toBeVisible();
+    await expect(page.getByText("未保存").first()).toBeVisible();
   } finally {
     await electronApp.close();
     await rm(tempRoot, { recursive: true, force: true });

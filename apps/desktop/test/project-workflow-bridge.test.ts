@@ -47,11 +47,11 @@ describe("project workflow bridge", () => {
     const selected = await bridge.selectChapter("ch_generated");
 
     expect(createdProject.projectRootInput).toBe("D:/Novel/M12");
-    expect(createdChapter.chapters[0]?.title).toBe("Untitled Chapter 1");
+    expect(createdChapter.chapters[0]?.title).toBe("未命名章节 1");
     expect(selected.activeChapterId).toBe("ch_generated");
     expect(calls).toEqual([
       "project.create:prj_generated:M12",
-      "project.createChapter:ch_generated:Untitled Chapter 1",
+      "project.createChapter:ch_generated:未命名章节 1",
       "project.selectChapter:ch_generated"
     ]);
   });
@@ -102,7 +102,7 @@ describe("project workflow bridge", () => {
 
     expect(canceled.feedback).toEqual({
       kind: "info",
-      message: "Open project canceled."
+      message: "已取消打开项目。"
     });
     expect(failed.feedback).toEqual({
       kind: "error",

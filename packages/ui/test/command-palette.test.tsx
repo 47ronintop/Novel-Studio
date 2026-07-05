@@ -17,9 +17,10 @@ describe("CommandPalette", () => {
     );
 
     expect(html).toContain('role="dialog"');
-    expect(html).toContain("Open Command Palette");
-    expect(html).toContain("Toggle Navigator");
-    expect(html).toContain("safe");
+    expect(html).toContain('aria-label="命令面板"');
+    expect(html).toContain("打开命令面板");
+    expect(html).toContain("切换项目导航");
+    expect(html).toContain("安全");
     expect(html).not.toContain("destructive");
   });
 

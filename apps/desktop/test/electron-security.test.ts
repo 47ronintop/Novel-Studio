@@ -180,7 +180,7 @@ describe("Electron security baseline", () => {
 
     expect(Object.keys(handlers)).toEqual(APPLICATION_IPC_CHANNELS);
     await expect(handlers["application:get-shell-state"]()).resolves.toMatchObject({
-      projectTitle: "No project open"
+      projectTitle: "未打开项目"
     });
     await expect(handlers["application:list-commands"]()).resolves.toHaveLength(4);
     await expect(

@@ -29,8 +29,8 @@ describe("M8 Settings and Studio UI", () => {
 
     expect(html).toContain("Default Model");
     expect(html).toContain("openai-compatible");
-    expect(html).toContain("Stored secret reference");
-    expect(html).toContain('aria-label="Test connection for Default Model"');
+    expect(html).toContain("已保存密钥引用");
+    expect(html).toContain('aria-label="测试连接 Default Model"');
     expect(html).not.toContain("secret://model_default/api_key");
     expect(html).not.toMatch(/sk-[A-Za-z0-9_-]+/);
     expect(html).not.toMatch(/filesystem|node:|fs\./i);
@@ -61,9 +61,9 @@ describe("M8 Settings and Studio UI", () => {
 
     expect(html).toContain("Review Chapter");
     expect(html).toContain("workflow");
-    expect(html).toContain("Schema valid");
-    expect(html).toContain('aria-label="Save config asset"');
-    expect(html).toContain('aria-label="Restore config version Before save"');
+    expect(html).toContain("Schema 有效");
+    expect(html).toContain('aria-label="保存配置资产"');
+    expect(html).toContain('aria-label="恢复配置版本 Before save"');
     expect(html).not.toMatch(/filesystem|node:|fs\./i);
   });
 });

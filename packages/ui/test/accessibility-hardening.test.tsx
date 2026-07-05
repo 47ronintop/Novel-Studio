@@ -72,8 +72,8 @@ describe("M9 accessibility hardening", () => {
       />
     );
 
-    expect(html).toContain('title="Preview version Manual save"');
-    expect(html).toContain('title="Restore version Manual save"');
+    expect(html).toContain('title="预览版本 Manual save"');
+    expect(html).toContain('title="恢复版本 Manual save"');
   });
 
   test("defines visible focus and reduced motion CSS hooks", () => {

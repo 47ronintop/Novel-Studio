@@ -1,9 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, Menu, dialog, ipcMain } from "electron";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createBootstrappedDefaultDesktopApplication } from "./application-composition.js";
 import { createApplicationIpcHandlers } from "./ipc-handlers.js";
+import { createApplicationMenuTemplate } from "./menu.js";
 import { createSecureWebPreferences } from "./security.js";
 
 const currentDirectory = fileURLToPath(new URL(".", import.meta.url));
@@ -52,9 +53,14 @@ export function createMainWindow(): BrowserWindow {
   return window;
 }
 
+export function setApplicationMenu(): void {
+  Menu.setApplicationMenu(Menu.buildFromTemplate(createApplicationMenuTemplate()));
+}
+
 if (process.env["VITEST"] !== "true") {
   void app.whenReady().then(async () => {
     await registerApplicationIpcHandlers();
+    setApplicationMenu();
     createMainWindow();
   });
 
