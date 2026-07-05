@@ -46,6 +46,7 @@ export interface WorkspaceShellProps {
   readonly onCommandPaletteOpen?: () => void;
   readonly onCommandExecute?: (commandId: ApplicationCommandId) => void;
   readonly onBottomPanelTabSelect?: ((tab: string) => void) | undefined;
+  readonly onSearchResultOpen?: ((result: ProjectSearchResultItem) => void) | undefined;
   readonly onActivitySelect?: (activityId: ActivityId) => void;
 }
 
@@ -163,6 +164,7 @@ export interface ProjectSearchProps {
   readonly onQueryChange: (query: string) => void;
   readonly onSearch: () => void;
   readonly onRebuildIndex: () => void;
+  readonly onResultOpen?: ((result: ProjectSearchResultItem) => void) | undefined;
 }
 
 export interface StoryBibleSummaryAsset {
@@ -250,6 +252,7 @@ export function WorkspaceShell({
   onCommandPaletteOpen,
   onCommandExecute,
   onBottomPanelTabSelect,
+  onSearchResultOpen,
   onActivitySelect
 }: WorkspaceShellProps) {
   const activeBottomPanelTab =
@@ -406,6 +409,7 @@ export function WorkspaceShell({
               settings={settings}
               studio={studio}
               storyBibleEditor={storyBibleEditor}
+              onSearchResultOpen={onSearchResultOpen}
             />
           )}
         </main>
@@ -848,7 +852,8 @@ function ActivityEmptyState({
   search,
   settings,
   studio,
-  storyBibleEditor
+  storyBibleEditor,
+  onSearchResultOpen
 }: {
   readonly activityId: ActivityId;
   readonly aiWritingWorkflow: AiWritingWorkflowProps | undefined;
@@ -856,9 +861,10 @@ function ActivityEmptyState({
   readonly settings: ModelSettingsPanelProps | undefined;
   readonly studio: ConfigStudioPanelProps | undefined;
   readonly storyBibleEditor: StoryBibleEditorProps | undefined;
+  readonly onSearchResultOpen: ((result: ProjectSearchResultItem) => void) | undefined;
 }) {
   if (activityId === "search" && search !== undefined) {
-    return <ProjectSearchView search={search} />;
+    return <ProjectSearchView search={{ ...search, onResultOpen: onSearchResultOpen }} />;
   }
 
   if (activityId === "storyBible" && storyBibleEditor !== undefined) {
@@ -872,6 +878,7 @@ function ActivityEmptyState({
   if (activityId === "studio" && studio !== undefined) {
     return <ConfigStudioPanel {...studio} />;
   }
+
   if (activityId === "storyBible") {
     return (
       <section className="ns-activity-view" aria-label="故事圣经视图">
@@ -1093,13 +1100,20 @@ function ProjectSearchView({ search }: { readonly search: ProjectSearchProps }) 
         <ol className="ns-search-results" aria-label="搜索结果">
           {search.results.map((result) => (
             <li className="ns-search-result" key={result.id}>
-              <div className="ns-search-result-header">
-                <span>{searchResultTypeLabel(result.type)}</span>
-                <strong>{result.title}</strong>
-                <span>分数 {result.score}</span>
-              </div>
-              <p>{result.snippet}</p>
-              <div className="ns-search-result-source">{result.sourceRef.relativePath}</div>
+              <button
+                aria-label={`打开搜索结果：${result.title}`}
+                className="ns-search-result-button"
+                onClick={() => search.onResultOpen?.(result)}
+                type="button"
+              >
+                <span className="ns-search-result-header">
+                  <span>{searchResultTypeLabel(result.type)}</span>
+                  <strong>{result.title}</strong>
+                  <span>分数 {result.score}</span>
+                </span>
+                <span>{result.snippet}</span>
+                <span className="ns-search-result-source">{result.sourceRef.relativePath}</span>
+              </button>
             </li>
           ))}
         </ol>

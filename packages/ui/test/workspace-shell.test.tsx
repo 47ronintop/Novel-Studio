@@ -175,6 +175,45 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("The hero keeps a hidden oath.");
   });
 
+  test("opens a search result through a structured click callback", () => {
+    const application = createDesktopApplication();
+    const openedResults: string[] = [];
+    const tree = WorkspaceShell({
+      shellState: { ...application.getShellState(), activeActivity: "search" },
+      commands: application.listCommands(),
+      commandPaletteOpen: false,
+      search: {
+        query: "oath",
+        status: "results-ready",
+        entryCount: 4,
+        results: [
+          {
+            id: "chapter:ch_opening",
+            type: "chapter",
+            title: "开篇",
+            snippet: "The hero keeps a hidden oath.",
+            score: 2,
+            sourceRef: {
+              kind: "chapter",
+              id: "ch_opening",
+              relativePath: "chapters/ch_opening.md"
+            }
+          }
+        ],
+        onQueryChange: () => undefined,
+        onSearch: () => undefined,
+        onRebuildIndex: () => undefined
+      },
+      onSearchResultOpen: (result) => openedResults.push(result.sourceRef.id)
+    });
+    const openResult = findElementByAriaLabel(tree, "打开搜索结果：开篇");
+
+    expect(openResult).toBeDefined();
+    openResult?.props.onClick?.();
+
+    expect(openedResults).toEqual(["ch_opening"]);
+  });
+
   test("renders a chapter editor when chapter data is available", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
@@ -416,6 +455,14 @@ function findElementByAriaLabel(
 
   if (node.props["aria-label"] === ariaLabel) {
     return node;
+  }
+
+  if (typeof node.type === "function") {
+    const renderComponent = node.type as (props: InspectableElementProps) => ReactNode;
+    const match = findElementByAriaLabel(renderComponent(node.props), ariaLabel);
+    if (match !== undefined) {
+      return match;
+    }
   }
 
   return findElementByAriaLabel(node.props.children, ariaLabel);

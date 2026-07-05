@@ -3,7 +3,8 @@ import type {
   ApplicationCommand,
   ApplicationCommandId,
   DesktopShellState,
-  NovelStudioApi
+  NovelStudioApi,
+  ProjectSearchResultItem
 } from "@novel-studio/application";
 import type {
   AiWritingWorkflowProps,
@@ -466,6 +467,32 @@ export function App() {
     void projectSearchBridge.rebuildIndex().then(setProjectSearch);
   }, [projectSearchBridge]);
 
+  const handleSearchResultOpen = useCallback(
+    (result: ProjectSearchResultItem) => {
+      if (result.sourceRef.kind === "chapter") {
+        setShellState((current) => ({
+          ...current,
+          activeActivity: "workspace"
+        }));
+        if (projectWorkflowBridge !== undefined) {
+          void projectWorkflowBridge
+            .selectChapter(result.sourceRef.id)
+            .then(refreshProjectWorkflow);
+        }
+        return;
+      }
+
+      setShellState((current) => ({
+        ...current,
+        activeActivity: "storyBible"
+      }));
+      if (storyBibleBridge !== undefined) {
+        setStoryBibleEditor(storyBibleBridge.selectEntry(result.sourceRef.id));
+      }
+    },
+    [projectWorkflowBridge, refreshProjectWorkflow, storyBibleBridge]
+  );
+
   const handleAiInstructionChange = useCallback(
     (instruction: string) => {
       if (aiWritingWorkflowBridge === undefined) {
@@ -771,6 +798,7 @@ export function App() {
       onCommandExecute={handleCommandExecute}
       onCommandPaletteOpen={handleCommandPaletteOpen}
       onBottomPanelTabSelect={handleBottomPanelTabSelect}
+      onSearchResultOpen={handleSearchResultOpen}
       onActivitySelect={handleActivitySelect}
     />
   );
