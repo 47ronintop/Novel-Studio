@@ -402,7 +402,10 @@ export function WorkspaceShell({
 
         <main aria-label="编辑区" className="ns-editor-area" data-region="editor-area">
           {shellState.activeActivity === "workspace" ? (
-            <WorkspaceEditorSurface chapterEditor={chapterEditor} />
+            <WorkspaceEditorSurface
+              chapterEditor={chapterEditor}
+              projectWorkflow={projectWorkflow}
+            />
           ) : (
             <ActivityEmptyState
               activityId={shellState.activeActivity}
@@ -812,26 +815,44 @@ function AiWorkflowObservabilityView({
 }
 
 function WorkspaceEditorSurface({
-  chapterEditor
+  chapterEditor,
+  projectWorkflow
 }: {
   readonly chapterEditor: ChapterEditorProps | undefined;
+  readonly projectWorkflow: ProjectWorkflowProps | undefined;
 }) {
+  const activeChapterId =
+    projectWorkflow?.activeChapterId ?? chapterEditor?.chapter.frontmatter.id ?? undefined;
+  const chapterTabs = projectWorkflow?.chapters ?? [];
+
   return (
     <>
-      <div className="ns-tabs" role="tablist" aria-label="打开的资产">
-        <button
-          aria-disabled="true"
-          aria-label="当前打开的章节标签"
-          aria-selected="true"
-          className="ns-tab"
-          data-focus-order="3"
-          disabled
-          role="tab"
-          title="当前只有一个打开资产，标签切换会在后续里程碑补齐。"
-          type="button"
-        >
-          {chapterEditor?.chapter.frontmatter.title ?? "未命名章节"}
-        </button>
+      <div className="ns-tabs" role="tablist" aria-label="章节标签">
+        {chapterTabs.length === 0 ? (
+          <span
+            aria-selected="true"
+            className="ns-tab ns-tab-static"
+            data-focus-order="3"
+            role="tab"
+          >
+            {chapterEditor?.chapter.frontmatter.title ?? "未命名章节"}
+          </span>
+        ) : (
+          chapterTabs.map((chapter, index) => (
+            <button
+              aria-label={`切换章节标签：${chapter.title}`}
+              aria-selected={chapter.id === activeChapterId}
+              className="ns-tab"
+              data-focus-order={index === 0 ? "3" : undefined}
+              key={chapter.id}
+              onClick={() => projectWorkflow?.onSelectChapter(chapter.id)}
+              role="tab"
+              type="button"
+            >
+              {chapter.title}
+            </button>
+          ))
+        )}
       </div>
       <section className="ns-editor-surface" aria-label="章节编辑器表面">
         {chapterEditor ? (

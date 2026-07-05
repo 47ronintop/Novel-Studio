@@ -55,8 +55,10 @@
 - 完成 M30 底部面板工作区：底部面板 tabs 支持真实切换，工作流运行、问题、搜索和日志面板提供最小中文内容闭环。
 - 完成 M31 搜索结果点击跳转：搜索结果项升级为可点击按钮，章节结果跳回工作区并选中章节，Story Bible 和 memory 结果跳到故事圣经并选中条目。
 - 完成 M32 时间线主视图：Timeline Activity 显示 Story Bible timeline 条目列表，支持空状态和点击进入故事圣经时间线编辑器。
+- 完成 M33 插件管理 UI：新增插件注册表读取 Repository/Application/IPC/preload 链路，设置页显示项目插件注册表、启用状态、manifest 路径和授权摘要，不执行第三方插件代码。
+- 完成 M34 多标签编辑器：工作区顶部章节标签改为可点击切换，复用现有章节选择 bridge，不再显示“后续补齐”的禁用标签提示。
 
 ## Notes
 
 - Phase 7 当前定义的 M0-M18 已完成。
-- 当前已完成 Post-M18 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转与 M32 时间线主视图；M27 安装后首次使用引导暂缓；未经用户确认不得 push。
+- 当前已完成 Post-M18 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转、M32 时间线主视图、M33 插件管理 UI 与 M34 多标签编辑器；M27 安装后首次使用引导暂缓；未经用户确认不得 push。

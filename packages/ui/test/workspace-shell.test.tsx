@@ -30,7 +30,7 @@ describe("WorkspaceShell", () => {
     expect(html).toContain('aria-label="底部面板"');
   });
 
-  test("marks unfinished editor tabs as disabled with reasons", () => {
+  test("renders the editor tab strip without unfinished disabled copy", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
@@ -42,10 +42,9 @@ describe("WorkspaceShell", () => {
 
     expect(html).toContain('aria-label="打开命令面板"');
     expect(html).toContain('title="打开命令面板"');
-    expect(html).toContain('aria-label="当前打开的章节标签"');
-    expect(html).toContain('aria-disabled="true"');
-    expect(html).toContain('title="当前只有一个打开资产，标签切换会在后续里程碑补齐。"');
-    expect(html).toContain("disabled");
+    expect(html).toContain('aria-label="章节标签"');
+    expect(html).not.toContain("标签切换会在后续里程碑补齐");
+    expect(html).not.toContain('aria-disabled="true"');
   });
 
   test("switches bottom panel tabs and renders the active panel content", () => {
@@ -391,6 +390,52 @@ describe("WorkspaceShell", () => {
       html.indexOf('aria-label="隐私与安全"')
     );
     expect(pluginSection).not.toContain("secret://");
+  });
+
+  test("switches chapter editor tabs through the project workflow callback", () => {
+    const application = createDesktopApplication();
+    const selectedChapters: string[] = [];
+    const tree = WorkspaceShell({
+      shellState: application.getShellState(),
+      commands: application.listCommands(),
+      commandPaletteOpen: false,
+      projectWorkflow: {
+        projectRootInput: "D:/Novel/M34",
+        chapters: [
+          {
+            id: "ch_opening",
+            title: "开篇",
+            order: 1,
+            status: "draft",
+            updatedAt: "2026-07-04T00:00:00.000Z"
+          },
+          {
+            id: "ch_second",
+            title: "第二章",
+            order: 2,
+            status: "draft",
+            updatedAt: "2026-07-04T00:00:00.000Z"
+          }
+        ],
+        activeChapterId: "ch_opening",
+        onProjectRootChange: () => undefined,
+        onOpenProject: () => undefined,
+        onCreateProject: () => undefined,
+        onCreateChapter: () => undefined,
+        onSelectChapter: (chapterId) => selectedChapters.push(chapterId)
+      }
+    });
+    const secondTab = findElementByAriaLabel(tree, "切换章节标签：第二章");
+
+    expect(secondTab).toBeDefined();
+    expect(secondTab?.props.disabled).toBeUndefined();
+    secondTab?.props.onClick?.();
+    expect(selectedChapters).toEqual(["ch_second"]);
+
+    const html = renderToStaticMarkup(tree);
+    expect(html).toContain('aria-label="章节标签"');
+    expect(html).toContain('aria-selected="true"');
+    expect(html).not.toContain("标签切换会在后续里程碑补齐");
   });
 
   test("renders Story Bible summaries and context eligibility", () => {

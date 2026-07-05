@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.19 | Status: Active | Last Updated: 2026-07-05
+Version: 1.20 | Status: Active | Last Updated: 2026-07-05
 
 ## 目标
 
@@ -50,6 +50,8 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M30       | 底部面板工作区           | 底部面板 tabs 真实切换、工作流/问题/搜索/日志最小内容闭环        | Complete |
 | M31       | 搜索结果点击跳转         | 搜索结果可点击打开章节或故事圣经条目                             | Complete |
 | M32       | 时间线主视图             | 时间线入口显示真实条目列表，并可跳到故事圣经时间线编辑器         | Complete |
+| M33       | 插件管理 UI              | 设置页显示项目插件注册表、授权摘要和刷新入口                     | Complete |
+| M34       | 多标签编辑器             | 工作区章节标签可点击切换，不再显示禁用补齐提示                   | Complete |
 
 ## M15 完成内容
 
@@ -185,17 +187,33 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - 点击时间线条目后切到故事圣经，并选中对应 timeline 条目进入可编辑详情。
 - M32 复用现有 Story Bible 数据结构，不新增时间轴画布、拖拽排序或文件系统直连。
 
+## M33 完成内容
+
+- 新增 `docs/productization/m33-plugin-management-ui.md`，明确插件管理 UI 的只读范围和安全边界。
+- 新增 `PluginRegistryFileRepository`，从项目 `plugins/plugins.json` 读取并按 `plugin-registry` schema 校验。
+- Application、Desktop IPC 和 preload 增加只读插件注册表读取通道。
+- Settings 视图新增“插件管理”区域，显示 plugin id、启用状态、manifest 路径和权限授权摘要。
+- M33 不读取 manifest、不执行第三方插件、不安装、不下载、不写插件注册表。
+
+## M34 完成内容
+
+- 新增 `docs/productization/m34-multi-tab-editor.md`，明确多标签编辑器的第一步范围。
+- 工作区顶部章节标签从禁用提示升级为可点击切换。
+- 章节标签来源复用现有项目章节列表，当前章节使用 `aria-selected` 标记。
+- 点击章节标签复用现有 `project.selectChapter` renderer bridge 和 Application/preload 边界。
+- M34 不新增持久化 tab 集合、关闭 tab、拖拽排序、Split View 或多窗口编辑。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转与 M32 时间线主视图。
+- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转、M32 时间线主视图、M33 插件管理 UI 与 M34 多标签编辑器。
 - M27 安装后首次使用引导已暂缓，需在核心可见功能更稳定后回补。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M33 插件管理 UI 或 M34 多标签编辑器，继续优先处理用户能直接点击但尚未形成完整闭环的高可见功能。
+- 下一步建议进入 M35 Split View / 资产并排查看，或 M36 项目健康检查与问题面板真实诊断，继续处理用户能直接看到但仍缺闭环的工作台能力。
 
 ## 当前技术债重点
 

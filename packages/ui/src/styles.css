@@ -283,6 +283,14 @@ textarea:focus-visible,
   padding: 0 9px;
 }
 
+.ns-tab[aria-selected="true"] {
+  border-color: var(--ns-primary);
+}
+
+.ns-tab-static {
+  cursor: default;
+}
+
 .ns-editor-surface {
   margin: 28px auto;
   max-width: 78ch;
