@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "1.0",
+  "plugins": [
+    {
+      "pluginId": "novel.test-tools",
+      "enabled": true,
+      "manifestPath": "plugins/novel.test-tools/plugin.json",
+      "grantedPermissions": [
+        {
+          "permission": "asset:read",
+          "scopes": ["characters"]
+        }
+      ]
+    }
+  ]
+}

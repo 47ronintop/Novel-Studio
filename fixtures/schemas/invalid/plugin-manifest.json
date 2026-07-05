@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "1.0",
+  "id": "Plugin With Spaces",
+  "displayName": "",
+  "version": "0.1",
+  "entry": {
+    "kind": "network",
+    "command": ""
+  },
+  "compatibleAppVersion": {
+    "min": "0.1"
+  },
+  "capabilities": [],
+  "permissions": [
+    {
+      "permission": "filesystem:write",
+      "scopes": []
+    }
+  ],
+  "contributes": {
+    "commands": [],
+    "workflowSteps": []
+  }
+}

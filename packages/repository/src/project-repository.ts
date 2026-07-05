@@ -12,6 +12,11 @@ import { storageError, validationError } from "./errors.js";
 import { validateWithSchema } from "./schema-validation.js";
 import { writeTextAtomically } from "./atomic-write.js";
 
+interface PluginRegistryFile {
+  schemaVersion: "1.0";
+  plugins: [];
+}
+
 export interface ProjectFileRepositoryOptions {
   projectRoot: string;
   traceId?: string;
@@ -94,6 +99,10 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
         ]
       }
     };
+    const pluginRegistry: PluginRegistryFile = {
+      schemaVersion: "1.0",
+      plugins: []
+    };
 
     const projectValidation = await validateWithSchema("project", project);
     if (!projectValidation.valid) {
@@ -135,6 +144,26 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
       );
     }
 
+    const pluginRegistryValidation = await validateWithSchema("plugin-registry", pluginRegistry);
+    if (!pluginRegistryValidation.valid) {
+      return err(
+        validationError({
+          code: "PROJECT_FILE_INVALID",
+          message: "Project plugin registry failed schema validation.",
+          suggestedAction: "Fix default plugin registry and retry.",
+          traceId: this.traceId,
+          redactedDetail: {
+            issues: pluginRegistryValidation.issues.map((issue) => ({
+              instancePath: issue.instancePath,
+              schemaPath: issue.schemaPath,
+              keyword: issue.keyword,
+              message: issue.message
+            }))
+          }
+        })
+      );
+    }
+
     try {
       await mkdir(this.options.projectRoot, { recursive: true });
       await Promise.all(
@@ -148,6 +177,7 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
           "prompts",
           "agents",
           "workflows",
+          "plugins",
           "history",
           join("history", "chapters"),
           join("history", "recovery"),
@@ -184,6 +214,15 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
     );
     if (!settingsWrite.ok) {
       return settingsWrite;
+    }
+
+    const pluginRegistryWrite = await writeJsonFile(
+      join(this.options.projectRoot, "plugins", "plugins.json"),
+      pluginRegistry,
+      this.traceId
+    );
+    if (!pluginRegistryWrite.ok) {
+      return pluginRegistryWrite;
     }
 
     return ok({ project, settings });
@@ -240,7 +279,7 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
 
 async function writeJsonFile(
   targetPath: string,
-  content: ProjectMetadata | ProjectSettings,
+  content: ProjectMetadata | ProjectSettings | PluginRegistryFile,
   traceId: string
 ): Promise<Result<void, UnifiedError>> {
   return writeTextAtomically({

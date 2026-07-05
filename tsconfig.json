@@ -9,6 +9,7 @@
     { "path": "./packages/workflow-engine" },
     { "path": "./packages/context-engine" },
     { "path": "./packages/agent-engine" },
+    { "path": "./packages/plugin-engine" },
     { "path": "./packages/repository" },
     { "path": "./packages/ui" }
   ]

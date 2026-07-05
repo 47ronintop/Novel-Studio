@@ -37,8 +37,9 @@
 - 完成 M15 Real Provider Profiles：收紧 settings model provider schema，新增 profile 保存前校验、默认 runtime profile 解析、AI workflow 动态 profile resolver，并把桌面项目 `settings.json` 接入 ModelSettingsSession；连接测试继续依赖注入，CI 不访问真实模型。
 - 完成 M16 Story Bible Modules：新增 `STORY_BIBLE.md`，实现 Story Bible Repository/Application 最小闭环，支持人物、世界观、大纲、时间线和记忆读写，接入 Context Engine 显式候选来源，并通过 Desktop IPC/preload 与 WorkspaceShell 摘要面板暴露最小 UI。
 - 完成 M17 Installer and Release Channel：新增 Windows NSIS installer 配置、应用 icon、schema 校验的 beta channel manifest、release notes、release validation scripts、installer wrapper 和 CI release channel check；发布仍为手动流程，本地 beta 签名明确为可选。
+- 完成 M18 Plugin System：新增 `PLUGIN_SYSTEM.md`、plugin manifest/registry schema 与 fixtures、`@novel-studio/plugin-engine` 权限策略、项目 `plugins/plugins.json` 默认注册表，以及插件引擎 package boundary tests。
 
 ## Notes
 
-- Phase 7 当前定义的 M0-M17 已完成。
-- 建议下一步进入 M18：Plugin System。
+- Phase 7 当前定义的 M0-M18 已完成。
+- 当前定义的 Phase 7 里程碑已完成；后续建议进入发布整理或下一轮 roadmap 规划。

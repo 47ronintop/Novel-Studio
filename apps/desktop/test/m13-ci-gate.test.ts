@@ -11,7 +11,8 @@ const runtimePackages = [
   "packages/llm-adapter/package.json",
   "packages/workflow-engine/package.json",
   "packages/context-engine/package.json",
-  "packages/agent-engine/package.json"
+  "packages/agent-engine/package.json",
+  "packages/plugin-engine/package.json"
 ] as const;
 
 describe("M13 real E2E and CI gate", () => {

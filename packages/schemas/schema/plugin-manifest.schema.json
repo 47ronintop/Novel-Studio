@@ -1,0 +1,118 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "schema.plugin-manifest.v1",
+  "title": "Novel Studio Plugin Manifest",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "id",
+    "displayName",
+    "version",
+    "entry",
+    "compatibleAppVersion",
+    "capabilities",
+    "permissions",
+    "contributes"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*(\\.[a-z0-9][a-z0-9-]*)+$" },
+    "displayName": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[A-Za-z0-9.-]+)?$" },
+    "entry": {
+      "type": "object",
+      "required": ["kind", "command"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["local-process", "webview", "none"] },
+        "command": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "compatibleAppVersion": {
+      "type": "object",
+      "required": ["min"],
+      "properties": {
+        "min": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "max": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" }
+      },
+      "additionalProperties": false
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["type", "id", "title"],
+        "properties": {
+          "type": { "type": "string", "enum": ["command", "workflow-step", "asset-view"] },
+          "id": { "type": "string", "minLength": 1 },
+          "title": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "permissions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["permission", "scopes"],
+        "properties": {
+          "permission": {
+            "type": "string",
+            "enum": ["project:read", "asset:read", "asset:write", "workflow:invoke"]
+          },
+          "scopes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "enum": [
+                "project",
+                "chapters",
+                "characters",
+                "world",
+                "outline",
+                "timeline",
+                "memories"
+              ]
+            },
+            "uniqueItems": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "contributes": {
+      "type": "object",
+      "required": ["commands", "workflowSteps"],
+      "properties": {
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "title"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "title": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "workflowSteps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "title"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "title": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

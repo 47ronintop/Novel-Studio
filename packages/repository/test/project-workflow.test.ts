@@ -43,6 +43,12 @@ describe("M12 project workflow repository support", () => {
     expect(await readFile(join(projectRoot, "settings.json"), "utf8")).toContain(
       "secret://model_default/api_key"
     );
+    expect(
+      JSON.parse(await readFile(join(projectRoot, "plugins", "plugins.json"), "utf8"))
+    ).toEqual({
+      schemaVersion: "1.0",
+      plugins: []
+    });
   });
 
   test("creates, lists, and reads chapters in project order", async () => {

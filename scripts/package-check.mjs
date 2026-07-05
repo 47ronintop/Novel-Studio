@@ -72,7 +72,8 @@ async function checkBuildArtifacts() {
     "apps/desktop/dist/renderer/index.html",
     "packages/application/dist/src/index.js",
     "packages/repository/dist/src/index.js",
-    "packages/ui/dist/src/index.js"
+    "packages/ui/dist/src/index.js",
+    "packages/plugin-engine/dist/src/index.js"
   ];
 
   for (const filePath of requiredFiles) {

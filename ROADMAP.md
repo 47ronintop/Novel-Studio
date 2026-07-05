@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.6 | Status: Active | Last Updated: 2026-07-05
+Version: 1.7 | Status: Active | Last Updated: 2026-07-05
 
 ## 目标
 
@@ -30,6 +30,7 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M15       | Real Provider Profiles          | 真实模型 profile 配置、secret ref 校验、离线连接测试和运行时解析                  | Complete |
 | M16       | Story Bible Modules             | 人物、世界观、大纲、时间线、记忆管理，给 Context Engine 提供高质量素材            | Complete |
 | M17       | Installer and Release Channel   | Windows NSIS installer、本地 beta release channel、release notes、icon 和签名策略 | Complete |
+| M18       | Plugin System                   | 插件 manifest、项目插件注册表、权限授权策略、插件引擎边界和 contract tests        | Complete |
 
 ## M15 完成内容
 
@@ -57,18 +58,26 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - 新增 `release:check`、`release:notes`、`package:installer` 脚本；发布检查不 push、不上传、不调用真实模型或签名服务。
 - CI 增加 release channel check；M17 本地 beta 明确允许 unsigned artifact，未来真实证书签名通过环境变量单独接入。
 
+## M18 完成内容
+
+- 新增 `PLUGIN_SYSTEM.md`，明确插件 manifest、权限、注册表、运行时边界、错误策略和 M18 验收标准。
+- 新增 `plugin-manifest` 与 `plugin-registry` JSON Schema 及 valid/invalid fixtures，插件配置进入 schema-first contract tests。
+- 新增 `@novel-studio/plugin-engine`，提供 registry snapshot 构建、app version 兼容检查、duplicate id 检查、disabled plugin 拒绝和 capability/permission/scope 授权检查。
+- 项目创建流程新增 `plugins/` 目录和默认 `plugins/plugins.json`，插件注册表落点进入 local-first 项目结构。
+- package/typecheck/build gate 纳入 `plugin-engine`，并增加 package boundary test，确保插件引擎不依赖 Repository/UI/Electron/LLM/Agent/Context/Workflow。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
-- Phase 7 当前定义的 M0-M17 已完成。
-- 下一步建议进入 M18：Plugin System。
+- Phase 7 当前定义的 M0-M18 已完成。
+- 当前定义的 Phase 7 M0-M18 已完成；后续建议进入发布整理或下一轮 roadmap 规划。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-| 下一步 | 名称          | 作用                                 |
-| ------ | ------------- | ------------------------------------ |
-| M18    | Plugin System | 插件接口、权限、隔离、插件目录或市场 |
+- 当前定义的 M0-M18 已全部完成。
+- 下一步建议先做 release readiness review：复核 installer artifact、release notes、未 push 提交和本地验证记录。
+- 若继续扩展能力，应新开下一轮 roadmap，而不是在当前 M0-M18 范围内追加隐性里程碑。
 
 ## 当前技术债重点
 

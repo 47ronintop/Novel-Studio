@@ -1,6 +1,6 @@
 ﻿# INDEX - Novel Studio 文档索引
 
-Version: 1.17 | Last Updated: 2026-07-05
+Version: 1.18 | Last Updated: 2026-07-05
 
 ## 文档优先级
 
@@ -25,6 +25,7 @@ Version: 1.17 | Last Updated: 2026-07-05
 | `ROADMAP.md`                                      | 1.5        | Active               | 当前里程碑、后续路线、完成状态                                                |
 | `STORY_BIBLE.md`                                  | 1.0        | Accepted for M16     | Story Bible 资产、仓储、Context 候选和最小 UI 闭环                            |
 | `docs/packaging/m17-installer-release-channel.md` | 1.0        | Accepted for M17     | Installer target, release channel manifest, release notes, and signing policy |
+| `PLUGIN_SYSTEM.md`                                | 1.0        | Accepted for M18     | 插件 manifest、权限、注册表、运行时边界和测试要求                             |
 | `LLM_ADAPTER.md`                                  | 1.0        | Accepted for M6      | Provider-neutral 模型调用边界                                                 |
 | `WORKFLOW_ENGINE.md`                              | 1.0        | Accepted for M7.1    | 确定性 workflow 状态机                                                        |
 | `CONTEXT_ENGINE.md`                               | 1.0        | Accepted for M7.2    | Context Bundle、token budget、trace                                           |
@@ -38,19 +39,19 @@ Version: 1.17 | Last Updated: 2026-07-05
 
 ## 进度跟踪
 
-| 阶段                  | 状态     | 当前产出                            | 下一步                      |
-| --------------------- | -------- | ----------------------------------- | --------------------------- |
-| Phase 1 产品设计      | Complete | `PRODUCT_PRD.md`                    | 已完成                      |
-| Phase 2 系统架构      | Complete | `ARCHITECTURE.md`、ADR-0001         | 已完成                      |
-| Phase 3 数据结构设计  | Complete | `DATA_SCHEMA.md`                    | 已完成                      |
-| Phase 4 UI/UX 设计    | Complete | `UI_GUIDELINES.md`                  | 已完成                      |
-| Phase 5 开发规范      | Complete | `CODING_STANDARDS.md`、`TESTING.md` | 已完成                      |
-| Phase 6 Task Planning | Complete | `ROADMAP.md`                        | 已完成                      |
-| Phase 7 正式开发      | Active   | M0-M17 已完成                       | 建议进入 M18：Plugin System |
+| 阶段                  | 状态     | 当前产出                            | 下一步                                |
+| --------------------- | -------- | ----------------------------------- | ------------------------------------- |
+| Phase 1 产品设计      | Complete | `PRODUCT_PRD.md`                    | 已完成                                |
+| Phase 2 系统架构      | Complete | `ARCHITECTURE.md`、ADR-0001         | 已完成                                |
+| Phase 3 数据结构设计  | Complete | `DATA_SCHEMA.md`                    | 已完成                                |
+| Phase 4 UI/UX 设计    | Complete | `UI_GUIDELINES.md`                  | 已完成                                |
+| Phase 5 开发规范      | Complete | `CODING_STANDARDS.md`、`TESTING.md` | 已完成                                |
+| Phase 6 Task Planning | Complete | `ROADMAP.md`                        | 已完成                                |
+| Phase 7 正式开发      | Complete | M0-M18 已完成                       | 后续进入发布整理或下一轮 roadmap 规划 |
 
 ## 当前本地状态
 
-- 当前已完成 M0-M17。
-- 最近完成的里程碑是 M17 Installer and Release Channel。
+- 当前已完成 M0-M18。
+- 最近完成的里程碑是 M18 Plugin System。
 - 未经用户确认不得 push。
 - 当前本地 artifact 位于被忽略的 `release/` 目录，不提交到仓库。

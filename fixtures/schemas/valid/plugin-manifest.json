@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "1.0",
+  "id": "novel.test-tools",
+  "displayName": "Test Tools",
+  "version": "0.1.0",
+  "entry": {
+    "kind": "local-process",
+    "command": "plugin.js"
+  },
+  "compatibleAppVersion": {
+    "min": "0.1.0",
+    "max": "0.2.0"
+  },
+  "capabilities": [
+    {
+      "type": "command",
+      "id": "test-tools.open-character-map",
+      "title": "Open Character Map"
+    }
+  ],
+  "permissions": [
+    {
+      "permission": "asset:read",
+      "scopes": ["characters"]
+    }
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "test-tools.open-character-map",
+        "title": "Open Character Map"
+      }
+    ],
+    "workflowSteps": []
+  }
+}

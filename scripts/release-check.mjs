@@ -102,7 +102,7 @@ async function checkReleaseNotes() {
   }
 
   const notes = await readFile(join(root, manifest.releaseNotesPath), "utf8");
-  if (!notes.includes("M17 Installer")) {
+  if (!notes.includes("M17 安装器与发布通道")) {
     failures.push("Release notes must include M17 installer and release channel notes.");
   }
 }
