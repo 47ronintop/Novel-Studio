@@ -8,28 +8,56 @@ describe("M8 Settings and Studio UI", () => {
     const html = renderToStaticMarkup(
       <ModelSettingsPanel
         defaultProfileId="model_default"
+        selectedProfileId="model_default"
         profiles={[
           {
             id: "model_default",
             provider: "openai-compatible",
             displayName: "Default Model",
+            baseUrl: "https://api.example.com/v1",
             modelName: "example-model",
             apiKeyRef: "secret://model_default/api_key",
+            temperature: 0.7,
+            maxTokens: 4096,
+            topP: 1,
             timeoutMs: 60000
           }
         ]}
+        draft={{
+          id: "model_default",
+          provider: "openai-compatible",
+          displayName: "Default Model",
+          baseUrl: "https://api.example.com/v1",
+          modelName: "example-model",
+          apiKeyRefInput: "",
+          temperature: "0.7",
+          maxTokens: "4096",
+          topP: "1",
+          timeoutMs: "60000"
+        }}
         connectionStatus={{
           profileId: "model_default",
           status: "idle"
         }}
+        saveStatus="idle"
+        onDraftChange={() => undefined}
+        onNewProfile={() => undefined}
+        onSelectProfile={() => undefined}
+        onSaveProfile={() => undefined}
         onTestConnection={() => undefined}
         onMakeDefault={() => undefined}
       />
     );
 
     expect(html).toContain("Default Model");
+    expect(html).toContain("设置");
+    expect(html).toContain("模型配置");
+    expect(html).toContain("隐私与安全");
+    expect(html).toContain("自动保存与历史");
     expect(html).toContain("openai-compatible");
     expect(html).toContain("已保存密钥引用");
+    expect(html).toContain("保存模型配置");
+    expect(html).toContain("新建模型");
     expect(html).toContain('aria-label="测试连接 Default Model"');
     expect(html).not.toContain("secret://model_default/api_key");
     expect(html).not.toMatch(/sk-[A-Za-z0-9_-]+/);

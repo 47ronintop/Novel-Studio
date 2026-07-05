@@ -6,6 +6,7 @@ import type {
 } from "@novel-studio/application";
 import type { ChapterSummary } from "@novel-studio/shared";
 import type { ChapterEditorProps } from "./chapter-editor.js";
+import type { ModelSettingsPanelProps } from "./model-settings-panel.js";
 import {
   Bot,
   Boxes,
@@ -25,6 +26,7 @@ import {
 
 import { ChapterEditor } from "./chapter-editor.js";
 import { CommandPalette } from "./command-palette.js";
+import { ModelSettingsPanel } from "./model-settings-panel.js";
 
 export interface WorkspaceShellProps {
   readonly shellState: DesktopShellState;
@@ -34,6 +36,7 @@ export interface WorkspaceShellProps {
   readonly projectWorkflow?: ProjectWorkflowProps;
   readonly aiWritingWorkflow?: AiWritingWorkflowProps;
   readonly search?: ProjectSearchProps;
+  readonly settings?: ModelSettingsPanelProps;
   readonly storyBible?: StoryBibleSummaryProps;
   readonly storyBibleEditor?: StoryBibleEditorProps;
   readonly onActivitySelect?: (activityId: ActivityId) => void;
@@ -169,6 +172,7 @@ export function WorkspaceShell({
   projectWorkflow,
   aiWritingWorkflow,
   search,
+  settings,
   storyBible,
   storyBibleEditor,
   onActivitySelect
@@ -312,6 +316,7 @@ export function WorkspaceShell({
               activityId={shellState.activeActivity}
               aiWritingWorkflow={aiWritingWorkflow}
               search={search}
+              settings={settings}
               storyBibleEditor={storyBibleEditor}
             />
           )}
@@ -482,11 +487,13 @@ function ActivityEmptyState({
   activityId,
   aiWritingWorkflow,
   search,
+  settings,
   storyBibleEditor
 }: {
   readonly activityId: ActivityId;
   readonly aiWritingWorkflow: AiWritingWorkflowProps | undefined;
   readonly search: ProjectSearchProps | undefined;
+  readonly settings: ModelSettingsPanelProps | undefined;
   readonly storyBibleEditor: StoryBibleEditorProps | undefined;
 }) {
   if (activityId === "search" && search !== undefined) {
@@ -495,6 +502,10 @@ function ActivityEmptyState({
 
   if (activityId === "storyBible" && storyBibleEditor !== undefined) {
     return <StoryBibleEditorView editor={storyBibleEditor} />;
+  }
+
+  if (activityId === "settings" && settings !== undefined) {
+    return <ModelSettingsPanel {...settings} />;
   }
   if (activityId === "storyBible") {
     return (

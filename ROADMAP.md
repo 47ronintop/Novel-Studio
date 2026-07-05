@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.10 | Status: Active | Last Updated: 2026-07-05
+Version: 1.11 | Status: Active | Last Updated: 2026-07-05
 
 ## 目标
 
@@ -39,6 +39,7 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M19       | Beta UX 产品化打磨     | 安装版入口可点击、顶部菜单中文化、主要 UI 文案中文化和空状态补齐 | Complete |
 | M20       | Search and Index UX    | 项目全文搜索、可重建本地索引、Search 视图真实结果展示            | Complete |
 | M21       | Story Bible Editing UX | 人物、世界观、大纲、时间线和记忆的可编辑 UI 闭环                 | Complete |
+| M22       | Settings UX Completion | 设置页模型配置、默认 profile、连接测试、隐私安全提示的可用闭环   | Complete |
 
 ## M15 完成内容
 
@@ -91,16 +92,24 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - Renderer `StoryBibleBridge` 支持选择分类、选择条目、更新草稿、保存 asset/memory，并在保存后重新加载 snapshot。
 - 保存仍走既有 `storyBible.saveAsset` / `storyBible.saveMemory` preload API；UI 不直接访问文件系统，不引入 AI 自动写入。
 
+## M22 完成内容
+
+- 新增 `docs/productization/m22-settings-ux-completion.md`，明确设置体验补齐范围、交互、安全边界和验收标准。
+- Settings Activity 从中文空状态升级为正式设置页，包含模型配置、自动保存与历史、隐私与安全分区。
+- `ModelSettingsPanel` 支持 profile 列表、编辑表单、新建草稿、保存、设为默认和连接测试状态反馈。
+- 新增 renderer `SettingsBridge`，通过 preload API 加载、保存、设默认和测试 model profile；UI 不直接访问文件系统。
+- 密钥值仍不显示、不落盘；编辑表单留空时沿用已有 `secret://` 引用，连接测试继续通过注入 tester。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX 与 M21 Story Bible Editing UX。
+- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX 与 M22 Settings UX Completion。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M22 Settings UX Completion。
+- 下一步建议进入 M23 Studio UX Completion。
 
 ## 当前技术债重点
 

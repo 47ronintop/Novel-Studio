@@ -19,8 +19,10 @@ export { ModelSettingsPanel } from "./model-settings-panel.js";
 export type {
   ModelConnectionStatus,
   ModelConnectionStatusValue,
+  ModelSettingsDraft,
   ModelSettingsPanelProps,
-  ModelSettingsProfile
+  ModelSettingsProfile,
+  ModelSettingsSaveStatus
 } from "./model-settings-panel.js";
 export { WorkspaceShell } from "./workspace-shell.js";
 export type {

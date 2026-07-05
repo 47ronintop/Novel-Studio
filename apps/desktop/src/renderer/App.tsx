@@ -7,6 +7,8 @@ import type {
 import type {
   AiWritingWorkflowProps,
   ChapterEditorProps,
+  ModelSettingsDraft,
+  ModelSettingsPanelProps,
   ProjectSearchProps,
   StoryBibleEditorDraft,
   StoryBibleEditorKind,
@@ -21,6 +23,7 @@ import { createChapterEditorBridge } from "./chapter-editor-bridge.js";
 import { createProjectWorkflowBridge } from "./project-workflow-bridge.js";
 import { createProjectSearchBridge } from "./project-search-bridge.js";
 import { createStoryBibleBridge } from "./story-bible-bridge.js";
+import { createSettingsBridge } from "./settings-bridge.js";
 import { reduceRendererShortcut } from "./shortcuts.js";
 
 declare global {
@@ -96,6 +99,9 @@ export function App() {
   const [storyBibleBridge] = useState(() =>
     api === undefined ? undefined : createStoryBibleBridge(api)
   );
+  const [settingsBridge] = useState(() =>
+    api === undefined ? undefined : createSettingsBridge(api)
+  );
   const [aiWritingWorkflowBridge] = useState(() =>
     api === undefined ? undefined : createAiWritingWorkflowBridge(api)
   );
@@ -110,6 +116,7 @@ export function App() {
   const [storyBibleEditor, setStoryBibleEditor] = useState(() =>
     storyBibleBridge?.getEditorProps()
   );
+  const [settings, setSettings] = useState(() => settingsBridge?.getProps());
   const [aiWritingWorkflow, setAiWritingWorkflow] = useState(() =>
     aiWritingWorkflowBridge?.getProps()
   );
@@ -191,6 +198,24 @@ export function App() {
       active = false;
     };
   }, [storyBibleBridge]);
+
+  useEffect(() => {
+    if (settingsBridge === undefined) {
+      return;
+    }
+
+    let active = true;
+
+    void settingsBridge.load().then((nextSettings) => {
+      if (active) {
+        setSettings(nextSettings);
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [settingsBridge]);
 
   const handleBodyChange = useCallback(
     (nextBody: string) => {
@@ -278,8 +303,11 @@ export function App() {
         setStoryBible(await storyBibleBridge.load());
         setStoryBibleEditor(storyBibleBridge.getEditorProps());
       }
+      if (settingsBridge !== undefined) {
+        setSettings(await settingsBridge.load());
+      }
     },
-    [api, chapterBridge, storyBibleBridge]
+    [api, chapterBridge, storyBibleBridge, settingsBridge]
   );
 
   const handleProjectRootChange = useCallback(
@@ -475,6 +503,69 @@ export function App() {
     });
   }, [storyBibleBridge]);
 
+  const handleSettingsProfileSelect = useCallback(
+    (profileId: string) => {
+      if (settingsBridge === undefined) {
+        return;
+      }
+
+      setSettings(settingsBridge.selectProfile(profileId));
+    },
+    [settingsBridge]
+  );
+
+  const handleSettingsDraftChange = useCallback(
+    (draft: Partial<ModelSettingsDraft>) => {
+      if (settingsBridge === undefined) {
+        return;
+      }
+
+      setSettings(settingsBridge.updateDraft(draft));
+    },
+    [settingsBridge]
+  );
+
+  const handleNewSettingsProfile = useCallback(() => {
+    if (settingsBridge === undefined) {
+      return;
+    }
+
+    setSettings(settingsBridge.newProfile());
+  }, [settingsBridge]);
+
+  const handleSaveSettingsProfile = useCallback(() => {
+    if (settingsBridge === undefined) {
+      return;
+    }
+
+    setSettings(settingsBridge.beginSave());
+    void settingsBridge.saveDraft().then(setSettings);
+  }, [settingsBridge]);
+
+  const handleTestSettingsConnection = useCallback(
+    (profileId: string) => {
+      if (settingsBridge === undefined) {
+        return;
+      }
+
+      setSettings(settingsBridge.beginTestConnection(profileId));
+      void settingsBridge.testConnection(profileId).then(setSettings);
+    },
+    [settingsBridge]
+  );
+
+  const handleMakeSettingsDefault = useCallback(
+    (profileId: string) => {
+      if (settingsBridge === undefined) {
+        return;
+      }
+
+      setSettings(settingsBridge.beginSave());
+      void settingsBridge.makeDefault(profileId).then(setSettings);
+    },
+    [settingsBridge]
+  );
+
   const interactiveChapterEditor =
     chapterEditor === undefined
       ? undefined
@@ -519,6 +610,19 @@ export function App() {
               onSearch: handleProjectSearch,
               onRebuildIndex: handleRebuildSearchIndex
             } satisfies ProjectSearchProps
+          })}
+      {...(settings === undefined
+        ? {}
+        : {
+            settings: {
+              ...settings,
+              onSelectProfile: handleSettingsProfileSelect,
+              onDraftChange: handleSettingsDraftChange,
+              onNewProfile: handleNewSettingsProfile,
+              onSaveProfile: handleSaveSettingsProfile,
+              onTestConnection: handleTestSettingsConnection,
+              onMakeDefault: handleMakeSettingsDefault
+            } satisfies ModelSettingsPanelProps
           })}
       {...(interactiveChapterEditor === undefined
         ? {}

@@ -1,6 +1,6 @@
 ﻿# INDEX - Novel Studio 文档索引
 
-Version: 1.21 | Last Updated: 2026-07-05
+Version: 1.22 | Last Updated: 2026-07-05
 
 ## 文档优先级
 
@@ -29,6 +29,7 @@ Version: 1.21 | Last Updated: 2026-07-05
 | `docs/productization/m19-beta-ux-hardening.md`      | 1.0        | Complete             | beta 安装版入口、中文菜单、可点击导航和空状态验收标准   |
 | `docs/productization/m20-search-index-ux.md`        | 1.0        | Complete             | 项目全文搜索、可重建索引、Search UI 和验收标准          |
 | `docs/productization/m21-story-bible-editing-ux.md` | 1.0        | Complete             | Story Bible 编辑入口、表单、保存闭环和验收标准          |
+| `docs/productization/m22-settings-ux-completion.md` | 1.0        | Complete             | 设置页模型配置、连接测试、隐私安全提示和验收标准        |
 | `LLM_ADAPTER.md`                                    | 1.0        | Accepted for M6      | Provider-neutral 模型调用边界                           |
 | `WORKFLOW_ENGINE.md`                                | 1.0        | Accepted for M7.1    | 确定性 workflow 状态机                                  |
 | `CONTEXT_ENGINE.md`                                 | 1.0        | Accepted for M7.2    | Context Bundle、token budget、trace                     |
@@ -52,7 +53,7 @@ Version: 1.21 | Last Updated: 2026-07-05
 | Phase 5 开发规范      | Complete | `CODING_STANDARDS.md`、`TESTING.md` | 已完成     |
 | Phase 6 Task Planning | Complete | `ROADMAP.md`                        | 已完成     |
 | Phase 7 正式开发      | Complete | M0-M18 已完成                       | 已完成     |
-| Post-M18 产品化打磨   | Active   | M19-M21 已完成                      | 下一步 M22 |
+| Post-M18 产品化打磨   | Active   | M19-M22 已完成                      | 下一步 M23 |
 
 ## 当前本地状态
 
@@ -60,5 +61,6 @@ Version: 1.21 | Last Updated: 2026-07-05
 - 当前已完成 M19 Beta UX 产品化打磨。
 - 当前已完成 M20 Search and Index UX。
 - 当前已完成 M21 Story Bible Editing UX。
+- 当前已完成 M22 Settings UX Completion。
 - 未经用户确认不得 push。
 - 当前本地 artifact 位于被忽略的 `release/` 目录，不提交到仓库。

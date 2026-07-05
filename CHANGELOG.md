@@ -45,8 +45,9 @@
 - 完成 M19 Beta UX 产品化打磨：左侧 Activity Bar 可点击并切换主视图，Electron 顶部菜单中文化，工作区、命令面板、章节编辑器、模型设置和 Studio 主要 UI 文案中文化，未完成入口显示中文空状态，并重新生成本地安装器。
 - 完成 M20 Search and Index UX：新增 schema-first 搜索索引、`SearchIndexFileRepository`、Project Search Application Session、Desktop IPC/preload、Search Activity 查询面板和本地 cache 重建闭环。
 - 完成 M21 Story Bible Editing UX：新增故事圣经主入口、五类资产编辑表单、renderer 草稿桥接、保存 asset/memory 后刷新 snapshot，并继续保持 UI 不直接访问文件系统。
+- 完成 M22 Settings UX Completion：Settings Activity 升级为正式设置页，支持模型 profile 编辑、保存、设默认、连接测试和隐私安全提示，保存仍通过 preload/IPC/Application settings session。
 
 ## Notes
 
 - Phase 7 当前定义的 M0-M18 已完成。
-- 当前已完成 Post-M18 M19 Beta UX 产品化打磨、M20 Search and Index UX 与 M21 Story Bible Editing UX；未经用户确认不得 push。
+- 当前已完成 Post-M18 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX 与 M22 Settings UX Completion；未经用户确认不得 push。
