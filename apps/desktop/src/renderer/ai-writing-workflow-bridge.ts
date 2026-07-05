@@ -54,7 +54,22 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
       return props;
     },
     async generateSuggestion(instruction) {
-      const suggestion = await unwrap(api.ai.generateChapterSuggestion({ instruction }));
+      const generated = await api.ai.generateChapterSuggestion({ instruction });
+      if (!generated.ok) {
+        currentSuggestionId = undefined;
+        const history = await loadLatestHistory(api);
+        props = createProps({
+          ...props,
+          status: "failed",
+          instruction,
+          failure: toFailureProps(generated.error),
+          retryPolicy: toRetryPolicyProps(undefined),
+          ...(history === undefined ? {} : { history })
+        });
+        return props;
+      }
+
+      const suggestion = generated.value;
       currentSuggestionId = suggestion.suggestionId;
       const history = await loadHistory(api, suggestion.workflowRunId);
       props = toProps(suggestion, instruction, history);
@@ -103,14 +118,15 @@ function toProps(
 function createProps(
   input: Omit<
     AiWritingWorkflowProps,
-    "onInstructionChange" | "onGenerateSuggestion" | "onApplySuggestion"
+    "onInstructionChange" | "onGenerateSuggestion" | "onApplySuggestion" | "onRetrySuggestion"
   >
 ): AiWritingWorkflowProps {
   return {
     ...input,
     onInstructionChange: () => undefined,
     onGenerateSuggestion: () => undefined,
-    onApplySuggestion: () => undefined
+    onApplySuggestion: () => undefined,
+    onRetrySuggestion: () => undefined
   };
 }
 
@@ -148,12 +164,30 @@ async function loadHistory(
   api: NovelStudioApi,
   workflowRunId: string
 ): Promise<AiWorkflowRunHistoryProps | undefined> {
+  return loadHistoryWithSelection(api, workflowRunId);
+}
+
+async function loadLatestHistory(
+  api: NovelStudioApi
+): Promise<AiWorkflowRunHistoryProps | undefined> {
+  return loadHistoryWithSelection(api, undefined);
+}
+
+async function loadHistoryWithSelection(
+  api: NovelStudioApi,
+  workflowRunId: string | undefined
+): Promise<AiWorkflowRunHistoryProps | undefined> {
   const list = await api.ai.listWorkflowRuns();
   if (!list.ok) {
     return undefined;
   }
 
-  const detail = await api.ai.readWorkflowRun(workflowRunId);
+  const selectedWorkflowRunId = workflowRunId ?? list.value[0]?.workflowRunId;
+  if (selectedWorkflowRunId === undefined) {
+    return toHistoryProps(list.value, undefined);
+  }
+
+  const detail = await api.ai.readWorkflowRun(selectedWorkflowRunId);
   return toHistoryProps(list.value, detail.ok ? detail.value : undefined);
 }
 
@@ -187,9 +221,42 @@ function toHistoryProps(
             costLabel: `${selectedRun.usage.cost.currency} ${selectedRun.usage.cost.amount.toFixed(
               6
             )} · ${selectedRun.usage.cost.status}`,
-            steps: selectedRun.steps
+            steps: selectedRun.steps,
+            ...(selectedRun.error === undefined
+              ? {}
+              : {
+                  errorLabel: `${selectedRun.error.code} · ${selectedRun.error.message}`
+                })
           }
         })
+  };
+}
+
+function toFailureProps(error: UnifiedError): NonNullable<AiWritingWorkflowProps["failure"]> {
+  return {
+    title: "工作流失败",
+    code: error.code,
+    message: error.message,
+    recoverabilityLabel: recoverabilityLabel(error.recoverability),
+    suggestedAction: error.suggestedAction
+  };
+}
+
+function toRetryPolicyProps(
+  retryPolicy: WorkflowRunRecord["retryPolicy"] | undefined
+): NonNullable<AiWritingWorkflowProps["retryPolicy"]> {
+  const policy = retryPolicy ?? {
+    mode: "manual",
+    maxAttempts: 1,
+    backoffLabel: "用户手动重试",
+    retryableCodes: ["LLM_TIMEOUT", "LLM_RATE_LIMITED", "LLM_PROVIDER_ERROR"]
+  };
+
+  return {
+    modeLabel: policy.mode === "manual" ? "手动重试" : policy.mode,
+    maxAttemptsLabel: `最多 ${policy.maxAttempts} 次`,
+    backoffLabel: policy.backoffLabel,
+    retryableCodesLabel: policy.retryableCodes.join(" / ")
   };
 }
 
@@ -201,6 +268,19 @@ function workflowRunStatusLabel(status: WorkflowRunRecordStatus): string {
       return "已应用";
     case "failed":
       return "失败";
+  }
+}
+
+function recoverabilityLabel(recoverability: UnifiedError["recoverability"]): string {
+  switch (recoverability) {
+    case "retryable":
+      return "可重试";
+    case "user-action":
+      return "需要处理";
+    case "fatal":
+      return "不可恢复";
+    case "unknown":
+      return "未知";
   }
 }
 

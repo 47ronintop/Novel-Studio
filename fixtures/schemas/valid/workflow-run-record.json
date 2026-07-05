@@ -3,7 +3,7 @@
   "workflowRunId": "wfrun_01",
   "workflowId": "wf_ai_continue_chapter",
   "workflowTitle": "Continue Chapter",
-  "status": "pending-confirmation",
+  "status": "failed",
   "startedAt": "2026-07-05T09:00:00.000Z",
   "updatedAt": "2026-07-05T09:00:01.000Z",
   "context": {
@@ -39,13 +39,26 @@
       "stepId": "write_suggestion",
       "label": "运行写作 Agent",
       "kind": "agent",
-      "status": "completed"
+      "status": "failed"
     },
     {
       "stepId": "confirm_apply",
       "label": "等待用户确认",
       "kind": "confirmation",
-      "status": "waiting-confirmation"
+      "status": "pending"
     }
-  ]
+  ],
+  "error": {
+    "code": "AGENT_MODEL_CALL_FAILED",
+    "message": "The agent model call failed.",
+    "recoverability": "retryable",
+    "suggestedAction": "Inspect the model profile and retry the workflow step.",
+    "retryable": true
+  },
+  "retryPolicy": {
+    "mode": "manual",
+    "maxAttempts": 1,
+    "backoffLabel": "用户手动重试",
+    "retryableCodes": ["LLM_TIMEOUT", "LLM_RATE_LIMITED", "LLM_PROVIDER_ERROR"]
+  }
 }

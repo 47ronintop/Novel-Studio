@@ -881,11 +881,21 @@ textarea:focus-visible,
   margin: 0;
 }
 
-.ns-ai-observability {
+.ns-ai-observability,
+.ns-ai-failure,
+.ns-ai-retry-policy {
   border-top: 1px solid var(--ns-border);
   display: grid;
   gap: 10px;
   padding-top: 10px;
+}
+
+.ns-ai-failure {
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.ns-ai-retry-policy {
+  border-color: rgba(59, 130, 246, 0.35);
 }
 
 .ns-ai-run-history {
@@ -943,6 +953,13 @@ textarea:focus-visible,
 .ns-ai-history-detail {
   display: grid;
   gap: 8px;
+}
+
+.ns-ai-history-error {
+  color: var(--ns-muted);
+  font-size: 12px;
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .ns-ai-observability-header {

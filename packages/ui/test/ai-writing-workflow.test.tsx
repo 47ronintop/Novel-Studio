@@ -13,7 +13,7 @@ describe("AI writing workflow UI", () => {
         commands={application.listCommands()}
         commandPaletteOpen={false}
         aiWritingWorkflow={{
-          status: "suggestion-ready",
+          status: "failed",
           instruction: "续写当前场景",
           summary: "补写了主角推门后的动作。",
           contextTraceLabel: "1 source / 4 tokens",
@@ -56,17 +56,27 @@ describe("AI writing workflow UI", () => {
                 modelLabel: "Default Model / example-model",
                 usageLabel: "24 tokens · estimated",
                 costLabel: "USD 0.000000 · estimated"
+              },
+              {
+                workflowRunId: "wfrun_m26_failed",
+                workflowTitle: "Continue Chapter",
+                statusLabel: "失败",
+                updatedAtLabel: "2026-07-05 09:31",
+                modelLabel: "Default Model / example-model",
+                usageLabel: "0 tokens · missing",
+                costLabel: "USD 0.000000 · unknown"
               }
             ],
             selectedRun: {
-              workflowRunId: "wfrun_m25",
+              workflowRunId: "wfrun_m26_failed",
               workflowTitle: "Continue Chapter",
-              statusLabel: "待确认",
-              updatedAtLabel: "2026-07-05 09:30",
+              statusLabel: "失败",
+              updatedAtLabel: "2026-07-05 09:31",
               contextLabel: "1 source / 4 tokens",
               modelLabel: "Default Model / example-model",
-              usageLabel: "24 tokens · estimated",
-              costLabel: "USD 0.000000 · estimated",
+              usageLabel: "0 tokens · missing",
+              costLabel: "USD 0.000000 · unknown",
+              errorLabel: "AGENT_MODEL_CALL_FAILED · The agent model call failed.",
               steps: [
                 {
                   stepId: "build_context",
@@ -78,20 +88,34 @@ describe("AI writing workflow UI", () => {
                   stepId: "write_suggestion",
                   label: "运行写作 Agent",
                   kind: "agent",
-                  status: "completed"
+                  status: "failed"
                 },
                 {
                   stepId: "confirm_apply",
                   label: "等待用户确认",
                   kind: "confirmation",
-                  status: "waiting-confirmation"
+                  status: "pending"
                 }
               ]
             }
           },
+          failure: {
+            title: "工作流失败",
+            code: "AGENT_MODEL_CALL_FAILED",
+            message: "The agent model call failed.",
+            recoverabilityLabel: "可重试",
+            suggestedAction: "Inspect the model profile and retry the workflow step."
+          },
+          retryPolicy: {
+            modeLabel: "手动重试",
+            maxAttemptsLabel: "最多 1 次",
+            backoffLabel: "用户手动重试",
+            retryableCodesLabel: "LLM_TIMEOUT / LLM_RATE_LIMITED / LLM_PROVIDER_ERROR"
+          },
           onInstructionChange: () => undefined,
           onGenerateSuggestion: () => undefined,
-          onApplySuggestion: () => undefined
+          onApplySuggestion: () => undefined,
+          onRetrySuggestion: () => undefined
         }}
       />
     );
@@ -112,5 +136,15 @@ describe("AI writing workflow UI", () => {
     expect(html).toContain("等待用户确认");
     expect(html).toContain('aria-label="工作流运行历史"');
     expect(html).toContain("待确认");
+    expect(html).toContain('aria-label="失败诊断"');
+    expect(html).toContain("AGENT_MODEL_CALL_FAILED");
+    expect(html).toContain("可重试");
+    expect(html).toContain("Inspect the model profile and retry the workflow step.");
+    expect(html).toContain('aria-label="重试策略"');
+    expect(html).toContain("手动重试");
+    expect(html).toContain("最多 1 次");
+    expect(html).toContain("LLM_TIMEOUT / LLM_RATE_LIMITED / LLM_PROVIDER_ERROR");
+    expect(html).toContain('aria-label="重试 AI 工作流"');
+    expect(html).toContain("失败");
   });
 });

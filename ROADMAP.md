@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.14 | Status: Active | Last Updated: 2026-07-05
+Version: 1.15 | Status: Active | Last Updated: 2026-07-05
 
 ## 目标
 
@@ -34,15 +34,16 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 
 ## Post-M18 产品化里程碑
 
-| Milestone | 名称                   | 作用                                                             | 状态     |
-| --------- | ---------------------- | ---------------------------------------------------------------- | -------- |
-| M19       | Beta UX 产品化打磨     | 安装版入口可点击、顶部菜单中文化、主要 UI 文案中文化和空状态补齐 | Complete |
-| M20       | Search and Index UX    | 项目全文搜索、可重建本地索引、Search 视图真实结果展示            | Complete |
-| M21       | Story Bible Editing UX | 人物、世界观、大纲、时间线和记忆的可编辑 UI 闭环                 | Complete |
-| M22       | Settings UX Completion | 设置页模型配置、默认 profile、连接测试、隐私安全提示的可用闭环   | Complete |
-| M23       | Studio UX Completion   | Prompt/Agent/Workflow 配置资产的可选择、可编辑、可保存工作台     | Complete |
-| M24       | 工作流运行观测         | AI 工作流运行 trace、上下文、模型、token/cost 和步骤状态可见     | Complete |
-| M25       | 工作流运行历史         | 最近 AI 工作流运行历史、脱敏详情、步骤状态和本地审计记录         | Complete |
+| Milestone | 名称                     | 作用                                                             | 状态     |
+| --------- | ------------------------ | ---------------------------------------------------------------- | -------- |
+| M19       | Beta UX 产品化打磨       | 安装版入口可点击、顶部菜单中文化、主要 UI 文案中文化和空状态补齐 | Complete |
+| M20       | Search and Index UX      | 项目全文搜索、可重建本地索引、Search 视图真实结果展示            | Complete |
+| M21       | Story Bible Editing UX   | 人物、世界观、大纲、时间线和记忆的可编辑 UI 闭环                 | Complete |
+| M22       | Settings UX Completion   | 设置页模型配置、默认 profile、连接测试、隐私安全提示的可用闭环   | Complete |
+| M23       | Studio UX Completion     | Prompt/Agent/Workflow 配置资产的可选择、可编辑、可保存工作台     | Complete |
+| M24       | 工作流运行观测           | AI 工作流运行 trace、上下文、模型、token/cost 和步骤状态可见     | Complete |
+| M25       | 工作流运行历史           | 最近 AI 工作流运行历史、脱敏详情、步骤状态和本地审计记录         | Complete |
+| M26       | 工作流失败诊断与重试策略 | 失败运行记录、可解释错误原因、重试策略展示和用户触发重试入口     | Complete |
 
 ## M15 完成内容
 
@@ -128,16 +129,25 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - Desktop IPC/preload 增加列出和读取 workflow run history 的白名单通道。
 - AI Workflow Inspector 新增“工作流运行历史”，展示最近运行、状态、模型、token/cost 和选中运行步骤详情。
 
+## M26 完成内容
+
+- 新增 `docs/productization/m26-workflow-failure-retry.md`，明确失败诊断、重试策略、数据边界和验收标准。
+- `workflow-run-record` schema 扩展脱敏失败诊断字段和可选 retry policy 摘要。
+- AI 写作工作流在模型/Agent 失败后写入 `failed` workflow run history，记录失败步骤、可恢复性和建议操作。
+- Renderer `AiWritingWorkflowBridge` 将失败 Result 转换为 UI props，不再让失败生成直接中断界面。
+- AI Workflow Inspector 新增“失败诊断”和“重试策略”，并提供“重试 AI 工作流”用户触发入口。
+- 重试复用当前指令重新生成；AI 输出仍保持建议态，应用到正文前继续要求用户确认。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测与 M25 工作流运行历史。
+- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史与 M26 工作流失败诊断与重试策略。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M26 工作流失败诊断与重试策略，补齐失败运行记录、可解释错误原因、用户触发重试和 retry policy 展示。
+- 下一步建议进入 M27 安装后首次使用引导，补齐欢迎页、示例项目入口、创建/打开项目引导和关键空状态行动按钮。
 
 ## 当前技术债重点
 

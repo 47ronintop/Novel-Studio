@@ -24,6 +24,7 @@ import {
   err,
   ok,
   type JsonObject,
+  type Recoverability,
   type Result,
   type UnifiedError
 } from "@novel-studio/shared";
@@ -119,6 +120,16 @@ export interface WorkflowRunStepRecord extends JsonObject {
 export interface WorkflowRunErrorSummary extends JsonObject {
   code: string;
   message: string;
+  recoverability?: Recoverability;
+  suggestedAction?: string;
+  retryable?: boolean;
+}
+
+export interface WorkflowRunRetryPolicySummary extends JsonObject {
+  mode: "manual";
+  maxAttempts: number;
+  backoffLabel: string;
+  retryableCodes: string[];
 }
 
 export interface WorkflowRunRecord extends JsonObject {
@@ -134,6 +145,7 @@ export interface WorkflowRunRecord extends JsonObject {
   usage: WorkflowRunUsageSummary;
   steps: WorkflowRunStepRecord[];
   error?: WorkflowRunErrorSummary;
+  retryPolicy?: WorkflowRunRetryPolicySummary;
 }
 
 export interface WorkflowRunSummary extends JsonObject {
@@ -330,6 +342,29 @@ export function createAgentBackedAiWritingWorkflowSession(
         now
       });
       if (!handoff.ok) {
+        if (options.workflowRunHistory !== undefined) {
+          const recorded = await options.workflowRunHistory.recordWorkflowRun(
+            createWorkflowRunRecord({
+              workflowId: parsedWorkflow.value.id,
+              status: "failed",
+              startedAt: runState.createdAt,
+              updatedAt: now(),
+              observability: createFailureObservability({
+                workflowRunId: runState.workflowRunId,
+                workflowTitle: parsedWorkflow.value.title,
+                generatedAt: now(),
+                contextTrace: contextBundle.value.trace,
+                modelProfile: runtimeProfile.value.modelProfile
+              }),
+              error: toWorkflowRunErrorSummary(handoff.error),
+              retryPolicy: defaultRetryPolicySummary()
+            })
+          );
+          if (!recorded.ok) {
+            return recorded;
+          }
+        }
+
         return handoff;
       }
 
@@ -387,7 +422,8 @@ export function createAgentBackedAiWritingWorkflowSession(
             status: suggestion.status,
             startedAt: runState.createdAt,
             updatedAt: generatedAt,
-            observability
+            observability,
+            retryPolicy: defaultRetryPolicySummary()
           })
         );
         if (!recorded.ok) {
@@ -459,8 +495,10 @@ function createWorkflowRunRecord(input: {
   readonly startedAt: string;
   readonly updatedAt: string;
   readonly observability: AiWritingWorkflowObservability;
+  readonly error?: WorkflowRunErrorSummary;
+  readonly retryPolicy?: WorkflowRunRetryPolicySummary;
 }): WorkflowRunRecord {
-  return {
+  const record: WorkflowRunRecord = {
     schemaVersion: "1.0",
     workflowRunId: input.observability.workflowRunId,
     workflowId: input.workflowId,
@@ -496,6 +534,12 @@ function createWorkflowRunRecord(input: {
       kind: step.kind,
       status: step.status
     }))
+  };
+
+  return {
+    ...record,
+    ...(input.error === undefined ? {} : { error: input.error }),
+    ...(input.retryPolicy === undefined ? {} : { retryPolicy: input.retryPolicy })
   };
 }
 
@@ -546,6 +590,88 @@ function createObservability(input: {
         status: "waiting-confirmation"
       }
     ]
+  };
+}
+
+function createFailureObservability(input: {
+  readonly workflowRunId: string;
+  readonly workflowTitle: string;
+  readonly generatedAt: string;
+  readonly contextTrace: ContextBundleTrace;
+  readonly modelProfile: LlmModelProfile;
+}): AiWritingWorkflowObservability {
+  return {
+    workflowRunId: input.workflowRunId,
+    workflowTitle: input.workflowTitle,
+    generatedAt: input.generatedAt,
+    context: {
+      sourceCount: input.contextTrace.includedRefs.length,
+      tokenEstimate: input.contextTrace.includedRefs.reduce(
+        (total, ref) => total + ref.tokenEstimate,
+        0
+      ),
+      selectionReason: input.contextTrace.selectionReason
+    },
+    model: {
+      profileId: input.modelProfile.id,
+      displayName: input.modelProfile.displayName,
+      provider: input.modelProfile.provider,
+      modelName: input.modelProfile.modelName
+    },
+    usage: missingWorkflowUsage(),
+    steps: [
+      {
+        stepId: "build_context",
+        label: "构建上下文",
+        kind: "context",
+        status: "completed"
+      },
+      {
+        stepId: "write_suggestion",
+        label: "运行写作 Agent",
+        kind: "agent",
+        status: "failed"
+      },
+      {
+        stepId: "confirm_apply",
+        label: "等待用户确认",
+        kind: "confirmation",
+        status: "pending"
+      }
+    ]
+  };
+}
+
+function missingWorkflowUsage(): LlmUsage {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    usageStatus: "missing",
+    cost: {
+      amount: 0,
+      currency: "USD",
+      status: "unknown"
+    }
+  };
+}
+
+function toWorkflowRunErrorSummary(error: UnifiedError): WorkflowRunErrorSummary {
+  return {
+    code: error.code,
+    message: error.message,
+    recoverability: error.code === "AGENT_MODEL_CALL_FAILED" ? "retryable" : error.recoverability,
+    suggestedAction: error.suggestedAction,
+    retryable: error.code === "AGENT_MODEL_CALL_FAILED" || error.recoverability === "retryable"
+  };
+}
+
+function defaultRetryPolicySummary(): WorkflowRunRetryPolicySummary {
+  return {
+    mode: "manual",
+    maxAttempts: 1,
+    backoffLabel: "用户手动重试",
+    retryableCodes: ["LLM_TIMEOUT", "LLM_RATE_LIMITED", "LLM_PROVIDER_ERROR"]
   };
 }
 

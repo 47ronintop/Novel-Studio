@@ -1,4 +1,10 @@
-import type { JsonObject, JsonValue, Result, UnifiedError } from "@novel-studio/shared";
+import type {
+  JsonObject,
+  JsonValue,
+  Recoverability,
+  Result,
+  UnifiedError
+} from "@novel-studio/shared";
 
 export type ProjectType = "novel" | "screenplay" | "comic-script" | "game-narrative";
 export type SnapshotReason =
@@ -152,6 +158,16 @@ export interface WorkflowRunStepRecord extends JsonObject {
 export interface WorkflowRunErrorSummary extends JsonObject {
   code: string;
   message: string;
+  recoverability?: Recoverability;
+  suggestedAction?: string;
+  retryable?: boolean;
+}
+
+export interface WorkflowRunRetryPolicySummary extends JsonObject {
+  mode: "manual";
+  maxAttempts: number;
+  backoffLabel: string;
+  retryableCodes: string[];
 }
 
 export interface WorkflowRunRecord extends JsonObject {
@@ -167,6 +183,7 @@ export interface WorkflowRunRecord extends JsonObject {
   usage: WorkflowRunUsageSummary;
   steps: WorkflowRunStepRecord[];
   error?: WorkflowRunErrorSummary;
+  retryPolicy?: WorkflowRunRetryPolicySummary;
 }
 
 export interface WorkflowRunSummary extends JsonObject {

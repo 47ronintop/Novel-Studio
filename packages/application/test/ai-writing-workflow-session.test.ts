@@ -317,6 +317,106 @@ describe("M14 AI writing workflow session", () => {
       maxTokens: 1024
     });
   });
+
+  test("records a failed workflow run with redacted diagnostics when the model call fails", async () => {
+    const workflowRunRecords: WorkflowRunRecord[] = [];
+    const chapterSession = createChapterEditorSession({
+      chapterId: "ch_m14",
+      repository: createRepository([]),
+      now: () => "2026-07-04T00:00:00.000Z"
+    });
+    const loaded = await chapterSession.load();
+    if (isErr(loaded)) {
+      throw new Error(loaded.error.message);
+    }
+
+    const aiWorkflow = createAgentBackedAiWritingWorkflowSession({
+      chapterEditorSession: chapterSession,
+      llmAdapter: createLlmAdapter({
+        provider: createMockProvider({
+          completions: [
+            {
+              type: "error",
+              code: "LLM_RATE_LIMITED",
+              message: "Provider rejected Authorization Bearer sk-live-secret.",
+              retryable: true,
+              redactedDetail: {
+                providerCode: "rate_limit"
+              }
+            }
+          ]
+        }),
+        clock: () => "2026-07-04T00:00:00.000Z"
+      }),
+      now: () => "2026-07-04T00:00:00.000Z",
+      createWorkflowRunId: () => "wfrun_failed_m26",
+      createSuggestionId: () => "sug_failed_m26",
+      createAgentRunId: () => "agentrun_failed_m26",
+      createHandoffId: () => "handoff_failed_m26",
+      workflowRunHistory: {
+        async recordWorkflowRun(record) {
+          workflowRunRecords.push(record);
+          return ok(record);
+        }
+      }
+    });
+
+    const generated = await aiWorkflow.generateChapterSuggestion({
+      instruction: "Continue after a temporary provider failure."
+    });
+
+    expect(isErr(generated)).toBe(true);
+    if (isOk(generated)) {
+      throw new Error("Expected AI workflow generation to fail.");
+    }
+    expect(generated.error.code).toBe("AGENT_MODEL_CALL_FAILED");
+    expect(workflowRunRecords).toEqual([
+      expect.objectContaining({
+        workflowRunId: "wfrun_failed_m26",
+        status: "failed",
+        context: {
+          sourceCount: 1,
+          tokenEstimate: 4,
+          selectionReason: "Continue after a temporary provider failure."
+        },
+        error: {
+          code: "AGENT_MODEL_CALL_FAILED",
+          message: "The agent model call failed.",
+          recoverability: "retryable",
+          suggestedAction: "Inspect the model profile and retry the workflow step.",
+          retryable: true
+        },
+        retryPolicy: {
+          mode: "manual",
+          maxAttempts: 1,
+          backoffLabel: "用户手动重试",
+          retryableCodes: ["LLM_TIMEOUT", "LLM_RATE_LIMITED", "LLM_PROVIDER_ERROR"]
+        },
+        steps: [
+          {
+            stepId: "build_context",
+            label: "构建上下文",
+            kind: "context",
+            status: "completed"
+          },
+          {
+            stepId: "write_suggestion",
+            label: "运行写作 Agent",
+            kind: "agent",
+            status: "failed"
+          },
+          {
+            stepId: "confirm_apply",
+            label: "等待用户确认",
+            kind: "confirmation",
+            status: "pending"
+          }
+        ]
+      })
+    ]);
+    expect(JSON.stringify(workflowRunRecords)).not.toContain("sk-live-secret");
+    expect(chapterSession.getState()?.chapter.body).toBe("Opening line.\n");
+  });
 });
 
 function createRepository(writes: ChapterDocument[]): ChapterDraftRepositoryPort {

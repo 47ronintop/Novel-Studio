@@ -7,7 +7,7 @@ import type {
   WorkflowRunRecord,
   WorkflowRunSummary
 } from "@novel-studio/application";
-import { ok } from "@novel-studio/shared";
+import { createUnifiedError, err, ok } from "@novel-studio/shared";
 
 import { createAiWritingWorkflowBridge } from "../src/renderer/ai-writing-workflow-bridge.js";
 
@@ -144,6 +144,58 @@ describe("AI writing workflow bridge", () => {
     expect(applied.dirty).toBe(true);
     expect(applied.saveStatus).toBe("Unsaved");
     expect(calls).toEqual(["ai.generate:续写当前场景", "ai.apply:sug_m14"]);
+  });
+
+  test("keeps failed workflow diagnostics visible and allows user-triggered retry", async () => {
+    const calls: string[] = [];
+    const api = createApi(calls);
+    let failedOnce = false;
+    api.ai.generateChapterSuggestion = async (request) => {
+      calls.push(`ai.generate:${request.instruction}`);
+      if (!failedOnce) {
+        failedOnce = true;
+        return err(
+          createUnifiedError({
+            code: "AGENT_MODEL_CALL_FAILED",
+            category: "AgentError",
+            message: "The agent model call failed.",
+            recoverability: "retryable",
+            suggestedAction: "Inspect the model profile and retry the workflow step.",
+            traceId: "ai-writing-workflow"
+          })
+        );
+      }
+
+      return ok(suggestion);
+    };
+    api.ai.listWorkflowRuns = async () => ok([failedWorkflowRunSummary()]);
+    api.ai.readWorkflowRun = async () => ok(failedWorkflowRunRecord());
+    const bridge = createAiWritingWorkflowBridge(api);
+
+    const failed = await bridge.generateSuggestion("续写当前场景");
+    const retrying = bridge.beginGenerate(failed.instruction);
+    const retried = await bridge.generateSuggestion(retrying.instruction);
+
+    expect(failed.status).toBe("failed");
+    expect(failed.failure).toEqual({
+      title: "工作流失败",
+      code: "AGENT_MODEL_CALL_FAILED",
+      message: "The agent model call failed.",
+      recoverabilityLabel: "可重试",
+      suggestedAction: "Inspect the model profile and retry the workflow step."
+    });
+    expect(failed.retryPolicy).toEqual({
+      modeLabel: "手动重试",
+      maxAttemptsLabel: "最多 1 次",
+      backoffLabel: "用户手动重试",
+      retryableCodesLabel: "LLM_TIMEOUT / LLM_RATE_LIMITED / LLM_PROVIDER_ERROR"
+    });
+    expect(failed.history?.selectedRun?.statusLabel).toBe("失败");
+    expect(failed.history?.selectedRun?.errorLabel).toBe(
+      "AGENT_MODEL_CALL_FAILED · The agent model call failed."
+    );
+    expect(retried.status).toBe("suggestion-ready");
+    expect(calls).toEqual(["ai.generate:续写当前场景", "ai.generate:续写当前场景"]);
   });
 });
 
@@ -343,5 +395,84 @@ function workflowRunRecord(): WorkflowRunRecord {
         status: "waiting-confirmation"
       }
     ]
+  };
+}
+
+function failedWorkflowRunSummary(): WorkflowRunSummary {
+  return {
+    workflowRunId: "wfrun_failed_m26",
+    workflowTitle: "Continue Chapter",
+    status: "failed",
+    updatedAt: "2026-07-05T00:01:00.000Z",
+    modelLabel: "M14 Mock Writer / mock-writer",
+    usageLabel: "0 tokens · missing",
+    costLabel: "USD 0.000000 · unknown"
+  };
+}
+
+function failedWorkflowRunRecord(): WorkflowRunRecord {
+  return {
+    schemaVersion: "1.0",
+    workflowRunId: "wfrun_failed_m26",
+    workflowId: "wf_ai_continue_chapter",
+    workflowTitle: "Continue Chapter",
+    status: "failed",
+    startedAt: "2026-07-05T00:01:00.000Z",
+    updatedAt: "2026-07-05T00:01:00.000Z",
+    context: {
+      sourceCount: 1,
+      tokenEstimate: 4,
+      selectionReason: "续写当前场景"
+    },
+    model: {
+      profileId: "mock_m14",
+      displayName: "M14 Mock Writer",
+      provider: "mock",
+      modelName: "mock-writer"
+    },
+    usage: {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      usageStatus: "missing",
+      cost: {
+        amount: 0,
+        currency: "USD",
+        status: "unknown"
+      }
+    },
+    steps: [
+      {
+        stepId: "build_context",
+        label: "构建上下文",
+        kind: "context",
+        status: "completed"
+      },
+      {
+        stepId: "write_suggestion",
+        label: "运行写作 Agent",
+        kind: "agent",
+        status: "failed"
+      },
+      {
+        stepId: "confirm_apply",
+        label: "等待用户确认",
+        kind: "confirmation",
+        status: "pending"
+      }
+    ],
+    error: {
+      code: "AGENT_MODEL_CALL_FAILED",
+      message: "The agent model call failed.",
+      recoverability: "retryable",
+      suggestedAction: "Inspect the model profile and retry the workflow step.",
+      retryable: true
+    },
+    retryPolicy: {
+      mode: "manual",
+      maxAttempts: 1,
+      backoffLabel: "用户手动重试",
+      retryableCodes: ["LLM_TIMEOUT", "LLM_RATE_LIMITED", "LLM_PROVIDER_ERROR"]
+    }
   };
 }

@@ -658,7 +658,8 @@ export function App() {
               ...aiWritingWorkflow,
               onInstructionChange: handleAiInstructionChange,
               onGenerateSuggestion: handleGenerateAiSuggestion,
-              onApplySuggestion: handleApplyAiSuggestion
+              onApplySuggestion: handleApplyAiSuggestion,
+              onRetrySuggestion: handleGenerateAiSuggestion
             } satisfies AiWritingWorkflowProps
           })}
       {...(projectWorkflow === undefined

@@ -65,7 +65,8 @@ export interface ProjectWorkflowFeedback {
   readonly message: string;
 }
 
-export type AiWritingWorkflowStatus = "idle" | "generating" | "suggestion-ready" | "applied";
+export type AiWritingWorkflowStatus =
+  "idle" | "generating" | "suggestion-ready" | "applied" | "failed";
 
 export interface AiWritingWorkflowProps {
   readonly status: AiWritingWorkflowStatus;
@@ -74,10 +75,28 @@ export interface AiWritingWorkflowProps {
   readonly contextTraceLabel?: string;
   readonly observability?: AiWorkflowObservabilityProps;
   readonly history?: AiWorkflowRunHistoryProps;
+  readonly failure?: AiWorkflowFailureDiagnosticProps;
+  readonly retryPolicy?: AiWorkflowRetryPolicyProps;
   readonly diffPreview?: ChapterEditorProps["diffPreview"];
   readonly onInstructionChange: (instruction: string) => void;
   readonly onGenerateSuggestion: () => void;
   readonly onApplySuggestion: () => void;
+  readonly onRetrySuggestion: () => void;
+}
+
+export interface AiWorkflowFailureDiagnosticProps {
+  readonly title: string;
+  readonly code: string;
+  readonly message: string;
+  readonly recoverabilityLabel: string;
+  readonly suggestedAction: string;
+}
+
+export interface AiWorkflowRetryPolicyProps {
+  readonly modeLabel: string;
+  readonly maxAttemptsLabel: string;
+  readonly backoffLabel: string;
+  readonly retryableCodesLabel: string;
 }
 
 export type AiWorkflowObservedStepKind = "context" | "agent" | "confirmation";
@@ -120,6 +139,7 @@ export interface AiWorkflowRunHistoryItemProps {
 export interface AiWorkflowRunHistoryDetailProps extends AiWorkflowRunHistoryItemProps {
   readonly contextLabel: string;
   readonly steps: readonly AiWorkflowObservedStepProps[];
+  readonly errorLabel?: string;
 }
 
 export interface StoryBibleSummaryProps {
@@ -432,6 +452,18 @@ export function WorkspaceShell({
                   <Check aria-hidden="true" size={14} />
                   应用
                 </button>
+                {aiWritingWorkflow.status === "failed" ? (
+                  <button
+                    aria-label="重试 AI 工作流"
+                    className="ns-icon-text-button"
+                    onClick={aiWritingWorkflow.onRetrySuggestion}
+                    title="重试 AI 工作流"
+                    type="button"
+                  >
+                    <Sparkles aria-hidden="true" size={14} />
+                    重试
+                  </button>
+                ) : null}
               </div>
               {aiWritingWorkflow.summary === undefined ? null : (
                 <p className="ns-ai-summary">{aiWritingWorkflow.summary}</p>
@@ -441,6 +473,12 @@ export function WorkspaceShell({
               )}
               {aiWritingWorkflow.observability === undefined ? null : (
                 <AiWorkflowObservabilityView observability={aiWritingWorkflow.observability} />
+              )}
+              {aiWritingWorkflow.failure === undefined ? null : (
+                <AiWorkflowFailureDiagnosticView failure={aiWritingWorkflow.failure} />
+              )}
+              {aiWritingWorkflow.retryPolicy === undefined ? null : (
+                <AiWorkflowRetryPolicyView retryPolicy={aiWritingWorkflow.retryPolicy} />
               )}
               {aiWritingWorkflow.history === undefined ? null : (
                 <AiWorkflowRunHistoryView history={aiWritingWorkflow.history} />
@@ -557,8 +595,69 @@ function AiWorkflowRunHistoryView({ history }: { readonly history: AiWorkflowRun
               </li>
             ))}
           </ol>
+          {history.selectedRun.errorLabel === undefined ? null : (
+            <p className="ns-ai-history-error">{history.selectedRun.errorLabel}</p>
+          )}
         </div>
       )}
+    </section>
+  );
+}
+
+function AiWorkflowFailureDiagnosticView({
+  failure
+}: {
+  readonly failure: AiWorkflowFailureDiagnosticProps;
+}) {
+  return (
+    <section className="ns-ai-failure" aria-label="失败诊断">
+      <div className="ns-ai-observability-header">
+        <span>{failure.title}</span>
+        <span>{failure.recoverabilityLabel}</span>
+      </div>
+      <dl className="ns-ai-observability-metrics">
+        <div>
+          <dt>错误</dt>
+          <dd>{failure.code}</dd>
+        </div>
+        <div>
+          <dt>说明</dt>
+          <dd>{failure.message}</dd>
+        </div>
+        <div>
+          <dt>建议</dt>
+          <dd>{failure.suggestedAction}</dd>
+        </div>
+      </dl>
+    </section>
+  );
+}
+
+function AiWorkflowRetryPolicyView({
+  retryPolicy
+}: {
+  readonly retryPolicy: AiWorkflowRetryPolicyProps;
+}) {
+  return (
+    <section className="ns-ai-retry-policy" aria-label="重试策略">
+      <div className="ns-ai-observability-header">
+        <span>重试策略</span>
+        <span>{retryPolicy.modeLabel}</span>
+      </div>
+      <dl className="ns-ai-observability-metrics">
+        <div>
+          <dt>次数</dt>
+          <dd>{retryPolicy.maxAttemptsLabel}</dd>
+        </div>
+        <div>
+          <dt>退避</dt>
+          <dd>{retryPolicy.backoffLabel}</dd>
+        </div>
+        <div>
+          <dt>错误</dt>
+          <dd>{retryPolicy.retryableCodesLabel}</dd>
+        </div>
+      </dl>
     </section>
   );
 }
@@ -972,6 +1071,8 @@ function statusLabel(status: AiWritingWorkflowStatus): string {
       return "待确认";
     case "applied":
       return "已应用";
+    case "failed":
+      return "失败";
   }
 }
 

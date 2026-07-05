@@ -35,6 +35,7 @@ export type {
   WorkflowRunModelSummary,
   WorkflowRunRecord,
   WorkflowRunRecordStatus,
+  WorkflowRunRetryPolicySummary,
   WorkflowRunStepKind,
   WorkflowRunStepRecord,
   WorkflowRunStepStatus,
