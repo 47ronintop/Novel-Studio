@@ -1,6 +1,6 @@
 # PLUGIN_SYSTEM - Novel Studio
 
-Version: 1.0 | Status: Draft for M18 | Phase: 7 Formal Development
+Version: 1.0 | Status: Accepted for M18 | Phase: 7 Formal Development
 
 ## 1. 目的
 
