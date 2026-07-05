@@ -26,11 +26,22 @@ import {
 } from "@novel-studio/repository";
 
 export const DEFAULT_FIXTURE_CHAPTER_ID = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D0";
+const DEFAULT_PROJECT_TITLE = "Minimal Chapter Project";
+const DEFAULT_PROJECT_ID = "prj_minimal_chapter";
+const DEFAULT_CHAPTER_TITLE = "第一章";
+const DEFAULT_CHAPTER_BODY = "原始章节正文。\n";
 
 export interface ProjectDesktopApplicationOptions {
   readonly projectRoot: string;
   readonly chapterId: string;
   readonly projectTitle: string;
+  readonly now?: () => string;
+  readonly createVersionId?: () => string;
+  readonly modelConnectionTester?: ModelConnectionTester;
+}
+
+export interface BootstrappedDefaultDesktopApplicationOptions {
+  readonly projectRoot: string;
   readonly now?: () => string;
   readonly createVersionId?: () => string;
   readonly modelConnectionTester?: ModelConnectionTester;
@@ -191,6 +202,70 @@ export function createDefaultDesktopApplication(): DesktopApplication {
   return createProjectDesktopApplication({
     projectRoot,
     chapterId: DEFAULT_FIXTURE_CHAPTER_ID,
-    projectTitle: "Minimal Chapter Project"
+    projectTitle: DEFAULT_PROJECT_TITLE
   });
+}
+
+export async function createBootstrappedDefaultDesktopApplication(
+  options: BootstrappedDefaultDesktopApplicationOptions
+): Promise<DesktopApplication> {
+  await ensureDefaultProject(options);
+
+  const application = createProjectDesktopApplication({
+    projectRoot: options.projectRoot,
+    chapterId: DEFAULT_FIXTURE_CHAPTER_ID,
+    projectTitle: DEFAULT_PROJECT_TITLE,
+    ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.createVersionId === undefined ? {} : { createVersionId: options.createVersionId }),
+    ...(options.modelConnectionTester === undefined
+      ? {}
+      : { modelConnectionTester: options.modelConnectionTester })
+  });
+  const opened = await application.openProject(options.projectRoot);
+  if (!opened.ok) {
+    throw new Error(opened.error.message);
+  }
+
+  return application;
+}
+
+async function ensureDefaultProject(
+  options: BootstrappedDefaultDesktopApplicationOptions
+): Promise<void> {
+  const projectRepository = new ProjectFileRepository({
+    projectRoot: options.projectRoot,
+    traceId: "trace_desktop_default_project_repository",
+    ...(options.now === undefined ? {} : { now: options.now })
+  });
+  const opened = await projectRepository.openProject();
+  if (!opened.ok) {
+    const created = await projectRepository.createProject({
+      projectId: DEFAULT_PROJECT_ID,
+      title: DEFAULT_PROJECT_TITLE,
+      language: "zh-CN"
+    });
+    if (!created.ok) {
+      throw new Error(created.error.message);
+    }
+  }
+
+  const chapterRepository = new ChapterFileRepository({
+    projectRoot: options.projectRoot,
+    traceId: "trace_desktop_default_chapter_repository",
+    ...(options.now === undefined ? {} : { now: options.now })
+  });
+  const chapters = await chapterRepository.listChapters();
+  if (chapters.ok && chapters.value.length > 0) {
+    return;
+  }
+
+  const createdChapter = await chapterRepository.createChapter({
+    chapterId: DEFAULT_FIXTURE_CHAPTER_ID,
+    title: DEFAULT_CHAPTER_TITLE,
+    order: 1,
+    body: DEFAULT_CHAPTER_BODY
+  });
+  if (!createdChapter.ok) {
+    throw new Error(createdChapter.error.message);
+  }
 }

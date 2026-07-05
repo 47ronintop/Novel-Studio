@@ -2,14 +2,19 @@ import { app, BrowserWindow, ipcMain } from "electron";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createDefaultDesktopApplication } from "./application-composition.js";
+import { createBootstrappedDefaultDesktopApplication } from "./application-composition.js";
 import { createApplicationIpcHandlers } from "./ipc-handlers.js";
 import { createSecureWebPreferences } from "./security.js";
 
 const currentDirectory = fileURLToPath(new URL(".", import.meta.url));
 
-export function registerApplicationIpcHandlers(): void {
-  const handlers = createApplicationIpcHandlers(createDefaultDesktopApplication());
+export async function registerApplicationIpcHandlers(): Promise<void> {
+  const projectRoot =
+    process.env["NOVEL_STUDIO_PROJECT_ROOT"] ??
+    join(app.getPath("userData"), "projects", "minimal-chapter");
+  const handlers = createApplicationIpcHandlers(
+    await createBootstrappedDefaultDesktopApplication({ projectRoot })
+  );
 
   for (const [channel, handler] of Object.entries(handlers)) {
     ipcMain.handle(channel, (_event, ...args: readonly unknown[]) => handler(...args));
@@ -35,9 +40,8 @@ export function createMainWindow(): BrowserWindow {
 }
 
 if (process.env["VITEST"] !== "true") {
-  registerApplicationIpcHandlers();
-
-  void app.whenReady().then(() => {
+  void app.whenReady().then(async () => {
+    await registerApplicationIpcHandlers();
     createMainWindow();
   });
 

@@ -1,0 +1,64 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, test } from "vitest";
+
+import {
+  createBootstrappedDefaultDesktopApplication,
+  DEFAULT_FIXTURE_CHAPTER_ID
+} from "../src/main/application-composition.js";
+
+const tempRoots: string[] = [];
+
+afterEach(async () => {
+  for (const root of tempRoots.splice(0)) {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+describe("beta startup default project", () => {
+  test("bootstraps a writable default project without relying on source fixtures", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-empty-default-"));
+    tempRoots.push(projectRoot);
+
+    const application = await createBootstrappedDefaultDesktopApplication({
+      projectRoot,
+      now: () => "2026-07-05T00:00:00.000Z"
+    });
+
+    const shellState = application.getShellState();
+    const loaded = await application.loadActiveChapter();
+    const chapters = await application.listProjectChapters();
+
+    expect(shellState.projectTitle).toBe("Minimal Chapter Project");
+    expect(shellState.navigatorSections.find((section) => section.id === "chapters")).toMatchObject(
+      {
+        itemCount: 1
+      }
+    );
+    expect(loaded).toMatchObject({
+      ok: true,
+      value: {
+        state: {
+          chapter: {
+            frontmatter: {
+              id: DEFAULT_FIXTURE_CHAPTER_ID,
+              title: "第一章"
+            },
+            body: "原始章节正文。\n"
+          },
+          saveStatus: "Saved"
+        }
+      }
+    });
+    expect(chapters).toMatchObject({
+      ok: true,
+      value: [
+        {
+          id: DEFAULT_FIXTURE_CHAPTER_ID,
+          title: "第一章"
+        }
+      ]
+    });
+  });
+});
