@@ -19,6 +19,10 @@ export const APPLICATION_IPC_CHANNELS = [
   "application:settings:list-model-profiles",
   "application:settings:save-model-profile",
   "application:settings:test-model-profile",
+  "application:story-bible:load",
+  "application:story-bible:save-asset",
+  "application:story-bible:save-memory",
+  "application:story-bible:build-context-candidates",
   "application:studio:load-config-asset",
   "application:studio:save-config-asset",
   "application:studio:restore-config-version"

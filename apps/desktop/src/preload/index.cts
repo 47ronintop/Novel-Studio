@@ -13,11 +13,16 @@ import type {
   ConfigVersionSummary,
   CreateProjectInput,
   DesktopShellState,
+  MemoryRecord,
   ModelConnectionResult,
   ModelProfile,
   ModelSettingsSnapshot,
   NovelStudioApi,
-  ProjectWorkspaceSnapshot
+  ProjectWorkspaceSnapshot,
+  StoryBibleAsset,
+  StoryBibleContextCandidate,
+  StoryBibleContextCandidateOptions,
+  StoryBibleSnapshot
 } from "@novel-studio/application";
 import type {
   ChapterSummary,
@@ -118,6 +123,25 @@ const api: NovelStudioApi = {
       invokeTyped<Result<ModelConnectionResult, UnifiedError>>(
         "application:settings:test-model-profile",
         profileId
+      )
+  },
+  storyBible: {
+    load: () =>
+      invokeTyped<Result<StoryBibleSnapshot, UnifiedError>>("application:story-bible:load"),
+    saveAsset: (asset: StoryBibleAsset) =>
+      invokeTyped<Result<StoryBibleAsset, UnifiedError>>(
+        "application:story-bible:save-asset",
+        asset
+      ),
+    saveMemory: (memory: MemoryRecord) =>
+      invokeTyped<Result<MemoryRecord, UnifiedError>>(
+        "application:story-bible:save-memory",
+        memory
+      ),
+    buildContextCandidates: (options?: StoryBibleContextCandidateOptions) =>
+      invokeTyped<Result<readonly StoryBibleContextCandidate[], UnifiedError>>(
+        "application:story-bible:build-context-candidates",
+        options
       )
   },
   studio: {

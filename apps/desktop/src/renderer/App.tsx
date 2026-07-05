@@ -3,13 +3,18 @@ import type {
   DesktopShellState,
   NovelStudioApi
 } from "@novel-studio/application";
-import type { AiWritingWorkflowProps, ChapterEditorProps } from "@novel-studio/ui";
+import type {
+  AiWritingWorkflowProps,
+  ChapterEditorProps,
+  StoryBibleSummaryProps
+} from "@novel-studio/ui";
 import { WorkspaceShell } from "@novel-studio/ui";
 import { useCallback, useEffect, useState } from "react";
 
 import { createAiWritingWorkflowBridge } from "./ai-writing-workflow-bridge.js";
 import { createChapterEditorBridge } from "./chapter-editor-bridge.js";
 import { createProjectWorkflowBridge } from "./project-workflow-bridge.js";
+import { createStoryBibleBridge } from "./story-bible-bridge.js";
 import { reduceRendererShortcut } from "./shortcuts.js";
 
 declare global {
@@ -79,6 +84,9 @@ export function App() {
   const [projectWorkflowBridge] = useState(() =>
     api === undefined ? undefined : createProjectWorkflowBridge(api)
   );
+  const [storyBibleBridge] = useState(() =>
+    api === undefined ? undefined : createStoryBibleBridge(api)
+  );
   const [aiWritingWorkflowBridge] = useState(() =>
     api === undefined ? undefined : createAiWritingWorkflowBridge(api)
   );
@@ -86,6 +94,9 @@ export function App() {
   const [commands, setCommands] = useState<readonly ApplicationCommand[]>(rendererCommands);
   const [chapterEditor, setChapterEditor] = useState<ChapterEditorProps | undefined>();
   const [projectWorkflow, setProjectWorkflow] = useState(() => projectWorkflowBridge?.getProps());
+  const [storyBible, setStoryBible] = useState<StoryBibleSummaryProps | undefined>(() =>
+    storyBibleBridge?.getProps()
+  );
   const [aiWritingWorkflow, setAiWritingWorkflow] = useState(() =>
     aiWritingWorkflowBridge?.getProps()
   );
@@ -148,6 +159,24 @@ export function App() {
       active = false;
     };
   }, [chapterBridge]);
+
+  useEffect(() => {
+    if (storyBibleBridge === undefined) {
+      return;
+    }
+
+    let active = true;
+
+    void storyBibleBridge.load().then((nextStoryBible) => {
+      if (active) {
+        setStoryBible(nextStoryBible);
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [storyBibleBridge]);
 
   const handleBodyChange = useCallback(
     (nextBody: string) => {
@@ -230,8 +259,11 @@ export function App() {
       if (chapterBridge !== undefined && nextWorkflow.activeChapterId !== undefined) {
         setChapterEditor(await chapterBridge.load());
       }
+      if (storyBibleBridge !== undefined) {
+        setStoryBible(await storyBibleBridge.load());
+      }
     },
-    [api, chapterBridge]
+    [api, chapterBridge, storyBibleBridge]
   );
 
   const handleProjectRootChange = useCallback(
@@ -368,6 +400,7 @@ export function App() {
       {...(interactiveChapterEditor === undefined
         ? {}
         : { chapterEditor: interactiveChapterEditor })}
+      {...(storyBible === undefined ? {} : { storyBible })}
       shellState={shellState}
       commands={commands}
       commandPaletteOpen={shortcutState.commandPaletteOpen}

@@ -45,6 +45,22 @@ export type {
 } from "./project-workspace-session.js";
 export { createProjectWorkspaceSession } from "./project-workspace-session.js";
 export type {
+  MemoryConfidence,
+  MemoryOrigin,
+  MemoryRecord,
+  MemoryRecordType,
+  StoryBibleAsset,
+  StoryBibleAssetType,
+  StoryBibleContextCandidate,
+  StoryBibleContextCandidateOptions,
+  StoryBibleEntityStatus,
+  StoryBibleRepositoryPort,
+  StoryBibleSession,
+  StoryBibleSessionOptions,
+  StoryBibleSnapshot
+} from "./story-bible-session.js";
+export { createStoryBibleSession } from "./story-bible-session.js";
+export type {
   AutosaveSettings,
   HistorySettings,
   ModelConnectionResult,

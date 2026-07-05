@@ -27,6 +27,7 @@ export interface WorkspaceShellProps {
   readonly chapterEditor?: ChapterEditorProps;
   readonly projectWorkflow?: ProjectWorkflowProps;
   readonly aiWritingWorkflow?: AiWritingWorkflowProps;
+  readonly storyBible?: StoryBibleSummaryProps;
 }
 
 export interface ProjectWorkflowProps {
@@ -53,6 +54,19 @@ export interface AiWritingWorkflowProps {
   readonly onApplySuggestion: () => void;
 }
 
+export interface StoryBibleSummaryProps {
+  readonly assets: readonly StoryBibleSummaryAsset[];
+}
+
+export interface StoryBibleSummaryAsset {
+  readonly id: string;
+  readonly title: string;
+  readonly type: string;
+  readonly status: string;
+  readonly summary: string;
+  readonly contextEligible?: boolean;
+}
+
 const activities = [
   { id: "workspace", label: "Workspace", icon: FolderTree },
   { id: "search", label: "Search", icon: Search },
@@ -68,7 +82,8 @@ export function WorkspaceShell({
   commandPaletteOpen,
   chapterEditor,
   projectWorkflow,
-  aiWritingWorkflow
+  aiWritingWorkflow,
+  storyBible
 }: WorkspaceShellProps) {
   return (
     <div className="ns-shell" data-theme="dark">
@@ -280,6 +295,29 @@ export function WorkspaceShell({
               {aiWritingWorkflow.contextTraceLabel === undefined ? null : (
                 <p className="ns-ai-context">{aiWritingWorkflow.contextTraceLabel}</p>
               )}
+            </section>
+          )}
+          {storyBible === undefined ? null : (
+            <section className="ns-story-bible-summary" aria-label="Story Bible summary">
+              <div className="ns-editor-panel-header">
+                <span>Story Bible</span>
+                <span className="ns-muted">{storyBible.assets.length}</span>
+              </div>
+              <ul className="ns-story-bible-list">
+                {storyBible.assets.map((asset) => (
+                  <li className="ns-story-bible-item" key={asset.id}>
+                    <div className="ns-story-bible-title">
+                      <span>{asset.title}</span>
+                      <span>{asset.type}</span>
+                    </div>
+                    <p>{asset.summary}</p>
+                    <div className="ns-story-bible-meta">
+                      <span>{asset.status}</span>
+                      {asset.contextEligible === true ? <span>Context eligible</span> : null}
+                    </div>
+                  </li>
+                ))}
+              </ul>
             </section>
           )}
         </aside>

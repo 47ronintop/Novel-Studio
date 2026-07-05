@@ -142,6 +142,7 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
           "chapters",
           "characters",
           "world",
+          "outline",
           "timeline",
           "memories",
           "prompts",

@@ -16,7 +16,12 @@ import type {
   ModelSettingsSnapshot,
   NovelStudioApi,
   ProjectWorkspaceSnapshot,
-  CreateProjectInput
+  CreateProjectInput,
+  MemoryRecord,
+  StoryBibleAsset,
+  StoryBibleContextCandidate,
+  StoryBibleContextCandidateOptions,
+  StoryBibleSnapshot
 } from "@novel-studio/application";
 import type {
   ChapterSummary,
@@ -141,6 +146,28 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           ipc,
           "application:settings:test-model-profile",
           profileId
+        )
+    },
+    storyBible: {
+      load: () =>
+        invokeTyped<Result<StoryBibleSnapshot, UnifiedError>>(ipc, "application:story-bible:load"),
+      saveAsset: (asset: StoryBibleAsset) =>
+        invokeTyped<Result<StoryBibleAsset, UnifiedError>>(
+          ipc,
+          "application:story-bible:save-asset",
+          asset
+        ),
+      saveMemory: (memory: MemoryRecord) =>
+        invokeTyped<Result<MemoryRecord, UnifiedError>>(
+          ipc,
+          "application:story-bible:save-memory",
+          memory
+        ),
+      buildContextCandidates: (options?: StoryBibleContextCandidateOptions) =>
+        invokeTyped<Result<readonly StoryBibleContextCandidate[], UnifiedError>>(
+          ipc,
+          "application:story-bible:build-context-candidates",
+          options
         )
     },
     studio: {

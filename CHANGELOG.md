@@ -35,8 +35,9 @@
 - 完成 M13 Real E2E and CI Gate：新增真实 Electron Playwright smoke，修复 runtime package exports 与 sandbox preload 运行时问题，新增 GitHub Actions CI gate，并把 `test:e2e` 改为实际运行测试。
 - 完成 M14 AI Writing Workflow UX：新增章节 AI 写作建议 session、IPC/preload/API、renderer bridge、AI Workflow 面板、diff preview、用户确认后应用，并用真实 Electron E2E 验证生成不改正文、Apply 后才进入 `Unsaved` 编辑状态。
 - 完成 M15 Real Provider Profiles：收紧 settings model provider schema，新增 profile 保存前校验、默认 runtime profile 解析、AI workflow 动态 profile resolver，并把桌面项目 `settings.json` 接入 ModelSettingsSession；连接测试继续依赖注入，CI 不访问真实模型。
+- 完成 M16 Story Bible Modules：新增 `STORY_BIBLE.md`，实现 Story Bible Repository/Application 最小闭环，支持人物、世界观、大纲、时间线和记忆读写，接入 Context Engine 显式候选来源，并通过 Desktop IPC/preload 与 WorkspaceShell 摘要面板暴露最小 UI。
 
 ## Notes
 
-- Phase 7 当前定义的 M0-M15 已完成。
-- 建议下一步进入 M16：Story Bible Modules。
+- Phase 7 当前定义的 M0-M16 已完成。
+- 建议下一步进入 M17：Installer and Release Channel。

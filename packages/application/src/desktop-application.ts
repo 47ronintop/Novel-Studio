@@ -44,6 +44,14 @@ import type {
   ProjectWorkspaceSession,
   ProjectWorkspaceSnapshot
 } from "./project-workspace-session.js";
+import type {
+  MemoryRecord,
+  StoryBibleAsset,
+  StoryBibleContextCandidateOptions,
+  StoryBibleSession,
+  StoryBibleSnapshot
+} from "./story-bible-session.js";
+import type { ContextCandidate } from "@novel-studio/context-engine";
 
 export type ActivityId = "workspace" | "search" | "timeline" | "ai" | "studio" | "settings";
 
@@ -78,6 +86,12 @@ export interface DesktopApplication {
     input: CreateChapterInput
   ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   selectProjectChapter(chapterId: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  loadStoryBible(): Promise<Result<StoryBibleSnapshot, UnifiedError>>;
+  saveStoryBibleAsset(asset: StoryBibleAsset): Promise<Result<StoryBibleAsset, UnifiedError>>;
+  saveStoryBibleMemory(memory: MemoryRecord): Promise<Result<MemoryRecord, UnifiedError>>;
+  buildStoryBibleContextCandidates(
+    options?: StoryBibleContextCandidateOptions
+  ): Promise<Result<readonly ContextCandidate[], UnifiedError>>;
   generateActiveChapterSuggestion(
     request: AiWritingSuggestionRequest
   ): Promise<Result<AiWritingSuggestion, UnifiedError>>;
@@ -120,6 +134,7 @@ export interface DesktopApplicationOptions {
   readonly projectWorkspaceSession?: ProjectWorkspaceSession;
   readonly modelSettingsSession?: ModelSettingsSession;
   readonly configStudioSession?: ConfigStudioSession;
+  readonly storyBibleSession?: StoryBibleSession;
   readonly aiWritingWorkflowSession?: AiWritingWorkflowSession;
   readonly createAiWritingWorkflowSession?: (
     chapterEditorSession: ChapterEditorSession
@@ -157,6 +172,7 @@ export function createDesktopApplication(
   const projectWorkspaceSession = options.projectWorkspaceSession;
   const modelSettingsSession = options.modelSettingsSession;
   const configStudioSession = options.configStudioSession;
+  const storyBibleSession = options.storyBibleSession;
   const aiWritingWorkflowSession = options.aiWritingWorkflowSession;
   const createAiWritingWorkflowSession = options.createAiWritingWorkflowSession;
   let dynamicAiWritingWorkflowSession: AiWritingWorkflowSession | undefined;
@@ -166,7 +182,11 @@ export function createDesktopApplication(
   return {
     getShellState: () =>
       withChapterSaveStatus(
-        withProjectWorkspaceState(shellState, projectWorkspaceSession?.getSnapshot()),
+        withProjectWorkspaceState(
+          shellState,
+          projectWorkspaceSession?.getSnapshot(),
+          storyBibleSession?.getSnapshot()
+        ),
         getActiveChapterEditorSession()?.getState()
       ),
     listCommands: () => DEFAULT_APPLICATION_COMMANDS,
@@ -224,6 +244,34 @@ export function createDesktopApplication(
       }
 
       return projectWorkspaceSession.selectChapter(chapterId);
+    },
+    async loadStoryBible() {
+      if (storyBibleSession === undefined) {
+        return storyBibleUnavailable();
+      }
+
+      return storyBibleSession.loadStoryBible();
+    },
+    async saveStoryBibleAsset(asset) {
+      if (storyBibleSession === undefined) {
+        return storyBibleUnavailable();
+      }
+
+      return storyBibleSession.saveStoryAsset(asset);
+    },
+    async saveStoryBibleMemory(memory) {
+      if (storyBibleSession === undefined) {
+        return storyBibleUnavailable();
+      }
+
+      return storyBibleSession.saveMemory(memory);
+    },
+    async buildStoryBibleContextCandidates(options) {
+      if (storyBibleSession === undefined) {
+        return storyBibleUnavailable();
+      }
+
+      return storyBibleSession.buildContextCandidates(options);
     },
     async generateActiveChapterSuggestion(request) {
       const activeAiWritingWorkflowSession = getAiWritingWorkflowSession();
@@ -412,7 +460,8 @@ function withChapterSaveStatus(
 
 function withProjectWorkspaceState(
   shellState: DesktopShellState,
-  workspaceSnapshot: ProjectWorkspaceSnapshot | undefined
+  workspaceSnapshot: ProjectWorkspaceSnapshot | undefined,
+  storyBibleSnapshot: StoryBibleSnapshot | undefined
 ): DesktopShellState {
   if (workspaceSnapshot === undefined) {
     return shellState;
@@ -421,11 +470,39 @@ function withProjectWorkspaceState(
   return {
     ...shellState,
     projectTitle: workspaceSnapshot.project.title,
-    navigatorSections: shellState.navigatorSections.map((section) =>
-      section.id === "chapters"
-        ? { ...section, itemCount: workspaceSnapshot.chapters.length }
-        : section
-    )
+    navigatorSections: shellState.navigatorSections.map((section) => {
+      switch (section.id) {
+        case "chapters":
+          return { ...section, itemCount: workspaceSnapshot.chapters.length };
+        case "characters":
+          return {
+            ...section,
+            itemCount: storyBibleSnapshot?.characters.length ?? section.itemCount
+          };
+        case "world":
+          return {
+            ...section,
+            itemCount: storyBibleSnapshot?.worldAssets.length ?? section.itemCount
+          };
+        case "outline":
+          return {
+            ...section,
+            itemCount: storyBibleSnapshot?.outline === undefined ? section.itemCount : 1
+          };
+        case "timeline":
+          return {
+            ...section,
+            itemCount: storyBibleSnapshot?.timeline === undefined ? section.itemCount : 1
+          };
+        case "memories":
+          return {
+            ...section,
+            itemCount: storyBibleSnapshot?.memories.length ?? section.itemCount
+          };
+        default:
+          return section;
+      }
+    })
   };
 }
 
@@ -479,6 +556,19 @@ function configStudioUnavailable<T>(): Result<T, UnifiedError> {
       recoverability: "user-action",
       suggestedAction: "Open a project with Studio support before editing configuration assets.",
       traceId: "application-config-studio"
+    })
+  );
+}
+
+function storyBibleUnavailable<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "STORY_BIBLE_UNAVAILABLE",
+      category: "UserError",
+      message: "No Story Bible session is available.",
+      recoverability: "user-action",
+      suggestedAction: "Open a project before using Story Bible commands.",
+      traceId: "application-story-bible"
     })
   );
 }

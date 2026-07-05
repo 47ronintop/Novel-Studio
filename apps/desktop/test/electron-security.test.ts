@@ -56,6 +56,10 @@ describe("Electron security baseline", () => {
       "application:settings:list-model-profiles",
       "application:settings:save-model-profile",
       "application:settings:test-model-profile",
+      "application:story-bible:load",
+      "application:story-bible:save-asset",
+      "application:story-bible:save-memory",
+      "application:story-bible:build-context-candidates",
       "application:studio:load-config-asset",
       "application:studio:save-config-asset",
       "application:studio:restore-config-version"
@@ -63,6 +67,7 @@ describe("Electron security baseline", () => {
     expect(isApplicationIpcChannel("application:list-commands")).toBe(true);
     expect(isApplicationIpcChannel("application:chapter:save")).toBe(true);
     expect(isApplicationIpcChannel("application:settings:list-model-profiles")).toBe(true);
+    expect(isApplicationIpcChannel("application:story-bible:load")).toBe(true);
     expect(isApplicationIpcChannel("application:studio:save-config-asset")).toBe(true);
     expect(isApplicationIpcChannel("fs:read-file")).toBe(false);
     expect(isApplicationIpcChannel("shell:open-path")).toBe(false);
@@ -101,6 +106,30 @@ describe("Electron security baseline", () => {
       timeoutMs: 60000
     });
     await api.settings.testModelProfileConnection("model_default");
+    await api.storyBible.load();
+    await api.storyBible.saveAsset({
+      schemaVersion: "1.0",
+      id: "chr_hero",
+      type: "character",
+      title: "Hero",
+      status: "active",
+      summary: "Hero summary.",
+      createdAt: "2026-07-05T00:00:00.000Z",
+      updatedAt: "2026-07-05T00:00:00.000Z"
+    });
+    await api.storyBible.saveMemory({
+      schemaVersion: "1.0",
+      id: "mem_oath",
+      type: "memory.long-term",
+      title: "Oath",
+      status: "active",
+      origin: "user",
+      confidence: "confirmed",
+      content: "The oath stays hidden.",
+      createdAt: "2026-07-05T00:00:00.000Z",
+      updatedAt: "2026-07-05T00:00:00.000Z"
+    });
+    await api.storyBible.buildContextCandidates({ includeStatuses: ["active"] });
     await api.studio.loadConfigAsset("workflow", "wf_review_chapter");
     await api.studio.saveConfigAsset({
       assetType: "workflow",
@@ -130,6 +159,10 @@ describe("Electron security baseline", () => {
       "application:settings:list-model-profiles",
       "application:settings:save-model-profile",
       "application:settings:test-model-profile",
+      "application:story-bible:load",
+      "application:story-bible:save-asset",
+      "application:story-bible:save-memory",
+      "application:story-bible:build-context-candidates",
       "application:studio:load-config-asset",
       "application:studio:save-config-asset",
       "application:studio:restore-config-version"
@@ -156,6 +189,10 @@ describe("Electron security baseline", () => {
     await expect(handlers["application:settings:list-model-profiles"]()).resolves.toMatchObject({
       ok: false,
       error: { code: "MODEL_SETTINGS_UNAVAILABLE" }
+    });
+    await expect(handlers["application:story-bible:load"]()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "STORY_BIBLE_UNAVAILABLE" }
     });
     await expect(
       handlers["application:studio:load-config-asset"]("prompt", "prompt_01")

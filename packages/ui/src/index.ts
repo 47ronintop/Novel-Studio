@@ -27,5 +27,7 @@ export type {
   AiWritingWorkflowProps,
   AiWritingWorkflowStatus,
   ProjectWorkflowProps,
+  StoryBibleSummaryAsset,
+  StoryBibleSummaryProps,
   WorkspaceShellProps
 } from "./workspace-shell.js";

@@ -7,7 +7,10 @@ import type {
   ConfigAssetType,
   CreateProjectInput,
   AiWritingSuggestionRequest,
-  ModelProfile
+  ModelProfile,
+  MemoryRecord,
+  StoryBibleAsset,
+  StoryBibleContextCandidateOptions
 } from "@novel-studio/application";
 import type { CreateChapterInput } from "@novel-studio/shared";
 
@@ -127,6 +130,25 @@ export function createApplicationIpcHandlers(
 
       return application.testModelProfileConnection(profileId);
     },
+    "application:story-bible:load": () => application.loadStoryBible(),
+    "application:story-bible:save-asset": (asset: unknown) => {
+      const storyBibleAsset = toStoryBibleAsset(asset);
+      if (storyBibleAsset === undefined) {
+        return application.saveStoryBibleAsset(emptyStoryBibleAsset());
+      }
+
+      return application.saveStoryBibleAsset(storyBibleAsset);
+    },
+    "application:story-bible:save-memory": (memory: unknown) => {
+      const storyBibleMemory = toMemoryRecord(memory);
+      if (storyBibleMemory === undefined) {
+        return application.saveStoryBibleMemory(emptyMemoryRecord());
+      }
+
+      return application.saveStoryBibleMemory(storyBibleMemory);
+    },
+    "application:story-bible:build-context-candidates": (options: unknown) =>
+      application.buildStoryBibleContextCandidates(toStoryBibleContextCandidateOptions(options)),
     "application:studio:load-config-asset": (assetType: unknown, assetId: unknown) => {
       if (!isConfigAssetType(assetType) || typeof assetId !== "string") {
         return application.loadConfigAsset("prompt", "");
@@ -158,6 +180,91 @@ export function createApplicationIpcHandlers(
 
       return application.restoreConfigAssetVersion(restoreInput);
     }
+  };
+}
+
+function toStoryBibleAsset(value: unknown): StoryBibleAsset | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (
+    typeof value.schemaVersion !== "string" ||
+    typeof value.id !== "string" ||
+    !isStoryBibleAssetType(value.type) ||
+    typeof value.title !== "string" ||
+    !isStoryBibleEntityStatus(value.status) ||
+    typeof value.summary !== "string" ||
+    typeof value.createdAt !== "string" ||
+    typeof value.updatedAt !== "string" ||
+    !isOptionalStringArray(value.aliases) ||
+    !isOptionalJsonObject(value.details) ||
+    !isOptionalStringArray(value.relatedEntityIds)
+  ) {
+    return undefined;
+  }
+
+  return {
+    schemaVersion: "1.0",
+    id: value.id,
+    type: value.type,
+    title: value.title,
+    status: value.status,
+    summary: value.summary,
+    ...(value.aliases === undefined ? {} : { aliases: value.aliases }),
+    ...(value.details === undefined ? {} : { details: value.details }),
+    ...(value.relatedEntityIds === undefined ? {} : { relatedEntityIds: value.relatedEntityIds }),
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt
+  };
+}
+
+function toMemoryRecord(value: unknown): MemoryRecord | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (
+    typeof value.schemaVersion !== "string" ||
+    typeof value.id !== "string" ||
+    !isMemoryRecordType(value.type) ||
+    typeof value.title !== "string" ||
+    !isStoryBibleEntityStatus(value.status) ||
+    !isMemoryOrigin(value.origin) ||
+    !isMemoryConfidence(value.confidence) ||
+    typeof value.content !== "string" ||
+    !isOptionalJsonObjectArray(value.sourceRefs) ||
+    typeof value.createdAt !== "string" ||
+    typeof value.updatedAt !== "string"
+  ) {
+    return undefined;
+  }
+
+  return {
+    schemaVersion: "1.0",
+    id: value.id,
+    type: value.type,
+    title: value.title,
+    status: value.status,
+    origin: value.origin,
+    confidence: value.confidence,
+    content: value.content,
+    ...(value.sourceRefs === undefined ? {} : { sourceRefs: value.sourceRefs }),
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt
+  };
+}
+
+function toStoryBibleContextCandidateOptions(
+  value: unknown
+): StoryBibleContextCandidateOptions | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (!isOptionalStoryBibleStatusArray(value.includeStatuses)) {
+    return undefined;
+  }
+
+  return {
+    ...(value.includeStatuses === undefined ? {} : { includeStatuses: value.includeStatuses })
   };
 }
 
@@ -321,6 +428,13 @@ function isOptionalString(value: unknown): value is string | undefined {
   return value === undefined || typeof value === "string";
 }
 
+function isOptionalStringArray(value: unknown): value is string[] | undefined {
+  return (
+    value === undefined ||
+    (Array.isArray(value) && value.every((entry) => typeof entry === "string"))
+  );
+}
+
 function isOptionalNumber(value: unknown): value is number | undefined {
   return value === undefined || typeof value === "number";
 }
@@ -349,6 +463,48 @@ function isJsonObject(value: unknown): value is JsonObject {
   return Object.values(value).every(isJsonValue);
 }
 
+function isOptionalJsonObject(value: unknown): value is JsonObject | undefined {
+  return value === undefined || isJsonObject(value);
+}
+
+function isOptionalJsonObjectArray(value: unknown): value is JsonObject[] | undefined {
+  return value === undefined || (Array.isArray(value) && value.every(isJsonObject));
+}
+
+function isStoryBibleAssetType(value: unknown): value is StoryBibleAsset["type"] {
+  return (
+    value === "character" ||
+    value === "world.location" ||
+    value === "world.faction" ||
+    value === "world.rule" ||
+    value === "world.glossary" ||
+    value === "outline" ||
+    value === "timeline.events"
+  );
+}
+
+function isStoryBibleEntityStatus(value: unknown): value is StoryBibleAsset["status"] {
+  return value === "active" || value === "draft" || value === "archived" || value === "deleted";
+}
+
+function isOptionalStoryBibleStatusArray(
+  value: unknown
+): value is StoryBibleAsset["status"][] | undefined {
+  return value === undefined || (Array.isArray(value) && value.every(isStoryBibleEntityStatus));
+}
+
+function isMemoryRecordType(value: unknown): value is MemoryRecord["type"] {
+  return value === "memory.long-term" || value === "memory.style" || value === "memory.summary";
+}
+
+function isMemoryOrigin(value: unknown): value is MemoryRecord["origin"] {
+  return value === "user" || value === "user-confirmed-ai" || value === "ai-unconfirmed";
+}
+
+function isMemoryConfidence(value: unknown): value is MemoryRecord["confidence"] {
+  return value === "confirmed" || value === "needs-review" || value === "deprecated";
+}
+
 function isJsonValue(value: unknown): value is JsonValue {
   if (
     value === null ||
@@ -374,5 +530,33 @@ function emptyModelProfile(): ModelProfile {
     temperature: 0,
     maxTokens: 1,
     timeoutMs: 1000
+  };
+}
+
+function emptyStoryBibleAsset(): StoryBibleAsset {
+  return {
+    schemaVersion: "1.0",
+    id: "",
+    type: "character",
+    title: "",
+    status: "draft",
+    summary: "",
+    createdAt: "",
+    updatedAt: ""
+  };
+}
+
+function emptyMemoryRecord(): MemoryRecord {
+  return {
+    schemaVersion: "1.0",
+    id: "",
+    type: "memory.long-term",
+    title: "",
+    status: "draft",
+    origin: "user",
+    confidence: "needs-review",
+    content: "",
+    createdAt: "",
+    updatedAt: ""
   };
 }

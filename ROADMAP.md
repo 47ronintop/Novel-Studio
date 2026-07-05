@@ -1,6 +1,6 @@
 # Novel Studio Roadmap
 
-Version: 1.4 | Status: Active | Last Updated: 2026-07-05
+Version: 1.5 | Status: Active | Last Updated: 2026-07-05
 
 ## 目标
 
@@ -28,6 +28,7 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M13       | Real E2E and CI Gate            | 真实 Electron E2E smoke、GitHub Actions、packaging gate                | Complete |
 | M14       | AI Writing Workflow UX          | 生成 AI 写作建议、预览 diff、用户确认后应用到章节编辑器                | Complete |
 | M15       | Real Provider Profiles          | 真实模型 profile 配置、secret ref 校验、离线连接测试和运行时解析       | Complete |
+| M16       | Story Bible Modules             | 人物、世界观、大纲、时间线、记忆管理，给 Context Engine 提供高质量素材 | Complete |
 
 ## M15 完成内容
 
@@ -38,20 +39,28 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - Desktop 组合接入项目 `settings.json` 的 ModelSettingsSession，支持通过 IPC 列出、保存、设为默认和测试 profile。
 - 连接测试继续通过依赖注入执行；CI 和默认桌面 AI workflow 仍不访问真实模型 endpoint。
 
+## M16 完成内容
+
+- 新增 `STORY_BIBLE.md`，明确 Story Bible 资产边界、Repository/Application/Context/UI 分层和 M16 验收标准。
+- 新增 `StoryBibleFileRepository`，支持保存和读取 `characters/`、`world/`、`outline/outline.json`、`timeline/events.json` 与 `memories/`，写入前和读取后均进行 schema 校验。
+- 新增 `StoryBibleSession`，支持加载 Story Bible snapshot、保存 Story Asset/Memory，并从当前 Story Bible 显式生成 Context Engine candidates。
+- Desktop IPC/preload 增加 Story Bible allowlist channels，renderer 不直接访问文件系统。
+- WorkspaceShell 增加最小 Story Bible 摘要面板，展示资产状态、摘要和 Context eligibility。
+- 项目创建流程补齐 `outline/` 目录；Context Engine 仍只消费显式候选，不扫描项目目录。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
-- Phase 7 当前定义的 M0-M15 已完成。
-- 下一步建议进入 M16：Story Bible Modules。
+- Phase 7 当前定义的 M0-M16 已完成。
+- 下一步建议进入 M17：Installer and Release Channel。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-| 下一步 | 名称                          | 作用                                                                   |
-| ------ | ----------------------------- | ---------------------------------------------------------------------- |
-| M16    | Story Bible Modules           | 人物、世界观、大纲、时间线、记忆管理，给 Context Engine 提供高质量素材 |
-| M17    | Installer and Release Channel | installer target、icon、签名、版本号、release notes、beta 发布流程     |
-| M18    | Plugin System                 | 插件接口、权限、隔离、插件目录或市场                                   |
+| 下一步 | 名称                          | 作用                                                               |
+| ------ | ----------------------------- | ------------------------------------------------------------------ |
+| M17    | Installer and Release Channel | installer target、icon、签名、版本号、release notes、beta 发布流程 |
+| M18    | Plugin System                 | 插件接口、权限、隔离、插件目录或市场                               |
 
 ## 当前技术债重点
 

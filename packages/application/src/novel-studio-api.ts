@@ -30,6 +30,13 @@ import type {
   ModelSettingsSnapshot
 } from "./model-settings-session.js";
 import type { CreateProjectInput, ProjectWorkspaceSnapshot } from "./project-workspace-session.js";
+import type {
+  MemoryRecord,
+  StoryBibleAsset,
+  StoryBibleContextCandidate,
+  StoryBibleContextCandidateOptions,
+  StoryBibleSnapshot
+} from "./story-bible-session.js";
 
 export interface NovelStudioApi {
   getShellState(): Promise<DesktopShellState>;
@@ -74,6 +81,14 @@ export interface NovelStudioApi {
     testModelProfileConnection(
       profileId: string
     ): Promise<Result<ModelConnectionResult, UnifiedError>>;
+  };
+  storyBible: {
+    load(): Promise<Result<StoryBibleSnapshot, UnifiedError>>;
+    saveAsset(asset: StoryBibleAsset): Promise<Result<StoryBibleAsset, UnifiedError>>;
+    saveMemory(memory: MemoryRecord): Promise<Result<MemoryRecord, UnifiedError>>;
+    buildContextCandidates(
+      options?: StoryBibleContextCandidateOptions
+    ): Promise<Result<readonly StoryBibleContextCandidate[], UnifiedError>>;
   };
   studio: {
     loadConfigAsset(

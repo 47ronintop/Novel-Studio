@@ -33,6 +33,19 @@ export type {
 export { ProjectFileRepository } from "./project-repository.js";
 export { RecoveryRepository } from "./recovery-repository.js";
 export { ProjectSettingsRepository } from "./settings-repository.js";
+export { StoryBibleFileRepository } from "./story-bible-repository.js";
+export type {
+  MemoryConfidence,
+  MemoryOrigin,
+  MemoryRecord,
+  MemoryRecordType,
+  StoryBibleAsset,
+  StoryBibleAssetType,
+  StoryBibleEntityStatus,
+  StoryBibleFileRepositoryOptions,
+  StoryBibleRepositoryPort,
+  StoryBibleSnapshot
+} from "./story-bible-repository.js";
 export type {
   ChapterDocument,
   ChapterDraftRepositoryPort,

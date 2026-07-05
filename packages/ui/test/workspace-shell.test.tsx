@@ -126,4 +126,39 @@ describe("WorkspaceShell", () => {
     expect(html).toContain('aria-current="true"');
     expect(html).toContain("开篇");
   });
+
+  test("renders Story Bible summaries and context eligibility", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={application.getShellState()}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        storyBible={{
+          assets: [
+            {
+              id: "chr_hero",
+              title: "Hero",
+              type: "character",
+              status: "active",
+              summary: "A procedural protagonist with a hidden oath."
+            },
+            {
+              id: "mem_oath",
+              title: "Oath",
+              type: "memory.long-term",
+              status: "active",
+              summary: "The hero never reveals the old oath aloud.",
+              contextEligible: true
+            }
+          ]
+        }}
+      />
+    );
+
+    expect(html).toContain('aria-label="Story Bible summary"');
+    expect(html).toContain("Hero");
+    expect(html).toContain("Oath");
+    expect(html).toContain("Context eligible");
+  });
 });

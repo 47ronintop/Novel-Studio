@@ -6,6 +6,7 @@ import {
   createDesktopApplication,
   createModelSettingsSession,
   createProjectWorkspaceSession,
+  createStoryBibleSession,
   resolveDefaultModelRuntimeProfile
 } from "@novel-studio/application";
 import type {
@@ -20,7 +21,8 @@ import {
   ChapterFileRepository,
   HistoryRepository,
   ProjectFileRepository,
-  ProjectSettingsRepository
+  ProjectSettingsRepository,
+  StoryBibleFileRepository
 } from "@novel-studio/repository";
 
 export const DEFAULT_FIXTURE_CHAPTER_ID = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D0";
@@ -91,6 +93,13 @@ export function createProjectDesktopApplication(
         ? {}
         : { connectionTester: options.modelConnectionTester })
     }),
+    storyBibleSession: createStoryBibleSession({
+      repository: {
+        readStoryBible: () => createStoryBibleRepository().readStoryBible(),
+        saveStoryAsset: (asset) => createStoryBibleRepository().saveStoryAsset(asset),
+        saveMemory: (memory) => createStoryBibleRepository().saveMemory(memory)
+      }
+    }),
     createAiWritingWorkflowSession: (activeChapterEditorSession) =>
       createAgentBackedAiWritingWorkflowSession({
         chapterEditorSession: activeChapterEditorSession,
@@ -126,6 +135,13 @@ export function createProjectDesktopApplication(
     return new ProjectSettingsRepository({
       projectRoot: projectWorkspaceSession.getSnapshot()?.projectRoot ?? options.projectRoot,
       traceId: "trace_desktop_settings_repository"
+    });
+  }
+
+  function createStoryBibleRepository(): StoryBibleFileRepository {
+    return new StoryBibleFileRepository({
+      projectRoot: projectWorkspaceSession.getSnapshot()?.projectRoot ?? options.projectRoot,
+      traceId: "trace_desktop_story_bible_repository"
     });
   }
 }
