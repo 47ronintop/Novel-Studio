@@ -28,6 +28,34 @@ const prompt = {
   updatedAt: "2026-07-04T00:00:00.000Z"
 } satisfies JsonObject;
 
+const workflow = {
+  schemaVersion: "1.0",
+  id: "wf_review_chapter",
+  type: "workflow.definition",
+  title: "Review current chapter",
+  status: "active",
+  entryStepId: "context",
+  steps: [
+    {
+      id: "context",
+      kind: "context",
+      nextStepId: "review"
+    },
+    {
+      id: "review",
+      kind: "agent",
+      agentId: "agent_reviewer_default",
+      nextStepId: "save"
+    },
+    {
+      id: "save",
+      kind: "save"
+    }
+  ],
+  createdAt: "2026-07-06T00:00:00.000Z",
+  updatedAt: "2026-07-06T00:00:00.000Z"
+} satisfies JsonObject;
+
 describe("config studio session", () => {
   test("loads and saves Prompt assets through an injected config asset port", async () => {
     const writes: JsonObject[] = [];
@@ -151,5 +179,53 @@ describe("config studio session", () => {
       return;
     }
     expect(saved.error.code).toBe("CONFIG_ASSET_INVALID");
+  });
+
+  test("attaches workflow graph projection to workflow config snapshots", async () => {
+    const port: ConfigAssetPort = {
+      async readConfigAsset() {
+        return ok(workflow);
+      },
+      async writeConfigAsset() {
+        return ok({ versionId: "ver_before_save" });
+      },
+      async restoreConfigAssetVersion() {
+        return ok(workflow);
+      }
+    };
+    const session = createConfigStudioSession({ configAssetPort: port });
+
+    const loaded = await session.loadConfigAsset("workflow", "wf_review_chapter");
+
+    expect(isOk(loaded)).toBe(true);
+    if (!loaded.ok) {
+      return;
+    }
+    expect(loaded.value.workflowGraph).toEqual({
+      graph: {
+        workflowId: "wf_review_chapter",
+        title: "Review current chapter",
+        entryNodeId: "context",
+        nodes: [
+          { id: "context", stepId: "context", kind: "context", label: "context", metadata: {} },
+          {
+            id: "review",
+            stepId: "review",
+            kind: "agent",
+            label: "review",
+            metadata: { agentId: "agent_reviewer_default" }
+          },
+          { id: "save", stepId: "save", kind: "save", label: "save", metadata: {} }
+        ],
+        edges: [
+          { id: "context:next:review", fromNodeId: "context", toNodeId: "review", kind: "next" },
+          { id: "review:next:save", fromNodeId: "review", toNodeId: "save", kind: "next" }
+        ]
+      },
+      validation: {
+        status: "valid",
+        issues: []
+      }
+    });
   });
 });

@@ -133,7 +133,8 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
       selectedAsset = assetFromSnapshot(
         result.value.assetType,
         result.value.assetId,
-        result.value.content
+        result.value.content,
+        result.value.workflowGraph
       );
       status = "saved";
       feedback = { kind: "info", message: "配置版本已恢复。" };
@@ -153,7 +154,8 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
     selectedAsset = assetFromSnapshot(
       result.value.assetType,
       result.value.assetId,
-      result.value.content
+      result.value.content,
+      result.value.workflowGraph
     );
     status = "idle";
     feedback = { kind: "info", message: successMessage };
@@ -188,14 +190,16 @@ function emptySelectedAsset(): ConfigStudioAsset {
 function assetFromSnapshot(
   assetType: ConfigAssetType,
   assetId: string,
-  content: JsonObject
+  content: JsonObject,
+  workflowGraph?: ConfigStudioAsset["workflowGraph"]
 ): ConfigStudioAsset {
   return {
     assetType,
     assetId,
     title: titleFromContent(content, assetId),
     validationStatus: "valid",
-    content: JSON.stringify(content, null, 2)
+    content: JSON.stringify(content, null, 2),
+    ...(workflowGraph === undefined ? {} : { workflowGraph })
   };
 }
 

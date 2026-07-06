@@ -1,4 +1,5 @@
 import { Boxes, RotateCcw, Save } from "lucide-react";
+import type { ConfigWorkflowGraphSnapshot } from "@novel-studio/application";
 
 export type ConfigStudioAssetType = "prompt" | "agent" | "workflow";
 export type ConfigValidationStatus = "valid" | "invalid" | "dirty";
@@ -16,6 +17,7 @@ export interface ConfigStudioAsset {
   readonly title: string;
   readonly validationStatus: ConfigValidationStatus;
   readonly content: string;
+  readonly workflowGraph?: ConfigWorkflowGraphSnapshot;
 }
 
 export interface ConfigStudioVersionEntry {
@@ -118,6 +120,9 @@ export function ConfigStudioPanel({
             onChange={(event) => onContentChange?.(event.currentTarget.value)}
             readOnly={onContentChange === undefined}
           />
+          {selectedAsset.workflowGraph === undefined ? null : (
+            <WorkflowGraphPreview workflowGraph={selectedAsset.workflowGraph} />
+          )}
         </main>
 
         <aside className="config-studio-versions" aria-label="配置版本历史">
@@ -154,6 +159,49 @@ function validationLabel(status: ConfigValidationStatus): string {
     case "dirty":
       return "有未保存修改";
   }
+}
+
+function WorkflowGraphPreview({
+  workflowGraph
+}: {
+  readonly workflowGraph: ConfigWorkflowGraphSnapshot;
+}) {
+  return (
+    <section className="config-studio-workflow-graph" aria-label="Workflow graph preview">
+      <header>
+        <h3>{workflowGraph.graph.title}</h3>
+        <span>Validation {workflowGraph.validation.status}</span>
+      </header>
+      <div className="config-studio-graph-stats">
+        <span>Nodes {workflowGraph.graph.nodes.length}</span>
+        <span>Edges {workflowGraph.graph.edges.length}</span>
+      </div>
+      <ol aria-label="Workflow graph nodes">
+        {workflowGraph.graph.nodes.map((node) => (
+          <li key={node.id}>
+            <span>{node.label}</span>
+            <span>{node.kind}</span>
+          </li>
+        ))}
+      </ol>
+      <ol aria-label="Workflow graph edges">
+        {workflowGraph.graph.edges.map((edge) => (
+          <li key={edge.id}>
+            {edge.fromNodeId} {"\u2192"} {edge.toNodeId}
+          </li>
+        ))}
+      </ol>
+      {workflowGraph.validation.issues.length === 0 ? null : (
+        <ol aria-label="Workflow graph validation issues">
+          {workflowGraph.validation.issues.map((issue) => (
+            <li key={`${issue.stepId}:${issue.code}`}>
+              {issue.code}: {issue.message}
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
 }
 
 function assetTypeLabel(assetType: ConfigStudioAssetType): string {

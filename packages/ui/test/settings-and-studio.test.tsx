@@ -140,7 +140,42 @@ describe("M8 Settings and Studio UI", () => {
           assetId: "wf_review_chapter",
           title: "Review Chapter",
           validationStatus: "valid",
-          content: '{\n  "schemaVersion": "1.0"\n}'
+          content: '{\n  "schemaVersion": "1.0"\n}',
+          workflowGraph: {
+            graph: {
+              workflowId: "wf_review_chapter",
+              title: "Review Chapter",
+              entryNodeId: "context",
+              nodes: [
+                {
+                  id: "context",
+                  stepId: "context",
+                  kind: "context",
+                  label: "context",
+                  metadata: {}
+                },
+                {
+                  id: "save",
+                  stepId: "save",
+                  kind: "save",
+                  label: "save",
+                  metadata: {}
+                }
+              ],
+              edges: [
+                {
+                  id: "context:next:save",
+                  fromNodeId: "context",
+                  toNodeId: "save",
+                  kind: "next"
+                }
+              ]
+            },
+            validation: {
+              status: "valid",
+              issues: []
+            }
+          }
         }}
         versions={[
           {
@@ -168,6 +203,11 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).toContain('aria-label="保存配置资产"');
     expect(html).toContain('aria-label="恢复配置版本 Before save"');
     expect(html).toContain('aria-label="选择配置资产 Reviewer Prompt"');
+    expect(html).toContain('aria-label="Workflow graph preview"');
+    expect(html).toContain("Nodes 2");
+    expect(html).toContain("Edges 1");
+    expect(html).toContain("context → save");
+    expect(html).toContain("Validation valid");
     expect(html).not.toMatch(/filesystem|node:|fs\./i);
   });
 });

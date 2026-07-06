@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.35 | Status: Active | Last Updated: 2026-07-06
+Version: 1.36 | Status: Active | Last Updated: 2026-07-06
 
 ## 目标
 
@@ -34,50 +34,52 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 
 ## Post-M18 产品化里程碑
 
-| Milestone | 名称                      | 作用                                                             | 状态     |
-| --------- | ------------------------- | ---------------------------------------------------------------- | -------- |
-| M19       | Beta UX 产品化打磨        | 安装版入口可点击、顶部菜单中文化、主要 UI 文案中文化和空状态补齐 | Complete |
-| M20       | Search and Index UX       | 项目全文搜索、可重建本地索引、Search 视图真实结果展示            | Complete |
-| M21       | Story Bible Editing UX    | 人物、世界观、大纲、时间线和记忆的可编辑 UI 闭环                 | Complete |
-| M22       | Settings UX Completion    | 设置页模型配置、默认 profile、连接测试、隐私安全提示的可用闭环   | Complete |
-| M23       | Studio UX Completion      | Prompt/Agent/Workflow 配置资产的可选择、可编辑、可保存工作台     | Complete |
-| M24       | 工作流运行观测            | AI 工作流运行 trace、上下文、模型、token/cost 和步骤状态可见     | Complete |
-| M25       | 工作流运行历史            | 最近 AI 工作流运行历史、脱敏详情、步骤状态和本地审计记录         | Complete |
-| M26       | 工作流失败诊断与重试策略  | 失败运行记录、可解释错误原因、重试策略展示和用户触发重试入口     | Complete |
-| M27       | 安装后首次使用引导        | 欢迎页、示例项目入口、创建/打开项目引导和关键空状态行动按钮      | Complete |
-| M28       | 全局功能可用性盘点        | 高可见入口要么可用，要么明确禁用并显示中文原因                   | Complete |
-| M29       | 功能完成度盘点与命令执行  | 可见入口完成度审计、核心缺口排序、命令面板真实执行闭环           | Complete |
-| M30       | 底部面板工作区            | 底部面板 tabs 真实切换、工作流/问题/搜索/日志最小内容闭环        | Complete |
-| M31       | 搜索结果点击跳转          | 搜索结果可点击打开章节或故事圣经条目                             | Complete |
-| M32       | 时间线主视图              | 时间线入口显示真实条目列表，并可跳到故事圣经时间线编辑器         | Complete |
-| M33       | 插件管理 UI               | 设置页显示项目插件注册表、授权摘要和刷新入口                     | Complete |
-| M34       | 多标签编辑器              | 工作区章节标签可点击切换，不再显示禁用补齐提示                   | Complete |
-| M35       | 宪法差距审计与路线图重排  | 区分切片完成和产品完整，按宪法/UI 指南重排 M36+                  | Complete |
-| M36       | Workspace Layout          | Split View、面板尺寸状态和安全布局命令                           | Complete |
-| M37       | Editor Tabs               | 运行期打开标签集合、dirty 标记和关闭标签                         | Complete |
-| M38       | Autosave Recovery         | 章节编辑写入恢复记录，项目打开显示可恢复草稿提示                 | Complete |
-| M39       | Timeline Workspace        | 时间线入口显示结构化事件轨道、指标和父时间线编辑入口             | Complete |
-| M40       | Project Health            | 问题面板显示 Application 层项目健康诊断和恢复引用问题            | Complete |
-| M41       | Command Palette           | 命令面板支持搜索过滤、分组、键盘选择和执行错误反馈               | Complete |
-| M42       | Plugin Management         | 插件 manifest 摘要、权限详情和项目级启用/禁用状态管理            | Complete |
-| M43       | Provider Matrix           | 宪法要求的模型 provider 配置矩阵、schema 校验和 UI 选项覆盖      | Complete |
-| M44       | Streaming UX              | OpenAI-compatible 流式契约、delta/usage 解析和 AI 流式预览状态   | Complete |
-| M45       | Workflow Branch           | Workflow Engine branch action、分支选择和 schema 契约            | Complete |
-| M46       | Editor Hardening          | 编辑器大文档指标、gutter 渲染上限、diff 摘要和快捷键冲突矩阵     | Complete |
-| M47       | Multi-window Safety       | 本地项目锁、打开/创建前锁获取、冲突保护和健康诊断信号            | Complete |
-| M48       | Onboarding                | 工作区快速开始、示例项目、创建/打开项目和第一章行动入口          | Complete |
-| M49       | Recovery Review           | 可恢复草稿预览、应用和丢弃闭环                                   | Complete |
-| M50       | User Preferences          | onboarding dismissed、布局偏好和用户级 UI 状态持久化             | Complete |
-| M51       | Recovery Hardening        | clean recovery 隐藏、file-ref typed error 和恢复策略收口         | Complete |
-| M52       | Editor Runtime            | 编辑器 runtime 状态条、adapter/mode/autosave/shortcut 可见       | Complete |
-| M53       | Workflow UX               | Workflow rail、branch choice 和 selected branch 可视化           | Complete |
-| M54       | Plugin Runtime RFC        | 插件运行时、权限、adapter、workflow contribution 架构 RFC        | Complete |
-| M55       | Editor Runtime RFC        | CodeMirror adapter、selection、visual diff 和快捷键边界 RFC      | Complete |
-| M56       | Workflow Designer RFC     | Workflow graph、条件、Agent 分支和插件 workflow 节点 RFC         | Complete |
-| M57       | Plugin Runtime Host       | host-command runtime session、权限校验和命令面板 contribution    | Complete |
-| M58       | Plugin Workflow Adapter   | Workflow plugin step、run-plugin-step action 和 mock adapter     | Complete |
-| M59       | Editor Runtime Adapter    | textarea runtime adapter 抽取、结构化事件和 runtime props        | Complete |
-| M60       | Workflow Graph Projection | Workflow graph view model、edges 和结构化 validator              | Complete |
+| Milestone | 名称                      | 作用                                                              | 状态     |
+| --------- | ------------------------- | ----------------------------------------------------------------- | -------- |
+| M19       | Beta UX 产品化打磨        | 安装版入口可点击、顶部菜单中文化、主要 UI 文案中文化和空状态补齐  | Complete |
+| M20       | Search and Index UX       | 项目全文搜索、可重建本地索引、Search 视图真实结果展示             | Complete |
+| M21       | Story Bible Editing UX    | 人物、世界观、大纲、时间线和记忆的可编辑 UI 闭环                  | Complete |
+| M22       | Settings UX Completion    | 设置页模型配置、默认 profile、连接测试、隐私安全提示的可用闭环    | Complete |
+| M23       | Studio UX Completion      | Prompt/Agent/Workflow 配置资产的可选择、可编辑、可保存工作台      | Complete |
+| M24       | 工作流运行观测            | AI 工作流运行 trace、上下文、模型、token/cost 和步骤状态可见      | Complete |
+| M25       | 工作流运行历史            | 最近 AI 工作流运行历史、脱敏详情、步骤状态和本地审计记录          | Complete |
+| M26       | 工作流失败诊断与重试策略  | 失败运行记录、可解释错误原因、重试策略展示和用户触发重试入口      | Complete |
+| M27       | 安装后首次使用引导        | 欢迎页、示例项目入口、创建/打开项目引导和关键空状态行动按钮       | Complete |
+| M28       | 全局功能可用性盘点        | 高可见入口要么可用，要么明确禁用并显示中文原因                    | Complete |
+| M29       | 功能完成度盘点与命令执行  | 可见入口完成度审计、核心缺口排序、命令面板真实执行闭环            | Complete |
+| M30       | 底部面板工作区            | 底部面板 tabs 真实切换、工作流/问题/搜索/日志最小内容闭环         | Complete |
+| M31       | 搜索结果点击跳转          | 搜索结果可点击打开章节或故事圣经条目                              | Complete |
+| M32       | 时间线主视图              | 时间线入口显示真实条目列表，并可跳到故事圣经时间线编辑器          | Complete |
+| M33       | 插件管理 UI               | 设置页显示项目插件注册表、授权摘要和刷新入口                      | Complete |
+| M34       | 多标签编辑器              | 工作区章节标签可点击切换，不再显示禁用补齐提示                    | Complete |
+| M35       | 宪法差距审计与路线图重排  | 区分切片完成和产品完整，按宪法/UI 指南重排 M36+                   | Complete |
+| M36       | Workspace Layout          | Split View、面板尺寸状态和安全布局命令                            | Complete |
+| M37       | Editor Tabs               | 运行期打开标签集合、dirty 标记和关闭标签                          | Complete |
+| M38       | Autosave Recovery         | 章节编辑写入恢复记录，项目打开显示可恢复草稿提示                  | Complete |
+| M39       | Timeline Workspace        | 时间线入口显示结构化事件轨道、指标和父时间线编辑入口              | Complete |
+| M40       | Project Health            | 问题面板显示 Application 层项目健康诊断和恢复引用问题             | Complete |
+| M41       | Command Palette           | 命令面板支持搜索过滤、分组、键盘选择和执行错误反馈                | Complete |
+| M42       | Plugin Management         | 插件 manifest 摘要、权限详情和项目级启用/禁用状态管理             | Complete |
+| M43       | Provider Matrix           | 宪法要求的模型 provider 配置矩阵、schema 校验和 UI 选项覆盖       | Complete |
+| M44       | Streaming UX              | OpenAI-compatible 流式契约、delta/usage 解析和 AI 流式预览状态    | Complete |
+| M45       | Workflow Branch           | Workflow Engine branch action、分支选择和 schema 契约             | Complete |
+| M46       | Editor Hardening          | 编辑器大文档指标、gutter 渲染上限、diff 摘要和快捷键冲突矩阵      | Complete |
+| M47       | Multi-window Safety       | 本地项目锁、打开/创建前锁获取、冲突保护和健康诊断信号             | Complete |
+| M48       | Onboarding                | 工作区快速开始、示例项目、创建/打开项目和第一章行动入口           | Complete |
+| M49       | Recovery Review           | 可恢复草稿预览、应用和丢弃闭环                                    | Complete |
+| M50       | User Preferences          | onboarding dismissed、布局偏好和用户级 UI 状态持久化              | Complete |
+| M51       | Recovery Hardening        | clean recovery 隐藏、file-ref typed error 和恢复策略收口          | Complete |
+| M52       | Editor Runtime            | 编辑器 runtime 状态条、adapter/mode/autosave/shortcut 可见        | Complete |
+| M53       | Workflow UX               | Workflow rail、branch choice 和 selected branch 可视化            | Complete |
+| M54       | Plugin Runtime RFC        | 插件运行时、权限、adapter、workflow contribution 架构 RFC         | Complete |
+| M55       | Editor Runtime RFC        | CodeMirror adapter、selection、visual diff 和快捷键边界 RFC       | Complete |
+| M56       | Workflow Designer RFC     | Workflow graph、条件、Agent 分支和插件 workflow 节点 RFC          | Complete |
+| M57       | Plugin Runtime Host       | host-command runtime session、权限校验和命令面板 contribution     | Complete |
+| M58       | Plugin Workflow Adapter   | Workflow plugin step、run-plugin-step action 和 mock adapter      | Complete |
+| M59       | Editor Runtime Adapter    | textarea runtime adapter 抽取、结构化事件和 runtime props         | Complete |
+| M60       | Workflow Graph Projection | Workflow graph view model、edges 和结构化 validator               | Complete |
+| M61       | CodeMirror Adapter Flag   | CodeMirror runtime adapter contract、feature flag 和 parity tests | Complete |
+| M62       | Workflow Studio Graph     | workflow config snapshot graph DTO 和 Studio 只读 graph view      | Complete |
 
 ## M15 完成内容
 
@@ -385,19 +387,28 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - Workflow Engine 新增 `WorkflowValidationReport`，覆盖 missing edge target、unreachable node、missing agent/plugin metadata 和 empty branch 等结构化问题。
 - M59/M60 不包含 CodeMirror 6 adapter、selection-aware AI commands、Workflow Designer UI、graph layout persistence 或 workflow execution changes。
 
+## M61/M62 完成内容
+
+- 新增 `docs/productization/m61-m62-codemirror-workflow-graph-view.md`，明确 CodeMirror flag 与 Workflow Studio read-only graph 的实施范围。
+- Renderer editor runtime 新增 adapter resolver，默认保持 textarea；只有显式启用 `codeMirrorEnabled` 且选择 `codemirror` 时才返回 flagged CodeMirror adapter。
+- flagged CodeMirror adapter 复用 M59 的结构化 event/snapshot contract，用于后续真实 CodeMirror package parity tests；M61 不把 CodeMirror 设为默认，也不引入真实 CodeMirror 包。
+- `ConfigStudioSession` 在读取/恢复 workflow config asset 时通过 Application 层附加 `workflowGraph` DTO，renderer 不直接调用 Workflow Engine。
+- Studio bridge 将 workflow graph snapshot 映射到 UI props，`ConfigStudioPanel` 在 workflow asset 下显示只读 graph preview、node/edge 统计、edges 和 validation 状态。
+- M61/M62 不包含 selection-aware AI commands、visual diff runtime、graph node editing、inspector edits、graph layout persistence 或 workflow graph save path。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19-M60，其中 M27 首次使用引导已通过 M48 回补完成。
+- Post-M18 产品化打磨已完成 M19-M62，其中 M27 首次使用引导已通过 M48 回补完成。
 - 当前产品状态是 beta productization：主干闭环可运行，但多个宪法/UI 指南能力仍是 Product Gap。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M61 CodeMirror Adapter Flag：按 RFC-0002 在 feature flag 后加入 CodeMirror 6 adapter parity 测试。
-- M62 建议进入 Workflow Studio Graph Read-only View：按 RFC-0003 将 M60 graph projection 显示到 Studio，不保存 graph layout。
-- M63 建议进入 Plugin Runtime Sandbox RFC：为 sandboxed-code、签名、timeout teardown 和权限提示单独定稿。
+- 下一步建议进入 M63 Editor Selection Metadata：按 RFC-0002 增加 selection summary 和 selection-aware command DTO。
+- M64 建议进入 Workflow Studio Inspector Read-only：按 RFC-0003 显示 selected node inspector 和 validation detail。
+- M65 建议进入 Plugin Runtime Sandbox RFC：为 sandboxed-code、签名、timeout teardown 和权限提示单独定稿。
 
 ## 当前技术债重点
 

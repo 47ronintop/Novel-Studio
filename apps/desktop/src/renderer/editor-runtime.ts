@@ -63,12 +63,44 @@ export interface EditorRuntimeAdapter {
   mount(input: EditorRuntimeMountInput): EditorRuntimeHandle;
 }
 
+export interface EditorRuntimeResolverOptions {
+  readonly preferredRuntimeId?: "textarea" | "codemirror";
+  readonly codeMirrorEnabled?: boolean;
+}
+
 export function createTextareaEditorRuntimeAdapter(): EditorRuntimeAdapter {
-  return {
+  return createMemoryBackedEditorRuntimeAdapter({
     runtimeId: "textarea",
-    adapterLabel: "Textarea Runtime",
-    mount(input) {
-      let body = input.body;
+    adapterLabel: "Textarea Runtime"
+  });
+}
+
+export function createCodeMirrorEditorRuntimeAdapter(): EditorRuntimeAdapter {
+  return createMemoryBackedEditorRuntimeAdapter({
+    runtimeId: "codemirror",
+    adapterLabel: "CodeMirror Adapter (flagged)"
+  });
+}
+
+export function resolveEditorRuntimeAdapter(
+  options: EditorRuntimeResolverOptions = {}
+): EditorRuntimeAdapter {
+  if (options.preferredRuntimeId === "codemirror" && options.codeMirrorEnabled === true) {
+    return createCodeMirrorEditorRuntimeAdapter();
+  }
+
+  return createTextareaEditorRuntimeAdapter();
+}
+
+function createMemoryBackedEditorRuntimeAdapter(input: {
+  readonly runtimeId: string;
+  readonly adapterLabel: string;
+}): EditorRuntimeAdapter {
+  return {
+    runtimeId: input.runtimeId,
+    adapterLabel: input.adapterLabel,
+    mount(mountInput) {
+      let body = mountInput.body;
       let selection: EditorRuntimeSelection | undefined;
       let focused = false;
       let destroyed = false;
@@ -77,11 +109,11 @@ export function createTextareaEditorRuntimeAdapter(): EditorRuntimeAdapter {
       return {
         getSnapshot() {
           return {
-            runtimeId: "textarea",
-            adapterLabel: "Textarea Runtime",
+            runtimeId: input.runtimeId,
+            adapterLabel: input.adapterLabel,
             documentMode: "Markdown",
             body,
-            saveStatus: input.saveStatus,
+            saveStatus: mountInput.saveStatus,
             ...(selection === undefined ? {} : { selection }),
             focused,
             destroyed,
@@ -99,26 +131,26 @@ export function createTextareaEditorRuntimeAdapter(): EditorRuntimeAdapter {
             return;
           }
           body = nextBody;
-          input.onEvent?.({ kind: "body-changed", body: nextBody });
+          mountInput.onEvent?.({ kind: "body-changed", body: nextBody });
         },
         updateSelection(nextSelection) {
           if (destroyed) {
             return;
           }
           selection = nextSelection;
-          input.onEvent?.({ kind: "selection-changed", selection: nextSelection });
+          mountInput.onEvent?.({ kind: "selection-changed", selection: nextSelection });
         },
         requestSave() {
           if (destroyed) {
             return;
           }
-          input.onEvent?.({ kind: "save-requested" });
+          mountInput.onEvent?.({ kind: "save-requested" });
         },
         dispatchCommand(commandId) {
           if (destroyed) {
             return;
           }
-          input.onEvent?.({ kind: "command-dispatched", commandId });
+          mountInput.onEvent?.({ kind: "command-dispatched", commandId });
         },
         reportWarning(message) {
           if (destroyed) {
@@ -127,7 +159,7 @@ export function createTextareaEditorRuntimeAdapter(): EditorRuntimeAdapter {
           if (!warnings.includes(message)) {
             warnings.push(message);
           }
-          input.onEvent?.({ kind: "runtime-warning", message });
+          mountInput.onEvent?.({ kind: "runtime-warning", message });
         },
         focus() {
           if (destroyed) {

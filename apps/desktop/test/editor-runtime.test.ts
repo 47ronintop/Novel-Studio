@@ -2,7 +2,9 @@ import { describe, expect, test } from "vitest";
 
 import {
   buildChapterEditorRuntimeProps,
+  createCodeMirrorEditorRuntimeAdapter,
   createTextareaEditorRuntimeAdapter,
+  resolveEditorRuntimeAdapter,
   type EditorRuntimeEvent
 } from "../src/renderer/editor-runtime.js";
 
@@ -96,5 +98,56 @@ describe("textarea editor runtime adapter", () => {
       "Recovery draft available"
     );
     expect(events).toEqual([]);
+  });
+});
+
+describe("editor runtime adapter resolver", () => {
+  test("defaults to textarea when CodeMirror is requested without the feature flag", () => {
+    const adapter = resolveEditorRuntimeAdapter({
+      preferredRuntimeId: "codemirror",
+      codeMirrorEnabled: false
+    });
+
+    expect(adapter.runtimeId).toBe("textarea");
+    expect(adapter.adapterLabel).toBe("Textarea Runtime");
+  });
+
+  test("selects CodeMirror only when the feature flag is enabled", () => {
+    const adapter = resolveEditorRuntimeAdapter({
+      preferredRuntimeId: "codemirror",
+      codeMirrorEnabled: true
+    });
+    const events: EditorRuntimeEvent[] = [];
+    const handle = adapter.mount({
+      body: "Flagged body",
+      saveStatus: "Saved",
+      onEvent: (event) => events.push(event)
+    });
+
+    handle.dispatchBodyChange("Flagged body\nNext");
+    handle.updateSelection({ anchor: 2, head: 9 });
+
+    expect(adapter.runtimeId).toBe("codemirror");
+    expect(handle.getSnapshot()).toMatchObject({
+      runtimeId: "codemirror",
+      adapterLabel: "CodeMirror Adapter (flagged)",
+      documentMode: "Markdown",
+      body: "Flagged body\nNext"
+    });
+    expect(buildChapterEditorRuntimeProps(handle.getSnapshot())).toMatchObject({
+      adapterLabel: "CodeMirror Adapter (flagged)",
+      activeRangeLabel: "Selection 2-9"
+    });
+    expect(events).toEqual([
+      { kind: "body-changed", body: "Flagged body\nNext" },
+      { kind: "selection-changed", selection: { anchor: 2, head: 9 } }
+    ]);
+  });
+
+  test("exposes an explicit CodeMirror adapter contract for parity tests", () => {
+    const adapter = createCodeMirrorEditorRuntimeAdapter();
+
+    expect(adapter.runtimeId).toBe("codemirror");
+    expect(adapter.adapterLabel).toBe("CodeMirror Adapter (flagged)");
   });
 });

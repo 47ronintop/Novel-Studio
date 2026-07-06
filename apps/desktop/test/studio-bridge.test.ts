@@ -22,6 +22,28 @@ const promptContent = {
   updatedAt: "2026-07-05T00:00:00.000Z"
 } satisfies JsonObject;
 
+const workflowContent = {
+  schemaVersion: "1.0",
+  id: "wf_review_chapter",
+  type: "workflow.definition",
+  title: "Review current chapter",
+  status: "active",
+  entryStepId: "context",
+  steps: [
+    {
+      id: "context",
+      kind: "context",
+      nextStepId: "save"
+    },
+    {
+      id: "save",
+      kind: "save"
+    }
+  ],
+  createdAt: "2026-07-06T00:00:00.000Z",
+  updatedAt: "2026-07-06T00:00:00.000Z"
+} satisfies JsonObject;
+
 describe("M23 studio bridge", () => {
   test("loads the default prompt asset into editable Studio props", async () => {
     const calls: string[] = [];
@@ -69,6 +91,28 @@ describe("M23 studio bridge", () => {
       "studio.restoreConfigAssetVersion:prompt:prompt_reviewer_default:ver_before_save"
     );
     expect(restored.selectedAsset.title).toBe("默认审稿 Prompt");
+  });
+
+  test("maps workflow graph snapshots into Studio UI props", async () => {
+    const calls: string[] = [];
+    const bridge = createStudioBridge(createApi(calls));
+
+    const props = await bridge.selectAsset("workflow", "wf_review_chapter");
+
+    expect(calls).toContain("studio.loadConfigAsset:workflow:wf_review_chapter");
+    expect(props.selectedAsset.workflowGraph).toEqual({
+      graph: {
+        workflowId: "wf_review_chapter",
+        title: "Review current chapter",
+        entryNodeId: "context",
+        nodes: [
+          { id: "context", stepId: "context", kind: "context", label: "context", metadata: {} },
+          { id: "save", stepId: "save", kind: "save", label: "save", metadata: {} }
+        ],
+        edges: [{ id: "context:next:save", fromNodeId: "context", toNodeId: "save", kind: "next" }]
+      },
+      validation: { status: "valid", issues: [] }
+    });
   });
 });
 
@@ -192,10 +236,41 @@ function createApi(calls: string[]): NovelStudioApi {
     studio: {
       loadConfigAsset: async (assetType, assetId) => {
         calls.push(`studio.loadConfigAsset:${assetType}:${assetId}`);
+        content = assetType === "workflow" ? workflowContent : promptContent;
         const snapshot: ConfigAssetSnapshot = {
           assetType,
           assetId,
-          content
+          content,
+          ...(assetType === "workflow"
+            ? {
+                workflowGraph: {
+                  graph: {
+                    workflowId: "wf_review_chapter",
+                    title: "Review current chapter",
+                    entryNodeId: "context",
+                    nodes: [
+                      {
+                        id: "context",
+                        stepId: "context",
+                        kind: "context",
+                        label: "context",
+                        metadata: {}
+                      },
+                      { id: "save", stepId: "save", kind: "save", label: "save", metadata: {} }
+                    ],
+                    edges: [
+                      {
+                        id: "context:next:save",
+                        fromNodeId: "context",
+                        toNodeId: "save",
+                        kind: "next"
+                      }
+                    ]
+                  },
+                  validation: { status: "valid", issues: [] }
+                }
+              }
+            : {})
         };
         return ok(snapshot);
       },

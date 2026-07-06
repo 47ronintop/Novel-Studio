@@ -149,6 +149,7 @@ export type {
   ConfigCreatedBy,
   ConfigStudioSession,
   ConfigStudioSessionOptions,
+  ConfigWorkflowGraphSnapshot,
   ConfigVersionSummary
 } from "./config-studio-session.js";
 export { createConfigStudioSession } from "./config-studio-session.js";

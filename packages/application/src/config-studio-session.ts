@@ -1,4 +1,13 @@
 import type { JsonObject, Result, UnifiedError } from "@novel-studio/shared";
+import {
+  buildWorkflowGraphViewModel,
+  parseWorkflowDefinition,
+  validateWorkflowGraph
+} from "@novel-studio/workflow-engine";
+import type {
+  WorkflowGraphViewModel,
+  WorkflowValidationReport
+} from "@novel-studio/workflow-engine";
 
 export type ConfigAssetType = "prompt" | "agent" | "workflow";
 export type ConfigCreatedBy = "user" | "system" | "migration";
@@ -7,6 +16,12 @@ export interface ConfigAssetSnapshot {
   readonly assetType: ConfigAssetType;
   readonly assetId: string;
   readonly content: JsonObject;
+  readonly workflowGraph?: ConfigWorkflowGraphSnapshot;
+}
+
+export interface ConfigWorkflowGraphSnapshot {
+  readonly graph: WorkflowGraphViewModel;
+  readonly validation: WorkflowValidationReport;
 }
 
 export interface ConfigVersionSummary {
@@ -70,7 +85,8 @@ export function createConfigStudioSession(
         value: {
           assetType,
           assetId,
-          content: content.value
+          content: content.value,
+          ...workflowGraphForContent(assetType, content.value, "config-studio-load")
         }
       };
     },
@@ -90,9 +106,32 @@ export function createConfigStudioSession(
         value: {
           assetType: input.assetType,
           assetId: input.assetId,
-          content: content.value
+          content: content.value,
+          ...workflowGraphForContent(input.assetType, content.value, "config-studio-restore")
         }
       };
+    }
+  };
+}
+
+function workflowGraphForContent(
+  assetType: ConfigAssetType,
+  content: JsonObject,
+  traceId: string
+): { readonly workflowGraph: ConfigWorkflowGraphSnapshot } | Record<string, never> {
+  if (assetType !== "workflow") {
+    return {};
+  }
+
+  const parsed = parseWorkflowDefinition(content, { traceId });
+  if (!parsed.ok) {
+    return {};
+  }
+
+  return {
+    workflowGraph: {
+      graph: buildWorkflowGraphViewModel(parsed.value),
+      validation: validateWorkflowGraph(parsed.value)
     }
   };
 }
