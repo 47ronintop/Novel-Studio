@@ -35,6 +35,7 @@ export interface StudioBridge {
   load(): Promise<ConfigStudioPanelProps>;
   selectAsset(assetType: ConfigAssetType, assetId: string): Promise<ConfigStudioPanelProps>;
   updateContent(nextContent: string): ConfigStudioPanelProps;
+  selectWorkflowNode(nodeId: string): ConfigStudioPanelProps;
   applyWorkflowNodeEdit(edit: ConfigWorkflowNodeInspectorEdit): ConfigStudioPanelProps;
   beginSave(): ConfigStudioPanelProps;
   save(): Promise<ConfigStudioPanelProps>;
@@ -49,6 +50,7 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
   let versions: readonly ConfigStudioVersionEntry[] = [];
   let status: ConfigStudioPanelProps["status"] = "idle";
   let feedback: ConfigStudioPanelProps["feedback"] | undefined;
+  let selectedWorkflowNodeId: string | undefined;
 
   return {
     getProps: () => toProps(),
@@ -59,6 +61,7 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
       selectedAssetType = assetType;
       selectedAssetId = assetId;
       versions = [];
+      selectedWorkflowNodeId = undefined;
       return loadSelectedAsset("配置资产已加载。");
     },
     updateContent(nextContent) {
@@ -69,6 +72,13 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
       };
       status = "idle";
       feedback = undefined;
+      return toProps();
+    },
+    selectWorkflowNode(nodeId) {
+      if (selectedAsset.workflowGraph?.graph.nodes.some((node) => node.id === nodeId) === true) {
+        selectedWorkflowNodeId = nodeId;
+        feedback = undefined;
+      }
       return toProps();
     },
     applyWorkflowNodeEdit(edit) {
@@ -102,11 +112,24 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
           result.value.workflowGraph.validation.status === "invalid" ? "invalid" : "dirty",
         workflowGraph: result.value.workflowGraph
       };
+      selectedWorkflowNodeId = selectedWorkflowNodeIdForGraph(
+        result.value.workflowGraph,
+        selectedWorkflowNodeId ?? edit.stepId
+      );
       status = "idle";
       feedback = undefined;
       return toProps();
     },
     beginSave() {
+      if (workflowGraphInvalid(selectedAsset)) {
+        status = "error";
+        feedback = {
+          kind: "error",
+          message: "Workflow graph validation failed. Fix validation issues before saving."
+        };
+        return toProps();
+      }
+
       status = "saving";
       feedback = { kind: "info", message: "正在保存配置资产..." };
       return toProps();
@@ -117,6 +140,15 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
         status = "error";
         selectedAsset = { ...selectedAsset, validationStatus: "invalid" };
         feedback = { kind: "error", message: "JSON 格式无效，修正后才能保存。" };
+        return toProps();
+      }
+
+      if (workflowGraphInvalid(selectedAsset)) {
+        status = "error";
+        feedback = {
+          kind: "error",
+          message: "Workflow graph validation failed. Fix validation issues before saving."
+        };
         return toProps();
       }
 
@@ -177,6 +209,10 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
         result.value.content,
         result.value.workflowGraph
       );
+      selectedWorkflowNodeId = selectedWorkflowNodeIdForGraph(
+        result.value.workflowGraph,
+        selectedWorkflowNodeId
+      );
       status = "saved";
       feedback = { kind: "info", message: "配置版本已恢复。" };
       return toProps();
@@ -198,6 +234,10 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
       result.value.content,
       result.value.workflowGraph
     );
+    selectedWorkflowNodeId = selectedWorkflowNodeIdForGraph(
+      result.value.workflowGraph,
+      selectedWorkflowNodeId
+    );
     status = "idle";
     feedback = { kind: "info", message: successMessage };
     return toProps();
@@ -210,8 +250,10 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
       versions,
       status,
       ...(feedback === undefined ? {} : { feedback }),
+      ...(selectedWorkflowNodeId === undefined ? {} : { selectedWorkflowNodeId }),
       onAssetSelect: () => undefined,
       onContentChange: () => undefined,
+      onWorkflowNodeSelect: () => undefined,
       onSave: () => undefined,
       onRestoreVersion: () => undefined
     };
@@ -226,6 +268,28 @@ function emptySelectedAsset(): ConfigStudioAsset {
     validationStatus: "dirty",
     content: "{}"
   };
+}
+
+function workflowGraphInvalid(asset: ConfigStudioAsset): boolean {
+  return asset.workflowGraph?.validation.status === "invalid";
+}
+
+function selectedWorkflowNodeIdForGraph(
+  workflowGraph: ConfigStudioAsset["workflowGraph"],
+  preferredNodeId: string | undefined
+): string | undefined {
+  if (workflowGraph === undefined) {
+    return undefined;
+  }
+
+  if (
+    preferredNodeId !== undefined &&
+    workflowGraph.graph.nodes.some((node) => node.id === preferredNodeId)
+  ) {
+    return preferredNodeId;
+  }
+
+  return workflowGraph.graph.entryNodeId;
 }
 
 function assetFromSnapshot(

@@ -141,6 +141,30 @@ describe("M23 studio bridge", () => {
     });
     expect(calls).not.toContain("studio.saveConfigAsset:workflow:wf_review_chapter");
   });
+
+  test("selects workflow graph nodes and blocks invalid workflow saves before preload", async () => {
+    const calls: string[] = [];
+    const bridge = createStudioBridge(createApi(calls));
+
+    await bridge.selectAsset("workflow", "wf_review_chapter");
+    const selected = bridge.selectWorkflowNode("save");
+    const invalid = bridge.applyWorkflowNodeEdit({
+      stepId: "save",
+      nextStepId: "missing"
+    });
+    const saving = bridge.beginSave();
+    const saved = await bridge.save();
+
+    expect(selected.selectedWorkflowNodeId).toBe("save");
+    expect(invalid.selectedWorkflowNodeId).toBe("save");
+    expect(saving.status).toBe("error");
+    expect(saving.feedback).toEqual({
+      kind: "error",
+      message: "Workflow graph validation failed. Fix validation issues before saving."
+    });
+    expect(saved.status).toBe("error");
+    expect(calls).not.toContain("studio.saveConfigAsset:workflow:wf_review_chapter");
+  });
 });
 
 function createApi(calls: string[]): NovelStudioApi {

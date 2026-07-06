@@ -184,6 +184,7 @@ describe("M8 Settings and Studio UI", () => {
             }
           }
         }}
+        selectedWorkflowNodeId="save"
         versions={[
           {
             versionId: "ver_before_save",
@@ -194,6 +195,7 @@ describe("M8 Settings and Studio UI", () => {
         status="idle"
         onAssetSelect={() => undefined}
         onContentChange={() => undefined}
+        onWorkflowNodeSelect={() => undefined}
         onSave={() => undefined}
         onRestoreVersion={() => undefined}
       />
@@ -213,14 +215,17 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).toContain('aria-label="Workflow graph preview"');
     expect(html).toContain("Nodes 2");
     expect(html).toContain("Edges 1");
+    expect(html).toContain('aria-label="Select workflow node context"');
+    expect(html).toContain('aria-label="Select workflow node save"');
+    expect(html).toContain('data-selected-node="true"');
     expect(html).toContain("context → save");
     expect(html).toContain("Validation invalid");
     expect(html).toContain('aria-label="Workflow node inspector"');
-    expect(html).toContain("Selected node context");
-    expect(html).toContain("Kind context");
+    expect(html).toContain("Selected node save");
+    expect(html).toContain("Kind save");
     expect(html).toContain('aria-label="Workflow node next step"');
     expect(html).toContain('name="nextStepId"');
-    expect(html).toContain("Outgoing context → save");
+    expect(html).toContain("Incoming context → save");
     expect(html).toContain("WORKFLOW_GRAPH_NODE_UNREACHABLE");
     expect(html).toContain("Workflow step is not reachable from the entry step.");
     expect(html).not.toMatch(/filesystem|node:|fs\./i);

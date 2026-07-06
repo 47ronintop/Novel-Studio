@@ -137,9 +137,17 @@ export type {
   PluginRuntimeResult,
   PluginRuntimeSession,
   PluginRuntimeSessionOptions,
-  PluginRuntimeWorkflowStepInput
+  PluginRuntimeWorkflowStepInput,
+  PluginSandboxDeniedCapability,
+  PluginSandboxPolicyDecision,
+  PluginSandboxPolicyInput,
+  PluginSandboxPolicyReport,
+  PluginSandboxTrustState
 } from "./plugin-runtime-session.js";
-export { createPluginRuntimeSession } from "./plugin-runtime-session.js";
+export {
+  createPluginRuntimeSession,
+  createPluginSandboxPolicyReport
+} from "./plugin-runtime-session.js";
 export type {
   ConfigAssetPort,
   ConfigAssetRestoreInput,

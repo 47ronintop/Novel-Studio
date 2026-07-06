@@ -9,6 +9,9 @@ const PROJECT_SCOPE = "project";
 
 type PluginContributionKind = "command" | "workflow-step";
 type PluginRuntimePermission = "project:read" | "workflow:invoke";
+export type PluginSandboxTrustState = "trusted-local" | "signed" | "untrusted";
+export type PluginSandboxDeniedCapability =
+  "asset:write" | "network:access" | "model:invoke" | "shell:execute";
 
 export interface PluginRuntimeCommandInput {
   readonly commandId: string;
@@ -41,6 +44,29 @@ export interface PluginRuntimeAdapterResult {
 
 export interface PluginRuntimeResult {
   readonly output: JsonObject;
+}
+
+export interface PluginSandboxPolicyInput {
+  readonly snapshot: PluginSettingsSnapshot;
+  readonly timeoutMs?: number;
+  readonly maxOutputBytes?: number;
+  readonly trustOverrides?: Readonly<Record<string, PluginSandboxTrustState>>;
+}
+
+export interface PluginSandboxPolicyDecision {
+  readonly pluginId: string;
+  readonly mode: "sandboxed-code";
+  readonly allowed: boolean;
+  readonly trustState: PluginSandboxTrustState;
+  readonly timeoutMs: number;
+  readonly maxOutputBytes: number;
+  readonly deniedCapabilities: readonly PluginSandboxDeniedCapability[];
+  readonly reasons: readonly string[];
+}
+
+export interface PluginSandboxPolicyReport {
+  readonly schemaVersion: "1.0";
+  readonly decisions: readonly PluginSandboxPolicyDecision[];
 }
 
 export interface PluginRuntimeAdapter {
@@ -161,6 +187,41 @@ export function createPluginRuntimeSession(
   };
 }
 
+export function createPluginSandboxPolicyReport(
+  input: PluginSandboxPolicyInput
+): PluginSandboxPolicyReport {
+  const timeoutMs = input.timeoutMs ?? 2000;
+  const maxOutputBytes = input.maxOutputBytes ?? 32768;
+
+  return {
+    schemaVersion: "1.0",
+    decisions: input.snapshot.plugins.map((entry) => {
+      const trustState = input.trustOverrides?.[entry.pluginId] ?? defaultTrustState(entry);
+      const deniedCapabilities = deniedSandboxCapabilities(entry);
+      const reasons = [
+        "Sandboxed code execution is disabled until an isolated worker is implemented.",
+        ...(trustState === "untrusted"
+          ? ["Plugin package is not trusted for code execution."]
+          : []),
+        ...deniedCapabilities.map(
+          (capability) => `Plugin requests denied sandbox capability ${capability}.`
+        )
+      ];
+
+      return {
+        pluginId: entry.pluginId,
+        mode: "sandboxed-code",
+        allowed: false,
+        trustState,
+        timeoutMs,
+        maxOutputBytes,
+        deniedCapabilities,
+        reasons
+      };
+    })
+  };
+}
+
 function toPluginCommandId(pluginId: string, contributionId: string): string {
   return `${PLUGIN_COMMAND_PREFIX}${pluginId}:${contributionId}`;
 }
@@ -272,6 +333,33 @@ function hasPermission(
   scope: string
 ): boolean {
   return grants.some((grant) => grant.permission === permission && grant.scopes.includes(scope));
+}
+
+function defaultTrustState(entry: PluginSettingsEntry): PluginSandboxTrustState {
+  return entry.manifestStatus === "valid" && entry.enabled ? "trusted-local" : "untrusted";
+}
+
+function deniedSandboxCapabilities(
+  entry: PluginSettingsEntry
+): readonly PluginSandboxDeniedCapability[] {
+  const denied = new Set<PluginSandboxDeniedCapability>();
+
+  for (const grant of entry.manifest?.requestedPermissions ?? []) {
+    if (isDeniedSandboxCapability(grant.permission)) {
+      denied.add(grant.permission);
+    }
+  }
+
+  return [...denied];
+}
+
+function isDeniedSandboxCapability(value: string): value is PluginSandboxDeniedCapability {
+  return (
+    value === "asset:write" ||
+    value === "network:access" ||
+    value === "model:invoke" ||
+    value === "shell:execute"
+  );
 }
 
 function normalizeAdapterResult(

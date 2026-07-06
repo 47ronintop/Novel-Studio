@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import { ok } from "@novel-studio/shared";
 
 import {
+  createPluginSandboxPolicyReport,
   createPluginRuntimeSession,
   type PluginRuntimeAdapter
 } from "../src/plugin-runtime-session.js";
@@ -44,6 +45,10 @@ const enabledSnapshot: PluginSettingsSnapshot = {
 const enabledPlugin = enabledSnapshot.plugins[0];
 if (enabledPlugin === undefined) {
   throw new Error("Plugin runtime fixture must include a plugin.");
+}
+const enabledManifest = enabledPlugin.manifest;
+if (enabledManifest === undefined) {
+  throw new Error("Plugin runtime fixture must include a manifest.");
 }
 
 describe("PluginRuntimeSession", () => {
@@ -185,6 +190,52 @@ describe("PluginRuntimeSession", () => {
         code: "PLUGIN_RUNTIME_INVALID_OUTPUT",
         category: "PluginError"
       }
+    });
+  });
+
+  test("reports denied-by-default sandbox policy decisions without executing plugin code", () => {
+    const report = createPluginSandboxPolicyReport({
+      snapshot: {
+        ...enabledSnapshot,
+        plugins: [
+          {
+            ...enabledPlugin,
+            manifest: {
+              ...enabledManifest,
+              entryKind: "local-process",
+              requestedPermissions: [
+                ...enabledManifest.requestedPermissions,
+                { permission: "network:access", scopes: ["https://api.example.com"] }
+              ]
+            }
+          }
+        ]
+      },
+      timeoutMs: 3000,
+      maxOutputBytes: 4096,
+      trustOverrides: {
+        "novel.structure-tools": "untrusted"
+      }
+    });
+
+    expect(report).toEqual({
+      schemaVersion: "1.0",
+      decisions: [
+        {
+          pluginId: "novel.structure-tools",
+          mode: "sandboxed-code",
+          allowed: false,
+          trustState: "untrusted",
+          timeoutMs: 3000,
+          maxOutputBytes: 4096,
+          deniedCapabilities: ["network:access"],
+          reasons: [
+            "Sandboxed code execution is disabled until an isolated worker is implemented.",
+            "Plugin package is not trusted for code execution.",
+            "Plugin requests denied sandbox capability network:access."
+          ]
+        }
+      ]
     });
   });
 });

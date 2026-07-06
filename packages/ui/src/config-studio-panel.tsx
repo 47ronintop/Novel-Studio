@@ -41,8 +41,10 @@ export interface ConfigStudioPanelProps {
   readonly versions: readonly ConfigStudioVersionEntry[];
   readonly status: ConfigStudioStatus;
   readonly feedback?: { readonly kind: "info" | "error"; readonly message: string };
+  readonly selectedWorkflowNodeId?: string;
   readonly onAssetSelect?: (assetType: ConfigStudioAssetType, assetId: string) => void;
   readonly onContentChange?: (nextContent: string) => void;
+  readonly onWorkflowNodeSelect?: (nodeId: string) => void;
   readonly onWorkflowNodeEdit?: (edit: ConfigStudioWorkflowNodeEdit) => void;
   readonly onSave?: () => void;
   readonly onRestoreVersion?: (versionId: string) => void;
@@ -54,12 +56,19 @@ export function ConfigStudioPanel({
   versions,
   status,
   feedback,
+  selectedWorkflowNodeId,
   onAssetSelect,
   onContentChange,
+  onWorkflowNodeSelect,
   onWorkflowNodeEdit,
   onSave,
   onRestoreVersion
 }: ConfigStudioPanelProps) {
+  const saveDisabled =
+    status === "saving" ||
+    selectedAsset.validationStatus === "invalid" ||
+    selectedAsset.workflowGraph?.validation.status === "invalid";
+
   return (
     <section className="config-studio-panel" aria-label="创作系统工作台">
       <header className="config-studio-header">
@@ -111,7 +120,7 @@ export function ConfigStudioPanel({
             <span>{validationLabel(selectedAsset.validationStatus)}</span>
             <button
               className="ns-icon-text-button"
-              disabled={status === "saving" || selectedAsset.validationStatus === "invalid"}
+              disabled={saveDisabled}
               type="button"
               aria-label="保存配置资产"
               onClick={() => onSave?.()}
@@ -134,6 +143,8 @@ export function ConfigStudioPanel({
           {selectedAsset.workflowGraph === undefined ? null : (
             <WorkflowGraphPreview
               workflowGraph={selectedAsset.workflowGraph}
+              {...(selectedWorkflowNodeId === undefined ? {} : { selectedWorkflowNodeId })}
+              {...(onWorkflowNodeSelect === undefined ? {} : { onWorkflowNodeSelect })}
               {...(onWorkflowNodeEdit === undefined ? {} : { onWorkflowNodeEdit })}
             />
           )}
@@ -177,11 +188,17 @@ function validationLabel(status: ConfigValidationStatus): string {
 
 function WorkflowGraphPreview({
   workflowGraph,
+  selectedWorkflowNodeId,
+  onWorkflowNodeSelect,
   onWorkflowNodeEdit
 }: {
   readonly workflowGraph: ConfigWorkflowGraphSnapshot;
+  readonly selectedWorkflowNodeId?: string;
+  readonly onWorkflowNodeSelect?: (nodeId: string) => void;
   readonly onWorkflowNodeEdit?: (edit: ConfigStudioWorkflowNodeEdit) => void;
 }) {
+  const activeNodeId = selectedWorkflowNodeId ?? workflowGraph.graph.entryNodeId;
+
   return (
     <section className="config-studio-workflow-graph" aria-label="Workflow graph preview">
       <header>
@@ -195,8 +212,15 @@ function WorkflowGraphPreview({
       <ol aria-label="Workflow graph nodes">
         {workflowGraph.graph.nodes.map((node) => (
           <li key={node.id}>
-            <span>{node.label}</span>
-            <span>{node.kind}</span>
+            <button
+              aria-label={`Select workflow node ${node.id}`}
+              data-selected-node={node.id === activeNodeId}
+              onClick={() => onWorkflowNodeSelect?.(node.id)}
+              type="button"
+            >
+              <span>{node.label}</span>
+              <span>{node.kind}</span>
+            </button>
           </li>
         ))}
       </ol>
@@ -218,6 +242,7 @@ function WorkflowGraphPreview({
       )}
       <WorkflowNodeInspector
         workflowGraph={workflowGraph}
+        selectedWorkflowNodeId={activeNodeId}
         {...(onWorkflowNodeEdit === undefined ? {} : { onWorkflowNodeEdit })}
       />
     </section>
@@ -226,12 +251,15 @@ function WorkflowGraphPreview({
 
 function WorkflowNodeInspector({
   workflowGraph,
+  selectedWorkflowNodeId,
   onWorkflowNodeEdit
 }: {
   readonly workflowGraph: ConfigWorkflowGraphSnapshot;
+  readonly selectedWorkflowNodeId?: string;
   readonly onWorkflowNodeEdit?: (edit: ConfigStudioWorkflowNodeEdit) => void;
 }) {
   const selectedNode =
+    workflowGraph.graph.nodes.find((node) => node.id === selectedWorkflowNodeId) ??
     workflowGraph.graph.nodes.find((node) => node.id === workflowGraph.graph.entryNodeId) ??
     workflowGraph.graph.nodes[0];
 

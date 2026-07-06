@@ -901,6 +901,19 @@ export function App() {
     [studioBridge]
   );
 
+  const handleStudioWorkflowNodeSelect = useCallback<
+    NonNullable<ConfigStudioPanelProps["onWorkflowNodeSelect"]>
+  >(
+    (nodeId) => {
+      if (studioBridge === undefined) {
+        return;
+      }
+
+      setStudio(studioBridge.selectWorkflowNode(nodeId));
+    },
+    [studioBridge]
+  );
+
   const handleStudioWorkflowNodeEdit = useCallback<
     NonNullable<ConfigStudioPanelProps["onWorkflowNodeEdit"]>
   >(
@@ -1035,6 +1048,7 @@ export function App() {
               ...studio,
               onAssetSelect: handleStudioAssetSelect,
               onContentChange: handleStudioContentChange,
+              onWorkflowNodeSelect: handleStudioWorkflowNodeSelect,
               onWorkflowNodeEdit: handleStudioWorkflowNodeEdit,
               onSave: handleStudioSave,
               onRestoreVersion: handleStudioRestoreVersion
