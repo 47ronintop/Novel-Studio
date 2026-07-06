@@ -72,8 +72,9 @@
 - 完成 M52/M53 Editor Runtime 与 Workflow UX：章节编辑器新增 runtime 状态条并由 renderer 注入 adapter/mode/autosave/shortcut 状态；AI workflow observability 和 history detail 新增 workflow rail、branch choice 与 selected branch 展示。
 - 完成 M54-M56 RFC 批次：新增 Plugin Runtime、Editor Runtime Engine 和 Workflow Designer 三份 accepted RFC，明确插件运行时 adapter、CodeMirror 迁移边界、workflow graph projection、权限、安全、测试和后续 M57+ 落地顺序。
 - 完成 M57/M58 Plugin Runtime Host Commands 与 Plugin Workflow Step Adapter：新增 Application PluginRuntimeSession、plugin command contribution listing/execution、Command Palette disabled reason 展示、Workflow Engine `plugin` step 与 `run-plugin-step` action，以及 mockable workflow-step adapter 边界；仍不执行任意第三方插件代码。
+- 完成 M59/M60 Editor Runtime Adapter 与 Workflow Graph Projection：新增 renderer textarea runtime adapter、结构化 editor runtime events、runtime props 派生模块，以及 Workflow Engine graph view model、next/branch/default edges 和结构化 validation report；仍不启用 CodeMirror 或 Workflow Designer UI。
 
 ## Notes
 
 - Phase 7 当前定义的 M0-M18 已完成。
-- 当前已完成 Post-M18 M19-M58；M27 安装后首次使用引导缺口已通过 M48 回补；未经用户确认不得 push。
+- 当前已完成 Post-M18 M19-M60；M27 安装后首次使用引导缺口已通过 M48 回补；未经用户确认不得 push。

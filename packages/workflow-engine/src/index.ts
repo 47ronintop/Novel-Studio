@@ -6,6 +6,19 @@ export {
   parseWorkflowDefinition,
   startWorkflowRun
 } from "./workflow-engine.js";
+export { buildWorkflowGraphViewModel, validateWorkflowGraph } from "./workflow-graph.js";
+export type {
+  WorkflowGraphEdge,
+  WorkflowGraphEdgeKind,
+  WorkflowGraphIssueCode,
+  WorkflowGraphIssueSeverity,
+  WorkflowGraphNode,
+  WorkflowGraphNodeMetadata,
+  WorkflowGraphValidationIssue,
+  WorkflowGraphValidationStatus,
+  WorkflowGraphViewModel,
+  WorkflowValidationReport
+} from "./workflow-graph.js";
 export type {
   ParseWorkflowOptions,
   StartWorkflowRunInput,

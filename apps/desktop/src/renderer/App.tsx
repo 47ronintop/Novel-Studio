@@ -35,6 +35,7 @@ import { createStoryBibleBridge } from "./story-bible-bridge.js";
 import { createSettingsBridge } from "./settings-bridge.js";
 import { createStudioBridge } from "./studio-bridge.js";
 import { reduceRendererShortcut } from "./shortcuts.js";
+import { createTextareaChapterEditorRuntimeProps } from "./editor-runtime.js";
 
 declare global {
   interface Window {
@@ -1151,19 +1152,8 @@ function applyShellPreferences(
 }
 
 function createChapterEditorRuntime(chapterEditor: ChapterEditorProps): ChapterEditorRuntimeProps {
-  const lineCount =
-    chapterEditor.chapter.body.length === 0 ? 1 : chapterEditor.chapter.body.split("\n").length;
-  const warnings = lineCount > 200 ? ["Large document optimizations active"] : [];
-
-  return {
-    adapterLabel: "Textarea Runtime",
-    documentMode: "Markdown",
-    activeRangeLabel: `Lines 1-${Math.max(1, Math.min(lineCount, 120))}`,
-    autosaveLabel:
-      chapterEditor.saveStatus === "Recovery available"
-        ? "Recovery draft available"
-        : "Autosave armed",
-    shortcutProfileLabel: "Default shortcuts",
-    warnings
-  };
+  return createTextareaChapterEditorRuntimeProps({
+    body: chapterEditor.chapter.body,
+    saveStatus: chapterEditor.saveStatus
+  });
 }
