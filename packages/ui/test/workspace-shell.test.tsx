@@ -688,6 +688,74 @@ describe("WorkspaceShell", () => {
     expect(html).toContain('data-dirty="true"');
   });
 
+  test("renders recovery review preview, apply, and discard actions", () => {
+    const application = createDesktopApplication();
+    const calls: string[] = [];
+    const tree = WorkspaceShell({
+      shellState: application.getShellState(),
+      commands: application.listCommands(),
+      commandPaletteOpen: false,
+      projectWorkflow: {
+        projectRootInput: "D:/Novel/M49",
+        chapters: [
+          {
+            id: "ch_opening",
+            title: "Opening",
+            order: 1,
+            status: "draft",
+            updatedAt: "2026-07-04T00:00:00.000Z"
+          }
+        ],
+        openChapterTabIds: ["ch_opening"],
+        dirtyChapterIds: ["ch_opening"],
+        activeChapterId: "ch_opening",
+        recovery: {
+          availableItems: [
+            {
+              sessionId: "session_prj_m49_ch_opening",
+              chapterId: "ch_opening",
+              updatedAt: "2026-07-06T00:05:00.000Z"
+            }
+          ],
+          review: {
+            status: "idle",
+            selectedDraft: {
+              sessionId: "session_prj_m49_ch_opening",
+              chapterId: "ch_opening",
+              chapterTitle: "Opening",
+              updatedAt: "2026-07-06T00:05:00.000Z",
+              body: "unsaved recovered opening\n"
+            }
+          }
+        },
+        onProjectRootChange: () => undefined,
+        onOpenProject: () => undefined,
+        onCreateProject: () => undefined,
+        onCreateChapter: () => undefined,
+        onSelectChapter: () => undefined,
+        onPreviewRecoveryDraft: (sessionId) => calls.push(`preview:${sessionId}`),
+        onApplyRecoveryDraft: (sessionId) => calls.push(`apply:${sessionId}`),
+        onDiscardRecoveryDraft: (sessionId) => calls.push(`discard:${sessionId}`)
+      }
+    });
+
+    findElementByAriaLabel(tree, "预览恢复草稿：Opening")?.props.onClick?.();
+    findElementByAriaLabel(tree, "应用恢复草稿：Opening")?.props.onClick?.();
+    findElementByAriaLabel(tree, "丢弃恢复草稿：Opening")?.props.onClick?.();
+
+    expect(calls).toEqual([
+      "preview:session_prj_m49_ch_opening",
+      "apply:session_prj_m49_ch_opening",
+      "discard:session_prj_m49_ch_opening"
+    ]);
+
+    const html = renderToStaticMarkup(tree);
+    expect(html).toContain('aria-label="恢复草稿预览"');
+    expect(html).toContain("unsaved recovered opening");
+    expect(html).toContain("应用恢复草稿");
+    expect(html).toContain("丢弃恢复草稿");
+  });
+
   test("renders Story Bible summaries and context eligibility", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(

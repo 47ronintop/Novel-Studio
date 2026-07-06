@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.29 | Status: Active | Last Updated: 2026-07-06
+Version: 1.30 | Status: Active | Last Updated: 2026-07-06
 
 ## 目标
 
@@ -66,6 +66,7 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M46       | Editor Hardening         | 编辑器大文档指标、gutter 渲染上限、diff 摘要和快捷键冲突矩阵     | Complete |
 | M47       | Multi-window Safety      | 本地项目锁、打开/创建前锁获取、冲突保护和健康诊断信号            | Complete |
 | M48       | Onboarding               | 工作区快速开始、示例项目、创建/打开项目和第一章行动入口          | Complete |
+| M49       | Recovery Review          | 可恢复草稿预览、应用和丢弃闭环                                   | Complete |
 
 ## M15 完成内容
 
@@ -323,18 +324,27 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - `ProjectWorkflowBridge.createExampleProject()` 通过现有 preload/API 创建本地示例项目和示例章节。
 - Electron E2E 覆盖从 onboarding 创建示例项目并验证示例章节正文落盘。
 
+## M49 完成内容
+
+- 新增 `docs/productization/m49-recovery-review.md`，明确 chapter recovery review 的范围、数据流和非目标。
+- `ProjectWorkspaceSession` 新增 recovery draft preview/apply/discard 命令；apply 返回 project workflow 与 chapter editor snapshot，避免 renderer 重新读取磁盘覆盖未保存恢复稿。
+- Desktop IPC/preload 增加三个 allowlisted project recovery channel，继续经 Application 层访问 recovery。
+- `WorkspaceShell` 的 autosave recovery notice 增加预览、应用和丢弃按钮，并显示恢复草稿正文预览。
+- Electron E2E 覆盖从磁盘 dirty recovery record 打开项目、预览、应用、保存并验证章节正文落盘。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19-M48，其中 M27 首次使用引导已通过 M48 回补完成。
+- Post-M18 产品化打磨已完成 M19-M49，其中 M27 首次使用引导已通过 M48 回补完成。
 - 当前产品状态是 beta productization：主干闭环可运行，但多个宪法/UI 指南能力仍是 Product Gap。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M49 Recovery Review：补齐可恢复草稿的预览、应用和丢弃闭环。
-- M49 之后继续按 `docs/productization/m35-constitution-gap-audit.md` 的 Product Ready 口径推进，不再把切片完成误写成产品完整。
+- 下一步建议进入 M50 User Preferences：持久化 onboarding dismissed、布局偏好和用户级 UI 状态。
+- M51 建议进入 Recovery Hardening：补 file-ref recovery、恢复记录归档/清理策略和 stale-lock recovery UI。
+- M52 建议进入 Editor Runtime：评估 CodeMirror 6、完整 visual diff editor 和用户可编辑快捷键注册表。
 
 ## 当前技术债重点
 

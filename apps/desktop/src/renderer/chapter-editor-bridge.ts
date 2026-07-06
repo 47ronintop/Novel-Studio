@@ -81,7 +81,7 @@ async function unwrap<T>(promise: Promise<Result<T, UnifiedError>>): Promise<T> 
   throw new Error(result.error.message);
 }
 
-function toChapterEditorProps(snapshot: ChapterEditorSnapshot): ChapterEditorProps {
+export function toChapterEditorProps(snapshot: ChapterEditorSnapshot): ChapterEditorProps {
   return {
     chapter: snapshot.state.chapter,
     dirty: snapshot.state.dirty,

@@ -1,10 +1,11 @@
 import { describe, expect, test } from "vitest";
 
-import { ok, type Result, type UnifiedError } from "@novel-studio/shared";
+import { ok, type ChapterDocument, type Result, type UnifiedError } from "@novel-studio/shared";
 import type {
   ApplicationCommand,
   DesktopApplication,
   DesktopShellState,
+  ProjectRecoveryDraftPreview,
   ProjectWorkspaceSnapshot
 } from "@novel-studio/application";
 
@@ -62,6 +63,39 @@ const workspaceSnapshot: ProjectWorkspaceSnapshot = {
   activeChapterId: "ch_opening"
 };
 
+const recoveryPreview: ProjectRecoveryDraftPreview = {
+  sessionId: "session_prj_m49_ch_opening",
+  chapterId: "ch_opening",
+  chapterTitle: "开篇",
+  updatedAt: "2026-07-06T00:05:00.000Z",
+  body: "恢复草稿正文\n"
+};
+
+const recoveredChapter: ChapterDocument = {
+  frontmatter: {
+    schemaVersion: "1.0",
+    id: "ch_opening",
+    title: "开篇",
+    order: 1,
+    status: "draft",
+    createdAt: "2026-07-04T00:00:00.000Z",
+    updatedAt: "2026-07-06T00:05:00.000Z"
+  },
+  body: "恢复草稿正文\n"
+};
+
+const recoveryApplyResult = {
+  workspace: workspaceSnapshot,
+  chapterEditor: {
+    state: {
+      chapter: recoveredChapter,
+      dirty: true,
+      saveStatus: "Unsaved" as const
+    },
+    versions: []
+  }
+};
+
 describe("M12 project workflow IPC", () => {
   test("exposes project workflow commands through preload without renderer filesystem access", async () => {
     const calls: string[] = [];
@@ -84,12 +118,18 @@ describe("M12 project workflow IPC", () => {
       title: "开篇"
     });
     await api.project.selectChapter("ch_opening");
+    await api.project.previewRecoveryDraft("session_prj_m49_ch_opening");
+    await api.project.applyRecoveryDraft("session_prj_m49_ch_opening");
+    await api.project.discardRecoveryDraft("session_prj_m49_ch_opening");
 
     expect(calls).toEqual([
       "application:project:open:1",
       "application:project:create:1",
       "application:project:create-chapter:1",
-      "application:project:select-chapter:1"
+      "application:project:select-chapter:1",
+      "application:project:preview-recovery-draft:1",
+      "application:project:apply-recovery-draft:1",
+      "application:project:discard-recovery-draft:1"
     ]);
   });
 
@@ -117,6 +157,15 @@ describe("M12 project workflow IPC", () => {
     await expect(handlers["application:project:select-chapter"]("ch_opening")).resolves.toEqual(
       ok(workspaceSnapshot)
     );
+    await expect(
+      handlers["application:project:preview-recovery-draft"]("session_prj_m49_ch_opening")
+    ).resolves.toEqual(ok(recoveryPreview));
+    await expect(
+      handlers["application:project:apply-recovery-draft"]("session_prj_m49_ch_opening")
+    ).resolves.toEqual(ok(recoveryApplyResult));
+    await expect(
+      handlers["application:project:discard-recovery-draft"]("session_prj_m49_ch_opening")
+    ).resolves.toEqual(ok(workspaceSnapshot));
   });
 });
 
@@ -130,6 +179,9 @@ function createFakeApplication(): DesktopApplication {
     listProjectChapters: () => Promise.resolve(ok(workspaceSnapshot.chapters)),
     createProjectChapter: () => Promise.resolve(ok(workspaceSnapshot)),
     selectProjectChapter: () => Promise.resolve(ok(workspaceSnapshot)),
+    previewRecoveryDraft: () => Promise.resolve(ok(recoveryPreview)),
+    applyRecoveryDraft: () => Promise.resolve(ok(recoveryApplyResult)),
+    discardRecoveryDraft: () => Promise.resolve(ok(workspaceSnapshot)),
     loadActiveChapter: unsupported,
     editActiveChapter: unsupported,
     saveActiveChapter: unsupported,

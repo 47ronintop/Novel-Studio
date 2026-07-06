@@ -471,6 +471,47 @@ export function App() {
     [projectWorkflowBridge, refreshProjectWorkflow]
   );
 
+  const handlePreviewRecoveryDraft = useCallback(
+    (sessionId: string) => {
+      if (projectWorkflowBridge === undefined) {
+        return;
+      }
+
+      void projectWorkflowBridge.previewRecoveryDraft(sessionId).then(setProjectWorkflow);
+    },
+    [projectWorkflowBridge]
+  );
+
+  const handleApplyRecoveryDraft = useCallback(
+    (sessionId: string) => {
+      if (projectWorkflowBridge === undefined) {
+        return;
+      }
+
+      void projectWorkflowBridge.applyRecoveryDraft(sessionId).then(async (result) => {
+        setProjectWorkflow(result.projectWorkflow);
+        if (result.chapterEditor !== undefined) {
+          setChapterEditor(result.chapterEditor);
+        }
+        if (api !== undefined) {
+          setShellState(await api.getShellState());
+        }
+      });
+    },
+    [api, projectWorkflowBridge]
+  );
+
+  const handleDiscardRecoveryDraft = useCallback(
+    (sessionId: string) => {
+      if (projectWorkflowBridge === undefined) {
+        return;
+      }
+
+      void projectWorkflowBridge.discardRecoveryDraft(sessionId).then(setProjectWorkflow);
+    },
+    [projectWorkflowBridge]
+  );
+
   const handleActivitySelect = useCallback((activityId: ActivityId) => {
     setShellState((current) => ({
       ...current,
@@ -892,7 +933,10 @@ export function App() {
               onCreateProject: handleCreateProject,
               onCreateChapter: handleCreateChapter,
               onSelectChapter: handleSelectChapter,
-              onCloseChapterTab: handleCloseChapterTab
+              onCloseChapterTab: handleCloseChapterTab,
+              onPreviewRecoveryDraft: handlePreviewRecoveryDraft,
+              onApplyRecoveryDraft: handleApplyRecoveryDraft,
+              onDiscardRecoveryDraft: handleDiscardRecoveryDraft
             }
           })}
       {...(projectSearch === undefined

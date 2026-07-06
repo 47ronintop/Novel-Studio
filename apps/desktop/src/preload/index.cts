@@ -20,6 +20,8 @@ import type {
   NovelStudioApi,
   PluginSettingsSnapshot,
   ProjectDirectorySelection,
+  ProjectRecoveryApplyResult,
+  ProjectRecoveryDraftPreview,
   ProjectSearchIndex,
   ProjectSearchQuery,
   ProjectSearchResults,
@@ -79,6 +81,21 @@ const api: NovelStudioApi = {
       invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
         "application:project:select-chapter",
         chapterId
+      ),
+    previewRecoveryDraft: (sessionId: string) =>
+      invokeTyped<Result<ProjectRecoveryDraftPreview, UnifiedError>>(
+        "application:project:preview-recovery-draft",
+        sessionId
+      ),
+    applyRecoveryDraft: (sessionId: string) =>
+      invokeTyped<Result<ProjectRecoveryApplyResult, UnifiedError>>(
+        "application:project:apply-recovery-draft",
+        sessionId
+      ),
+    discardRecoveryDraft: (sessionId: string) =>
+      invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
+        "application:project:discard-recovery-draft",
+        sessionId
       )
   },
   ai: {

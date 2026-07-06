@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { ok, type ChapterSummary } from "@novel-studio/shared";
+import { ok, type ChapterDocument, type ChapterSummary } from "@novel-studio/shared";
 import type { NovelStudioApi, ProjectWorkspaceSnapshot } from "@novel-studio/application";
 
 import { createProjectWorkflowBridge } from "../src/renderer/project-workflow-bridge.js";
@@ -26,6 +26,19 @@ const emptySnapshot: ProjectWorkspaceSnapshot = {
   recovery: {
     availableItems: []
   }
+};
+
+const recoveredChapter: ChapterDocument = {
+  frontmatter: {
+    schemaVersion: "1.0",
+    id: "ch_opening",
+    title: "Opening",
+    order: 1,
+    status: "draft",
+    createdAt: "2026-07-04T00:00:00.000Z",
+    updatedAt: "2026-07-06T00:05:00.000Z"
+  },
+  body: "unsaved recovered opening\n"
 };
 
 describe("project workflow bridge", () => {
@@ -159,6 +172,50 @@ describe("project workflow bridge", () => {
 
     expect(opened.dirtyChapterIds).toEqual(["ch_opening"]);
     expect(opened.recovery?.availableItems[0]?.chapterId).toBe("ch_opening");
+  });
+
+  test("previews, applies, and discards recovery drafts through the preload API", async () => {
+    const calls: string[] = [];
+    const chapters: readonly ChapterSummary[] = [
+      {
+        id: "ch_opening",
+        title: "Opening",
+        order: 1,
+        status: "draft",
+        updatedAt: "2026-07-04T00:00:00.000Z"
+      }
+    ];
+    const recovery = {
+      availableItems: [
+        {
+          sessionId: "session_prj_m49_ch_opening",
+          chapterId: "ch_opening",
+          updatedAt: "2026-07-06T00:05:00.000Z"
+        }
+      ]
+    };
+    const api = createApi({
+      record: calls,
+      getChapters: () => chapters,
+      setChapters: () => undefined,
+      chooseOpenProjectRoot: "D:/Novel/M49",
+      recovery
+    });
+    const bridge = createProjectWorkflowBridge(api);
+
+    await bridge.openProject();
+    const previewed = await bridge.previewRecoveryDraft("session_prj_m49_ch_opening");
+    const applied = await bridge.applyRecoveryDraft("session_prj_m49_ch_opening");
+    const discarded = await bridge.discardRecoveryDraft("session_prj_m49_ch_opening");
+
+    expect(previewed.recovery?.review?.selectedDraft?.body).toBe("unsaved recovered opening\n");
+    expect(applied.projectWorkflow.recovery?.availableItems).toEqual([]);
+    expect(applied.chapterEditor.chapter.body).toBe("unsaved recovered opening\n");
+    expect(applied.chapterEditor.dirty).toBe(true);
+    expect(discarded.recovery?.availableItems).toEqual([]);
+    expect(calls).toContain("project.previewRecoveryDraft:session_prj_m49_ch_opening");
+    expect(calls).toContain("project.applyRecoveryDraft:session_prj_m49_ch_opening");
+    expect(calls).toContain("project.discardRecoveryDraft:session_prj_m49_ch_opening");
   });
 
   test("uses native directory selection when no project path is typed", async () => {
@@ -345,6 +402,50 @@ function createApi(options: {
           projectRoot: currentProjectRoot,
           chapters: options.getChapters(),
           activeChapterId: chapterId
+        });
+      },
+      previewRecoveryDraft: async (sessionId) => {
+        options.record.push(`project.previewRecoveryDraft:${sessionId}`);
+        return ok({
+          sessionId,
+          chapterId: "ch_opening",
+          chapterTitle: "Opening",
+          updatedAt: "2026-07-06T00:05:00.000Z",
+          body: "unsaved recovered opening\n"
+        });
+      },
+      applyRecoveryDraft: async (sessionId) => {
+        options.record.push(`project.applyRecoveryDraft:${sessionId}`);
+        return ok({
+          workspace: {
+            ...emptySnapshot,
+            projectRoot: currentProjectRoot,
+            chapters: options.getChapters(),
+            recovery: {
+              availableItems: []
+            },
+            activeChapterId: "ch_opening"
+          },
+          chapterEditor: {
+            state: {
+              chapter: recoveredChapter,
+              dirty: true,
+              saveStatus: "Unsaved" as const
+            },
+            versions: []
+          }
+        });
+      },
+      discardRecoveryDraft: async (sessionId) => {
+        options.record.push(`project.discardRecoveryDraft:${sessionId}`);
+        return ok({
+          ...emptySnapshot,
+          projectRoot: currentProjectRoot,
+          chapters: options.getChapters(),
+          recovery: {
+            availableItems: []
+          },
+          activeChapterId: "ch_opening"
         });
       }
     },

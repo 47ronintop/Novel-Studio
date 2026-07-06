@@ -174,6 +174,130 @@ describe("M12 project workflow session", () => {
     ]);
   });
 
+  test("previews, applies, and discards chapter recovery drafts without deleting records", async () => {
+    const projectRoot = await createTempRoot();
+    const recoveryWrites: RecoveryRecord[] = [];
+    const recoveryRecords: RecoveryRecord[] = [
+      {
+        schemaVersion: "1.0",
+        sessionId: "session_prj_m49_app_ch_opening",
+        projectId: "prj_m49_app",
+        openAssetId: "ch_opening",
+        assetType: "chapter",
+        dirty: true,
+        draftContentRef: {
+          strategy: "inline",
+          content: "unsaved recovered opening\n"
+        },
+        updatedAt: "2026-07-06T00:05:00.000Z"
+      },
+      {
+        schemaVersion: "1.0",
+        sessionId: "session_prj_m49_app_ch_second",
+        projectId: "prj_m49_app",
+        openAssetId: "ch_second",
+        assetType: "chapter",
+        dirty: true,
+        draftContentRef: {
+          strategy: "inline",
+          content: "discarded recovered second\n"
+        },
+        updatedAt: "2026-07-06T00:06:00.000Z"
+      }
+    ];
+    const recoveryRepository: RecoveryRepositoryPort = {
+      async writeRecoveryRecord(record) {
+        recoveryWrites.push(record);
+        const existingIndex = recoveryRecords.findIndex(
+          (entry) => entry.sessionId === record.sessionId
+        );
+        if (existingIndex >= 0) {
+          recoveryRecords.splice(existingIndex, 1, record);
+        } else {
+          recoveryRecords.unshift(record);
+        }
+        return { ok: true, value: record };
+      },
+      async listRecoveryRecords() {
+        return { ok: true, value: recoveryRecords };
+      }
+    };
+    const session = createProjectWorkspaceSession({
+      now: () => "2026-07-06T00:10:00.000Z",
+      createProjectRepository: (root) =>
+        new ProjectFileRepository({
+          projectRoot: root,
+          now: () => "2026-07-06T00:00:00.000Z"
+        }),
+      createChapterRepository: (root) =>
+        new ChapterFileRepository({
+          projectRoot: root,
+          now: () => "2026-07-06T00:00:00.000Z"
+        }),
+      createHistoryRepository: (root) =>
+        new HistoryRepository({
+          projectRoot: root,
+          now: () => "2026-07-06T00:00:00.000Z",
+          createVersionId: () => "ver_m49"
+        }),
+      createRecoveryRepository: () => recoveryRepository
+    });
+
+    await session.createProject({
+      projectRoot,
+      projectId: "prj_m49_app",
+      title: "M49 App Project",
+      language: "zh-CN"
+    });
+    await session.createChapter({
+      chapterId: "ch_opening",
+      title: "Opening",
+      body: "persisted opening\n"
+    });
+    await session.createChapter({
+      chapterId: "ch_second",
+      title: "Second",
+      body: "persisted second\n"
+    });
+
+    const preview = await session.previewRecoveryDraft("session_prj_m49_app_ch_opening");
+    const applied = await session.applyRecoveryDraft("session_prj_m49_app_ch_opening");
+    const activeEditorState = session.getActiveChapterEditorSession()?.getState();
+    const discarded = await session.discardRecoveryDraft("session_prj_m49_app_ch_second");
+
+    expect(isOk(preview)).toBe(true);
+    if (isErr(preview)) {
+      throw new Error(preview.error.message);
+    }
+    expect(preview.value).toMatchObject({
+      sessionId: "session_prj_m49_app_ch_opening",
+      chapterId: "ch_opening",
+      chapterTitle: "Opening",
+      updatedAt: "2026-07-06T00:05:00.000Z",
+      body: "unsaved recovered opening\n"
+    });
+    expect(isOk(applied)).toBe(true);
+    if (isErr(applied)) {
+      throw new Error(applied.error.message);
+    }
+    expect(applied.value.chapterEditor.state.chapter.body).toBe("unsaved recovered opening\n");
+    expect(applied.value.chapterEditor.state.dirty).toBe(true);
+    expect(applied.value.workspace.recovery.availableItems).toHaveLength(1);
+    expect(activeEditorState?.chapter.body).toBe(applied.value.chapterEditor.state.chapter.body);
+    expect(activeEditorState?.dirty).toBe(applied.value.chapterEditor.state.dirty);
+    expect(isOk(discarded)).toBe(true);
+    expect(session.getSnapshot()?.recovery.availableItems).toEqual([]);
+    expect(recoveryWrites.map((record) => [record.sessionId, record.dirty])).toEqual([
+      ["session_prj_m49_app_ch_opening", true],
+      ["session_prj_m49_app_ch_opening", false],
+      ["session_prj_m49_app_ch_second", false]
+    ]);
+    expect(recoveryRecords.map((record) => [record.sessionId, record.dirty])).toEqual([
+      ["session_prj_m49_app_ch_opening", false],
+      ["session_prj_m49_app_ch_second", false]
+    ]);
+  });
+
   test("builds project health diagnostics for recovery and reference issues", async () => {
     const projectRoot = await createTempRoot();
     const recoveryRecords: RecoveryRecord[] = [

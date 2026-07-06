@@ -46,6 +46,9 @@ describe("Electron security baseline", () => {
       "application:project:list-chapters",
       "application:project:create-chapter",
       "application:project:select-chapter",
+      "application:project:preview-recovery-draft",
+      "application:project:apply-recovery-draft",
+      "application:project:discard-recovery-draft",
       "application:search:rebuild-index",
       "application:search:query",
       "application:ai:generate-chapter-suggestion",
@@ -73,6 +76,7 @@ describe("Electron security baseline", () => {
       "application:studio:restore-config-version"
     ]);
     expect(isApplicationIpcChannel("application:list-commands")).toBe(true);
+    expect(isApplicationIpcChannel("application:project:preview-recovery-draft")).toBe(true);
     expect(isApplicationIpcChannel("application:chapter:save")).toBe(true);
     expect(isApplicationIpcChannel("application:settings:list-model-profiles")).toBe(true);
     expect(isApplicationIpcChannel("application:story-bible:load")).toBe(true);
@@ -95,6 +99,9 @@ describe("Electron security baseline", () => {
     await api.commands.execute("workspace.toggle-navigator");
     await api.project.chooseOpenDirectory();
     await api.project.chooseCreateDirectory();
+    await api.project.previewRecoveryDraft("session_recovery");
+    await api.project.applyRecoveryDraft("session_recovery");
+    await api.project.discardRecoveryDraft("session_recovery");
     await api.chapter.load();
     await api.ai.generateChapterSuggestion({ instruction: "Continue." });
     await api.ai.applyChapterSuggestion("sug_01");
@@ -163,6 +170,9 @@ describe("Electron security baseline", () => {
       "application:execute-command",
       "application:project:choose-open-directory",
       "application:project:choose-create-directory",
+      "application:project:preview-recovery-draft",
+      "application:project:apply-recovery-draft",
+      "application:project:discard-recovery-draft",
       "application:chapter:load",
       "application:ai:generate-chapter-suggestion",
       "application:ai:apply-chapter-suggestion",

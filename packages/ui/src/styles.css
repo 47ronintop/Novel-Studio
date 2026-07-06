@@ -429,27 +429,61 @@ textarea:focus-visible,
 }
 
 .ns-recovery-notice {
-  align-items: center;
   background: rgba(245, 158, 11, 0.12);
   border: 1px solid rgba(245, 158, 11, 0.42);
   border-radius: 6px;
   color: var(--ns-text);
-  display: flex;
-  gap: 12px;
-  justify-content: space-between;
+  display: block;
   margin-bottom: 12px;
   padding: 8px 10px;
 }
 
-.ns-recovery-notice div {
+.ns-recovery-notice-main {
   display: grid;
-  gap: 2px;
+  gap: 10px;
   min-width: 0;
 }
 
 .ns-recovery-notice span {
   color: var(--ns-muted);
   font-size: 12px;
+}
+
+.ns-recovery-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.ns-recovery-action-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ns-recovery-preview {
+  border-top: 1px solid rgba(245, 158, 11, 0.24);
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+}
+
+.ns-recovery-preview > div {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.ns-recovery-preview pre {
+  color: var(--ns-text);
+  font-family: var(--ns-font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
 }
 
 .ns-activity-view {

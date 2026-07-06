@@ -1,6 +1,7 @@
-import type { ProjectWorkflowProps } from "@novel-studio/ui";
+import type { ChapterEditorProps, ProjectWorkflowProps } from "@novel-studio/ui";
 import type { NovelStudioApi, ProjectWorkspaceSnapshot } from "@novel-studio/application";
 import type { Result, UnifiedError } from "@novel-studio/shared";
+import { toChapterEditorProps } from "./chapter-editor-bridge.js";
 
 export interface ProjectWorkflowBridgeOptions {
   readonly createProjectId?: () => string;
@@ -16,6 +17,14 @@ export interface ProjectWorkflowBridge {
   createChapter(): Promise<ProjectWorkflowProps>;
   selectChapter(chapterId: string): Promise<ProjectWorkflowProps>;
   closeChapterTab(chapterId: string): Promise<ProjectWorkflowProps>;
+  previewRecoveryDraft(sessionId: string): Promise<ProjectWorkflowProps>;
+  applyRecoveryDraft(sessionId: string): Promise<ProjectWorkflowRecoveryApplyBridgeResult>;
+  discardRecoveryDraft(sessionId: string): Promise<ProjectWorkflowProps>;
+}
+
+export interface ProjectWorkflowRecoveryApplyBridgeResult {
+  readonly projectWorkflow: ProjectWorkflowProps;
+  readonly chapterEditor?: ChapterEditorProps;
 }
 
 const EXAMPLE_PROJECT_TITLE = "示例小说项目";
@@ -34,6 +43,7 @@ export function createProjectWorkflowBridge(
   let status: ProjectWorkflowProps["status"] = "idle";
   let feedback: ProjectWorkflowProps["feedback"] | undefined;
   let openChapterTabIds: string[] = [];
+  let recoveryReview: NonNullable<ProjectWorkflowProps["recovery"]>["review"] | undefined;
 
   return {
     getProps: () => toProps(),
@@ -178,6 +188,56 @@ export function createProjectWorkflowBridge(
       }
 
       return toProps();
+    },
+    async previewRecoveryDraft(sessionId) {
+      recoveryReview = { status: "previewing" };
+      const preview = await api.project.previewRecoveryDraft(sessionId);
+      if (!preview.ok) {
+        feedback = { kind: "error", message: preview.error.message };
+        recoveryReview = { status: "idle" };
+        return toProps();
+      }
+
+      recoveryReview = {
+        status: "idle",
+        selectedDraft: preview.value
+      };
+      feedback = undefined;
+      return toProps();
+    },
+    async applyRecoveryDraft(sessionId) {
+      recoveryReview = { ...recoveryReview, status: "applying" };
+      const applied = await api.project.applyRecoveryDraft(sessionId);
+      if (!applied.ok) {
+        feedback = { kind: "error", message: applied.error.message };
+        recoveryReview = { ...recoveryReview, status: "idle" };
+        return { projectWorkflow: toProps() };
+      }
+
+      snapshot = applied.value.workspace;
+      projectRootInput = snapshot.projectRoot;
+      addOpenChapterTab(snapshot.activeChapterId);
+      recoveryReview = undefined;
+      feedback = undefined;
+      return {
+        projectWorkflow: toProps(),
+        chapterEditor: toChapterEditorProps(applied.value.chapterEditor)
+      };
+    },
+    async discardRecoveryDraft(sessionId) {
+      recoveryReview = { ...recoveryReview, status: "discarding" };
+      const discarded = await api.project.discardRecoveryDraft(sessionId);
+      if (!discarded.ok) {
+        feedback = { kind: "error", message: discarded.error.message };
+        recoveryReview = { ...recoveryReview, status: "idle" };
+        return toProps();
+      }
+
+      snapshot = discarded.value;
+      projectRootInput = snapshot.projectRoot;
+      recoveryReview = undefined;
+      feedback = undefined;
+      return toProps();
     }
   };
 
@@ -227,6 +287,14 @@ export function createProjectWorkflowBridge(
   }
 
   function toProps(): ProjectWorkflowProps {
+    const recovery =
+      snapshot?.recovery === undefined && recoveryReview === undefined
+        ? undefined
+        : {
+            ...(snapshot?.recovery ?? { availableItems: [] }),
+            ...(recoveryReview === undefined ? {} : { review: recoveryReview })
+          };
+
     return {
       projectRootInput,
       ...(status === undefined ? {} : { status }),
@@ -234,7 +302,7 @@ export function createProjectWorkflowBridge(
       chapters: snapshot?.chapters ?? [],
       openChapterTabIds,
       dirtyChapterIds: snapshot?.recovery.availableItems.map((item) => item.chapterId) ?? [],
-      ...(snapshot?.recovery === undefined ? {} : { recovery: snapshot.recovery }),
+      ...(recovery === undefined ? {} : { recovery }),
       ...(snapshot?.health === undefined ? {} : { health: snapshot.health }),
       ...(snapshot?.activeChapterId === undefined
         ? {}

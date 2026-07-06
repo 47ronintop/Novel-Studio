@@ -7,12 +7,13 @@ import type {
   CreateChapterInput,
   JsonObject,
   RecoveryRepositoryPort,
+  RecoveryRecord,
   Result,
   UnifiedError
 } from "@novel-studio/shared";
 
 import { createChapterEditorSession } from "./chapter-editor-session.js";
-import type { ChapterEditorSession } from "./chapter-editor-session.js";
+import type { ChapterEditorSession, ChapterEditorSnapshot } from "./chapter-editor-session.js";
 
 export interface ProjectMetadata extends JsonObject {
   schemaVersion: "1.0";
@@ -71,6 +72,19 @@ export interface ProjectWorkspaceRecoveryItem extends JsonObject {
   sessionId: string;
   chapterId: string;
   updatedAt: string;
+}
+
+export interface ProjectRecoveryDraftPreview extends JsonObject {
+  sessionId: string;
+  chapterId: string;
+  chapterTitle: string;
+  updatedAt: string;
+  body: string;
+}
+
+export interface ProjectRecoveryApplyResult {
+  workspace: ProjectWorkspaceSnapshot;
+  chapterEditor: ChapterEditorSnapshot;
 }
 
 export type ProjectHealthStatus = "healthy" | "attention" | "blocked";
@@ -132,6 +146,11 @@ export interface ProjectWorkspaceSession {
   listChapters(): Promise<Result<readonly ChapterSummary[], UnifiedError>>;
   createChapter(input: CreateChapterInput): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   selectChapter(chapterId: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  previewRecoveryDraft(
+    sessionId: string
+  ): Promise<Result<ProjectRecoveryDraftPreview, UnifiedError>>;
+  applyRecoveryDraft(sessionId: string): Promise<Result<ProjectRecoveryApplyResult, UnifiedError>>;
+  discardRecoveryDraft(sessionId: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   releaseProjectLock(): Promise<Result<void, UnifiedError>>;
 }
 
@@ -209,6 +228,97 @@ export function createProjectWorkspaceSession(
       }
 
       return activateChapter(chapterId);
+    },
+    async previewRecoveryDraft(sessionId) {
+      const record = await findDirtyChapterRecoveryRecord(sessionId);
+      if (!record.ok) {
+        return record;
+      }
+
+      const body = recoveryRecordBody(record.value);
+      if (!body.ok) {
+        return body;
+      }
+
+      const chapter = state?.chapters.find((entry) => entry.id === record.value.openAssetId);
+      if (chapter === undefined) {
+        return missingRecoveryChapter(record.value.openAssetId);
+      }
+
+      return ok({
+        sessionId: record.value.sessionId,
+        chapterId: record.value.openAssetId,
+        chapterTitle: chapter.title,
+        updatedAt: record.value.updatedAt,
+        body: body.value
+      });
+    },
+    async applyRecoveryDraft(sessionId) {
+      const record = await findDirtyChapterRecoveryRecord(sessionId);
+      if (!record.ok) {
+        return record;
+      }
+
+      const body = recoveryRecordBody(record.value);
+      if (!body.ok) {
+        return body;
+      }
+
+      const activated = await activateChapter(record.value.openAssetId);
+      if (!activated.ok) {
+        return activated;
+      }
+
+      const editor = activeChapterEditorSession;
+      if (editor === undefined) {
+        return workspaceUnavailable();
+      }
+
+      const loaded = await editor.load();
+      if (!loaded.ok) {
+        return loaded;
+      }
+
+      const edited = await editor.edit(body.value);
+      if (!edited.ok) {
+        return edited;
+      }
+
+      const markedClean = await markRecoveryRecordClean(record.value);
+      if (!markedClean.ok) {
+        return markedClean;
+      }
+
+      const workspace = await refreshWorkspaceRecovery();
+      if (!workspace.ok) {
+        return workspace;
+      }
+
+      const versions = await editor.listVersions();
+      if (!versions.ok) {
+        return versions;
+      }
+
+      return ok({
+        workspace: workspace.value,
+        chapterEditor: {
+          state: edited.value,
+          versions: versions.value
+        }
+      });
+    },
+    async discardRecoveryDraft(sessionId) {
+      const record = await findDirtyChapterRecoveryRecord(sessionId);
+      if (!record.ok) {
+        return record;
+      }
+
+      const markedClean = await markRecoveryRecordClean(record.value);
+      if (!markedClean.ok) {
+        return markedClean;
+      }
+
+      return refreshWorkspaceRecovery();
     },
     async releaseProjectLock() {
       if (projectLockRepository === undefined) {
@@ -387,6 +497,74 @@ export function createProjectWorkspaceSession(
     });
   }
 
+  async function findDirtyChapterRecoveryRecord(
+    sessionId: string
+  ): Promise<Result<RecoveryRecord, UnifiedError>> {
+    if (state === undefined || recoveryRepository === undefined) {
+      return workspaceUnavailable();
+    }
+
+    const records = await recoveryRepository.listRecoveryRecords();
+    if (!records.ok) {
+      return records;
+    }
+
+    const record = records.value.find((entry) => entry.sessionId === sessionId);
+    if (record === undefined || !record.dirty) {
+      return recoveryDraftNotFound(sessionId);
+    }
+    if (record.projectId !== state.project.projectId || record.assetType !== "chapter") {
+      return unsupportedRecoveryDraft(sessionId);
+    }
+
+    return ok(record);
+  }
+
+  async function markRecoveryRecordClean(
+    record: RecoveryRecord
+  ): Promise<Result<void, UnifiedError>> {
+    if (recoveryRepository === undefined) {
+      return workspaceUnavailable();
+    }
+
+    const written = await recoveryRepository.writeRecoveryRecord({
+      ...record,
+      dirty: false,
+      updatedAt: currentTimestamp()
+    });
+    if (!written.ok) {
+      return written;
+    }
+
+    return ok(undefined);
+  }
+
+  async function refreshWorkspaceRecovery(): Promise<
+    Result<ProjectWorkspaceSnapshot, UnifiedError>
+  > {
+    if (state === undefined) {
+      return workspaceUnavailable();
+    }
+
+    const recovery = await loadRecoverySummary(state.project.projectId);
+    if (!recovery.ok) {
+      return recovery;
+    }
+
+    state = {
+      ...state,
+      recovery: recovery.value,
+      health: buildProjectHealth({
+        checkedAt: currentTimestamp(),
+        chapters: state.chapters,
+        recovery: recovery.value,
+        ...(state.lock === undefined ? {} : { lock: state.lock })
+      })
+    };
+
+    return ok(state);
+  }
+
   function currentTimestamp(): string {
     return options.now?.() ?? new Date().toISOString();
   }
@@ -504,6 +682,68 @@ function buildProjectHealth(input: ProjectHealthInput): ProjectWorkspaceHealth {
 
 function createRecoverySessionId(projectId: string, chapterId: string): string {
   return `session_${sanitizeRecoveryId(projectId)}_${sanitizeRecoveryId(chapterId)}`;
+}
+
+function recoveryRecordBody(record: RecoveryRecord): Result<string, UnifiedError> {
+  if (
+    record.draftContentRef.strategy !== "inline" ||
+    record.draftContentRef.content === undefined
+  ) {
+    return err(
+      createUnifiedError({
+        code: "RECOVERY_DRAFT_CONTENT_UNAVAILABLE",
+        category: "UserError",
+        message: "Recovery draft content is not available for preview.",
+        recoverability: "user-action",
+        suggestedAction: "Keep the recovery record for manual inspection.",
+        traceId: "project-workspace-session"
+      })
+    );
+  }
+
+  return ok(record.draftContentRef.content);
+}
+
+function recoveryDraftNotFound(sessionId: string): Result<never, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "RECOVERY_DRAFT_NOT_FOUND",
+      category: "UserError",
+      message: "The requested recovery draft is not available.",
+      recoverability: "user-action",
+      suggestedAction: "Refresh the project recovery list and try again.",
+      traceId: "project-workspace-session",
+      redactedDetail: { sessionId }
+    })
+  );
+}
+
+function unsupportedRecoveryDraft(sessionId: string): Result<never, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "RECOVERY_DRAFT_UNSUPPORTED",
+      category: "UserError",
+      message: "Only chapter recovery drafts can be reviewed in this workspace.",
+      recoverability: "user-action",
+      suggestedAction: "Open the matching asset editor or keep the recovery record for later.",
+      traceId: "project-workspace-session",
+      redactedDetail: { sessionId }
+    })
+  );
+}
+
+function missingRecoveryChapter(chapterId: string): Result<never, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "PROJECT_CHAPTER_NOT_FOUND",
+      category: "UserError",
+      message: "The recovered chapter is not part of the open project.",
+      recoverability: "user-action",
+      suggestedAction: "Review recovery history before clearing or archiving the record.",
+      traceId: "project-workspace-session",
+      redactedDetail: { chapterId }
+    })
+  );
 }
 
 function sanitizeRecoveryId(value: string): string {

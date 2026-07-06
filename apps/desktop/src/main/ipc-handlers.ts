@@ -87,6 +87,27 @@ export function createApplicationIpcHandlers(
 
       return application.selectProjectChapter(chapterId);
     },
+    "application:project:preview-recovery-draft": (sessionId: unknown) => {
+      if (typeof sessionId !== "string") {
+        return application.previewRecoveryDraft("");
+      }
+
+      return application.previewRecoveryDraft(sessionId);
+    },
+    "application:project:apply-recovery-draft": (sessionId: unknown) => {
+      if (typeof sessionId !== "string") {
+        return application.applyRecoveryDraft("");
+      }
+
+      return application.applyRecoveryDraft(sessionId);
+    },
+    "application:project:discard-recovery-draft": (sessionId: unknown) => {
+      if (typeof sessionId !== "string") {
+        return application.discardRecoveryDraft("");
+      }
+
+      return application.discardRecoveryDraft(sessionId);
+    },
     "application:search:rebuild-index": () => application.rebuildProjectSearchIndex(),
     "application:search:query": (input: unknown) => application.searchProject(toSearchQuery(input)),
     "application:ai:generate-chapter-suggestion": (request: unknown) => {

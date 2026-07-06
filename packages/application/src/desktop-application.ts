@@ -46,6 +46,8 @@ import type {
 } from "./ai-writing-workflow-session.js";
 import type {
   CreateProjectInput,
+  ProjectRecoveryApplyResult,
+  ProjectRecoveryDraftPreview,
   ProjectWorkspaceSession,
   ProjectWorkspaceSnapshot
 } from "./project-workspace-session.js";
@@ -108,6 +110,11 @@ export interface DesktopApplication {
     input: CreateChapterInput
   ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   selectProjectChapter(chapterId: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  previewRecoveryDraft(
+    sessionId: string
+  ): Promise<Result<ProjectRecoveryDraftPreview, UnifiedError>>;
+  applyRecoveryDraft(sessionId: string): Promise<Result<ProjectRecoveryApplyResult, UnifiedError>>;
+  discardRecoveryDraft(sessionId: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   rebuildProjectSearchIndex(): Promise<Result<ProjectSearchIndex, UnifiedError>>;
   searchProject(input: ProjectSearchQuery): Promise<Result<ProjectSearchResults, UnifiedError>>;
   loadStoryBible(): Promise<Result<StoryBibleSnapshot, UnifiedError>>;
@@ -294,6 +301,27 @@ export function createDesktopApplication(
       }
 
       return projectWorkspaceSession.selectChapter(chapterId);
+    },
+    async previewRecoveryDraft(sessionId) {
+      if (projectWorkspaceSession === undefined) {
+        return projectWorkspaceUnavailable();
+      }
+
+      return projectWorkspaceSession.previewRecoveryDraft(sessionId);
+    },
+    async applyRecoveryDraft(sessionId) {
+      if (projectWorkspaceSession === undefined) {
+        return projectWorkspaceUnavailable();
+      }
+
+      return projectWorkspaceSession.applyRecoveryDraft(sessionId);
+    },
+    async discardRecoveryDraft(sessionId) {
+      if (projectWorkspaceSession === undefined) {
+        return projectWorkspaceUnavailable();
+      }
+
+      return projectWorkspaceSession.discardRecoveryDraft(sessionId);
     },
     async rebuildProjectSearchIndex() {
       const searchSession = getProjectSearchSession();

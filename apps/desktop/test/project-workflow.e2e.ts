@@ -1,5 +1,5 @@
 import { expect, test, _electron as electron } from "@playwright/test";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -45,7 +45,9 @@ test("creates a project, creates a chapter, edits it, and saves through Electron
     await page.getByRole("button", { name: "保存章节" }).click();
     await expect(page.getByText("已保存").first()).toBeVisible();
 
-    const chapterFiles = await readdir(join(projectRoot, "chapters"));
+    const chapterFiles = (await readdir(join(projectRoot, "chapters"))).filter((entry) =>
+      entry.endsWith(".md")
+    );
     expect(chapterFiles).toHaveLength(1);
     const [chapterFile] = chapterFiles;
     expect(chapterFile).toBeDefined();
@@ -85,7 +87,9 @@ test("creates an example project from the onboarding quick start", async () => {
     await expect(projectNavigator.getByRole("button", { name: /示例章节/ })).toBeVisible();
     await expect(page.getByLabel("章节正文")).toHaveValue(/这是一个本地示例章节/);
 
-    const chapterFiles = await readdir(join(exampleRoot, "chapters"));
+    const chapterFiles = (await readdir(join(exampleRoot, "chapters"))).filter((entry) =>
+      entry.endsWith(".md")
+    );
     expect(chapterFiles).toHaveLength(1);
     const [chapterFile] = chapterFiles;
     if (chapterFile === undefined) {
@@ -95,6 +99,108 @@ test("creates an example project from the onboarding quick start", async () => {
     expect(savedChapter).toContain("这是一个本地示例章节");
   } finally {
     await electronApp.close();
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("reviews and applies an autosave recovery draft from disk", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-recovery-e2e-"));
+  const defaultProjectRoot = join(tempRoot, "Default Project");
+  const projectRoot = join(tempRoot, "Recovery Smoke");
+  const firstApp = await electron.launch({
+    args: [electronMain],
+    env: {
+      ...process.env,
+      NOVEL_STUDIO_PROJECT_ROOT: defaultProjectRoot
+    }
+  });
+
+  try {
+    const page = await firstApp.firstWindow();
+
+    await page.getByLabel("项目路径").fill(projectRoot);
+    await page.getByRole("button", { name: "创建项目" }).click();
+    await page.getByRole("button", { name: "新建章节" }).click();
+
+    const body = page.getByLabel("章节正文");
+    await body.fill("Persisted baseline.");
+    await page.getByRole("button", { name: "保存章节" }).click();
+    await expect(page.getByText("已保存").first()).toBeVisible();
+  } finally {
+    await firstApp.close();
+  }
+
+  const projectMetadata = JSON.parse(await readFile(join(projectRoot, "project.json"), "utf8")) as {
+    readonly projectId: string;
+  };
+  const chapterFiles = (await readdir(join(projectRoot, "chapters"))).filter((entry) =>
+    entry.endsWith(".md")
+  );
+  const [chapterFile] = chapterFiles;
+  if (chapterFile === undefined) {
+    throw new Error("Expected one chapter file before writing recovery.");
+  }
+  const chapterPath = join(projectRoot, "chapters", chapterFile);
+  const chapterMarkdown = await readFile(chapterPath, "utf8");
+  const chapterId = /id:\s+['"]?([^'"\r\n]+)['"]?/.exec(chapterMarkdown)?.[1]?.trim();
+  if (chapterId === undefined) {
+    throw new Error("Expected chapter id in frontmatter.");
+  }
+  const sessionId = `session_${projectMetadata.projectId}_${chapterId}`;
+  const recoveredBody = "Recovered draft from autosave.\n";
+  await mkdir(join(projectRoot, "history", "recovery"), { recursive: true });
+  await writeFile(
+    join(projectRoot, "history", "recovery", `${sessionId}.json`),
+    `${JSON.stringify(
+      {
+        schemaVersion: "1.0",
+        sessionId,
+        projectId: projectMetadata.projectId,
+        openAssetId: chapterId,
+        assetType: "chapter",
+        dirty: true,
+        draftContentRef: {
+          strategy: "inline",
+          content: recoveredBody
+        },
+        updatedAt: "2026-07-06T00:05:00.000Z"
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const secondApp = await electron.launch({
+    args: [electronMain],
+    env: {
+      ...process.env,
+      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Second Default Project")
+    }
+  });
+
+  try {
+    const page = await secondApp.firstWindow();
+
+    await page.getByLabel("项目路径").fill(projectRoot);
+    await page.getByRole("button", { name: "打开项目" }).click();
+
+    await expect(page.getByLabel("Autosave recovery")).toBeVisible();
+    await page.getByRole("button", { name: /预览恢复草稿/ }).click();
+    await expect(page.getByLabel("恢复草稿预览")).toContainText("Recovered draft from autosave.");
+    await page.getByRole("button", { name: /应用恢复草稿/ }).click();
+    await expect(page.getByLabel("章节正文")).toHaveValue(recoveredBody);
+    await page.getByRole("button", { name: "保存章节" }).click();
+    await expect(page.getByText("已保存").first()).toBeVisible();
+
+    const savedChapter = await readFile(chapterPath, "utf8");
+    expect(savedChapter).toContain("Recovered draft from autosave.");
+    const recoveryRecord = JSON.parse(
+      await readFile(join(projectRoot, "history", "recovery", `${sessionId}.json`), "utf8")
+    ) as { readonly dirty: boolean };
+    expect(recoveryRecord.dirty).toBe(false);
+  } finally {
+    await secondApp.close();
     await rm(tempRoot, { recursive: true, force: true });
   }
 });

@@ -32,7 +32,12 @@ import type {
   ModelSettingsSnapshot
 } from "./model-settings-session.js";
 import type { PluginSettingsSnapshot } from "./plugin-settings-session.js";
-import type { CreateProjectInput, ProjectWorkspaceSnapshot } from "./project-workspace-session.js";
+import type {
+  CreateProjectInput,
+  ProjectRecoveryApplyResult,
+  ProjectRecoveryDraftPreview,
+  ProjectWorkspaceSnapshot
+} from "./project-workspace-session.js";
 import type {
   ProjectSearchIndex,
   ProjectSearchQuery,
@@ -62,6 +67,15 @@ export interface NovelStudioApi {
       input: CreateChapterInput
     ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
     selectChapter(chapterId: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+    previewRecoveryDraft(
+      sessionId: string
+    ): Promise<Result<ProjectRecoveryDraftPreview, UnifiedError>>;
+    applyRecoveryDraft(
+      sessionId: string
+    ): Promise<Result<ProjectRecoveryApplyResult, UnifiedError>>;
+    discardRecoveryDraft(
+      sessionId: string
+    ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   };
   ai: {
     generateChapterSuggestion(

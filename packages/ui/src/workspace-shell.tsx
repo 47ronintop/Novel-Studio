@@ -16,6 +16,7 @@ import {
   Boxes,
   Check,
   Clock3,
+  Eye,
   FilePlus,
   FolderTree,
   FolderOpen,
@@ -26,6 +27,7 @@ import {
   Search,
   Settings,
   Sparkles,
+  Trash2,
   X
 } from "lucide-react";
 
@@ -78,16 +80,33 @@ export interface ProjectWorkflowProps {
   readonly onCreateChapter: () => void;
   readonly onSelectChapter: (chapterId: string) => void;
   readonly onCloseChapterTab?: (chapterId: string) => void;
+  readonly onPreviewRecoveryDraft?: (sessionId: string) => void;
+  readonly onApplyRecoveryDraft?: (sessionId: string) => void;
+  readonly onDiscardRecoveryDraft?: (sessionId: string) => void;
 }
 
 export interface ProjectWorkflowRecoveryProps {
   readonly availableItems: readonly ProjectWorkflowRecoveryItemProps[];
+  readonly review?: ProjectWorkflowRecoveryReviewProps;
 }
 
 export interface ProjectWorkflowRecoveryItemProps {
   readonly sessionId: string;
   readonly chapterId: string;
   readonly updatedAt: string;
+}
+
+export interface ProjectWorkflowRecoveryReviewProps {
+  readonly status: "idle" | "previewing" | "applying" | "discarding";
+  readonly selectedDraft?: ProjectWorkflowRecoveryDraftPreviewProps;
+}
+
+export interface ProjectWorkflowRecoveryDraftPreviewProps {
+  readonly sessionId: string;
+  readonly chapterId: string;
+  readonly chapterTitle: string;
+  readonly updatedAt: string;
+  readonly body: string;
 }
 
 export type ProjectWorkflowStatus = "idle" | "opening" | "creating";
@@ -1191,19 +1210,75 @@ function AutosaveRecoveryNotice({
   }
 
   const recoveredTitles = recoveryItems
-    .map(
-      (item) => projectWorkflow?.chapters.find((chapter) => chapter.id === item.chapterId)?.title
-    )
-    .filter((title): title is string => title !== undefined);
+    .map((item) => recoveryItemTitle(projectWorkflow, item))
+    .filter((title) => title.length > 0);
+  const selectedDraft = projectWorkflow?.recovery?.review?.selectedDraft;
 
   return (
     <section className="ns-recovery-notice" aria-label="Autosave recovery">
-      <div>
-        <strong>Recoverable drafts {recoveryItems.length}</strong>
-        <span>{recoveredTitles.join(", ")}</span>
+      <div className="ns-recovery-notice-main">
+        <div>
+          <strong>Recoverable drafts {recoveryItems.length}</strong>
+          <span>{recoveredTitles.join(", ")}</span>
+        </div>
+        <div className="ns-recovery-actions">
+          {recoveryItems.map((item) => {
+            const title = recoveryItemTitle(projectWorkflow, item);
+            return (
+              <div className="ns-recovery-action-row" key={item.sessionId}>
+                <span>{item.updatedAt}</span>
+                <button
+                  aria-label={`预览恢复草稿：${title}`}
+                  className="ns-icon-text-button"
+                  onClick={() => projectWorkflow?.onPreviewRecoveryDraft?.(item.sessionId)}
+                  type="button"
+                >
+                  <Eye aria-hidden="true" size={13} />
+                  预览恢复草稿
+                </button>
+                <button
+                  aria-label={`应用恢复草稿：${title}`}
+                  className="ns-icon-text-button"
+                  onClick={() => projectWorkflow?.onApplyRecoveryDraft?.(item.sessionId)}
+                  type="button"
+                >
+                  <Check aria-hidden="true" size={13} />
+                  应用恢复草稿
+                </button>
+                <button
+                  aria-label={`丢弃恢复草稿：${title}`}
+                  className="ns-icon-text-button"
+                  onClick={() => projectWorkflow?.onDiscardRecoveryDraft?.(item.sessionId)}
+                  type="button"
+                >
+                  <Trash2 aria-hidden="true" size={13} />
+                  丢弃恢复草稿
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        {selectedDraft === undefined ? null : (
+          <article className="ns-recovery-preview" aria-label="恢复草稿预览">
+            <div>
+              <strong>{selectedDraft.chapterTitle}</strong>
+              <span>{selectedDraft.updatedAt}</span>
+            </div>
+            <pre>{selectedDraft.body}</pre>
+          </article>
+        )}
       </div>
-      <span>{recoveryItems[0]?.updatedAt}</span>
     </section>
+  );
+}
+
+function recoveryItemTitle(
+  projectWorkflow: ProjectWorkflowProps | undefined,
+  item: ProjectWorkflowRecoveryItemProps
+): string {
+  return (
+    projectWorkflow?.chapters.find((chapter) => chapter.id === item.chapterId)?.title ??
+    item.chapterId
   );
 }
 
