@@ -90,8 +90,9 @@
 - 确认最终版 v1 路线：面向公开安装用户，v1 纳入常见 provider 支持（OpenAI/GPT、Claude、DeepSeek、GLM、通义等）和公开安装发布门禁；插件市场/第三方源码执行、CodeMirror 默认迁移、Timeline 深编辑继续移入 v2/backlog。
 - 将阅读预览/角色配音朗读纳入路线图范围裁决：不插队 M92-M97 核心闭环，M98 只判断是否进入 v1.1；若后续实施，第一版限定为章节阅读预览、Story Bible 人物声音设定、系统语音默认和 Edge TTS 实验 provider，不直接扩展到有声书导出或全自动角色推断。
 - 完成 M92 Structural Refactor Gate：新增结构门禁测试，拆分 `workspace-shell.tsx` 的 AI/Story Bible/Search/onboarding/recovery 视图、`App.tsx` 的 renderer shell helper，以及 `ai-writing-workflow-session.ts` 的公共类型模块；三个目标文件均降到硬拆分阈值以下且不新增用户功能。
+- 完成 M93 Core Writing Journey E2E：新增 Electron E2E 覆盖创建项目、写章节、生成并审阅 AI 建议、确认应用、保存、关闭重开、继续编辑和再次落盘，并验证 AI 前置版本历史不丢。
 
 ## Notes
 
 - Phase 7 当前定义的 M0-M18 已完成。
-- 当前已完成 Post-M18 M19-M92，M93-M98 已按最终确认的 v1 核心闭环裁剪规划；M27 安装后首次使用引导缺口已通过 M48 回补；未经用户确认不得 push。
+- 当前已完成 Post-M18 M19-M93，M94-M98 已按最终确认的 v1 核心闭环裁剪规划；M27 安装后首次使用引导缺口已通过 M48 回补；未经用户确认不得 push。

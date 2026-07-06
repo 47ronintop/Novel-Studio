@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.48 | Status: Active | Last Updated: 2026-07-06
+Version: 1.49 | Status: Active | Last Updated: 2026-07-06
 
 ## 目标
 
@@ -110,7 +110,7 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M90       | Workflow Product Editing        | product workflow edit helper、node type、edge、branch 和 delete-confirm UI   | Complete |
 | M91       | CodeMirror Migration Gate       | migration gate、opt-in/E2E/benchmark/rollback evidence 和 runtime strip      | Complete |
 | M92       | Structural Refactor Gate        | 拆分超大 UI/Application 文件，降低继续开发的结构性风险                       | Complete |
-| M93       | Core Writing Journey E2E        | 验证并修复“写章节→AI辅助→保存/恢复→重开继续写”的单一用户旅程                 | Planned  |
+| M93       | Core Writing Journey E2E        | 验证并修复“写章节→AI辅助→保存/恢复→重开继续写”的单一用户旅程                 | Complete |
 | M94       | Data Loss Hardening             | 聚焦不丢稿：recovery、history、file-ref、stale-lock 的最小安全闭环           | Planned  |
 | M95       | Provider Compatibility Ship     | 支持公开用户常见 API：OpenAI/GPT、Claude、DeepSeek、GLM、通义等 AI 建议闭环  | Planned  |
 | M96       | Story Bible Consistency Minimum | 聚焦作者继续写作所需的 Story Bible 引用/一致性提示                           | Planned  |
@@ -555,11 +555,17 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - `packages/application/src/ai-writing-workflow-session.ts` 拆出 AI workflow DTO、history record、session options 到 `ai-writing-workflow-types.ts`，实现文件降至 986 行，并保留旧 session 模块 type re-export 兼容。
 - M92 不新增用户功能；现有 workspace shell、renderer bridge 和 AI workflow session 测试继续通过。
 
+## M93 完成内容
+
+- `apps/desktop/test/ai-writing-workflow.e2e.ts` 新增核心写作旅程 E2E：创建项目、新建章节、写正文、生成 AI 建议、审阅 diff、确认应用、保存、关闭、重开项目、继续编辑并再次保存。
+- E2E 同时验证 AI 建议不会在确认前写入正文，确认后保存到章节 Markdown，重开后正文不丢，版本历史仍显示 `Before AI apply` 快照，继续编辑后的内容再次落盘。
+- M93 未新增产品功能；当前实现已能通过核心旅程验收，后续 M94 聚焦 data loss hardening 的边缘恢复/历史/锁场景。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19-M92，其中 M27 首次使用引导已通过 M48 回补完成。
+- Post-M18 产品化打磨已完成 M19-M93，其中 M27 首次使用引导已通过 M48 回补完成。
 - 当前产品状态是 beta productization：主干闭环可运行，但多个宪法/UI 指南能力仍是 Product Gap。
 - `docs/superpowers/plans/2026-07-06-product-ready-remaining-work.md` 记录了 M92-M100 候选缺口清单，但不得直接执行；后续执行必须先通过本文件的范围复核检查点。
 - 未经用户确认不得 push。
@@ -593,7 +599,7 @@ Scope Review 必须回答：
 ## 裁剪后后续路线
 
 - M92 Structural Refactor Gate：已完成。拆分 `workspace-shell.tsx`、`App.tsx` 和 `ai-writing-workflow-session.ts` 的职责边界，不新增用户功能；结构门禁已覆盖硬拆分阈值。
-- M93 Core Writing Journey E2E：只建立并修复一条真实作者旅程。完成判定：E2E 覆盖创建/打开项目、写正文、生成 AI 建议、审阅应用、保存、关闭重开、继续编辑，且正文和历史不丢。
+- M93 Core Writing Journey E2E：已完成。E2E 覆盖创建/打开项目、写正文、生成 AI 建议、审阅应用、保存、关闭重开、继续编辑，且正文和历史不丢。
 - M94 Data Loss Hardening：只处理会造成丢稿或无法恢复继续写的 recovery/history/lock 缺口。完成判定：dirty recovery、file-ref recovery、版本回滚前快照、stale lock 提示都有可复现测试；默认不删除 `history/`、`memories/`、`recovery/`。
 - M95 Provider Compatibility Ship：支持公开用户常见 API provider 的 AI 建议闭环，不追求 streaming 体验。完成判定：用户能配置 OpenAI/GPT、Claude、DeepSeek、GLM、通义等 provider profile；DeepSeek/GLM/通义等 OpenAI-compatible provider 能通过统一兼容层工作；Claude 通过 Anthropic/native adapter 或明确支持的兼容代理工作；失败时得到脱敏错误，成功时看到 diff/review 并手动应用；取消不会写入正文。
 - M96 Story Bible Consistency Minimum：只补作者继续写作所需的一致性提示，不做完整知识图谱或时间线编辑器。完成判定：系统能提示“这个人物设定在前文有冲突”这类最小冲突，并提供跳转链接到相关 Story Bible 条目或章节上下文；缺失人物/地点/时间线引用能在 Project Health 或写作界面提示。
