@@ -225,6 +225,35 @@ describe("editor runtime adapter resolver", () => {
     });
   });
 
+  test("records an explicit CodeMirror DOM view mount request with view package metadata", () => {
+    const mountInput = {
+      body: "CodeMirror view body",
+      saveStatus: "Saved" as const,
+      domMountTarget: {
+        targetId: "chapter-editor-root",
+        ownerDocumentLabel: "renderer-document"
+      },
+      domMountElement: { nodeType: 1 }
+    };
+
+    const handle = createCodeMirrorEditorRuntimeAdapter().mount(mountInput);
+
+    expect(handle.getSnapshot()).toMatchObject({
+      runtimeViewPackage: {
+        name: "@codemirror/view",
+        role: "dom-view"
+      },
+      domViewMount: {
+        status: "mounted",
+        packageName: "@codemirror/view",
+        role: "dom-view",
+        targetId: "chapter-editor-root",
+        ownerDocumentLabel: "renderer-document",
+        fallbackRuntimeId: "textarea"
+      }
+    });
+  });
+
   test("summarizes normalized editor selections for future focused commands", () => {
     const handle = createTextareaEditorRuntimeAdapter().mount({
       body: "First line\nSecond line\nThird line",

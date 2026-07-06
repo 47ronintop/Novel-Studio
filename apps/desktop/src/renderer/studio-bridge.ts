@@ -1,6 +1,9 @@
 import {
+  applyConfigWorkflowGraphLayoutEdit,
   applyConfigWorkflowNodeInspectorEdit,
+  createConfigWorkflowGraphLayout,
   type ConfigAssetType,
+  type ConfigWorkflowGraphLayoutEdit,
   type ConfigWorkflowNodeInspectorEdit,
   type NovelStudioApi
 } from "@novel-studio/application";
@@ -37,6 +40,7 @@ export interface StudioBridge {
   updateContent(nextContent: string): ConfigStudioPanelProps;
   selectWorkflowNode(nodeId: string): ConfigStudioPanelProps;
   applyWorkflowNodeEdit(edit: ConfigWorkflowNodeInspectorEdit): ConfigStudioPanelProps;
+  updateWorkflowGraphLayout(edit: ConfigWorkflowGraphLayoutEdit): ConfigStudioPanelProps;
   beginSave(): ConfigStudioPanelProps;
   save(): Promise<ConfigStudioPanelProps>;
   beginRestore(): ConfigStudioPanelProps;
@@ -115,6 +119,24 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
       selectedWorkflowNodeId = selectedWorkflowNodeIdForGraph(
         result.value.workflowGraph,
         selectedWorkflowNodeId ?? edit.stepId
+      );
+      status = "idle";
+      feedback = undefined;
+      return toProps();
+    },
+    updateWorkflowGraphLayout(edit) {
+      if (selectedAsset.workflowGraph === undefined) {
+        return toProps();
+      }
+
+      selectedAsset = {
+        ...selectedAsset,
+        validationStatus: selectedAsset.validationStatus === "invalid" ? "invalid" : "dirty",
+        workflowGraph: applyConfigWorkflowGraphLayoutEdit(selectedAsset.workflowGraph, edit)
+      };
+      selectedWorkflowNodeId = selectedWorkflowNodeIdForGraph(
+        selectedAsset.workflowGraph,
+        edit.nodeId
       );
       status = "idle";
       feedback = undefined;
@@ -254,6 +276,7 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
       onAssetSelect: () => undefined,
       onContentChange: () => undefined,
       onWorkflowNodeSelect: () => undefined,
+      onWorkflowLayoutChange: () => undefined,
       onSave: () => undefined,
       onRestoreVersion: () => undefined
     };
@@ -304,7 +327,14 @@ function assetFromSnapshot(
     title: titleFromContent(content, assetId),
     validationStatus: "valid",
     content: JSON.stringify(content, null, 2),
-    ...(workflowGraph === undefined ? {} : { workflowGraph })
+    ...(workflowGraph === undefined
+      ? {}
+      : {
+          workflowGraph: {
+            ...workflowGraph,
+            layout: workflowGraph.layout ?? createConfigWorkflowGraphLayout(workflowGraph.graph)
+          }
+        })
   };
 }
 

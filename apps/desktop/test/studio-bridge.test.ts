@@ -111,8 +111,36 @@ describe("M23 studio bridge", () => {
         ],
         edges: [{ id: "context:next:save", fromNodeId: "context", toNodeId: "save", kind: "next" }]
       },
-      validation: { status: "valid", issues: [] }
+      validation: { status: "valid", issues: [] },
+      layout: {
+        schemaVersion: "1.0",
+        source: "generated",
+        viewport: { x: 0, y: 0, zoom: 1 },
+        nodes: [
+          { nodeId: "context", x: 0, y: 0 },
+          { nodeId: "save", x: 220, y: 0 }
+        ]
+      }
     });
+  });
+
+  test("updates workflow graph layout as a local Studio draft without saving", async () => {
+    const calls: string[] = [];
+    const bridge = createStudioBridge(createApi(calls));
+
+    await bridge.selectAsset("workflow", "wf_review_chapter");
+    const props = bridge.updateWorkflowGraphLayout({
+      nodeId: "save",
+      x: 360,
+      y: 120
+    });
+
+    expect(props.selectedAsset.workflowGraph?.layout).toMatchObject({
+      source: "draft",
+      nodes: expect.arrayContaining([{ nodeId: "save", x: 360, y: 120 }])
+    });
+    expect(props.selectedAsset.validationStatus).toBe("dirty");
+    expect(calls).not.toContain("studio.saveConfigAsset:workflow:wf_review_chapter");
   });
 
   test("applies workflow inspector edits to the JSON draft and refreshes graph validation", async () => {

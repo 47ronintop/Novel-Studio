@@ -138,6 +138,7 @@ export type {
   PluginRuntimeSession,
   PluginRuntimeSessionOptions,
   PluginRuntimeWorkflowStepInput,
+  PluginIsolationWorkerPrototypeOptions,
   PluginSandboxIsolationInput,
   PluginSandboxIsolationPlan,
   PluginSandboxIsolationReadiness,
@@ -153,6 +154,7 @@ export type {
   PluginSandboxTrustState
 } from "./plugin-runtime-session.js";
 export {
+  createPluginIsolationWorkerPrototypeAdapter,
   createPluginSandboxIsolationPlan,
   createPluginSandboxFixtureWorkerAdapter,
   createPluginRuntimeSession,
@@ -169,11 +171,16 @@ export type {
   ConfigStudioSessionOptions,
   ConfigWorkflowNodeInspectorEdit,
   ConfigWorkflowNodeInspectorEditResult,
+  ConfigWorkflowGraphLayout,
+  ConfigWorkflowGraphLayoutEdit,
+  ConfigWorkflowGraphLayoutNode,
   ConfigWorkflowGraphSnapshot,
   ConfigVersionSummary
 } from "./config-studio-session.js";
 export {
   applyConfigWorkflowNodeInspectorEdit,
+  applyConfigWorkflowGraphLayoutEdit,
+  createConfigWorkflowGraphLayout,
   createConfigStudioSession
 } from "./config-studio-session.js";
 export type {

@@ -181,6 +181,15 @@ describe("M8 Settings and Studio UI", () => {
                   message: "Workflow step is not reachable from the entry step."
                 }
               ]
+            },
+            layout: {
+              schemaVersion: "1.0",
+              source: "draft",
+              viewport: { x: 0, y: 0, zoom: 1 },
+              nodes: [
+                { nodeId: "context", x: 0, y: 0 },
+                { nodeId: "save", x: 240, y: 80 }
+              ]
             }
           }
         }}
@@ -215,6 +224,9 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).toContain('aria-label="Workflow graph preview"');
     expect(html).toContain("Nodes 2");
     expect(html).toContain("Edges 1");
+    expect(html).toContain('data-layout-x="240"');
+    expect(html).toContain('data-layout-y="80"');
+    expect(html).toContain('aria-label="Move workflow node save right"');
     expect(html).toContain('aria-label="Select workflow node context"');
     expect(html).toContain('aria-label="Select workflow node save"');
     expect(html).toContain('data-selected-node="true"');

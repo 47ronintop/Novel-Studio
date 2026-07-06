@@ -225,6 +225,16 @@ describe("config studio session", () => {
       validation: {
         status: "valid",
         issues: []
+      },
+      layout: {
+        schemaVersion: "1.0",
+        source: "generated",
+        viewport: { x: 0, y: 0, zoom: 1 },
+        nodes: [
+          { nodeId: "context", x: 0, y: 0 },
+          { nodeId: "review", x: 220, y: 0 },
+          { nodeId: "save", x: 440, y: 0 }
+        ]
       }
     });
   });

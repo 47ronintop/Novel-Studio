@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.42 | Status: Active | Last Updated: 2026-07-06
+Version: 1.43 | Status: Active | Last Updated: 2026-07-06
 
 ## 目标
 
@@ -95,6 +95,9 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M75       | Selection Event UI Wiring  | textarea selection events、runtime selection state 和 preview command wiring | Complete |
 | M76       | Selection Preview Apply    | stored selection preview、explicit apply 和 before-ai-apply snapshot         | Complete |
 | M77       | Sandbox Isolation Spike    | sandbox isolation plan DTO、signing/teardown/readiness contract              | Complete |
+| M78       | CodeMirror DOM View        | explicit CodeMirror DOM view mount path、view package metadata 和 fallback   | Complete |
+| M79       | Plugin Isolation Prototype | signed fixture isolation worker prototype、ready/blocked execution contract  | Complete |
+| M80       | Workflow Layout Draft      | graph layout projection、node positions 和 Studio draft layout update        | Complete |
 
 ## M15 完成内容
 
@@ -473,19 +476,29 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - Plugin Runtime 新增 `createPluginSandboxIsolationPlan()`，输出 signing、teardown、timeout、payload、denied capabilities 和 blocked readiness contract，不执行任意插件代码。
 - M75-M77 不包含 CodeMirror 默认替换、真实 isolated worker/process 启动、插件签名 UI、marketplace 或 selection preview 自动保存到章节文件。
 
+## M78-M80 完成内容
+
+- 新增 `PRODUCT.md`，为 UI/product craft 工具提供 product register、用户、产品目的、反参考和设计原则上下文；不改变项目文档优先级。
+- 新增 `docs/productization/m78-m80-codemirror-isolation-workflow-layout.md`，明确 CodeMirror DOM view、plugin isolation prototype 和 workflow layout draft 的范围。
+- Desktop renderer 新增 `@codemirror/view`，CodeMirror runtime adapter 在显式提供 DOM mount element 时记录 mounted DOM view contract，并在真实 DOM parent 可用时构造 `EditorView`；默认仍不替换 textarea。
+- Plugin Runtime isolation plan 在 signed 且无 denied sandbox capability 时进入 `ready`/`executable`；新增 `createPluginIsolationWorkerPrototypeAdapter()`，通过 deterministic fixture 验证 timeout、payload 和 blocked readiness，不执行任意第三方源码。
+- Config Studio workflow graph snapshot 新增 layout projection，按节点顺序生成 deterministic positions；Studio bridge 支持 `updateWorkflowGraphLayout()` 更新本地 draft，不调用 preload save API。
+- Workflow Studio graph preview 渲染 layout 坐标和最小移动入口，保留 invalid graph save gate。
+- M78-M80 不包含 CodeMirror 默认切换、完整编辑器 UI 替换、真实 OS/process sandbox、插件签名 UI、marketplace、graph drag/drop 或 workflow layout 项目文件持久化。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19-M77，其中 M27 首次使用引导已通过 M48 回补完成。
+- Post-M18 产品化打磨已完成 M19-M80，其中 M27 首次使用引导已通过 M48 回补完成。
 - 当前产品状态是 beta productization：主干闭环可运行，但多个宪法/UI 指南能力仍是 Product Gap。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- M78 建议进入 CodeMirror DOM View Implementation：在现有 mount plan 之后实现可回退的真实 DOM view adapter。
-- M79 建议进入 Plugin Isolation Worker Prototype：在 isolation plan 之后验证真实 worker/process 启动、超时 teardown 和输出通道。
-- M80 建议进入 Workflow Designer Layout Persistence：补 graph layout persistence、drag/drop 与 designer availability。
+- M81 建议进入 Selection Apply Review UX：补 selection-level undo、compare 和局部接受/拒绝体验。
+- M82 建议进入 Plugin Signing and Permission UI：补 signing/trust state、权限提示和 sandbox audit 可见化。
+- M83 建议进入 Workflow Designer Interaction：补 graph drag/drop、layout 项目持久化和 designer availability gate。
 
 ## 当前技术债重点
 

@@ -995,6 +995,19 @@ export function App() {
     [studioBridge]
   );
 
+  const handleStudioWorkflowLayoutChange = useCallback<
+    NonNullable<ConfigStudioPanelProps["onWorkflowLayoutChange"]>
+  >(
+    (edit) => {
+      if (studioBridge === undefined) {
+        return;
+      }
+
+      setStudio(studioBridge.updateWorkflowGraphLayout(edit));
+    },
+    [studioBridge]
+  );
+
   const handleStudioSave = useCallback<NonNullable<ConfigStudioPanelProps["onSave"]>>(() => {
     if (studioBridge === undefined) {
       return;
@@ -1120,6 +1133,7 @@ export function App() {
               onContentChange: handleStudioContentChange,
               onWorkflowNodeSelect: handleStudioWorkflowNodeSelect,
               onWorkflowNodeEdit: handleStudioWorkflowNodeEdit,
+              onWorkflowLayoutChange: handleStudioWorkflowLayoutChange,
               onSave: handleStudioSave,
               onRestoreVersion: handleStudioRestoreVersion
             } satisfies ConfigStudioPanelProps

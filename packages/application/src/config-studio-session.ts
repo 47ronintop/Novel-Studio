@@ -24,6 +24,30 @@ export interface ConfigAssetSnapshot {
 export interface ConfigWorkflowGraphSnapshot {
   readonly graph: WorkflowGraphViewModel;
   readonly validation: WorkflowValidationReport;
+  readonly layout?: ConfigWorkflowGraphLayout;
+}
+
+export interface ConfigWorkflowGraphLayoutNode {
+  readonly nodeId: string;
+  readonly x: number;
+  readonly y: number;
+}
+
+export interface ConfigWorkflowGraphLayout {
+  readonly schemaVersion: "1.0";
+  readonly source: "generated" | "draft";
+  readonly viewport: {
+    readonly x: number;
+    readonly y: number;
+    readonly zoom: number;
+  };
+  readonly nodes: readonly ConfigWorkflowGraphLayoutNode[];
+}
+
+export interface ConfigWorkflowGraphLayoutEdit {
+  readonly nodeId: string;
+  readonly x: number;
+  readonly y: number;
 }
 
 export interface ConfigVersionSummary {
@@ -147,8 +171,50 @@ export function applyConfigWorkflowNodeInspectorEdit(input: {
       content: edited.value as unknown as JsonObject,
       workflowGraph: {
         graph: buildWorkflowGraphViewModel(edited.value),
-        validation: validateWorkflowGraph(edited.value)
+        validation: validateWorkflowGraph(edited.value),
+        layout: createConfigWorkflowGraphLayout(buildWorkflowGraphViewModel(edited.value))
       }
+    }
+  };
+}
+
+export function createConfigWorkflowGraphLayout(
+  graph: WorkflowGraphViewModel,
+  previousLayout?: ConfigWorkflowGraphLayout
+): ConfigWorkflowGraphLayout {
+  const previousByNodeId = new Map(
+    previousLayout?.nodes.map((node) => [node.nodeId, node] as const) ?? []
+  );
+
+  return {
+    schemaVersion: "1.0",
+    source: previousLayout?.source ?? "generated",
+    viewport: previousLayout?.viewport ?? { x: 0, y: 0, zoom: 1 },
+    nodes: graph.nodes.map((node, index) => {
+      const previous = previousByNodeId.get(node.id);
+      return previous ?? { nodeId: node.id, x: index * 220, y: 0 };
+    })
+  };
+}
+
+export function applyConfigWorkflowGraphLayoutEdit(
+  snapshot: ConfigWorkflowGraphSnapshot,
+  edit: ConfigWorkflowGraphLayoutEdit
+): ConfigWorkflowGraphSnapshot {
+  const currentLayout = createConfigWorkflowGraphLayout(snapshot.graph, snapshot.layout);
+  const nodeExists = snapshot.graph.nodes.some((node) => node.id === edit.nodeId);
+  if (!nodeExists) {
+    return snapshot;
+  }
+
+  return {
+    ...snapshot,
+    layout: {
+      ...currentLayout,
+      source: "draft",
+      nodes: currentLayout.nodes.map((node) =>
+        node.nodeId === edit.nodeId ? { nodeId: edit.nodeId, x: edit.x, y: edit.y } : node
+      )
     }
   };
 }
@@ -170,7 +236,8 @@ function workflowGraphForContent(
   return {
     workflowGraph: {
       graph: buildWorkflowGraphViewModel(parsed.value),
-      validation: validateWorkflowGraph(parsed.value)
+      validation: validateWorkflowGraph(parsed.value),
+      layout: createConfigWorkflowGraphLayout(buildWorkflowGraphViewModel(parsed.value))
     }
   };
 }

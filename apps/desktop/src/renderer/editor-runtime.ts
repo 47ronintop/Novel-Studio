@@ -1,6 +1,7 @@
 import type { ChapterEditorDiffPreview, ChapterEditorRuntimeProps } from "@novel-studio/ui";
 import type { SaveStatus } from "@novel-studio/application";
 import { EditorSelection, EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 
 export interface EditorRuntimeSelection {
   readonly anchor: number;
@@ -43,6 +44,14 @@ export type EditorRuntimeDomViewMount =
     }
   | {
       readonly status: "planned";
+      readonly packageName: "@codemirror/view";
+      readonly role: "dom-view";
+      readonly targetId: string;
+      readonly ownerDocumentLabel: string;
+      readonly fallbackRuntimeId: "textarea";
+    }
+  | {
+      readonly status: "mounted";
       readonly packageName: "@codemirror/view";
       readonly role: "dom-view";
       readonly targetId: string;
@@ -97,6 +106,10 @@ export interface EditorRuntimeSnapshot {
     readonly name: "@codemirror/state";
     readonly role: "headless-state";
   };
+  readonly runtimeViewPackage?: {
+    readonly name: "@codemirror/view";
+    readonly role: "dom-view";
+  };
   readonly documentMode: string;
   readonly body: string;
   readonly saveStatus: SaveStatus;
@@ -112,6 +125,7 @@ export interface EditorRuntimeMountInput {
   readonly body: string;
   readonly saveStatus: SaveStatus;
   readonly domMountTarget?: EditorRuntimeDomMountTarget;
+  readonly domMountElement?: unknown;
   readonly onEvent?: (event: EditorRuntimeEvent) => void;
 }
 
@@ -251,6 +265,7 @@ function createCodeMirrorBackedEditorRuntimeAdapter(): EditorRuntimeAdapter {
     adapterLabel: "CodeMirror 6 Headless Adapter (flagged)",
     mount(mountInput) {
       let state = EditorState.create({ doc: mountInput.body });
+      let view = createCodeMirrorDomView(state, mountInput.domMountElement);
       let selection: EditorRuntimeSelection | undefined;
       let focused = false;
       let destroyed = false;
@@ -264,6 +279,7 @@ function createCodeMirrorBackedEditorRuntimeAdapter(): EditorRuntimeAdapter {
         state = state.update({
           changes: { from: 0, to: state.doc.length, insert: nextBody }
         }).state;
+        view?.setState(state);
       }
 
       function setSelection(nextSelection: EditorRuntimeSelection): void {
@@ -272,6 +288,7 @@ function createCodeMirrorBackedEditorRuntimeAdapter(): EditorRuntimeAdapter {
         state = state.update({
           selection: EditorSelection.single(anchor, head)
         }).state;
+        view?.setState(state);
         selection = nextSelection;
       }
 
@@ -281,6 +298,17 @@ function createCodeMirrorBackedEditorRuntimeAdapter(): EditorRuntimeAdapter {
             status: "not-requested",
             packageName: "@codemirror/view",
             role: "dom-view",
+            fallbackRuntimeId: "textarea"
+          };
+        }
+
+        if (mountInput.domMountElement !== undefined) {
+          return {
+            status: "mounted",
+            packageName: "@codemirror/view",
+            role: "dom-view",
+            targetId: mountInput.domMountTarget.targetId,
+            ownerDocumentLabel: mountInput.domMountTarget.ownerDocumentLabel,
             fallbackRuntimeId: "textarea"
           };
         }
@@ -305,6 +333,14 @@ function createCodeMirrorBackedEditorRuntimeAdapter(): EditorRuntimeAdapter {
               name: "@codemirror/state",
               role: "headless-state"
             },
+            ...(mountInput.domMountElement === undefined
+              ? {}
+              : {
+                  runtimeViewPackage: {
+                    name: "@codemirror/view",
+                    role: "dom-view"
+                  }
+                }),
             documentMode: "Markdown",
             body: currentBody,
             saveStatus: mountInput.saveStatus,
@@ -364,9 +400,12 @@ function createCodeMirrorBackedEditorRuntimeAdapter(): EditorRuntimeAdapter {
             return;
           }
           focused = true;
+          view?.focus();
         },
         destroy() {
           destroyed = true;
+          view?.destroy();
+          view = undefined;
         }
       };
     }
@@ -524,6 +563,23 @@ function clampOffset(value: number, body: string): number {
 
 function clampCodeMirrorOffset(value: number, state: EditorState): number {
   return Math.min(Math.max(0, value), state.doc.length);
+}
+
+function createCodeMirrorDomView(state: EditorState, parent: unknown): EditorView | undefined {
+  if (parent === undefined || !isDomParent(parent)) {
+    return undefined;
+  }
+
+  return new EditorView({ state, parent });
+}
+
+function isDomParent(value: unknown): value is Element | DocumentFragment {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "appendChild" in value &&
+    "ownerDocument" in value
+  );
 }
 
 function lineNumberForOffset(body: string, offset: number): number {

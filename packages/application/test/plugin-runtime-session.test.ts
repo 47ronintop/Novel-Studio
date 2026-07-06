@@ -5,6 +5,7 @@ import { ok } from "@novel-studio/shared";
 import {
   createPluginSandboxIsolationPlan,
   createPluginSandboxFixtureWorkerAdapter,
+  createPluginIsolationWorkerPrototypeAdapter,
   createPluginSandboxPolicyReport,
   createPluginRuntimeSession,
   type PluginRuntimeAdapter
@@ -398,6 +399,101 @@ describe("PluginRuntimeSession", () => {
           ]
         }
       ]
+    });
+  });
+
+  test("runs signed ready plugins through the isolation worker prototype adapter", () => {
+    const plan = createPluginSandboxIsolationPlan({
+      snapshot: enabledSnapshot,
+      runtimeKind: "worker-thread",
+      timeoutMs: 250,
+      maxOutputBytes: 512,
+      signedPluginIds: ["novel.structure-tools"]
+    });
+    const session = createPluginRuntimeSession({
+      snapshot: enabledSnapshot,
+      adapter: createPluginIsolationWorkerPrototypeAdapter({
+        plan,
+        fixtures: {
+          "novel.structure-tools:outline.score": {
+            output: {
+              accepted: true,
+              isolated: true
+            },
+            durationMs: 25
+          }
+        }
+      })
+    });
+
+    expect(plan.workers[0]).toMatchObject({
+      pluginId: "novel.structure-tools",
+      executable: true,
+      readiness: "ready",
+      signing: "satisfied",
+      deniedCapabilities: []
+    });
+    expect(
+      session.runWorkflowStep({
+        pluginId: "novel.structure-tools",
+        contributionId: "outline.score",
+        input: { chapterId: "ch_01" },
+        traceId: "trace_isolated_worker"
+      })
+    ).toEqual(
+      ok({
+        output: {
+          accepted: true,
+          isolated: true
+        }
+      })
+    );
+  });
+
+  test("blocks isolation worker prototype execution until signing is satisfied", () => {
+    const plan = createPluginSandboxIsolationPlan({
+      snapshot: enabledSnapshot,
+      runtimeKind: "worker-thread",
+      timeoutMs: 250,
+      maxOutputBytes: 512,
+      signedPluginIds: []
+    });
+    const session = createPluginRuntimeSession({
+      snapshot: enabledSnapshot,
+      adapter: createPluginIsolationWorkerPrototypeAdapter({
+        plan,
+        fixtures: {
+          "novel.structure-tools:outline.score": {
+            output: { accepted: true },
+            durationMs: 25
+          }
+        }
+      })
+    });
+
+    expect(plan.workers[0]).toMatchObject({
+      executable: false,
+      readiness: "blocked",
+      signing: "required"
+    });
+    expect(
+      session.runWorkflowStep({
+        pluginId: "novel.structure-tools",
+        contributionId: "outline.score",
+        input: {},
+        traceId: "trace_isolated_unsigned"
+      })
+    ).toMatchObject({
+      ok: false,
+      error: {
+        code: "PLUGIN_RUNTIME_PERMISSION_DENIED",
+        category: "PluginError",
+        redactedDetail: {
+          pluginId: "novel.structure-tools",
+          readiness: "blocked",
+          signing: "required"
+        }
+      }
     });
   });
 });

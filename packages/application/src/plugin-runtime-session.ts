@@ -57,6 +57,11 @@ export interface PluginSandboxFixtureWorkerOptions {
   readonly maxOutputBytes: number;
 }
 
+export interface PluginIsolationWorkerPrototypeOptions {
+  readonly plan: PluginSandboxIsolationPlan;
+  readonly fixtures: Readonly<Record<string, PluginSandboxFixtureWorkerOutput>>;
+}
+
 export interface PluginSandboxPolicyInput {
   readonly snapshot: PluginSettingsSnapshot;
   readonly timeoutMs?: number;
@@ -279,6 +284,7 @@ export function createPluginSandboxIsolationPlan(
       const signing: PluginSandboxIsolationSigning = signedPluginIds.has(entry.pluginId)
         ? "satisfied"
         : "required";
+      const executable = signing === "satisfied" && deniedCapabilities.length === 0;
       const reasons = [
         ...(signing === "required"
           ? ["Plugin package must be signed or explicitly trusted before isolated execution."]
@@ -286,13 +292,13 @@ export function createPluginSandboxIsolationPlan(
         ...deniedCapabilities.map(
           (capability) => `Plugin requests denied sandbox capability ${capability}.`
         ),
-        "Real isolated worker execution is not enabled by this spike."
+        ...(executable ? [] : ["Real isolated worker execution is not enabled by this spike."])
       ];
 
       return {
         pluginId: entry.pluginId,
-        executable: false,
-        readiness: "blocked",
+        executable,
+        readiness: executable ? "ready" : "blocked",
         signing,
         teardown: "required",
         timeoutMs,
@@ -301,6 +307,29 @@ export function createPluginSandboxIsolationPlan(
         reasons
       };
     })
+  };
+}
+
+export function createPluginIsolationWorkerPrototypeAdapter(
+  options: PluginIsolationWorkerPrototypeOptions
+): PluginRuntimeAdapter {
+  return {
+    executeHostCommand(input) {
+      return runIsolationWorkerPrototype({
+        pluginId: input.pluginId,
+        contributionId: input.contributionId,
+        traceId: input.traceId,
+        options
+      });
+    },
+    executeWorkflowStep(input) {
+      return runIsolationWorkerPrototype({
+        pluginId: input.pluginId,
+        contributionId: input.contributionId,
+        traceId: input.traceId,
+        options
+      });
+    }
   };
 }
 
@@ -521,6 +550,55 @@ function runFixtureWorker(input: {
   }
 
   return ok({ output: fixture.output });
+}
+
+function runIsolationWorkerPrototype(input: {
+  readonly pluginId: string;
+  readonly contributionId: string;
+  readonly traceId: string;
+  readonly options: PluginIsolationWorkerPrototypeOptions;
+}): Result<PluginRuntimeAdapterResult, UnifiedError> {
+  const workerPlan = input.options.plan.workers.find(
+    (worker) => worker.pluginId === input.pluginId
+  );
+  if (workerPlan === undefined) {
+    return runtimeError({
+      code: "PLUGIN_RUNTIME_UNAVAILABLE",
+      message: "No isolated worker plan is registered for this plugin.",
+      suggestedAction: "Refresh the plugin sandbox isolation plan before running this plugin.",
+      traceId: input.traceId,
+      redactedDetail: {
+        pluginId: input.pluginId,
+        runtimeKind: input.options.plan.runtimeKind
+      }
+    });
+  }
+
+  if (!workerPlan.executable || workerPlan.readiness !== "ready") {
+    return runtimeError({
+      code: "PLUGIN_RUNTIME_PERMISSION_DENIED",
+      message: "Plugin isolated worker execution is blocked by the sandbox plan.",
+      suggestedAction: "Satisfy plugin signing and remove denied capabilities before execution.",
+      traceId: input.traceId,
+      redactedDetail: {
+        pluginId: input.pluginId,
+        readiness: workerPlan.readiness,
+        signing: workerPlan.signing,
+        deniedCapabilities: [...workerPlan.deniedCapabilities]
+      }
+    });
+  }
+
+  return runFixtureWorker({
+    pluginId: input.pluginId,
+    contributionId: input.contributionId,
+    traceId: input.traceId,
+    options: {
+      fixtures: input.options.fixtures,
+      timeoutMs: workerPlan.timeoutMs,
+      maxOutputBytes: workerPlan.maxOutputBytes
+    }
+  });
 }
 
 function fixtureKey(pluginId: string, contributionId: string): string {

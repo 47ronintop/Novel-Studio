@@ -1,5 +1,8 @@
 import { Boxes, RotateCcw, Save } from "lucide-react";
-import type { ConfigWorkflowGraphSnapshot } from "@novel-studio/application";
+import type {
+  ConfigWorkflowGraphLayoutEdit,
+  ConfigWorkflowGraphSnapshot
+} from "@novel-studio/application";
 
 export type ConfigStudioAssetType = "prompt" | "agent" | "workflow";
 export type ConfigValidationStatus = "valid" | "invalid" | "dirty";
@@ -46,6 +49,7 @@ export interface ConfigStudioPanelProps {
   readonly onContentChange?: (nextContent: string) => void;
   readonly onWorkflowNodeSelect?: (nodeId: string) => void;
   readonly onWorkflowNodeEdit?: (edit: ConfigStudioWorkflowNodeEdit) => void;
+  readonly onWorkflowLayoutChange?: (edit: ConfigWorkflowGraphLayoutEdit) => void;
   readonly onSave?: () => void;
   readonly onRestoreVersion?: (versionId: string) => void;
 }
@@ -61,6 +65,7 @@ export function ConfigStudioPanel({
   onContentChange,
   onWorkflowNodeSelect,
   onWorkflowNodeEdit,
+  onWorkflowLayoutChange,
   onSave,
   onRestoreVersion
 }: ConfigStudioPanelProps) {
@@ -146,6 +151,7 @@ export function ConfigStudioPanel({
               {...(selectedWorkflowNodeId === undefined ? {} : { selectedWorkflowNodeId })}
               {...(onWorkflowNodeSelect === undefined ? {} : { onWorkflowNodeSelect })}
               {...(onWorkflowNodeEdit === undefined ? {} : { onWorkflowNodeEdit })}
+              {...(onWorkflowLayoutChange === undefined ? {} : { onWorkflowLayoutChange })}
             />
           )}
         </main>
@@ -190,14 +196,19 @@ function WorkflowGraphPreview({
   workflowGraph,
   selectedWorkflowNodeId,
   onWorkflowNodeSelect,
-  onWorkflowNodeEdit
+  onWorkflowNodeEdit,
+  onWorkflowLayoutChange
 }: {
   readonly workflowGraph: ConfigWorkflowGraphSnapshot;
   readonly selectedWorkflowNodeId?: string;
   readonly onWorkflowNodeSelect?: (nodeId: string) => void;
   readonly onWorkflowNodeEdit?: (edit: ConfigStudioWorkflowNodeEdit) => void;
+  readonly onWorkflowLayoutChange?: (edit: ConfigWorkflowGraphLayoutEdit) => void;
 }) {
   const activeNodeId = selectedWorkflowNodeId ?? workflowGraph.graph.entryNodeId;
+  const layoutByNodeId = new Map(
+    workflowGraph.layout?.nodes.map((node) => [node.nodeId, node] as const) ?? []
+  );
 
   return (
     <section className="config-studio-workflow-graph" aria-label="Workflow graph preview">
@@ -210,19 +221,39 @@ function WorkflowGraphPreview({
         <span>Edges {workflowGraph.graph.edges.length}</span>
       </div>
       <ol aria-label="Workflow graph nodes">
-        {workflowGraph.graph.nodes.map((node) => (
-          <li key={node.id}>
-            <button
-              aria-label={`Select workflow node ${node.id}`}
-              data-selected-node={node.id === activeNodeId}
-              onClick={() => onWorkflowNodeSelect?.(node.id)}
-              type="button"
-            >
-              <span>{node.label}</span>
-              <span>{node.kind}</span>
-            </button>
-          </li>
-        ))}
+        {workflowGraph.graph.nodes.map((node, index) => {
+          const layout = layoutByNodeId.get(node.id) ?? {
+            nodeId: node.id,
+            x: index * 220,
+            y: 0
+          };
+          return (
+            <li data-layout-x={layout.x} data-layout-y={layout.y} key={node.id}>
+              <button
+                aria-label={`Select workflow node ${node.id}`}
+                data-selected-node={node.id === activeNodeId}
+                onClick={() => onWorkflowNodeSelect?.(node.id)}
+                type="button"
+              >
+                <span>{node.label}</span>
+                <span>{node.kind}</span>
+              </button>
+              <button
+                aria-label={`Move workflow node ${node.id} right`}
+                onClick={() =>
+                  onWorkflowLayoutChange?.({
+                    nodeId: node.id,
+                    x: layout.x + 120,
+                    y: layout.y
+                  })
+                }
+                type="button"
+              >
+                Move right
+              </button>
+            </li>
+          );
+        })}
       </ol>
       <ol aria-label="Workflow graph edges">
         {workflowGraph.graph.edges.map((edge) => (
