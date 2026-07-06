@@ -1,5 +1,7 @@
+import type { CSSProperties } from "react";
 import { Boxes, RotateCcw, Save } from "lucide-react";
 import type {
+  ConfigWorkflowDesignerAvailability,
   ConfigWorkflowGraphLayoutEdit,
   ConfigWorkflowGraphSnapshot
 } from "@novel-studio/application";
@@ -45,11 +47,14 @@ export interface ConfigStudioPanelProps {
   readonly status: ConfigStudioStatus;
   readonly feedback?: { readonly kind: "info" | "error"; readonly message: string };
   readonly selectedWorkflowNodeId?: string;
+  readonly selectedWorkflowEdgeId?: string;
   readonly onAssetSelect?: (assetType: ConfigStudioAssetType, assetId: string) => void;
   readonly onContentChange?: (nextContent: string) => void;
   readonly onWorkflowNodeSelect?: (nodeId: string) => void;
+  readonly onWorkflowEdgeSelect?: (edgeId: string) => void;
   readonly onWorkflowNodeEdit?: (edit: ConfigStudioWorkflowNodeEdit) => void;
   readonly onWorkflowLayoutChange?: (edit: ConfigWorkflowGraphLayoutEdit) => void;
+  readonly onWorkflowNodeDragCommit?: (edit: ConfigWorkflowGraphLayoutEdit) => void;
   readonly onSave?: () => void;
   readonly onRestoreVersion?: (versionId: string) => void;
 }
@@ -61,11 +66,14 @@ export function ConfigStudioPanel({
   status,
   feedback,
   selectedWorkflowNodeId,
+  selectedWorkflowEdgeId,
   onAssetSelect,
   onContentChange,
   onWorkflowNodeSelect,
+  onWorkflowEdgeSelect,
   onWorkflowNodeEdit,
   onWorkflowLayoutChange,
+  onWorkflowNodeDragCommit,
   onSave,
   onRestoreVersion
 }: ConfigStudioPanelProps) {
@@ -149,9 +157,12 @@ export function ConfigStudioPanel({
             <WorkflowGraphPreview
               workflowGraph={selectedAsset.workflowGraph}
               {...(selectedWorkflowNodeId === undefined ? {} : { selectedWorkflowNodeId })}
+              {...(selectedWorkflowEdgeId === undefined ? {} : { selectedWorkflowEdgeId })}
               {...(onWorkflowNodeSelect === undefined ? {} : { onWorkflowNodeSelect })}
+              {...(onWorkflowEdgeSelect === undefined ? {} : { onWorkflowEdgeSelect })}
               {...(onWorkflowNodeEdit === undefined ? {} : { onWorkflowNodeEdit })}
               {...(onWorkflowLayoutChange === undefined ? {} : { onWorkflowLayoutChange })}
+              {...(onWorkflowNodeDragCommit === undefined ? {} : { onWorkflowNodeDragCommit })}
             />
           )}
         </main>
@@ -195,17 +206,24 @@ function validationLabel(status: ConfigValidationStatus): string {
 function WorkflowGraphPreview({
   workflowGraph,
   selectedWorkflowNodeId,
+  selectedWorkflowEdgeId,
   onWorkflowNodeSelect,
+  onWorkflowEdgeSelect,
   onWorkflowNodeEdit,
-  onWorkflowLayoutChange
+  onWorkflowLayoutChange,
+  onWorkflowNodeDragCommit
 }: {
   readonly workflowGraph: ConfigWorkflowGraphSnapshot;
   readonly selectedWorkflowNodeId?: string;
+  readonly selectedWorkflowEdgeId?: string;
   readonly onWorkflowNodeSelect?: (nodeId: string) => void;
+  readonly onWorkflowEdgeSelect?: (edgeId: string) => void;
   readonly onWorkflowNodeEdit?: (edit: ConfigStudioWorkflowNodeEdit) => void;
   readonly onWorkflowLayoutChange?: (edit: ConfigWorkflowGraphLayoutEdit) => void;
+  readonly onWorkflowNodeDragCommit?: (edit: ConfigWorkflowGraphLayoutEdit) => void;
 }) {
   const activeNodeId = selectedWorkflowNodeId ?? workflowGraph.graph.entryNodeId;
+  const availability = createWorkflowDesignerAvailability(workflowGraph);
   const layoutByNodeId = new Map(
     workflowGraph.layout?.nodes.map((node) => [node.nodeId, node] as const) ?? []
   );
@@ -220,15 +238,31 @@ function WorkflowGraphPreview({
         <span>Nodes {workflowGraph.graph.nodes.length}</span>
         <span>Edges {workflowGraph.graph.edges.length}</span>
       </div>
-      <ol aria-label="Workflow graph nodes">
+      <WorkflowDesignerAvailabilityBanner availability={availability} />
+      <ol
+        aria-label="Workflow designer canvas"
+        className="config-studio-workflow-canvas"
+        data-designer-status={availability.status}
+      >
         {workflowGraph.graph.nodes.map((node, index) => {
           const layout = layoutByNodeId.get(node.id) ?? {
             nodeId: node.id,
             x: index * 220,
             y: 0
           };
+          const canvasStyle = {
+            "--canvas-x": `${layout.x}px`,
+            "--canvas-y": `${layout.y}px`
+          } as CSSProperties;
           return (
-            <li data-layout-x={layout.x} data-layout-y={layout.y} key={node.id}>
+            <li
+              data-canvas-x={layout.x}
+              data-canvas-y={layout.y}
+              data-layout-x={layout.x}
+              data-layout-y={layout.y}
+              key={node.id}
+              style={canvasStyle}
+            >
               <button
                 aria-label={`Select workflow node ${node.id}`}
                 data-selected-node={node.id === activeNodeId}
@@ -240,6 +274,7 @@ function WorkflowGraphPreview({
               </button>
               <button
                 aria-label={`Move workflow node ${node.id} right`}
+                disabled={!availability.canDragNodes}
                 onClick={() =>
                   onWorkflowLayoutChange?.({
                     nodeId: node.id,
@@ -253,6 +288,7 @@ function WorkflowGraphPreview({
               </button>
               <button
                 aria-label={`Move workflow node ${node.id} left`}
+                disabled={!availability.canDragNodes}
                 onClick={() =>
                   onWorkflowLayoutChange?.({
                     nodeId: node.id,
@@ -266,6 +302,7 @@ function WorkflowGraphPreview({
               </button>
               <button
                 aria-label={`Move workflow node ${node.id} down`}
+                disabled={!availability.canDragNodes}
                 onClick={() =>
                   onWorkflowLayoutChange?.({
                     nodeId: node.id,
@@ -279,6 +316,7 @@ function WorkflowGraphPreview({
               </button>
               <button
                 aria-label={`Move workflow node ${node.id} up`}
+                disabled={!availability.canDragNodes}
                 onClick={() =>
                   onWorkflowLayoutChange?.({
                     nodeId: node.id,
@@ -290,6 +328,20 @@ function WorkflowGraphPreview({
               >
                 Move up
               </button>
+              <button
+                aria-label={`Commit workflow node drag ${node.id}`}
+                disabled={!availability.canDragNodes}
+                onClick={() =>
+                  onWorkflowNodeDragCommit?.({
+                    nodeId: node.id,
+                    x: layout.x,
+                    y: layout.y
+                  })
+                }
+                type="button"
+              >
+                Commit drag
+              </button>
             </li>
           );
         })}
@@ -297,7 +349,15 @@ function WorkflowGraphPreview({
       <ol aria-label="Workflow graph edges">
         {workflowGraph.graph.edges.map((edge) => (
           <li key={edge.id}>
-            {edge.fromNodeId} {"\u2192"} {edge.toNodeId}
+            <button
+              aria-label={`Select workflow edge ${edge.id}`}
+              data-selected-edge={edge.id === selectedWorkflowEdgeId}
+              disabled={!availability.canSelectEdges}
+              onClick={() => onWorkflowEdgeSelect?.(edge.id)}
+              type="button"
+            >
+              {edge.fromNodeId} {"\u2192"} {edge.toNodeId}
+            </button>
           </li>
         ))}
       </ol>
@@ -315,6 +375,52 @@ function WorkflowGraphPreview({
         selectedWorkflowNodeId={activeNodeId}
         {...(onWorkflowNodeEdit === undefined ? {} : { onWorkflowNodeEdit })}
       />
+    </section>
+  );
+}
+
+function createWorkflowDesignerAvailability(
+  workflowGraph: ConfigWorkflowGraphSnapshot
+): ConfigWorkflowDesignerAvailability {
+  const blockerMessages = [
+    ...workflowGraph.validation.issues.map((issue) => issue.message),
+    ...(workflowGraph.layout === undefined ? ["Workflow layout is not available."] : [])
+  ];
+  const ready = blockerMessages.length === 0;
+
+  return {
+    status: ready ? "ready" : "blocked",
+    message: ready ? "Workflow designer canvas ready" : "Workflow designer canvas blocked",
+    blockerMessages,
+    nodeCount: workflowGraph.graph.nodes.length,
+    edgeCount: workflowGraph.graph.edges.length,
+    canDragNodes: ready,
+    canSelectEdges: ready
+  };
+}
+
+function WorkflowDesignerAvailabilityBanner({
+  availability
+}: {
+  readonly availability: ConfigWorkflowDesignerAvailability;
+}) {
+  return (
+    <section
+      aria-label={availability.message}
+      className="config-studio-workflow-availability"
+      data-status={availability.status}
+    >
+      <span>{availability.message}</span>
+      <span>
+        Canvas {availability.nodeCount} nodes / {availability.edgeCount} edges
+      </span>
+      {availability.blockerMessages.length === 0 ? null : (
+        <ol aria-label="Workflow designer blockers">
+          {availability.blockerMessages.map((message) => (
+            <li key={message}>{message}</li>
+          ))}
+        </ol>
+      )}
     </section>
   );
 }

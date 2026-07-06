@@ -1902,6 +1902,158 @@ textarea:focus-visible,
   width: 100%;
 }
 
+.config-studio-workflow-graph {
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+  padding: 10px;
+}
+
+.config-studio-workflow-graph header,
+.config-studio-graph-stats,
+.config-studio-workflow-availability {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.config-studio-workflow-graph h3,
+.config-studio-workflow-graph h4 {
+  font-size: 13px;
+  margin: 0;
+}
+
+.config-studio-graph-stats span,
+.config-studio-workflow-availability > span {
+  border: 1px solid var(--ns-border);
+  border-radius: 999px;
+  color: var(--ns-muted);
+  font-size: 12px;
+  padding: 3px 8px;
+}
+
+.config-studio-workflow-availability[data-status="blocked"] > span:first-child {
+  color: var(--ns-warning);
+}
+
+.config-studio-workflow-availability ol,
+.config-studio-workflow-graph ol {
+  margin: 0;
+  padding: 0;
+}
+
+.config-studio-workflow-availability ol {
+  color: var(--ns-muted);
+  display: grid;
+  flex-basis: 100%;
+  font-size: 12px;
+  gap: 4px;
+  list-style: none;
+}
+
+.config-studio-workflow-canvas {
+  background: color-mix(in srgb, var(--ns-bg) 84%, transparent);
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  list-style: none;
+  min-height: 96px;
+  padding: 8px;
+}
+
+.config-studio-workflow-canvas li {
+  align-content: start;
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px;
+}
+
+.config-studio-workflow-canvas button,
+.config-studio-workflow-graph [aria-label="Workflow graph edges"] button {
+  background: transparent;
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  color: var(--ns-ink);
+  cursor: pointer;
+  font-size: 12px;
+  min-height: 26px;
+  overflow: hidden;
+  padding: 4px 7px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-studio-workflow-canvas button:disabled,
+.config-studio-workflow-graph [aria-label="Workflow graph edges"] button:disabled {
+  color: var(--ns-muted);
+  cursor: not-allowed;
+}
+
+.config-studio-workflow-canvas button[data-selected-node="true"],
+.config-studio-workflow-graph
+  [aria-label="Workflow graph edges"]
+  button[data-selected-edge="true"] {
+  background: color-mix(in srgb, var(--ns-accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--ns-accent) 56%, var(--ns-border));
+}
+
+.config-studio-workflow-graph [aria-label="Workflow graph edges"],
+.config-studio-workflow-graph [aria-label="Workflow graph validation issues"],
+.config-studio-workflow-inspector ol {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+}
+
+.config-studio-workflow-graph [aria-label="Workflow graph validation issues"] li,
+.config-studio-workflow-inspector p,
+.config-studio-workflow-inspector li {
+  color: var(--ns-muted);
+  font-size: 12px;
+  margin: 0;
+}
+
+.config-studio-workflow-inspector {
+  border-top: 1px solid var(--ns-border);
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+}
+
+.config-studio-workflow-inspector-fields {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.config-studio-workflow-inspector-fields label {
+  display: grid;
+  gap: 4px;
+}
+
+.config-studio-workflow-inspector-fields span {
+  color: var(--ns-muted);
+  font-size: 12px;
+}
+
+.config-studio-workflow-inspector-fields input {
+  background: var(--ns-bg);
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  color: var(--ns-ink);
+  min-height: 28px;
+  padding: 4px 7px;
+}
+
 .config-studio-versions {
   align-content: start;
   display: grid;

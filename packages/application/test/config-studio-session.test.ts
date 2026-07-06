@@ -11,6 +11,7 @@ import {
 
 import {
   applyConfigWorkflowGraphLayoutToContent,
+  createConfigWorkflowDesignerAvailability,
   createConfigStudioSession,
   type ConfigAssetPort,
   type ConfigAssetType
@@ -265,5 +266,77 @@ describe("config studio session", () => {
       ]
     });
     expect(result.value.workflowGraph.layout?.source).toBe("draft");
+  });
+
+  test("derives workflow designer availability from graph validation and layout readiness", () => {
+    const availability = createConfigWorkflowDesignerAvailability({
+      graph: {
+        workflowId: "wf_review_chapter",
+        title: "Review current chapter",
+        entryNodeId: "context",
+        nodes: [
+          { id: "context", stepId: "context", kind: "context", label: "context", metadata: {} },
+          { id: "save", stepId: "save", kind: "save", label: "save", metadata: {} }
+        ],
+        edges: [{ id: "context:next:save", fromNodeId: "context", toNodeId: "save", kind: "next" }]
+      },
+      validation: { status: "valid", issues: [] },
+      layout: {
+        schemaVersion: "1.0",
+        source: "draft",
+        viewport: { x: 0, y: 0, zoom: 1 },
+        nodes: [
+          { nodeId: "context", x: 0, y: 0 },
+          { nodeId: "save", x: 240, y: 80 }
+        ]
+      }
+    });
+
+    expect(availability).toEqual({
+      status: "ready",
+      message: "Workflow designer canvas ready",
+      blockerMessages: [],
+      nodeCount: 2,
+      edgeCount: 1,
+      canDragNodes: true,
+      canSelectEdges: true
+    });
+  });
+
+  test("blocks workflow designer canvas interaction when graph validation fails", () => {
+    const availability = createConfigWorkflowDesignerAvailability({
+      graph: {
+        workflowId: "wf_review_chapter",
+        title: "Review current chapter",
+        entryNodeId: "context",
+        nodes: [
+          { id: "context", stepId: "context", kind: "context", label: "context", metadata: {} }
+        ],
+        edges: []
+      },
+      validation: {
+        status: "invalid",
+        issues: [
+          {
+            code: "WORKFLOW_GRAPH_EDGE_TARGET_MISSING",
+            severity: "error",
+            stepId: "context",
+            message: "Workflow edge points to a missing step.",
+            targetStepId: "missing"
+          }
+        ]
+      }
+    });
+
+    expect(availability).toMatchObject({
+      status: "blocked",
+      message: "Workflow designer canvas blocked",
+      nodeCount: 1,
+      edgeCount: 0,
+      canDragNodes: false,
+      canSelectEdges: false
+    });
+    expect(availability.blockerMessages).toContain("Workflow edge points to a missing step.");
+    expect(availability.blockerMessages).toContain("Workflow layout is not available.");
   });
 });

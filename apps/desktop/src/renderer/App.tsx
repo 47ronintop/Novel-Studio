@@ -1029,6 +1029,19 @@ export function App() {
     [studioBridge]
   );
 
+  const handleStudioWorkflowEdgeSelect = useCallback<
+    NonNullable<ConfigStudioPanelProps["onWorkflowEdgeSelect"]>
+  >(
+    (edgeId) => {
+      if (studioBridge === undefined) {
+        return;
+      }
+
+      setStudio(studioBridge.selectWorkflowEdge(edgeId));
+    },
+    [studioBridge]
+  );
+
   const handleStudioWorkflowNodeEdit = useCallback<
     NonNullable<ConfigStudioPanelProps["onWorkflowNodeEdit"]>
   >(
@@ -1051,6 +1064,19 @@ export function App() {
       }
 
       setStudio(studioBridge.updateWorkflowGraphLayout(edit));
+    },
+    [studioBridge]
+  );
+
+  const handleStudioWorkflowNodeDragCommit = useCallback<
+    NonNullable<ConfigStudioPanelProps["onWorkflowNodeDragCommit"]>
+  >(
+    (edit) => {
+      if (studioBridge === undefined) {
+        return;
+      }
+
+      setStudio(studioBridge.commitWorkflowNodeDrag(edit));
     },
     [studioBridge]
   );
@@ -1184,8 +1210,10 @@ export function App() {
               onAssetSelect: handleStudioAssetSelect,
               onContentChange: handleStudioContentChange,
               onWorkflowNodeSelect: handleStudioWorkflowNodeSelect,
+              onWorkflowEdgeSelect: handleStudioWorkflowEdgeSelect,
               onWorkflowNodeEdit: handleStudioWorkflowNodeEdit,
               onWorkflowLayoutChange: handleStudioWorkflowLayoutChange,
+              onWorkflowNodeDragCommit: handleStudioWorkflowNodeDragCommit,
               onSave: handleStudioSave,
               onRestoreVersion: handleStudioRestoreVersion
             } satisfies ConfigStudioPanelProps

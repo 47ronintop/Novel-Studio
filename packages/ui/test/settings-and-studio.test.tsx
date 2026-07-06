@@ -194,6 +194,7 @@ describe("M8 Settings and Studio UI", () => {
           }
         }}
         selectedWorkflowNodeId="save"
+        selectedWorkflowEdgeId="context:next:save"
         versions={[
           {
             versionId: "ver_before_save",
@@ -205,6 +206,8 @@ describe("M8 Settings and Studio UI", () => {
         onAssetSelect={() => undefined}
         onContentChange={() => undefined}
         onWorkflowNodeSelect={() => undefined}
+        onWorkflowEdgeSelect={() => undefined}
+        onWorkflowNodeDragCommit={() => undefined}
         onSave={() => undefined}
         onRestoreVersion={() => undefined}
       />
@@ -222,14 +225,19 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).toContain('aria-label="恢复配置版本 Before save"');
     expect(html).toContain('aria-label="选择配置资产 Reviewer Prompt"');
     expect(html).toContain('aria-label="Workflow graph preview"');
+    expect(html).toContain('aria-label="Workflow designer canvas blocked"');
     expect(html).toContain("Nodes 2");
     expect(html).toContain("Edges 1");
-    expect(html).toContain('data-layout-x="240"');
-    expect(html).toContain('data-layout-y="80"');
+    expect(html).toContain('data-canvas-x="240"');
+    expect(html).toContain('data-canvas-y="80"');
+    expect(html).toContain('style="--canvas-x:240px;--canvas-y:80px"');
     expect(html).toContain('aria-label="Move workflow node save right"');
+    expect(html).toContain('aria-label="Commit workflow node drag save"');
     expect(html).toContain('aria-label="Select workflow node context"');
     expect(html).toContain('aria-label="Select workflow node save"');
+    expect(html).toContain('aria-label="Select workflow edge context:next:save"');
     expect(html).toContain('data-selected-node="true"');
+    expect(html).toContain('data-selected-edge="true"');
     expect(html).toContain("context → save");
     expect(html).toContain("Validation invalid");
     expect(html).toContain('aria-label="Workflow node inspector"');

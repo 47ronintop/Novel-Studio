@@ -40,8 +40,10 @@ export interface StudioBridge {
   selectAsset(assetType: ConfigAssetType, assetId: string): Promise<ConfigStudioPanelProps>;
   updateContent(nextContent: string): ConfigStudioPanelProps;
   selectWorkflowNode(nodeId: string): ConfigStudioPanelProps;
+  selectWorkflowEdge(edgeId: string): ConfigStudioPanelProps;
   applyWorkflowNodeEdit(edit: ConfigWorkflowNodeInspectorEdit): ConfigStudioPanelProps;
   updateWorkflowGraphLayout(edit: ConfigWorkflowGraphLayoutEdit): ConfigStudioPanelProps;
+  commitWorkflowNodeDrag(edit: ConfigWorkflowGraphLayoutEdit): ConfigStudioPanelProps;
   beginSave(): ConfigStudioPanelProps;
   save(): Promise<ConfigStudioPanelProps>;
   beginRestore(): ConfigStudioPanelProps;
@@ -56,6 +58,7 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
   let status: ConfigStudioPanelProps["status"] = "idle";
   let feedback: ConfigStudioPanelProps["feedback"] | undefined;
   let selectedWorkflowNodeId: string | undefined;
+  let selectedWorkflowEdgeId: string | undefined;
 
   return {
     getProps: () => toProps(),
@@ -67,6 +70,7 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
       selectedAssetId = assetId;
       versions = [];
       selectedWorkflowNodeId = undefined;
+      selectedWorkflowEdgeId = undefined;
       return loadSelectedAsset("配置资产已加载。");
     },
     updateContent(nextContent) {
@@ -82,6 +86,14 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
     selectWorkflowNode(nodeId) {
       if (selectedAsset.workflowGraph?.graph.nodes.some((node) => node.id === nodeId) === true) {
         selectedWorkflowNodeId = nodeId;
+        selectedWorkflowEdgeId = undefined;
+        feedback = undefined;
+      }
+      return toProps();
+    },
+    selectWorkflowEdge(edgeId) {
+      if (selectedAsset.workflowGraph?.graph.edges.some((edge) => edge.id === edgeId) === true) {
+        selectedWorkflowEdgeId = edgeId;
         feedback = undefined;
       }
       return toProps();
@@ -121,6 +133,10 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
         result.value.workflowGraph,
         selectedWorkflowNodeId ?? edit.stepId
       );
+      selectedWorkflowEdgeId = selectedWorkflowEdgeIdForGraph(
+        result.value.workflowGraph,
+        selectedWorkflowEdgeId
+      );
       status = "idle";
       feedback = undefined;
       return toProps();
@@ -152,9 +168,13 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
         selectedAsset.workflowGraph,
         edit.nodeId
       );
+      selectedWorkflowEdgeId = undefined;
       status = "idle";
       feedback = undefined;
       return toProps();
+    },
+    commitWorkflowNodeDrag(edit) {
+      return this.updateWorkflowGraphLayout(edit);
     },
     beginSave() {
       if (workflowGraphInvalid(selectedAsset)) {
@@ -249,6 +269,10 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
         result.value.workflowGraph,
         selectedWorkflowNodeId
       );
+      selectedWorkflowEdgeId = selectedWorkflowEdgeIdForGraph(
+        result.value.workflowGraph,
+        selectedWorkflowEdgeId
+      );
       status = "saved";
       feedback = { kind: "info", message: "配置版本已恢复。" };
       return toProps();
@@ -274,6 +298,10 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
       result.value.workflowGraph,
       selectedWorkflowNodeId
     );
+    selectedWorkflowEdgeId = selectedWorkflowEdgeIdForGraph(
+      result.value.workflowGraph,
+      selectedWorkflowEdgeId
+    );
     status = "idle";
     feedback = { kind: "info", message: successMessage };
     return toProps();
@@ -287,10 +315,13 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
       status,
       ...(feedback === undefined ? {} : { feedback }),
       ...(selectedWorkflowNodeId === undefined ? {} : { selectedWorkflowNodeId }),
+      ...(selectedWorkflowEdgeId === undefined ? {} : { selectedWorkflowEdgeId }),
       onAssetSelect: () => undefined,
       onContentChange: () => undefined,
       onWorkflowNodeSelect: () => undefined,
+      onWorkflowEdgeSelect: () => undefined,
       onWorkflowLayoutChange: () => undefined,
+      onWorkflowNodeDragCommit: () => undefined,
       onSave: () => undefined,
       onRestoreVersion: () => undefined
     };
@@ -327,6 +358,19 @@ function selectedWorkflowNodeIdForGraph(
   }
 
   return workflowGraph.graph.entryNodeId;
+}
+
+function selectedWorkflowEdgeIdForGraph(
+  workflowGraph: ConfigStudioAsset["workflowGraph"],
+  preferredEdgeId: string | undefined
+): string | undefined {
+  if (workflowGraph === undefined || preferredEdgeId === undefined) {
+    return undefined;
+  }
+
+  return workflowGraph.graph.edges.some((edge) => edge.id === preferredEdgeId)
+    ? preferredEdgeId
+    : undefined;
 }
 
 function assetFromSnapshot(

@@ -27,6 +27,16 @@ export interface ConfigWorkflowGraphSnapshot {
   readonly layout?: ConfigWorkflowGraphLayout;
 }
 
+export interface ConfigWorkflowDesignerAvailability {
+  readonly status: "ready" | "blocked";
+  readonly message: string;
+  readonly blockerMessages: readonly string[];
+  readonly nodeCount: number;
+  readonly edgeCount: number;
+  readonly canDragNodes: boolean;
+  readonly canSelectEdges: boolean;
+}
+
 export interface ConfigWorkflowGraphLayoutNode {
   readonly nodeId: string;
   readonly x: number;
@@ -253,6 +263,26 @@ export function applyConfigWorkflowGraphLayoutToContent(input: {
       },
       workflowGraph
     }
+  };
+}
+
+export function createConfigWorkflowDesignerAvailability(
+  snapshot: ConfigWorkflowGraphSnapshot
+): ConfigWorkflowDesignerAvailability {
+  const blockerMessages = [
+    ...snapshot.validation.issues.map((issue) => issue.message),
+    ...(snapshot.layout === undefined ? ["Workflow layout is not available."] : [])
+  ];
+  const ready = blockerMessages.length === 0;
+
+  return {
+    status: ready ? "ready" : "blocked",
+    message: ready ? "Workflow designer canvas ready" : "Workflow designer canvas blocked",
+    blockerMessages,
+    nodeCount: snapshot.graph.nodes.length,
+    edgeCount: snapshot.graph.edges.length,
+    canDragNodes: ready,
+    canSelectEdges: ready
   };
 }
 

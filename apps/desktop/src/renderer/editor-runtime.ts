@@ -152,6 +152,23 @@ export interface EditorRuntimeResolverOptions {
   readonly codeMirrorEnabled?: boolean;
 }
 
+export interface EditorRuntimeDefaultReadinessInput {
+  readonly codeMirrorEnabled?: boolean;
+  readonly domViewMount?: EditorRuntimeDomViewMount;
+  readonly eventParityPassed?: boolean;
+  readonly fallbackRuntimeAvailable?: boolean;
+  readonly largeDocumentSmokePassed?: boolean;
+}
+
+export interface EditorRuntimeDefaultReadinessDecision {
+  readonly status: "ready" | "blocked";
+  readonly recommendedDefaultRuntimeId: "textarea" | "codemirror";
+  readonly fallbackRuntimeId: "textarea";
+  readonly blockerMessages: readonly string[];
+  readonly warningMessages: readonly string[];
+  readonly migrationRisk: "low" | "medium" | "high";
+}
+
 export function createTextareaEditorRuntimeAdapter(): EditorRuntimeAdapter {
   return createMemoryBackedEditorRuntimeAdapter({
     runtimeId: "textarea",
@@ -171,6 +188,46 @@ export function resolveEditorRuntimeAdapter(
   }
 
   return createTextareaEditorRuntimeAdapter();
+}
+
+export function evaluateEditorRuntimeDefaultReadiness(
+  input: EditorRuntimeDefaultReadinessInput
+): EditorRuntimeDefaultReadinessDecision {
+  const blockerMessages: string[] = [];
+  const warningMessages: string[] = [];
+
+  if (input.codeMirrorEnabled !== true) {
+    blockerMessages.push("CodeMirror feature flag is not enabled.");
+  }
+
+  if (input.domViewMount === undefined || input.domViewMount.status === "not-requested") {
+    blockerMessages.push("CodeMirror DOM view has not been requested.");
+  } else if (input.domViewMount.status === "planned") {
+    blockerMessages.push("CodeMirror DOM view is planned but not mounted.");
+  }
+
+  if (input.eventParityPassed !== true) {
+    blockerMessages.push("Editor runtime event parity has not passed.");
+  }
+
+  if (input.fallbackRuntimeAvailable !== true) {
+    blockerMessages.push("Textarea fallback runtime is not available.");
+  }
+
+  if (input.largeDocumentSmokePassed !== true) {
+    blockerMessages.push("Large document runtime smoke test has not passed.");
+  }
+
+  const ready = blockerMessages.length === 0;
+
+  return {
+    status: ready ? "ready" : "blocked",
+    recommendedDefaultRuntimeId: ready ? "codemirror" : "textarea",
+    fallbackRuntimeId: "textarea",
+    blockerMessages,
+    warningMessages,
+    migrationRisk: ready ? "low" : blockerMessages.length > 2 ? "high" : "medium"
+  };
 }
 
 function createMemoryBackedEditorRuntimeAdapter(input: {

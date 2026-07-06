@@ -175,6 +175,7 @@ export type {
   ConfigWorkflowNodeInspectorEdit,
   ConfigWorkflowNodeInspectorEditResult,
   ConfigWorkflowGraphLayoutContentEditResult,
+  ConfigWorkflowDesignerAvailability,
   ConfigWorkflowGraphLayout,
   ConfigWorkflowGraphLayoutEdit,
   ConfigWorkflowGraphLayoutNode,
@@ -185,6 +186,7 @@ export {
   applyConfigWorkflowNodeInspectorEdit,
   applyConfigWorkflowGraphLayoutEdit,
   applyConfigWorkflowGraphLayoutToContent,
+  createConfigWorkflowDesignerAvailability,
   createConfigWorkflowGraphLayout,
   createConfigStudioSession
 } from "./config-studio-session.js";

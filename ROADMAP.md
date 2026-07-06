@@ -500,19 +500,29 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - Workflow graph UI 增加 up/down/left/right directional movement controls；仍不改变 workflow execution semantics。
 - M81-M83 不包含 CodeMirror 默认切换、真实外部进程 sandbox、marketplace、完整 drag/drop 画布、复杂 edge 编辑或 Workflow Designer Product Ready。
 
+## M84-M85 完成内容
+
+- 新增 `docs/productization/m84-m85-workflow-canvas-editor-readiness.md`，明确 workflow canvas 和 editor default readiness 的切片边界。
+- Config Studio Application 新增 workflow designer availability DTO，按 graph validation、layout readiness、node/edge count 输出 ready/blocked gate。
+- Studio bridge 新增 selected workflow edge 状态和 `commitWorkflowNodeDrag()`，拖拽提交继续写入 workflow JSON draft `layout` 字段，不调用 preload save API。
+- Workflow graph UI 升级为 canvas-like surface，输出稳定 `data-canvas-x/y`、CSS canvas 坐标、edge selection、designer blockers 和 drag commit 控件。
+- Editor Runtime 新增 `evaluateEditorRuntimeDefaultReadiness()`，显式评估 CodeMirror feature flag、DOM mount、event parity、textarea fallback 和 large-document smoke。
+- `resolveEditorRuntimeAdapter()` 默认仍保持 textarea；M85 只给出 default readiness 决策，不自动切换 CodeMirror。
+- M84-M85 不包含 edge 语义编辑、完整图形化工作流编辑器、Workflow Designer Product Ready、真实 CodeMirror 默认迁移或局部 diff editor。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19-M83，其中 M27 首次使用引导已通过 M48 回补完成。
+- Post-M18 产品化打磨已完成 M19-M85，其中 M27 首次使用引导已通过 M48 回补完成。
 - 当前产品状态是 beta productization：主干闭环可运行，但多个宪法/UI 指南能力仍是 Product Gap。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- M84 建议进入 Workflow Designer Canvas：补真正拖拽画布、edge selection 和可用性 gate。
-- M85 建议进入 Editor Runtime Default Readiness：评估 CodeMirror 默认切换条件、迁移风险和 fallback 策略。
 - M86 建议进入 Plugin Runtime Hardening：补真实 process/utility isolation 方案验证、签名信任策略和审计日志留存。
+- M87 建议进入 Workflow Designer Semantic Editing：补 edge/branch 语义编辑、节点增删和 graph-to-definition 保存策略。
+- M88 建议进入 Editor Local Diff Review：补 CodeMirror 局部 diff review UI、large-document smoke fixture 和 fallback 回滚 UX。
 
 ## 当前技术债重点
 

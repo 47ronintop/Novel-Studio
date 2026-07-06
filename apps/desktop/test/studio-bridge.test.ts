@@ -147,6 +147,32 @@ describe("M23 studio bridge", () => {
     expect(calls).not.toContain("studio.saveConfigAsset:workflow:wf_review_chapter");
   });
 
+  test("selects workflow edges and commits node drag edits into the workflow draft", async () => {
+    const calls: string[] = [];
+    const bridge = createStudioBridge(createApi(calls));
+
+    await bridge.selectAsset("workflow", "wf_review_chapter");
+    const edgeSelected = bridge.selectWorkflowEdge("context:next:save");
+    const dragged = bridge.commitWorkflowNodeDrag({
+      nodeId: "save",
+      x: 420,
+      y: 160
+    });
+
+    expect(edgeSelected.selectedWorkflowEdgeId).toBe("context:next:save");
+    expect(dragged.selectedWorkflowNodeId).toBe("save");
+    expect(dragged.selectedWorkflowEdgeId).toBeUndefined();
+    expect(dragged.selectedAsset.workflowGraph?.layout).toMatchObject({
+      source: "draft",
+      nodes: expect.arrayContaining([{ nodeId: "save", x: 420, y: 160 }])
+    });
+    expect(JSON.parse(dragged.selectedAsset.content).layout).toMatchObject({
+      source: "draft",
+      nodes: expect.arrayContaining([{ nodeId: "save", x: 420, y: 160 }])
+    });
+    expect(calls).not.toContain("studio.saveConfigAsset:workflow:wf_review_chapter");
+  });
+
   test("applies workflow inspector edits to the JSON draft and refreshes graph validation", async () => {
     const calls: string[] = [];
     const bridge = createStudioBridge(createApi(calls));

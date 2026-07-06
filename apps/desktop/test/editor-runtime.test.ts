@@ -8,6 +8,7 @@ import {
   createSelectionAwareAiPreviewDraft,
   createTextareaChapterEditorRuntimeProps,
   createTextareaEditorRuntimeAdapter,
+  evaluateEditorRuntimeDefaultReadiness,
   resolveEditorRuntimeAdapter,
   type EditorRuntimeEvent
 } from "../src/renderer/editor-runtime.js";
@@ -106,6 +107,59 @@ describe("textarea editor runtime adapter", () => {
 });
 
 describe("editor runtime adapter resolver", () => {
+  test("keeps textarea as the default while CodeMirror default readiness has blockers", () => {
+    const readiness = evaluateEditorRuntimeDefaultReadiness({
+      codeMirrorEnabled: true,
+      domViewMount: {
+        status: "planned",
+        packageName: "@codemirror/view",
+        role: "dom-view",
+        targetId: "chapter-editor-root",
+        ownerDocumentLabel: "renderer-document",
+        fallbackRuntimeId: "textarea"
+      },
+      eventParityPassed: true,
+      fallbackRuntimeAvailable: true,
+      largeDocumentSmokePassed: true
+    });
+
+    expect(readiness).toEqual({
+      status: "blocked",
+      recommendedDefaultRuntimeId: "textarea",
+      fallbackRuntimeId: "textarea",
+      blockerMessages: ["CodeMirror DOM view is planned but not mounted."],
+      warningMessages: [],
+      migrationRisk: "medium"
+    });
+    expect(resolveEditorRuntimeAdapter().runtimeId).toBe("textarea");
+  });
+
+  test("recommends CodeMirror only after default readiness evidence passes", () => {
+    const readiness = evaluateEditorRuntimeDefaultReadiness({
+      codeMirrorEnabled: true,
+      domViewMount: {
+        status: "mounted",
+        packageName: "@codemirror/view",
+        role: "dom-view",
+        targetId: "chapter-editor-root",
+        ownerDocumentLabel: "renderer-document",
+        fallbackRuntimeId: "textarea"
+      },
+      eventParityPassed: true,
+      fallbackRuntimeAvailable: true,
+      largeDocumentSmokePassed: true
+    });
+
+    expect(readiness).toEqual({
+      status: "ready",
+      recommendedDefaultRuntimeId: "codemirror",
+      fallbackRuntimeId: "textarea",
+      blockerMessages: [],
+      warningMessages: [],
+      migrationRisk: "low"
+    });
+  });
+
   test("defaults to textarea when CodeMirror is requested without the feature flag", () => {
     const adapter = resolveEditorRuntimeAdapter({
       preferredRuntimeId: "codemirror",
