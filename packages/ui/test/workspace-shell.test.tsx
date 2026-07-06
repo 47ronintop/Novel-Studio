@@ -365,6 +365,60 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("开篇");
   });
 
+  test("renders onboarding quick start actions and invokes callbacks", () => {
+    const application = createDesktopApplication();
+    const calls: string[] = [];
+    const tree = WorkspaceShell({
+      shellState: application.getShellState(),
+      commands: application.listCommands(),
+      commandPaletteOpen: false,
+      projectWorkflow: {
+        projectRootInput: "D:/Novel/Example",
+        chapters: [],
+        onProjectRootChange: () => undefined,
+        onOpenProject: () => calls.push("open"),
+        onCreateProject: () => calls.push("create"),
+        onCreateChapter: () => calls.push("chapter"),
+        onSelectChapter: () => undefined
+      },
+      onboarding: {
+        visible: true,
+        dismissed: false,
+        steps: [
+          { id: "project", label: "创建或打开项目", completed: false },
+          { id: "chapter", label: "新建第一章", completed: false },
+          { id: "ai", label: "用 AI 生成建议", completed: false }
+        ],
+        onCreateExampleProject: () => calls.push("example"),
+        onCreateProject: () => calls.push("create"),
+        onOpenProject: () => calls.push("open"),
+        onCreateFirstChapter: () => calls.push("chapter"),
+        onDismiss: () => calls.push("dismiss")
+      }
+    });
+
+    const createExample = findElementByAriaLabel(tree, "创建示例项目");
+    const createProject = findElementByAriaLabel(tree, "创建新项目");
+    const openProject = findElementByAriaLabel(tree, "打开已有项目");
+    const createFirstChapter = findElementByAriaLabel(tree, "新建第一章");
+    const dismiss = findElementByAriaLabel(tree, "隐藏快速开始");
+
+    createExample?.props.onClick?.();
+    createProject?.props.onClick?.();
+    openProject?.props.onClick?.();
+    createFirstChapter?.props.onClick?.();
+    dismiss?.props.onClick?.();
+
+    expect(calls).toEqual(["example", "create", "open", "chapter", "dismiss"]);
+
+    const html = renderToStaticMarkup(tree);
+    expect(html).toContain('aria-label="快速开始"');
+    expect(html).toContain("创建示例项目");
+    expect(html).toContain("创建或打开项目");
+    expect(html).toContain("新建第一章");
+    expect(html).not.toMatch(/marketing|landing/i);
+  });
+
   test("renders plugin management inside settings with refresh wiring", () => {
     const application = createDesktopApplication();
     const refreshCalls: string[] = [];

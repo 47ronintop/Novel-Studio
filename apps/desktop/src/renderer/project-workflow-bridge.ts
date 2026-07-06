@@ -12,10 +12,16 @@ export interface ProjectWorkflowBridge {
   setProjectRootInput(projectRoot: string): ProjectWorkflowProps;
   openProject(): Promise<ProjectWorkflowProps>;
   createProject(): Promise<ProjectWorkflowProps>;
+  createExampleProject(): Promise<ProjectWorkflowProps>;
   createChapter(): Promise<ProjectWorkflowProps>;
   selectChapter(chapterId: string): Promise<ProjectWorkflowProps>;
   closeChapterTab(chapterId: string): Promise<ProjectWorkflowProps>;
 }
+
+const EXAMPLE_PROJECT_TITLE = "示例小说项目";
+const EXAMPLE_CHAPTER_TITLE = "示例章节";
+const EXAMPLE_CHAPTER_BODY =
+  "这是一个本地示例章节。\n\n你可以直接改写这一段，也可以打开 AI 工作流生成建议。所有内容默认保存在本地项目文件夹中。\n";
 
 export function createProjectWorkflowBridge(
   api: NovelStudioApi,
@@ -82,6 +88,49 @@ export function createProjectWorkflowBridge(
         }
 
         snapshot = created.value;
+        projectRootInput = snapshot.projectRoot;
+        openChapterTabIds =
+          snapshot.activeChapterId === undefined ? [] : [snapshot.activeChapterId];
+      });
+    },
+    async createExampleProject() {
+      return runProjectOperation("creating", async () => {
+        const selectedProjectRoot = await resolveProjectRoot(
+          () => api.project.chooseCreateDirectory(),
+          "已取消创建示例项目。",
+          shouldUseTypedCreateRoot()
+        );
+        if (selectedProjectRoot === undefined) {
+          return;
+        }
+
+        const created = await api.project.create({
+          projectRoot: selectedProjectRoot,
+          projectId: createProjectId(),
+          title: EXAMPLE_PROJECT_TITLE,
+          language: "zh-CN"
+        });
+        if (!created.ok) {
+          feedback = { kind: "error", message: created.error.message };
+          return;
+        }
+
+        const createdChapter = await api.project.createChapter({
+          chapterId: createChapterId(),
+          title: EXAMPLE_CHAPTER_TITLE,
+          order: 1,
+          body: EXAMPLE_CHAPTER_BODY
+        });
+        if (!createdChapter.ok) {
+          feedback = { kind: "error", message: createdChapter.error.message };
+          snapshot = created.value;
+          projectRootInput = snapshot.projectRoot;
+          openChapterTabIds =
+            snapshot.activeChapterId === undefined ? [] : [snapshot.activeChapterId];
+          return;
+        }
+
+        snapshot = createdChapter.value;
         projectRootInput = snapshot.projectRoot;
         openChapterTabIds =
           snapshot.activeChapterId === undefined ? [] : [snapshot.activeChapterId];

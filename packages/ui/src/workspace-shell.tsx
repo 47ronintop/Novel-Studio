@@ -50,6 +50,7 @@ export interface WorkspaceShellProps {
   readonly studio?: ConfigStudioPanelProps;
   readonly storyBible?: StoryBibleSummaryProps;
   readonly storyBibleEditor?: StoryBibleEditorProps;
+  readonly onboarding?: OnboardingProps;
   readonly onCommandPaletteOpen?: () => void;
   readonly onCommandPaletteQueryChange?: ((query: string) => void) | undefined;
   readonly onCommandPaletteActiveCommandChange?:
@@ -94,6 +95,23 @@ export type ProjectWorkflowStatus = "idle" | "opening" | "creating";
 export interface ProjectWorkflowFeedback {
   readonly kind: "info" | "error";
   readonly message: string;
+}
+
+export interface OnboardingProps {
+  readonly visible: boolean;
+  readonly dismissed: boolean;
+  readonly steps: readonly OnboardingStepProps[];
+  readonly onCreateExampleProject: () => void;
+  readonly onCreateProject: () => void;
+  readonly onOpenProject: () => void;
+  readonly onCreateFirstChapter: () => void;
+  readonly onDismiss: () => void;
+}
+
+export interface OnboardingStepProps {
+  readonly id: string;
+  readonly label: string;
+  readonly completed: boolean;
 }
 
 export type AiWritingWorkflowStatus =
@@ -297,6 +315,7 @@ export function WorkspaceShell({
   studio,
   storyBible,
   storyBibleEditor,
+  onboarding,
   onCommandPaletteOpen,
   onCommandPaletteQueryChange,
   onCommandPaletteActiveCommandChange,
@@ -510,6 +529,7 @@ export function WorkspaceShell({
           {shellState.activeActivity === "workspace" ? (
             <WorkspaceEditorSurface
               chapterEditor={chapterEditor}
+              onboarding={onboarding}
               projectWorkflow={projectWorkflow}
               splitView={workspaceLayout.splitView}
             />
@@ -978,10 +998,12 @@ function AiWorkflowObservabilityView({
 
 function WorkspaceEditorSurface({
   chapterEditor,
+  onboarding,
   projectWorkflow,
   splitView
 }: {
   readonly chapterEditor: ChapterEditorProps | undefined;
+  readonly onboarding: OnboardingProps | undefined;
   readonly projectWorkflow: ProjectWorkflowProps | undefined;
   readonly splitView: boolean;
 }) {
@@ -1043,16 +1065,29 @@ function WorkspaceEditorSurface({
       </div>
       <div className="ns-editor-panes" data-split-view={splitView}>
         <section className="ns-editor-surface" aria-label="章节编辑器表面">
+          <OnboardingQuickStart onboarding={onboarding} />
           <AutosaveRecoveryNotice projectWorkflow={projectWorkflow} />
           {chapterEditor ? (
             <ChapterEditor {...chapterEditor} />
           ) : (
-            <>
-              <div className="ns-document-title">未命名章节</div>
-              <p>继续写下一场</p>
+            <section className="ns-empty-editor" aria-label="空章节工作区">
+              <div>
+                <div className="ns-document-title">未命名章节</div>
+                <p>继续写下一场。创建第一章后开始写正文，或先打开已有项目继续编辑。</p>
+              </div>
+              <button
+                aria-label="新建第一章"
+                className="ns-icon-text-button"
+                disabled={projectWorkflow === undefined || isProjectWorkflowBusy(projectWorkflow)}
+                onClick={projectWorkflow?.onCreateChapter}
+                type="button"
+              >
+                <FilePlus aria-hidden="true" size={14} />
+                新建第一章
+              </button>
               <div className="ns-editor-line" />
               <div className="ns-editor-line ns-editor-line-short" />
-            </>
+            </section>
           )}
         </section>
         {splitView ? (
@@ -1066,6 +1101,82 @@ function WorkspaceEditorSurface({
         ) : null}
       </div>
     </>
+  );
+}
+
+function OnboardingQuickStart({
+  onboarding
+}: {
+  readonly onboarding: OnboardingProps | undefined;
+}) {
+  if (onboarding === undefined || onboarding.visible !== true || onboarding.dismissed === true) {
+    return null;
+  }
+
+  return (
+    <section className="ns-onboarding" aria-label="快速开始">
+      <div className="ns-onboarding-header">
+        <div>
+          <h1>快速开始</h1>
+          <p>连接你的第一个长篇项目，或创建一个本地示例项目熟悉工作台。</p>
+        </div>
+        <button
+          aria-label="隐藏快速开始"
+          className="ns-icon-button"
+          onClick={onboarding.onDismiss}
+          title="隐藏快速开始"
+          type="button"
+        >
+          <X aria-hidden="true" size={14} />
+        </button>
+      </div>
+      <ol className="ns-onboarding-steps" aria-label="入门步骤">
+        {onboarding.steps.map((step) => (
+          <li data-completed={step.completed} key={step.id}>
+            <span>{step.completed ? "✓" : "•"}</span>
+            <span>{step.label}</span>
+          </li>
+        ))}
+      </ol>
+      <div className="ns-onboarding-actions">
+        <button
+          aria-label="创建示例项目"
+          className="ns-icon-text-button"
+          onClick={onboarding.onCreateExampleProject}
+          type="button"
+        >
+          <Sparkles aria-hidden="true" size={14} />
+          创建示例项目
+        </button>
+        <button
+          aria-label="创建新项目"
+          className="ns-icon-text-button"
+          onClick={onboarding.onCreateProject}
+          type="button"
+        >
+          <FolderPlus aria-hidden="true" size={14} />
+          创建新项目
+        </button>
+        <button
+          aria-label="打开已有项目"
+          className="ns-icon-text-button"
+          onClick={onboarding.onOpenProject}
+          type="button"
+        >
+          <FolderOpen aria-hidden="true" size={14} />
+          打开已有项目
+        </button>
+        <button
+          aria-label="新建第一章"
+          className="ns-icon-text-button"
+          onClick={onboarding.onCreateFirstChapter}
+          type="button"
+        >
+          <FilePlus aria-hidden="true" size={14} />
+          新建第一章
+        </button>
+      </div>
+    </section>
   );
 }
 

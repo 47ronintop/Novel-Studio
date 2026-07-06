@@ -13,6 +13,8 @@ import type {
   ConfigStudioPanelProps,
   ModelSettingsDraft,
   ModelSettingsPanelProps,
+  OnboardingProps,
+  ProjectWorkflowProps,
   ProjectSearchProps,
   StoryBibleEditorDraft,
   StoryBibleEditorKind,
@@ -181,6 +183,7 @@ export function App() {
   const [commandPaletteSelectedCommandId, setCommandPaletteSelectedCommandId] = useState<
     ApplicationCommandId | undefined
   >(undefined);
+  const [onboardingDismissed, setOnboardingDismissed] = useState(false);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -424,6 +427,18 @@ export function App() {
       status: "creating"
     });
     void projectWorkflowBridge.createProject().then(refreshProjectWorkflow);
+  }, [projectWorkflowBridge, refreshProjectWorkflow]);
+
+  const handleCreateExampleProject = useCallback(() => {
+    if (projectWorkflowBridge === undefined) {
+      return;
+    }
+
+    setProjectWorkflow({
+      ...projectWorkflowBridge.getProps(),
+      status: "creating"
+    });
+    void projectWorkflowBridge.createExampleProject().then(refreshProjectWorkflow);
   }, [projectWorkflowBridge, refreshProjectWorkflow]);
 
   const handleCreateChapter = useCallback(() => {
@@ -841,6 +856,17 @@ export function App() {
           onVersionPreview: handleVersionPreview,
           onVersionRestore: handleVersionRestore
         };
+  const onboarding = createOnboardingProps({
+    dismissed: onboardingDismissed,
+    shellState,
+    chapterEditor,
+    projectWorkflow,
+    onCreateExampleProject: handleCreateExampleProject,
+    onCreateProject: handleCreateProject,
+    onOpenProject: handleOpenProject,
+    onCreateFirstChapter: handleCreateChapter,
+    onDismiss: () => setOnboardingDismissed(true)
+  });
 
   return (
     <WorkspaceShell
@@ -915,6 +941,7 @@ export function App() {
       {...(interactiveChapterEditor === undefined
         ? {}
         : { chapterEditor: interactiveChapterEditor })}
+      onboarding={onboarding}
       {...(storyBible === undefined ? {} : { storyBible })}
       {...(storyBibleEditor === undefined
         ? {}
@@ -952,4 +979,49 @@ function getNovelStudioApi(): NovelStudioApi | undefined {
   }
 
   return window.novelStudio;
+}
+
+function createOnboardingProps(input: {
+  readonly dismissed: boolean;
+  readonly shellState: DesktopShellState;
+  readonly chapterEditor: ChapterEditorProps | undefined;
+  readonly projectWorkflow: ProjectWorkflowProps | undefined;
+  readonly onCreateExampleProject: () => void;
+  readonly onCreateProject: () => void;
+  readonly onOpenProject: () => void;
+  readonly onCreateFirstChapter: () => void;
+  readonly onDismiss: () => void;
+}): OnboardingProps {
+  const hasProject =
+    input.shellState.projectTitle !== "未打开项目" ||
+    (input.projectWorkflow?.projectRootInput.trim().length ?? 0) > 0;
+  const hasChapter =
+    input.chapterEditor !== undefined || (input.projectWorkflow?.chapters.length ?? 0) > 0;
+
+  return {
+    visible: true,
+    dismissed: input.dismissed,
+    steps: [
+      {
+        id: "project",
+        label: "创建或打开项目",
+        completed: hasProject
+      },
+      {
+        id: "chapter",
+        label: "新建第一章",
+        completed: hasChapter
+      },
+      {
+        id: "ai",
+        label: "用 AI 生成建议",
+        completed: false
+      }
+    ],
+    onCreateExampleProject: input.onCreateExampleProject,
+    onCreateProject: input.onCreateProject,
+    onOpenProject: input.onOpenProject,
+    onCreateFirstChapter: input.onCreateFirstChapter,
+    onDismiss: input.onDismiss
+  };
 }

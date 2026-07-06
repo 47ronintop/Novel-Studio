@@ -45,6 +45,8 @@ export type {
   AiWorkflowRunHistoryProps,
   AiWritingWorkflowProps,
   AiWritingWorkflowStatus,
+  OnboardingProps,
+  OnboardingStepProps,
   ProjectSearchProps,
   ProjectSearchStatus,
   ProjectWorkflowProps,

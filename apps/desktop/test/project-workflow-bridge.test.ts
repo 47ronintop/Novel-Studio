@@ -61,6 +61,34 @@ describe("project workflow bridge", () => {
     ]);
   });
 
+  test("creates an example project with a sample chapter through the preload API", async () => {
+    const calls: string[] = [];
+    let chapters: readonly ChapterSummary[] = [];
+    const api = createApi({
+      record: calls,
+      getChapters: () => chapters,
+      setChapters: (nextChapters) => {
+        chapters = nextChapters;
+      }
+    });
+    const bridge = createProjectWorkflowBridge(api, {
+      createProjectId: () => "prj_example",
+      createChapterId: () => "ch_example"
+    });
+
+    bridge.setProjectRootInput("D:/Novel/Example Project");
+    const example = await bridge.createExampleProject();
+
+    expect(example.projectRootInput).toBe("D:/Novel/Example Project");
+    expect(example.activeChapterId).toBe("ch_example");
+    expect(example.openChapterTabIds).toEqual(["ch_example"]);
+    expect(example.chapters[0]?.title).toBe("示例章节");
+    expect(calls).toEqual([
+      "project.create:prj_example:示例小说项目",
+      "project.createChapter:ch_example:示例章节"
+    ]);
+  });
+
   test("tracks runtime open chapter tabs and selects a neighbor when closing the active tab", async () => {
     const calls: string[] = [];
     let chapters: readonly ChapterSummary[] = [
@@ -198,6 +226,8 @@ function createApi(options: {
   readonly openErrorMessage?: string;
   readonly recovery?: ProjectWorkspaceSnapshot["recovery"];
 }): NovelStudioApi {
+  let currentProjectRoot = emptySnapshot.projectRoot;
+
   return {
     getShellState: async () => ({
       projectTitle: "M12",
@@ -274,6 +304,7 @@ function createApi(options: {
             }
           };
         }
+        currentProjectRoot = projectRoot;
         return ok({
           ...emptySnapshot,
           projectRoot,
@@ -283,6 +314,7 @@ function createApi(options: {
       },
       create: async (input) => {
         options.record.push(`project.create:${input.projectId}:${input.title}`);
+        currentProjectRoot = input.projectRoot;
         return ok({ ...emptySnapshot, projectRoot: input.projectRoot, chapters: [] });
       },
       listChapters: async () => ok(options.getChapters()),
@@ -301,6 +333,7 @@ function createApi(options: {
         options.setChapters(nextChapters);
         return ok({
           ...emptySnapshot,
+          projectRoot: currentProjectRoot,
           chapters: nextChapters,
           activeChapterId: input.chapterId
         });
@@ -309,6 +342,7 @@ function createApi(options: {
         options.record.push(`project.selectChapter:${chapterId}`);
         return ok({
           ...emptySnapshot,
+          projectRoot: currentProjectRoot,
           chapters: options.getChapters(),
           activeChapterId: chapterId
         });

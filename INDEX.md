@@ -1,6 +1,6 @@
 ﻿# INDEX - Novel Studio 文档索引
 
-Version: 1.40 | Last Updated: 2026-07-06
+Version: 1.41 | Last Updated: 2026-07-06
 
 ## 文档优先级
 
@@ -22,7 +22,7 @@ Version: 1.40 | Last Updated: 2026-07-06
 | `UI_GUIDELINES.md`                                              | 1.0        | Accepted             | UI/UX、布局、交互、设计 tokens、可访问性                 |
 | `CODING_STANDARDS.md`                                           | 1.0        | Accepted             | 开发规范、语言规则、分层、schema、UI 实现                |
 | `TESTING.md`                                                    | 1.0        | Accepted             | 测试规范、fixtures、LLM mock、CI 门禁                    |
-| `ROADMAP.md`                                                    | 1.28       | Active               | 当前里程碑、后续路线、完成状态                           |
+| `ROADMAP.md`                                                    | 1.29       | Active               | 当前里程碑、后续路线、完成状态                           |
 | `STORY_BIBLE.md`                                                | 1.0        | Accepted for M16     | Story Bible 资产、仓储、Context 候选和最小 UI 闭环       |
 | `docs/packaging/m17-installer-release-channel.md`               | 1.0        | Accepted for M17     | 安装器目标、发布通道 manifest、release notes 和签名策略  |
 | `PLUGIN_SYSTEM.md`                                              | 1.0        | Accepted for M18     | 插件 manifest、权限、注册表、运行时边界和测试要求        |
@@ -52,6 +52,7 @@ Version: 1.40 | Last Updated: 2026-07-06
 | `docs/productization/m45-workflow-branch.md`                    | 1.0        | Complete             | Workflow Engine branch action 和分支选择状态转换         |
 | `docs/productization/m46-editor-hardening.md`                   | 1.0        | Complete             | 编辑器大文档指标、gutter 上限、diff 摘要和快捷键冲突矩阵 |
 | `docs/productization/m47-multi-window-safety.md`                | 1.0        | Complete             | 本地项目锁、打开/创建前锁获取和锁冲突保护                |
+| `docs/productization/m48-onboarding.md`                         | 1.0        | Complete             | 工作区快速开始、示例项目和第一章行动入口                 |
 | `LLM_ADAPTER.md`                                                | 1.0        | Accepted for M6      | Provider-neutral 模型调用边界                            |
 | `WORKFLOW_ENGINE.md`                                            | 1.0        | Accepted for M7.1    | 确定性 workflow 状态机                                   |
 | `CONTEXT_ENGINE.md`                                             | 1.0        | Accepted for M7.2    | Context Bundle、token budget、trace                      |
@@ -75,7 +76,7 @@ Version: 1.40 | Last Updated: 2026-07-06
 | Phase 5 开发规范      | Complete | `CODING_STANDARDS.md`、`TESTING.md` | 已完成     |
 | Phase 6 Task Planning | Complete | `ROADMAP.md`                        | 已完成     |
 | Phase 7 正式开发      | Complete | M0-M18 已完成                       | 已完成     |
-| Post-M18 产品化打磨   | Active   | M19-M26、M28-M47 已完成，M27 暂缓   | 下一步 M48 |
+| Post-M18 产品化打磨   | Active   | M19-M48 已完成                      | 下一步 M49 |
 
 ## 当前本地状态
 
@@ -104,7 +105,7 @@ Version: 1.40 | Last Updated: 2026-07-06
 - 当前已完成 M43 Provider Matrix。
 - 当前已完成 M44 Streaming UX 与 M45 Workflow Branch。
 - 当前已完成 M46 Editor Hardening 与 M47 Multi-window Safety。
-- M27 安装后首次使用引导暂缓，等待核心可见功能继续补齐。
+- 当前已完成 M48 Onboarding，M27 安装后首次使用引导缺口已回补。
 - 当前 `Complete` 只表示里程碑切片完成；产品完整度以 M35 的 `Product Ready` 口径为准。
 - 未经用户确认不得 push。
 - 当前本地 artifact 位于被忽略的 `release/` 目录，不提交到仓库。

@@ -61,6 +61,44 @@ test("creates a project, creates a chapter, edits it, and saves through Electron
   }
 });
 
+test("creates an example project from the onboarding quick start", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-onboarding-e2e-"));
+  const defaultProjectRoot = join(tempRoot, "Default Project");
+  const exampleRoot = join(tempRoot, "Example Smoke");
+  const electronApp = await electron.launch({
+    args: [electronMain],
+    env: {
+      ...process.env,
+      NOVEL_STUDIO_PROJECT_ROOT: defaultProjectRoot
+    }
+  });
+
+  try {
+    const page = await electronApp.firstWindow();
+
+    await expect(page.getByRole("region", { name: "快速开始" })).toBeVisible();
+    await page.getByLabel("项目路径").fill(exampleRoot);
+    await page.getByRole("button", { name: "创建示例项目" }).click();
+
+    const projectNavigator = page.getByLabel("项目导航");
+    await expect(page.getByText("示例小说项目")).toBeVisible();
+    await expect(projectNavigator.getByRole("button", { name: /示例章节/ })).toBeVisible();
+    await expect(page.getByLabel("章节正文")).toHaveValue(/这是一个本地示例章节/);
+
+    const chapterFiles = await readdir(join(exampleRoot, "chapters"));
+    expect(chapterFiles).toHaveLength(1);
+    const [chapterFile] = chapterFiles;
+    if (chapterFile === undefined) {
+      throw new Error("Expected one example chapter file.");
+    }
+    const savedChapter = await readFile(join(exampleRoot, "chapters", chapterFile), "utf8");
+    expect(savedChapter).toContain("这是一个本地示例章节");
+  } finally {
+    await electronApp.close();
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("switches visible beta activity views from the left activity bar", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-activity-e2e-"));
   const electronApp = await electron.launch({

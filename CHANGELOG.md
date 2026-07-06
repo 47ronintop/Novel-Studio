@@ -66,8 +66,9 @@
 - 完成 M43 Provider Matrix：settings schema、Application 校验、LLM Adapter provider 类型和 Settings UI provider select 覆盖宪法要求的 11 个模型渠道；CI 仍只使用 mock/fixture，不访问真实 provider。
 - 完成 M44/M45 Streaming UX 与 Workflow Branch：OpenAI-compatible streaming fixture 契约支持 delta/usage 解析和 malformed chunk 规范化，AI 写作 UI 增加流式预览/取消状态；Workflow Engine 增加 `choose-branch` action、`chooseWorkflowBranch()` 和 branch schema/fixture 契约。
 - 完成 M46/M47 Editor Hardening 与 Multi-window Safety：章节编辑器新增文档指标、large-document mode、gutter 渲染上限和 diff 摘要，renderer 新增快捷键冲突矩阵；Repository/Application/Desktop 新增本地项目锁获取、冲突保护、正常 shutdown 释放和 Project Health lock 信号。
+- 完成 M48 Onboarding：工作区新增快速开始面板、示例项目入口、创建/打开项目行动和空章节“新建第一章”按钮；示例项目通过现有 Project Workflow bridge 创建本地项目和示例章节。
 
 ## Notes
 
 - Phase 7 当前定义的 M0-M18 已完成。
-- 当前已完成 Post-M18 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转、M32 时间线主视图、M33 插件管理 UI、M34 多标签编辑器、M35 宪法差距审计、M36 Workspace Layout、M37 Editor Tabs、M38 Autosave Recovery、M39 Timeline Workspace、M40 Project Health、M41 Command Palette、M42 Plugin Management、M43 Provider Matrix、M44 Streaming UX、M45 Workflow Branch、M46 Editor Hardening 与 M47 Multi-window Safety；M27 安装后首次使用引导暂缓；未经用户确认不得 push。
+- 当前已完成 Post-M18 M19-M48；M27 安装后首次使用引导缺口已通过 M48 回补；未经用户确认不得 push。

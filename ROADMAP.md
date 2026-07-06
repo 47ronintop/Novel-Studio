@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.28 | Status: Active | Last Updated: 2026-07-06
+Version: 1.29 | Status: Active | Last Updated: 2026-07-06
 
 ## 目标
 
@@ -44,7 +44,7 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M24       | 工作流运行观测           | AI 工作流运行 trace、上下文、模型、token/cost 和步骤状态可见     | Complete |
 | M25       | 工作流运行历史           | 最近 AI 工作流运行历史、脱敏详情、步骤状态和本地审计记录         | Complete |
 | M26       | 工作流失败诊断与重试策略 | 失败运行记录、可解释错误原因、重试策略展示和用户触发重试入口     | Complete |
-| M27       | 安装后首次使用引导       | 欢迎页、示例项目入口、创建/打开项目引导和关键空状态行动按钮      | Deferred |
+| M27       | 安装后首次使用引导       | 欢迎页、示例项目入口、创建/打开项目引导和关键空状态行动按钮      | Complete |
 | M28       | 全局功能可用性盘点       | 高可见入口要么可用，要么明确禁用并显示中文原因                   | Complete |
 | M29       | 功能完成度盘点与命令执行 | 可见入口完成度审计、核心缺口排序、命令面板真实执行闭环           | Complete |
 | M30       | 底部面板工作区           | 底部面板 tabs 真实切换、工作流/问题/搜索/日志最小内容闭环        | Complete |
@@ -65,6 +65,7 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M45       | Workflow Branch          | Workflow Engine branch action、分支选择和 schema 契约            | Complete |
 | M46       | Editor Hardening         | 编辑器大文档指标、gutter 渲染上限、diff 摘要和快捷键冲突矩阵     | Complete |
 | M47       | Multi-window Safety      | 本地项目锁、打开/创建前锁获取、冲突保护和健康诊断信号            | Complete |
+| M48       | Onboarding               | 工作区快速开始、示例项目、创建/打开项目和第一章行动入口          | Complete |
 
 ## M15 完成内容
 
@@ -314,19 +315,26 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - `ProjectWorkspaceSnapshot` 暴露 lock summary，并在 Project Health 中显示 active lock 信息。
 - Desktop composition 为每个应用实例注入本地 lock owner id，并在正常 shutdown 时释放当前项目锁；M47 不包含 stale-lock recovery UI 或实时协作。
 
+## M48 完成内容
+
+- 新增 `docs/productization/m48-onboarding.md`，明确 Onboarding 的工作区内引导范围和非目标。
+- `WorkspaceShell` 新增“快速开始”面板，提供创建示例项目、创建新项目、打开已有项目和新建第一章行动。
+- 空章节工作区新增“新建第一章”按钮，不再只显示静态占位。
+- `ProjectWorkflowBridge.createExampleProject()` 通过现有 preload/API 创建本地示例项目和示例章节。
+- Electron E2E 覆盖从 onboarding 创建示例项目并验证示例章节正文落盘。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转、M32 时间线主视图、M33 插件管理 UI、M34 多标签编辑器、M35 宪法差距审计、M36 Workspace Layout、M37 Editor Tabs、M38 Autosave Recovery、M39 Timeline Workspace、M40 Project Health、M41 Command Palette、M42 Plugin Management、M43 Provider Matrix、M44 Streaming UX、M45 Workflow Branch、M46 Editor Hardening 与 M47 Multi-window Safety。
-- M27 安装后首次使用引导已暂缓，需在核心可见功能更稳定后回补。
+- Post-M18 产品化打磨已完成 M19-M48，其中 M27 首次使用引导已通过 M48 回补完成。
 - 当前产品状态是 beta productization：主干闭环可运行，但多个宪法/UI 指南能力仍是 Product Gap。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M48 Onboarding：回补 M27 暂缓的欢迎页、示例项目入口、创建/打开项目引导和关键空状态行动按钮。
-- M48 之后继续按 `docs/productization/m35-constitution-gap-audit.md` 的 Product Ready 口径推进，不再把切片完成误写成产品完整。
+- 下一步建议进入 M49 Recovery Review：补齐可恢复草稿的预览、应用和丢弃闭环。
+- M49 之后继续按 `docs/productization/m35-constitution-gap-audit.md` 的 Product Ready 口径推进，不再把切片完成误写成产品完整。
 
 ## 当前技术债重点
 

@@ -21,6 +21,7 @@ Version: 1.0 | Status: Active
 | TD-026 | `ROADMAP.md` M39                           | M39 只展示结构化时间线事件，尚未提供事件级编辑、拖拽排序或正文双向定位                                                                        | 时间线仍依赖 Story Bible 父资产编辑                          | 后续 Timeline Workspace 迭代补齐事件表单、排序和跳转                              | Open   |
 | TD-027 | `ROADMAP.md` M42 / `PLUGIN_SYSTEM.md`      | M42 已补 manifest 摘要与启停管理，但仍无插件安装、沙箱执行和 Workflow contribution 激活                                                       | 插件系统仍只能管理本地注册声明，不能运行能力                 | 后续 Plugin Runtime/Marketplace RFC 明确沙箱、权限审批和 workflow 接入            | Open   |
 | TD-028 | `ROADMAP.md` M44                           | M44 已补 streaming UI props 和 Adapter fixture contract，但尚未实现 Electron IPC live streaming 与真实取消传播                                | 用户可见流式状态已存在，但真实 provider 流式输出仍需后续接线 | 后续 Streaming Runtime 批次补 IPC event channel、AbortController 和端到端 fixture | Open   |
+| TD-029 | `ROADMAP.md` M48                           | M48 的 onboarding dismissed 状态只保存在 renderer 运行期内，尚未持久化到用户偏好或项目设置                                                    | 用户重启后会重新看到快速开始面板                             | 后续 User Preferences schema/RFC 明确是否持久化 onboarding 状态                   | Open   |
 
 ## Resolved Items
 
