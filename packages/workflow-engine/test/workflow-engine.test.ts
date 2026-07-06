@@ -474,6 +474,87 @@ describe("Workflow Engine", () => {
     }
   });
 
+  test("evaluates plugin workflow steps without executing plugin code", () => {
+    const pluginWorkflow = {
+      ...workflow,
+      entryStepId: "step_plugin",
+      steps: [
+        {
+          id: "step_plugin",
+          kind: "plugin",
+          pluginId: "novel.structure-tools",
+          contributionId: "outline.score",
+          nextStepId: "step_save"
+        },
+        {
+          id: "step_save",
+          kind: "save"
+        }
+      ]
+    };
+    const parsed = parseWorkflowDefinition(pluginWorkflow, { traceId: "trace_plugin_01" });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) {
+      return;
+    }
+
+    const run = startWorkflowRun(parsed.value, runInput);
+    const pluginAction = evaluateNextWorkflowAction(parsed.value, run);
+    const afterPlugin = completeWorkflowStep(parsed.value, run, {
+      stepId: "step_plugin",
+      traceId: "trace_plugin_02",
+      now: runInput.now
+    });
+
+    expect(pluginAction).toEqual({
+      ok: true,
+      value: {
+        kind: "run-plugin-step",
+        workflowRunId: "wfrun_01",
+        stepId: "step_plugin",
+        pluginId: "novel.structure-tools",
+        contributionId: "outline.score",
+        nextStepId: "step_save"
+      }
+    });
+    expect(afterPlugin).toEqual({
+      ok: true,
+      value: {
+        schemaVersion: "1.0",
+        workflowRunId: "wfrun_01",
+        workflowId: "wf_review_chapter",
+        status: "running",
+        currentStepId: "step_save",
+        completedStepIds: ["step_plugin"],
+        confirmedStepIds: [],
+        createdAt: "2026-07-04T00:00:00.000Z",
+        updatedAt: "2026-07-04T00:00:00.000Z"
+      }
+    });
+  });
+
+  test("rejects plugin workflow steps without plugin contribution identifiers", () => {
+    const parsed = parseWorkflowDefinition(
+      {
+        ...workflow,
+        entryStepId: "step_plugin",
+        steps: [
+          {
+            id: "step_plugin",
+            kind: "plugin",
+            pluginId: "novel.structure-tools"
+          }
+        ]
+      },
+      { traceId: "trace_plugin_03" }
+    );
+
+    expect(isErr(parsed)).toBe(true);
+    if (!parsed.ok) {
+      expect(parsed.error.code).toBe("WORKFLOW_PLUGIN_STEP_INVALID");
+    }
+  });
+
   test("does not depend on Agent, Context, LLM Adapter, or Repository packages", () => {
     const packageJson = JSON.parse(
       readFileSync(new URL("../package.json", import.meta.url), "utf8")

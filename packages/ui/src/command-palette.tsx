@@ -92,7 +92,12 @@ export function CommandPalette({
                       aria-label={`Execute command: ${command.title}`}
                       className="ns-command-action"
                       data-active={command.id === activeCommandId}
-                      onClick={() => onCommandExecute?.(command.id)}
+                      disabled={command.disabledReason !== undefined}
+                      onClick={() => {
+                        if (command.disabledReason === undefined) {
+                          onCommandExecute?.(command.id);
+                        }
+                      }}
                       type="button"
                     >
                       <span className="ns-command-title">{command.title}</span>
@@ -100,6 +105,9 @@ export function CommandPalette({
                         <span>{command.defaultShortcut}</span>
                         <span className="ns-risk-level">{riskLevelLabel(command.riskLevel)}</span>
                       </span>
+                      {command.disabledReason === undefined ? null : (
+                        <span className="ns-command-disabled-reason">{command.disabledReason}</span>
+                      )}
                     </button>
                   </li>
                 ))}
@@ -127,9 +135,13 @@ function filterCommands(
   }
 
   return commands.filter((command) =>
-    [command.id, command.title, command.scope, command.defaultShortcut].some((value) =>
-      normalize(value).includes(normalizedQuery)
-    )
+    [
+      command.id,
+      command.title,
+      command.scope,
+      command.defaultShortcut,
+      command.disabledReason ?? ""
+    ].some((value) => normalize(value).includes(normalizedQuery))
   );
 }
 
@@ -190,7 +202,10 @@ function handleCommandKeyDown({
 
   if (event.key === "Enter" && activeCommandId !== undefined) {
     event.preventDefault();
-    onCommandExecute?.(activeCommandId);
+    const activeCommand = commands.find((command) => command.id === activeCommandId);
+    if (activeCommand?.disabledReason === undefined) {
+      onCommandExecute?.(activeCommandId);
+    }
   }
 }
 
@@ -198,6 +213,8 @@ function scopeLabel(scope: ApplicationCommand["scope"]): string {
   switch (scope) {
     case "workspace":
       return "Workspace";
+    case "plugin":
+      return "Plugin";
   }
 }
 

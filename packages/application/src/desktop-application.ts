@@ -36,6 +36,7 @@ import type {
 } from "./model-settings-session.js";
 import { pluginRegistryUnavailable } from "./plugin-settings-session.js";
 import type { PluginSettingsSession, PluginSettingsSnapshot } from "./plugin-settings-session.js";
+import type { PluginRuntimeSession } from "./plugin-runtime-session.js";
 import type {
   AiWritingSuggestion,
   AiWritingSuggestionRequest,
@@ -181,6 +182,7 @@ export interface DesktopApplicationOptions {
   readonly projectWorkspaceSession?: ProjectWorkspaceSession;
   readonly modelSettingsSession?: ModelSettingsSession;
   readonly pluginSettingsSession?: PluginSettingsSession;
+  readonly pluginRuntimeSession?: PluginRuntimeSession;
   readonly configStudioSession?: ConfigStudioSession;
   readonly userPreferencesSession?: UserPreferencesSession;
   readonly storyBibleSession?: StoryBibleSession;
@@ -230,6 +232,7 @@ export function createDesktopApplication(
   const projectWorkspaceSession = options.projectWorkspaceSession;
   const modelSettingsSession = options.modelSettingsSession;
   const pluginSettingsSession = options.pluginSettingsSession;
+  const pluginRuntimeSession = options.pluginRuntimeSession;
   const configStudioSession = options.configStudioSession;
   const userPreferencesSession = options.userPreferencesSession;
   const storyBibleSession = options.storyBibleSession;
@@ -257,26 +260,41 @@ export function createDesktopApplication(
         ),
         getActiveChapterEditorSession()?.getState()
       ),
-    listCommands: () => DEFAULT_APPLICATION_COMMANDS,
+    listCommands: () => [
+      ...DEFAULT_APPLICATION_COMMANDS,
+      ...(pluginRuntimeSession?.listCommands() ?? [])
+    ],
     executeCommand: (commandId: string) => {
       const command = findApplicationCommand(commandId);
 
-      if (command === undefined || !isSafeCommand(command)) {
-        return err(
-          createUnifiedError({
-            code: "APPLICATION_COMMAND_NOT_ALLOWED",
-            category: "UserError",
-            message: "The requested command is not available in the desktop shell.",
-            recoverability: "user-action",
-            suggestedAction: "Choose an available command from the command palette.",
-            traceId: "application-command-bridge"
-          })
-        );
+      if (command !== undefined && isSafeCommand(command)) {
+        shellState = reduceShellState(shellState, command.id);
+
+        return ok(shellState);
       }
 
-      shellState = reduceShellState(shellState, command.id);
+      if (pluginRuntimeSession?.canExecuteCommand(commandId) === true) {
+        const result = pluginRuntimeSession.executeCommand({
+          commandId,
+          traceId: "application-plugin-command"
+        });
+        if (!result.ok) {
+          return result;
+        }
 
-      return ok(shellState);
+        return ok(shellState);
+      }
+
+      return err(
+        createUnifiedError({
+          code: "APPLICATION_COMMAND_NOT_ALLOWED",
+          category: "UserError",
+          message: "The requested command is not available in the desktop shell.",
+          recoverability: "user-action",
+          suggestedAction: "Choose an available command from the command palette.",
+          traceId: "application-command-bridge"
+        })
+      );
     },
     async openProject(projectRoot) {
       if (projectWorkspaceSession === undefined) {
@@ -847,6 +865,8 @@ function reduceShellState(
           inspectorWidth: clampPanelWidth(shellState.workspaceLayout.inspectorWidth + 40, 240, 440)
         }
       };
+    default:
+      return shellState;
   }
 }
 

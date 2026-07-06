@@ -10,6 +10,7 @@ import type {
 import { createChapterEditorSession } from "../src/chapter-editor-session.js";
 import { createDesktopApplication } from "../src/desktop-application.js";
 import { DEFAULT_APPLICATION_COMMANDS, isSafeCommand } from "../src/command-registry.js";
+import { createPluginRuntimeSession } from "../src/plugin-runtime-session.js";
 
 interface PluginSettingsSnapshot {
   readonly schemaVersion: "1.0";
@@ -301,6 +302,59 @@ describe("desktop application command bridge", () => {
         recoverability: "user-action"
       }
     });
+  });
+
+  test("exposes and executes plugin runtime host commands through the Application boundary", () => {
+    const application = createDesktopApplication({
+      pluginRuntimeSession: createPluginRuntimeSession({
+        snapshot: {
+          schemaVersion: "1.0",
+          plugins: [
+            {
+              pluginId: "novel.structure-tools",
+              enabled: true,
+              manifestPath: "plugins/novel.structure-tools/plugin.json",
+              grantedPermissions: [{ permission: "project:read", scopes: ["project"] }],
+              manifestStatus: "valid",
+              manifest: {
+                displayName: "Structure Tools",
+                version: "1.0.0",
+                entryKind: "none",
+                compatibleAppVersion: { min: "0.1.0" },
+                capabilities: [{ type: "command", id: "outline.audit", title: "Audit Outline" }],
+                requestedPermissions: [{ permission: "project:read", scopes: ["project"] }],
+                contributes: {
+                  commands: [{ id: "outline.audit", title: "Audit Outline" }],
+                  workflowSteps: []
+                }
+              }
+            }
+          ]
+        },
+        adapter: {
+          executeHostCommand: () => ok({ output: { accepted: true } }),
+          executeWorkflowStep: () => ok({ output: { accepted: true } })
+        }
+      })
+    });
+
+    expect(application.listCommands()).toContainEqual({
+      id: "plugin:novel.structure-tools:outline.audit",
+      title: "Audit Outline",
+      scope: "plugin",
+      riskLevel: "safe",
+      defaultShortcut: "",
+      source: {
+        kind: "plugin",
+        pluginId: "novel.structure-tools",
+        contributionId: "outline.audit"
+      }
+    });
+
+    const result = application.executeCommand("plugin:novel.structure-tools:outline.audit");
+
+    expect(result.ok).toBe(true);
+    expect(application.getShellState().commandPaletteOpen).toBe(false);
   });
 
   test("delegates active chapter editing through an injected Application session", async () => {

@@ -1,4 +1,4 @@
-export type ApplicationCommandId =
+export type WorkspaceApplicationCommandId =
   | "workspace.open-command-palette"
   | "workspace.toggle-navigator"
   | "workspace.toggle-inspector"
@@ -9,7 +9,9 @@ export type ApplicationCommandId =
   | "workspace.narrow-inspector"
   | "workspace.widen-inspector";
 
-export type ApplicationCommandScope = "workspace";
+export type ApplicationCommandId = string;
+
+export type ApplicationCommandScope = "workspace" | "plugin";
 
 export type CommandRiskLevel = "safe" | "confirmation-required" | "destructive";
 
@@ -19,9 +21,17 @@ export interface ApplicationCommand {
   readonly scope: ApplicationCommandScope;
   readonly riskLevel: CommandRiskLevel;
   readonly defaultShortcut: string;
+  readonly disabledReason?: string;
+  readonly source?: {
+    readonly kind: "plugin";
+    readonly pluginId: string;
+    readonly contributionId: string;
+  };
 }
 
-export const DEFAULT_APPLICATION_COMMANDS: readonly ApplicationCommand[] = [
+export const DEFAULT_APPLICATION_COMMANDS: readonly (ApplicationCommand & {
+  readonly id: WorkspaceApplicationCommandId;
+})[] = [
   {
     id: "workspace.open-command-palette",
     title: "打开命令面板",

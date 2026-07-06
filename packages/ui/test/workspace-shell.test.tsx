@@ -585,6 +585,43 @@ describe("WorkspaceShell", () => {
     expect(html).toContain('aria-label="拆分参考窗格"');
   });
 
+  test("renders plugin command disabled reasons in the command palette", () => {
+    const application = createDesktopApplication();
+    const executedCommands: ApplicationCommandId[] = [];
+    const tree = WorkspaceShell({
+      shellState: application.getShellState(),
+      commands: [
+        ...application.listCommands(),
+        {
+          id: "plugin:novel.structure-tools:outline.audit",
+          title: "Audit Outline",
+          scope: "plugin",
+          riskLevel: "safe",
+          defaultShortcut: "",
+          disabledReason: "Plugin is disabled.",
+          source: {
+            kind: "plugin",
+            pluginId: "novel.structure-tools",
+            contributionId: "outline.audit"
+          }
+        }
+      ],
+      commandPaletteOpen: true,
+      onCommandExecute: (commandId) => executedCommands.push(commandId)
+    });
+    const command = findElementByAriaLabel(tree, "Execute command: Audit Outline");
+
+    expect(command).toBeDefined();
+    expect(command?.props.disabled).toBe(true);
+    command?.props.onClick?.();
+    expect(executedCommands).toEqual([]);
+
+    const html = renderToStaticMarkup(tree);
+    expect(html).toContain("Plugin");
+    expect(html).toContain("Audit Outline");
+    expect(html).toContain("Plugin is disabled.");
+  });
+
   test("renders only runtime-open chapter tabs with dirty and close affordances", () => {
     const application = createDesktopApplication();
     const closedTabs: string[] = [];

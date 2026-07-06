@@ -90,6 +90,20 @@ export function parseWorkflowDefinition(
         })
       );
     }
+    if (
+      step.kind === "plugin" &&
+      (step.pluginId === undefined || step.contributionId === undefined)
+    ) {
+      return err(
+        workflowError({
+          code: "WORKFLOW_PLUGIN_STEP_INVALID",
+          message: "Plugin workflow steps must include pluginId and contributionId.",
+          suggestedAction: "Add pluginId and contributionId before running this workflow.",
+          traceId: options.traceId,
+          redactedDetail: { stepId: step.id }
+        })
+      );
+    }
   }
 
   return ok(definition);
@@ -181,6 +195,27 @@ export function evaluateNextWorkflowAction(
         ...(step.defaultNextStepId === undefined
           ? {}
           : { defaultNextStepId: step.defaultNextStepId })
+      });
+    case "plugin":
+      if (step.pluginId === undefined || step.contributionId === undefined) {
+        return err(
+          workflowError({
+            code: "WORKFLOW_PLUGIN_STEP_INVALID",
+            message: "Plugin workflow steps must include pluginId and contributionId.",
+            suggestedAction: "Fix the workflow definition before running this step.",
+            traceId: state.workflowRunId,
+            redactedDetail: { stepId: step.id }
+          })
+        );
+      }
+
+      return ok({
+        kind: "run-plugin-step",
+        workflowRunId: state.workflowRunId,
+        stepId: step.id,
+        pluginId: step.pluginId,
+        contributionId: step.contributionId,
+        nextStepId
       });
   }
 }
@@ -340,6 +375,8 @@ function parseSteps(
 
     const nextStepId = readString(rawStep, "nextStepId");
     const agentId = readString(rawStep, "agentId");
+    const pluginId = readString(rawStep, "pluginId");
+    const contributionId = readString(rawStep, "contributionId");
     const branches = parseBranches(rawStep.branches, traceId);
     if (!branches.ok) {
       return branches;
@@ -350,6 +387,8 @@ function parseSteps(
       kind,
       nextStepId,
       agentId,
+      pluginId,
+      contributionId,
       branches: branches.value,
       defaultNextStepId
     });
@@ -412,6 +451,8 @@ function createStep(input: {
   readonly kind: WorkflowStepKind;
   readonly nextStepId: string | undefined;
   readonly agentId: string | undefined;
+  readonly pluginId: string | undefined;
+  readonly contributionId: string | undefined;
   readonly branches: readonly WorkflowBranch[] | undefined;
   readonly defaultNextStepId: string | undefined;
 }): WorkflowStep {
@@ -434,11 +475,25 @@ function createStep(input: {
           ...withAgent,
           nextStepId: input.nextStepId
         };
-  const withBranches =
-    input.branches === undefined
+  const withPlugin =
+    input.pluginId === undefined
       ? withNext
       : {
           ...withNext,
+          pluginId: input.pluginId
+        };
+  const withContribution =
+    input.contributionId === undefined
+      ? withPlugin
+      : {
+          ...withPlugin,
+          contributionId: input.contributionId
+        };
+  const withBranches =
+    input.branches === undefined
+      ? withContribution
+      : {
+          ...withContribution,
           branches: input.branches
         };
 
@@ -572,7 +627,8 @@ function readStepKind(value: unknown): WorkflowStepKind | undefined {
     value === "agent" ||
     value === "confirmation" ||
     value === "save" ||
-    value === "branch"
+    value === "branch" ||
+    value === "plugin"
     ? value
     : undefined;
 }

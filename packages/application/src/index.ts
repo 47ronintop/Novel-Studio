@@ -129,6 +129,18 @@ export type {
 } from "./plugin-settings-session.js";
 export { createPluginSettingsSession } from "./plugin-settings-session.js";
 export type {
+  PluginRuntimeAdapter,
+  PluginRuntimeAdapterCommandInput,
+  PluginRuntimeAdapterResult,
+  PluginRuntimeAdapterWorkflowStepInput,
+  PluginRuntimeCommandInput,
+  PluginRuntimeResult,
+  PluginRuntimeSession,
+  PluginRuntimeSessionOptions,
+  PluginRuntimeWorkflowStepInput
+} from "./plugin-runtime-session.js";
+export { createPluginRuntimeSession } from "./plugin-runtime-session.js";
+export type {
   ConfigAssetPort,
   ConfigAssetRestoreInput,
   ConfigAssetSaveInput,

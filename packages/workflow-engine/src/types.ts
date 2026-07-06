@@ -1,11 +1,13 @@
 export type WorkflowStatus = "active" | "draft" | "archived" | "deleted";
-export type WorkflowStepKind = "context" | "agent" | "confirmation" | "save" | "branch";
+export type WorkflowStepKind = "context" | "agent" | "confirmation" | "save" | "branch" | "plugin";
 export type WorkflowRunStatus = "running" | "waiting-for-confirmation" | "completed" | "failed";
 
 export interface WorkflowStep {
   readonly id: string;
   readonly kind: WorkflowStepKind;
   readonly agentId?: string;
+  readonly pluginId?: string;
+  readonly contributionId?: string;
   readonly nextStepId?: string;
   readonly branches?: readonly WorkflowBranch[];
   readonly defaultNextStepId?: string;
@@ -94,6 +96,14 @@ export type WorkflowNextAction =
       readonly stepId: string;
       readonly branches: readonly WorkflowBranch[];
       readonly defaultNextStepId?: string;
+    }
+  | {
+      readonly kind: "run-plugin-step";
+      readonly workflowRunId: string;
+      readonly stepId: string;
+      readonly pluginId: string;
+      readonly contributionId: string;
+      readonly nextStepId: string | null;
     }
   | {
       readonly kind: "complete";

@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.33 | Status: Active | Last Updated: 2026-07-06
+Version: 1.34 | Status: Active | Last Updated: 2026-07-06
 
 ## 目标
 
@@ -74,6 +74,8 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M54       | Plugin Runtime RFC       | 插件运行时、权限、adapter、workflow contribution 架构 RFC        | Complete |
 | M55       | Editor Runtime RFC       | CodeMirror adapter、selection、visual diff 和快捷键边界 RFC      | Complete |
 | M56       | Workflow Designer RFC    | Workflow graph、条件、Agent 分支和插件 workflow 节点 RFC         | Complete |
+| M57       | Plugin Runtime Host      | host-command runtime session、权限校验和命令面板 contribution    | Complete |
+| M58       | Plugin Workflow Adapter  | Workflow plugin step、run-plugin-step action 和 mock adapter     | Complete |
 
 ## M15 完成内容
 
@@ -362,20 +364,29 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - 新增 `docs/rfcs/RFC-0003-workflow-designer.md`，接受 schema-first Workflow Designer：JSON 仍是 source of truth，graph view model 只做 UI 投影，Workflow Engine 保持确定性状态机。
 - M54-M56 不新增运行时代码，不改变项目数据格式，不引入真实第三方插件执行、CodeMirror 默认启用或 workflow graph editor。
 
+## M57/M58 完成内容
+
+- 新增 `docs/productization/m57-m58-plugin-runtime-workflow.md`，明确 Plugin Runtime host-command 与 workflow-step adapter 的实施范围。
+- Application 新增 `PluginRuntimeSession`，从已加载插件设置快照生成 plugin command contributions，并在 listing 与 execution 两处校验 enabled、manifest、capability、contribution、permission 和 scope。
+- `DesktopApplication.listCommands()` 暴露 plugin command contributions；Command Palette 显示 plugin 分组和 disabled reason，禁用项不会触发执行。
+- plugin host command 执行通过 injected `PluginRuntimeAdapter` fixture/host boundary 返回结构化 JSON，不执行任意第三方代码。
+- Workflow Engine 新增 `plugin` step kind 和 `run-plugin-step` next action；Engine 只发出结构化动作，不调用插件、不访问文件系统。
+- Application runtime 新增 `runWorkflowStep()`，对 workflow-step contribution 使用 `workflow:invoke` project scope 校验，并拒绝非结构化 adapter output。
+- M57/M58 不包含 sandboxed-code、marketplace、插件网络权限、真实外部进程执行、workflow graph designer 或 plugin-specific IPC event channel。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19-M56，其中 M27 首次使用引导已通过 M48 回补完成。
+- Post-M18 产品化打磨已完成 M19-M58，其中 M27 首次使用引导已通过 M48 回补完成。
 - 当前产品状态是 beta productization：主干闭环可运行，但多个宪法/UI 指南能力仍是 Product Gap。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M57 Plugin Runtime Host Commands：实现 RFC-0001 的 host-command runtime slice。
-- M58 建议进入 Plugin Workflow Step Adapter：实现 mockable workflow-step adapter 和 workflow integration tests。
-- M59 建议进入 Editor Runtime Adapter Extraction：按 RFC-0002 抽出 textarea runtime adapter。
+- 下一步建议进入 M59 Editor Runtime Adapter Extraction：按 RFC-0002 抽出 textarea runtime adapter。
 - M60 建议进入 Workflow Graph Projection：按 RFC-0003 实现 definition/graph projection 与 validator。
+- M61 建议进入 Plugin Runtime Sandbox RFC：为 sandboxed-code、签名、timeout teardown 和权限提示单独定稿。
 
 ## 当前技术债重点
 
