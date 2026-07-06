@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.49 | Status: Active | Last Updated: 2026-07-06
+Version: 1.50 | Status: Active | Last Updated: 2026-07-06
 
 ## 目标
 
@@ -111,8 +111,8 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M91       | CodeMirror Migration Gate       | migration gate、opt-in/E2E/benchmark/rollback evidence 和 runtime strip      | Complete |
 | M92       | Structural Refactor Gate        | 拆分超大 UI/Application 文件，降低继续开发的结构性风险                       | Complete |
 | M93       | Core Writing Journey E2E        | 验证并修复“写章节→AI辅助→保存/恢复→重开继续写”的单一用户旅程                 | Complete |
-| M94       | Data Loss Hardening             | 聚焦不丢稿：recovery、history、file-ref、stale-lock 的最小安全闭环           | Planned  |
-| M95       | Provider Compatibility Ship     | 支持公开用户常见 API：OpenAI/GPT、Claude、DeepSeek、GLM、通义等 AI 建议闭环  | Planned  |
+| M94       | Data Loss Hardening             | 聚焦不丢稿：recovery、history、file-ref、stale-lock 的最小安全闭环           | Complete |
+| M95       | Provider Compatibility Ship     | 支持公开用户常见 API：OpenAI/GPT、Claude、DeepSeek、GLM、通义等 AI 建议闭环  | Complete |
 | M96       | Story Bible Consistency Minimum | 聚焦作者继续写作所需的 Story Bible 引用/一致性提示                           | Planned  |
 | M97       | Public Install Release Gate     | 面向公开安装用户的 installer、签名/证书策略、release channel 和核心旅程验证  | Planned  |
 | M98       | V1 Ship Audit                   | 只按核心闭环证据裁决 v1 ship；同步裁决阅读朗读等 v1.1 候选功能               | Planned  |
@@ -561,11 +561,25 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - E2E 同时验证 AI 建议不会在确认前写入正文，确认后保存到章节 Markdown，重开后正文不丢，版本历史仍显示 `Before AI apply` 快照，继续编辑后的内容再次落盘。
 - M93 未新增产品功能；当前实现已能通过核心旅程验收，后续 M94 聚焦 data loss hardening 的边缘恢复/历史/锁场景。
 
+## M94 完成内容
+
+- `ProjectLockFileRepository` 新增 stale lock 判定：超过配置阈值的锁返回 `PROJECT_LOCK_STALE`、`recoverability=user-action` 和脱敏 owner/acquiredAt/staleAfterMs 详情。
+- `packages/repository/test/project-workflow.test.ts` 覆盖 stale lock 场景，验证不会自动删除受保护的 `project-lock.json`，防止误判导致多窗口写入风险。
+- M94 复用既有 dirty recovery、file-ref typed error、`before-ai-apply` history snapshot 和 M93 核心旅程 E2E；本次只补会影响“保存不丢稿、重开能继续写”的锁恢复边界，不新增 archive browser 或完整多窗口编排。
+
+## M95 完成内容
+
+- `@novel-studio/llm-adapter` 新增 `createProviderRouter()`，将 OpenAI/GPT、DeepSeek、GLM/Zhipu、通义、OpenRouter 和本地 OpenAI-compatible 服务路由到兼容 runtime provider；Anthropic/Claude 保留原生 provider 路径。
+- LLM Adapter 成功响应和 streaming start/done 事件的 `provider` 改为用户选择的 model profile provider，避免 DeepSeek 经兼容层执行后在观测里显示成内部 provider。
+- Desktop 组合层新增 `createAiProvider` 注入点；默认离线仍使用本地 mock，测试和未来真实运行时可注入 provider router，不再把 AI workflow 永久固定在 mock provider。
+- 新增 `apps/desktop/test/m95-provider-runtime-routing.test.ts`，验证默认 DeepSeek profile 能进入 OpenAI-compatible runtime provider，并在 AI 建议观测里保留 DeepSeek provider 信息。
+- M95 不包含 live benchmark、streaming 体验补完、密钥库实现或长尾 provider 专用 translator；这些不影响作者先完成“AI 建议→审阅→手动应用”的 v1 核心闭环。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19-M93，其中 M27 首次使用引导已通过 M48 回补完成。
+- Post-M18 产品化打磨已完成 M19-M95，其中 M27 首次使用引导已通过 M48 回补完成。
 - 当前产品状态是 beta productization：主干闭环可运行，但多个宪法/UI 指南能力仍是 Product Gap。
 - `docs/superpowers/plans/2026-07-06-product-ready-remaining-work.md` 记录了 M92-M100 候选缺口清单，但不得直接执行；后续执行必须先通过本文件的范围复核检查点。
 - 未经用户确认不得 push。
@@ -596,12 +610,21 @@ Scope Review 必须回答：
 3. 是否有文件超过重构阈值：UI/renderer 单文件 800 行警戒、1200 行强制拆分；Application session 单文件 700 行警戒、1000 行强制拆分；测试文件 700 行警戒。
 4. 当前缺口是否会导致真实作者写不完、丢失手稿、无法审阅 AI 修改、或无法在重启后继续写？若不会，默认不进入 v1 主线。
 
+## Scope Review - 2026-07-06 after M94/M95
+
+| 检查项               | 结论                                                                                                                         | 处理                                                                                       |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| 核心写作闭环         | M93 E2E 已覆盖创建/写作/AI 审阅/保存/重开/继续写；M94 增加 stale lock 类型化提示，降低异常锁导致无法继续写的风险             | 可以进入 M96，但 M96 必须只补 Story Bible 最小一致性提示，不扩展 Timeline 深编辑或知识图谱 |
+| 接下来两个 milestone | M96 直接对应 v1 ship 的“冲突提示和跳转”；M97 直接对应公开安装用户可下载、安装、启动和完成核心旅程                            | 保留 M96/M97；阅读朗读继续留到 M98 裁决，不插入 M96/M97                                    |
+| 文件重构阈值         | M92 已建立结构门禁；本次 M94/M95 未新增超大 UI/Application 文件                                                              | 暂不新增结构性 milestone；若后续文件再次超过阈值，必须先处理结构风险                       |
+| 可砍/延后项          | archive browser、history 压缩保留策略 UI、完整多窗口编排、provider streaming、live benchmark、专用 translator 不阻断核心闭环 | 全部继续留在 v2/backlog，触发条件仍按下方 Backlog 规则执行                                 |
+
 ## 裁剪后后续路线
 
 - M92 Structural Refactor Gate：已完成。拆分 `workspace-shell.tsx`、`App.tsx` 和 `ai-writing-workflow-session.ts` 的职责边界，不新增用户功能；结构门禁已覆盖硬拆分阈值。
 - M93 Core Writing Journey E2E：已完成。E2E 覆盖创建/打开项目、写正文、生成 AI 建议、审阅应用、保存、关闭重开、继续编辑，且正文和历史不丢。
-- M94 Data Loss Hardening：只处理会造成丢稿或无法恢复继续写的 recovery/history/lock 缺口。完成判定：dirty recovery、file-ref recovery、版本回滚前快照、stale lock 提示都有可复现测试；默认不删除 `history/`、`memories/`、`recovery/`。
-- M95 Provider Compatibility Ship：支持公开用户常见 API provider 的 AI 建议闭环，不追求 streaming 体验。完成判定：用户能配置 OpenAI/GPT、Claude、DeepSeek、GLM、通义等 provider profile；DeepSeek/GLM/通义等 OpenAI-compatible provider 能通过统一兼容层工作；Claude 通过 Anthropic/native adapter 或明确支持的兼容代理工作；失败时得到脱敏错误，成功时看到 diff/review 并手动应用；取消不会写入正文。
+- M94 Data Loss Hardening：已完成。dirty recovery、file-ref recovery、版本回滚前快照和 stale lock 类型化提示均有可复现测试；stale lock 不会自动删除受保护锁文件。
+- M95 Provider Compatibility Ship：已完成。常见公开 provider 可通过 `createProviderRouter()` 接入兼容或原生 runtime；桌面组合层可注入 provider router，DeepSeek 默认 profile 已有 AI 建议闭环测试证据。
 - M96 Story Bible Consistency Minimum：只补作者继续写作所需的一致性提示，不做完整知识图谱或时间线编辑器。完成判定：系统能提示“这个人物设定在前文有冲突”这类最小冲突，并提供跳转链接到相关 Story Bible 条目或章节上下文；缺失人物/地点/时间线引用能在 Project Health 或写作界面提示。
 - M97 Public Install Release Gate：验证面向公开安装用户的交付条件。完成判定：公开下载的 Windows installer 能安装、启动、打开/创建项目并完成核心旅程；release channel、release notes、artifact secret scan、schema packaging 校验通过；Windows 签名/证书策略有可执行方案和失败门禁；macOS notarization 仅在 macOS artifact 纳入 v1 分发时进入本 milestone。
 - M98 V1 Ship Audit：只按 v1 ship 验收场景裁决是否发布，并同步裁决阅读预览/角色朗读是否进入 v1.1 第一批实施。完成判定：验收场景证据、测试命令、已知限制和延期清单写入 release readiness；所有非核心功能明确标记为 v2/backlog；阅读朗读有明确 go/no-go 记录，若 go，则后续 milestone 只允许先做“阅读预览 + Story Bible 人物声音设定 + 系统语音默认 + Edge TTS 实验 provider”，不得直接扩成有声书导出、情绪配音或全自动角色推断。
@@ -623,4 +646,4 @@ Scope Review 必须回答：
 - Windows 公开安装的签名/证书策略进入 M97；macOS notarization 和托管自动更新仅在对应分发渠道纳入 v1 时进入主线。
 - schema codegen 和更强 dependency boundary 工具尚未最终选择。
 - history 归档/压缩策略、stale lock recovery UI、完整多窗口状态编排仍需后续设计。
-- Provider Matrix 配置已覆盖；OpenAI-compatible 主路径、Anthropic/native Claude 路径和常见 provider fixtures 进入 M95；streaming、live benchmark 和长尾 provider 专用 translator 进入 v2/backlog 触发项。
+- Provider Matrix 配置与运行时路由已覆盖 v1 主路径；Claude 仍需要在真实 runtime 中注入 Anthropic/native provider 或明确兼容代理。streaming、live benchmark、密钥库和长尾 provider 专用 translator 进入 v2/backlog 触发项。

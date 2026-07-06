@@ -91,8 +91,11 @@
 - 将阅读预览/角色配音朗读纳入路线图范围裁决：不插队 M92-M97 核心闭环，M98 只判断是否进入 v1.1；若后续实施，第一版限定为章节阅读预览、Story Bible 人物声音设定、系统语音默认和 Edge TTS 实验 provider，不直接扩展到有声书导出或全自动角色推断。
 - 完成 M92 Structural Refactor Gate：新增结构门禁测试，拆分 `workspace-shell.tsx` 的 AI/Story Bible/Search/onboarding/recovery 视图、`App.tsx` 的 renderer shell helper，以及 `ai-writing-workflow-session.ts` 的公共类型模块；三个目标文件均降到硬拆分阈值以下且不新增用户功能。
 - 完成 M93 Core Writing Journey E2E：新增 Electron E2E 覆盖创建项目、写章节、生成并审阅 AI 建议、确认应用、保存、关闭重开、继续编辑和再次落盘，并验证 AI 前置版本历史不丢。
+- 完成 M94 Data Loss Hardening：`ProjectLockFileRepository` 新增 stale lock 类型化错误和脱敏详情，测试验证不会自动删除受保护锁文件；M94 只补不丢稿/能继续写所需的锁边界，不扩展 archive browser 或完整多窗口编排。
+- 完成 M95 Provider Compatibility Ship：新增 LLM provider router，DeepSeek/GLM/通义等可走 OpenAI-compatible runtime，Anthropic/Claude 保留原生 provider 路径；桌面组合层新增 provider 注入点并验证 DeepSeek 默认 profile 可完成 AI 建议闭环。
+- 执行 M94/M95 后 Scope Review：确认 M96 只做 Story Bible 最小一致性提示，M97 保持公开安装发布门禁；阅读朗读、provider streaming、live benchmark、history archive UI 和完整多窗口编排继续留在 v2/backlog 或 M98 裁决。
 
 ## Notes
 
 - Phase 7 当前定义的 M0-M18 已完成。
-- 当前已完成 Post-M18 M19-M93，M94-M98 已按最终确认的 v1 核心闭环裁剪规划；M27 安装后首次使用引导缺口已通过 M48 回补；未经用户确认不得 push。
+- 当前已完成 Post-M18 M19-M95，M96-M98 已按最终确认的 v1 核心闭环裁剪规划；M27 安装后首次使用引导缺口已通过 M48 回补；未经用户确认不得 push。

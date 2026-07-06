@@ -49,6 +49,7 @@ export interface ProjectDesktopApplicationOptions {
   readonly now?: () => string;
   readonly createVersionId?: () => string;
   readonly modelConnectionTester?: ModelConnectionTester;
+  readonly createAiProvider?: (input: DesktopAiProviderFactoryInput) => LlmProvider;
 }
 
 export interface BootstrappedDefaultDesktopApplicationOptions {
@@ -57,6 +58,11 @@ export interface BootstrappedDefaultDesktopApplicationOptions {
   readonly now?: () => string;
   readonly createVersionId?: () => string;
   readonly modelConnectionTester?: ModelConnectionTester;
+  readonly createAiProvider?: (input: DesktopAiProviderFactoryInput) => LlmProvider;
+}
+
+export interface DesktopAiProviderFactoryInput {
+  readonly chapterEditorSession: ChapterEditorSession;
 }
 
 export function createProjectDesktopApplication(
@@ -187,7 +193,10 @@ export function createProjectDesktopApplication(
       createAgentBackedAiWritingWorkflowSession({
         chapterEditorSession: activeChapterEditorSession,
         llmAdapter: createLlmAdapter({
-          provider: createDesktopMockAiProvider(activeChapterEditorSession),
+          provider:
+            options.createAiProvider?.({
+              chapterEditorSession: activeChapterEditorSession
+            }) ?? createDesktopMockAiProvider(activeChapterEditorSession),
           clock: () => options.now?.() ?? new Date().toISOString()
         }),
         resolveModelRuntimeProfile: async () => {
@@ -323,7 +332,10 @@ export async function createBootstrappedDefaultDesktopApplication(
     ...(options.createVersionId === undefined ? {} : { createVersionId: options.createVersionId }),
     ...(options.modelConnectionTester === undefined
       ? {}
-      : { modelConnectionTester: options.modelConnectionTester })
+      : { modelConnectionTester: options.modelConnectionTester }),
+    ...(options.createAiProvider === undefined
+      ? {}
+      : { createAiProvider: options.createAiProvider })
   });
   const opened = await application.openProject(options.projectRoot);
   if (!opened.ok) {

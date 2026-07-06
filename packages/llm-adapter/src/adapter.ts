@@ -72,7 +72,7 @@ export function createLlmAdapter(options: LlmAdapterOptions): LlmAdapter {
           const response: LlmResponse = {
             schemaVersion: "1.0",
             requestId: request.requestId,
-            provider: options.provider.id,
+            provider: request.modelProfile.provider,
             modelName: request.modelProfile.modelName,
             status: "success",
             content: completion.content,
@@ -138,7 +138,7 @@ export function createLlmAdapter(options: LlmAdapterOptions): LlmAdapter {
       yield ok({
         type: "start",
         requestId: request.requestId,
-        provider: options.provider.id,
+        provider: request.modelProfile.provider,
         modelName: request.modelProfile.modelName,
         createdAt: now()
       });
@@ -161,7 +161,7 @@ export function createLlmAdapter(options: LlmAdapterOptions): LlmAdapter {
       yield ok({
         type: "done",
         requestId: request.requestId,
-        provider: options.provider.id,
+        provider: request.modelProfile.provider,
         modelName: request.modelProfile.modelName,
         createdAt: now()
       });

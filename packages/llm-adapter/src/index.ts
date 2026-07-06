@@ -1,5 +1,6 @@
 export { createLlmAdapter } from "./adapter.js";
 export { createMockProvider } from "./mock-provider.js";
+export { createProviderRouter, type ProviderRouterOptions } from "./provider-router.js";
 export {
   createOpenAiCompatibleProvider,
   OpenAiCompatibleHttpError,

@@ -15,6 +15,7 @@ export interface ProjectLockFileRepositoryOptions {
   readonly projectRoot: string;
   readonly ownerId: string;
   readonly now?: () => string;
+  readonly staleAfterMs?: number;
   readonly traceId?: string;
 }
 
@@ -104,6 +105,26 @@ export class ProjectLockFileRepository {
     if (!existing.ok) {
       return existing;
     }
+    const staleAfterMs = this.options.staleAfterMs;
+    if (
+      staleAfterMs !== undefined &&
+      isStaleLock(existing.value, this.options.now?.() ?? new Date().toISOString(), staleAfterMs)
+    ) {
+      return err(
+        storageError({
+          code: "PROJECT_LOCK_STALE",
+          message: "Project lock appears to be stale.",
+          suggestedAction:
+            "Confirm no other Novel Studio window is using this project before replacing the stale lock.",
+          traceId: this.traceId,
+          redactedDetail: {
+            ownerId: existing.value.ownerId,
+            acquiredAt: existing.value.acquiredAt,
+            staleAfterMs
+          }
+        })
+      );
+    }
 
     return err(
       storageError({
@@ -160,6 +181,14 @@ export class ProjectLockFileRepository {
       );
     }
   }
+}
+
+function isStaleLock(record: ProjectLockRecord, now: string, staleAfterMs: number): boolean {
+  const acquiredAt = Date.parse(record.acquiredAt);
+  const current = Date.parse(now);
+  return (
+    Number.isFinite(acquiredAt) && Number.isFinite(current) && current - acquiredAt >= staleAfterMs
+  );
 }
 
 function isFileExistsError(error: unknown): boolean {

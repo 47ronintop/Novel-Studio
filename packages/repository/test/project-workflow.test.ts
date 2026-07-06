@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -164,6 +164,49 @@ describe("M12 project workflow repository support", () => {
       throw new Error(reacquired.error.message);
     }
     expect(reacquired.value.ownerId).toBe("window_b");
+  });
+
+  test("reports stale project locks without deleting the protected lock file", async () => {
+    const projectRoot = await createTempRoot();
+    await mkdir(join(projectRoot, ".novel-studio"), { recursive: true });
+    await writeFile(
+      join(projectRoot, ".novel-studio", "project-lock.json"),
+      `${JSON.stringify(
+        {
+          schemaVersion: "1.0",
+          ownerId: "crashed_window",
+          projectRoot,
+          acquiredAt: "2026-07-06T00:00:00.000Z"
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+    const nextOwner = new ProjectLockFileRepository({
+      projectRoot,
+      ownerId: "window_b",
+      now: () => "2026-07-06T03:00:00.000Z",
+      staleAfterMs: 60 * 60 * 1000
+    });
+
+    const result = await nextOwner.acquireProjectLock();
+    const lockContent = await readFile(
+      join(projectRoot, ".novel-studio", "project-lock.json"),
+      "utf8"
+    );
+
+    expect(isErr(result)).toBe(true);
+    if (!result.ok) {
+      expect(result.error.code).toBe("PROJECT_LOCK_STALE");
+      expect(result.error.recoverability).toBe("user-action");
+      expect(result.error.redactedDetail).toEqual({
+        ownerId: "crashed_window",
+        acquiredAt: "2026-07-06T00:00:00.000Z",
+        staleAfterMs: 3600000
+      });
+    }
+    expect(lockContent).toContain('"ownerId": "crashed_window"');
   });
 });
 

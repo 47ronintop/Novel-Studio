@@ -5,6 +5,7 @@ import { isErr, isOk } from "@novel-studio/shared";
 import {
   createLlmAdapter,
   createMockProvider,
+  createProviderRouter,
   type LlmProvider,
   type LlmRequest
 } from "../src/index.js";
@@ -223,6 +224,96 @@ describe("LLM Adapter", () => {
     expect(result.error.code).toBe("LLM_TIMEOUT");
     expect(result.error.category).toBe("LLMAdapterError");
     expect(result.error.recoverability).toBe("retryable");
+  });
+
+  test("routes common public providers through compatible or native runtime providers", async () => {
+    const calls: string[] = [];
+    const openAiCompatibleProvider: LlmProvider = {
+      id: "openai-compatible",
+      async complete(request) {
+        calls.push(`compatible:${request.modelProfile.provider}:${request.modelProfile.modelName}`);
+        return {
+          content: { type: "text", value: "compatible response" }
+        };
+      },
+      stream() {
+        return createMockProvider({ streams: [] }).stream(request);
+      }
+    };
+    const anthropicProvider: LlmProvider = {
+      id: "anthropic",
+      async complete(request) {
+        calls.push(`anthropic:${request.modelProfile.provider}:${request.modelProfile.modelName}`);
+        return {
+          content: { type: "text", value: "anthropic response" }
+        };
+      },
+      stream() {
+        return createMockProvider({ streams: [] }).stream(request);
+      }
+    };
+    const adapter = createLlmAdapter({
+      provider: createProviderRouter({
+        providers: {
+          "openai-compatible": openAiCompatibleProvider,
+          anthropic: anthropicProvider
+        },
+        aliases: {
+          openai: "openai-compatible",
+          deepseek: "openai-compatible",
+          zhipu: "openai-compatible",
+          "tongyi-qianwen": "openai-compatible",
+          openrouter: "openai-compatible"
+        }
+      }),
+      clock: () => "2026-07-06T00:00:00.000Z"
+    });
+
+    const deepseek = await adapter.complete({
+      ...request,
+      modelProfile: {
+        ...request.modelProfile,
+        provider: "deepseek",
+        modelName: "deepseek-chat",
+        baseUrl: "https://api.deepseek.com/v1"
+      }
+    });
+    const zhipu = await adapter.complete({
+      ...request,
+      modelProfile: {
+        ...request.modelProfile,
+        provider: "zhipu",
+        modelName: "glm-4",
+        baseUrl: "https://open.bigmodel.cn/api/paas/v4"
+      }
+    });
+    const tongyi = await adapter.complete({
+      ...request,
+      modelProfile: {
+        ...request.modelProfile,
+        provider: "tongyi-qianwen",
+        modelName: "qwen-plus",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      }
+    });
+    const anthropic = await adapter.complete({
+      ...request,
+      modelProfile: {
+        ...request.modelProfile,
+        provider: "anthropic",
+        modelName: "claude-3-5-sonnet"
+      }
+    });
+
+    expect([deepseek, zhipu, tongyi, anthropic].every((result) => result.ok)).toBe(true);
+    expect(calls).toEqual([
+      "compatible:deepseek:deepseek-chat",
+      "compatible:zhipu:glm-4",
+      "compatible:tongyi-qianwen:qwen-plus",
+      "anthropic:anthropic:claude-3-5-sonnet"
+    ]);
+    expect(deepseek).toMatchObject({ ok: true, value: { provider: "deepseek" } });
+    expect(anthropic).toMatchObject({ ok: true, value: { provider: "anthropic" } });
   });
 
   test("normalizes an in-flight provider timeout", async () => {
