@@ -115,7 +115,8 @@ describe("AI writing workflow UI", () => {
           onInstructionChange: () => undefined,
           onGenerateSuggestion: () => undefined,
           onApplySuggestion: () => undefined,
-          onRetrySuggestion: () => undefined
+          onRetrySuggestion: () => undefined,
+          onCancelStreaming: () => undefined
         }}
       />
     );
@@ -146,5 +147,30 @@ describe("AI writing workflow UI", () => {
     expect(html).toContain("LLM_TIMEOUT / LLM_RATE_LIMITED / LLM_PROVIDER_ERROR");
     expect(html).toContain('aria-label="重试 AI 工作流"');
     expect(html).toContain("失败");
+  });
+
+  test("renders streaming preview and cancel control", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={application.getShellState()}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        aiWritingWorkflow={{
+          status: "streaming",
+          instruction: "Continue the scene.",
+          streamPreview: "The city answered",
+          onInstructionChange: () => undefined,
+          onGenerateSuggestion: () => undefined,
+          onApplySuggestion: () => undefined,
+          onRetrySuggestion: () => undefined,
+          onCancelStreaming: () => undefined
+        }}
+      />
+    );
+
+    expect(html).toContain("The city answered");
+    expect(html).toContain('aria-label="取消 AI 流式输出"');
+    expect(html).toContain("流式输出中");
   });
 });

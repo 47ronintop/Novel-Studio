@@ -25,6 +25,9 @@ export interface AiWritingWorkflowBridge {
   getProps(): AiWritingWorkflowProps;
   setInstruction(instruction: string): AiWritingWorkflowProps;
   beginGenerate(instruction: string): AiWritingWorkflowProps;
+  beginStreamingGenerate(instruction: string): AiWritingWorkflowProps;
+  appendStreamDelta(delta: string): AiWritingWorkflowProps;
+  cancelStreaming(): AiWritingWorkflowProps;
   generateSuggestion(instruction: string): Promise<AiWritingWorkflowProps>;
   applySuggestion(): Promise<ChapterEditorProps>;
 }
@@ -50,6 +53,30 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
         ...props,
         status: "generating",
         instruction
+      });
+      return props;
+    },
+    beginStreamingGenerate(instruction) {
+      props = createProps({
+        ...props,
+        status: "streaming",
+        instruction,
+        streamPreview: ""
+      });
+      return props;
+    },
+    appendStreamDelta(delta) {
+      props = createProps({
+        ...props,
+        status: "streaming",
+        streamPreview: `${props.streamPreview ?? ""}${delta}`
+      });
+      return props;
+    },
+    cancelStreaming() {
+      props = createProps({
+        ...props,
+        status: "cancelled"
       });
       return props;
     },
@@ -118,7 +145,11 @@ function toProps(
 function createProps(
   input: Omit<
     AiWritingWorkflowProps,
-    "onInstructionChange" | "onGenerateSuggestion" | "onApplySuggestion" | "onRetrySuggestion"
+    | "onInstructionChange"
+    | "onGenerateSuggestion"
+    | "onApplySuggestion"
+    | "onRetrySuggestion"
+    | "onCancelStreaming"
   >
 ): AiWritingWorkflowProps {
   return {
@@ -126,7 +157,8 @@ function createProps(
     onInstructionChange: () => undefined,
     onGenerateSuggestion: () => undefined,
     onApplySuggestion: () => undefined,
-    onRetrySuggestion: () => undefined
+    onRetrySuggestion: () => undefined,
+    onCancelStreaming: () => undefined
   };
 }
 

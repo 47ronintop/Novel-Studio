@@ -4,6 +4,7 @@ export {
   createOpenAiCompatibleProvider,
   OpenAiCompatibleHttpError,
   type OpenAiCompatibleProviderOptions,
+  type OpenAiCompatibleStreamTransport,
   type OpenAiCompatibleTransport,
   type OpenAiCompatibleTransportRequest
 } from "./openai-compatible-provider.js";

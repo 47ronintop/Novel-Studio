@@ -626,6 +626,14 @@ export function App() {
     });
   }, [aiWritingWorkflowBridge]);
 
+  const handleCancelAiStreaming = useCallback(() => {
+    if (aiWritingWorkflowBridge === undefined) {
+      return;
+    }
+
+    setAiWritingWorkflow(aiWritingWorkflowBridge.cancelStreaming());
+  }, [aiWritingWorkflowBridge]);
+
   const handleStoryBibleKindSelect = useCallback(
     (kind: StoryBibleEditorKind) => {
       if (storyBibleBridge === undefined) {
@@ -844,7 +852,8 @@ export function App() {
               onInstructionChange: handleAiInstructionChange,
               onGenerateSuggestion: handleGenerateAiSuggestion,
               onApplySuggestion: handleApplyAiSuggestion,
-              onRetrySuggestion: handleGenerateAiSuggestion
+              onRetrySuggestion: handleGenerateAiSuggestion,
+              onCancelStreaming: handleCancelAiStreaming
             } satisfies AiWritingWorkflowProps
           })}
       {...(projectWorkflow === undefined

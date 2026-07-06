@@ -22,7 +22,12 @@ export type OpenAiCompatibleTransport = (
 
 export interface OpenAiCompatibleProviderOptions {
   readonly transport: OpenAiCompatibleTransport;
+  readonly streamTransport?: OpenAiCompatibleStreamTransport;
 }
+
+export type OpenAiCompatibleStreamTransport = (
+  request: OpenAiCompatibleTransportRequest
+) => AsyncIterable<unknown>;
 
 export class OpenAiCompatibleHttpError extends Error {
   readonly status: number;
@@ -60,10 +65,29 @@ export function createOpenAiCompatibleProvider(
         throw normalizeOpenAiCompatibleError(error);
       }
     },
-    stream() {
-      return unsupportedStream();
+    stream(request) {
+      if (options.streamTransport === undefined) {
+        return unsupportedStream();
+      }
+
+      return streamChatCompletion(options.streamTransport, request);
     }
   };
+}
+
+async function* streamChatCompletion(
+  streamTransport: OpenAiCompatibleStreamTransport,
+  request: LlmRequest
+): AsyncIterable<LlmProviderStreamEvent> {
+  try {
+    for await (const chunk of streamTransport(createTransportRequest(request, true))) {
+      for (const event of parseStreamChunk(chunk)) {
+        yield event;
+      }
+    }
+  } catch (error) {
+    throw normalizeOpenAiCompatibleError(error);
+  }
 }
 
 function unsupportedStream(): AsyncIterable<LlmProviderStreamEvent> {
@@ -82,7 +106,10 @@ function unsupportedStream(): AsyncIterable<LlmProviderStreamEvent> {
   };
 }
 
-function createTransportRequest(request: LlmRequest): OpenAiCompatibleTransportRequest {
+function createTransportRequest(
+  request: LlmRequest,
+  streaming = false
+): OpenAiCompatibleTransportRequest {
   const baseUrl = request.modelProfile.baseUrl;
   if (baseUrl === undefined || baseUrl.length === 0) {
     throw new LlmProviderFailure({
@@ -95,7 +122,7 @@ function createTransportRequest(request: LlmRequest): OpenAiCompatibleTransportR
   const body: JsonObject = {
     model: request.modelProfile.modelName,
     messages: request.messages.map(toOpenAiCompatibleMessage),
-    stream: false
+    stream: streaming
   };
 
   if (request.parameters.temperature !== undefined) {
@@ -152,6 +179,46 @@ function parseChatCompletion(payload: unknown): LlmProviderCompletion {
     },
     usage: parseUsage(root.usage)
   };
+}
+
+function parseStreamChunk(payload: unknown): readonly LlmProviderStreamEvent[] {
+  const root = requireRecord(payload);
+  const choices = root.choices;
+  if (!Array.isArray(choices)) {
+    throw malformedResponse(root);
+  }
+
+  const events: LlmProviderStreamEvent[] = [];
+  for (const choice of choices) {
+    if (!isRecord(choice)) {
+      throw malformedResponse(root);
+    }
+
+    const delta = choice.delta;
+    if (!isRecord(delta)) {
+      throw malformedResponse(root);
+    }
+
+    const content = delta.content;
+    if (content !== undefined) {
+      if (typeof content !== "string") {
+        throw malformedResponse(root);
+      }
+      events.push({
+        type: "delta",
+        value: content
+      });
+    }
+  }
+
+  if (root.usage !== undefined) {
+    events.push({
+      type: "usage",
+      usage: parseUsage(root.usage)
+    });
+  }
+
+  return events;
 }
 
 function parseUsage(value: unknown): LlmUsage {

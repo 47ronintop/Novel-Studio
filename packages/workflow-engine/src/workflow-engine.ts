@@ -4,6 +4,8 @@ import { workflowError } from "./errors.js";
 import type {
   ParseWorkflowOptions,
   StartWorkflowRunInput,
+  WorkflowBranch,
+  WorkflowBranchSelectionInput,
   WorkflowDefinition,
   WorkflowNextAction,
   WorkflowRunState,
@@ -70,6 +72,12 @@ export function parseWorkflowDefinition(
   for (const step of definition.steps) {
     if (step.nextStepId !== undefined && findStep(definition, step.nextStepId) === undefined) {
       return stepNotFound(options.traceId, step.nextStepId);
+    }
+    if (step.kind === "branch") {
+      const branchValidation = validateBranchStep(definition, step, options.traceId);
+      if (!branchValidation.ok) {
+        return branchValidation;
+      }
     }
     if (step.kind === "agent" && step.agentId === undefined) {
       return err(
@@ -165,15 +173,15 @@ export function evaluateNextWorkflowAction(
         nextStepId
       });
     case "branch":
-      return err(
-        workflowError({
-          code: "WORKFLOW_DEFINITION_INVALID",
-          message: "Branch step evaluation is not implemented in M7.1.",
-          suggestedAction: "Use context, agent, confirmation, or save steps in this workflow.",
-          traceId: state.workflowRunId,
-          redactedDetail: { stepId: step.id }
-        })
-      );
+      return ok({
+        kind: "choose-branch",
+        workflowRunId: state.workflowRunId,
+        stepId: step.id,
+        branches: step.branches ?? [],
+        ...(step.defaultNextStepId === undefined
+          ? {}
+          : { defaultNextStepId: step.defaultNextStepId })
+      });
   }
 }
 
@@ -196,6 +204,18 @@ export function completeWorkflowStep(
         code: "WORKFLOW_CONFIRMATION_REQUIRED",
         message: "Workflow confirmation step cannot complete before user confirmation.",
         suggestedAction: "Confirm the workflow step before completing it.",
+        traceId: input.traceId,
+        redactedDetail: { stepId: currentStep.value.id }
+      })
+    );
+  }
+
+  if (currentStep.value.kind === "branch") {
+    return err(
+      workflowError({
+        code: "WORKFLOW_BRANCH_CHOICE_REQUIRED",
+        message: "Workflow branch steps require an explicit branch selection.",
+        suggestedAction: "Evaluate the next workflow action and choose a branch before advancing.",
         traceId: input.traceId,
         redactedDetail: { stepId: currentStep.value.id }
       })
@@ -244,6 +264,50 @@ export function confirmWorkflowStep(
   });
 }
 
+export function chooseWorkflowBranch(
+  definition: WorkflowDefinition,
+  state: WorkflowRunState,
+  input: WorkflowBranchSelectionInput
+): Result<WorkflowRunState, UnifiedError> {
+  const currentStep = validateCurrentStep(definition, state, input);
+  if (!currentStep.ok) {
+    return currentStep;
+  }
+
+  if (currentStep.value.kind !== "branch") {
+    return err(
+      workflowError({
+        code: "WORKFLOW_STEP_MISMATCH",
+        message: "Only branch steps can choose a workflow branch.",
+        suggestedAction: "Evaluate the next workflow action before choosing a branch.",
+        traceId: input.traceId,
+        redactedDetail: { stepId: currentStep.value.id, kind: currentStep.value.kind }
+      })
+    );
+  }
+
+  const branch = currentStep.value.branches?.find((candidate) => candidate.id === input.branchId);
+  if (branch === undefined) {
+    return err(
+      workflowError({
+        code: "WORKFLOW_BRANCH_NOT_FOUND",
+        message: "The selected workflow branch does not exist.",
+        suggestedAction: "Choose one of the branch ids returned by the workflow action.",
+        traceId: input.traceId,
+        redactedDetail: { stepId: currentStep.value.id, branchId: input.branchId }
+      })
+    );
+  }
+
+  return ok({
+    ...state,
+    status: statusForNextStep(definition, branch.nextStepId),
+    currentStepId: branch.nextStepId,
+    completedStepIds: appendUnique(state.completedStepIds, currentStep.value.id),
+    updatedAt: input.now()
+  });
+}
+
 function parseSteps(
   rawSteps: readonly unknown[],
   traceId: string
@@ -276,11 +340,71 @@ function parseSteps(
 
     const nextStepId = readString(rawStep, "nextStepId");
     const agentId = readString(rawStep, "agentId");
-    const step = createStep({ id, kind, nextStepId, agentId });
+    const branches = parseBranches(rawStep.branches, traceId);
+    if (!branches.ok) {
+      return branches;
+    }
+    const defaultNextStepId = readString(rawStep, "defaultNextStepId");
+    const step = createStep({
+      id,
+      kind,
+      nextStepId,
+      agentId,
+      branches: branches.value,
+      defaultNextStepId
+    });
     steps.push(step);
   }
 
   return ok(steps);
+}
+
+function parseBranches(
+  rawBranches: unknown,
+  traceId: string
+): Result<readonly WorkflowBranch[] | undefined, UnifiedError> {
+  if (rawBranches === undefined) {
+    return ok(undefined);
+  }
+  if (!Array.isArray(rawBranches) || rawBranches.length === 0) {
+    return invalidDefinition(traceId, "Branch steps must include at least one branch.");
+  }
+
+  const branches: WorkflowBranch[] = [];
+  const seenIds = new Set<string>();
+  for (const rawBranch of rawBranches) {
+    if (!isRecord(rawBranch)) {
+      return invalidDefinition(traceId, "Workflow branch must be an object.");
+    }
+
+    const id = readString(rawBranch, "id");
+    const label = readString(rawBranch, "label");
+    const condition = readString(rawBranch, "condition");
+    const nextStepId = readString(rawBranch, "nextStepId");
+    if (
+      id === undefined ||
+      label === undefined ||
+      condition === undefined ||
+      nextStepId === undefined
+    ) {
+      return invalidDefinition(traceId, "Workflow branch is missing required fields.");
+    }
+    if (seenIds.has(id)) {
+      return err(
+        workflowError({
+          code: "WORKFLOW_DUPLICATE_BRANCH",
+          message: "Workflow branch ids must be unique within a branch step.",
+          suggestedAction: "Rename duplicate workflow branch ids.",
+          traceId,
+          redactedDetail: { branchId: id }
+        })
+      );
+    }
+    seenIds.add(id);
+    branches.push({ id, label, condition, nextStepId });
+  }
+
+  return ok(branches);
 }
 
 function createStep(input: {
@@ -288,6 +412,8 @@ function createStep(input: {
   readonly kind: WorkflowStepKind;
   readonly nextStepId: string | undefined;
   readonly agentId: string | undefined;
+  readonly branches: readonly WorkflowBranch[] | undefined;
+  readonly defaultNextStepId: string | undefined;
 }): WorkflowStep {
   const base = {
     id: input.id,
@@ -301,11 +427,26 @@ function createStep(input: {
           agentId: input.agentId
         };
 
-  return input.nextStepId === undefined
-    ? withAgent
+  const withNext =
+    input.nextStepId === undefined
+      ? withAgent
+      : {
+          ...withAgent,
+          nextStepId: input.nextStepId
+        };
+  const withBranches =
+    input.branches === undefined
+      ? withNext
+      : {
+          ...withNext,
+          branches: input.branches
+        };
+
+  return input.defaultNextStepId === undefined
+    ? withBranches
     : {
-        ...withAgent,
-        nextStepId: input.nextStepId
+        ...withBranches,
+        defaultNextStepId: input.defaultNextStepId
       };
 }
 
@@ -342,6 +483,31 @@ function validateCurrentStep(
   }
 
   return ok(step);
+}
+
+function validateBranchStep(
+  definition: WorkflowDefinition,
+  step: WorkflowStep,
+  traceId: string
+): Result<WorkflowDefinition, UnifiedError> {
+  if (step.branches === undefined || step.branches.length === 0) {
+    return invalidDefinition(traceId, "Branch workflow steps must include branches.");
+  }
+
+  for (const branch of step.branches) {
+    if (findStep(definition, branch.nextStepId) === undefined) {
+      return stepNotFound(traceId, branch.nextStepId);
+    }
+  }
+
+  if (
+    step.defaultNextStepId !== undefined &&
+    findStep(definition, step.defaultNextStepId) === undefined
+  ) {
+    return stepNotFound(traceId, step.defaultNextStepId);
+  }
+
+  return ok(definition);
 }
 
 function statusForNextStep(

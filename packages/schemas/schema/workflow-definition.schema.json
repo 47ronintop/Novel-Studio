@@ -34,8 +34,36 @@
             "enum": ["context", "agent", "confirmation", "save", "branch"]
           },
           "agentId": { "type": "string" },
-          "nextStepId": { "type": "string" }
+          "nextStepId": { "type": "string" },
+          "branches": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["id", "label", "condition", "nextStepId"],
+              "properties": {
+                "id": { "type": "string", "minLength": 1 },
+                "label": { "type": "string", "minLength": 1 },
+                "condition": { "type": "string", "minLength": 1 },
+                "nextStepId": { "type": "string", "minLength": 1 }
+              },
+              "additionalProperties": true
+            }
+          },
+          "defaultNextStepId": { "type": "string", "minLength": 1 }
         },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "kind": { "const": "branch" }
+              }
+            },
+            "then": {
+              "required": ["branches"]
+            }
+          }
+        ],
         "additionalProperties": true
       }
     },

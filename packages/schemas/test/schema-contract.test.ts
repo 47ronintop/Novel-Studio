@@ -164,6 +164,39 @@ describe("schema contract coverage", () => {
 
     expect([...providers].sort()).toEqual([...requiredModelProviders].sort());
   });
+
+  test("workflow valid fixture covers branch step metadata", () => {
+    const fixture = readFixture("valid", "workflow-definition") as {
+      readonly steps?: readonly {
+        readonly kind?: string;
+        readonly branches?: readonly {
+          readonly id?: string;
+          readonly label?: string;
+          readonly condition?: string;
+          readonly nextStepId?: string;
+        }[];
+        readonly defaultNextStepId?: string;
+      }[];
+    };
+
+    const branchStep = fixture.steps?.find((step) => step.kind === "branch");
+
+    expect(branchStep?.branches).toEqual([
+      {
+        id: "needs_revision",
+        label: "Needs revision",
+        condition: "review.severity >= medium",
+        nextStepId: "step_rewrite"
+      },
+      {
+        id: "ready_to_save",
+        label: "Ready to save",
+        condition: "review.severity < medium",
+        nextStepId: "step_save"
+      }
+    ]);
+    expect(branchStep?.defaultNextStepId).toBe("step_save");
+  });
 });
 
 function expectIssueShape(issue: ValidationIssue): void {

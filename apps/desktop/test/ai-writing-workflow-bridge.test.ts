@@ -146,6 +146,28 @@ describe("AI writing workflow bridge", () => {
     expect(calls).toEqual(["ai.generate:续写当前场景", "ai.apply:sug_m14"]);
   });
 
+  test("tracks streaming preview deltas and cancellation locally", () => {
+    const bridge = createAiWritingWorkflowBridge(createApi([]));
+
+    const streaming = bridge.beginStreamingGenerate("Continue with streaming.");
+    const firstDelta = bridge.appendStreamDelta("The city");
+    const secondDelta = bridge.appendStreamDelta(" answered.");
+    const cancelled = bridge.cancelStreaming();
+
+    expect(streaming).toMatchObject({
+      status: "streaming",
+      instruction: "Continue with streaming.",
+      streamPreview: ""
+    });
+    expect(firstDelta.streamPreview).toBe("The city");
+    expect(secondDelta.streamPreview).toBe("The city answered.");
+    expect(cancelled).toMatchObject({
+      status: "cancelled",
+      instruction: "Continue with streaming.",
+      streamPreview: "The city answered."
+    });
+  });
+
   test("keeps failed workflow diagnostics visible and allows user-triggered retry", async () => {
     const calls: string[] = [];
     const api = createApi(calls);

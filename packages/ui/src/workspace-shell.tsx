@@ -97,12 +97,13 @@ export interface ProjectWorkflowFeedback {
 }
 
 export type AiWritingWorkflowStatus =
-  "idle" | "generating" | "suggestion-ready" | "applied" | "failed";
+  "idle" | "generating" | "streaming" | "suggestion-ready" | "applied" | "failed" | "cancelled";
 
 export interface AiWritingWorkflowProps {
   readonly status: AiWritingWorkflowStatus;
   readonly instruction: string;
   readonly summary?: string;
+  readonly streamPreview?: string;
   readonly contextTraceLabel?: string;
   readonly observability?: AiWorkflowObservabilityProps;
   readonly history?: AiWorkflowRunHistoryProps;
@@ -113,6 +114,7 @@ export interface AiWritingWorkflowProps {
   readonly onGenerateSuggestion: () => void;
   readonly onApplySuggestion: () => void;
   readonly onRetrySuggestion: () => void;
+  readonly onCancelStreaming: () => void;
 }
 
 export interface AiWorkflowFailureDiagnosticProps {
@@ -567,7 +569,10 @@ export function WorkspaceShell({
                 <button
                   aria-label="生成 AI 建议"
                   className="ns-icon-text-button"
-                  disabled={aiWritingWorkflow.status === "generating"}
+                  disabled={
+                    aiWritingWorkflow.status === "generating" ||
+                    aiWritingWorkflow.status === "streaming"
+                  }
                   onClick={aiWritingWorkflow.onGenerateSuggestion}
                   title="生成 AI 建议"
                   type="button"
@@ -586,6 +591,18 @@ export function WorkspaceShell({
                   <Check aria-hidden="true" size={14} />
                   应用
                 </button>
+                {aiWritingWorkflow.status === "streaming" ? (
+                  <button
+                    aria-label="取消 AI 流式输出"
+                    className="ns-icon-text-button"
+                    onClick={aiWritingWorkflow.onCancelStreaming}
+                    title="取消 AI 流式输出"
+                    type="button"
+                  >
+                    <X aria-hidden="true" size={14} />
+                    取消
+                  </button>
+                ) : null}
                 {aiWritingWorkflow.status === "failed" ? (
                   <button
                     aria-label="重试 AI 工作流"
@@ -601,6 +618,11 @@ export function WorkspaceShell({
               </div>
               {aiWritingWorkflow.summary === undefined ? null : (
                 <p className="ns-ai-summary">{aiWritingWorkflow.summary}</p>
+              )}
+              {aiWritingWorkflow.streamPreview === undefined ? null : (
+                <pre className="ns-ai-stream-preview" aria-label="AI 流式输出预览">
+                  {aiWritingWorkflow.streamPreview}
+                </pre>
               )}
               {aiWritingWorkflow.contextTraceLabel === undefined ? null : (
                 <p className="ns-ai-context">{aiWritingWorkflow.contextTraceLabel}</p>
@@ -1514,12 +1536,16 @@ function statusLabel(status: AiWritingWorkflowStatus): string {
       return "空闲";
     case "generating":
       return "生成中";
+    case "streaming":
+      return "流式输出中";
     case "suggestion-ready":
       return "待确认";
     case "applied":
       return "已应用";
     case "failed":
       return "失败";
+    case "cancelled":
+      return "已取消";
   }
 }
 

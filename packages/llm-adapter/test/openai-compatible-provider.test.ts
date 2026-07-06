@@ -8,6 +8,7 @@ import {
   createLlmAdapter,
   createOpenAiCompatibleProvider,
   OpenAiCompatibleHttpError,
+  type LlmStreamResult,
   type LlmRequest,
   type OpenAiCompatibleTransportRequest
 } from "../src/index.js";
@@ -193,9 +194,185 @@ describe("OpenAI-compatible provider", () => {
     expect(result.error.code).toBe("LLM_MALFORMED_RESPONSE");
     expect(result.error.recoverability).toBe("user-action");
   });
+
+  test("maps provider-neutral streaming requests and fixture chunks", async () => {
+    const calls: OpenAiCompatibleTransportRequest[] = [];
+    const provider = createOpenAiCompatibleProvider({
+      transport: async () => readFixture("openai-compatible-chat-success.json"),
+      streamTransport: async function* (transportRequest) {
+        calls.push(transportRequest);
+        yield {
+          choices: [
+            {
+              delta: {
+                content: "The city"
+              }
+            }
+          ]
+        };
+        yield {
+          choices: [
+            {
+              delta: {
+                content: " answered with rain."
+              }
+            }
+          ]
+        };
+        yield {
+          choices: [
+            {
+              delta: {}
+            }
+          ],
+          usage: {
+            prompt_tokens: 14,
+            completion_tokens: 7,
+            total_tokens: 21
+          }
+        };
+      }
+    });
+    const adapter = createLlmAdapter({
+      provider,
+      clock: () => "2026-07-06T00:00:00.000Z"
+    });
+
+    const events = await collectStream(adapter.stream({ ...request, mode: "streaming" }));
+
+    expect(calls).toEqual([
+      {
+        url: "https://provider.example/v1/chat/completions",
+        body: {
+          model: "fixture-model",
+          messages: [
+            {
+              role: "developer",
+              content: "Return one sentence."
+            },
+            {
+              role: "user",
+              content: "Write a rainy city line."
+            }
+          ],
+          temperature: 0.4,
+          max_tokens: 64,
+          top_p: 0.9,
+          stream: true
+        },
+        timeoutMs: 1000
+      }
+    ]);
+    expect(events).toEqual([
+      {
+        ok: true,
+        value: {
+          type: "start",
+          requestId: "llmreq_openai_compatible_01",
+          provider: "openai-compatible",
+          modelName: "fixture-model",
+          createdAt: "2026-07-06T00:00:00.000Z"
+        }
+      },
+      {
+        ok: true,
+        value: {
+          type: "delta",
+          value: "The city"
+        }
+      },
+      {
+        ok: true,
+        value: {
+          type: "delta",
+          value: " answered with rain."
+        }
+      },
+      {
+        ok: true,
+        value: {
+          type: "usage",
+          usage: {
+            inputTokens: 14,
+            outputTokens: 7,
+            totalTokens: 21,
+            usageStatus: "actual",
+            cost: {
+              amount: 0,
+              currency: "USD",
+              status: "unknown"
+            }
+          }
+        }
+      },
+      {
+        ok: true,
+        value: {
+          type: "done",
+          requestId: "llmreq_openai_compatible_01",
+          provider: "openai-compatible",
+          modelName: "fixture-model",
+          createdAt: "2026-07-06T00:00:00.000Z"
+        }
+      }
+    ]);
+  });
+
+  test("normalizes malformed OpenAI-compatible streaming chunks", async () => {
+    const provider = createOpenAiCompatibleProvider({
+      transport: async () => readFixture("openai-compatible-chat-success.json"),
+      streamTransport: async function* () {
+        yield {
+          choices: [
+            {
+              delta: {
+                content: 42
+              }
+            }
+          ]
+        };
+      }
+    });
+    const adapter = createLlmAdapter({
+      provider,
+      clock: () => "2026-07-06T00:00:00.000Z"
+    });
+
+    const events = await collectStream(adapter.stream({ ...request, mode: "streaming" }));
+
+    expect(events).toEqual([
+      {
+        ok: true,
+        value: {
+          type: "start",
+          requestId: "llmreq_openai_compatible_01",
+          provider: "openai-compatible",
+          modelName: "fixture-model",
+          createdAt: "2026-07-06T00:00:00.000Z"
+        }
+      },
+      {
+        ok: false,
+        error: expect.objectContaining({
+          code: "LLM_MALFORMED_RESPONSE",
+          category: "LLMAdapterError"
+        })
+      }
+    ]);
+  });
 });
 
 function readFixture(fileName: string): JsonObject {
   const fixtureUrl = new URL(`../../../fixtures/llm/${fileName}`, import.meta.url);
   return JSON.parse(readFileSync(fixtureUrl, "utf8")) as JsonObject;
+}
+
+async function collectStream(
+  stream: AsyncIterable<LlmStreamResult>
+): Promise<readonly LlmStreamResult[]> {
+  const events: LlmStreamResult[] = [];
+  for await (const event of stream) {
+    events.push(event);
+  }
+  return events;
 }

@@ -7,6 +7,15 @@ export interface WorkflowStep {
   readonly kind: WorkflowStepKind;
   readonly agentId?: string;
   readonly nextStepId?: string;
+  readonly branches?: readonly WorkflowBranch[];
+  readonly defaultNextStepId?: string;
+}
+
+export interface WorkflowBranch {
+  readonly id: string;
+  readonly label: string;
+  readonly condition: string;
+  readonly nextStepId: string;
 }
 
 export interface WorkflowDefinition {
@@ -49,6 +58,10 @@ export interface WorkflowStepTransitionInput {
   readonly now: () => string;
 }
 
+export interface WorkflowBranchSelectionInput extends WorkflowStepTransitionInput {
+  readonly branchId: string;
+}
+
 export type WorkflowNextAction =
   | {
       readonly kind: "build-context";
@@ -74,6 +87,13 @@ export type WorkflowNextAction =
       readonly workflowRunId: string;
       readonly stepId: string;
       readonly nextStepId: string | null;
+    }
+  | {
+      readonly kind: "choose-branch";
+      readonly workflowRunId: string;
+      readonly stepId: string;
+      readonly branches: readonly WorkflowBranch[];
+      readonly defaultNextStepId?: string;
     }
   | {
       readonly kind: "complete";

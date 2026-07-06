@@ -61,6 +61,8 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M41       | Command Palette          | 命令面板支持搜索过滤、分组、键盘选择和执行错误反馈               | Complete |
 | M42       | Plugin Management        | 插件 manifest 摘要、权限详情和项目级启用/禁用状态管理            | Complete |
 | M43       | Provider Matrix          | 宪法要求的模型 provider 配置矩阵、schema 校验和 UI 选项覆盖      | Complete |
+| M44       | Streaming UX             | OpenAI-compatible 流式契约、delta/usage 解析和 AI 流式预览状态   | Complete |
+| M45       | Workflow Branch          | Workflow Engine branch action、分支选择和 schema 契约            | Complete |
 
 ## M15 完成内容
 
@@ -278,18 +280,34 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - Settings UI 的 Provider select 从 3 个硬编码选项升级为 catalog 驱动选项；不暴露 secret 引用。
 - M43 不包含真实 Anthropic/Gemini 等 provider SDK、真实联网测试或 Streaming UX。
 
+## M44 完成内容
+
+- 新增 `docs/productization/m44-streaming-ux.md`，明确 Streaming UX 的 Adapter/UI 契约范围和非目标。
+- OpenAI-compatible provider 新增 fixture-backed streaming transport，streaming request 映射为 `stream: true`。
+- LLM Adapter streaming 路径可接收 OpenAI-compatible delta/usage chunk，并把 malformed chunk 规范化为统一错误。
+- AI 写作面板新增 `streaming`、`cancelled`、stream preview 和 cancel command 的 UI props 与 renderer bridge 状态。
+- M44 不包含真实 Electron IPC live streaming，也不自动把流式内容写入正文。
+
+## M45 完成内容
+
+- 新增 `docs/productization/m45-workflow-branch.md`，明确 Workflow Branch 的 engine 状态机范围和非目标。
+- Workflow Engine branch step 升级为 `choose-branch` action，暴露 branch id、label、condition 和 next target。
+- 新增 `chooseWorkflowBranch()`，分支选择后推进 run state 并记录 branch step completed。
+- workflow definition schema 和 fixture 覆盖 branch metadata。
+- M45 不执行条件表达式语言；条件仍由 Application/Workflow caller 判定后显式选择分支。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转、M32 时间线主视图、M33 插件管理 UI、M34 多标签编辑器、M35 宪法差距审计、M36 Workspace Layout、M37 Editor Tabs、M38 Autosave Recovery、M39 Timeline Workspace、M40 Project Health、M41 Command Palette、M42 Plugin Management 与 M43 Provider Matrix。
+- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转、M32 时间线主视图、M33 插件管理 UI、M34 多标签编辑器、M35 宪法差距审计、M36 Workspace Layout、M37 Editor Tabs、M38 Autosave Recovery、M39 Timeline Workspace、M40 Project Health、M41 Command Palette、M42 Plugin Management、M43 Provider Matrix、M44 Streaming UX 与 M45 Workflow Branch。
 - M27 安装后首次使用引导已暂缓，需在核心可见功能更稳定后回补。
 - 当前产品状态是 beta productization：主干闭环可运行，但多个宪法/UI 指南能力仍是 Product Gap。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M44 Streaming UX：补齐模型调用流式输出的 UI 状态、取消/错误反馈和 Adapter streaming 契约展示。
+- 下一步建议进入 M46 Editor Hardening：补齐编辑器大文件体验、diff 审阅和快捷键冲突矩阵。
 - M44-M48 按 `docs/productization/m35-constitution-gap-audit.md` 的缺口排序推进，不再把切片完成误写成产品完整。
 
 ## 当前技术债重点

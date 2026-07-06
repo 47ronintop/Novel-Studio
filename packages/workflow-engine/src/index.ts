@@ -1,4 +1,5 @@
 export {
+  chooseWorkflowBranch,
   completeWorkflowStep,
   confirmWorkflowStep,
   evaluateNextWorkflowAction,
@@ -8,6 +9,8 @@ export {
 export type {
   ParseWorkflowOptions,
   StartWorkflowRunInput,
+  WorkflowBranch,
+  WorkflowBranchSelectionInput,
   WorkflowDefinition,
   WorkflowNextAction,
   WorkflowRunState,

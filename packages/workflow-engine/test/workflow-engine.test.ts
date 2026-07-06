@@ -5,6 +5,7 @@ import { describe, expect, test } from "vitest";
 import { isErr, isOk } from "@novel-studio/shared";
 
 import {
+  chooseWorkflowBranch,
   completeWorkflowStep,
   confirmWorkflowStep,
   evaluateNextWorkflowAction,
@@ -293,6 +294,184 @@ describe("Workflow Engine", () => {
         updatedAt: "2026-07-04T00:00:00.000Z"
       }
     });
+  });
+
+  test("evaluates branch actions and advances through the selected branch", () => {
+    const branchedWorkflow = {
+      ...workflow,
+      entryStepId: "step_build_context",
+      steps: [
+        {
+          id: "step_build_context",
+          kind: "context",
+          nextStepId: "step_branch"
+        },
+        {
+          id: "step_branch",
+          kind: "branch",
+          branches: [
+            {
+              id: "needs_revision",
+              label: "Needs revision",
+              condition: "review.severity >= medium",
+              nextStepId: "step_rewrite"
+            },
+            {
+              id: "ready_to_save",
+              label: "Ready to save",
+              condition: "review.severity < medium",
+              nextStepId: "step_save"
+            }
+          ],
+          defaultNextStepId: "step_save"
+        },
+        {
+          id: "step_rewrite",
+          kind: "agent",
+          agentId: "agent_writer_default",
+          nextStepId: "step_save"
+        },
+        {
+          id: "step_save",
+          kind: "save"
+        }
+      ]
+    };
+    const parsed = parseWorkflowDefinition(branchedWorkflow, { traceId: "trace_branch_01" });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) {
+      return;
+    }
+
+    const run = startWorkflowRun(parsed.value, runInput);
+    const afterContext = completeWorkflowStep(parsed.value, run, {
+      stepId: "step_build_context",
+      traceId: "trace_branch_02",
+      now: runInput.now
+    });
+    expect(afterContext.ok).toBe(true);
+    if (!afterContext.ok) {
+      return;
+    }
+
+    const branchAction = evaluateNextWorkflowAction(parsed.value, afterContext.value);
+    const afterBranch = chooseWorkflowBranch(parsed.value, afterContext.value, {
+      stepId: "step_branch",
+      branchId: "needs_revision",
+      traceId: "trace_branch_03",
+      now: runInput.now
+    });
+
+    expect(branchAction).toEqual({
+      ok: true,
+      value: {
+        kind: "choose-branch",
+        workflowRunId: "wfrun_01",
+        stepId: "step_branch",
+        branches: [
+          {
+            id: "needs_revision",
+            label: "Needs revision",
+            condition: "review.severity >= medium",
+            nextStepId: "step_rewrite"
+          },
+          {
+            id: "ready_to_save",
+            label: "Ready to save",
+            condition: "review.severity < medium",
+            nextStepId: "step_save"
+          }
+        ],
+        defaultNextStepId: "step_save"
+      }
+    });
+    expect(afterBranch).toEqual({
+      ok: true,
+      value: {
+        schemaVersion: "1.0",
+        workflowRunId: "wfrun_01",
+        workflowId: "wf_review_chapter",
+        status: "running",
+        currentStepId: "step_rewrite",
+        completedStepIds: ["step_build_context", "step_branch"],
+        confirmedStepIds: [],
+        createdAt: "2026-07-04T00:00:00.000Z",
+        updatedAt: "2026-07-04T00:00:00.000Z"
+      }
+    });
+  });
+
+  test("rejects branch steps with missing branch targets", () => {
+    const parsed = parseWorkflowDefinition(
+      {
+        ...workflow,
+        entryStepId: "step_branch",
+        steps: [
+          {
+            id: "step_branch",
+            kind: "branch",
+            branches: [
+              {
+                id: "missing_target",
+                label: "Missing target",
+                condition: "always",
+                nextStepId: "step_missing"
+              }
+            ]
+          }
+        ]
+      },
+      { traceId: "trace_branch_04" }
+    );
+
+    expect(isErr(parsed)).toBe(true);
+    if (!parsed.ok) {
+      expect(parsed.error.code).toBe("WORKFLOW_STEP_NOT_FOUND");
+    }
+  });
+
+  test("rejects direct completion of branch steps without branch selection", () => {
+    const parsed = parseWorkflowDefinition(
+      {
+        ...workflow,
+        entryStepId: "step_branch",
+        steps: [
+          {
+            id: "step_branch",
+            kind: "branch",
+            branches: [
+              {
+                id: "save",
+                label: "Save",
+                condition: "always",
+                nextStepId: "step_save"
+              }
+            ]
+          },
+          {
+            id: "step_save",
+            kind: "save"
+          }
+        ]
+      },
+      { traceId: "trace_branch_05" }
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) {
+      return;
+    }
+
+    const run = startWorkflowRun(parsed.value, runInput);
+    const completed = completeWorkflowStep(parsed.value, run, {
+      stepId: "step_branch",
+      traceId: "trace_branch_06",
+      now: runInput.now
+    });
+
+    expect(isErr(completed)).toBe(true);
+    if (!completed.ok) {
+      expect(completed.error.code).toBe("WORKFLOW_BRANCH_CHOICE_REQUIRED");
+    }
   });
 
   test("does not depend on Agent, Context, LLM Adapter, or Repository packages", () => {
