@@ -82,12 +82,13 @@ export type {
   StoryBibleSnapshot
 } from "./story-bible-session.js";
 export { createStoryBibleSession } from "./story-bible-session.js";
+export type { ModelProvider, ModelProviderCatalogEntry } from "./model-provider-catalog.js";
+export { MODEL_PROVIDER_CATALOG, isModelProvider } from "./model-provider-catalog.js";
 export type {
   AutosaveSettings,
   HistorySettings,
   ModelConnectionResult,
   ModelConnectionTester,
-  ModelProvider,
   ModelProfile,
   ModelSettings,
   ModelRuntimeProfile,

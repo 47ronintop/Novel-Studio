@@ -1,6 +1,6 @@
 ﻿# INDEX - Novel Studio 文档索引
 
-Version: 1.37 | Last Updated: 2026-07-06
+Version: 1.38 | Last Updated: 2026-07-06
 
 ## 文档优先级
 
@@ -22,7 +22,7 @@ Version: 1.37 | Last Updated: 2026-07-06
 | `UI_GUIDELINES.md`                                              | 1.0        | Accepted             | UI/UX、布局、交互、设计 tokens、可访问性                |
 | `CODING_STANDARDS.md`                                           | 1.0        | Accepted             | 开发规范、语言规则、分层、schema、UI 实现               |
 | `TESTING.md`                                                    | 1.0        | Accepted             | 测试规范、fixtures、LLM mock、CI 门禁                   |
-| `ROADMAP.md`                                                    | 1.26       | Active               | 当前里程碑、后续路线、完成状态                          |
+| `ROADMAP.md`                                                    | 1.27       | Active               | 当前里程碑、后续路线、完成状态                          |
 | `STORY_BIBLE.md`                                                | 1.0        | Accepted for M16     | Story Bible 资产、仓储、Context 候选和最小 UI 闭环      |
 | `docs/packaging/m17-installer-release-channel.md`               | 1.0        | Accepted for M17     | 安装器目标、发布通道 manifest、release notes 和签名策略 |
 | `PLUGIN_SYSTEM.md`                                              | 1.0        | Accepted for M18     | 插件 manifest、权限、注册表、运行时边界和测试要求       |
@@ -47,6 +47,7 @@ Version: 1.37 | Last Updated: 2026-07-06
 | `docs/productization/m39-timeline-workspace.md`                 | 1.0        | Complete             | 时间线结构化事件轨道、指标和父时间线编辑入口            |
 | `docs/productization/m40-m41-project-health-command-palette.md` | 1.0        | Complete             | 项目健康诊断和命令面板交互增强                          |
 | `docs/productization/m42-plugin-management.md`                  | 1.0        | Complete             | 插件 manifest 摘要、权限详情和启用/禁用管理             |
+| `docs/productization/m43-provider-matrix.md`                    | 1.0        | Complete             | 模型 provider 配置矩阵、schema 校验和 Settings UI 覆盖  |
 | `LLM_ADAPTER.md`                                                | 1.0        | Accepted for M6      | Provider-neutral 模型调用边界                           |
 | `WORKFLOW_ENGINE.md`                                            | 1.0        | Accepted for M7.1    | 确定性 workflow 状态机                                  |
 | `CONTEXT_ENGINE.md`                                             | 1.0        | Accepted for M7.2    | Context Bundle、token budget、trace                     |
@@ -70,7 +71,7 @@ Version: 1.37 | Last Updated: 2026-07-06
 | Phase 5 开发规范      | Complete | `CODING_STANDARDS.md`、`TESTING.md` | 已完成     |
 | Phase 6 Task Planning | Complete | `ROADMAP.md`                        | 已完成     |
 | Phase 7 正式开发      | Complete | M0-M18 已完成                       | 已完成     |
-| Post-M18 产品化打磨   | Active   | M19-M26、M28-M42 已完成，M27 暂缓   | 下一步 M43 |
+| Post-M18 产品化打磨   | Active   | M19-M26、M28-M43 已完成，M27 暂缓   | 下一步 M44 |
 
 ## 当前本地状态
 
@@ -96,6 +97,7 @@ Version: 1.37 | Last Updated: 2026-07-06
 - 当前已完成 M39 Timeline Workspace。
 - 当前已完成 M40 Project Health 与 M41 Command Palette。
 - 当前已完成 M42 Plugin Management。
+- 当前已完成 M43 Provider Matrix。
 - M27 安装后首次使用引导暂缓，等待核心可见功能继续补齐。
 - 当前 `Complete` 只表示里程碑切片完成；产品完整度以 M35 的 `Product Ready` 口径为准。
 - 未经用户确认不得 push。

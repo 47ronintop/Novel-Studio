@@ -63,8 +63,9 @@
 - 完成 M39 Timeline Workspace：Timeline Activity 解析 Story Bible 时间线结构化事件，显示事件轨道、指标、章节引用和父时间线编辑入口。
 - 完成 M40/M41 Project Health 与 Command Palette：问题面板显示 Application 层健康诊断，命令面板支持搜索过滤、分组、键盘选择和执行错误反馈。
 - 完成 M42 Plugin Management：插件管理从只读 registry 升级为 manifest 摘要、权限详情和项目级启用/禁用管理；仍不安装、不下载、不执行第三方插件代码。
+- 完成 M43 Provider Matrix：settings schema、Application 校验、LLM Adapter provider 类型和 Settings UI provider select 覆盖宪法要求的 11 个模型渠道；CI 仍只使用 mock/fixture，不访问真实 provider。
 
 ## Notes
 
 - Phase 7 当前定义的 M0-M18 已完成。
-- 当前已完成 Post-M18 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转、M32 时间线主视图、M33 插件管理 UI、M34 多标签编辑器、M35 宪法差距审计、M36 Workspace Layout、M37 Editor Tabs、M38 Autosave Recovery、M39 Timeline Workspace、M40 Project Health、M41 Command Palette 与 M42 Plugin Management；M27 安装后首次使用引导暂缓；未经用户确认不得 push。
+- 当前已完成 Post-M18 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转、M32 时间线主视图、M33 插件管理 UI、M34 多标签编辑器、M35 宪法差距审计、M36 Workspace Layout、M37 Editor Tabs、M38 Autosave Recovery、M39 Timeline Workspace、M40 Project Health、M41 Command Palette、M42 Plugin Management 与 M43 Provider Matrix；M27 安装后首次使用引导暂缓；未经用户确认不得 push。

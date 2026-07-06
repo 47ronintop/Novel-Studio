@@ -52,7 +52,19 @@
               "id": { "type": "string" },
               "provider": {
                 "type": "string",
-                "enum": ["openai-compatible", "openai", "ollama"]
+                "enum": [
+                  "openai-compatible",
+                  "openai",
+                  "anthropic",
+                  "google-gemini",
+                  "openrouter",
+                  "deepseek",
+                  "zhipu",
+                  "tongyi-qianwen",
+                  "ollama",
+                  "lm-studio",
+                  "vllm"
+                ]
               },
               "displayName": { "type": "string", "minLength": 1 },
               "baseUrl": { "type": "string" },

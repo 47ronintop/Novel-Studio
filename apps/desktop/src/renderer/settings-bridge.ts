@@ -1,4 +1,5 @@
-﻿import type {
+import { MODEL_PROVIDER_CATALOG } from "@novel-studio/application";
+import type {
   ModelProfile,
   NovelStudioApi,
   PluginSettingsSnapshot
@@ -258,6 +259,10 @@ export function createSettingsBridge(
       draft,
       saveStatus,
       ...(connectionStatus === undefined ? {} : { connectionStatus }),
+      providerOptions: MODEL_PROVIDER_CATALOG.map((provider) => ({
+        id: provider.id,
+        label: provider.label
+      })),
       plugins: {
         ...plugins,
         onRefresh: () => undefined,

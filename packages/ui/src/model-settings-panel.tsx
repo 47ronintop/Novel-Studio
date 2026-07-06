@@ -30,6 +30,11 @@ export interface ModelSettingsDraft {
   readonly timeoutMs: string;
 }
 
+export interface ModelProviderOption {
+  readonly id: string;
+  readonly label: string;
+}
+
 export interface ModelConnectionStatus {
   readonly profileId: string;
   readonly status: ModelConnectionStatusValue;
@@ -95,6 +100,7 @@ export interface ModelSettingsPanelProps {
   readonly draft: ModelSettingsDraft;
   readonly saveStatus: ModelSettingsSaveStatus;
   readonly connectionStatus?: ModelConnectionStatus;
+  readonly providerOptions?: readonly ModelProviderOption[];
   readonly plugins?: PluginSettingsPanelProps;
   readonly feedback?: { readonly kind: "info" | "error"; readonly message: string };
   readonly onSelectProfile?: (profileId: string) => void;
@@ -112,6 +118,7 @@ export function ModelSettingsPanel({
   draft,
   saveStatus,
   connectionStatus,
+  providerOptions,
   plugins,
   feedback,
   onSelectProfile,
@@ -253,9 +260,11 @@ export function ModelSettingsPanel({
                       onChange={(event) => onDraftChange?.({ provider: event.currentTarget.value })}
                       value={draft.provider}
                     >
-                      <option value="openai-compatible">openai-compatible</option>
-                      <option value="openai">openai</option>
-                      <option value="ollama">ollama</option>
+                      {(providerOptions ?? []).map((provider) => (
+                        <option key={provider.id} value={provider.id}>
+                          {provider.label}
+                        </option>
+                      ))}
                     </select>
                   </ModelField>
                   <ModelField label="模型名称">

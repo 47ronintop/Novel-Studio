@@ -26,6 +26,126 @@
         "timeoutMs": 60000,
         "frequencyPenalty": 0,
         "presencePenalty": 0
+      },
+      {
+        "id": "model_openai",
+        "provider": "openai",
+        "displayName": "OpenAI",
+        "baseUrl": "https://api.openai.com/v1",
+        "apiKeyRef": "secret://model_openai/api_key",
+        "modelName": "gpt-4.1",
+        "temperature": 0.7,
+        "maxTokens": 4096,
+        "topP": 1,
+        "timeoutMs": 60000
+      },
+      {
+        "id": "model_anthropic",
+        "provider": "anthropic",
+        "displayName": "Anthropic",
+        "baseUrl": "https://api.anthropic.com",
+        "apiKeyRef": "secret://model_anthropic/api_key",
+        "modelName": "claude-3-5-sonnet",
+        "temperature": 0.7,
+        "maxTokens": 4096,
+        "topP": 1,
+        "timeoutMs": 60000
+      },
+      {
+        "id": "model_google_gemini",
+        "provider": "google-gemini",
+        "displayName": "Google Gemini",
+        "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+        "apiKeyRef": "secret://model_google_gemini/api_key",
+        "modelName": "gemini-1.5-pro",
+        "temperature": 0.7,
+        "maxTokens": 4096,
+        "topP": 1,
+        "timeoutMs": 60000
+      },
+      {
+        "id": "model_openrouter",
+        "provider": "openrouter",
+        "displayName": "OpenRouter",
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "apiKeyRef": "secret://model_openrouter/api_key",
+        "modelName": "openrouter/auto",
+        "temperature": 0.7,
+        "maxTokens": 4096,
+        "topP": 1,
+        "timeoutMs": 60000
+      },
+      {
+        "id": "model_deepseek",
+        "provider": "deepseek",
+        "displayName": "DeepSeek",
+        "baseUrl": "https://api.deepseek.com/v1",
+        "apiKeyRef": "secret://model_deepseek/api_key",
+        "modelName": "deepseek-chat",
+        "temperature": 0.7,
+        "maxTokens": 4096,
+        "topP": 1,
+        "timeoutMs": 60000
+      },
+      {
+        "id": "model_zhipu",
+        "provider": "zhipu",
+        "displayName": "Zhipu",
+        "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+        "apiKeyRef": "secret://model_zhipu/api_key",
+        "modelName": "glm-4",
+        "temperature": 0.7,
+        "maxTokens": 4096,
+        "topP": 1,
+        "timeoutMs": 60000
+      },
+      {
+        "id": "model_tongyi_qianwen",
+        "provider": "tongyi-qianwen",
+        "displayName": "Tongyi Qianwen",
+        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "apiKeyRef": "secret://model_tongyi_qianwen/api_key",
+        "modelName": "qwen-plus",
+        "temperature": 0.7,
+        "maxTokens": 4096,
+        "topP": 1,
+        "timeoutMs": 60000
+      },
+      {
+        "id": "model_ollama",
+        "provider": "ollama",
+        "displayName": "Ollama",
+        "baseUrl": "http://localhost:11434/v1",
+        "apiKeyRef": "secret://model_ollama/api_key",
+        "modelName": "llama3.1",
+        "temperature": 0.7,
+        "maxTokens": 4096,
+        "topP": 1,
+        "timeoutMs": 60000
+      },
+      {
+        "id": "model_lm_studio",
+        "provider": "lm-studio",
+        "displayName": "LM Studio",
+        "baseUrl": "http://localhost:1234/v1",
+        "apiKeyRef": "secret://model_lm_studio/api_key",
+        "modelName": "local-model",
+        "temperature": 0.7,
+        "maxTokens": 4096,
+        "topP": 1,
+        "timeoutMs": 60000
+      },
+      {
+        "id": "model_vllm",
+        "provider": "vllm",
+        "displayName": "vLLM",
+        "baseUrl": "http://localhost:8000/v1",
+        "apiKeyRef": "secret://model_vllm/api_key",
+        "modelName": "local-vllm-model",
+        "temperature": 0.7,
+        "maxTokens": 4096,
+        "topP": 1,
+        "timeoutMs": 60000
       }
     ]
   }

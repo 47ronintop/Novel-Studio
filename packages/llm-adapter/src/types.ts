@@ -1,7 +1,18 @@
 import type { JsonObject, JsonValue, Result, UnifiedError } from "@novel-studio/shared";
 
 export type LlmProviderId =
-  "mock" | "openai-compatible" | "openai" | "anthropic" | "google-gemini" | "ollama";
+  | "mock"
+  | "openai-compatible"
+  | "openai"
+  | "anthropic"
+  | "google-gemini"
+  | "openrouter"
+  | "deepseek"
+  | "zhipu"
+  | "tongyi-qianwen"
+  | "ollama"
+  | "lm-studio"
+  | "vllm";
 
 export type LlmMode = "streaming" | "non-streaming";
 

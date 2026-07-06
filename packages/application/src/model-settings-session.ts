@@ -8,8 +8,7 @@ import {
   type UnifiedError
 } from "@novel-studio/shared";
 import type { LlmModelProfile, LlmParameters } from "@novel-studio/llm-adapter";
-
-export type ModelProvider = "openai-compatible" | "openai" | "ollama";
+import { isModelProvider, type ModelProvider } from "./model-provider-catalog.js";
 
 export interface ModelProfile extends JsonObject {
   readonly id: string;
@@ -264,7 +263,8 @@ function validateModelProfile(profile: ModelProfile): Result<ModelProvider, Unif
         category: "ValidationError",
         message: "Model profile must use a supported provider and a secret reference.",
         recoverability: "user-action",
-        suggestedAction: "Use OpenAI Compatible, OpenAI, or Ollama and store keys as secret refs.",
+        suggestedAction:
+          "Choose a supported provider from the provider matrix and store keys as secret refs.",
         traceId: "application-model-settings",
         redactedDetail: {
           profileId: profile.id,
@@ -279,14 +279,7 @@ function validateModelProfile(profile: ModelProfile): Result<ModelProvider, Unif
 }
 
 function toSupportedProvider(provider: string): ModelProvider | undefined {
-  switch (provider) {
-    case "openai-compatible":
-    case "openai":
-    case "ollama":
-      return provider;
-    default:
-      return undefined;
-  }
+  return isModelProvider(provider) ? provider : undefined;
 }
 
 function redactJsonObject(value: JsonObject): JsonObject {

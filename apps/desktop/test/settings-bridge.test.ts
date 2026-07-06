@@ -32,6 +32,19 @@ describe("M22 settings bridge", () => {
 
     expect(calls).toEqual(["settings.listModelProfiles", "plugins.loadRegistry"]);
     expect(props.profiles[0]?.displayName).toBe("Default Model");
+    expect(props.providerOptions.map((provider) => provider.id)).toEqual([
+      "openai-compatible",
+      "openai",
+      "anthropic",
+      "google-gemini",
+      "openrouter",
+      "deepseek",
+      "zhipu",
+      "tongyi-qianwen",
+      "ollama",
+      "lm-studio",
+      "vllm"
+    ]);
     expect(props.plugins?.entries[0]?.pluginId).toBe("novel.timeline-tools");
     expect(props.plugins?.entries[0]?.manifest?.displayName).toBe("Timeline Tools");
     expect(props.plugins?.entries[0]?.manifest?.version).toBe("1.2.3");

@@ -11,6 +11,7 @@ import {
 
 import {
   createModelSettingsSession,
+  MODEL_PROVIDER_CATALOG,
   resolveDefaultModelRuntimeProfile,
   type ModelConnectionTester,
   type ModelProfile,
@@ -189,6 +190,90 @@ describe("model settings session", () => {
     expect(result.error.code).toBe("MODEL_PROFILE_INVALID");
     expect(JSON.stringify(result.error)).not.toContain("sk-plaintext");
     expect(writes).toEqual([]);
+  });
+
+  test("saves every constitution-required model provider", async () => {
+    const writes: ProjectSettings[] = [];
+    let currentSettings: ProjectSettings = settings;
+    const port: ProjectSettingsPort = {
+      async readSettings() {
+        return ok(currentSettings);
+      },
+      async writeSettings(nextSettings) {
+        writes.push(nextSettings);
+        currentSettings = nextSettings;
+        return ok(nextSettings);
+      }
+    };
+    const session = createModelSettingsSession({ settingsPort: port });
+
+    for (const provider of MODEL_PROVIDER_CATALOG) {
+      const result = await session.saveModelProfile({
+        id: `model_${provider.id.replaceAll("-", "_")}`,
+        provider: provider.id,
+        displayName: provider.label,
+        ...(provider.defaultBaseUrl === undefined ? {} : { baseUrl: provider.defaultBaseUrl }),
+        apiKeyRef: `secret://model_${provider.id.replaceAll("-", "_")}/api_key`,
+        modelName: provider.defaultModelName,
+        temperature: 0.7,
+        maxTokens: 4096,
+        topP: 1,
+        timeoutMs: 60000
+      });
+
+      expect(result.ok, provider.id).toBe(true);
+    }
+
+    expect(writes).toHaveLength(MODEL_PROVIDER_CATALOG.length);
+    expect(currentSettings.models.profiles.map((profile) => profile.provider).sort()).toEqual(
+      ["openai-compatible", ...MODEL_PROVIDER_CATALOG.map((provider) => provider.id)].sort()
+    );
+  });
+
+  test("resolves catalog provider runtime profiles without dropping base URL or parameters", () => {
+    const openRouterSettings: ProjectSettings = {
+      ...settings,
+      models: {
+        defaultProfileId: "model_openrouter",
+        profiles: [
+          {
+            id: "model_openrouter",
+            provider: "openrouter",
+            displayName: "OpenRouter",
+            baseUrl: "https://openrouter.ai/api/v1",
+            apiKeyRef: "secret://model_openrouter/api_key",
+            modelName: "openrouter/auto",
+            temperature: 0.3,
+            maxTokens: 2048,
+            topP: 0.9,
+            timeoutMs: 45000
+          }
+        ]
+      }
+    };
+
+    const result = resolveDefaultModelRuntimeProfile(openRouterSettings);
+
+    expect(isOk(result)).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.value).toEqual({
+      modelProfile: {
+        id: "model_openrouter",
+        provider: "openrouter",
+        displayName: "OpenRouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        apiKeyRef: "secret://model_openrouter/api_key",
+        modelName: "openrouter/auto",
+        timeoutMs: 45000
+      },
+      parameters: {
+        temperature: 0.3,
+        maxTokens: 2048,
+        topP: 0.9
+      }
+    });
   });
 
   test("resolves the default settings profile into an LLM runtime profile", () => {

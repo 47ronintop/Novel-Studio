@@ -65,6 +65,19 @@ describe("M8 Settings and Studio UI", () => {
           onSetEnabled: () => undefined
         }}
         saveStatus="idle"
+        providerOptions={[
+          { id: "openai-compatible", label: "OpenAI Compatible" },
+          { id: "openai", label: "OpenAI" },
+          { id: "anthropic", label: "Anthropic" },
+          { id: "google-gemini", label: "Google Gemini" },
+          { id: "openrouter", label: "OpenRouter" },
+          { id: "deepseek", label: "DeepSeek" },
+          { id: "zhipu", label: "Zhipu" },
+          { id: "tongyi-qianwen", label: "Tongyi Qianwen" },
+          { id: "ollama", label: "Ollama" },
+          { id: "lm-studio", label: "LM Studio" },
+          { id: "vllm", label: "vLLM" }
+        ]}
         onDraftChange={() => undefined}
         onNewProfile={() => undefined}
         onSelectProfile={() => undefined}
@@ -85,6 +98,14 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).toContain("隐私与安全");
     expect(html).toContain("自动保存与历史");
     expect(html).toContain("openai-compatible");
+    expect(html).toContain("anthropic");
+    expect(html).toContain("google-gemini");
+    expect(html).toContain("openrouter");
+    expect(html).toContain("deepseek");
+    expect(html).toContain("zhipu");
+    expect(html).toContain("tongyi-qianwen");
+    expect(html).toContain("lm-studio");
+    expect(html).toContain("vllm");
     expect(html).toContain("已保存密钥引用");
     expect(html).toContain("保存模型配置");
     expect(html).toContain("新建模型");

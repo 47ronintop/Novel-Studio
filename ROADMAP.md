@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.26 | Status: Active | Last Updated: 2026-07-06
+Version: 1.27 | Status: Active | Last Updated: 2026-07-06
 
 ## 目标
 
@@ -60,6 +60,7 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M40       | Project Health           | 问题面板显示 Application 层项目健康诊断和恢复引用问题            | Complete |
 | M41       | Command Palette          | 命令面板支持搜索过滤、分组、键盘选择和执行错误反馈               | Complete |
 | M42       | Plugin Management        | 插件 manifest 摘要、权限详情和项目级启用/禁用状态管理            | Complete |
+| M43       | Provider Matrix          | 宪法要求的模型 provider 配置矩阵、schema 校验和 UI 选项覆盖      | Complete |
 
 ## M15 完成内容
 
@@ -267,19 +268,29 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - Settings 插件管理区显示 display name、version、entry kind、兼容范围、requested/granted permissions、capabilities、commands/workflow steps，并提供启用/禁用按钮。
 - M42 不包含插件 marketplace、远程安装/更新、插件沙箱执行或 Workflow contribution 激活。
 
+## M43 完成内容
+
+- 新增 `docs/productization/m43-provider-matrix.md`，明确 Provider Matrix 的配置/校验/UI 范围和非目标。
+- `settings.schema.json` 的 model provider enum 扩展到 OpenAI Compatible、OpenAI、Anthropic、Google Gemini、OpenRouter、DeepSeek、智谱、通义千问、Ollama、LM Studio 和 vLLM。
+- valid settings fixture 覆盖全部 provider；schema contract 继续拒绝 unsupported provider 和明文 `apiKey`。
+- Application 新增 provider catalog，并用 catalog 校验 `ModelSettingsSession.saveModelProfile()` 与默认 runtime profile 解析。
+- LLM Adapter `LlmProviderId` 扩展到完整 provider matrix，保持模型调用仍统一走 Adapter 边界。
+- Settings UI 的 Provider select 从 3 个硬编码选项升级为 catalog 驱动选项；不暴露 secret 引用。
+- M43 不包含真实 Anthropic/Gemini 等 provider SDK、真实联网测试或 Streaming UX。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转、M32 时间线主视图、M33 插件管理 UI、M34 多标签编辑器、M35 宪法差距审计、M36 Workspace Layout、M37 Editor Tabs、M38 Autosave Recovery、M39 Timeline Workspace、M40 Project Health、M41 Command Palette 与 M42 Plugin Management。
+- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转、M32 时间线主视图、M33 插件管理 UI、M34 多标签编辑器、M35 宪法差距审计、M36 Workspace Layout、M37 Editor Tabs、M38 Autosave Recovery、M39 Timeline Workspace、M40 Project Health、M41 Command Palette、M42 Plugin Management 与 M43 Provider Matrix。
 - M27 安装后首次使用引导已暂缓，需在核心可见功能更稳定后回补。
 - 当前产品状态是 beta productization：主干闭环可运行，但多个宪法/UI 指南能力仍是 Product Gap。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M43 Provider Matrix：补齐宪法第3节要求的多 provider fixtures、契约测试和 UI 验证口径。
-- M43-M48 按 `docs/productization/m35-constitution-gap-audit.md` 的缺口排序推进，不再把切片完成误写成产品完整。
+- 下一步建议进入 M44 Streaming UX：补齐模型调用流式输出的 UI 状态、取消/错误反馈和 Adapter streaming 契约展示。
+- M44-M48 按 `docs/productization/m35-constitution-gap-audit.md` 的缺口排序推进，不再把切片完成误写成产品完整。
 
 ## 当前技术债重点
 
@@ -287,4 +298,4 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - 生产级 signing/notarization、托管更新发布和证书管理仍是后续工作；M17 仅声明本地 unsigned beta 通道。
 - schema codegen 和更强 dependency boundary 工具尚未最终选择。
 - history 归档/压缩策略、项目锁、多窗口冲突处理仍需后续设计。
-- 更多 Provider 的 fixtures 和 contract tests 需按批次补齐。
+- Provider Matrix 配置已覆盖；真实 provider runtime translators、离线响应 fixtures 和 live benchmark 仍需后续按 Adapter 批次补齐。

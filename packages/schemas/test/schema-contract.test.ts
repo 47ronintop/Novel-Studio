@@ -33,6 +33,20 @@ const schemaNames = [
 
 type SchemaName = (typeof schemaNames)[number];
 
+const requiredModelProviders = [
+  "openai-compatible",
+  "openai",
+  "anthropic",
+  "google-gemini",
+  "openrouter",
+  "deepseek",
+  "zhipu",
+  "tongyi-qianwen",
+  "ollama",
+  "lm-studio",
+  "vllm"
+] as const;
+
 function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf8"));
 }
@@ -133,6 +147,22 @@ describe("schema contract coverage", () => {
     expect(result.issues.map((issue) => issue.instancePath)).toEqual(
       expect.arrayContaining(["/models/profiles/0/provider", "/models/profiles/0/apiKey"])
     );
+  });
+
+  test("settings valid fixture covers every constitution-required model provider", () => {
+    const fixture = readFixture("valid", "settings") as {
+      readonly models?: {
+        readonly profiles?: readonly {
+          readonly provider?: string;
+        }[];
+      };
+    };
+
+    const providers = new Set(
+      fixture.models?.profiles?.map((profile) => profile.provider).filter(Boolean)
+    );
+
+    expect([...providers].sort()).toEqual([...requiredModelProviders].sort());
   });
 });
 
