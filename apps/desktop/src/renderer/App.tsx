@@ -4,7 +4,8 @@ import type {
   ApplicationCommandId,
   DesktopShellState,
   NovelStudioApi,
-  ProjectSearchResultItem
+  ProjectSearchResultItem,
+  UserPreferencesSaveInput
 } from "@novel-studio/application";
 import type {
   AiWritingWorkflowProps,
@@ -218,6 +219,14 @@ export function App() {
       if (active) {
         setCommands(nextCommands);
       }
+    });
+    void api.preferences.load().then((result) => {
+      if (!active || !result.ok) {
+        return;
+      }
+
+      setOnboardingDismissed(result.value.onboarding.dismissed);
+      setShellState((current) => applyShellPreferences(current, result.value.shell));
     });
 
     return () => {
@@ -512,19 +521,44 @@ export function App() {
     [projectWorkflowBridge]
   );
 
-  const handleActivitySelect = useCallback((activityId: ActivityId) => {
-    setShellState((current) => ({
-      ...current,
-      activeActivity: activityId
-    }));
-  }, []);
+  const persistUserPreferences = useCallback(
+    (input: UserPreferencesSaveInput) => {
+      if (api === undefined) {
+        return;
+      }
 
-  const handleBottomPanelTabSelect = useCallback((tab: string) => {
-    setShellState((current) => ({
-      ...current,
-      activeBottomPanelTab: tab
-    }));
-  }, []);
+      void api.preferences.save(input);
+    },
+    [api]
+  );
+
+  const handleActivitySelect = useCallback(
+    (activityId: ActivityId) => {
+      setShellState((current) => {
+        const next = {
+          ...current,
+          activeActivity: activityId
+        };
+        persistUserPreferences({ shell: shellPreferencesFromState(next) });
+        return next;
+      });
+    },
+    [persistUserPreferences]
+  );
+
+  const handleBottomPanelTabSelect = useCallback(
+    (tab: string) => {
+      setShellState((current) => {
+        const next = {
+          ...current,
+          activeBottomPanelTab: tab
+        };
+        persistUserPreferences({ shell: shellPreferencesFromState(next) });
+        return next;
+      });
+    },
+    [persistUserPreferences]
+  );
 
   const handleCommandPaletteOpen = useCallback(() => {
     setCommandPaletteFeedback(undefined);
@@ -565,6 +599,7 @@ export function App() {
         }
 
         setShellState(result.value);
+        persistUserPreferences({ shell: shellPreferencesFromState(result.value) });
         setCommandPaletteFeedback(undefined);
         setCommandPaletteQuery("");
         setCommandPaletteSelectedCommandId(undefined);
@@ -574,7 +609,7 @@ export function App() {
         }));
       });
     },
-    [commandExecutionBridge]
+    [commandExecutionBridge, persistUserPreferences]
   );
 
   const handleSearchQueryChange = useCallback(
@@ -906,7 +941,13 @@ export function App() {
     onCreateProject: handleCreateProject,
     onOpenProject: handleOpenProject,
     onCreateFirstChapter: handleCreateChapter,
-    onDismiss: () => setOnboardingDismissed(true)
+    onDismiss: () => {
+      setOnboardingDismissed(true);
+      persistUserPreferences({
+        onboarding: { dismissed: true },
+        shell: shellPreferencesFromState(shellState)
+      });
+    }
   });
 
   return (
@@ -1067,5 +1108,42 @@ function createOnboardingProps(input: {
     onOpenProject: input.onOpenProject,
     onCreateFirstChapter: input.onCreateFirstChapter,
     onDismiss: input.onDismiss
+  };
+}
+
+function shellPreferencesFromState(
+  shellState: DesktopShellState
+): NonNullable<UserPreferencesSaveInput["shell"]> {
+  return {
+    navigatorCollapsed: shellState.navigatorCollapsed,
+    inspectorCollapsed: shellState.inspectorCollapsed,
+    bottomPanelVisible: shellState.bottomPanelVisible,
+    activeBottomPanelTab: shellState.activeBottomPanelTab,
+    workspaceLayout: shellState.workspaceLayout
+  };
+}
+
+function applyShellPreferences(
+  shellState: DesktopShellState,
+  preferences: NonNullable<UserPreferencesSaveInput["shell"]>
+): DesktopShellState {
+  return {
+    ...shellState,
+    ...(preferences.navigatorCollapsed === undefined
+      ? {}
+      : { navigatorCollapsed: preferences.navigatorCollapsed }),
+    ...(preferences.inspectorCollapsed === undefined
+      ? {}
+      : { inspectorCollapsed: preferences.inspectorCollapsed }),
+    ...(preferences.bottomPanelVisible === undefined
+      ? {}
+      : { bottomPanelVisible: preferences.bottomPanelVisible }),
+    ...(preferences.activeBottomPanelTab === undefined
+      ? {}
+      : { activeBottomPanelTab: preferences.activeBottomPanelTab }),
+    workspaceLayout: {
+      ...shellState.workspaceLayout,
+      ...preferences.workspaceLayout
+    }
   };
 }

@@ -16,7 +16,11 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
   const projectRoot =
     process.env["NOVEL_STUDIO_PROJECT_ROOT"] ??
     join(app.getPath("userData"), "projects", "minimal-chapter");
-  activeDesktopApplication = await createBootstrappedDefaultDesktopApplication({ projectRoot });
+  const userDataRoot = process.env["NOVEL_STUDIO_USER_DATA_ROOT"] ?? app.getPath("userData");
+  activeDesktopApplication = await createBootstrappedDefaultDesktopApplication({
+    projectRoot,
+    userDataRoot
+  });
   const handlers = createApplicationIpcHandlers(activeDesktopApplication, {
     chooseOpenProjectDirectory: () => chooseProjectDirectory("Open Novel Studio project"),
     chooseCreateProjectDirectory: () => chooseProjectDirectory("Create Novel Studio project")

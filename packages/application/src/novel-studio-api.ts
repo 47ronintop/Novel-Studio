@@ -50,6 +50,10 @@ import type {
   StoryBibleContextCandidateOptions,
   StoryBibleSnapshot
 } from "./story-bible-session.js";
+import type {
+  UserPreferencesSaveInput,
+  UserPreferencesSnapshot
+} from "./user-preferences-session.js";
 
 export interface NovelStudioApi {
   getShellState(): Promise<DesktopShellState>;
@@ -138,6 +142,10 @@ export interface NovelStudioApi {
     restoreConfigAssetVersion(
       input: ConfigAssetRestoreInput
     ): Promise<Result<ConfigAssetSnapshot, UnifiedError>>;
+  };
+  preferences: {
+    load(): Promise<Result<UserPreferencesSnapshot, UnifiedError>>;
+    save(input: UserPreferencesSaveInput): Promise<Result<UserPreferencesSnapshot, UnifiedError>>;
   };
 }
 

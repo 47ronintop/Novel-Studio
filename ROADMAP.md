@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.30 | Status: Active | Last Updated: 2026-07-06
+Version: 1.31 | Status: Active | Last Updated: 2026-07-06
 
 ## 目标
 
@@ -67,6 +67,8 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M47       | Multi-window Safety      | 本地项目锁、打开/创建前锁获取、冲突保护和健康诊断信号            | Complete |
 | M48       | Onboarding               | 工作区快速开始、示例项目、创建/打开项目和第一章行动入口          | Complete |
 | M49       | Recovery Review          | 可恢复草稿预览、应用和丢弃闭环                                   | Complete |
+| M50       | User Preferences         | onboarding dismissed、布局偏好和用户级 UI 状态持久化             | Complete |
+| M51       | Recovery Hardening       | clean recovery 隐藏、file-ref typed error 和恢复策略收口         | Complete |
 
 ## M15 完成内容
 
@@ -332,19 +334,27 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - `WorkspaceShell` 的 autosave recovery notice 增加预览、应用和丢弃按钮，并显示恢复草稿正文预览。
 - Electron E2E 覆盖从磁盘 dirty recovery record 打开项目、预览、应用、保存并验证章节正文落盘。
 
+## M50/M51 完成内容
+
+- 新增 `docs/productization/m50-user-preferences.md` 和 `docs/productization/m51-recovery-hardening.md`。
+- 新增 user preferences Application Session 与 Repository，保存 app-local `user-preferences.json`，不存正文、密钥或项目源数据。
+- Desktop IPC/preload 增加 `preferences.load` 与 `preferences.save` allowlisted channels。
+- Renderer 启动加载偏好，并在 onboarding dismiss、布局命令、活动切换和底部 tab 切换后保存用户偏好。
+- M51 focused tests 覆盖 clean recovery record 继续隐藏、`file-ref` recovery preview/apply 返回 typed unavailable-content error。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19-M49，其中 M27 首次使用引导已通过 M48 回补完成。
+- Post-M18 产品化打磨已完成 M19-M51，其中 M27 首次使用引导已通过 M48 回补完成。
 - 当前产品状态是 beta productization：主干闭环可运行，但多个宪法/UI 指南能力仍是 Product Gap。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M50 User Preferences：持久化 onboarding dismissed、布局偏好和用户级 UI 状态。
-- M51 建议进入 Recovery Hardening：补 file-ref recovery、恢复记录归档/清理策略和 stale-lock recovery UI。
-- M52 建议进入 Editor Runtime：评估 CodeMirror 6、完整 visual diff editor 和用户可编辑快捷键注册表。
+- 下一步建议进入 M52 Editor Runtime：评估 CodeMirror 6、完整 visual diff editor 和用户可编辑快捷键注册表。
+- M53 建议进入 Workflow UX：workflow graph、条件分支 UI 和 Agent 分支决策可视化。
+- M54 建议进入 Plugin Runtime RFC：插件安装/更新、沙箱执行、权限审批和 Workflow contribution 激活。
 
 ## 当前技术债重点
 

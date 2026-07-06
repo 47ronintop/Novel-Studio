@@ -103,6 +103,49 @@ test("creates an example project from the onboarding quick start", async () => {
   }
 });
 
+test("persists onboarding dismissal in user preferences", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-preferences-e2e-"));
+  const userDataRoot = join(tempRoot, "User Data");
+  const firstApp = await electron.launch({
+    args: [electronMain],
+    env: {
+      ...process.env,
+      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Default Project"),
+      NOVEL_STUDIO_USER_DATA_ROOT: userDataRoot
+    }
+  });
+
+  try {
+    const page = await firstApp.firstWindow();
+    await expect(page.getByRole("region", { name: "快速开始" })).toBeVisible();
+    await page.getByRole("button", { name: "隐藏快速开始" }).click();
+    await expect(page.getByRole("region", { name: "快速开始" })).toBeHidden();
+  } finally {
+    await firstApp.close();
+  }
+
+  const secondApp = await electron.launch({
+    args: [electronMain],
+    env: {
+      ...process.env,
+      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Second Default Project"),
+      NOVEL_STUDIO_USER_DATA_ROOT: userDataRoot
+    }
+  });
+
+  try {
+    const page = await secondApp.firstWindow();
+    await expect(page.getByLabel("编辑区")).toBeVisible();
+    await expect(page.getByRole("region", { name: "快速开始" })).toHaveCount(0);
+
+    const preferencesFile = await readFile(join(userDataRoot, "user-preferences.json"), "utf8");
+    expect(preferencesFile).toContain('"dismissed": true');
+  } finally {
+    await secondApp.close();
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("reviews and applies an autosave recovery draft from disk", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-recovery-e2e-"));
   const defaultProjectRoot = join(tempRoot, "Default Project");

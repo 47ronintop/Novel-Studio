@@ -194,7 +194,9 @@ function createFakeApplication(): DesktopApplication {
     testModelProfileConnection: unsupported,
     loadConfigAsset: unsupported,
     saveConfigAsset: unsupported,
-    restoreConfigAssetVersion: unsupported
+    restoreConfigAssetVersion: unsupported,
+    loadUserPreferences: unsupported,
+    saveUserPreferences: unsupported
   };
 }
 

@@ -10,6 +10,7 @@ import {
   createProjectSearchSession,
   createProjectWorkspaceSession,
   createStoryBibleSession,
+  createUserPreferencesSession,
   resolveDefaultModelRuntimeProfile
 } from "@novel-studio/application";
 import type {
@@ -30,7 +31,8 @@ import {
   ProjectSettingsRepository,
   RecoveryRepository,
   SearchIndexFileRepository,
-  StoryBibleFileRepository
+  StoryBibleFileRepository,
+  UserPreferencesFileRepository
 } from "@novel-studio/repository";
 
 export const DEFAULT_FIXTURE_CHAPTER_ID = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D0";
@@ -43,6 +45,7 @@ export interface ProjectDesktopApplicationOptions {
   readonly projectRoot: string;
   readonly chapterId: string;
   readonly projectTitle: string;
+  readonly userDataRoot?: string;
   readonly now?: () => string;
   readonly createVersionId?: () => string;
   readonly modelConnectionTester?: ModelConnectionTester;
@@ -50,6 +53,7 @@ export interface ProjectDesktopApplicationOptions {
 
 export interface BootstrappedDefaultDesktopApplicationOptions {
   readonly projectRoot: string;
+  readonly userDataRoot?: string;
   readonly now?: () => string;
   readonly createVersionId?: () => string;
   readonly modelConnectionTester?: ModelConnectionTester;
@@ -148,6 +152,16 @@ export function createProjectDesktopApplication(
           createConfigAssetRepository().restoreConfigAssetVersion(input)
       }
     }),
+    ...(options.userDataRoot === undefined
+      ? {}
+      : {
+          userPreferencesSession: createUserPreferencesSession({
+            preferencesPort: new UserPreferencesFileRepository({
+              userDataRoot: options.userDataRoot,
+              traceId: "trace_desktop_user_preferences_repository"
+            })
+          })
+        }),
     storyBibleSession: createStoryBibleSession({
       repository: {
         readStoryBible: () => createStoryBibleRepository().readStoryBible(),
@@ -287,6 +301,9 @@ export function createDefaultDesktopApplication(): DesktopApplication {
 
   return createProjectDesktopApplication({
     projectRoot,
+    ...(process.env["NOVEL_STUDIO_USER_DATA_ROOT"] === undefined
+      ? {}
+      : { userDataRoot: process.env["NOVEL_STUDIO_USER_DATA_ROOT"] }),
     chapterId: DEFAULT_FIXTURE_CHAPTER_ID,
     projectTitle: DEFAULT_PROJECT_TITLE
   });
@@ -299,6 +316,7 @@ export async function createBootstrappedDefaultDesktopApplication(
 
   const application = createProjectDesktopApplication({
     projectRoot: options.projectRoot,
+    ...(options.userDataRoot === undefined ? {} : { userDataRoot: options.userDataRoot }),
     chapterId: DEFAULT_FIXTURE_CHAPTER_ID,
     projectTitle: DEFAULT_PROJECT_TITLE,
     ...(options.now === undefined ? {} : { now: options.now }),

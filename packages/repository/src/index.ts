@@ -79,6 +79,8 @@ export type {
   StoryBibleSnapshot
 } from "./story-bible-repository.js";
 export { SearchIndexFileRepository } from "./search-index-repository.js";
+export { UserPreferencesFileRepository } from "./user-preferences-repository.js";
+export type { UserPreferencesFileRepositoryOptions } from "./user-preferences-repository.js";
 export type {
   SearchIndexEntry,
   SearchIndexEntryType,

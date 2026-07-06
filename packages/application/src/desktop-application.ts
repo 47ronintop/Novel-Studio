@@ -64,6 +64,11 @@ import type {
   StoryBibleSession,
   StoryBibleSnapshot
 } from "./story-bible-session.js";
+import type {
+  UserPreferencesSaveInput,
+  UserPreferencesSession,
+  UserPreferencesSnapshot
+} from "./user-preferences-session.js";
 import type { ContextCandidate } from "@novel-studio/context-engine";
 
 export type ActivityId =
@@ -165,6 +170,10 @@ export interface DesktopApplication {
   restoreConfigAssetVersion(
     input: ConfigAssetRestoreInput
   ): Promise<Result<ConfigAssetSnapshot, UnifiedError>>;
+  loadUserPreferences(): Promise<Result<UserPreferencesSnapshot, UnifiedError>>;
+  saveUserPreferences(
+    input: UserPreferencesSaveInput
+  ): Promise<Result<UserPreferencesSnapshot, UnifiedError>>;
 }
 
 export interface DesktopApplicationOptions {
@@ -173,6 +182,7 @@ export interface DesktopApplicationOptions {
   readonly modelSettingsSession?: ModelSettingsSession;
   readonly pluginSettingsSession?: PluginSettingsSession;
   readonly configStudioSession?: ConfigStudioSession;
+  readonly userPreferencesSession?: UserPreferencesSession;
   readonly storyBibleSession?: StoryBibleSession;
   readonly createProjectSearchSession?: (projectRoot: string) => ProjectSearchSession;
   readonly aiWritingWorkflowSession?: AiWritingWorkflowSession;
@@ -221,6 +231,7 @@ export function createDesktopApplication(
   const modelSettingsSession = options.modelSettingsSession;
   const pluginSettingsSession = options.pluginSettingsSession;
   const configStudioSession = options.configStudioSession;
+  const userPreferencesSession = options.userPreferencesSession;
   const storyBibleSession = options.storyBibleSession;
   const createProjectSearchSession = options.createProjectSearchSession;
   const aiWritingWorkflowSession = options.aiWritingWorkflowSession;
@@ -528,6 +539,20 @@ export function createDesktopApplication(
       }
 
       return configStudioSession.restoreConfigAssetVersion(input);
+    },
+    async loadUserPreferences() {
+      if (userPreferencesSession === undefined) {
+        return userPreferencesUnavailable();
+      }
+
+      return userPreferencesSession.load();
+    },
+    async saveUserPreferences(input) {
+      if (userPreferencesSession === undefined) {
+        return userPreferencesUnavailable();
+      }
+
+      return userPreferencesSession.save(input);
     }
   };
 
@@ -752,6 +777,19 @@ function workflowRunHistoryUnavailable<T>(): Result<T, UnifiedError> {
       recoverability: "user-action",
       suggestedAction: "Open a project before viewing workflow run history.",
       traceId: "application-workflow-run-history"
+    })
+  );
+}
+
+function userPreferencesUnavailable<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "USER_PREFERENCES_UNAVAILABLE",
+      category: "UserError",
+      message: "No user preferences session is available.",
+      recoverability: "user-action",
+      suggestedAction: "Continue with runtime defaults or restart the desktop application.",
+      traceId: "application-user-preferences"
     })
   );
 }

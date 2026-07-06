@@ -370,6 +370,97 @@ describe("M12 project workflow session", () => {
     expect(createdProject.value.health.issues.map((issue) => issue.source)).toContain("recovery");
   });
 
+  test("keeps clean recovery records hidden and rejects file-ref draft recovery review", async () => {
+    const projectRoot = await createTempRoot();
+    const recoveryRecords: RecoveryRecord[] = [
+      {
+        schemaVersion: "1.0",
+        sessionId: "session_prj_m51_ch_clean",
+        projectId: "prj_m51_app",
+        openAssetId: "ch_clean",
+        assetType: "chapter",
+        dirty: false,
+        draftContentRef: {
+          strategy: "inline",
+          content: "processed draft\n"
+        },
+        updatedAt: "2026-07-06T00:04:00.000Z"
+      },
+      {
+        schemaVersion: "1.0",
+        sessionId: "session_prj_m51_ch_file_ref",
+        projectId: "prj_m51_app",
+        openAssetId: "ch_file_ref",
+        assetType: "chapter",
+        dirty: true,
+        draftContentRef: {
+          strategy: "file-ref",
+          path: "history/recovery/file-ref.md"
+        },
+        updatedAt: "2026-07-06T00:05:00.000Z"
+      }
+    ];
+    const session = createProjectWorkspaceSession({
+      now: () => "2026-07-06T00:10:00.000Z",
+      createProjectRepository: (root) =>
+        new ProjectFileRepository({
+          projectRoot: root,
+          now: () => "2026-07-06T00:00:00.000Z"
+        }),
+      createChapterRepository: (root) =>
+        new ChapterFileRepository({
+          projectRoot: root,
+          now: () => "2026-07-06T00:00:00.000Z"
+        }),
+      createHistoryRepository: (root) =>
+        new HistoryRepository({
+          projectRoot: root,
+          now: () => "2026-07-06T00:00:00.000Z",
+          createVersionId: () => "ver_m51"
+        }),
+      createRecoveryRepository: () => ({
+        async writeRecoveryRecord(record) {
+          recoveryRecords.unshift(record);
+          return ok(record);
+        },
+        async listRecoveryRecords() {
+          return ok(recoveryRecords);
+        }
+      })
+    });
+
+    const created = await session.createProject({
+      projectRoot,
+      projectId: "prj_m51_app",
+      title: "M51 App Project",
+      language: "zh-CN"
+    });
+    await session.createChapter({
+      chapterId: "ch_file_ref",
+      title: "File Ref",
+      body: "persisted file ref\n"
+    });
+    const preview = await session.previewRecoveryDraft("session_prj_m51_ch_file_ref");
+    const apply = await session.applyRecoveryDraft("session_prj_m51_ch_file_ref");
+
+    expect(isOk(created)).toBe(true);
+    expect(session.getSnapshot()?.recovery.availableItems).toEqual([
+      {
+        sessionId: "session_prj_m51_ch_file_ref",
+        chapterId: "ch_file_ref",
+        updatedAt: "2026-07-06T00:05:00.000Z"
+      }
+    ]);
+    expect(isErr(preview)).toBe(true);
+    if (isErr(preview)) {
+      expect(preview.error.code).toBe("RECOVERY_DRAFT_CONTENT_UNAVAILABLE");
+    }
+    expect(isErr(apply)).toBe(true);
+    if (isErr(apply)) {
+      expect(apply.error.code).toBe("RECOVERY_DRAFT_CONTENT_UNAVAILABLE");
+    }
+  });
+
   test("acquires project locks before activation and preserves current workspace on conflict", async () => {
     const firstRoot = await createTempRoot();
     const secondRoot = await createTempRoot();

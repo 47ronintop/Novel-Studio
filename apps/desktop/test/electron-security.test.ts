@@ -73,7 +73,9 @@ describe("Electron security baseline", () => {
       "application:story-bible:build-context-candidates",
       "application:studio:load-config-asset",
       "application:studio:save-config-asset",
-      "application:studio:restore-config-version"
+      "application:studio:restore-config-version",
+      "application:preferences:load",
+      "application:preferences:save"
     ]);
     expect(isApplicationIpcChannel("application:list-commands")).toBe(true);
     expect(isApplicationIpcChannel("application:project:preview-recovery-draft")).toBe(true);
@@ -81,6 +83,7 @@ describe("Electron security baseline", () => {
     expect(isApplicationIpcChannel("application:settings:list-model-profiles")).toBe(true);
     expect(isApplicationIpcChannel("application:story-bible:load")).toBe(true);
     expect(isApplicationIpcChannel("application:studio:save-config-asset")).toBe(true);
+    expect(isApplicationIpcChannel("application:preferences:load")).toBe(true);
     expect(isApplicationIpcChannel("fs:read-file")).toBe(false);
     expect(isApplicationIpcChannel("shell:open-path")).toBe(false);
   });
@@ -162,6 +165,10 @@ describe("Electron security baseline", () => {
       assetId: "wf_review_chapter",
       versionId: "ver_01"
     });
+    await api.preferences.load();
+    await api.preferences.save({
+      onboarding: { dismissed: true }
+    });
 
     expect(invokedChannels.every(isApplicationIpcChannel)).toBe(true);
     expect(invokedChannels).toEqual([
@@ -195,7 +202,9 @@ describe("Electron security baseline", () => {
       "application:story-bible:build-context-candidates",
       "application:studio:load-config-asset",
       "application:studio:save-config-asset",
-      "application:studio:restore-config-version"
+      "application:studio:restore-config-version",
+      "application:preferences:load",
+      "application:preferences:save"
     ]);
   });
 
@@ -249,6 +258,10 @@ describe("Electron security baseline", () => {
     ).resolves.toMatchObject({
       ok: false,
       error: { code: "CONFIG_STUDIO_UNAVAILABLE" }
+    });
+    await expect(handlers["application:preferences:load"]()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "USER_PREFERENCES_UNAVAILABLE" }
     });
   });
 

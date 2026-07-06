@@ -30,6 +30,8 @@ import type {
   StoryBibleContextCandidate,
   StoryBibleContextCandidateOptions,
   StoryBibleSnapshot,
+  UserPreferencesSaveInput,
+  UserPreferencesSnapshot,
   WorkflowRunRecord,
   WorkflowRunSummary
 } from "@novel-studio/application";
@@ -216,6 +218,15 @@ const api: NovelStudioApi = {
     restoreConfigAssetVersion: (input: ConfigAssetRestoreInput) =>
       invokeTyped<Result<ConfigAssetSnapshot, UnifiedError>>(
         "application:studio:restore-config-version",
+        input
+      )
+  },
+  preferences: {
+    load: () =>
+      invokeTyped<Result<UserPreferencesSnapshot, UnifiedError>>("application:preferences:load"),
+    save: (input: UserPreferencesSaveInput) =>
+      invokeTyped<Result<UserPreferencesSnapshot, UnifiedError>>(
+        "application:preferences:save",
         input
       )
   }

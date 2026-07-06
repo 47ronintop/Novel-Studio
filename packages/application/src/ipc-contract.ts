@@ -36,7 +36,9 @@ export const APPLICATION_IPC_CHANNELS = [
   "application:story-bible:build-context-candidates",
   "application:studio:load-config-asset",
   "application:studio:save-config-asset",
-  "application:studio:restore-config-version"
+  "application:studio:restore-config-version",
+  "application:preferences:load",
+  "application:preferences:save"
 ] as const;
 
 export type ApplicationIpcChannel = (typeof APPLICATION_IPC_CHANNELS)[number];

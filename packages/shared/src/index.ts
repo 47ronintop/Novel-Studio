@@ -29,5 +29,13 @@ export type {
   RecoveryRecord,
   RecoveryRepositoryPort
 } from "./recovery.js";
+export type {
+  UserOnboardingPreferences,
+  UserPreferencesPort,
+  UserPreferencesSaveInput,
+  UserPreferencesSnapshot,
+  UserShellPreferences,
+  UserWorkspaceLayoutPreferences
+} from "./user-preferences.js";
 export type { Err, Ok, Result } from "./result.js";
 export { err, isErr, isOk, ok, unwrapOr } from "./result.js";

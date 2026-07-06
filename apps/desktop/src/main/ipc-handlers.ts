@@ -11,7 +11,8 @@ import type {
   MemoryRecord,
   ProjectSearchQuery,
   StoryBibleAsset,
-  StoryBibleContextCandidateOptions
+  StoryBibleContextCandidateOptions,
+  UserPreferencesSaveInput
 } from "@novel-studio/application";
 import type { CreateChapterInput } from "@novel-studio/shared";
 
@@ -235,8 +236,19 @@ export function createApplicationIpcHandlers(
       }
 
       return application.restoreConfigAssetVersion(restoreInput);
-    }
+    },
+    "application:preferences:load": () => application.loadUserPreferences(),
+    "application:preferences:save": (input: unknown) =>
+      application.saveUserPreferences(toUserPreferencesSaveInput(input))
   };
+}
+
+function toUserPreferencesSaveInput(value: unknown): UserPreferencesSaveInput {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  return value as UserPreferencesSaveInput;
 }
 
 function toStoryBibleAsset(value: unknown): StoryBibleAsset | undefined {
