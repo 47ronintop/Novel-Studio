@@ -1,0 +1,318 @@
+﻿import { Check, RotateCcw, X } from "lucide-react";
+
+import type {
+  AiWorkflowFailureDiagnosticProps,
+  AiWorkflowObservabilityProps,
+  AiWorkflowObservedStepKind,
+  AiWorkflowObservedStepProps,
+  AiWorkflowObservedStepStatus,
+  AiWorkflowRetryPolicyProps,
+  AiWorkflowRunHistoryProps,
+  AiWritingWorkflowProps,
+  AiWritingWorkflowStatus
+} from "./workspace-shell.js";
+
+export function AiWorkflowRunHistoryView({
+  history
+}: {
+  readonly history: AiWorkflowRunHistoryProps;
+}) {
+  return (
+    <section className="ns-ai-run-history" aria-label="工作流运行历史">
+      <div className="ns-ai-observability-header">
+        <span>工作流运行历史</span>
+        <span>{history.runs.length}</span>
+      </div>
+      {history.runs.length === 0 ? (
+        <p className="ns-ai-history-empty">暂无工作流运行记录</p>
+      ) : (
+        <ol className="ns-ai-history-list" aria-label="最近工作流运行">
+          {history.runs.map((run) => (
+            <li className="ns-ai-history-row" key={run.workflowRunId}>
+              <div>
+                <span>{run.workflowTitle}</span>
+                <span>{run.updatedAtLabel}</span>
+              </div>
+              <div>
+                <span>{run.statusLabel}</span>
+                <span>{run.modelLabel}</span>
+              </div>
+              <div>
+                <span>{run.usageLabel}</span>
+                <span>{run.costLabel}</span>
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+      {history.selectedRun === undefined ? null : (
+        <div className="ns-ai-history-detail" aria-label="工作流运行详情">
+          <dl className="ns-ai-observability-metrics">
+            <div>
+              <dt>上下文</dt>
+              <dd>{history.selectedRun.contextLabel}</dd>
+            </div>
+            <div>
+              <dt>模型</dt>
+              <dd>{history.selectedRun.modelLabel}</dd>
+            </div>
+            <div>
+              <dt>Token</dt>
+              <dd>{history.selectedRun.usageLabel}</dd>
+            </div>
+          </dl>
+          <AiWorkflowRail
+            ariaLabel="History workflow rail"
+            listLabel="历史工作流步骤"
+            steps={history.selectedRun.steps}
+          />
+          {history.selectedRun.errorLabel === undefined ? null : (
+            <p className="ns-ai-history-error">{history.selectedRun.errorLabel}</p>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+export function AiWorkflowFailureDiagnosticView({
+  failure
+}: {
+  readonly failure: AiWorkflowFailureDiagnosticProps;
+}) {
+  return (
+    <section className="ns-ai-failure" aria-label="失败诊断">
+      <div className="ns-ai-observability-header">
+        <span>{failure.title}</span>
+        <span>{failure.recoverabilityLabel}</span>
+      </div>
+      <dl className="ns-ai-observability-metrics">
+        <div>
+          <dt>错误</dt>
+          <dd>{failure.code}</dd>
+        </div>
+        <div>
+          <dt>说明</dt>
+          <dd>{failure.message}</dd>
+        </div>
+        <div>
+          <dt>建议</dt>
+          <dd>{failure.suggestedAction}</dd>
+        </div>
+      </dl>
+    </section>
+  );
+}
+
+export function AiWorkflowRetryPolicyView({
+  retryPolicy
+}: {
+  readonly retryPolicy: AiWorkflowRetryPolicyProps;
+}) {
+  return (
+    <section className="ns-ai-retry-policy" aria-label="重试策略">
+      <div className="ns-ai-observability-header">
+        <span>重试策略</span>
+        <span>{retryPolicy.modeLabel}</span>
+      </div>
+      <dl className="ns-ai-observability-metrics">
+        <div>
+          <dt>次数</dt>
+          <dd>{retryPolicy.maxAttemptsLabel}</dd>
+        </div>
+        <div>
+          <dt>退避</dt>
+          <dd>{retryPolicy.backoffLabel}</dd>
+        </div>
+        <div>
+          <dt>错误</dt>
+          <dd>{retryPolicy.retryableCodesLabel}</dd>
+        </div>
+      </dl>
+    </section>
+  );
+}
+
+export function AiSelectionReviewView({ workflow }: { readonly workflow: AiWritingWorkflowProps }) {
+  const review = workflow.selectionReview;
+  if (review === undefined) {
+    return null;
+  }
+
+  return (
+    <section className="ns-ai-observability" aria-label="Selection AI review">
+      <div className="ns-ai-observability-header">
+        <span>Selection review</span>
+        <span>{review.status}</span>
+      </div>
+      <p className="ns-ai-context">
+        Range {review.rangeLabel}: {review.compareLabel}
+      </p>
+      <div className="ns-ai-actions">
+        <button
+          aria-label="Accept selection AI preview"
+          className="ns-icon-text-button"
+          disabled={workflow.status !== "suggestion-ready" || review.status !== "pending"}
+          onClick={workflow.onApplySuggestion}
+          type="button"
+        >
+          <Check aria-hidden="true" size={14} />
+          Accept
+        </button>
+        <button
+          aria-label="Reject selection AI preview"
+          className="ns-icon-text-button"
+          disabled={review.status !== "pending" || workflow.onRejectSelectionReview === undefined}
+          onClick={workflow.onRejectSelectionReview}
+          type="button"
+        >
+          <X aria-hidden="true" size={14} />
+          Reject
+        </button>
+        <button
+          aria-label="Undo selection AI rejection"
+          className="ns-icon-text-button"
+          disabled={!review.canUndo || workflow.onUndoSelectionReview === undefined}
+          onClick={workflow.onUndoSelectionReview}
+          type="button"
+        >
+          <RotateCcw aria-hidden="true" size={14} />
+          Undo
+        </button>
+      </div>
+    </section>
+  );
+}
+
+export function AiWorkflowObservabilityView({
+  observability
+}: {
+  readonly observability: AiWorkflowObservabilityProps;
+}) {
+  return (
+    <section className="ns-ai-observability" aria-label="AI 工作流运行观测">
+      <div className="ns-ai-observability-header">
+        <span>{observability.workflowTitle}</span>
+        <span>{observability.generatedAtLabel}</span>
+      </div>
+      <dl className="ns-ai-observability-metrics">
+        <div>
+          <dt>上下文</dt>
+          <dd>{observability.contextLabel}</dd>
+        </div>
+        <div>
+          <dt>模型</dt>
+          <dd>{observability.modelLabel}</dd>
+        </div>
+        <div>
+          <dt>Token</dt>
+          <dd>{observability.usageLabel}</dd>
+        </div>
+        <div>
+          <dt>成本</dt>
+          <dd>{observability.costLabel}</dd>
+        </div>
+      </dl>
+      <AiWorkflowRail
+        ariaLabel="Workflow rail"
+        listLabel="AI 工作流步骤"
+        steps={observability.steps}
+      />
+    </section>
+  );
+}
+
+function AiWorkflowRail({
+  ariaLabel,
+  listLabel,
+  steps
+}: {
+  readonly ariaLabel: string;
+  readonly listLabel: string;
+  readonly steps: readonly AiWorkflowObservedStepProps[];
+}) {
+  return (
+    <section className="ns-ai-workflow-rail" aria-label={ariaLabel}>
+      <ol className="ns-ai-step-list" aria-label={listLabel}>
+        {steps.map((step) => (
+          <li
+            className="ns-ai-step"
+            data-kind={step.kind}
+            data-status={step.status}
+            key={step.stepId}
+          >
+            <div className="ns-ai-step-main">
+              <span>{step.label}</span>
+              <span>{aiStepKindLabel(step.kind)}</span>
+              <span>{aiStepStatusLabel(step.status)}</span>
+            </div>
+            {step.description === undefined ? null : (
+              <p className="ns-ai-step-description">{step.description}</p>
+            )}
+            {step.branchChoices === undefined || step.branchChoices.length === 0 ? null : (
+              <ul className="ns-ai-branch-choice-list" aria-label={`${step.label} branch choices`}>
+                {step.branchChoices.map((choice) => (
+                  <li
+                    className="ns-ai-branch-choice"
+                    data-selected-branch={choice.branchId === step.selectedBranchId}
+                    key={choice.branchId}
+                  >
+                    <span>{choice.label}</span>
+                    <span>{choice.conditionLabel ?? choice.branchId}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+export function statusLabel(status: AiWritingWorkflowStatus): string {
+  switch (status) {
+    case "idle":
+      return "空闲";
+    case "generating":
+      return "生成中";
+    case "streaming":
+      return "流式输出中";
+    case "suggestion-ready":
+      return "待确认";
+    case "applied":
+      return "已应用";
+    case "failed":
+      return "失败";
+    case "cancelled":
+      return "已取消";
+  }
+}
+
+function aiStepStatusLabel(status: AiWorkflowObservedStepStatus): string {
+  switch (status) {
+    case "pending":
+      return "待执行";
+    case "running":
+      return "运行中";
+    case "completed":
+      return "已完成";
+    case "waiting-confirmation":
+      return "待确认";
+    case "failed":
+      return "失败";
+  }
+}
+
+function aiStepKindLabel(kind: AiWorkflowObservedStepKind): string {
+  switch (kind) {
+    case "context":
+      return "Context";
+    case "agent":
+      return "Agent";
+    case "confirmation":
+      return "Confirm";
+    case "branch":
+      return "Branch";
+  }
+}

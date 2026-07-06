@@ -232,5 +232,5 @@ export type {
   WorkflowRunStepRecord,
   WorkflowRunSummary,
   WorkflowRunUsageSummary
-} from "./ai-writing-workflow-session.js";
+} from "./ai-writing-workflow-types.js";
 export { createAgentBackedAiWritingWorkflowSession } from "./ai-writing-workflow-session.js";

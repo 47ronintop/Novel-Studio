@@ -85,8 +85,13 @@
 - 完成 M84/M85 Workflow Designer Canvas 与 Editor Runtime Default Readiness：新增 workflow designer availability gate、selected edge state、structured node drag commit、canvas coordinate UI、CodeMirror default readiness evaluator 和 fallback decision；仍不做 edge 语义编辑、不默认切换 CodeMirror、不完成 Product Ready workflow designer。
 - 完成 M86-M88 Plugin Runtime Hardening、Workflow Designer Semantic Editing 与 Editor Local Diff Review：新增 plugin hardening report、audit retention/marketplace boundary DTO、workflow add/delete/retarget/branch semantic draft helper、Studio semantic action入口、editor local diff review metadata、large-document smoke 和 textarea rollback label；仍不执行任意第三方插件源码、不做完整 graph editor、不默认切换 CodeMirror。
 - 完成 M89-M91 Plugin Runtime Trust Store、Workflow Designer Product Editing 与 CodeMirror Default Migration Gate：新增 plugin trust store edit DTO、cache-protected audit JSONL record projection、workflow product edit helper、节点类型/edge/branch/delete-confirm UI 控件、CodeMirror migration gate 和 runtime strip label；仍不写真实 audit Repository、不执行任意第三方插件源码、不强制切换 CodeMirror 默认。
+- 固定 M92-M100 Product Ready 剩余工作路线：新增 `docs/superpowers/plans/2026-07-06-product-ready-remaining-work.md`，把插件持久化、工作流设计器补完、编辑器迁移、恢复/历史/多窗口、引用完整性、provider streaming、质量门禁、发布硬化和 Product Ready 审计收敛为固定队列。
+- 批判性复核 M92-M100 路线：将上一条固定队列降级为候选缺口清单，在 `ROADMAP.md` 新增 v1 ship 验收场景、强制 Scope Review 检查点和裁剪后的 M92-M98 主线，优先处理结构性风险与核心写作闭环。
+- 确认最终版 v1 路线：面向公开安装用户，v1 纳入常见 provider 支持（OpenAI/GPT、Claude、DeepSeek、GLM、通义等）和公开安装发布门禁；插件市场/第三方源码执行、CodeMirror 默认迁移、Timeline 深编辑继续移入 v2/backlog。
+- 将阅读预览/角色配音朗读纳入路线图范围裁决：不插队 M92-M97 核心闭环，M98 只判断是否进入 v1.1；若后续实施，第一版限定为章节阅读预览、Story Bible 人物声音设定、系统语音默认和 Edge TTS 实验 provider，不直接扩展到有声书导出或全自动角色推断。
+- 完成 M92 Structural Refactor Gate：新增结构门禁测试，拆分 `workspace-shell.tsx` 的 AI/Story Bible/Search/onboarding/recovery 视图、`App.tsx` 的 renderer shell helper，以及 `ai-writing-workflow-session.ts` 的公共类型模块；三个目标文件均降到硬拆分阈值以下且不新增用户功能。
 
 ## Notes
 
 - Phase 7 当前定义的 M0-M18 已完成。
-- 当前已完成 Post-M18 M19-M91；M27 安装后首次使用引导缺口已通过 M48 回补；未经用户确认不得 push。
+- 当前已完成 Post-M18 M19-M92，M93-M98 已按最终确认的 v1 核心闭环裁剪规划；M27 安装后首次使用引导缺口已通过 M48 回补；未经用户确认不得 push。

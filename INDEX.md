@@ -1,6 +1,6 @@
 ﻿# INDEX - Novel Studio 文档索引
 
-Version: 1.55 | Last Updated: 2026-07-06
+Version: 1.60 | Last Updated: 2026-07-06
 
 ## 文档优先级
 
@@ -23,7 +23,7 @@ Version: 1.55 | Last Updated: 2026-07-06
 | `UI_GUIDELINES.md`                                                    | 1.0        | Accepted             | UI/UX、布局、交互、设计 tokens、可访问性                 |
 | `CODING_STANDARDS.md`                                                 | 1.0        | Accepted             | 开发规范、语言规则、分层、schema、UI 实现                |
 | `TESTING.md`                                                          | 1.0        | Accepted             | 测试规范、fixtures、LLM mock、CI 门禁                    |
-| `ROADMAP.md`                                                          | 1.43       | Active               | 当前里程碑、后续路线、完成状态                           |
+| `ROADMAP.md`                                                          | 1.48       | Active               | 当前里程碑、后续路线、完成状态                           |
 | `STORY_BIBLE.md`                                                      | 1.0        | Accepted for M16     | Story Bible 资产、仓储、Context 候选和最小 UI 闭环       |
 | `docs/packaging/m17-installer-release-channel.md`                     | 1.0        | Accepted for M17     | 安装器目标、发布通道 manifest、release notes 和签名策略  |
 | `PLUGIN_SYSTEM.md`                                                    | 1.0        | Accepted for M18     | 插件 manifest、权限、注册表、运行时边界和测试要求        |
@@ -70,6 +70,11 @@ Version: 1.55 | Last Updated: 2026-07-06
 | `docs/productization/m72-m74-sandbox-codemirror-selection-ai.md`      | 1.0        | Complete             | Sandbox fixture、CodeMirror mount plan 和 selection AI   |
 | `docs/productization/m75-m77-selection-apply-sandbox-isolation.md`    | 1.0        | Complete             | Selection event/apply 和 sandbox isolation plan          |
 | `docs/productization/m78-m80-codemirror-isolation-workflow-layout.md` | 1.0        | Complete             | CodeMirror DOM、isolation prototype 和 workflow layout   |
+| `docs/productization/m81-m83-selection-plugin-workflow-review.md`     | 1.0        | Complete             | Selection review、plugin trust UI 和 workflow movement   |
+| `docs/productization/m84-m85-workflow-canvas-editor-readiness.md`     | 1.0        | Complete             | Workflow canvas 和 editor runtime default readiness      |
+| `docs/productization/m86-m88-plugin-workflow-editor-hardening.md`     | 1.0        | Complete             | Plugin hardening、workflow semantic edit 和 local diff   |
+| `docs/productization/m89-m91-trust-workflow-editor-gates.md`          | 1.0        | Complete             | Plugin trust store、workflow edit 和 CodeMirror gate     |
+| `docs/superpowers/plans/2026-07-06-product-ready-remaining-work.md`   | 1.0        | Candidate            | Product Ready 缺口候选清单；不得绕过 ROADMAP 范围复核    |
 | `docs/rfcs/RFC-0001-plugin-runtime.md`                                | 1.0        | Accepted for M54     | Plugin Runtime、权限、adapter 和 workflow contribution   |
 | `docs/rfcs/RFC-0002-editor-runtime-engine.md`                         | 1.0        | Accepted for M55     | Editor Runtime Engine、CodeMirror adapter 和 visual diff |
 | `docs/rfcs/RFC-0003-workflow-designer.md`                             | 1.0        | Accepted for M56     | Workflow Designer、graph projection 和 validation        |
@@ -97,7 +102,7 @@ Version: 1.55 | Last Updated: 2026-07-06
 | Phase 5 开发规范      | Complete | `CODING_STANDARDS.md`、`TESTING.md` | 已完成     |
 | Phase 6 Task Planning | Complete | `ROADMAP.md`                        | 已完成     |
 | Phase 7 正式开发      | Complete | M0-M18 已完成                       | 已完成     |
-| Post-M18 产品化打磨   | Active   | M19-M91 已完成                      | 下一步 M92 |
+| Post-M18 产品化打磨   | Active   | M19-M92 已完成；M93-M98 已裁剪规划  | 下一步 M93 |
 
 ## 当前本地状态
 
@@ -145,6 +150,8 @@ Version: 1.55 | Last Updated: 2026-07-06
 - 当前已完成 M84 Workflow Designer Canvas 与 M85 Editor Runtime Default Readiness。
 - 当前已完成 M86 Plugin Runtime Hardening、M87 Workflow Designer Semantic Editing 与 M88 Editor Local Diff Review。
 - 当前已完成 M89 Plugin Runtime Trust Store、M90 Workflow Designer Product Editing 与 M91 CodeMirror Default Migration Gate。
+- 当前已完成 M92 Structural Refactor Gate：拆分 workspace shell、renderer App 和 AI workflow session，并新增结构门禁测试。
 - 当前 `Complete` 只表示里程碑切片完成；产品完整度以 M35 的 `Product Ready` 口径为准。
+- 当前 M92-M98 已按用户确认的 v1 ship 范围裁剪到 `ROADMAP.md`：公开安装、常见 provider 支持、textarea 暂可接受、Story Bible 最小冲突提示；阅读预览/角色朗读纳入 M98 的 v1.1 候选裁决，不抢占 M92-M97；`docs/superpowers/plans/2026-07-06-product-ready-remaining-work.md` 仅作为候选缺口清单，不得直接执行。
 - 未经用户确认不得 push。
 - 当前本地 artifact 位于被忽略的 `release/` 目录，不提交到仓库。
