@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.32 | Status: Active | Last Updated: 2026-07-06
+Version: 1.33 | Status: Active | Last Updated: 2026-07-06
 
 ## 目标
 
@@ -71,6 +71,9 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M51       | Recovery Hardening       | clean recovery 隐藏、file-ref typed error 和恢复策略收口         | Complete |
 | M52       | Editor Runtime           | 编辑器 runtime 状态条、adapter/mode/autosave/shortcut 可见       | Complete |
 | M53       | Workflow UX              | Workflow rail、branch choice 和 selected branch 可视化           | Complete |
+| M54       | Plugin Runtime RFC       | 插件运行时、权限、adapter、workflow contribution 架构 RFC        | Complete |
+| M55       | Editor Runtime RFC       | CodeMirror adapter、selection、visual diff 和快捷键边界 RFC      | Complete |
+| M56       | Workflow Designer RFC    | Workflow graph、条件、Agent 分支和插件 workflow 节点 RFC         | Complete |
 
 ## M15 完成内容
 
@@ -352,19 +355,27 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - AI workflow observed step props 支持 `branch` kind、description、branch choices 和 selected branch id。
 - Inspector workflow observability 与 selected run history detail 使用可复用 `Workflow rail` 展示步骤、状态、分支条件和 selected branch。
 
+## M54-M56 RFC 完成内容
+
+- 新增 `docs/rfcs/RFC-0001-plugin-runtime.md`，接受分阶段 Plugin Runtime：manifest/registry 继续作为入口，v1 优先 host-mediated command 和 mockable workflow-step adapter，任意第三方代码执行、marketplace 和网络权限继续延后。
+- 新增 `docs/rfcs/RFC-0002-editor-runtime-engine.md`，接受 adapter-first Editor Runtime Engine：textarea runtime 保留为 fallback，CodeMirror 6 作为推荐生产 adapter，保存/恢复/版本历史仍经 Application/Repository。
+- 新增 `docs/rfcs/RFC-0003-workflow-designer.md`，接受 schema-first Workflow Designer：JSON 仍是 source of truth，graph view model 只做 UI 投影，Workflow Engine 保持确定性状态机。
+- M54-M56 不新增运行时代码，不改变项目数据格式，不引入真实第三方插件执行、CodeMirror 默认启用或 workflow graph editor。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19-M53，其中 M27 首次使用引导已通过 M48 回补完成。
+- Post-M18 产品化打磨已完成 M19-M56，其中 M27 首次使用引导已通过 M48 回补完成。
 - 当前产品状态是 beta productization：主干闭环可运行，但多个宪法/UI 指南能力仍是 Product Gap。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M54 Plugin Runtime RFC：插件安装/更新、沙箱执行、权限审批和 Workflow contribution 激活。
-- M55 建议进入 Editor Runtime Engine RFC：评估 CodeMirror 6、完整 visual diff editor 和用户可编辑快捷键注册表。
-- M56 建议进入 Workflow Designer RFC：workflow graph、条件表达式、Agent 分支决策可视化和插件 workflow contribution。
+- 下一步建议进入 M57 Plugin Runtime Host Commands：实现 RFC-0001 的 host-command runtime slice。
+- M58 建议进入 Plugin Workflow Step Adapter：实现 mockable workflow-step adapter 和 workflow integration tests。
+- M59 建议进入 Editor Runtime Adapter Extraction：按 RFC-0002 抽出 textarea runtime adapter。
+- M60 建议进入 Workflow Graph Projection：按 RFC-0003 实现 definition/graph projection 与 validator。
 
 ## 当前技术债重点
 
