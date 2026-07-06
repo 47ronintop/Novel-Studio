@@ -103,6 +103,54 @@ function createFakeAiSession(calls: string[]): AiWritingWorkflowSession {
       calls.push(`generate:${request.instruction}`);
       return ok(suggestion);
     },
+    async generateSelectionPreview(request) {
+      calls.push(`selection:${request.instruction}`);
+      return ok({
+        previewId: "sug_selection_m74",
+        workflowRunId: "wfrun_selection_m74",
+        previewOnly: true,
+        proposedText: "Selection rewrite.",
+        summary: "Selection preview.",
+        selection: request.selection,
+        diffPreview: {
+          title: "Selection AI preview",
+          changes: [{ kind: "replace", value: "Selection rewrite.\n" }]
+        },
+        contextTrace: {
+          selectionReason: request.instruction,
+          includedRefs: [],
+          excludedRefs: []
+        },
+        observability: {
+          workflowRunId: "wfrun_selection_m74",
+          workflowTitle: "Selection Preview",
+          generatedAt: "2026-07-04T00:00:00.000Z",
+          context: {
+            sourceCount: 0,
+            tokenEstimate: 0,
+            selectionReason: request.instruction
+          },
+          model: {
+            profileId: "mock_m14",
+            displayName: "M14 Mock Writer",
+            provider: "mock",
+            modelName: "mock-writer"
+          },
+          usage: {
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+            usageStatus: "missing",
+            cost: {
+              amount: 0,
+              currency: "USD",
+              status: "unknown"
+            }
+          },
+          steps: []
+        }
+      });
+    },
     async applyChapterSuggestion(suggestionId) {
       calls.push(`apply:${suggestionId}`);
       return ok({

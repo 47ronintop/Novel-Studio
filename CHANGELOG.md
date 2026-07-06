@@ -78,8 +78,9 @@
 - 完成 M65-M67 Plugin Runtime Sandbox RFC、Workflow Studio Inspector Editing 与 Editor Visual Diff Runtime：新增 sandboxed-code 安全 RFC、workflow inspector structured edit DTO、JSON draft graph validation refresh、callback-driven inspector fields，以及 preview-only visual diff runtime decorations/summary；仍不执行第三方插件代码、不自动应用 AI diff、不启用真实 CodeMirror 包。
 - 完成 M68/M69 Plugin Sandbox Policy DTOs 与 Workflow Studio Node Selection & Save Validation：新增 denied-by-default sandbox policy report、trust state、timeout/payload limits、denied capabilities、workflow graph node selection、selected inspector target，以及 invalid graph save gate；仍不启动 sandbox worker 或做 graph drag/drop。
 - 完成 M70/M71 CodeMirror Package Parity 与 Selection-aware AI Preview：新增 `@codemirror/state` package-backed headless adapter、runtimePackage 元数据、CodeMirror/textarea runtime event parity、selection-aware preview-only diff draft 和 callback-driven UI preview command；仍不挂载 CodeMirror DOM view、不默认切换编辑器、不从 renderer 调模型或自动应用正文。
+- 完成 M72-M74 Plugin Sandbox Fixture Worker、CodeMirror DOM Mount Plan 与 Selection AI Application Flow：新增 deterministic sandbox fixture worker adapter、timeout teardown/payload limit enforcement、CodeMirror `domViewMount` descriptor、Application/IPC/preload/renderer selection preview generation，以及 preview-only selection diff；仍不执行任意第三方插件代码、不默认切换 CodeMirror、不自动应用 selection rewrite。
 
 ## Notes
 
 - Phase 7 当前定义的 M0-M18 已完成。
-- 当前已完成 Post-M18 M19-M71；M27 安装后首次使用引导缺口已通过 M48 回补；未经用户确认不得 push。
+- 当前已完成 Post-M18 M19-M74；M27 安装后首次使用引导缺口已通过 M48 回补；未经用户确认不得 push。

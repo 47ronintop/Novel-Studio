@@ -6,6 +6,7 @@ import type {
   ConfigAssetSaveInput,
   ConfigAssetType,
   CreateProjectInput,
+  AiWritingSelectionPreviewRequest,
   AiWritingSuggestionRequest,
   ModelProfile,
   MemoryRecord,
@@ -113,6 +114,11 @@ export function createApplicationIpcHandlers(
     "application:search:query": (input: unknown) => application.searchProject(toSearchQuery(input)),
     "application:ai:generate-chapter-suggestion": (request: unknown) => {
       return application.generateActiveChapterSuggestion(toAiWritingSuggestionRequest(request));
+    },
+    "application:ai:generate-selection-preview": (request: unknown) => {
+      return application.generateActiveSelectionPreview(
+        toAiWritingSelectionPreviewRequest(request)
+      );
     },
     "application:ai:apply-chapter-suggestion": (suggestionId: unknown) => {
       if (typeof suggestionId !== "string") {
@@ -468,6 +474,35 @@ function toAiWritingSuggestionRequest(value: unknown): AiWritingSuggestionReques
 
   return {
     instruction: value.instruction
+  };
+}
+
+function toAiWritingSelectionPreviewRequest(value: unknown): AiWritingSelectionPreviewRequest {
+  if (
+    !isRecord(value) ||
+    typeof value.instruction !== "string" ||
+    !isRecord(value.selection) ||
+    typeof value.selection.startOffset !== "number" ||
+    typeof value.selection.endOffset !== "number" ||
+    typeof value.selection.selectedText !== "string"
+  ) {
+    return {
+      instruction: "",
+      selection: {
+        startOffset: 0,
+        endOffset: 0,
+        selectedText: ""
+      }
+    };
+  }
+
+  return {
+    instruction: value.instruction,
+    selection: {
+      startOffset: value.selection.startOffset,
+      endOffset: value.selection.endOffset,
+      selectedText: value.selection.selectedText
+    }
   };
 }
 

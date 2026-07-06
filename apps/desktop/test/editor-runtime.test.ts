@@ -181,6 +181,49 @@ describe("editor runtime adapter resolver", () => {
     ]);
   });
 
+  test("keeps CodeMirror DOM view unmounted unless an explicit mount target is provided", () => {
+    const textareaSnapshot = createTextareaEditorRuntimeAdapter()
+      .mount({
+        body: "Plain textarea",
+        saveStatus: "Saved"
+      })
+      .getSnapshot();
+    const codeMirrorSnapshot = createCodeMirrorEditorRuntimeAdapter()
+      .mount({
+        body: "CodeMirror body",
+        saveStatus: "Saved"
+      })
+      .getSnapshot();
+
+    expect(textareaSnapshot.domViewMount).toBeUndefined();
+    expect(codeMirrorSnapshot.domViewMount).toEqual({
+      status: "not-requested",
+      packageName: "@codemirror/view",
+      role: "dom-view",
+      fallbackRuntimeId: "textarea"
+    });
+  });
+
+  test("creates a CodeMirror DOM mount plan behind the adapter boundary", () => {
+    const handle = createCodeMirrorEditorRuntimeAdapter().mount({
+      body: "CodeMirror body",
+      saveStatus: "Saved",
+      domMountTarget: {
+        targetId: "chapter-editor-root",
+        ownerDocumentLabel: "renderer-document"
+      }
+    });
+
+    expect(handle.getSnapshot().domViewMount).toEqual({
+      status: "planned",
+      packageName: "@codemirror/view",
+      role: "dom-view",
+      targetId: "chapter-editor-root",
+      ownerDocumentLabel: "renderer-document",
+      fallbackRuntimeId: "textarea"
+    });
+  });
+
   test("summarizes normalized editor selections for future focused commands", () => {
     const handle = createTextareaEditorRuntimeAdapter().mount({
       body: "First line\nSecond line\nThird line",

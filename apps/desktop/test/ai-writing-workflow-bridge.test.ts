@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import type {
+  AiWritingSelectionPreview,
   AiWritingSuggestion,
   ChapterEditorSnapshot,
   NovelStudioApi,
@@ -107,6 +108,67 @@ const suggestion: AiWritingSuggestion = {
   }
 };
 
+const selectionPreview: AiWritingSelectionPreview = {
+  previewId: "sug_selection_m74",
+  workflowRunId: "wfrun_selection_m74",
+  previewOnly: true,
+  proposedText: "The opening line tightened.",
+  summary: "Rewrites only the selected sentence.",
+  selection: {
+    startOffset: 0,
+    endOffset: 13,
+    selectedText: "Opening line."
+  },
+  diffPreview: {
+    title: "Selection AI preview",
+    changes: [
+      {
+        kind: "replace",
+        value: "The opening line tightened.\n"
+      }
+    ]
+  },
+  contextTrace: {
+    selectionReason: "Rewrite selection.",
+    includedRefs: [
+      {
+        refType: "chapter",
+        refId: "ch_01JZ7P9QK2R6D4W8K3A1B5C9D0",
+        tokenEstimate: 4
+      }
+    ],
+    excludedRefs: []
+  },
+  observability: {
+    workflowRunId: "wfrun_selection_m74",
+    workflowTitle: "Selection Preview",
+    generatedAt: "2026-07-05T00:00:00.000Z",
+    context: {
+      sourceCount: 1,
+      tokenEstimate: 4,
+      selectionReason: "Rewrite selection."
+    },
+    model: {
+      profileId: "mock_m14",
+      displayName: "M14 Mock Writer",
+      provider: "mock",
+      modelName: "mock-writer"
+    },
+    usage: {
+      inputTokens: 16,
+      outputTokens: 8,
+      totalTokens: 24,
+      usageStatus: "estimated",
+      cost: {
+        amount: 0,
+        currency: "USD",
+        status: "estimated"
+      }
+    },
+    steps: []
+  }
+};
+
 describe("AI writing workflow bridge", () => {
   test("generates a preview-only suggestion and applies it through the preload API", async () => {
     const calls: string[] = [];
@@ -166,6 +228,37 @@ describe("AI writing workflow bridge", () => {
       instruction: "Continue with streaming.",
       streamPreview: "The city answered."
     });
+  });
+
+  test("generates selection-aware preview without creating an applyable suggestion", async () => {
+    const calls: string[] = [];
+    const bridge = createAiWritingWorkflowBridge(createApi(calls));
+
+    const generated = await bridge.generateSelectionPreview({
+      instruction: "Rewrite selection.",
+      command: {
+        commandId: "editor.ai.preview-selection",
+        runtimeId: "textarea",
+        selection: {
+          startOffset: 0,
+          endOffset: 13,
+          characterCount: 13,
+          lineStart: 1,
+          lineEnd: 1,
+          selectedTextPreview: "Opening line.",
+          collapsed: false
+        }
+      },
+      selectedText: "Opening line."
+    });
+
+    expect(generated.status).toBe("suggestion-ready");
+    expect(generated.summary).toBe("Rewrites only the selected sentence.");
+    expect(generated.diffPreview).toEqual(selectionPreview.diffPreview);
+    expect(calls).toEqual(["ai.selection:Rewrite selection.:0-13"]);
+    await expect(bridge.applySuggestion()).rejects.toThrow(
+      "No AI writing suggestion is available to apply."
+    );
   });
 
   test("keeps failed workflow diagnostics visible and allows user-triggered retry", async () => {
@@ -276,6 +369,12 @@ function createApi(calls: string[]): NovelStudioApi {
       generateChapterSuggestion: async (request) => {
         calls.push(`ai.generate:${request.instruction}`);
         return ok(suggestion);
+      },
+      generateSelectionPreview: async (request) => {
+        calls.push(
+          `ai.selection:${request.instruction}:${request.selection.startOffset}-${request.selection.endOffset}`
+        );
+        return ok(selectionPreview);
       },
       applyChapterSuggestion: async (suggestionId) => {
         calls.push(`ai.apply:${suggestionId}`);

@@ -52,6 +52,7 @@ describe("Electron security baseline", () => {
       "application:search:rebuild-index",
       "application:search:query",
       "application:ai:generate-chapter-suggestion",
+      "application:ai:generate-selection-preview",
       "application:ai:apply-chapter-suggestion",
       "application:ai:list-workflow-runs",
       "application:ai:read-workflow-run",
@@ -107,6 +108,14 @@ describe("Electron security baseline", () => {
     await api.project.discardRecoveryDraft("session_recovery");
     await api.chapter.load();
     await api.ai.generateChapterSuggestion({ instruction: "Continue." });
+    await api.ai.generateSelectionPreview({
+      instruction: "Rewrite selection.",
+      selection: {
+        startOffset: 0,
+        endOffset: 5,
+        selectedText: "Hello"
+      }
+    });
     await api.ai.applyChapterSuggestion("sug_01");
     await api.ai.listWorkflowRuns();
     await api.ai.readWorkflowRun("run_01");
@@ -182,6 +191,7 @@ describe("Electron security baseline", () => {
       "application:project:discard-recovery-draft",
       "application:chapter:load",
       "application:ai:generate-chapter-suggestion",
+      "application:ai:generate-selection-preview",
       "application:ai:apply-chapter-suggestion",
       "application:ai:list-workflow-runs",
       "application:ai:read-workflow-run",

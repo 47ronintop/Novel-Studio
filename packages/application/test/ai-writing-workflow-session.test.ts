@@ -417,6 +417,73 @@ describe("M14 AI writing workflow session", () => {
     expect(JSON.stringify(workflowRunRecords)).not.toContain("sk-live-secret");
     expect(chapterSession.getState()?.chapter.body).toBe("Opening line.\n");
   });
+
+  test("generates a selection-aware preview without writing chapter content", async () => {
+    const requests: LlmRequest[] = [];
+    const writes: ChapterDocument[] = [];
+    const chapterSession = createChapterEditorSession({
+      chapterId: "ch_m14",
+      repository: createRepository(writes),
+      now: () => "2026-07-04T00:00:00.000Z"
+    });
+    const loaded = await chapterSession.load();
+    if (isErr(loaded)) {
+      throw new Error(loaded.error.message);
+    }
+
+    const aiWorkflow = createAgentBackedAiWritingWorkflowSession({
+      chapterEditorSession: chapterSession,
+      llmAdapter: createLlmAdapter({
+        provider: createSelectionPreviewProvider(requests),
+        clock: () => "2026-07-04T00:00:00.000Z"
+      }),
+      now: () => "2026-07-04T00:00:00.000Z",
+      createWorkflowRunId: () => "wfrun_selection_m74",
+      createSuggestionId: () => "sug_selection_m74",
+      createAgentRunId: () => "agentrun_selection_m74",
+      createHandoffId: () => "handoff_selection_m74"
+    });
+
+    const preview = await aiWorkflow.generateSelectionPreview({
+      instruction: "Rewrite the selected sentence with more tension.",
+      selection: {
+        startOffset: 0,
+        endOffset: 13,
+        selectedText: "Opening line."
+      }
+    });
+
+    expect(isOk(preview)).toBe(true);
+    if (isErr(preview)) {
+      throw new Error(preview.error.message);
+    }
+    expect(preview.value).toMatchObject({
+      previewId: "sug_selection_m74",
+      workflowRunId: "wfrun_selection_m74",
+      previewOnly: true,
+      proposedText: "The opening line tightened.",
+      summary: "Rewrites only the selected sentence.",
+      selection: {
+        startOffset: 0,
+        endOffset: 13,
+        selectedText: "Opening line."
+      },
+      diffPreview: {
+        title: "Selection AI preview",
+        changes: [
+          {
+            kind: "replace",
+            value: "The opening line tightened.\n"
+          }
+        ]
+      }
+    });
+    expect(requests[0]?.messages[1]?.content).toContain("Opening line.");
+    expect(requests[0]?.messages[1]?.content).toContain("Rewrite the selected sentence");
+    expect(chapterSession.getState()?.chapter.body).toBe("Opening line.\n");
+    expect(chapterSession.getState()?.dirty).toBe(false);
+    expect(writes).toEqual([]);
+  });
 });
 
 function createRepository(writes: ChapterDocument[]): ChapterDraftRepositoryPort {
@@ -442,6 +509,30 @@ function createCapturingProvider(requests: LlmRequest[]): LlmProvider {
           value: {
             proposedBody,
             summary: "Continues the current scene."
+          }
+        }
+      };
+    },
+    async *stream() {
+      yield {
+        type: "delta",
+        value: ""
+      };
+    }
+  };
+}
+
+function createSelectionPreviewProvider(requests: LlmRequest[]): LlmProvider {
+  return {
+    id: "mock",
+    async complete(request) {
+      requests.push(request);
+      return {
+        content: {
+          type: "json",
+          value: {
+            proposedText: "The opening line tightened.",
+            summary: "Rewrites only the selected sentence."
           }
         }
       };

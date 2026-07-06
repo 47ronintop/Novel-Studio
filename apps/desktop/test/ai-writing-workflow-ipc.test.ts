@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import { ok, type Result, type UnifiedError } from "@novel-studio/shared";
 import type {
   AiWritingSuggestion,
+  AiWritingSelectionPreview,
   ApplicationCommand,
   ChapterEditorSnapshot,
   DesktopApplication,
@@ -71,6 +72,56 @@ const suggestion: AiWritingSuggestion = {
   }
 };
 
+const selectionPreview: AiWritingSelectionPreview = {
+  previewId: "sug_selection_m74",
+  workflowRunId: "wfrun_selection_m74",
+  previewOnly: true,
+  proposedText: "The opening line tightened.",
+  summary: "Rewrites only the selected sentence.",
+  selection: {
+    startOffset: 0,
+    endOffset: 13,
+    selectedText: "Opening line."
+  },
+  diffPreview: {
+    title: "Selection AI preview",
+    changes: [{ kind: "replace", value: "The opening line tightened.\n" }]
+  },
+  contextTrace: {
+    selectionReason: "Rewrite.",
+    includedRefs: [],
+    excludedRefs: []
+  },
+  observability: {
+    workflowRunId: "wfrun_selection_m74",
+    workflowTitle: "Selection Preview",
+    generatedAt: "2026-07-04T00:00:00.000Z",
+    context: {
+      sourceCount: 0,
+      tokenEstimate: 0,
+      selectionReason: "Rewrite."
+    },
+    model: {
+      profileId: "mock_m14",
+      displayName: "M14 Mock Writer",
+      provider: "mock",
+      modelName: "mock-writer"
+    },
+    usage: {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      usageStatus: "missing",
+      cost: {
+        amount: 0,
+        currency: "USD",
+        status: "unknown"
+      }
+    },
+    steps: []
+  }
+};
+
 describe("M14 AI writing workflow IPC", () => {
   test("exposes generate and apply through the preload API", async () => {
     const calls: string[] = [];
@@ -92,6 +143,27 @@ describe("M14 AI writing workflow IPC", () => {
     ]);
   });
 
+  test("exposes selection preview generation through the preload API", async () => {
+    const calls: string[] = [];
+    const api = createNovelStudioApi({
+      async invoke(channel, ...args) {
+        calls.push(`${channel}:${args.length}`);
+        return ok(selectionPreview);
+      }
+    });
+
+    await api.ai.generateSelectionPreview({
+      instruction: "Rewrite.",
+      selection: {
+        startOffset: 0,
+        endOffset: 13,
+        selectedText: "Opening line."
+      }
+    });
+
+    expect(calls).toEqual(["application:ai:generate-selection-preview:1"]);
+  });
+
   test("routes AI writing IPC channels to the Application layer", async () => {
     const handlers = createApplicationIpcHandlers(createFakeApplication());
 
@@ -101,6 +173,21 @@ describe("M14 AI writing workflow IPC", () => {
     await expect(handlers["application:ai:apply-chapter-suggestion"]("sug_m14")).resolves.toEqual(
       ok(chapterSnapshot())
     );
+  });
+
+  test("routes selection preview IPC channel to the Application layer", async () => {
+    const handlers = createApplicationIpcHandlers(createFakeApplication());
+
+    await expect(
+      handlers["application:ai:generate-selection-preview"]({
+        instruction: "Rewrite.",
+        selection: {
+          startOffset: 0,
+          endOffset: 13,
+          selectedText: "Opening line."
+        }
+      })
+    ).resolves.toEqual(ok(selectionPreview));
   });
 
   test("exposes workflow run history through the preload API", async () => {
@@ -146,6 +233,7 @@ function createFakeApplication(): DesktopApplication {
     createProjectChapter: unsupported,
     selectProjectChapter: unsupported,
     generateActiveChapterSuggestion: async () => ok(suggestion),
+    generateActiveSelectionPreview: async () => ok(selectionPreview),
     applyActiveChapterSuggestion: async () => ok(chapterSnapshot()),
     listWorkflowRuns: async () => ok([workflowRunSummary()]),
     readWorkflowRun: async () => ok(workflowRunRecord()),

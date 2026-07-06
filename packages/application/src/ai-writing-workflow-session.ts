@@ -40,12 +40,35 @@ export interface AiWritingSuggestionRequest {
   readonly instruction: string;
 }
 
+export interface AiWritingSelectionRange {
+  readonly startOffset: number;
+  readonly endOffset: number;
+  readonly selectedText: string;
+}
+
+export interface AiWritingSelectionPreviewRequest {
+  readonly instruction: string;
+  readonly selection: AiWritingSelectionRange;
+}
+
 export interface AiWritingSuggestion {
   readonly suggestionId: string;
   readonly workflowRunId: string;
   readonly status: "pending-confirmation" | "applied";
   readonly proposedBody: string;
   readonly summary: string;
+  readonly diffPreview: ChapterSuggestionDiffPreview;
+  readonly contextTrace: ContextBundleTrace;
+  readonly observability: AiWritingWorkflowObservability;
+}
+
+export interface AiWritingSelectionPreview {
+  readonly previewId: string;
+  readonly workflowRunId: string;
+  readonly previewOnly: true;
+  readonly proposedText: string;
+  readonly summary: string;
+  readonly selection: AiWritingSelectionRange;
   readonly diffPreview: ChapterSuggestionDiffPreview;
   readonly contextTrace: ContextBundleTrace;
   readonly observability: AiWritingWorkflowObservability;
@@ -168,6 +191,9 @@ export interface AiWritingWorkflowSession {
   generateChapterSuggestion(
     request: AiWritingSuggestionRequest
   ): Promise<Result<AiWritingSuggestion, UnifiedError>>;
+  generateSelectionPreview(
+    request: AiWritingSelectionPreviewRequest
+  ): Promise<Result<AiWritingSelectionPreview, UnifiedError>>;
   applyChapterSuggestion(
     suggestionId: string
   ): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
@@ -227,6 +253,15 @@ const agentConfig: AgentConfig = {
   modelProfileId: "mock_m14",
   createdAt: "2026-07-04T00:00:00.000Z",
   updatedAt: "2026-07-04T00:00:00.000Z"
+};
+
+const selectionPreviewAgentConfig: AgentConfig = {
+  ...agentConfig,
+  id: "agent_selection_rewriter",
+  title: "Selection Rewriter",
+  promptTemplateId: "prompt_rewrite_selection",
+  inputSchemaId: "schema.ai-selection-preview.input.v1",
+  outputSchemaId: "schema.ai-selection-preview.output.v1"
 };
 
 export function createAgentBackedAiWritingWorkflowSession(
@@ -440,6 +475,182 @@ export function createAgentBackedAiWritingWorkflowSession(
       });
 
       return ok(suggestion);
+    },
+    async generateSelectionPreview(request) {
+      const chapterState = options.chapterEditorSession.getState();
+      if (chapterState === undefined) {
+        return aiWorkflowError({
+          code: "AI_WORKFLOW_CHAPTER_NOT_LOADED",
+          message: "No active chapter is loaded for AI writing.",
+          suggestedAction: "Open a project chapter before generating AI writing suggestions."
+        });
+      }
+
+      const validatedSelection = validateSelectionRange(
+        chapterState.chapter.body,
+        request.selection
+      );
+      if (!validatedSelection.ok) {
+        return validatedSelection;
+      }
+
+      const parsedWorkflow = parseWorkflowDefinition(workflowDefinition, {
+        traceId: "ai-selection-preview"
+      });
+      if (!parsedWorkflow.ok) {
+        return parsedWorkflow;
+      }
+
+      let runState = startWorkflowRun(parsedWorkflow.value, {
+        workflowRunId: createWorkflowRunId(),
+        traceId: "ai-selection-preview",
+        now
+      });
+
+      const contextAction = evaluateNextWorkflowAction(parsedWorkflow.value, runState);
+      if (!contextAction.ok) {
+        return contextAction;
+      }
+      if (contextAction.value.kind !== "build-context") {
+        return invalidWorkflowAction(contextAction.value.kind);
+      }
+
+      const contextBundle = buildContextBundle({
+        schemaVersion: "1.0",
+        contextBundleId: `ctx_${runState.workflowRunId}`,
+        workflowRunId: runState.workflowRunId,
+        traceId: "ai-selection-preview",
+        goal: request.instruction,
+        budget: { maxTokens: 1024 },
+        candidates: [
+          {
+            refType: "chapter",
+            refId: chapterState.chapter.frontmatter.id,
+            content: validatedSelection.value.selectedText,
+            priority: 1,
+            tokenEstimate: estimateSelectionTokens(validatedSelection.value.selectedText),
+            sourceRefs: [
+              {
+                entityType: "chapter",
+                entityId: chapterState.chapter.frontmatter.id
+              }
+            ]
+          }
+        ]
+      });
+      if (!contextBundle.ok) {
+        return contextBundle;
+      }
+
+      const afterContext = completeWorkflowStep(parsedWorkflow.value, runState, {
+        stepId: contextAction.value.stepId,
+        traceId: "ai-selection-preview",
+        now
+      });
+      if (!afterContext.ok) {
+        return afterContext;
+      }
+      runState = afterContext.value;
+
+      const agentAction = evaluateNextWorkflowAction(parsedWorkflow.value, runState);
+      if (!agentAction.ok) {
+        return agentAction;
+      }
+      if (agentAction.value.kind !== "run-agent") {
+        return invalidWorkflowAction(agentAction.value.kind);
+      }
+
+      const runtimeProfile = await resolveModelRuntimeProfile(options);
+      if (!runtimeProfile.ok) {
+        return runtimeProfile;
+      }
+
+      const handoff = await runAgent({
+        schemaVersion: "1.0",
+        agentRunId: createAgentRunId(),
+        handoffId: createHandoffId(),
+        workflowRunId: runState.workflowRunId,
+        traceId: "ai-selection-preview",
+        agent: selectionPreviewAgentConfig,
+        toAgentId: "application",
+        input: {
+          instruction: request.instruction,
+          currentBody: chapterState.chapter.body,
+          selection: {
+            startOffset: validatedSelection.value.startOffset,
+            endOffset: validatedSelection.value.endOffset,
+            selectedText: validatedSelection.value.selectedText
+          }
+        },
+        contextBundle: contextBundle.value,
+        llmRequest: createSelectionPreviewLlmRequest(
+          runState.workflowRunId,
+          request.instruction,
+          validatedSelection.value,
+          runtimeProfile.value.modelProfile,
+          runtimeProfile.value.parameters
+        ),
+        llmAdapter: options.llmAdapter,
+        validateSchema: validateAiWritingSchema,
+        now
+      });
+      if (!handoff.ok) {
+        return handoff;
+      }
+
+      const output = toSelectionPreviewOutput(handoff.value.payload);
+      if (output === undefined) {
+        return aiWorkflowError({
+          code: "AI_WORKFLOW_OUTPUT_INVALID",
+          message: "AI selection preview output did not include replacement text.",
+          suggestedAction: "Retry the AI selection preview with a valid structured output."
+        });
+      }
+
+      const afterAgent = completeWorkflowStep(parsedWorkflow.value, runState, {
+        stepId: agentAction.value.stepId,
+        traceId: "ai-selection-preview",
+        now
+      });
+      if (!afterAgent.ok) {
+        return afterAgent;
+      }
+      runState = afterAgent.value;
+
+      const generatedAt = now();
+      const observability = createObservability({
+        workflowRunId: runState.workflowRunId,
+        workflowTitle: "Selection Preview",
+        generatedAt,
+        contextTrace: contextBundle.value.trace,
+        modelProfile: runtimeProfile.value.modelProfile,
+        usage: handoff.value.usage
+      });
+      const nextBody = replaceSelection(
+        chapterState.chapter.body,
+        validatedSelection.value,
+        output.proposedText
+      );
+
+      return ok({
+        previewId: createSuggestionId(),
+        workflowRunId: runState.workflowRunId,
+        previewOnly: true,
+        proposedText: output.proposedText,
+        summary: output.summary,
+        selection: validatedSelection.value,
+        diffPreview: {
+          title: "Selection AI preview",
+          changes: [
+            {
+              kind: "replace",
+              value: nextBody
+            }
+          ]
+        },
+        contextTrace: contextBundle.value.trace,
+        observability
+      });
     },
     async applyChapterSuggestion(suggestionId) {
       const stored = suggestions.get(suggestionId);
@@ -731,6 +942,40 @@ function createLlmRequest(
   };
 }
 
+function createSelectionPreviewLlmRequest(
+  workflowRunId: string,
+  instruction: string,
+  selection: AiWritingSelectionRange,
+  modelProfile: LlmModelProfile,
+  parameters: LlmParameters
+): LlmRequest {
+  return {
+    schemaVersion: "1.0",
+    requestId: `llm_${workflowRunId}`,
+    traceId: "ai-selection-preview",
+    mode: "non-streaming",
+    modelProfile,
+    messages: [
+      {
+        role: "system",
+        content: "Return JSON with proposedText and summary for a selected text rewrite."
+      },
+      {
+        role: "user",
+        content: [
+          `Instruction: ${instruction}`,
+          `Selection offsets: ${selection.startOffset}-${selection.endOffset}`,
+          `Selected text: ${selection.selectedText}`
+        ].join("\n")
+      }
+    ],
+    parameters,
+    responseFormat: {
+      type: "json_object"
+    }
+  };
+}
+
 function validateAiWritingSchema(input: {
   readonly schemaId: string;
   readonly value: JsonObject;
@@ -740,6 +985,22 @@ function validateAiWritingSchema(input: {
       valid:
         typeof input.value["instruction"] === "string" &&
         typeof input.value["currentBody"] === "string"
+    };
+  }
+  if (input.schemaId === "schema.ai-selection-preview.input.v1") {
+    const selection = input.value["selection"];
+    return {
+      valid:
+        typeof input.value["instruction"] === "string" &&
+        typeof input.value["currentBody"] === "string" &&
+        typeof selection === "object" &&
+        selection !== null &&
+        !Array.isArray(selection)
+    };
+  }
+  if (input.schemaId === "schema.ai-selection-preview.output.v1") {
+    return {
+      valid: toSelectionPreviewOutput(input.value) !== undefined
     };
   }
 
@@ -758,6 +1019,60 @@ function toAiWritingOutput(
   }
 
   return { proposedBody, summary };
+}
+
+function toSelectionPreviewOutput(
+  value: JsonObject
+): { readonly proposedText: string; readonly summary: string } | undefined {
+  const proposedText = value["proposedText"];
+  const summary = value["summary"];
+  if (typeof proposedText !== "string" || typeof summary !== "string") {
+    return undefined;
+  }
+
+  return { proposedText, summary };
+}
+
+function validateSelectionRange(
+  body: string,
+  selection: AiWritingSelectionRange
+): Result<AiWritingSelectionRange, UnifiedError> {
+  if (
+    !Number.isInteger(selection.startOffset) ||
+    !Number.isInteger(selection.endOffset) ||
+    selection.startOffset < 0 ||
+    selection.endOffset > body.length ||
+    selection.startOffset >= selection.endOffset
+  ) {
+    return aiWorkflowError({
+      code: "AI_WORKFLOW_SELECTION_INVALID",
+      message: "AI selection preview requires a non-empty selection inside the active chapter.",
+      suggestedAction: "Select text in the active chapter before requesting a selection preview."
+    });
+  }
+
+  const selectedText = body.slice(selection.startOffset, selection.endOffset);
+  if (selectedText !== selection.selectedText) {
+    return aiWorkflowError({
+      code: "AI_WORKFLOW_SELECTION_STALE",
+      message: "The selected text no longer matches the active chapter.",
+      suggestedAction: "Refresh the selection and request the preview again."
+    });
+  }
+
+  return ok(selection);
+}
+
+function replaceSelection(
+  body: string,
+  selection: AiWritingSelectionRange,
+  proposedText: string
+): string {
+  return `${body.slice(0, selection.startOffset)}${proposedText}${body.slice(selection.endOffset)}`;
+}
+
+function estimateSelectionTokens(selectedText: string): number {
+  return Math.max(1, Math.ceil(selectedText.length / 4));
 }
 
 function invalidWorkflowAction<T>(kind: string): Result<T, UnifiedError> {

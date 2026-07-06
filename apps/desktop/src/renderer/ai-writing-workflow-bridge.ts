@@ -1,5 +1,6 @@
 import type {
   AiWritingWorkflowObservability,
+  AiWritingSelectionPreview,
   AiWritingSuggestion,
   ChapterEditorSnapshot,
   NovelStudioApi,
@@ -20,6 +21,7 @@ import type {
   ChapterEditorProps,
   ChapterEditorVersionEntry
 } from "@novel-studio/ui";
+import type { EditorSelectionCommand } from "./editor-runtime.js";
 
 export interface AiWritingWorkflowBridge {
   getProps(): AiWritingWorkflowProps;
@@ -29,7 +31,14 @@ export interface AiWritingWorkflowBridge {
   appendStreamDelta(delta: string): AiWritingWorkflowProps;
   cancelStreaming(): AiWritingWorkflowProps;
   generateSuggestion(instruction: string): Promise<AiWritingWorkflowProps>;
+  generateSelectionPreview(input: AiSelectionPreviewBridgeInput): Promise<AiWritingWorkflowProps>;
   applySuggestion(): Promise<ChapterEditorProps>;
+}
+
+export interface AiSelectionPreviewBridgeInput {
+  readonly instruction: string;
+  readonly command: EditorSelectionCommand;
+  readonly selectedText: string;
 }
 
 export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWorkflowBridge {
@@ -102,6 +111,35 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
       props = toProps(suggestion, instruction, history);
       return props;
     },
+    async generateSelectionPreview(input) {
+      const generated = await api.ai.generateSelectionPreview({
+        instruction: input.instruction,
+        selection: {
+          startOffset: input.command.selection.startOffset,
+          endOffset: input.command.selection.endOffset,
+          selectedText: input.selectedText
+        }
+      });
+      if (!generated.ok) {
+        currentSuggestionId = undefined;
+        const history = await loadLatestHistory(api);
+        props = createProps({
+          ...props,
+          status: "failed",
+          instruction: input.instruction,
+          failure: toFailureProps(generated.error),
+          retryPolicy: toRetryPolicyProps(undefined),
+          ...(history === undefined ? {} : { history })
+        });
+        return props;
+      }
+
+      currentSuggestionId = undefined;
+      const preview = generated.value;
+      const history = await loadHistory(api, preview.workflowRunId);
+      props = toSelectionPreviewProps(preview, input.instruction, history);
+      return props;
+    },
     async applySuggestion() {
       if (currentSuggestionId === undefined) {
         throw new Error("No AI writing suggestion is available to apply.");
@@ -142,6 +180,22 @@ function toProps(
   });
 }
 
+function toSelectionPreviewProps(
+  preview: AiWritingSelectionPreview,
+  instruction: string,
+  history: AiWorkflowRunHistoryProps | undefined
+): AiWritingWorkflowProps {
+  return createProps({
+    status: "suggestion-ready",
+    instruction,
+    summary: preview.summary,
+    contextTraceLabel: traceLabel(preview),
+    observability: toObservabilityProps(preview.observability),
+    ...(history === undefined ? {} : { history }),
+    diffPreview: preview.diffPreview
+  });
+}
+
 function createProps(
   input: Omit<
     AiWritingWorkflowProps,
@@ -162,9 +216,9 @@ function createProps(
   };
 }
 
-function traceLabel(suggestion: AiWritingSuggestion): string {
-  const sourceCount = suggestion.contextTrace.includedRefs.length;
-  const tokenCount = suggestion.contextTrace.includedRefs.reduce(
+function traceLabel(input: Pick<AiWritingSuggestion, "contextTrace">): string {
+  const sourceCount = input.contextTrace.includedRefs.length;
+  const tokenCount = input.contextTrace.includedRefs.reduce(
     (total, ref) => total + ref.tokenEstimate,
     0
   );

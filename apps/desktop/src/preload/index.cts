@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   ApplicationCommand,
   ApplicationIpcChannel,
+  AiWritingSelectionPreview,
+  AiWritingSelectionPreviewRequest,
   AiWritingSuggestion,
   AiWritingSuggestionRequest,
   ChapterEditorSnapshot,
@@ -104,6 +106,11 @@ const api: NovelStudioApi = {
     generateChapterSuggestion: (request: AiWritingSuggestionRequest) =>
       invokeTyped<Result<AiWritingSuggestion, UnifiedError>>(
         "application:ai:generate-chapter-suggestion",
+        request
+      ),
+    generateSelectionPreview: (request: AiWritingSelectionPreviewRequest) =>
+      invokeTyped<Result<AiWritingSelectionPreview, UnifiedError>>(
+        "application:ai:generate-selection-preview",
         request
       ),
     applyChapterSuggestion: (suggestionId: string) =>

@@ -138,6 +138,8 @@ export type {
   PluginRuntimeSession,
   PluginRuntimeSessionOptions,
   PluginRuntimeWorkflowStepInput,
+  PluginSandboxFixtureWorkerOptions,
+  PluginSandboxFixtureWorkerOutput,
   PluginSandboxDeniedCapability,
   PluginSandboxPolicyDecision,
   PluginSandboxPolicyInput,
@@ -145,6 +147,7 @@ export type {
   PluginSandboxTrustState
 } from "./plugin-runtime-session.js";
 export {
+  createPluginSandboxFixtureWorkerAdapter,
   createPluginRuntimeSession,
   createPluginSandboxPolicyReport
 } from "./plugin-runtime-session.js";
@@ -170,6 +173,9 @@ export type {
   AiWorkflowObservedStep,
   AiWorkflowObservedStepKind,
   AiWorkflowObservedStepStatus,
+  AiWritingSelectionPreview,
+  AiWritingSelectionPreviewRequest,
+  AiWritingSelectionRange,
   AiWritingSuggestion,
   AiWritingSuggestionRequest,
   AiWritingWorkflowObservability,

@@ -2,6 +2,8 @@ import type {
   ApplicationCommand,
   ApplicationIpcChannel,
   AiWritingSuggestion,
+  AiWritingSelectionPreview,
+  AiWritingSelectionPreviewRequest,
   AiWritingSuggestionRequest,
   ChapterEditorSnapshot,
   ChapterSuggestionDiffPreview,
@@ -123,6 +125,12 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
         invokeTyped<Result<AiWritingSuggestion, UnifiedError>>(
           ipc,
           "application:ai:generate-chapter-suggestion",
+          request
+        ),
+      generateSelectionPreview: (request: AiWritingSelectionPreviewRequest) =>
+        invokeTyped<Result<AiWritingSelectionPreview, UnifiedError>>(
+          ipc,
+          "application:ai:generate-selection-preview",
           request
         ),
       applyChapterSuggestion: (suggestionId: string) =>

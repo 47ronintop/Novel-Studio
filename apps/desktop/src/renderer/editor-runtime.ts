@@ -29,6 +29,27 @@ export interface EditorSelectionAiPreviewDraft {
   readonly previewOnly: true;
 }
 
+export interface EditorRuntimeDomMountTarget {
+  readonly targetId: string;
+  readonly ownerDocumentLabel: string;
+}
+
+export type EditorRuntimeDomViewMount =
+  | {
+      readonly status: "not-requested";
+      readonly packageName: "@codemirror/view";
+      readonly role: "dom-view";
+      readonly fallbackRuntimeId: "textarea";
+    }
+  | {
+      readonly status: "planned";
+      readonly packageName: "@codemirror/view";
+      readonly role: "dom-view";
+      readonly targetId: string;
+      readonly ownerDocumentLabel: string;
+      readonly fallbackRuntimeId: "textarea";
+    };
+
 export interface EditorVisualDiffDecoration {
   readonly kind: "insert" | "delete" | "replace";
   readonly startOffset: number;
@@ -81,6 +102,7 @@ export interface EditorRuntimeSnapshot {
   readonly saveStatus: SaveStatus;
   readonly selection?: EditorRuntimeSelection;
   readonly selectionSummary?: EditorRuntimeSelectionSummary;
+  readonly domViewMount?: EditorRuntimeDomViewMount;
   readonly focused: boolean;
   readonly destroyed: boolean;
   readonly warnings: readonly string[];
@@ -89,6 +111,7 @@ export interface EditorRuntimeSnapshot {
 export interface EditorRuntimeMountInput {
   readonly body: string;
   readonly saveStatus: SaveStatus;
+  readonly domMountTarget?: EditorRuntimeDomMountTarget;
   readonly onEvent?: (event: EditorRuntimeEvent) => void;
 }
 
@@ -252,6 +275,26 @@ function createCodeMirrorBackedEditorRuntimeAdapter(): EditorRuntimeAdapter {
         selection = nextSelection;
       }
 
+      function domViewMount(): EditorRuntimeDomViewMount {
+        if (mountInput.domMountTarget === undefined) {
+          return {
+            status: "not-requested",
+            packageName: "@codemirror/view",
+            role: "dom-view",
+            fallbackRuntimeId: "textarea"
+          };
+        }
+
+        return {
+          status: "planned",
+          packageName: "@codemirror/view",
+          role: "dom-view",
+          targetId: mountInput.domMountTarget.targetId,
+          ownerDocumentLabel: mountInput.domMountTarget.ownerDocumentLabel,
+          fallbackRuntimeId: "textarea"
+        };
+      }
+
       return {
         getSnapshot() {
           const currentBody = body();
@@ -269,6 +312,7 @@ function createCodeMirrorBackedEditorRuntimeAdapter(): EditorRuntimeAdapter {
             ...(selection === undefined
               ? {}
               : { selectionSummary: summarizeSelection(currentBody, selection) }),
+            domViewMount: domViewMount(),
             focused,
             destroyed,
             warnings

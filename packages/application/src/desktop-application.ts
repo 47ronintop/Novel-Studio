@@ -39,6 +39,8 @@ import type { PluginSettingsSession, PluginSettingsSnapshot } from "./plugin-set
 import type { PluginRuntimeSession } from "./plugin-runtime-session.js";
 import type {
   AiWritingSuggestion,
+  AiWritingSelectionPreview,
+  AiWritingSelectionPreviewRequest,
   AiWritingSuggestionRequest,
   AiWritingWorkflowSession,
   WorkflowRunHistoryPort,
@@ -132,6 +134,9 @@ export interface DesktopApplication {
   generateActiveChapterSuggestion(
     request: AiWritingSuggestionRequest
   ): Promise<Result<AiWritingSuggestion, UnifiedError>>;
+  generateActiveSelectionPreview(
+    request: AiWritingSelectionPreviewRequest
+  ): Promise<Result<AiWritingSelectionPreview, UnifiedError>>;
   applyActiveChapterSuggestion(
     suggestionId: string
   ): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
@@ -403,6 +408,14 @@ export function createDesktopApplication(
       }
 
       return activeAiWritingWorkflowSession.generateChapterSuggestion(request);
+    },
+    async generateActiveSelectionPreview(request) {
+      const activeAiWritingWorkflowSession = getAiWritingWorkflowSession();
+      if (activeAiWritingWorkflowSession === undefined) {
+        return aiWritingWorkflowUnavailable();
+      }
+
+      return activeAiWritingWorkflowSession.generateSelectionPreview(request);
     },
     async applyActiveChapterSuggestion(suggestionId) {
       const activeAiWritingWorkflowSession = getAiWritingWorkflowSession();

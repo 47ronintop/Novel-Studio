@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.40 | Status: Active | Last Updated: 2026-07-06
+Version: 1.41 | Status: Active | Last Updated: 2026-07-06
 
 ## 目标
 
@@ -89,6 +89,9 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M69       | Workflow Node Selection    | graph node selection、selected inspector 和 invalid save gate                | Complete |
 | M70       | CodeMirror Package Parity  | package-backed headless CodeMirror state adapter 和 textarea fallback parity | Complete |
 | M71       | Selection-aware AI Preview | selection command DTO、preview-only diff draft 和 UI preview command         | Complete |
+| M72       | Plugin Sandbox Fixture     | deterministic fixture worker、timeout teardown 和 payload limit enforcement  | Complete |
+| M73       | CodeMirror DOM Mount Plan  | CodeMirror DOM view mount descriptor、fallback metadata 和 no default switch | Complete |
+| M74       | Selection AI App Flow      | Application/IPC/renderer selection preview generation 和 preview-only diff   | Complete |
 
 ## M15 完成内容
 
@@ -446,19 +449,29 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - Chapter Editor runtime 状态条新增 selection preview command button，保持 callback-driven，不直接调用模型、不写入存储、不自动应用正文。
 - M70/M71 不包含 DOM-mounted CodeMirror view、默认编辑器切换、renderer 模型调用、Application/Agent-backed selection rewrite 或自动应用 AI diff。
 
+## M72-M74 完成内容
+
+- 新增 `docs/productization/m72-m74-sandbox-codemirror-selection-ai.md`，明确 sandbox fixture worker、CodeMirror DOM mount plan 和 selection AI Application flow 的范围。
+- Plugin Runtime 新增 `createPluginSandboxFixtureWorkerAdapter()`，以 deterministic fixture 模拟 sandbox worker 输出，并强制 timeout 和 max output bytes。
+- Fixture worker 超时返回 `PLUGIN_RUNTIME_TIMEOUT`，包含 teardown completed 元数据；输出超限返回 `PLUGIN_RUNTIME_INVALID_OUTPUT`，继续保持结构化、脱敏错误。
+- CodeMirror runtime snapshot 新增 `domViewMount`，只有显式提供 DOM mount target 时才进入 planned 状态；默认仍是 textarea fallback，不自动挂载 DOM view。
+- AI Writing Workflow 新增 `generateSelectionPreview()`，通过 Context Engine、Agent Engine 和 LLM Adapter 生成 selected text replacement，返回 preview-only diff，不写章节正文。
+- Desktop Application、IPC allowlist、preload API 和 renderer AI bridge 接入 `generateSelectionPreview()`；renderer bridge 不设置可应用 suggestion id，避免 selection preview 被自动应用。
+- M72-M74 不包含真实第三方插件代码执行、OS/process sandbox、签名 UI、CodeMirror 默认切换、真实 DOM view 替换、selection preview 自动 apply 或完整 selection event UI 接线。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19-M71，其中 M27 首次使用引导已通过 M48 回补完成。
+- Post-M18 产品化打磨已完成 M19-M74，其中 M27 首次使用引导已通过 M48 回补完成。
 - 当前产品状态是 beta productization：主干闭环可运行，但多个宪法/UI 指南能力仍是 Product Gap。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- M72 建议进入 Plugin Sandbox Fixture Worker：在 RFC-0004 policy 之后补 timeout teardown 和 payload limit 的 fixture worker。
-- M73 建议进入 CodeMirror DOM View Spike/Adapter Mount：验证真实 CodeMirror DOM view 挂载边界，仍不默认切换。
-- M74 建议进入 Selection-aware AI Application Flow：把 selection preview 接到 Application/Agent-backed 生成链路，继续要求用户确认后才应用。
+- M75 建议进入 Selection Event UI Wiring：把真实 textarea/CodeMirror selection event 接到 renderer runtime snapshot 和 selection AI preview 按钮。
+- M76 建议进入 Selection Preview Apply Confirmation：为 selection preview 增加用户确认后的 apply path，仍需版本快照和 undo/rollback。
+- M77 建议进入 Plugin Sandbox Isolation Spike：在 fixture worker 之后验证真实隔离 worker/process、签名和权限提示边界。
 
 ## 当前技术债重点
 

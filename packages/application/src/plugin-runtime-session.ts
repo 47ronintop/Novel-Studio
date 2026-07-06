@@ -46,6 +46,17 @@ export interface PluginRuntimeResult {
   readonly output: JsonObject;
 }
 
+export interface PluginSandboxFixtureWorkerOutput {
+  readonly output: JsonObject;
+  readonly durationMs?: number;
+}
+
+export interface PluginSandboxFixtureWorkerOptions {
+  readonly fixtures: Readonly<Record<string, PluginSandboxFixtureWorkerOutput>>;
+  readonly timeoutMs: number;
+  readonly maxOutputBytes: number;
+}
+
 export interface PluginSandboxPolicyInput {
   readonly snapshot: PluginSettingsSnapshot;
   readonly timeoutMs?: number;
@@ -222,6 +233,29 @@ export function createPluginSandboxPolicyReport(
   };
 }
 
+export function createPluginSandboxFixtureWorkerAdapter(
+  options: PluginSandboxFixtureWorkerOptions
+): PluginRuntimeAdapter {
+  return {
+    executeHostCommand(input) {
+      return runFixtureWorker({
+        pluginId: input.pluginId,
+        contributionId: input.contributionId,
+        traceId: input.traceId,
+        options
+      });
+    },
+    executeWorkflowStep(input) {
+      return runFixtureWorker({
+        pluginId: input.pluginId,
+        contributionId: input.contributionId,
+        traceId: input.traceId,
+        options
+      });
+    }
+  };
+}
+
 function toPluginCommandId(pluginId: string, contributionId: string): string {
   return `${PLUGIN_COMMAND_PREFIX}${pluginId}:${contributionId}`;
 }
@@ -360,6 +394,70 @@ function isDeniedSandboxCapability(value: string): value is PluginSandboxDeniedC
     value === "model:invoke" ||
     value === "shell:execute"
   );
+}
+
+function runFixtureWorker(input: {
+  readonly pluginId: string;
+  readonly contributionId: string;
+  readonly traceId: string;
+  readonly options: PluginSandboxFixtureWorkerOptions;
+}): Result<PluginRuntimeAdapterResult, UnifiedError> {
+  const fixture = input.options.fixtures[fixtureKey(input.pluginId, input.contributionId)];
+  if (fixture === undefined) {
+    return runtimeError({
+      code: "PLUGIN_RUNTIME_UNAVAILABLE",
+      message: "No sandbox fixture worker output is registered for this contribution.",
+      suggestedAction: "Register a fixture worker output before running the plugin contribution.",
+      traceId: input.traceId,
+      redactedDetail: {
+        pluginId: input.pluginId,
+        contributionId: input.contributionId
+      }
+    });
+  }
+
+  const durationMs = fixture.durationMs ?? 0;
+  if (durationMs > input.options.timeoutMs) {
+    return runtimeError({
+      code: "PLUGIN_RUNTIME_TIMEOUT",
+      message: "Plugin sandbox fixture worker exceeded the configured timeout.",
+      suggestedAction: "Reduce plugin work or increase the sandbox timeout after review.",
+      traceId: input.traceId,
+      redactedDetail: {
+        pluginId: input.pluginId,
+        contributionId: input.contributionId,
+        durationMs,
+        timeoutMs: input.options.timeoutMs,
+        teardown: "completed"
+      }
+    });
+  }
+
+  const outputBytes = jsonByteLength(fixture.output);
+  if (outputBytes > input.options.maxOutputBytes) {
+    return runtimeError({
+      code: "PLUGIN_RUNTIME_INVALID_OUTPUT",
+      message: "Plugin sandbox fixture worker output exceeded the configured payload limit.",
+      suggestedAction: "Return a smaller structured payload from the plugin contribution.",
+      traceId: input.traceId,
+      redactedDetail: {
+        pluginId: input.pluginId,
+        contributionId: input.contributionId,
+        outputBytes,
+        maxOutputBytes: input.options.maxOutputBytes
+      }
+    });
+  }
+
+  return ok({ output: fixture.output });
+}
+
+function fixtureKey(pluginId: string, contributionId: string): string {
+  return `${pluginId}:${contributionId}`;
+}
+
+function jsonByteLength(value: JsonObject): number {
+  return new TextEncoder().encode(JSON.stringify(value)).length;
 }
 
 function normalizeAdapterResult(

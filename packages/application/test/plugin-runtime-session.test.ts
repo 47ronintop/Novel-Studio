@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import { ok } from "@novel-studio/shared";
 
 import {
+  createPluginSandboxFixtureWorkerAdapter,
   createPluginSandboxPolicyReport,
   createPluginRuntimeSession,
   type PluginRuntimeAdapter
@@ -236,6 +237,119 @@ describe("PluginRuntimeSession", () => {
           ]
         }
       ]
+    });
+  });
+
+  test("runs workflow steps through a deterministic sandbox fixture worker", () => {
+    const session = createPluginRuntimeSession({
+      snapshot: enabledSnapshot,
+      adapter: createPluginSandboxFixtureWorkerAdapter({
+        fixtures: {
+          "novel.structure-tools:outline.score": {
+            output: {
+              accepted: true,
+              score: 91
+            },
+            durationMs: 25
+          }
+        },
+        timeoutMs: 100,
+        maxOutputBytes: 512
+      })
+    });
+
+    expect(
+      session.runWorkflowStep({
+        pluginId: "novel.structure-tools",
+        contributionId: "outline.score",
+        input: { chapterId: "ch_01" },
+        traceId: "trace_fixture_worker"
+      })
+    ).toEqual(
+      ok({
+        output: {
+          accepted: true,
+          score: 91
+        }
+      })
+    );
+  });
+
+  test("tears down sandbox fixture worker executions that exceed timeout", () => {
+    const session = createPluginRuntimeSession({
+      snapshot: enabledSnapshot,
+      adapter: createPluginSandboxFixtureWorkerAdapter({
+        fixtures: {
+          "novel.structure-tools:outline.score": {
+            output: { accepted: true },
+            durationMs: 150
+          }
+        },
+        timeoutMs: 100,
+        maxOutputBytes: 512
+      })
+    });
+
+    const result = session.runWorkflowStep({
+      pluginId: "novel.structure-tools",
+      contributionId: "outline.score",
+      input: { chapterId: "ch_01" },
+      traceId: "trace_fixture_timeout"
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "PLUGIN_RUNTIME_TIMEOUT",
+        category: "PluginError",
+        redactedDetail: {
+          pluginId: "novel.structure-tools",
+          contributionId: "outline.score",
+          durationMs: 150,
+          timeoutMs: 100,
+          teardown: "completed"
+        }
+      }
+    });
+  });
+
+  test("rejects sandbox fixture worker output that exceeds payload limit", () => {
+    const session = createPluginRuntimeSession({
+      snapshot: enabledSnapshot,
+      adapter: createPluginSandboxFixtureWorkerAdapter({
+        fixtures: {
+          "novel.structure-tools:outline.score": {
+            output: {
+              accepted: true,
+              largeText: "x".repeat(200)
+            },
+            durationMs: 10
+          }
+        },
+        timeoutMs: 100,
+        maxOutputBytes: 64
+      })
+    });
+
+    const result = session.runWorkflowStep({
+      pluginId: "novel.structure-tools",
+      contributionId: "outline.score",
+      input: { chapterId: "ch_01" },
+      traceId: "trace_fixture_payload"
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "PLUGIN_RUNTIME_INVALID_OUTPUT",
+        category: "PluginError",
+        redactedDetail: {
+          pluginId: "novel.structure-tools",
+          contributionId: "outline.score",
+          outputBytes: expect.any(Number),
+          maxOutputBytes: 64
+        }
+      }
     });
   });
 });

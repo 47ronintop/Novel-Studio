@@ -10,6 +10,8 @@ import type {
 import type { ApplicationCommand } from "./command-registry.js";
 import type {
   AiWritingSuggestion,
+  AiWritingSelectionPreview,
+  AiWritingSelectionPreviewRequest,
   AiWritingSuggestionRequest,
   WorkflowRunRecord,
   WorkflowRunSummary
@@ -85,6 +87,9 @@ export interface NovelStudioApi {
     generateChapterSuggestion(
       request: AiWritingSuggestionRequest
     ): Promise<Result<AiWritingSuggestion, UnifiedError>>;
+    generateSelectionPreview(
+      request: AiWritingSelectionPreviewRequest
+    ): Promise<Result<AiWritingSelectionPreview, UnifiedError>>;
     applyChapterSuggestion(
       suggestionId: string
     ): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
