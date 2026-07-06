@@ -74,6 +74,88 @@ describe("StoryBibleSession", () => {
     expect(candidates.value.map((candidate) => candidate.refId)).toEqual(["loc_capital"]);
   });
 
+  test("reports minimal Story Bible consistency conflicts with jump targets", async () => {
+    const session = createStoryBibleSession({
+      repository: createStaticStoryBibleRepository({
+        characters: [
+          {
+            ...characterAsset(),
+            title: "Mira",
+            aliases: ["Captain Mira"],
+            summary: "Mira is established as an only child."
+          }
+        ],
+        worldAssets: [
+          {
+            ...worldAsset(),
+            id: "world_mira_family",
+            title: "Mira Family Rumor",
+            summary: "Conflict: Captain Mira has a younger brother in the capital."
+          }
+        ],
+        memories: [
+          {
+            ...unconfirmedMemory(),
+            id: "mem_mira_sibling_conflict",
+            title: "Mira sibling conflict",
+            confidence: "confirmed",
+            origin: "user-confirmed-ai",
+            content: "This contradicts Mira: Captain Mira later says her brother is alive."
+          }
+        ]
+      })
+    });
+
+    const report = await session.buildConsistencyReport();
+
+    expect(report.ok).toBe(true);
+    if (!report.ok) {
+      return;
+    }
+    expect(report.value).toEqual({
+      status: "attention",
+      checkedAt: "2026-07-05T00:00:00.000Z",
+      issues: [
+        {
+          id: "story-consistency.character.chr_hero.world_mira_family",
+          severity: "warning",
+          title: "Character setting may conflict with another Story Bible entry",
+          message:
+            "Mira appears in Mira Family Rumor with an explicit conflict marker. Review both entries before continuing the chapter.",
+          sourceRef: {
+            kind: "character",
+            id: "chr_hero",
+            title: "Mira"
+          },
+          targetRef: {
+            kind: "world",
+            id: "world_mira_family",
+            title: "Mira Family Rumor"
+          },
+          suggestedAction: "Open the linked Story Bible entry and resolve the setting conflict."
+        },
+        {
+          id: "story-consistency.character.chr_hero.mem_mira_sibling_conflict",
+          severity: "warning",
+          title: "Character setting may conflict with a memory",
+          message:
+            "Mira appears in Mira sibling conflict with an explicit conflict marker. Review both entries before continuing the chapter.",
+          sourceRef: {
+            kind: "character",
+            id: "chr_hero",
+            title: "Mira"
+          },
+          targetRef: {
+            kind: "memory",
+            id: "mem_mira_sibling_conflict",
+            title: "Mira sibling conflict"
+          },
+          suggestedAction: "Open the linked Story Bible entry and resolve the setting conflict."
+        }
+      ]
+    });
+  });
+
   test("returns a stable unavailable error without a repository", async () => {
     const session = createStoryBibleSession();
 

@@ -3,6 +3,7 @@ import { Check, Clock3, FilePlus, Search } from "lucide-react";
 
 import type {
   ProjectSearchProps,
+  StoryBibleConsistencyIssueProps,
   StoryBibleEditorKind,
   StoryBibleEditorProps
 } from "./workspace-shell.js";
@@ -117,6 +118,24 @@ export function StoryBibleEditorView({ editor }: { readonly editor: StoryBibleEd
         </button>
       </div>
 
+      {editor.consistency === undefined || editor.consistency.issues.length === 0 ? null : (
+        <section className="ns-story-consistency" aria-label="Story Bible consistency warnings">
+          <div className="ns-story-consistency-header">
+            <strong>Story Bible consistency {editor.consistency.status}</strong>
+            <span>Checked {editor.consistency.checkedAt}</span>
+          </div>
+          <ol>
+            {editor.consistency.issues.map((issue) => (
+              <StoryBibleConsistencyIssue
+                issue={issue}
+                key={issue.id}
+                onEntrySelect={editor.onEntrySelect}
+              />
+            ))}
+          </ol>
+        </section>
+      )}
+
       <div className="ns-story-editor-grid">
         <aside className="ns-story-editor-list" aria-label="故事圣经分类">
           <div className="ns-story-kind-tabs" role="tablist" aria-label="故事圣经分类">
@@ -197,6 +216,34 @@ export function StoryBibleEditorView({ editor }: { readonly editor: StoryBibleEd
         </form>
       </div>
     </section>
+  );
+}
+
+function StoryBibleConsistencyIssue({
+  issue,
+  onEntrySelect
+}: {
+  readonly issue: StoryBibleConsistencyIssueProps;
+  readonly onEntrySelect: (entryId: string) => void;
+}) {
+  return (
+    <li className="ns-story-consistency-issue" data-severity={issue.severity}>
+      <div>
+        <strong>{issue.title}</strong>
+        <span>{issue.sourceRef.title}</span>
+        <span>{issue.targetRef.title}</span>
+      </div>
+      <p>{issue.message}</p>
+      <span>{issue.suggestedAction}</span>
+      <button
+        aria-label={`Open consistency target: ${issue.targetRef.title}`}
+        className="ns-icon-text-button"
+        onClick={() => onEntrySelect(issue.targetRef.id)}
+        type="button"
+      >
+        Open target
+      </button>
+    </li>
   );
 }
 

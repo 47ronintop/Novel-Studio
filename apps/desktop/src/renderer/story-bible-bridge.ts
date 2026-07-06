@@ -2,6 +2,7 @@ import type {
   MemoryRecord,
   NovelStudioApi,
   StoryBibleAsset,
+  StoryBibleConsistencyReport,
   StoryBibleSnapshot
 } from "@novel-studio/application";
 import type { Result, UnifiedError } from "@novel-studio/shared";
@@ -10,6 +11,7 @@ import type {
   StoryBibleEditorEntry,
   StoryBibleEditorKind,
   StoryBibleEditorProps,
+  StoryBibleConsistencyProps,
   StoryTimelineEvent,
   StoryBibleSummaryAsset,
   StoryBibleSummaryProps
@@ -33,24 +35,42 @@ export function createStoryBibleBridge(api: NovelStudioApi): StoryBibleBridge {
     worldAssets: [],
     memories: []
   };
-  let editorProps = createEditorProps(snapshot, "character", emptyDraft("character"), "idle");
+  let consistency: StoryBibleConsistencyProps | undefined;
+  let editorProps = createEditorProps(
+    snapshot,
+    "character",
+    emptyDraft("character"),
+    "idle",
+    undefined,
+    consistency
+  );
 
   return {
     getProps: () => props,
     getEditorProps: () => editorProps,
     async load() {
       snapshot = await unwrap(api.storyBible.load());
+      consistency = toConsistencyProps(await unwrap(api.storyBible.buildConsistencyReport()));
       props = toProps(snapshot);
       editorProps = createEditorProps(
         snapshot,
         editorProps.activeKind,
         draftFromSnapshot(snapshot, editorProps.draft),
-        "idle"
+        "idle",
+        undefined,
+        consistency
       );
       return props;
     },
     selectKind(kind) {
-      editorProps = createEditorProps(snapshot, kind, emptyDraft(kind), "idle");
+      editorProps = createEditorProps(
+        snapshot,
+        kind,
+        emptyDraft(kind),
+        "idle",
+        undefined,
+        consistency
+      );
       return editorProps;
     },
     selectEntry(entryId) {
@@ -69,7 +89,9 @@ export function createStoryBibleBridge(api: NovelStudioApi): StoryBibleBridge {
           body: entry.body,
           status: entry.status
         },
-        "idle"
+        "idle",
+        undefined,
+        consistency
       );
       return editorProps;
     },
@@ -81,7 +103,9 @@ export function createStoryBibleBridge(api: NovelStudioApi): StoryBibleBridge {
           ...editorProps.draft,
           ...draft
         },
-        "idle"
+        "idle",
+        undefined,
+        consistency
       );
       return editorProps;
     },
@@ -90,7 +114,9 @@ export function createStoryBibleBridge(api: NovelStudioApi): StoryBibleBridge {
         snapshot,
         editorProps.activeKind,
         editorProps.draft,
-        "saving"
+        "saving",
+        undefined,
+        consistency
       );
       return editorProps;
     },
@@ -103,14 +129,22 @@ export function createStoryBibleBridge(api: NovelStudioApi): StoryBibleBridge {
           : await api.storyBible.saveAsset(toStoryAsset(draft, now, snapshot));
 
       if (!saved.ok) {
-        editorProps = createEditorProps(snapshot, editorProps.activeKind, draft, "error", {
-          kind: "error",
-          message: saved.error.message
-        });
+        editorProps = createEditorProps(
+          snapshot,
+          editorProps.activeKind,
+          draft,
+          "error",
+          {
+            kind: "error",
+            message: saved.error.message
+          },
+          consistency
+        );
         return editorProps;
       }
 
       snapshot = await unwrap(api.storyBible.load());
+      consistency = toConsistencyProps(await unwrap(api.storyBible.buildConsistencyReport()));
       props = toProps(snapshot);
       editorProps = createEditorProps(
         snapshot,
@@ -120,7 +154,8 @@ export function createStoryBibleBridge(api: NovelStudioApi): StoryBibleBridge {
         {
           kind: "info",
           message: "故事圣经已保存。"
-        }
+        },
+        consistency
       );
       return editorProps;
     }
@@ -189,12 +224,14 @@ function createEditorProps(
   activeKind: StoryBibleEditorKind,
   draft: StoryBibleEditorDraft,
   status: StoryBibleEditorProps["status"],
-  feedback?: StoryBibleEditorProps["feedback"]
+  feedback?: StoryBibleEditorProps["feedback"],
+  consistency?: StoryBibleConsistencyProps
 ): StoryBibleEditorProps {
   return {
     activeKind,
     status,
     entries: createEditorEntries(snapshot),
+    ...(consistency === undefined ? {} : { consistency }),
     draft,
     ...(feedback === undefined ? {} : { feedback }),
     onKindSelect: () => undefined,
@@ -202,6 +239,22 @@ function createEditorProps(
     onDraftChange: () => undefined,
     onNewDraft: () => undefined,
     onSave: () => undefined
+  };
+}
+
+function toConsistencyProps(report: StoryBibleConsistencyReport): StoryBibleConsistencyProps {
+  return {
+    status: report.status,
+    checkedAt: report.checkedAt,
+    issues: report.issues.map((issue) => ({
+      id: issue.id,
+      severity: issue.severity,
+      title: issue.title,
+      message: issue.message,
+      sourceRef: issue.sourceRef,
+      targetRef: issue.targetRef,
+      suggestedAction: issue.suggestedAction
+    }))
   };
 }
 

@@ -63,6 +63,7 @@ import type {
 import type {
   MemoryRecord,
   StoryBibleAsset,
+  StoryBibleConsistencyReport,
   StoryBibleContextCandidateOptions,
   StoryBibleSession,
   StoryBibleSnapshot
@@ -128,6 +129,7 @@ export interface DesktopApplication {
   loadStoryBible(): Promise<Result<StoryBibleSnapshot, UnifiedError>>;
   saveStoryBibleAsset(asset: StoryBibleAsset): Promise<Result<StoryBibleAsset, UnifiedError>>;
   saveStoryBibleMemory(memory: MemoryRecord): Promise<Result<MemoryRecord, UnifiedError>>;
+  buildStoryBibleConsistencyReport(): Promise<Result<StoryBibleConsistencyReport, UnifiedError>>;
   buildStoryBibleContextCandidates(
     options?: StoryBibleContextCandidateOptions
   ): Promise<Result<readonly ContextCandidate[], UnifiedError>>;
@@ -396,6 +398,13 @@ export function createDesktopApplication(
       }
 
       return storyBibleSession.saveMemory(memory);
+    },
+    async buildStoryBibleConsistencyReport() {
+      if (storyBibleSession === undefined) {
+        return storyBibleUnavailable();
+      }
+
+      return storyBibleSession.buildConsistencyReport();
     },
     async buildStoryBibleContextCandidates(options) {
       if (storyBibleSession === undefined) {

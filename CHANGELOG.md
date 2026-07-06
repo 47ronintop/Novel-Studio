@@ -94,8 +94,11 @@
 - 完成 M94 Data Loss Hardening：`ProjectLockFileRepository` 新增 stale lock 类型化错误和脱敏详情，测试验证不会自动删除受保护锁文件；M94 只补不丢稿/能继续写所需的锁边界，不扩展 archive browser 或完整多窗口编排。
 - 完成 M95 Provider Compatibility Ship：新增 LLM provider router，DeepSeek/GLM/通义等可走 OpenAI-compatible runtime，Anthropic/Claude 保留原生 provider 路径；桌面组合层新增 provider 注入点并验证 DeepSeek 默认 profile 可完成 AI 建议闭环。
 - 执行 M94/M95 后 Scope Review：确认 M96 只做 Story Bible 最小一致性提示，M97 保持公开安装发布门禁；阅读朗读、provider streaming、live benchmark、history archive UI 和完整多窗口编排继续留在 v2/backlog 或 M98 裁决。
+- 完成 M96 Story Bible Consistency Minimum：新增 Story Bible 最小一致性报告、IPC/preload/API/renderer bridge 和编辑器 warning UI；只提示显式 conflict/contradict/冲突/矛盾 标记命中的人物设定冲突，并提供 Story Bible 条目跳转，不做知识图谱或 Timeline 深编辑。
+- 完成 M97 Public Install Release Gate：新增公开 Windows 安装门禁文档，`release:check` 验证 M97 文档、核心 E2E、artifact secret scan、release channel、release notes 和 installer config，并明确不 push、不上传、不发布。
+- 执行 M96/M97 后 Scope Review：确认下一步只剩 M98 V1 Ship Audit；M98 只能做 ship 审计和阅读朗读 go/no-go 裁决，不得直接扩成新功能实现。
 
 ## Notes
 
 - Phase 7 当前定义的 M0-M18 已完成。
-- 当前已完成 Post-M18 M19-M95，M96-M98 已按最终确认的 v1 核心闭环裁剪规划；M27 安装后首次使用引导缺口已通过 M48 回补；未经用户确认不得 push。
+- 当前已完成 Post-M18 M19-M97，M98 已按最终确认的 v1 核心闭环裁剪规划；M27 安装后首次使用引导缺口已通过 M48 回补；未经用户确认不得 push。

@@ -1,6 +1,10 @@
 import { describe, expect, test } from "vitest";
 
-import type { NovelStudioApi, StoryBibleSnapshot } from "@novel-studio/application";
+import type {
+  NovelStudioApi,
+  StoryBibleConsistencyReport,
+  StoryBibleSnapshot
+} from "@novel-studio/application";
 import { ok } from "@novel-studio/shared";
 
 import { createStoryBibleBridge } from "../src/renderer/story-bible-bridge.js";
@@ -53,12 +57,54 @@ describe("Story Bible bridge", () => {
 
     const props = await bridge.load();
 
-    expect(calls).toEqual(["storyBible.load"]);
+    expect(calls).toEqual(["storyBible.load", "storyBible.buildConsistencyReport"]);
     expect(props.assets.map((asset) => asset.title)).toEqual(["Hero", "Capital", "Oath"]);
     expect(props.assets[2]).toMatchObject({
       id: "mem_oath",
       type: "memory.long-term",
       contextEligible: true
+    });
+  });
+
+  test("loads Story Bible consistency warnings into editor props", async () => {
+    const bridge = createStoryBibleBridge(
+      createApi([], snapshot, {
+        status: "attention",
+        checkedAt: "2026-07-05T00:00:00.000Z",
+        issues: [
+          {
+            id: "story-consistency.character.chr_hero.mem_oath",
+            severity: "warning",
+            title: "Character setting may conflict with a memory",
+            message: "Hero appears in Oath with an explicit conflict marker.",
+            sourceRef: {
+              kind: "character",
+              id: "chr_hero",
+              title: "Hero"
+            },
+            targetRef: {
+              kind: "memory",
+              id: "mem_oath",
+              title: "Oath"
+            },
+            suggestedAction: "Open the linked Story Bible entry and resolve the setting conflict."
+          }
+        ]
+      })
+    );
+
+    await bridge.load();
+
+    expect(bridge.getEditorProps().consistency).toMatchObject({
+      status: "attention",
+      issues: [
+        {
+          targetRef: {
+            id: "mem_oath",
+            title: "Oath"
+          }
+        }
+      ]
     });
   });
 
@@ -147,7 +193,12 @@ describe("Story Bible bridge", () => {
 
 function createApi(
   calls: string[],
-  initialSnapshot: StoryBibleSnapshot = snapshot
+  initialSnapshot: StoryBibleSnapshot = snapshot,
+  consistencyReport: StoryBibleConsistencyReport = {
+    status: "healthy",
+    checkedAt: "2026-07-05T00:00:00.000Z",
+    issues: []
+  }
 ): NovelStudioApi {
   let currentSnapshot = initialSnapshot;
 
@@ -279,6 +330,10 @@ function createApi(
           memories: replaceMemory(currentSnapshot.memories, memory)
         };
         return ok(memory);
+      },
+      buildConsistencyReport: async () => {
+        calls.push("storyBible.buildConsistencyReport");
+        return ok(consistencyReport);
       },
       buildContextCandidates: async () => {
         throw new Error("not used");

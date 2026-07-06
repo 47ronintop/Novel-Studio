@@ -7,6 +7,7 @@ import type {
   DesktopShellState,
   MemoryRecord,
   StoryBibleAsset,
+  StoryBibleConsistencyReport,
   StoryBibleContextCandidate,
   StoryBibleSnapshot
 } from "@novel-studio/application";
@@ -43,6 +44,9 @@ describe("M16 Story Bible IPC", () => {
         if (channel === "application:story-bible:build-context-candidates") {
           return ok(contextCandidates());
         }
+        if (channel === "application:story-bible:build-consistency-report") {
+          return ok(consistencyReport());
+        }
         if (channel === "application:story-bible:save-asset") {
           return ok(characterAsset());
         }
@@ -56,12 +60,14 @@ describe("M16 Story Bible IPC", () => {
     await api.storyBible.load();
     await api.storyBible.saveAsset(characterAsset());
     await api.storyBible.saveMemory(memoryRecord());
+    await api.storyBible.buildConsistencyReport();
     await api.storyBible.buildContextCandidates({ includeStatuses: ["active"] });
 
     expect(calls).toEqual([
       "application:story-bible:load:0",
       "application:story-bible:save-asset:1",
       "application:story-bible:save-memory:1",
+      "application:story-bible:build-consistency-report:0",
       "application:story-bible:build-context-candidates:1"
     ]);
   });
@@ -75,6 +81,9 @@ describe("M16 Story Bible IPC", () => {
     );
     await expect(handlers["application:story-bible:save-memory"](memoryRecord())).resolves.toEqual(
       ok(memoryRecord())
+    );
+    await expect(handlers["application:story-bible:build-consistency-report"]()).resolves.toEqual(
+      ok(consistencyReport())
     );
     await expect(
       handlers["application:story-bible:build-context-candidates"]({ includeStatuses: ["active"] })
@@ -95,6 +104,7 @@ function createFakeApplication(): DesktopApplication {
     loadStoryBible: async () => ok(snapshot),
     saveStoryBibleAsset: async () => ok(characterAsset()),
     saveStoryBibleMemory: async () => ok(memoryRecord()),
+    buildStoryBibleConsistencyReport: async () => ok(consistencyReport()),
     buildStoryBibleContextCandidates: async () => ok(contextCandidates()),
     generateActiveChapterSuggestion: unsupported,
     applyActiveChapterSuggestion: unsupported,
@@ -111,6 +121,14 @@ function createFakeApplication(): DesktopApplication {
     loadConfigAsset: unsupported,
     saveConfigAsset: unsupported,
     restoreConfigAssetVersion: unsupported
+  };
+}
+
+function consistencyReport(): StoryBibleConsistencyReport {
+  return {
+    status: "healthy",
+    checkedAt: now,
+    issues: []
   };
 }
 

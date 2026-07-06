@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { describe, expect, test } from "vitest";
 
+import { withBuildGateLock } from "./build-gate-lock";
+
 describe("M9 alpha checklist", () => {
   test("exposes build and alpha check scripts", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
@@ -18,14 +20,16 @@ describe("M9 alpha checklist", () => {
     );
   });
 
-  test("passes the local alpha check gate", () => {
-    const result = spawnSync("npm run alpha:check", {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      shell: true
+  test("passes the local alpha check gate", async () => {
+    const result = await withBuildGateLock(() => {
+      return spawnSync("npm run alpha:check", {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        shell: true
+      });
     });
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stdout).toContain("Alpha check passed");
-  }, 30000);
+  }, 90000);
 });

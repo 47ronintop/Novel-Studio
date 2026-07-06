@@ -217,6 +217,8 @@ export function createApplicationIpcHandlers(
 
       return application.saveStoryBibleMemory(storyBibleMemory);
     },
+    "application:story-bible:build-consistency-report": () =>
+      application.buildStoryBibleConsistencyReport(),
     "application:story-bible:build-context-candidates": (options: unknown) =>
       application.buildStoryBibleContextCandidates(toStoryBibleContextCandidateOptions(options)),
     "application:studio:load-config-asset": (assetType: unknown, assetId: unknown) => {

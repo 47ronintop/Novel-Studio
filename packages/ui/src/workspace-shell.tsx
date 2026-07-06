@@ -307,6 +307,7 @@ export interface StoryBibleEditorProps {
   readonly activeKind: StoryBibleEditorKind;
   readonly status: StoryBibleEditorStatus;
   readonly entries: readonly StoryBibleEditorEntry[];
+  readonly consistency?: StoryBibleConsistencyProps;
   readonly draft: StoryBibleEditorDraft;
   readonly feedback?: ProjectWorkflowFeedback;
   readonly onKindSelect: (kind: StoryBibleEditorKind) => void;
@@ -314,6 +315,30 @@ export interface StoryBibleEditorProps {
   readonly onDraftChange: (draft: Partial<StoryBibleEditorDraft>) => void;
   readonly onNewDraft: () => void;
   readonly onSave: () => void;
+}
+
+export type StoryBibleConsistencyStatus = "healthy" | "attention";
+
+export interface StoryBibleConsistencyProps {
+  readonly status: StoryBibleConsistencyStatus;
+  readonly checkedAt: string;
+  readonly issues: readonly StoryBibleConsistencyIssueProps[];
+}
+
+export interface StoryBibleConsistencyIssueProps {
+  readonly id: string;
+  readonly severity: "warning";
+  readonly title: string;
+  readonly message: string;
+  readonly sourceRef: StoryBibleConsistencyRefProps;
+  readonly targetRef: StoryBibleConsistencyRefProps;
+  readonly suggestedAction: string;
+}
+
+export interface StoryBibleConsistencyRefProps {
+  readonly kind: StoryBibleEditorKind;
+  readonly id: string;
+  readonly title: string;
 }
 
 const activities = [

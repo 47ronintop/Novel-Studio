@@ -1,6 +1,6 @@
 ﻿# INDEX - Novel Studio 文档索引
 
-Version: 1.62 | Last Updated: 2026-07-06
+Version: 1.63 | Last Updated: 2026-07-06
 
 ## 文档优先级
 
@@ -23,7 +23,7 @@ Version: 1.62 | Last Updated: 2026-07-06
 | `UI_GUIDELINES.md`                                                    | 1.0        | Accepted             | UI/UX、布局、交互、设计 tokens、可访问性                 |
 | `CODING_STANDARDS.md`                                                 | 1.0        | Accepted             | 开发规范、语言规则、分层、schema、UI 实现                |
 | `TESTING.md`                                                          | 1.0        | Accepted             | 测试规范、fixtures、LLM mock、CI 门禁                    |
-| `ROADMAP.md`                                                          | 1.50       | Active               | 当前里程碑、后续路线、完成状态                           |
+| `ROADMAP.md`                                                          | 1.51       | Active               | 当前里程碑、后续路线、完成状态                           |
 | `STORY_BIBLE.md`                                                      | 1.0        | Accepted for M16     | Story Bible 资产、仓储、Context 候选和最小 UI 闭环       |
 | `docs/packaging/m17-installer-release-channel.md`                     | 1.0        | Accepted for M17     | 安装器目标、发布通道 manifest、release notes 和签名策略  |
 | `PLUGIN_SYSTEM.md`                                                    | 1.0        | Accepted for M18     | 插件 manifest、权限、注册表、运行时边界和测试要求        |
@@ -86,6 +86,7 @@ Version: 1.62 | Last Updated: 2026-07-06
 | `docs/spikes/editor.md`                                               | 1.0        | Accepted for M5      | 编辑器选型 spike                                         |
 | `docs/performance/m9-alpha-baseline.md`                               | 1.0        | Accepted for M9      | 大型项目 fixture 与 alpha 性能基线                       |
 | `docs/packaging/m10-beta-packaging.md`                                | 1.2        | Accepted for M10-M13 | 打包配置、artifact 稳定化、真实 e2e 与 CI gate           |
+| `docs/packaging/m97-public-install-release-gate.md`                   | 1.0        | Complete             | 公开 Windows 安装门禁、签名策略和发布检查要求            |
 | `docs/releases/v0.1.0-beta-readiness.md`                              | 1.0        | Review Complete      | v0.1.0 beta 发布验收记录、产物、验证证据和剩余风险       |
 | `adr/ADR-0001-engine-runtime-language.md`                             | 1.0        | Accepted             | Core Engine 运行时语言决策                               |
 | `CHANGELOG.md`                                                        | 0.1.0-docs | Active               | 变更记录                                                 |
@@ -102,7 +103,7 @@ Version: 1.62 | Last Updated: 2026-07-06
 | Phase 5 开发规范      | Complete | `CODING_STANDARDS.md`、`TESTING.md` | 已完成     |
 | Phase 6 Task Planning | Complete | `ROADMAP.md`                        | 已完成     |
 | Phase 7 正式开发      | Complete | M0-M18 已完成                       | 已完成     |
-| Post-M18 产品化打磨   | Active   | M19-M95 已完成；M96-M98 已裁剪规划  | 下一步 M96 |
+| Post-M18 产品化打磨   | Active   | M19-M97 已完成；M98 已裁剪规划      | 下一步 M98 |
 
 ## 当前本地状态
 
@@ -154,7 +155,9 @@ Version: 1.62 | Last Updated: 2026-07-06
 - 当前已完成 M93 Core Writing Journey E2E：新增真实作者核心旅程 E2E，覆盖 AI 审阅应用、保存、关闭重开和继续编辑。
 - 当前已完成 M94 Data Loss Hardening：补齐 stale lock 类型化提示并验证不自动删除受保护锁文件，继续复用既有 recovery/history/file-ref 安全闭环。
 - 当前已完成 M95 Provider Compatibility Ship：新增 provider router 和桌面 provider 注入点，验证 DeepSeek profile 可走 OpenAI-compatible runtime 完成 AI 建议闭环。
+- 当前已完成 M96 Story Bible Consistency Minimum：Story Bible 编辑器显示显式冲突标记驱动的最小一致性提示，并提供条目跳转。
+- 当前已完成 M97 Public Install Release Gate：release check 覆盖公开安装门禁文档、核心 E2E、artifact secret scan、release channel、release notes 和 installer config。
 - 当前 `Complete` 只表示里程碑切片完成；产品完整度以 M35 的 `Product Ready` 口径为准。
-- 当前 M92-M98 已按用户确认的 v1 ship 范围裁剪到 `ROADMAP.md`：公开安装、常见 provider 支持、textarea 暂可接受、Story Bible 最小冲突提示；阅读预览/角色朗读纳入 M98 的 v1.1 候选裁决，不抢占 M92-M97；M94/M95 后 Scope Review 已写入 `ROADMAP.md`；`docs/superpowers/plans/2026-07-06-product-ready-remaining-work.md` 仅作为候选缺口清单，不得直接执行。
+- 当前 M92-M98 已按用户确认的 v1 ship 范围裁剪到 `ROADMAP.md`：公开安装、常见 provider 支持、textarea 暂可接受、Story Bible 最小冲突提示；阅读预览/角色朗读纳入 M98 的 v1.1 候选裁决，不抢占 M92-M97；M94/M95 与 M96/M97 后 Scope Review 已写入 `ROADMAP.md`；`docs/superpowers/plans/2026-07-06-product-ready-remaining-work.md` 仅作为候选缺口清单，不得直接执行。
 - 未经用户确认不得 push。
 - 当前本地 artifact 位于被忽略的 `release/` 目录，不提交到仓库。

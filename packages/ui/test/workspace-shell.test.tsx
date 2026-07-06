@@ -913,6 +913,83 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("Hero");
   });
 
+  test("renders Story Bible consistency warnings with jump actions", () => {
+    const application = createDesktopApplication();
+    const openedEntries: string[] = [];
+    const tree = WorkspaceShell({
+      shellState: { ...application.getShellState(), activeActivity: "storyBible" },
+      commands: application.listCommands(),
+      commandPaletteOpen: false,
+      storyBibleEditor: {
+        activeKind: "character",
+        status: "idle",
+        entries: [
+          {
+            id: "chr_hero",
+            kind: "character",
+            title: "Mira",
+            status: "active",
+            body: "Mira is established as an only child."
+          },
+          {
+            id: "world_mira_family",
+            kind: "world",
+            title: "Mira Family Rumor",
+            status: "active",
+            body: "Conflict: Captain Mira has a younger brother in the capital."
+          }
+        ],
+        consistency: {
+          status: "attention",
+          checkedAt: "2026-07-05T00:00:00.000Z",
+          issues: [
+            {
+              id: "story-consistency.character.chr_hero.world_mira_family",
+              severity: "warning",
+              title: "Character setting may conflict with another Story Bible entry",
+              message:
+                "Mira appears in Mira Family Rumor with an explicit conflict marker. Review both entries before continuing the chapter.",
+              sourceRef: {
+                kind: "character",
+                id: "chr_hero",
+                title: "Mira"
+              },
+              targetRef: {
+                kind: "world",
+                id: "world_mira_family",
+                title: "Mira Family Rumor"
+              },
+              suggestedAction: "Open the linked Story Bible entry and resolve the setting conflict."
+            }
+          ]
+        },
+        draft: {
+          kind: "character",
+          title: "Mira",
+          body: "Mira is established as an only child.",
+          status: "active"
+        },
+        onKindSelect: () => undefined,
+        onEntrySelect: (entryId) => openedEntries.push(entryId),
+        onDraftChange: () => undefined,
+        onNewDraft: () => undefined,
+        onSave: () => undefined
+      }
+    });
+    const jumpButton = findElementByAriaLabel(tree, "Open consistency target: Mira Family Rumor");
+
+    expect(jumpButton).toBeDefined();
+    jumpButton?.props.onClick?.();
+    expect(openedEntries).toEqual(["world_mira_family"]);
+
+    const html = renderToStaticMarkup(tree);
+    expect(html).toContain('aria-label="Story Bible consistency warnings"');
+    expect(html).toContain("Story Bible consistency attention");
+    expect(html).toContain("Character setting may conflict with another Story Bible entry");
+    expect(html).toContain("Mira Family Rumor");
+    expect(html).toContain("Open target");
+  });
+
   test("renders the timeline activity as a real main view with entry navigation", () => {
     const application = createDesktopApplication();
     const openedEntries: string[] = [];

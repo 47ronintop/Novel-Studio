@@ -28,6 +28,7 @@ import type {
   CreateProjectInput,
   MemoryRecord,
   StoryBibleAsset,
+  StoryBibleConsistencyReport,
   StoryBibleContextCandidate,
   StoryBibleContextCandidateOptions,
   StoryBibleSnapshot,
@@ -253,6 +254,11 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           ipc,
           "application:story-bible:save-memory",
           memory
+        ),
+      buildConsistencyReport: () =>
+        invokeTyped<Result<StoryBibleConsistencyReport, UnifiedError>>(
+          ipc,
+          "application:story-bible:build-consistency-report"
         ),
       buildContextCandidates: (options?: StoryBibleContextCandidateOptions) =>
         invokeTyped<Result<readonly StoryBibleContextCandidate[], UnifiedError>>(

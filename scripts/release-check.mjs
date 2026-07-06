@@ -11,6 +11,7 @@ await checkPackageScripts();
 await checkElectronBuilderConfig();
 await checkReleaseChannelManifest();
 await checkReleaseNotes();
+await checkPublicInstallGate();
 
 if (failures.length > 0) {
   for (const failure of failures) {
@@ -19,6 +20,7 @@ if (failures.length > 0) {
   process.exitCode = 1;
 } else {
   console.log("Release check passed");
+  console.log("Public install release gate passed");
 }
 
 async function checkPackageScripts() {
@@ -107,6 +109,39 @@ async function checkReleaseNotes() {
   }
   if (!notes.includes("M18 插件系统边界")) {
     failures.push("Release notes must include M18 plugin system boundary notes.");
+  }
+}
+
+async function checkPublicInstallGate() {
+  const packageJson = await readJson("package.json");
+  const scripts = packageJson.scripts;
+  if (!isRecord(scripts)) {
+    failures.push("Root package.json scripts must be available for the public install gate.");
+    return;
+  }
+
+  expectScript(scripts, "test:e2e", "npm run build && playwright test");
+  expectScript(scripts, "package:artifact-check", "node scripts/artifact-secret-scan.mjs");
+
+  const publicGatePath = "docs/packaging/m97-public-install-release-gate.md";
+  if (!(await fileExists(publicGatePath))) {
+    failures.push(`Public install release gate document is missing: ${publicGatePath}`);
+    return;
+  }
+
+  const publicGate = await readFile(join(root, publicGatePath), "utf8");
+  const requiredPhrases = [
+    "Windows public install gate",
+    "signing.required=true",
+    "npm run test:e2e",
+    "npm run package:artifact-check",
+    "No macOS notarization is required unless macOS artifacts enter v1."
+  ];
+
+  for (const phrase of requiredPhrases) {
+    if (!publicGate.includes(phrase)) {
+      failures.push(`Public install release gate document must include: ${phrase}`);
+    }
   }
 }
 

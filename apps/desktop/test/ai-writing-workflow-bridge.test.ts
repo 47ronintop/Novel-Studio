@@ -462,6 +462,9 @@ function createApi(calls: string[]): NovelStudioApi {
       saveMemory: async () => {
         throw new Error("not used");
       },
+      buildConsistencyReport: async () => {
+        throw new Error("not used");
+      },
       buildContextCandidates: async () => {
         throw new Error("not used");
       }

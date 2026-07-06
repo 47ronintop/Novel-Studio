@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, test } from "vitest";
 
+import { withBuildGateLock } from "./build-gate-lock";
+
 describe("M10 beta packaging", () => {
   test("declares renderer bundling and installer-grade packaging scripts", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
@@ -26,11 +28,13 @@ describe("M10 beta packaging", () => {
     expect(packageJson.devDependencies["electron-builder"]).toBeDefined();
   });
 
-  test("build emits a bundled renderer entrypoint loaded by Electron main", () => {
-    const result = spawnSync("npm run build", {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      shell: true
+  test("build emits a bundled renderer entrypoint loaded by Electron main", async () => {
+    const result = await withBuildGateLock(() => {
+      return spawnSync("npm run build", {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        shell: true
+      });
     });
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
@@ -46,13 +50,15 @@ describe("M10 beta packaging", () => {
     expect(html).toMatch(/assets\/index-[A-Za-z0-9_-]+\.js/);
     expect(html).toContain("assets/index-");
     expect(main).toContain('"..", "renderer", "index.html"');
-  }, 30000);
+  }, 90000);
 
-  test("package check validates Electron packaging configuration and build artifacts", () => {
-    const result = spawnSync("npm run package:check", {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      shell: true
+  test("package check validates Electron packaging configuration and build artifacts", async () => {
+    const result = await withBuildGateLock(() => {
+      return spawnSync("npm run package:check", {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        shell: true
+      });
     });
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
@@ -60,5 +66,5 @@ describe("M10 beta packaging", () => {
     expect(existsSync(join(process.cwd(), "apps", "desktop", "electron-builder.config.cjs"))).toBe(
       true
     );
-  }, 30000);
+  }, 90000);
 });

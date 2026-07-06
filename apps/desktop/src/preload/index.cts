@@ -29,6 +29,7 @@ import type {
   ProjectSearchResults,
   ProjectWorkspaceSnapshot,
   StoryBibleAsset,
+  StoryBibleConsistencyReport,
   StoryBibleContextCandidate,
   StoryBibleContextCandidateOptions,
   StoryBibleSnapshot,
@@ -208,6 +209,10 @@ const api: NovelStudioApi = {
       invokeTyped<Result<MemoryRecord, UnifiedError>>(
         "application:story-bible:save-memory",
         memory
+      ),
+    buildConsistencyReport: () =>
+      invokeTyped<Result<StoryBibleConsistencyReport, UnifiedError>>(
+        "application:story-bible:build-consistency-report"
       ),
     buildContextCandidates: (options?: StoryBibleContextCandidateOptions) =>
       invokeTyped<Result<readonly StoryBibleContextCandidate[], UnifiedError>>(

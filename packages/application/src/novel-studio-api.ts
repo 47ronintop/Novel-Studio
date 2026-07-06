@@ -48,6 +48,7 @@ import type {
 import type {
   MemoryRecord,
   StoryBibleAsset,
+  StoryBibleConsistencyReport,
   StoryBibleContextCandidate,
   StoryBibleContextCandidateOptions,
   StoryBibleSnapshot
@@ -133,6 +134,7 @@ export interface NovelStudioApi {
     load(): Promise<Result<StoryBibleSnapshot, UnifiedError>>;
     saveAsset(asset: StoryBibleAsset): Promise<Result<StoryBibleAsset, UnifiedError>>;
     saveMemory(memory: MemoryRecord): Promise<Result<MemoryRecord, UnifiedError>>;
+    buildConsistencyReport(): Promise<Result<StoryBibleConsistencyReport, UnifiedError>>;
     buildContextCandidates(
       options?: StoryBibleContextCandidateOptions
     ): Promise<Result<readonly StoryBibleContextCandidate[], UnifiedError>>;
