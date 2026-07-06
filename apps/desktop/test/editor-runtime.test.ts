@@ -5,6 +5,7 @@ import {
   createCodeMirrorEditorRuntimeAdapter,
   createEditorSelectionCommand,
   createEditorVisualDiffReview,
+  createSelectionAwareAiPreviewDraft,
   createTextareaEditorRuntimeAdapter,
   resolveEditorRuntimeAdapter,
   type EditorRuntimeEvent
@@ -132,12 +133,16 @@ describe("editor runtime adapter resolver", () => {
     expect(adapter.runtimeId).toBe("codemirror");
     expect(handle.getSnapshot()).toMatchObject({
       runtimeId: "codemirror",
-      adapterLabel: "CodeMirror Adapter (flagged)",
+      adapterLabel: "CodeMirror 6 Headless Adapter (flagged)",
       documentMode: "Markdown",
-      body: "Flagged body\nNext"
+      body: "Flagged body\nNext",
+      runtimePackage: {
+        name: "@codemirror/state",
+        role: "headless-state"
+      }
     });
     expect(buildChapterEditorRuntimeProps(handle.getSnapshot())).toMatchObject({
-      adapterLabel: "CodeMirror Adapter (flagged)",
+      adapterLabel: "CodeMirror 6 Headless Adapter (flagged)",
       activeRangeLabel: "Selection 2-9"
     });
     expect(events).toEqual([
@@ -150,7 +155,30 @@ describe("editor runtime adapter resolver", () => {
     const adapter = createCodeMirrorEditorRuntimeAdapter();
 
     expect(adapter.runtimeId).toBe("codemirror");
-    expect(adapter.adapterLabel).toBe("CodeMirror Adapter (flagged)");
+    expect(adapter.adapterLabel).toBe("CodeMirror 6 Headless Adapter (flagged)");
+  });
+
+  test("keeps CodeMirror package-backed selection parity with textarea runtime events", () => {
+    const events: EditorRuntimeEvent[] = [];
+    const handle = createCodeMirrorEditorRuntimeAdapter().mount({
+      body: "Alpha\nBeta\nGamma",
+      saveStatus: "Saved",
+      onEvent: (event) => events.push(event)
+    });
+
+    handle.updateSelection({ anchor: 14, head: 6 });
+    handle.dispatchBodyChange("Alpha\nBeta revised\nGamma");
+
+    expect(handle.getSnapshot().selectionSummary).toMatchObject({
+      startOffset: 6,
+      endOffset: 14,
+      selectedTextPreview: "Beta rev"
+    });
+    expect(handle.getSnapshot().body).toBe("Alpha\nBeta revised\nGamma");
+    expect(events).toEqual([
+      { kind: "selection-changed", selection: { anchor: 14, head: 6 } },
+      { kind: "body-changed", body: "Alpha\nBeta revised\nGamma" }
+    ]);
   });
 
   test("summarizes normalized editor selections for future focused commands", () => {
@@ -245,5 +273,61 @@ describe("editor runtime adapter resolver", () => {
         changes: [{ kind: "insert", value: "Rewritten paragraph.\n" }]
       }).visualDiffSummaryLabel
     ).toBe("Visual diff preview: 1 change");
+  });
+
+  test("creates selection-aware AI preview drafts without applying content", () => {
+    const handle = createTextareaEditorRuntimeAdapter().mount({
+      body: "Alpha sentence.\nBeta sentence.",
+      saveStatus: "Saved"
+    });
+    handle.updateSelection({ anchor: 0, head: 15 });
+
+    expect(
+      createSelectionAwareAiPreviewDraft({
+        snapshot: handle.getSnapshot(),
+        commandId: "editor.ai.preview-selection",
+        proposedText: "Rewritten alpha sentence."
+      })
+    ).toEqual({
+      command: {
+        commandId: "editor.ai.preview-selection",
+        runtimeId: "textarea",
+        selection: {
+          startOffset: 0,
+          endOffset: 15,
+          characterCount: 15,
+          lineStart: 1,
+          lineEnd: 1,
+          selectedTextPreview: "Alpha sentence.",
+          collapsed: false
+        }
+      },
+      diffPreview: {
+        title: "Selection AI preview",
+        changes: [
+          {
+            kind: "replace",
+            value: "Rewritten alpha sentence.\nBeta sentence."
+          }
+        ]
+      },
+      previewOnly: true
+    });
+  });
+
+  test("rejects selection-aware AI preview drafts for collapsed selections", () => {
+    const handle = createTextareaEditorRuntimeAdapter().mount({
+      body: "Alpha sentence.",
+      saveStatus: "Saved"
+    });
+    handle.updateSelection({ anchor: 5, head: 5 });
+
+    expect(
+      createSelectionAwareAiPreviewDraft({
+        snapshot: handle.getSnapshot(),
+        commandId: "editor.ai.preview-selection",
+        proposedText: "Replacement"
+      })
+    ).toBeUndefined();
   });
 });

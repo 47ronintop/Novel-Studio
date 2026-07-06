@@ -136,11 +136,16 @@ describe("ChapterEditor", () => {
           adapterLabel: "Textarea Runtime",
           documentMode: "Markdown",
           activeRangeLabel: "Lines 1-1",
+          selectionAiPreviewCommand: {
+            commandId: "editor.ai.preview-selection",
+            label: "Preview selection rewrite"
+          },
           visualDiffSummaryLabel: "Visual diff preview: 2 changes",
           autosaveLabel: "Autosave armed",
           shortcutProfileLabel: "Default shortcuts",
           warnings: ["Large document optimizations inactive"]
         }}
+        onSelectionAiPreview={() => undefined}
       />
     );
 
@@ -148,6 +153,8 @@ describe("ChapterEditor", () => {
     expect(html).toContain("Textarea Runtime");
     expect(html).toContain("Markdown");
     expect(html).toContain("Lines 1-1");
+    expect(html).toContain('aria-label="Preview selection rewrite"');
+    expect(html).toContain("Preview selection rewrite");
     expect(html).toContain("Visual diff preview: 2 changes");
     expect(html).toContain("Autosave armed");
     expect(html).toContain("Default shortcuts");

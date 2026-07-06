@@ -26,6 +26,11 @@ export interface ChapterEditorRuntimeProps {
   readonly documentMode: string;
   readonly activeRangeLabel: string;
   readonly selectionSummaryLabel?: string;
+  readonly selectionAiPreviewCommand?: {
+    readonly commandId: string;
+    readonly label: string;
+    readonly disabledReason?: string;
+  };
   readonly visualDiffSummaryLabel?: string;
   readonly autosaveLabel: string;
   readonly shortcutProfileLabel: string;
@@ -41,6 +46,7 @@ export interface ChapterEditorProps {
   readonly runtime?: ChapterEditorRuntimeProps;
   readonly onBodyChange?: (nextBody: string) => void;
   readonly onSave?: () => void;
+  readonly onSelectionAiPreview?: (commandId: string) => void;
   readonly onVersionPreview?: (versionId: string) => void;
   readonly onVersionRestore?: (versionId: string) => void;
 }
@@ -54,6 +60,7 @@ export function ChapterEditor({
   runtime,
   onBodyChange,
   onSave,
+  onSelectionAiPreview,
   onVersionPreview,
   onVersionRestore
 }: ChapterEditorProps) {
@@ -101,7 +108,12 @@ export function ChapterEditor({
         </button>
       </header>
 
-      {runtime === undefined ? null : <ChapterEditorRuntime runtime={runtime} />}
+      {runtime === undefined ? null : (
+        <ChapterEditorRuntime
+          runtime={runtime}
+          {...(onSelectionAiPreview === undefined ? {} : { onSelectionAiPreview })}
+        />
+      )}
 
       <div className="ns-editor-body" data-dirty={dirty} data-large-document={largeDocument}>
         <textarea
@@ -195,7 +207,15 @@ export function ChapterEditor({
   );
 }
 
-function ChapterEditorRuntime({ runtime }: { readonly runtime: ChapterEditorRuntimeProps }) {
+function ChapterEditorRuntime({
+  runtime,
+  onSelectionAiPreview
+}: {
+  readonly runtime: ChapterEditorRuntimeProps;
+  readonly onSelectionAiPreview?: (commandId: string) => void;
+}) {
+  const selectionAiPreviewCommand = runtime.selectionAiPreviewCommand;
+
   return (
     <section className="ns-editor-runtime" aria-label="Editor Runtime">
       <div className="ns-editor-runtime-main">
@@ -207,6 +227,19 @@ function ChapterEditorRuntime({ runtime }: { readonly runtime: ChapterEditorRunt
         )}
         {runtime.visualDiffSummaryLabel === undefined ? null : (
           <span>{runtime.visualDiffSummaryLabel}</span>
+        )}
+        {selectionAiPreviewCommand === undefined ? null : (
+          <button
+            aria-label={selectionAiPreviewCommand.label}
+            disabled={
+              selectionAiPreviewCommand.disabledReason !== undefined ||
+              onSelectionAiPreview === undefined
+            }
+            onClick={() => onSelectionAiPreview?.(selectionAiPreviewCommand.commandId)}
+            type="button"
+          >
+            {selectionAiPreviewCommand.label}
+          </button>
         )}
         <span>{runtime.autosaveLabel}</span>
         <span>{runtime.shortcutProfileLabel}</span>

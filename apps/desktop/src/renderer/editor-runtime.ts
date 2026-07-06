@@ -1,5 +1,6 @@
 import type { ChapterEditorDiffPreview, ChapterEditorRuntimeProps } from "@novel-studio/ui";
 import type { SaveStatus } from "@novel-studio/application";
+import { EditorSelection, EditorState } from "@codemirror/state";
 
 export interface EditorRuntimeSelection {
   readonly anchor: number;
@@ -20,6 +21,12 @@ export interface EditorSelectionCommand {
   readonly commandId: string;
   readonly runtimeId: string;
   readonly selection: EditorRuntimeSelectionSummary;
+}
+
+export interface EditorSelectionAiPreviewDraft {
+  readonly command: EditorSelectionCommand;
+  readonly diffPreview: ChapterEditorDiffPreview;
+  readonly previewOnly: true;
 }
 
 export interface EditorVisualDiffDecoration {
@@ -65,6 +72,10 @@ export type EditorRuntimeEvent =
 export interface EditorRuntimeSnapshot {
   readonly runtimeId: string;
   readonly adapterLabel: string;
+  readonly runtimePackage?: {
+    readonly name: "@codemirror/state";
+    readonly role: "headless-state";
+  };
   readonly documentMode: string;
   readonly body: string;
   readonly saveStatus: SaveStatus;
@@ -112,10 +123,7 @@ export function createTextareaEditorRuntimeAdapter(): EditorRuntimeAdapter {
 }
 
 export function createCodeMirrorEditorRuntimeAdapter(): EditorRuntimeAdapter {
-  return createMemoryBackedEditorRuntimeAdapter({
-    runtimeId: "codemirror",
-    adapterLabel: "CodeMirror Adapter (flagged)"
-  });
+  return createCodeMirrorBackedEditorRuntimeAdapter();
 }
 
 export function resolveEditorRuntimeAdapter(
@@ -214,6 +222,113 @@ function createMemoryBackedEditorRuntimeAdapter(input: {
   };
 }
 
+function createCodeMirrorBackedEditorRuntimeAdapter(): EditorRuntimeAdapter {
+  return {
+    runtimeId: "codemirror",
+    adapterLabel: "CodeMirror 6 Headless Adapter (flagged)",
+    mount(mountInput) {
+      let state = EditorState.create({ doc: mountInput.body });
+      let selection: EditorRuntimeSelection | undefined;
+      let focused = false;
+      let destroyed = false;
+      const warnings: string[] = [];
+
+      function body(): string {
+        return state.doc.toString();
+      }
+
+      function setBody(nextBody: string): void {
+        state = state.update({
+          changes: { from: 0, to: state.doc.length, insert: nextBody }
+        }).state;
+      }
+
+      function setSelection(nextSelection: EditorRuntimeSelection): void {
+        const anchor = clampCodeMirrorOffset(nextSelection.anchor, state);
+        const head = clampCodeMirrorOffset(nextSelection.head, state);
+        state = state.update({
+          selection: EditorSelection.single(anchor, head)
+        }).state;
+        selection = nextSelection;
+      }
+
+      return {
+        getSnapshot() {
+          const currentBody = body();
+          return {
+            runtimeId: "codemirror",
+            adapterLabel: "CodeMirror 6 Headless Adapter (flagged)",
+            runtimePackage: {
+              name: "@codemirror/state",
+              role: "headless-state"
+            },
+            documentMode: "Markdown",
+            body: currentBody,
+            saveStatus: mountInput.saveStatus,
+            ...(selection === undefined ? {} : { selection }),
+            ...(selection === undefined
+              ? {}
+              : { selectionSummary: summarizeSelection(currentBody, selection) }),
+            focused,
+            destroyed,
+            warnings
+          };
+        },
+        applyExternalBody(nextBody) {
+          if (destroyed) {
+            return;
+          }
+          setBody(nextBody);
+        },
+        dispatchBodyChange(nextBody) {
+          if (destroyed) {
+            return;
+          }
+          setBody(nextBody);
+          mountInput.onEvent?.({ kind: "body-changed", body: nextBody });
+        },
+        updateSelection(nextSelection) {
+          if (destroyed) {
+            return;
+          }
+          setSelection(nextSelection);
+          mountInput.onEvent?.({ kind: "selection-changed", selection: nextSelection });
+        },
+        requestSave() {
+          if (destroyed) {
+            return;
+          }
+          mountInput.onEvent?.({ kind: "save-requested" });
+        },
+        dispatchCommand(commandId) {
+          if (destroyed) {
+            return;
+          }
+          mountInput.onEvent?.({ kind: "command-dispatched", commandId });
+        },
+        reportWarning(message) {
+          if (destroyed) {
+            return;
+          }
+          if (!warnings.includes(message)) {
+            warnings.push(message);
+          }
+          mountInput.onEvent?.({ kind: "runtime-warning", message });
+        },
+        focus() {
+          if (destroyed) {
+            return;
+          }
+          focused = true;
+        },
+        destroy() {
+          destroyed = true;
+        }
+      };
+    }
+  };
+}
+
 export function buildChapterEditorRuntimeProps(
   snapshot: EditorRuntimeSnapshot,
   diffPreview?: ChapterEditorDiffPreview
@@ -228,6 +343,14 @@ export function buildChapterEditorRuntimeProps(
     ...(snapshot.selectionSummary === undefined
       ? {}
       : { selectionSummaryLabel: formatSelectionSummary(snapshot.selectionSummary) }),
+    ...(snapshot.selectionSummary === undefined || snapshot.selectionSummary.collapsed
+      ? {}
+      : {
+          selectionAiPreviewCommand: {
+            commandId: "editor.ai.preview-selection",
+            label: "Preview selection rewrite"
+          }
+        }),
     ...(visualDiffReview === undefined
       ? {}
       : { visualDiffSummaryLabel: formatVisualDiffSummary(visualDiffReview) }),
@@ -267,6 +390,35 @@ export function createEditorVisualDiffReview(
     decorations: diffPreview.changes.map((change) =>
       createVisualDiffDecoration(snapshot.body, change)
     )
+  };
+}
+
+export function createSelectionAwareAiPreviewDraft(input: {
+  readonly snapshot: EditorRuntimeSnapshot;
+  readonly commandId: string;
+  readonly proposedText: string;
+}): EditorSelectionAiPreviewDraft | undefined {
+  const command = createEditorSelectionCommand(input.snapshot, input.commandId);
+  if (command === undefined || command.selection.collapsed) {
+    return undefined;
+  }
+
+  const nextBody = `${input.snapshot.body.slice(0, command.selection.startOffset)}${
+    input.proposedText
+  }${input.snapshot.body.slice(command.selection.endOffset)}`;
+
+  return {
+    command,
+    diffPreview: {
+      title: "Selection AI preview",
+      changes: [
+        {
+          kind: "replace",
+          value: nextBody
+        }
+      ]
+    },
+    previewOnly: true
   };
 }
 
@@ -319,6 +471,10 @@ function summarizeSelection(
 
 function clampOffset(value: number, body: string): number {
   return Math.min(Math.max(0, value), body.length);
+}
+
+function clampCodeMirrorOffset(value: number, state: EditorState): number {
+  return Math.min(Math.max(0, value), state.doc.length);
 }
 
 function lineNumberForOffset(body: string, offset: number): number {
