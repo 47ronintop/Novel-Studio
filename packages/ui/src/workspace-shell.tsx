@@ -169,15 +169,24 @@ export interface AiWorkflowRetryPolicyProps {
   readonly retryableCodesLabel: string;
 }
 
-export type AiWorkflowObservedStepKind = "context" | "agent" | "confirmation";
+export type AiWorkflowObservedStepKind = "context" | "agent" | "confirmation" | "branch";
 export type AiWorkflowObservedStepStatus =
   "pending" | "running" | "completed" | "waiting-confirmation" | "failed";
+
+export interface AiWorkflowBranchChoiceProps {
+  readonly branchId: string;
+  readonly label: string;
+  readonly conditionLabel?: string;
+}
 
 export interface AiWorkflowObservedStepProps {
   readonly stepId: string;
   readonly label: string;
   readonly kind: AiWorkflowObservedStepKind;
   readonly status: AiWorkflowObservedStepStatus;
+  readonly description?: string;
+  readonly branchChoices?: readonly AiWorkflowBranchChoiceProps[];
+  readonly selectedBranchId?: string;
 }
 
 export interface AiWorkflowObservabilityProps {
@@ -899,14 +908,11 @@ function AiWorkflowRunHistoryView({ history }: { readonly history: AiWorkflowRun
               <dd>{history.selectedRun.usageLabel}</dd>
             </div>
           </dl>
-          <ol className="ns-ai-step-list" aria-label="历史工作流步骤">
-            {history.selectedRun.steps.map((step) => (
-              <li className="ns-ai-step" data-status={step.status} key={step.stepId}>
-                <span>{step.label}</span>
-                <span>{aiStepStatusLabel(step.status)}</span>
-              </li>
-            ))}
-          </ol>
+          <AiWorkflowRail
+            ariaLabel="History workflow rail"
+            listLabel="历史工作流步骤"
+            steps={history.selectedRun.steps}
+          />
           {history.selectedRun.errorLabel === undefined ? null : (
             <p className="ns-ai-history-error">{history.selectedRun.errorLabel}</p>
           )}
@@ -1003,11 +1009,56 @@ function AiWorkflowObservabilityView({
           <dd>{observability.costLabel}</dd>
         </div>
       </dl>
-      <ol className="ns-ai-step-list" aria-label="AI 工作流步骤">
-        {observability.steps.map((step) => (
-          <li className="ns-ai-step" data-status={step.status} key={step.stepId}>
-            <span>{step.label}</span>
-            <span>{aiStepStatusLabel(step.status)}</span>
+      <AiWorkflowRail
+        ariaLabel="Workflow rail"
+        listLabel="AI 工作流步骤"
+        steps={observability.steps}
+      />
+    </section>
+  );
+}
+
+function AiWorkflowRail({
+  ariaLabel,
+  listLabel,
+  steps
+}: {
+  readonly ariaLabel: string;
+  readonly listLabel: string;
+  readonly steps: readonly AiWorkflowObservedStepProps[];
+}) {
+  return (
+    <section className="ns-ai-workflow-rail" aria-label={ariaLabel}>
+      <ol className="ns-ai-step-list" aria-label={listLabel}>
+        {steps.map((step) => (
+          <li
+            className="ns-ai-step"
+            data-kind={step.kind}
+            data-status={step.status}
+            key={step.stepId}
+          >
+            <div className="ns-ai-step-main">
+              <span>{step.label}</span>
+              <span>{aiStepKindLabel(step.kind)}</span>
+              <span>{aiStepStatusLabel(step.status)}</span>
+            </div>
+            {step.description === undefined ? null : (
+              <p className="ns-ai-step-description">{step.description}</p>
+            )}
+            {step.branchChoices === undefined || step.branchChoices.length === 0 ? null : (
+              <ul className="ns-ai-branch-choice-list" aria-label={`${step.label} branch choices`}>
+                {step.branchChoices.map((choice) => (
+                  <li
+                    className="ns-ai-branch-choice"
+                    data-selected-branch={choice.branchId === step.selectedBranchId}
+                    key={choice.branchId}
+                  >
+                    <span>{choice.label}</span>
+                    <span>{choice.conditionLabel ?? choice.branchId}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </li>
         ))}
       </ol>
@@ -1747,6 +1798,19 @@ function aiStepStatusLabel(status: AiWorkflowObservedStepStatus): string {
       return "待确认";
     case "failed":
       return "失败";
+  }
+}
+
+function aiStepKindLabel(kind: AiWorkflowObservedStepKind): string {
+  switch (kind) {
+    case "context":
+      return "Context";
+    case "agent":
+      return "Agent";
+    case "confirmation":
+      return "Confirm";
+    case "branch":
+      return "Branch";
   }
 }
 

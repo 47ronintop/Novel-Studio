@@ -9,6 +9,7 @@ import type {
 } from "@novel-studio/application";
 import type {
   AiWritingWorkflowProps,
+  ChapterEditorRuntimeProps,
   ChapterEditorProps,
   CommandPaletteFeedback,
   ConfigStudioPanelProps,
@@ -927,6 +928,7 @@ export function App() {
       ? undefined
       : {
           ...chapterEditor,
+          runtime: createChapterEditorRuntime(chapterEditor),
           onBodyChange: handleBodyChange,
           onSave: handleSave,
           onVersionPreview: handleVersionPreview,
@@ -1145,5 +1147,23 @@ function applyShellPreferences(
       ...shellState.workspaceLayout,
       ...preferences.workspaceLayout
     }
+  };
+}
+
+function createChapterEditorRuntime(chapterEditor: ChapterEditorProps): ChapterEditorRuntimeProps {
+  const lineCount =
+    chapterEditor.chapter.body.length === 0 ? 1 : chapterEditor.chapter.body.split("\n").length;
+  const warnings = lineCount > 200 ? ["Large document optimizations active"] : [];
+
+  return {
+    adapterLabel: "Textarea Runtime",
+    documentMode: "Markdown",
+    activeRangeLabel: `Lines 1-${Math.max(1, Math.min(lineCount, 120))}`,
+    autosaveLabel:
+      chapterEditor.saveStatus === "Recovery available"
+        ? "Recovery draft available"
+        : "Autosave armed",
+    shortcutProfileLabel: "Default shortcuts",
+    warnings
   };
 }

@@ -927,6 +927,40 @@ textarea:focus-visible,
   color: var(--ns-warning);
 }
 
+.ns-editor-runtime {
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+}
+
+.ns-editor-runtime-main,
+.ns-editor-runtime-warnings {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+}
+
+.ns-editor-runtime-main span,
+.ns-editor-runtime-warnings li {
+  border: 1px solid var(--ns-border);
+  border-radius: 999px;
+  color: var(--ns-muted);
+  font-size: 12px;
+  list-style: none;
+  min-height: 24px;
+  padding: 3px 8px;
+}
+
+.ns-editor-runtime-warnings li {
+  border-color: color-mix(in oklch, var(--ns-warning) 65%, var(--ns-border));
+  color: var(--ns-warning);
+}
+
 .ns-editor-title {
   font-size: 18px;
   margin: 0;
@@ -1310,14 +1344,20 @@ textarea:focus-visible,
 }
 
 .ns-ai-step {
-  align-items: center;
   border: 1px solid var(--ns-border);
   border-radius: 6px;
-  display: flex;
+  display: grid;
   gap: 8px;
-  justify-content: space-between;
   min-height: 30px;
   padding: 6px 8px;
+}
+
+.ns-ai-step-main {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
 }
 
 .ns-ai-step span:first-child {
@@ -1339,6 +1379,42 @@ textarea:focus-visible,
 
 .ns-ai-step[data-status="failed"] {
   border-color: color-mix(in oklch, var(--ns-danger) 65%, var(--ns-border));
+}
+
+.ns-ai-workflow-rail {
+  display: grid;
+  gap: 6px;
+}
+
+.ns-ai-step-description {
+  color: var(--ns-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.ns-ai-branch-choice-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ns-ai-branch-choice {
+  border: 1px solid var(--ns-border);
+  border-radius: 999px;
+  color: var(--ns-muted);
+  display: inline-flex;
+  gap: 6px;
+  min-height: 24px;
+  padding: 3px 8px;
+}
+
+.ns-ai-branch-choice[data-selected-branch="true"] {
+  border-color: color-mix(in oklch, var(--ns-primary) 70%, var(--ns-border));
+  color: var(--ns-ink);
 }
 
 .ns-story-bible-list {

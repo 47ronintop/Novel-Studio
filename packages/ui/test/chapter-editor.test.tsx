@@ -124,4 +124,32 @@ describe("ChapterEditor", () => {
     expect(html).toContain('data-large-document="true"');
     expect(html.match(/ns-editor-line-number/g)?.length).toBe(120);
   });
+
+  test("renders editor runtime status without filesystem details", () => {
+    const html = renderToStaticMarkup(
+      <ChapterEditor
+        chapter={chapter}
+        saveStatus="Unsaved"
+        dirty={true}
+        versionHistory={[]}
+        runtime={{
+          adapterLabel: "Textarea Runtime",
+          documentMode: "Markdown",
+          activeRangeLabel: "Lines 1-1",
+          autosaveLabel: "Autosave armed",
+          shortcutProfileLabel: "Default shortcuts",
+          warnings: ["Large document optimizations inactive"]
+        }}
+      />
+    );
+
+    expect(html).toContain('aria-label="Editor Runtime"');
+    expect(html).toContain("Textarea Runtime");
+    expect(html).toContain("Markdown");
+    expect(html).toContain("Lines 1-1");
+    expect(html).toContain("Autosave armed");
+    expect(html).toContain("Default shortcuts");
+    expect(html).toContain("Large document optimizations inactive");
+    expect(html).not.toMatch(/filesystem|node:fs|projectRoot/i);
+  });
 });

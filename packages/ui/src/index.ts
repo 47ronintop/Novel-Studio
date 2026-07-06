@@ -9,6 +9,7 @@ export type {
   ChapterEditorDiffChange,
   ChapterEditorDiffPreview,
   ChapterEditorProps,
+  ChapterEditorRuntimeProps,
   ChapterEditorVersionEntry
 } from "./chapter-editor.js";
 export { ConfigStudioPanel } from "./config-studio-panel.js";
@@ -45,6 +46,7 @@ export type {
   AiWorkflowRunHistoryProps,
   AiWritingWorkflowProps,
   AiWritingWorkflowStatus,
+  AiWorkflowBranchChoiceProps,
   OnboardingProps,
   OnboardingStepProps,
   ProjectSearchProps,

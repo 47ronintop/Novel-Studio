@@ -21,12 +21,22 @@ export interface ChapterEditorDiffPreview {
   readonly changes: readonly ChapterEditorDiffChange[];
 }
 
+export interface ChapterEditorRuntimeProps {
+  readonly adapterLabel: string;
+  readonly documentMode: string;
+  readonly activeRangeLabel: string;
+  readonly autosaveLabel: string;
+  readonly shortcutProfileLabel: string;
+  readonly warnings: readonly string[];
+}
+
 export interface ChapterEditorProps {
   readonly chapter: ChapterDocument;
   readonly saveStatus: "Saved" | "Saving" | "Unsaved" | "Recovery available";
   readonly dirty: boolean;
   readonly versionHistory: readonly ChapterEditorVersionEntry[];
   readonly diffPreview?: ChapterEditorDiffPreview;
+  readonly runtime?: ChapterEditorRuntimeProps;
   readonly onBodyChange?: (nextBody: string) => void;
   readonly onSave?: () => void;
   readonly onVersionPreview?: (versionId: string) => void;
@@ -39,6 +49,7 @@ export function ChapterEditor({
   dirty,
   versionHistory,
   diffPreview,
+  runtime,
   onBodyChange,
   onSave,
   onVersionPreview,
@@ -87,6 +98,8 @@ export function ChapterEditor({
           保存
         </button>
       </header>
+
+      {runtime === undefined ? null : <ChapterEditorRuntime runtime={runtime} />}
 
       <div className="ns-editor-body" data-dirty={dirty} data-large-document={largeDocument}>
         <textarea
@@ -176,6 +189,27 @@ export function ChapterEditor({
           </section>
         ) : null}
       </div>
+    </section>
+  );
+}
+
+function ChapterEditorRuntime({ runtime }: { readonly runtime: ChapterEditorRuntimeProps }) {
+  return (
+    <section className="ns-editor-runtime" aria-label="Editor Runtime">
+      <div className="ns-editor-runtime-main">
+        <span>{runtime.adapterLabel}</span>
+        <span>{runtime.documentMode}</span>
+        <span>{runtime.activeRangeLabel}</span>
+        <span>{runtime.autosaveLabel}</span>
+        <span>{runtime.shortcutProfileLabel}</span>
+      </div>
+      {runtime.warnings.length === 0 ? null : (
+        <ul className="ns-editor-runtime-warnings" aria-label="Editor Runtime warnings">
+          {runtime.warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }

@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.31 | Status: Active | Last Updated: 2026-07-06
+Version: 1.32 | Status: Active | Last Updated: 2026-07-06
 
 ## 目标
 
@@ -69,6 +69,8 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M49       | Recovery Review          | 可恢复草稿预览、应用和丢弃闭环                                   | Complete |
 | M50       | User Preferences         | onboarding dismissed、布局偏好和用户级 UI 状态持久化             | Complete |
 | M51       | Recovery Hardening       | clean recovery 隐藏、file-ref typed error 和恢复策略收口         | Complete |
+| M52       | Editor Runtime           | 编辑器 runtime 状态条、adapter/mode/autosave/shortcut 可见       | Complete |
+| M53       | Workflow UX              | Workflow rail、branch choice 和 selected branch 可视化           | Complete |
 
 ## M15 完成内容
 
@@ -342,19 +344,27 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - Renderer 启动加载偏好，并在 onboarding dismiss、布局命令、活动切换和底部 tab 切换后保存用户偏好。
 - M51 focused tests 覆盖 clean recovery record 继续隐藏、`file-ref` recovery preview/apply 返回 typed unavailable-content error。
 
+## M52/M53 完成内容
+
+- 新增 `docs/productization/m52-editor-runtime.md` 和 `docs/productization/m53-workflow-ux.md`。
+- `ChapterEditor` 新增可选 runtime DTO，并显示 `Editor Runtime` 状态条，包含 adapter、Markdown mode、active line range、autosave、shortcut profile 和 runtime warnings。
+- Renderer 从现有 chapter editor state 计算 runtime props；不新增 renderer 文件系统访问、不新增存储和模型调用。
+- AI workflow observed step props 支持 `branch` kind、description、branch choices 和 selected branch id。
+- Inspector workflow observability 与 selected run history detail 使用可复用 `Workflow rail` 展示步骤、状态、分支条件和 selected branch。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19-M51，其中 M27 首次使用引导已通过 M48 回补完成。
+- Post-M18 产品化打磨已完成 M19-M53，其中 M27 首次使用引导已通过 M48 回补完成。
 - 当前产品状态是 beta productization：主干闭环可运行，但多个宪法/UI 指南能力仍是 Product Gap。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M52 Editor Runtime：评估 CodeMirror 6、完整 visual diff editor 和用户可编辑快捷键注册表。
-- M53 建议进入 Workflow UX：workflow graph、条件分支 UI 和 Agent 分支决策可视化。
-- M54 建议进入 Plugin Runtime RFC：插件安装/更新、沙箱执行、权限审批和 Workflow contribution 激活。
+- 下一步建议进入 M54 Plugin Runtime RFC：插件安装/更新、沙箱执行、权限审批和 Workflow contribution 激活。
+- M55 建议进入 Editor Runtime Engine RFC：评估 CodeMirror 6、完整 visual diff editor 和用户可编辑快捷键注册表。
+- M56 建议进入 Workflow Designer RFC：workflow graph、条件表达式、Agent 分支决策可视化和插件 workflow contribution。
 
 ## 当前技术债重点
 
