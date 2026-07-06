@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.27 | Status: Active | Last Updated: 2026-07-06
+Version: 1.28 | Status: Active | Last Updated: 2026-07-06
 
 ## 目标
 
@@ -63,6 +63,8 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M43       | Provider Matrix          | 宪法要求的模型 provider 配置矩阵、schema 校验和 UI 选项覆盖      | Complete |
 | M44       | Streaming UX             | OpenAI-compatible 流式契约、delta/usage 解析和 AI 流式预览状态   | Complete |
 | M45       | Workflow Branch          | Workflow Engine branch action、分支选择和 schema 契约            | Complete |
+| M46       | Editor Hardening         | 编辑器大文档指标、gutter 渲染上限、diff 摘要和快捷键冲突矩阵     | Complete |
+| M47       | Multi-window Safety      | 本地项目锁、打开/创建前锁获取、冲突保护和健康诊断信号            | Complete |
 
 ## M15 完成内容
 
@@ -296,24 +298,40 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - workflow definition schema 和 fixture 覆盖 branch metadata。
 - M45 不执行条件表达式语言；条件仍由 Application/Workflow caller 判定后显式选择分支。
 
+## M46 完成内容
+
+- 新增 `docs/productization/m46-editor-hardening.md`，明确 Editor Hardening 的首个产品化切片和非目标。
+- 章节编辑器新增 line/word/character 指标，并在超过阈值时进入 large-document mode。
+- 大文档 decorative gutter line number 渲染限制为固定上限，避免章节行数过多时无意义扩张 DOM。
+- Diff preview 新增 insert/delete/replace 摘要，便于用户先扫变更规模。
+- Renderer shortcut 新增归一化冲突矩阵，为后续快捷键设置和命令面板冲突检查提供基础。
+
+## M47 完成内容
+
+- 新增 `docs/productization/m47-multi-window-safety.md`，明确 Multi-window Safety 的本地项目锁范围和非目标。
+- Repository 新增 `.novel-studio/project-lock.json` 文件锁，使用 exclusive create 获取锁。
+- Application 在项目 open/create 激活前获取项目锁，锁冲突时保留当前工作区。
+- `ProjectWorkspaceSnapshot` 暴露 lock summary，并在 Project Health 中显示 active lock 信息。
+- Desktop composition 为每个应用实例注入本地 lock owner id，并在正常 shutdown 时释放当前项目锁；M47 不包含 stale-lock recovery UI 或实时协作。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转、M32 时间线主视图、M33 插件管理 UI、M34 多标签编辑器、M35 宪法差距审计、M36 Workspace Layout、M37 Editor Tabs、M38 Autosave Recovery、M39 Timeline Workspace、M40 Project Health、M41 Command Palette、M42 Plugin Management、M43 Provider Matrix、M44 Streaming UX 与 M45 Workflow Branch。
+- Post-M18 产品化打磨已完成 M19 Beta UX 产品化打磨、M20 Search and Index UX、M21 Story Bible Editing UX、M22 Settings UX Completion、M23 Studio UX Completion、M24 工作流运行观测、M25 工作流运行历史、M26 工作流失败诊断与重试策略、M28 全局功能可用性盘点、M29 功能完成度盘点、M30 底部面板工作区、M31 搜索结果点击跳转、M32 时间线主视图、M33 插件管理 UI、M34 多标签编辑器、M35 宪法差距审计、M36 Workspace Layout、M37 Editor Tabs、M38 Autosave Recovery、M39 Timeline Workspace、M40 Project Health、M41 Command Palette、M42 Plugin Management、M43 Provider Matrix、M44 Streaming UX、M45 Workflow Branch、M46 Editor Hardening 与 M47 Multi-window Safety。
 - M27 安装后首次使用引导已暂缓，需在核心可见功能更稳定后回补。
 - 当前产品状态是 beta productization：主干闭环可运行，但多个宪法/UI 指南能力仍是 Product Gap。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M46 Editor Hardening：补齐编辑器大文件体验、diff 审阅和快捷键冲突矩阵。
-- M44-M48 按 `docs/productization/m35-constitution-gap-audit.md` 的缺口排序推进，不再把切片完成误写成产品完整。
+- 下一步建议进入 M48 Onboarding：回补 M27 暂缓的欢迎页、示例项目入口、创建/打开项目引导和关键空状态行动按钮。
+- M48 之后继续按 `docs/productization/m35-constitution-gap-audit.md` 的 Product Ready 口径推进，不再把切片完成误写成产品完整。
 
 ## 当前技术债重点
 
 - coverage threshold 尚未实现；当前 CI 已覆盖测试门禁，但没有数字覆盖率门槛。
 - 生产级 signing/notarization、托管更新发布和证书管理仍是后续工作；M17 仅声明本地 unsigned beta 通道。
 - schema codegen 和更强 dependency boundary 工具尚未最终选择。
-- history 归档/压缩策略、项目锁、多窗口冲突处理仍需后续设计。
+- history 归档/压缩策略、stale lock recovery UI、完整多窗口状态编排仍需后续设计。
 - Provider Matrix 配置已覆盖；真实 provider runtime translators、离线响应 fixtures 和 live benchmark 仍需后续按 Adapter 批次补齐。

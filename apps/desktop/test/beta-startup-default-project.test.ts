@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -60,5 +60,24 @@ describe("beta startup default project", () => {
         }
       ]
     });
+  });
+
+  test("releases the bootstrapped project lock during shutdown", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-lock-default-"));
+    tempRoots.push(projectRoot);
+
+    const application = await createBootstrappedDefaultDesktopApplication({
+      projectRoot,
+      now: () => "2026-07-06T00:00:00.000Z"
+    });
+
+    await expect(access(join(projectRoot, ".novel-studio", "project-lock.json"))).resolves.toBe(
+      undefined
+    );
+
+    const shutdown = await application.shutdown();
+
+    expect(shutdown).toEqual({ ok: true, value: undefined });
+    await expect(access(join(projectRoot, ".novel-studio", "project-lock.json"))).rejects.toThrow();
   });
 });

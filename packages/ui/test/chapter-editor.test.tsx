@@ -85,4 +85,43 @@ describe("ChapterEditor", () => {
     expect(html).toContain("仅预览");
     expect(html).not.toContain("Apply suggestion");
   });
+
+  test("renders large-document metrics, capped line gutter, and diff summary", () => {
+    const largeBody = Array.from({ length: 260 }, (_, index) => `Line ${index + 1}`).join("\n");
+    const html = renderToStaticMarkup(
+      <ChapterEditor
+        chapter={{
+          ...chapter,
+          body: largeBody
+        }}
+        saveStatus="Saved"
+        dirty={false}
+        versionHistory={[]}
+        diffPreview={{
+          title: "AI suggestion",
+          changes: [
+            {
+              kind: "insert",
+              value: "New paragraph.\n"
+            },
+            {
+              kind: "delete",
+              value: "Old paragraph.\n"
+            },
+            {
+              kind: "replace",
+              value: "Rewritten paragraph.\n"
+            }
+          ]
+        }}
+      />
+    );
+
+    expect(html).toContain("260 lines");
+    expect(html).toContain("520 words");
+    expect(html).toContain("Large document mode");
+    expect(html).toContain("Diff summary: 1 insert / 1 delete / 1 replace");
+    expect(html).toContain('data-large-document="true"');
+    expect(html.match(/ns-editor-line-number/g)?.length).toBe(120);
+  });
 });

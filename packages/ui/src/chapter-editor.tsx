@@ -2,6 +2,9 @@ import type { ChapterDocument } from "@novel-studio/shared";
 import { Eye, History, RotateCcw, Save, SquarePen } from "lucide-react";
 import { useMemo } from "react";
 
+const LARGE_DOCUMENT_LINE_THRESHOLD = 200;
+const MAX_RENDERED_GUTTER_LINES = 120;
+
 export interface ChapterEditorVersionEntry {
   readonly versionId: string;
   readonly label: string;
@@ -43,6 +46,12 @@ export function ChapterEditor({
 }: ChapterEditorProps) {
   const editorStateLabel = dirty ? "已修改" : "未修改";
   const documentLines = useMemo(() => chapter.body.split("\n"), [chapter.body]);
+  const metrics = useMemo(() => calculateDocumentMetrics(chapter.body), [chapter.body]);
+  const largeDocument = metrics.lineCount > LARGE_DOCUMENT_LINE_THRESHOLD;
+  const gutterLines = largeDocument
+    ? documentLines.slice(0, MAX_RENDERED_GUTTER_LINES)
+    : documentLines;
+  const diffSummary = diffPreview === undefined ? undefined : summarizeDiff(diffPreview);
 
   return (
     <section className="ns-editor-layout" aria-label="章节编辑器">
@@ -57,6 +66,16 @@ export function ChapterEditor({
             </p>
           </div>
         </div>
+        <div
+          className="ns-editor-metrics"
+          aria-label="Editor document metrics"
+          data-large-document={largeDocument}
+        >
+          <span>{metrics.lineCount} lines</span>
+          <span>{metrics.wordCount} words</span>
+          <span>{metrics.characterCount} chars</span>
+          {largeDocument ? <span>Large document mode</span> : null}
+        </div>
         <button
           aria-label="保存章节"
           className="ns-editor-save"
@@ -69,7 +88,7 @@ export function ChapterEditor({
         </button>
       </header>
 
-      <div className="ns-editor-body" data-dirty={dirty}>
+      <div className="ns-editor-body" data-dirty={dirty} data-large-document={largeDocument}>
         <textarea
           aria-label="章节正文"
           className="ns-editor-textarea"
@@ -81,7 +100,7 @@ export function ChapterEditor({
           spellCheck={true}
         />
         <div className="ns-editor-gutter" aria-hidden="true">
-          {documentLines.map((line, index) => (
+          {gutterLines.map((line, index) => (
             <div className="ns-editor-line-number" key={`${index}-${line.length}`}>
               {index + 1}
             </div>
@@ -137,6 +156,12 @@ export function ChapterEditor({
               <span>{diffPreview.title}</span>
               <span className="ns-preview-only">仅预览</span>
             </div>
+            {diffSummary === undefined ? null : (
+              <p className="ns-diff-summary">
+                Diff summary: {diffSummary.insertCount} insert / {diffSummary.deleteCount} delete /{" "}
+                {diffSummary.replaceCount} replace
+              </p>
+            )}
             <ul className="ns-diff-list">
               {diffPreview.changes.map((change, index) => (
                 <li
@@ -153,6 +178,33 @@ export function ChapterEditor({
       </div>
     </section>
   );
+}
+
+function calculateDocumentMetrics(body: string): {
+  readonly lineCount: number;
+  readonly wordCount: number;
+  readonly characterCount: number;
+} {
+  const lines = body.length === 0 ? [""] : body.split("\n");
+  const words = body.match(/\S+/g) ?? [];
+
+  return {
+    lineCount: lines.length,
+    wordCount: words.length,
+    characterCount: body.length
+  };
+}
+
+function summarizeDiff(diffPreview: ChapterEditorDiffPreview): {
+  readonly insertCount: number;
+  readonly deleteCount: number;
+  readonly replaceCount: number;
+} {
+  return {
+    insertCount: diffPreview.changes.filter((change) => change.kind === "insert").length,
+    deleteCount: diffPreview.changes.filter((change) => change.kind === "delete").length,
+    replaceCount: diffPreview.changes.filter((change) => change.kind === "replace").length
+  };
 }
 
 function saveStatusLabel(status: ChapterEditorProps["saveStatus"]): string {

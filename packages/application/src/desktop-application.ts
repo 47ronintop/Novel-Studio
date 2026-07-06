@@ -97,6 +97,7 @@ export interface DesktopShellState {
 }
 
 export interface DesktopApplication {
+  shutdown(): Promise<Result<void, UnifiedError>>;
   getShellState(): DesktopShellState;
   listCommands(): readonly ApplicationCommand[];
   executeCommand(commandId: string): Result<DesktopShellState, UnifiedError>;
@@ -222,6 +223,13 @@ export function createDesktopApplication(
   let shellState = createInitialShellState(options);
 
   return {
+    async shutdown() {
+      if (projectWorkspaceSession === undefined) {
+        return ok(undefined);
+      }
+
+      return projectWorkspaceSession.releaseProjectLock();
+    },
     getShellState: () =>
       withChapterSaveStatus(
         withProjectWorkspaceState(

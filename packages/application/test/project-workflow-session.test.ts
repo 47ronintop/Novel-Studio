@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test } from "vitest";
 
 import { isErr, isOk } from "@novel-studio/shared";
 import type { RecoveryRecord, RecoveryRepositoryPort } from "@novel-studio/shared";
+import { createUnifiedError, err, ok } from "@novel-studio/shared";
 import {
   ChapterFileRepository,
   HistoryRepository,
@@ -12,6 +13,10 @@ import {
 } from "@novel-studio/repository";
 
 import { createProjectWorkspaceSession } from "../src/project-workspace-session.js";
+import type {
+  ProjectWorkspaceLock,
+  ProjectWorkspaceLockPort
+} from "../src/project-workspace-session.js";
 
 const tempRoots: string[] = [];
 
@@ -240,6 +245,115 @@ describe("M12 project workflow session", () => {
     );
     expect(createdProject.value.health.issues.map((issue) => issue.source)).toContain("recovery");
   });
+
+  test("acquires project locks before activation and preserves current workspace on conflict", async () => {
+    const firstRoot = await createTempRoot();
+    const secondRoot = await createTempRoot();
+    const locks = new Map<string, ProjectWorkspaceLock>();
+    const session = createProjectWorkspaceSession({
+      now: () => "2026-07-06T00:00:00.000Z",
+      createProjectRepository: (root) =>
+        new ProjectFileRepository({
+          projectRoot: root,
+          now: () => "2026-07-06T00:00:00.000Z"
+        }),
+      createChapterRepository: (root) =>
+        new ChapterFileRepository({
+          projectRoot: root,
+          now: () => "2026-07-06T00:00:00.000Z"
+        }),
+      createHistoryRepository: (root) =>
+        new HistoryRepository({
+          projectRoot: root,
+          now: () => "2026-07-06T00:00:00.000Z",
+          createVersionId: () => "ver_m47"
+        }),
+      createRecoveryRepository: () => emptyRecoveryRepository(),
+      createProjectLockRepository: (root) => createMemoryLockRepository(root, "window_a", locks)
+    });
+    const conflictingSession = createProjectWorkspaceSession({
+      now: () => "2026-07-06T00:01:00.000Z",
+      createProjectRepository: (root) =>
+        new ProjectFileRepository({
+          projectRoot: root,
+          now: () => "2026-07-06T00:01:00.000Z"
+        }),
+      createChapterRepository: (root) =>
+        new ChapterFileRepository({
+          projectRoot: root,
+          now: () => "2026-07-06T00:01:00.000Z"
+        }),
+      createHistoryRepository: (root) =>
+        new HistoryRepository({
+          projectRoot: root,
+          now: () => "2026-07-06T00:01:00.000Z",
+          createVersionId: () => "ver_m47_conflict"
+        }),
+      createRecoveryRepository: () => emptyRecoveryRepository(),
+      createProjectLockRepository: (root) => createMemoryLockRepository(root, "window_b", locks)
+    });
+
+    const firstProject = await session.createProject({
+      projectRoot: firstRoot,
+      projectId: "prj_m47_first",
+      title: "M47 First",
+      language: "zh-CN"
+    });
+    await new ProjectFileRepository({
+      projectRoot: secondRoot,
+      now: () => "2026-07-06T00:00:00.000Z"
+    }).createProject({
+      projectId: "prj_m47_second",
+      title: "M47 Second",
+      language: "zh-CN"
+    });
+    locks.set(secondRoot, {
+      schemaVersion: "1.0",
+      ownerId: "window_other",
+      projectRoot: secondRoot,
+      acquiredAt: "2026-07-06T00:00:30.000Z"
+    });
+
+    const conflict = await session.openProject(secondRoot);
+    const secondWindowConflict = await conflictingSession.openProject(firstRoot);
+
+    expect(isOk(firstProject)).toBe(true);
+    if (isErr(firstProject)) {
+      throw new Error(firstProject.error.message);
+    }
+    expect(firstProject.value.lock).toEqual({
+      schemaVersion: "1.0",
+      ownerId: "window_a",
+      projectRoot: firstRoot,
+      acquiredAt: "2026-07-06T00:00:00.000Z"
+    });
+    expect(isErr(conflict)).toBe(true);
+    if (!conflict.ok) {
+      expect(conflict.error.code).toBe("PROJECT_LOCK_CONFLICT");
+    }
+    expect(session.getSnapshot()?.project.title).toBe("M47 First");
+    expect(isErr(secondWindowConflict)).toBe(true);
+    if (!secondWindowConflict.ok) {
+      expect(secondWindowConflict.error.code).toBe("PROJECT_LOCK_CONFLICT");
+      expect(secondWindowConflict.error.redactedDetail).toEqual({
+        ownerId: "window_a",
+        acquiredAt: "2026-07-06T00:00:00.000Z"
+      });
+    }
+
+    const released = await session.releaseProjectLock();
+    const reopenedAfterRelease = await conflictingSession.openProject(firstRoot);
+
+    expect(released).toEqual(ok(undefined));
+    expect(isOk(reopenedAfterRelease)).toBe(true);
+    if (isErr(reopenedAfterRelease)) {
+      throw new Error(reopenedAfterRelease.error.message);
+    }
+    expect(reopenedAfterRelease.value.lock).toMatchObject({
+      ownerId: "window_b",
+      projectRoot: firstRoot
+    });
+  });
 });
 
 function emptyRecoveryRepository(): RecoveryRepositoryPort {
@@ -249,6 +363,49 @@ function emptyRecoveryRepository(): RecoveryRepositoryPort {
     },
     async listRecoveryRecords() {
       return { ok: true, value: [] };
+    }
+  };
+}
+
+function createMemoryLockRepository(
+  projectRoot: string,
+  ownerId: string,
+  locks: Map<string, ProjectWorkspaceLock>
+): ProjectWorkspaceLockPort {
+  return {
+    async acquireProjectLock() {
+      const existing = locks.get(projectRoot);
+      if (existing !== undefined && existing.ownerId !== ownerId) {
+        return err(
+          createUnifiedError({
+            code: "PROJECT_LOCK_CONFLICT",
+            category: "StorageError",
+            message: "Project is already locked by another Novel Studio window.",
+            recoverability: "user-action",
+            suggestedAction: "Close the other window or resolve the stale lock.",
+            traceId: "test-project-lock",
+            redactedDetail: {
+              ownerId: existing.ownerId,
+              acquiredAt: existing.acquiredAt
+            }
+          })
+        );
+      }
+
+      const lock = {
+        schemaVersion: "1.0" as const,
+        ownerId,
+        projectRoot,
+        acquiredAt: ownerId === "window_a" ? "2026-07-06T00:00:00.000Z" : "2026-07-06T00:01:00.000Z"
+      };
+      locks.set(projectRoot, lock);
+      return ok(lock);
+    },
+    async releaseProjectLock() {
+      if (locks.get(projectRoot)?.ownerId === ownerId) {
+        locks.delete(projectRoot);
+      }
+      return ok(undefined);
     }
   };
 }

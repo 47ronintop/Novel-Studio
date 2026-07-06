@@ -55,6 +55,8 @@ export type {
   ProjectMetadata,
   ProjectRepositoryPort,
   ProjectSnapshot,
+  ProjectWorkspaceLock,
+  ProjectWorkspaceLockPort,
   ProjectWorkspaceRecoveryItem,
   ProjectWorkspaceRecoverySummary,
   ProjectWorkspaceHealth,

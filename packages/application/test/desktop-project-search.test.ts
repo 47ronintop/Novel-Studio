@@ -66,6 +66,9 @@ describe("DesktopApplication project search", () => {
         },
         selectChapter: async () => {
           throw new Error("not used");
+        },
+        releaseProjectLock: async () => {
+          return ok(undefined);
         }
       },
       createProjectSearchSession: (projectRoot) => {

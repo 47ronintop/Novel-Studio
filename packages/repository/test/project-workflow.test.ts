@@ -5,7 +5,11 @@ import { afterEach, describe, expect, test } from "vitest";
 
 import { isErr, isOk } from "@novel-studio/shared";
 
-import { ChapterFileRepository, ProjectFileRepository } from "../src/index.js";
+import {
+  ChapterFileRepository,
+  ProjectFileRepository,
+  ProjectLockFileRepository
+} from "../src/index.js";
 
 const tempRoots: string[] = [];
 
@@ -106,6 +110,60 @@ describe("M12 project workflow repository support", () => {
       throw new Error(loaded.error.message);
     }
     expect(loaded.value.body).toBe("第一章正文\n");
+  });
+
+  test("acquires a project lock, rejects conflicting owners, and releases only by owner", async () => {
+    const projectRoot = await createTempRoot();
+    const firstOwner = new ProjectLockFileRepository({
+      projectRoot,
+      ownerId: "window_a",
+      now: () => "2026-07-06T00:00:00.000Z"
+    });
+    const secondOwner = new ProjectLockFileRepository({
+      projectRoot,
+      ownerId: "window_b",
+      now: () => "2026-07-06T00:01:00.000Z"
+    });
+
+    const acquired = await firstOwner.acquireProjectLock();
+    const firstLockContent = await readFile(
+      join(projectRoot, ".novel-studio", "project-lock.json"),
+      "utf8"
+    );
+    const conflicting = await secondOwner.acquireProjectLock();
+    const nonOwnerRelease = await secondOwner.releaseProjectLock();
+    const ownerRelease = await firstOwner.releaseProjectLock();
+    const reacquired = await secondOwner.acquireProjectLock();
+
+    expect(isOk(acquired)).toBe(true);
+    if (isErr(acquired)) {
+      throw new Error(acquired.error.message);
+    }
+    expect(acquired.value).toEqual({
+      schemaVersion: "1.0",
+      ownerId: "window_a",
+      projectRoot,
+      acquiredAt: "2026-07-06T00:00:00.000Z"
+    });
+    expect(firstLockContent).toContain('"ownerId": "window_a"');
+    expect(isErr(conflicting)).toBe(true);
+    if (!conflicting.ok) {
+      expect(conflicting.error.code).toBe("PROJECT_LOCK_CONFLICT");
+      expect(conflicting.error.redactedDetail).toEqual({
+        ownerId: "window_a",
+        acquiredAt: "2026-07-06T00:00:00.000Z"
+      });
+    }
+    expect(isErr(nonOwnerRelease)).toBe(true);
+    if (!nonOwnerRelease.ok) {
+      expect(nonOwnerRelease.error.code).toBe("PROJECT_LOCK_OWNER_MISMATCH");
+    }
+    expect(isOk(ownerRelease)).toBe(true);
+    expect(isOk(reacquired)).toBe(true);
+    if (isErr(reacquired)) {
+      throw new Error(reacquired.error.message);
+    }
+    expect(reacquired.value.ownerId).toBe("window_b");
   });
 });
 

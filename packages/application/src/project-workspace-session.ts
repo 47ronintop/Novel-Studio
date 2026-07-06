@@ -52,7 +52,15 @@ export interface ProjectWorkspaceSnapshot {
   chapters: readonly ChapterSummary[];
   recovery: ProjectWorkspaceRecoverySummary;
   health: ProjectWorkspaceHealth;
+  lock?: ProjectWorkspaceLock;
   activeChapterId?: string;
+}
+
+export interface ProjectWorkspaceLock extends JsonObject {
+  schemaVersion: "1.0";
+  ownerId: string;
+  projectRoot: string;
+  acquiredAt: string;
 }
 
 export interface ProjectWorkspaceRecoverySummary extends JsonObject {
@@ -67,7 +75,8 @@ export interface ProjectWorkspaceRecoveryItem extends JsonObject {
 
 export type ProjectHealthStatus = "healthy" | "attention" | "blocked";
 export type ProjectHealthSeverity = "info" | "warning" | "error";
-export type ProjectHealthSource = "schema" | "cache" | "history" | "recovery" | "references";
+export type ProjectHealthSource =
+  "schema" | "cache" | "history" | "recovery" | "references" | "lock";
 
 export interface ProjectWorkspaceHealth extends JsonObject {
   status: ProjectHealthStatus;
@@ -98,6 +107,11 @@ export interface ProjectRepositoryPort {
   ): Promise<Result<ProjectSnapshot, UnifiedError>>;
 }
 
+export interface ProjectWorkspaceLockPort {
+  acquireProjectLock(): Promise<Result<ProjectWorkspaceLock, UnifiedError>>;
+  releaseProjectLock(): Promise<Result<void, UnifiedError>>;
+}
+
 export type ProjectChapterRepositoryPort = ChapterDraftRepositoryPort &
   ChapterCatalogRepositoryPort;
 
@@ -106,6 +120,7 @@ export interface ProjectWorkspaceSessionOptions {
   createChapterRepository(projectRoot: string): ProjectChapterRepositoryPort;
   createHistoryRepository(projectRoot: string): ChapterHistoryRepositoryPort;
   createRecoveryRepository(projectRoot: string): RecoveryRepositoryPort;
+  createProjectLockRepository?: (projectRoot: string) => ProjectWorkspaceLockPort;
   now?: () => string;
 }
 
@@ -117,6 +132,7 @@ export interface ProjectWorkspaceSession {
   listChapters(): Promise<Result<readonly ChapterSummary[], UnifiedError>>;
   createChapter(input: CreateChapterInput): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   selectChapter(chapterId: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  releaseProjectLock(): Promise<Result<void, UnifiedError>>;
 }
 
 export function createProjectWorkspaceSession(
@@ -126,21 +142,33 @@ export function createProjectWorkspaceSession(
   let chapterRepository: ProjectChapterRepositoryPort | undefined;
   let historyRepository: ChapterHistoryRepositoryPort | undefined;
   let recoveryRepository: RecoveryRepositoryPort | undefined;
+  let projectLockRepository: ProjectWorkspaceLockPort | undefined;
   let activeChapterEditorSession: ChapterEditorSession | undefined;
 
   return {
     getSnapshot: () => state,
     getActiveChapterEditorSession: () => activeChapterEditorSession,
     async openProject(projectRoot) {
+      const acquiredLock = await acquireWorkspaceLock(projectRoot);
+      if (!acquiredLock.ok) {
+        return acquiredLock;
+      }
+
       const projectRepository = options.createProjectRepository(projectRoot);
       const opened = await projectRepository.openProject();
       if (!opened.ok) {
+        await acquiredLock.value.repository?.releaseProjectLock();
         return opened;
       }
 
-      return activateProject(projectRoot, opened.value);
+      return activateProject(projectRoot, opened.value, acquiredLock.value);
     },
     async createProject(input) {
+      const acquiredLock = await acquireWorkspaceLock(input.projectRoot);
+      if (!acquiredLock.ok) {
+        return acquiredLock;
+      }
+
       const projectRepository = options.createProjectRepository(input.projectRoot);
       const created = await projectRepository.createProject({
         projectId: input.projectId,
@@ -150,10 +178,11 @@ export function createProjectWorkspaceSession(
         ...(input.targetWordCount === undefined ? {} : { targetWordCount: input.targetWordCount })
       });
       if (!created.ok) {
+        await acquiredLock.value.repository?.releaseProjectLock();
         return created;
       }
 
-      return activateProject(input.projectRoot, created.value);
+      return activateProject(input.projectRoot, created.value, acquiredLock.value);
     },
     async listChapters() {
       if (chapterRepository === undefined) {
@@ -180,16 +209,49 @@ export function createProjectWorkspaceSession(
       }
 
       return activateChapter(chapterId);
+    },
+    async releaseProjectLock() {
+      if (projectLockRepository === undefined) {
+        return ok(undefined);
+      }
+
+      const released = await projectLockRepository.releaseProjectLock();
+      if (!released.ok) {
+        return released;
+      }
+
+      projectLockRepository = undefined;
+      if (state !== undefined) {
+        state = {
+          projectRoot: state.projectRoot,
+          project: state.project,
+          settings: state.settings,
+          chapters: state.chapters,
+          recovery: state.recovery,
+          health: buildProjectHealth({
+            checkedAt: currentTimestamp(),
+            chapters: state.chapters,
+            recovery: state.recovery
+          }),
+          ...(state.activeChapterId === undefined ? {} : { activeChapterId: state.activeChapterId })
+        };
+      }
+
+      return ok(undefined);
     }
   };
 
   async function activateProject(
     projectRoot: string,
-    projectSnapshot: ProjectSnapshot
+    projectSnapshot: ProjectSnapshot,
+    acquiredLock: AcquiredWorkspaceLock
   ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>> {
+    const previousLockRepository = projectLockRepository;
+    const previousProjectRoot = state?.projectRoot;
     chapterRepository = options.createChapterRepository(projectRoot);
     historyRepository = options.createHistoryRepository(projectRoot);
     recoveryRepository = options.createRecoveryRepository(projectRoot);
+    projectLockRepository = acquiredLock.repository;
     const chapters = await chapterRepository.listChapters();
     if (!chapters.ok) {
       return chapters;
@@ -210,12 +272,22 @@ export function createProjectWorkspaceSession(
       health: buildProjectHealth({
         checkedAt: currentTimestamp(),
         chapters: chapters.value,
-        recovery: recoverySummary
+        recovery: recoverySummary,
+        ...(acquiredLock.lock === undefined ? {} : { lock: acquiredLock.lock })
       }),
+      ...(acquiredLock.lock === undefined ? {} : { lock: acquiredLock.lock }),
       ...(activeChapterId === undefined ? {} : { activeChapterId })
     };
     activeChapterEditorSession =
       activeChapterId === undefined ? undefined : createActiveChapterEditorSession(activeChapterId);
+
+    if (
+      previousLockRepository !== undefined &&
+      previousProjectRoot !== undefined &&
+      previousProjectRoot !== projectRoot
+    ) {
+      await previousLockRepository.releaseProjectLock();
+    }
 
     return ok(state);
   }
@@ -258,7 +330,8 @@ export function createProjectWorkspaceSession(
       health: buildProjectHealth({
         checkedAt: currentTimestamp(),
         chapters: chapters.value,
-        recovery: recovery.value
+        recovery: recovery.value,
+        ...(state.lock === undefined ? {} : { lock: state.lock })
       }),
       activeChapterId: selected.id
     };
@@ -317,12 +390,37 @@ export function createProjectWorkspaceSession(
   function currentTimestamp(): string {
     return options.now?.() ?? new Date().toISOString();
   }
+
+  async function acquireWorkspaceLock(
+    projectRoot: string
+  ): Promise<Result<AcquiredWorkspaceLock, UnifiedError>> {
+    const repository = options.createProjectLockRepository?.(projectRoot);
+    if (repository === undefined) {
+      return ok({});
+    }
+
+    const lock = await repository.acquireProjectLock();
+    if (!lock.ok) {
+      return lock;
+    }
+
+    return ok({
+      lock: lock.value,
+      repository
+    });
+  }
+}
+
+interface AcquiredWorkspaceLock {
+  readonly lock?: ProjectWorkspaceLock;
+  readonly repository?: ProjectWorkspaceLockPort;
 }
 
 interface ProjectHealthInput {
   checkedAt: string;
   chapters: readonly ChapterSummary[];
   recovery: ProjectWorkspaceRecoverySummary;
+  lock?: ProjectWorkspaceLock;
 }
 
 function buildProjectHealth(input: ProjectHealthInput): ProjectWorkspaceHealth {
@@ -363,6 +461,17 @@ function buildProjectHealth(input: ProjectHealthInput): ProjectWorkspaceHealth {
       title: "Recoverable drafts available",
       message: `There are ${input.recovery.availableItems.length} dirty recovery draft(s).`,
       suggestedAction: "Review recovery drafts before continuing long edits."
+    });
+  }
+
+  if (input.lock !== undefined) {
+    issues.push({
+      id: "lock.project_active",
+      severity: "info",
+      source: "lock",
+      title: "Project lock active",
+      message: `Project is locked for local owner ${input.lock.ownerId}.`,
+      suggestedAction: "Close this window to release the local project lock."
     });
   }
 

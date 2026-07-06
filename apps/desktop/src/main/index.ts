@@ -6,23 +6,32 @@ import { createBootstrappedDefaultDesktopApplication } from "./application-compo
 import { createApplicationIpcHandlers } from "./ipc-handlers.js";
 import { createApplicationMenuTemplate } from "./menu.js";
 import { createSecureWebPreferences } from "./security.js";
+import type { DesktopApplication } from "@novel-studio/application";
 
 const currentDirectory = fileURLToPath(new URL(".", import.meta.url));
+let activeDesktopApplication: DesktopApplication | undefined;
+let shutdownInProgress = false;
 
 export async function registerApplicationIpcHandlers(): Promise<void> {
   const projectRoot =
     process.env["NOVEL_STUDIO_PROJECT_ROOT"] ??
     join(app.getPath("userData"), "projects", "minimal-chapter");
-  const handlers = createApplicationIpcHandlers(
-    await createBootstrappedDefaultDesktopApplication({ projectRoot }),
-    {
-      chooseOpenProjectDirectory: () => chooseProjectDirectory("Open Novel Studio project"),
-      chooseCreateProjectDirectory: () => chooseProjectDirectory("Create Novel Studio project")
-    }
-  );
+  activeDesktopApplication = await createBootstrappedDefaultDesktopApplication({ projectRoot });
+  const handlers = createApplicationIpcHandlers(activeDesktopApplication, {
+    chooseOpenProjectDirectory: () => chooseProjectDirectory("Open Novel Studio project"),
+    chooseCreateProjectDirectory: () => chooseProjectDirectory("Create Novel Studio project")
+  });
 
   for (const [channel, handler] of Object.entries(handlers)) {
     ipcMain.handle(channel, (_event, ...args: readonly unknown[]) => handler(...args));
+  }
+}
+
+export async function shutdownDesktopApplication(): Promise<void> {
+  const application = activeDesktopApplication;
+  activeDesktopApplication = undefined;
+  if (application !== undefined) {
+    await application.shutdown();
   }
 }
 
@@ -68,5 +77,17 @@ if (process.env["VITEST"] !== "true") {
     if (process.platform !== "darwin") {
       app.quit();
     }
+  });
+
+  app.on("before-quit", (event) => {
+    if (shutdownInProgress || activeDesktopApplication === undefined) {
+      return;
+    }
+
+    event.preventDefault();
+    shutdownInProgress = true;
+    void shutdownDesktopApplication().finally(() => {
+      app.quit();
+    });
   });
 }

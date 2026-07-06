@@ -809,6 +809,28 @@ textarea:focus-visible,
   gap: 10px;
 }
 
+.ns-editor-metrics {
+  align-items: center;
+  color: var(--ns-muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.ns-editor-metrics span {
+  border: 1px solid var(--ns-border);
+  border-radius: 999px;
+  min-height: 24px;
+  padding: 3px 8px;
+}
+
+.ns-editor-metrics[data-large-document="true"] span:last-child {
+  border-color: color-mix(in oklch, var(--ns-warning) 70%, var(--ns-border));
+  color: var(--ns-warning);
+}
+
 .ns-editor-title {
   font-size: 18px;
   margin: 0;
@@ -858,6 +880,10 @@ textarea:focus-visible,
   grid-template-columns: 1fr 52px;
   overflow: hidden;
   min-height: 220px;
+}
+
+.ns-editor-body[data-large-document="true"] {
+  border-color: color-mix(in oklch, var(--ns-warning) 55%, var(--ns-border));
 }
 
 .ns-editor-textarea {
@@ -931,6 +957,13 @@ textarea:focus-visible,
   color: var(--ns-accent);
   font-size: 12px;
   font-weight: 500;
+}
+
+.ns-diff-summary {
+  color: var(--ns-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
 }
 
 .ns-diff-item {

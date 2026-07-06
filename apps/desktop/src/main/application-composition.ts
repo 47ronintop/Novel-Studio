@@ -26,6 +26,7 @@ import {
   HistoryRepository,
   PluginRegistryFileRepository,
   ProjectFileRepository,
+  ProjectLockFileRepository,
   ProjectSettingsRepository,
   RecoveryRepository,
   SearchIndexFileRepository,
@@ -57,6 +58,7 @@ export interface BootstrappedDefaultDesktopApplicationOptions {
 export function createProjectDesktopApplication(
   options: ProjectDesktopApplicationOptions
 ): DesktopApplication {
+  const lockOwnerId = createProjectLockOwnerId();
   const chapterRepository = new ChapterFileRepository({
     projectRoot: options.projectRoot,
     traceId: "trace_desktop_chapter_repository"
@@ -107,6 +109,13 @@ export function createProjectDesktopApplication(
       new RecoveryRepository({
         projectRoot,
         traceId: "trace_desktop_project_recovery_repository"
+      }),
+    createProjectLockRepository: (projectRoot) =>
+      new ProjectLockFileRepository({
+        projectRoot,
+        ownerId: lockOwnerId,
+        traceId: "trace_desktop_project_lock_repository",
+        ...(options.now === undefined ? {} : { now: options.now })
       })
   });
   const settingsPort: ProjectSettingsPort = {
@@ -304,6 +313,10 @@ export async function createBootstrappedDefaultDesktopApplication(
   }
 
   return application;
+}
+
+function createProjectLockOwnerId(): string {
+  return `desktop_${process.pid}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 async function ensureDefaultProject(

@@ -9,12 +9,13 @@ const electronMain = join(repositoryRoot, "apps", "desktop", "dist", "main", "in
 
 test("creates a project, creates a chapter, edits it, and saves through Electron", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-e2e-"));
+  const defaultProjectRoot = join(tempRoot, "Default Project");
   const projectRoot = join(tempRoot, "Project Smoke");
   const electronApp = await electron.launch({
     args: [electronMain],
     env: {
       ...process.env,
-      NOVEL_STUDIO_PROJECT_ROOT: join(repositoryRoot, "fixtures", "projects", "minimal-chapter")
+      NOVEL_STUDIO_PROJECT_ROOT: defaultProjectRoot
     }
   });
 
@@ -61,11 +62,12 @@ test("creates a project, creates a chapter, edits it, and saves through Electron
 });
 
 test("switches visible beta activity views from the left activity bar", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-activity-e2e-"));
   const electronApp = await electron.launch({
     args: [electronMain],
     env: {
       ...process.env,
-      NOVEL_STUDIO_PROJECT_ROOT: join(repositoryRoot, "fixtures", "projects", "minimal-chapter")
+      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Default Project")
     }
   });
 
@@ -85,5 +87,6 @@ test("switches visible beta activity views from the left activity bar", async ()
     await expect(page.getByLabel("编辑区")).toBeVisible();
   } finally {
     await electronApp.close();
+    await rm(tempRoot, { recursive: true, force: true });
   }
 });

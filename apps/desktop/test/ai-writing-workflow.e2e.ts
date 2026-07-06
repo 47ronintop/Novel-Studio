@@ -9,12 +9,13 @@ const electronMain = join(repositoryRoot, "apps", "desktop", "dist", "main", "in
 
 test("generates an AI writing suggestion and applies it only after confirmation", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-ai-e2e-"));
+  const defaultProjectRoot = join(tempRoot, "Default Project");
   const projectRoot = join(tempRoot, "AI Workflow Smoke");
   const electronApp = await electron.launch({
     args: [electronMain],
     env: {
       ...process.env,
-      NOVEL_STUDIO_PROJECT_ROOT: join(repositoryRoot, "fixtures", "projects", "minimal-chapter")
+      NOVEL_STUDIO_PROJECT_ROOT: defaultProjectRoot
     }
   });
 
