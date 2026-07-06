@@ -36,6 +36,7 @@ export interface ChapterEditorSession {
   getState(): ChapterEditorState | undefined;
   load(): Promise<Result<ChapterEditorState, UnifiedError>>;
   edit(nextBody: string): Promise<Result<ChapterEditorState, UnifiedError>>;
+  applyAiEdit(nextBody: string): Promise<Result<ChapterEditorState, UnifiedError>>;
   save(): Promise<Result<ChapterEditorState, UnifiedError>>;
   listVersions(): Promise<Result<readonly ChapterVersionSummary[], UnifiedError>>;
   previewVersion(versionId: string): Promise<Result<ChapterVersionContent, UnifiedError>>;
@@ -105,6 +106,27 @@ export function createChapterEditorSession(
       }
 
       return ok(state);
+    },
+    async applyAiEdit(nextBody: string) {
+      if (state === undefined) {
+        return err(createChapterSessionError("CHAPTER_SESSION_NOT_LOADED"));
+      }
+
+      if (options.historyRepository !== undefined) {
+        const snapshotResult = await options.historyRepository.snapshotChapterVersion({
+          chapterId: options.chapterId,
+          body: state.chapter.body,
+          reason: "before-ai-apply",
+          createdBy: "user",
+          parentVersionId: null
+        });
+
+        if (!snapshotResult.ok) {
+          return snapshotResult;
+        }
+      }
+
+      return this.edit(nextBody);
     },
     async save() {
       if (state === undefined) {

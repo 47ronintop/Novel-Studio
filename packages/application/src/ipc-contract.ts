@@ -16,6 +16,7 @@ export const APPLICATION_IPC_CHANNELS = [
   "application:search:query",
   "application:ai:generate-chapter-suggestion",
   "application:ai:generate-selection-preview",
+  "application:ai:apply-selection-preview",
   "application:ai:apply-chapter-suggestion",
   "application:ai:list-workflow-runs",
   "application:ai:read-workflow-run",

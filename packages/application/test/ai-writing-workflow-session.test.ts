@@ -6,6 +6,7 @@ import { createChapterEditorSession } from "../src/chapter-editor-session.js";
 import { createLlmAdapter, createMockProvider } from "@novel-studio/llm-adapter";
 import type { LlmProvider, LlmRequest } from "@novel-studio/llm-adapter";
 import { isErr, isOk, ok, type ChapterDocument } from "@novel-studio/shared";
+import type { ChapterVersionSnapshotInput } from "@novel-studio/shared";
 import type { ChapterDraftRepositoryPort } from "../src/chapter-editor-session.js";
 
 const originalChapter = {
@@ -484,6 +485,67 @@ describe("M14 AI writing workflow session", () => {
     expect(chapterSession.getState()?.dirty).toBe(false);
     expect(writes).toEqual([]);
   });
+
+  test("applies a stored selection preview only after confirmation", async () => {
+    const writes: ChapterDocument[] = [];
+    const snapshots: ChapterVersionSnapshotInput[] = [];
+    const chapterSession = createChapterEditorSession({
+      chapterId: "ch_m14",
+      repository: createRepository(writes),
+      historyRepository: createHistoryRepository(snapshots),
+      now: () => "2026-07-04T00:00:00.000Z"
+    });
+    const loaded = await chapterSession.load();
+    if (isErr(loaded)) {
+      throw new Error(loaded.error.message);
+    }
+
+    const aiWorkflow = createAgentBackedAiWritingWorkflowSession({
+      chapterEditorSession: chapterSession,
+      llmAdapter: createLlmAdapter({
+        provider: createSelectionPreviewProvider([]),
+        clock: () => "2026-07-04T00:00:00.000Z"
+      }),
+      now: () => "2026-07-04T00:00:00.000Z",
+      createWorkflowRunId: () => "wfrun_selection_apply_m76",
+      createSuggestionId: () => "sug_selection_apply_m76",
+      createAgentRunId: () => "agentrun_selection_apply_m76",
+      createHandoffId: () => "handoff_selection_apply_m76"
+    });
+
+    const preview = await aiWorkflow.generateSelectionPreview({
+      instruction: "Rewrite the selected sentence.",
+      selection: {
+        startOffset: 0,
+        endOffset: 13,
+        selectedText: "Opening line."
+      }
+    });
+    if (isErr(preview)) {
+      throw new Error(preview.error.message);
+    }
+
+    expect(chapterSession.getState()?.chapter.body).toBe("Opening line.\n");
+    const applied = await aiWorkflow.applySelectionPreview(preview.value.previewId);
+
+    expect(isOk(applied)).toBe(true);
+    if (isErr(applied)) {
+      throw new Error(applied.error.message);
+    }
+    expect(applied.value.state.chapter.body).toBe("The opening line tightened.\n");
+    expect(applied.value.state.dirty).toBe(true);
+    expect(applied.value.state.saveStatus).toBe("Unsaved");
+    expect(writes).toEqual([]);
+    expect(snapshots).toEqual([
+      {
+        chapterId: "ch_m14",
+        body: "Opening line.\n",
+        reason: "before-ai-apply",
+        createdBy: "user",
+        parentVersionId: null
+      }
+    ]);
+  });
 });
 
 function createRepository(writes: ChapterDocument[]): ChapterDraftRepositoryPort {
@@ -494,6 +556,30 @@ function createRepository(writes: ChapterDocument[]): ChapterDraftRepositoryPort
     async writeChapter(chapter) {
       writes.push(chapter);
       return ok(chapter);
+    }
+  };
+}
+
+function createHistoryRepository(snapshots: ChapterVersionSnapshotInput[]) {
+  return {
+    async snapshotChapterVersion(input: ChapterVersionSnapshotInput) {
+      snapshots.push(input);
+      return ok({
+        versionId: `ver_${snapshots.length}`,
+        reason: input.reason,
+        createdBy: input.createdBy ?? "user",
+        createdAt: "2026-07-04T00:00:00.000Z",
+        parentVersionId: input.parentVersionId ?? null
+      });
+    },
+    async listChapterVersions() {
+      return ok([]);
+    },
+    async readChapterVersion() {
+      return ok({
+        versionId: "ver_01",
+        body: "Opening line.\n"
+      });
     }
   };
 }

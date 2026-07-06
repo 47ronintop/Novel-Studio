@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.41 | Status: Active | Last Updated: 2026-07-06
+Version: 1.42 | Status: Active | Last Updated: 2026-07-06
 
 ## 目标
 
@@ -92,6 +92,9 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M72       | Plugin Sandbox Fixture     | deterministic fixture worker、timeout teardown 和 payload limit enforcement  | Complete |
 | M73       | CodeMirror DOM Mount Plan  | CodeMirror DOM view mount descriptor、fallback metadata 和 no default switch | Complete |
 | M74       | Selection AI App Flow      | Application/IPC/renderer selection preview generation 和 preview-only diff   | Complete |
+| M75       | Selection Event UI Wiring  | textarea selection events、runtime selection state 和 preview command wiring | Complete |
+| M76       | Selection Preview Apply    | stored selection preview、explicit apply 和 before-ai-apply snapshot         | Complete |
+| M77       | Sandbox Isolation Spike    | sandbox isolation plan DTO、signing/teardown/readiness contract              | Complete |
 
 ## M15 完成内容
 
@@ -459,19 +462,30 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - Desktop Application、IPC allowlist、preload API 和 renderer AI bridge 接入 `generateSelectionPreview()`；renderer bridge 不设置可应用 suggestion id，避免 selection preview 被自动应用。
 - M72-M74 不包含真实第三方插件代码执行、OS/process sandbox、签名 UI、CodeMirror 默认切换、真实 DOM view 替换、selection preview 自动 apply 或完整 selection event UI 接线。
 
+## M75-M77 完成内容
+
+- 新增 `docs/productization/m75-m77-selection-apply-sandbox-isolation.md`，明确 selection event wiring、selection apply confirmation 和 sandbox isolation spike 的范围。
+- Chapter Editor textarea 新增真实 selection event extraction，`onSelect`、`onMouseUp`、`onKeyUp` 将 `selectionStart`/`selectionEnd` 转换为结构化 selection。
+- Renderer App 持有 active chapter selection，并把 selection 输入 editor runtime props，使 runtime 状态条显示 selection summary 和 preview command。
+- Selection preview button 通过 `AiWritingWorkflowBridge.generateSelectionPreview()` 走 Application/IPC/LLM Adapter，renderer 仍不直接调模型。
+- AI workflow 存储 selection preview，新增 `applySelectionPreview()`；显式应用后通过 `ChapterEditorSession.applyAiEdit()` 更新未保存草稿，并在 history 可用时写入 `before-ai-apply` 快照。
+- IPC allowlist、preload API 和 renderer bridge 接入 `applySelectionPreview()`；AI panel 的 Apply 可以应用当前 selection preview。
+- Plugin Runtime 新增 `createPluginSandboxIsolationPlan()`，输出 signing、teardown、timeout、payload、denied capabilities 和 blocked readiness contract，不执行任意插件代码。
+- M75-M77 不包含 CodeMirror 默认替换、真实 isolated worker/process 启动、插件签名 UI、marketplace 或 selection preview 自动保存到章节文件。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19-M74，其中 M27 首次使用引导已通过 M48 回补完成。
+- Post-M18 产品化打磨已完成 M19-M77，其中 M27 首次使用引导已通过 M48 回补完成。
 - 当前产品状态是 beta productization：主干闭环可运行，但多个宪法/UI 指南能力仍是 Product Gap。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- M75 建议进入 Selection Event UI Wiring：把真实 textarea/CodeMirror selection event 接到 renderer runtime snapshot 和 selection AI preview 按钮。
-- M76 建议进入 Selection Preview Apply Confirmation：为 selection preview 增加用户确认后的 apply path，仍需版本快照和 undo/rollback。
-- M77 建议进入 Plugin Sandbox Isolation Spike：在 fixture worker 之后验证真实隔离 worker/process、签名和权限提示边界。
+- M78 建议进入 CodeMirror DOM View Implementation：在现有 mount plan 之后实现可回退的真实 DOM view adapter。
+- M79 建议进入 Plugin Isolation Worker Prototype：在 isolation plan 之后验证真实 worker/process 启动、超时 teardown 和输出通道。
+- M80 建议进入 Workflow Designer Layout Persistence：补 graph layout persistence、drag/drop 与 designer availability。
 
 ## 当前技术债重点
 

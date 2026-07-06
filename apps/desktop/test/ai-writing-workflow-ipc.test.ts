@@ -164,6 +164,20 @@ describe("M14 AI writing workflow IPC", () => {
     expect(calls).toEqual(["application:ai:generate-selection-preview:1"]);
   });
 
+  test("exposes selection preview apply through the preload API", async () => {
+    const calls: string[] = [];
+    const api = createNovelStudioApi({
+      async invoke(channel, ...args) {
+        calls.push(`${channel}:${args.length}`);
+        return ok(chapterSnapshot());
+      }
+    });
+
+    await api.ai.applySelectionPreview("sug_selection_m76");
+
+    expect(calls).toEqual(["application:ai:apply-selection-preview:1"]);
+  });
+
   test("routes AI writing IPC channels to the Application layer", async () => {
     const handlers = createApplicationIpcHandlers(createFakeApplication());
 
@@ -188,6 +202,14 @@ describe("M14 AI writing workflow IPC", () => {
         }
       })
     ).resolves.toEqual(ok(selectionPreview));
+  });
+
+  test("routes selection preview apply IPC channel to the Application layer", async () => {
+    const handlers = createApplicationIpcHandlers(createFakeApplication());
+
+    await expect(
+      handlers["application:ai:apply-selection-preview"]("sug_selection_m76")
+    ).resolves.toEqual(ok(chapterSnapshot()));
   });
 
   test("exposes workflow run history through the preload API", async () => {
@@ -234,6 +256,7 @@ function createFakeApplication(): DesktopApplication {
     selectProjectChapter: unsupported,
     generateActiveChapterSuggestion: async () => ok(suggestion),
     generateActiveSelectionPreview: async () => ok(selectionPreview),
+    applyActiveSelectionPreview: async () => ok(chapterSnapshot()),
     applyActiveChapterSuggestion: async () => ok(chapterSnapshot()),
     listWorkflowRuns: async () => ok([workflowRunSummary()]),
     readWorkflowRun: async () => ok(workflowRunRecord()),

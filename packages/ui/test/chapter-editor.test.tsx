@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 
-import { ChapterEditor } from "../src/chapter-editor.js";
+import { ChapterEditor, readTextareaSelection } from "../src/chapter-editor.js";
 
 const chapter = {
   frontmatter: {
@@ -160,5 +160,17 @@ describe("ChapterEditor", () => {
     expect(html).toContain("Default shortcuts");
     expect(html).toContain("Large document optimizations inactive");
     expect(html).not.toMatch(/filesystem|node:fs|projectRoot/i);
+  });
+
+  test("extracts textarea selection offsets for renderer runtime wiring", () => {
+    expect(
+      readTextareaSelection({
+        selectionStart: 2,
+        selectionEnd: 9
+      })
+    ).toEqual({
+      anchor: 2,
+      head: 9
+    });
   });
 });

@@ -194,6 +194,7 @@ export interface AiWritingWorkflowSession {
   generateSelectionPreview(
     request: AiWritingSelectionPreviewRequest
   ): Promise<Result<AiWritingSelectionPreview, UnifiedError>>;
+  applySelectionPreview(previewId: string): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
   applyChapterSuggestion(
     suggestionId: string
   ): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
@@ -217,6 +218,10 @@ interface StoredSuggestion {
   readonly suggestion: AiWritingSuggestion;
   readonly workflow: WorkflowDefinition;
   readonly runState: WorkflowRunState;
+}
+
+interface StoredSelectionPreview {
+  readonly preview: AiWritingSelectionPreview;
 }
 
 const workflowDefinition: WorkflowDefinition = {
@@ -273,6 +278,7 @@ export function createAgentBackedAiWritingWorkflowSession(
   const createAgentRunId = options.createAgentRunId ?? (() => `agentrun_${Date.now()}`);
   const createHandoffId = options.createHandoffId ?? (() => `handoff_${Date.now()}`);
   const suggestions = new Map<string, StoredSuggestion>();
+  const selectionPreviews = new Map<string, StoredSelectionPreview>();
 
   return {
     async generateChapterSuggestion(request) {
@@ -631,8 +637,7 @@ export function createAgentBackedAiWritingWorkflowSession(
         validatedSelection.value,
         output.proposedText
       );
-
-      return ok({
+      const preview: AiWritingSelectionPreview = {
         previewId: createSuggestionId(),
         workflowRunId: runState.workflowRunId,
         previewOnly: true,
@@ -650,6 +655,43 @@ export function createAgentBackedAiWritingWorkflowSession(
         },
         contextTrace: contextBundle.value.trace,
         observability
+      };
+      selectionPreviews.set(preview.previewId, { preview });
+
+      return ok(preview);
+    },
+    async applySelectionPreview(previewId) {
+      const stored = selectionPreviews.get(previewId);
+      if (stored === undefined) {
+        return aiWorkflowError({
+          code: "AI_WORKFLOW_SELECTION_PREVIEW_NOT_FOUND",
+          message: "The requested AI selection preview is not available.",
+          suggestedAction: "Generate a new selection preview before applying it."
+        });
+      }
+
+      const replacement = stored.preview.diffPreview.changes[0];
+      if (replacement === undefined || replacement.kind !== "replace") {
+        return aiWorkflowError({
+          code: "AI_WORKFLOW_SELECTION_PREVIEW_INVALID",
+          message: "The stored AI selection preview does not include a replacement diff.",
+          suggestedAction: "Generate a new selection preview before applying it."
+        });
+      }
+
+      const edited = await options.chapterEditorSession.applyAiEdit(replacement.value);
+      if (!edited.ok) {
+        return edited;
+      }
+
+      const versions = await options.chapterEditorSession.listVersions();
+      if (!versions.ok) {
+        return versions;
+      }
+
+      return ok({
+        state: edited.value,
+        versions: versions.value
       });
     },
     async applyChapterSuggestion(suggestionId) {
@@ -680,7 +722,7 @@ export function createAgentBackedAiWritingWorkflowSession(
         return completed;
       }
 
-      const edited = await options.chapterEditorSession.edit(stored.suggestion.proposedBody);
+      const edited = await options.chapterEditorSession.applyAiEdit(stored.suggestion.proposedBody);
       if (!edited.ok) {
         return edited;
       }

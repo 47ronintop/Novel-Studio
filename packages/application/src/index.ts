@@ -138,6 +138,12 @@ export type {
   PluginRuntimeSession,
   PluginRuntimeSessionOptions,
   PluginRuntimeWorkflowStepInput,
+  PluginSandboxIsolationInput,
+  PluginSandboxIsolationPlan,
+  PluginSandboxIsolationReadiness,
+  PluginSandboxIsolationRuntimeKind,
+  PluginSandboxIsolationSigning,
+  PluginSandboxIsolationWorkerPlan,
   PluginSandboxFixtureWorkerOptions,
   PluginSandboxFixtureWorkerOutput,
   PluginSandboxDeniedCapability,
@@ -147,6 +153,7 @@ export type {
   PluginSandboxTrustState
 } from "./plugin-runtime-session.js";
 export {
+  createPluginSandboxIsolationPlan,
   createPluginSandboxFixtureWorkerAdapter,
   createPluginRuntimeSession,
   createPluginSandboxPolicyReport

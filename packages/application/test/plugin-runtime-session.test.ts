@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import { ok } from "@novel-studio/shared";
 
 import {
+  createPluginSandboxIsolationPlan,
   createPluginSandboxFixtureWorkerAdapter,
   createPluginSandboxPolicyReport,
   createPluginRuntimeSession,
@@ -350,6 +351,53 @@ describe("PluginRuntimeSession", () => {
           maxOutputBytes: 64
         }
       }
+    });
+  });
+
+  test("creates a blocked sandbox isolation plan without executing plugin code", () => {
+    const plan = createPluginSandboxIsolationPlan({
+      snapshot: {
+        ...enabledSnapshot,
+        plugins: [
+          {
+            ...enabledPlugin,
+            manifest: {
+              ...enabledManifest,
+              entryKind: "local-process",
+              requestedPermissions: [
+                ...enabledManifest.requestedPermissions,
+                { permission: "shell:execute", scopes: ["project"] }
+              ]
+            }
+          }
+        ]
+      },
+      runtimeKind: "utility-process",
+      timeoutMs: 2500,
+      maxOutputBytes: 8192,
+      signedPluginIds: []
+    });
+
+    expect(plan).toEqual({
+      schemaVersion: "1.0",
+      runtimeKind: "utility-process",
+      workers: [
+        {
+          pluginId: "novel.structure-tools",
+          executable: false,
+          readiness: "blocked",
+          signing: "required",
+          teardown: "required",
+          timeoutMs: 2500,
+          maxOutputBytes: 8192,
+          deniedCapabilities: ["shell:execute"],
+          reasons: [
+            "Plugin package must be signed or explicitly trusted before isolated execution.",
+            "Plugin requests denied sandbox capability shell:execute.",
+            "Real isolated worker execution is not enabled by this spike."
+          ]
+        }
+      ]
     });
   });
 });

@@ -53,6 +53,7 @@ describe("Electron security baseline", () => {
       "application:search:query",
       "application:ai:generate-chapter-suggestion",
       "application:ai:generate-selection-preview",
+      "application:ai:apply-selection-preview",
       "application:ai:apply-chapter-suggestion",
       "application:ai:list-workflow-runs",
       "application:ai:read-workflow-run",
@@ -116,6 +117,7 @@ describe("Electron security baseline", () => {
         selectedText: "Hello"
       }
     });
+    await api.ai.applySelectionPreview("sug_selection_01");
     await api.ai.applyChapterSuggestion("sug_01");
     await api.ai.listWorkflowRuns();
     await api.ai.readWorkflowRun("run_01");
@@ -192,6 +194,7 @@ describe("Electron security baseline", () => {
       "application:chapter:load",
       "application:ai:generate-chapter-suggestion",
       "application:ai:generate-selection-preview",
+      "application:ai:apply-selection-preview",
       "application:ai:apply-chapter-suggestion",
       "application:ai:list-workflow-runs",
       "application:ai:read-workflow-run",

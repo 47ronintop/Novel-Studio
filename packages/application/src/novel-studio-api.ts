@@ -90,6 +90,7 @@ export interface NovelStudioApi {
     generateSelectionPreview(
       request: AiWritingSelectionPreviewRequest
     ): Promise<Result<AiWritingSelectionPreview, UnifiedError>>;
+    applySelectionPreview(previewId: string): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
     applyChapterSuggestion(
       suggestionId: string
     ): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;

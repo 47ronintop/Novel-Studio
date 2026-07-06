@@ -6,6 +6,7 @@ import {
   createEditorSelectionCommand,
   createEditorVisualDiffReview,
   createSelectionAwareAiPreviewDraft,
+  createTextareaChapterEditorRuntimeProps,
   createTextareaEditorRuntimeAdapter,
   resolveEditorRuntimeAdapter,
   type EditorRuntimeEvent
@@ -355,6 +356,26 @@ describe("editor runtime adapter resolver", () => {
         ]
       },
       previewOnly: true
+    });
+  });
+
+  test("derives textarea runtime props from explicit UI selection events", () => {
+    expect(
+      createTextareaChapterEditorRuntimeProps({
+        body: "Alpha sentence.\nBeta sentence.",
+        saveStatus: "Saved",
+        selection: {
+          anchor: 0,
+          head: 15
+        }
+      })
+    ).toMatchObject({
+      activeRangeLabel: "Selection 0-15",
+      selectionSummaryLabel: "Selection 15 chars, lines 1-1",
+      selectionAiPreviewCommand: {
+        commandId: "editor.ai.preview-selection",
+        label: "Preview selection rewrite"
+      }
     });
   });
 

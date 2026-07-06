@@ -9,6 +9,7 @@ import type {
 } from "@novel-studio/application";
 import type {
   AiWritingWorkflowProps,
+  ChapterEditorSelection,
   ChapterEditorRuntimeProps,
   ChapterEditorProps,
   CommandPaletteFeedback,
@@ -35,7 +36,11 @@ import { createStoryBibleBridge } from "./story-bible-bridge.js";
 import { createSettingsBridge } from "./settings-bridge.js";
 import { createStudioBridge } from "./studio-bridge.js";
 import { reduceRendererShortcut } from "./shortcuts.js";
-import { createTextareaChapterEditorRuntimeProps } from "./editor-runtime.js";
+import {
+  createEditorSelectionCommand,
+  createTextareaChapterEditorRuntimeProps,
+  createTextareaEditorRuntimeAdapter
+} from "./editor-runtime.js";
 
 declare global {
   interface Window {
@@ -165,6 +170,7 @@ export function App() {
   const [shellState, setShellState] = useState<DesktopShellState>(rendererShellState);
   const [commands, setCommands] = useState<readonly ApplicationCommand[]>(rendererCommands);
   const [chapterEditor, setChapterEditor] = useState<ChapterEditorProps | undefined>();
+  const [chapterSelection, setChapterSelection] = useState<ChapterEditorSelection | undefined>();
   const [projectWorkflow, setProjectWorkflow] = useState(() => projectWorkflowBridge?.getProps());
   const [projectSearch, setProjectSearch] = useState(() => projectSearchBridge?.getProps());
   const [storyBible, setStoryBible] = useState<StoryBibleSummaryProps | undefined>(() =>
@@ -319,6 +325,10 @@ export function App() {
     },
     [chapterBridge]
   );
+
+  const handleSelectionChange = useCallback((selection: ChapterEditorSelection) => {
+    setChapterSelection(selection);
+  }, []);
 
   const handleSave = useCallback(() => {
     if (chapterBridge === undefined) {
@@ -708,6 +718,64 @@ export function App() {
     });
   }, [aiWritingWorkflow, aiWritingWorkflowBridge]);
 
+  const handleSelectionAiPreview = useCallback(
+    (commandId: string) => {
+      if (
+        aiWritingWorkflowBridge === undefined ||
+        aiWritingWorkflow === undefined ||
+        chapterEditor === undefined ||
+        chapterSelection === undefined
+      ) {
+        return;
+      }
+
+      const adapter = createTextareaEditorRuntimeAdapter();
+      const handle = adapter.mount({
+        body: chapterEditor.chapter.body,
+        saveStatus: chapterEditor.saveStatus
+      });
+      handle.updateSelection(chapterSelection);
+      const command = createEditorSelectionCommand(handle.getSnapshot(), commandId);
+      if (command === undefined || command.selection.collapsed) {
+        return;
+      }
+
+      const instruction =
+        aiWritingWorkflow.instruction.trim().length === 0
+          ? "Rewrite the selected text."
+          : aiWritingWorkflow.instruction;
+      const selectedText = chapterEditor.chapter.body.slice(
+        command.selection.startOffset,
+        command.selection.endOffset
+      );
+
+      setAiWritingWorkflow(aiWritingWorkflowBridge.beginGenerate(instruction));
+      void aiWritingWorkflowBridge
+        .generateSelectionPreview({
+          instruction,
+          command,
+          selectedText
+        })
+        .then((nextAiWritingWorkflow) => {
+          setAiWritingWorkflow(nextAiWritingWorkflow);
+          const diffPreview = nextAiWritingWorkflow.diffPreview;
+          if (diffPreview === undefined) {
+            return;
+          }
+
+          setChapterEditor((current) =>
+            current === undefined
+              ? current
+              : {
+                  ...current,
+                  diffPreview
+                }
+          );
+        });
+    },
+    [aiWritingWorkflow, aiWritingWorkflowBridge, chapterEditor, chapterSelection]
+  );
+
   const handleApplyAiSuggestion = useCallback(() => {
     if (aiWritingWorkflowBridge === undefined) {
       return;
@@ -955,8 +1023,10 @@ export function App() {
       ? undefined
       : {
           ...chapterEditor,
-          runtime: createChapterEditorRuntime(chapterEditor),
+          runtime: createChapterEditorRuntime(chapterEditor, chapterSelection),
           onBodyChange: handleBodyChange,
+          onSelectionChange: handleSelectionChange,
+          onSelectionAiPreview: handleSelectionAiPreview,
           onSave: handleSave,
           onVersionPreview: handleVersionPreview,
           onVersionRestore: handleVersionRestore
@@ -1179,10 +1249,14 @@ function applyShellPreferences(
   };
 }
 
-function createChapterEditorRuntime(chapterEditor: ChapterEditorProps): ChapterEditorRuntimeProps {
+function createChapterEditorRuntime(
+  chapterEditor: ChapterEditorProps,
+  selection: ChapterEditorSelection | undefined
+): ChapterEditorRuntimeProps {
   return createTextareaChapterEditorRuntimeProps({
     body: chapterEditor.chapter.body,
     saveStatus: chapterEditor.saveStatus,
+    ...(selection === undefined ? {} : { selection }),
     ...(chapterEditor.diffPreview === undefined ? {} : { diffPreview: chapterEditor.diffPreview })
   });
 }

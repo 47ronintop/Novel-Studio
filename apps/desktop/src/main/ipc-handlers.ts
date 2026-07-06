@@ -120,6 +120,13 @@ export function createApplicationIpcHandlers(
         toAiWritingSelectionPreviewRequest(request)
       );
     },
+    "application:ai:apply-selection-preview": (previewId: unknown) => {
+      if (typeof previewId !== "string") {
+        return application.applyActiveSelectionPreview("");
+      }
+
+      return application.applyActiveSelectionPreview(previewId);
+    },
     "application:ai:apply-chapter-suggestion": (suggestionId: unknown) => {
       if (typeof suggestionId !== "string") {
         return application.applyActiveChapterSuggestion("");

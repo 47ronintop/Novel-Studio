@@ -255,10 +255,14 @@ describe("AI writing workflow bridge", () => {
     expect(generated.status).toBe("suggestion-ready");
     expect(generated.summary).toBe("Rewrites only the selected sentence.");
     expect(generated.diffPreview).toEqual(selectionPreview.diffPreview);
-    expect(calls).toEqual(["ai.selection:Rewrite selection.:0-13"]);
-    await expect(bridge.applySuggestion()).rejects.toThrow(
-      "No AI writing suggestion is available to apply."
-    );
+    const applied = await bridge.applySelectionPreview();
+
+    expect(applied.chapter.body).toContain("AI continuation draft.");
+    expect(applied.dirty).toBe(true);
+    expect(calls).toEqual([
+      "ai.selection:Rewrite selection.:0-13",
+      "ai.apply-selection:sug_selection_m74"
+    ]);
   });
 
   test("keeps failed workflow diagnostics visible and allows user-triggered retry", async () => {
@@ -375,6 +379,10 @@ function createApi(calls: string[]): NovelStudioApi {
           `ai.selection:${request.instruction}:${request.selection.startOffset}-${request.selection.endOffset}`
         );
         return ok(selectionPreview);
+      },
+      applySelectionPreview: async (previewId) => {
+        calls.push(`ai.apply-selection:${previewId}`);
+        return ok(appliedSnapshot);
       },
       applyChapterSuggestion: async (suggestionId) => {
         calls.push(`ai.apply:${suggestionId}`);

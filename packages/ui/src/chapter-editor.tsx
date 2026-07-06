@@ -45,10 +45,21 @@ export interface ChapterEditorProps {
   readonly diffPreview?: ChapterEditorDiffPreview;
   readonly runtime?: ChapterEditorRuntimeProps;
   readonly onBodyChange?: (nextBody: string) => void;
+  readonly onSelectionChange?: (selection: ChapterEditorSelection) => void;
   readonly onSave?: () => void;
   readonly onSelectionAiPreview?: (commandId: string) => void;
   readonly onVersionPreview?: (versionId: string) => void;
   readonly onVersionRestore?: (versionId: string) => void;
+}
+
+export interface ChapterEditorSelection {
+  readonly anchor: number;
+  readonly head: number;
+}
+
+export interface TextareaSelectionSource {
+  readonly selectionStart: number;
+  readonly selectionEnd: number;
 }
 
 export function ChapterEditor({
@@ -59,6 +70,7 @@ export function ChapterEditor({
   diffPreview,
   runtime,
   onBodyChange,
+  onSelectionChange,
   onSave,
   onSelectionAiPreview,
   onVersionPreview,
@@ -72,6 +84,9 @@ export function ChapterEditor({
     ? documentLines.slice(0, MAX_RENDERED_GUTTER_LINES)
     : documentLines;
   const diffSummary = diffPreview === undefined ? undefined : summarizeDiff(diffPreview);
+  const handleSelectionChange = (source: TextareaSelectionSource) => {
+    onSelectionChange?.(readTextareaSelection(source));
+  };
 
   return (
     <section className="ns-editor-layout" aria-label="章节编辑器">
@@ -121,6 +136,15 @@ export function ChapterEditor({
           className="ns-editor-textarea"
           onChange={(event) => {
             onBodyChange?.(event.currentTarget.value);
+          }}
+          onKeyUp={(event) => {
+            handleSelectionChange(event.currentTarget);
+          }}
+          onMouseUp={(event) => {
+            handleSelectionChange(event.currentTarget);
+          }}
+          onSelect={(event) => {
+            handleSelectionChange(event.currentTarget);
           }}
           readOnly={onBodyChange === undefined}
           value={chapter.body}
@@ -205,6 +229,13 @@ export function ChapterEditor({
       </div>
     </section>
   );
+}
+
+export function readTextareaSelection(source: TextareaSelectionSource): ChapterEditorSelection {
+  return {
+    anchor: source.selectionStart,
+    head: source.selectionEnd
+  };
 }
 
 function ChapterEditorRuntime({

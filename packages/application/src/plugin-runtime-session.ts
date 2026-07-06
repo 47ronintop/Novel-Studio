@@ -80,6 +80,36 @@ export interface PluginSandboxPolicyReport {
   readonly decisions: readonly PluginSandboxPolicyDecision[];
 }
 
+export type PluginSandboxIsolationRuntimeKind = "worker-thread" | "utility-process";
+export type PluginSandboxIsolationReadiness = "blocked" | "ready";
+export type PluginSandboxIsolationSigning = "required" | "satisfied";
+
+export interface PluginSandboxIsolationInput {
+  readonly snapshot: PluginSettingsSnapshot;
+  readonly runtimeKind?: PluginSandboxIsolationRuntimeKind;
+  readonly timeoutMs?: number;
+  readonly maxOutputBytes?: number;
+  readonly signedPluginIds?: readonly string[];
+}
+
+export interface PluginSandboxIsolationWorkerPlan {
+  readonly pluginId: string;
+  readonly executable: boolean;
+  readonly readiness: PluginSandboxIsolationReadiness;
+  readonly signing: PluginSandboxIsolationSigning;
+  readonly teardown: "required";
+  readonly timeoutMs: number;
+  readonly maxOutputBytes: number;
+  readonly deniedCapabilities: readonly PluginSandboxDeniedCapability[];
+  readonly reasons: readonly string[];
+}
+
+export interface PluginSandboxIsolationPlan {
+  readonly schemaVersion: "1.0";
+  readonly runtimeKind: PluginSandboxIsolationRuntimeKind;
+  readonly workers: readonly PluginSandboxIsolationWorkerPlan[];
+}
+
 export interface PluginRuntimeAdapter {
   executeHostCommand(
     input: PluginRuntimeAdapterCommandInput
@@ -224,6 +254,47 @@ export function createPluginSandboxPolicyReport(
         mode: "sandboxed-code",
         allowed: false,
         trustState,
+        timeoutMs,
+        maxOutputBytes,
+        deniedCapabilities,
+        reasons
+      };
+    })
+  };
+}
+
+export function createPluginSandboxIsolationPlan(
+  input: PluginSandboxIsolationInput
+): PluginSandboxIsolationPlan {
+  const runtimeKind = input.runtimeKind ?? "utility-process";
+  const timeoutMs = input.timeoutMs ?? 2000;
+  const maxOutputBytes = input.maxOutputBytes ?? 32768;
+  const signedPluginIds = new Set(input.signedPluginIds ?? []);
+
+  return {
+    schemaVersion: "1.0",
+    runtimeKind,
+    workers: input.snapshot.plugins.map((entry) => {
+      const deniedCapabilities = deniedSandboxCapabilities(entry);
+      const signing: PluginSandboxIsolationSigning = signedPluginIds.has(entry.pluginId)
+        ? "satisfied"
+        : "required";
+      const reasons = [
+        ...(signing === "required"
+          ? ["Plugin package must be signed or explicitly trusted before isolated execution."]
+          : []),
+        ...deniedCapabilities.map(
+          (capability) => `Plugin requests denied sandbox capability ${capability}.`
+        ),
+        "Real isolated worker execution is not enabled by this spike."
+      ];
+
+      return {
+        pluginId: entry.pluginId,
+        executable: false,
+        readiness: "blocked",
+        signing,
+        teardown: "required",
         timeoutMs,
         maxOutputBytes,
         deniedCapabilities,

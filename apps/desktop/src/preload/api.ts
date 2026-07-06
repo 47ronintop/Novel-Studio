@@ -133,6 +133,12 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           "application:ai:generate-selection-preview",
           request
         ),
+      applySelectionPreview: (previewId: string) =>
+        invokeTyped<Result<ChapterEditorSnapshot, UnifiedError>>(
+          ipc,
+          "application:ai:apply-selection-preview",
+          previewId
+        ),
       applyChapterSuggestion: (suggestionId: string) =>
         invokeTyped<Result<ChapterEditorSnapshot, UnifiedError>>(
           ipc,

@@ -113,6 +113,11 @@ const api: NovelStudioApi = {
         "application:ai:generate-selection-preview",
         request
       ),
+    applySelectionPreview: (previewId: string) =>
+      invokeTyped<Result<ChapterEditorSnapshot, UnifiedError>>(
+        "application:ai:apply-selection-preview",
+        previewId
+      ),
     applyChapterSuggestion: (suggestionId: string) =>
       invokeTyped<Result<ChapterEditorSnapshot, UnifiedError>>(
         "application:ai:apply-chapter-suggestion",

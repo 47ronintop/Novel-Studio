@@ -151,6 +151,29 @@ function createFakeAiSession(calls: string[]): AiWritingWorkflowSession {
         }
       });
     },
+    async applySelectionPreview(previewId) {
+      calls.push(`apply-selection:${previewId}`);
+      return ok({
+        state: {
+          chapter: {
+            frontmatter: {
+              schemaVersion: "1.0",
+              id: "ch_m14",
+              type: "chapter",
+              title: "M14",
+              order: 1,
+              status: "draft",
+              createdAt: "2026-07-04T00:00:00.000Z",
+              updatedAt: "2026-07-04T00:00:00.000Z"
+            },
+            body: "Selection rewrite.\n"
+          },
+          dirty: true,
+          saveStatus: "Unsaved"
+        },
+        versions: []
+      });
+    },
     async applyChapterSuggestion(suggestionId) {
       calls.push(`apply:${suggestionId}`);
       return ok({

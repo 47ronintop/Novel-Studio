@@ -137,6 +137,9 @@ export interface DesktopApplication {
   generateActiveSelectionPreview(
     request: AiWritingSelectionPreviewRequest
   ): Promise<Result<AiWritingSelectionPreview, UnifiedError>>;
+  applyActiveSelectionPreview(
+    previewId: string
+  ): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
   applyActiveChapterSuggestion(
     suggestionId: string
   ): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
@@ -416,6 +419,14 @@ export function createDesktopApplication(
       }
 
       return activeAiWritingWorkflowSession.generateSelectionPreview(request);
+    },
+    async applyActiveSelectionPreview(previewId) {
+      const activeAiWritingWorkflowSession = getAiWritingWorkflowSession();
+      if (activeAiWritingWorkflowSession === undefined) {
+        return aiWritingWorkflowUnavailable();
+      }
+
+      return activeAiWritingWorkflowSession.applySelectionPreview(previewId);
     },
     async applyActiveChapterSuggestion(suggestionId) {
       const activeAiWritingWorkflowSession = getAiWritingWorkflowSession();

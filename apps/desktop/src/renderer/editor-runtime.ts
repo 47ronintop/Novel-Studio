@@ -469,11 +469,16 @@ export function createSelectionAwareAiPreviewDraft(input: {
 export function createTextareaChapterEditorRuntimeProps(input: {
   readonly body: string;
   readonly saveStatus: SaveStatus;
+  readonly selection?: EditorRuntimeSelection;
   readonly diffPreview?: ChapterEditorDiffPreview;
 }): ChapterEditorRuntimeProps {
   const adapter = createTextareaEditorRuntimeAdapter();
   const handle = adapter.mount(input);
   const lineCount = countLines(input.body);
+
+  if (input.selection !== undefined) {
+    handle.updateSelection(input.selection);
+  }
 
   if (lineCount > 200) {
     handle.reportWarning("Large document optimizations active");

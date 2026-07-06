@@ -10,6 +10,7 @@ export type {
   ChapterEditorDiffPreview,
   ChapterEditorProps,
   ChapterEditorRuntimeProps,
+  ChapterEditorSelection,
   ChapterEditorVersionEntry
 } from "./chapter-editor.js";
 export { ConfigStudioPanel } from "./config-studio-panel.js";

@@ -32,6 +32,7 @@ export interface AiWritingWorkflowBridge {
   cancelStreaming(): AiWritingWorkflowProps;
   generateSuggestion(instruction: string): Promise<AiWritingWorkflowProps>;
   generateSelectionPreview(input: AiSelectionPreviewBridgeInput): Promise<AiWritingWorkflowProps>;
+  applySelectionPreview(): Promise<ChapterEditorProps>;
   applySuggestion(): Promise<ChapterEditorProps>;
 }
 
@@ -43,6 +44,7 @@ export interface AiSelectionPreviewBridgeInput {
 
 export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWorkflowBridge {
   let currentSuggestionId: string | undefined;
+  let currentSelectionPreviewId: string | undefined;
   let props: AiWritingWorkflowProps = createProps({
     status: "idle",
     instruction: ""
@@ -93,6 +95,7 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
       const generated = await api.ai.generateChapterSuggestion({ instruction });
       if (!generated.ok) {
         currentSuggestionId = undefined;
+        currentSelectionPreviewId = undefined;
         const history = await loadLatestHistory(api);
         props = createProps({
           ...props,
@@ -107,6 +110,7 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
 
       const suggestion = generated.value;
       currentSuggestionId = suggestion.suggestionId;
+      currentSelectionPreviewId = undefined;
       const history = await loadHistory(api, suggestion.workflowRunId);
       props = toProps(suggestion, instruction, history);
       return props;
@@ -122,6 +126,7 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
       });
       if (!generated.ok) {
         currentSuggestionId = undefined;
+        currentSelectionPreviewId = undefined;
         const history = await loadLatestHistory(api);
         props = createProps({
           ...props,
@@ -135,13 +140,37 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
       }
 
       currentSuggestionId = undefined;
+      currentSelectionPreviewId = generated.value.previewId;
       const preview = generated.value;
       const history = await loadHistory(api, preview.workflowRunId);
       props = toSelectionPreviewProps(preview, input.instruction, history);
       return props;
     },
+    async applySelectionPreview() {
+      if (currentSelectionPreviewId === undefined) {
+        throw new Error("No AI selection preview is available to apply.");
+      }
+
+      const snapshot = await unwrap(api.ai.applySelectionPreview(currentSelectionPreviewId));
+      props = createProps({
+        ...props,
+        status: "applied"
+      });
+      currentSelectionPreviewId = undefined;
+      return toChapterEditorProps(snapshot);
+    },
     async applySuggestion() {
       if (currentSuggestionId === undefined) {
+        if (currentSelectionPreviewId !== undefined) {
+          const snapshot = await unwrap(api.ai.applySelectionPreview(currentSelectionPreviewId));
+          props = createProps({
+            ...props,
+            status: "applied"
+          });
+          currentSelectionPreviewId = undefined;
+          return toChapterEditorProps(snapshot);
+        }
+
         throw new Error("No AI writing suggestion is available to apply.");
       }
 
@@ -150,6 +179,7 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
         ...props,
         status: "applied"
       });
+      currentSuggestionId = undefined;
       return toChapterEditorProps(snapshot);
     }
   };
