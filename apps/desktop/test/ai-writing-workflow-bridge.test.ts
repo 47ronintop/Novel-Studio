@@ -114,6 +114,13 @@ const selectionPreview: AiWritingSelectionPreview = {
   previewOnly: true,
   proposedText: "The opening line tightened.",
   summary: "Rewrites only the selected sentence.",
+  review: {
+    status: "pending",
+    originalText: "Opening line.",
+    proposedText: "The opening line tightened.",
+    rangeLabel: "0-13",
+    compareLabel: "Opening line. -> The opening line tightened."
+  },
   selection: {
     startOffset: 0,
     endOffset: 13,
@@ -255,6 +262,14 @@ describe("AI writing workflow bridge", () => {
     expect(generated.status).toBe("suggestion-ready");
     expect(generated.summary).toBe("Rewrites only the selected sentence.");
     expect(generated.diffPreview).toEqual(selectionPreview.diffPreview);
+    expect(generated.selectionReview).toEqual({
+      status: "pending",
+      originalText: "Opening line.",
+      proposedText: "The opening line tightened.",
+      rangeLabel: "0-13",
+      compareLabel: "Opening line. -> The opening line tightened.",
+      canUndo: false
+    });
     const applied = await bridge.applySelectionPreview();
 
     expect(applied.chapter.body).toContain("AI continuation draft.");
@@ -263,6 +278,44 @@ describe("AI writing workflow bridge", () => {
       "ai.selection:Rewrite selection.:0-13",
       "ai.apply-selection:sug_selection_m74"
     ]);
+  });
+
+  test("rejects and restores a selection preview review without calling the preload API", async () => {
+    const calls: string[] = [];
+    const bridge = createAiWritingWorkflowBridge(createApi(calls));
+
+    await bridge.generateSelectionPreview({
+      instruction: "Rewrite selection.",
+      command: {
+        commandId: "editor.ai.preview-selection",
+        runtimeId: "textarea",
+        selection: {
+          startOffset: 0,
+          endOffset: 13,
+          characterCount: 13,
+          lineStart: 1,
+          lineEnd: 1,
+          selectedTextPreview: "Opening line.",
+          collapsed: false
+        }
+      },
+      selectedText: "Opening line."
+    });
+
+    const rejected = bridge.rejectSelectionPreview();
+    const restored = bridge.undoSelectionPreviewRejection();
+
+    expect(rejected.status).toBe("cancelled");
+    expect(rejected.selectionReview).toMatchObject({
+      status: "rejected",
+      canUndo: true
+    });
+    expect(restored.status).toBe("suggestion-ready");
+    expect(restored.selectionReview).toMatchObject({
+      status: "pending",
+      canUndo: false
+    });
+    expect(calls).toEqual(["ai.selection:Rewrite selection.:0-13"]);
   });
 
   test("keeps failed workflow diagnostics visible and allows user-triggered retry", async () => {

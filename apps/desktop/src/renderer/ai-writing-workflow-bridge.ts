@@ -32,6 +32,8 @@ export interface AiWritingWorkflowBridge {
   cancelStreaming(): AiWritingWorkflowProps;
   generateSuggestion(instruction: string): Promise<AiWritingWorkflowProps>;
   generateSelectionPreview(input: AiSelectionPreviewBridgeInput): Promise<AiWritingWorkflowProps>;
+  rejectSelectionPreview(): AiWritingWorkflowProps;
+  undoSelectionPreviewRejection(): AiWritingWorkflowProps;
   applySelectionPreview(): Promise<ChapterEditorProps>;
   applySuggestion(): Promise<ChapterEditorProps>;
 }
@@ -45,6 +47,8 @@ export interface AiSelectionPreviewBridgeInput {
 export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWorkflowBridge {
   let currentSuggestionId: string | undefined;
   let currentSelectionPreviewId: string | undefined;
+  let currentSelectionPreview: AiWritingSelectionPreview | undefined;
+  let rejectedSelectionPreview: AiWritingSelectionPreview | undefined;
   let props: AiWritingWorkflowProps = createProps({
     status: "idle",
     instruction: ""
@@ -96,6 +100,7 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
       if (!generated.ok) {
         currentSuggestionId = undefined;
         currentSelectionPreviewId = undefined;
+        currentSelectionPreview = undefined;
         const history = await loadLatestHistory(api);
         props = createProps({
           ...props,
@@ -111,6 +116,8 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
       const suggestion = generated.value;
       currentSuggestionId = suggestion.suggestionId;
       currentSelectionPreviewId = undefined;
+      currentSelectionPreview = undefined;
+      rejectedSelectionPreview = undefined;
       const history = await loadHistory(api, suggestion.workflowRunId);
       props = toProps(suggestion, instruction, history);
       return props;
@@ -127,6 +134,7 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
       if (!generated.ok) {
         currentSuggestionId = undefined;
         currentSelectionPreviewId = undefined;
+        currentSelectionPreview = undefined;
         const history = await loadLatestHistory(api);
         props = createProps({
           ...props,
@@ -141,9 +149,46 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
 
       currentSuggestionId = undefined;
       currentSelectionPreviewId = generated.value.previewId;
+      currentSelectionPreview = generated.value;
+      rejectedSelectionPreview = undefined;
       const preview = generated.value;
       const history = await loadHistory(api, preview.workflowRunId);
       props = toSelectionPreviewProps(preview, input.instruction, history);
+      return props;
+    },
+    rejectSelectionPreview() {
+      if (currentSelectionPreview === undefined || props.selectionReview === undefined) {
+        return props;
+      }
+
+      rejectedSelectionPreview = currentSelectionPreview;
+      currentSelectionPreviewId = undefined;
+      currentSelectionPreview = undefined;
+      props = createProps({
+        ...props,
+        status: "cancelled",
+        selectionReview: {
+          ...props.selectionReview,
+          status: "rejected",
+          canUndo: true
+        }
+      });
+      return props;
+    },
+    undoSelectionPreviewRejection() {
+      if (rejectedSelectionPreview === undefined) {
+        return props;
+      }
+
+      currentSuggestionId = undefined;
+      currentSelectionPreviewId = rejectedSelectionPreview.previewId;
+      currentSelectionPreview = rejectedSelectionPreview;
+      props = createProps({
+        ...props,
+        status: "suggestion-ready",
+        selectionReview: toSelectionReviewProps(rejectedSelectionPreview)
+      });
+      rejectedSelectionPreview = undefined;
       return props;
     },
     async applySelectionPreview() {
@@ -154,9 +199,20 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
       const snapshot = await unwrap(api.ai.applySelectionPreview(currentSelectionPreviewId));
       props = createProps({
         ...props,
-        status: "applied"
+        status: "applied",
+        ...(props.selectionReview === undefined
+          ? {}
+          : {
+              selectionReview: {
+                ...props.selectionReview,
+                status: "applied",
+                canUndo: false
+              }
+            })
       });
       currentSelectionPreviewId = undefined;
+      currentSelectionPreview = undefined;
+      rejectedSelectionPreview = undefined;
       return toChapterEditorProps(snapshot);
     },
     async applySuggestion() {
@@ -165,9 +221,20 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
           const snapshot = await unwrap(api.ai.applySelectionPreview(currentSelectionPreviewId));
           props = createProps({
             ...props,
-            status: "applied"
+            status: "applied",
+            ...(props.selectionReview === undefined
+              ? {}
+              : {
+                  selectionReview: {
+                    ...props.selectionReview,
+                    status: "applied",
+                    canUndo: false
+                  }
+                })
           });
           currentSelectionPreviewId = undefined;
+          currentSelectionPreview = undefined;
+          rejectedSelectionPreview = undefined;
           return toChapterEditorProps(snapshot);
         }
 
@@ -180,6 +247,7 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
         status: "applied"
       });
       currentSuggestionId = undefined;
+      rejectedSelectionPreview = undefined;
       return toChapterEditorProps(snapshot);
     }
   };
@@ -222,8 +290,22 @@ function toSelectionPreviewProps(
     contextTraceLabel: traceLabel(preview),
     observability: toObservabilityProps(preview.observability),
     ...(history === undefined ? {} : { history }),
-    diffPreview: preview.diffPreview
+    diffPreview: preview.diffPreview,
+    selectionReview: toSelectionReviewProps(preview)
   });
+}
+
+function toSelectionReviewProps(
+  preview: AiWritingSelectionPreview
+): NonNullable<AiWritingWorkflowProps["selectionReview"]> {
+  return {
+    status: preview.review.status,
+    originalText: preview.review.originalText,
+    proposedText: preview.review.proposedText,
+    rangeLabel: preview.review.rangeLabel,
+    compareLabel: preview.review.compareLabel,
+    canUndo: false
+  };
 }
 
 function createProps(
@@ -232,6 +314,8 @@ function createProps(
     | "onInstructionChange"
     | "onGenerateSuggestion"
     | "onApplySuggestion"
+    | "onRejectSelectionReview"
+    | "onUndoSelectionReview"
     | "onRetrySuggestion"
     | "onCancelStreaming"
   >
@@ -241,6 +325,8 @@ function createProps(
     onInstructionChange: () => undefined,
     onGenerateSuggestion: () => undefined,
     onApplySuggestion: () => undefined,
+    onRejectSelectionReview: () => undefined,
+    onUndoSelectionReview: () => undefined,
     onRetrySuggestion: () => undefined,
     onCancelStreaming: () => undefined
   };

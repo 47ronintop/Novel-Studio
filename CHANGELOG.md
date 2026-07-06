@@ -81,8 +81,9 @@
 - 完成 M72-M74 Plugin Sandbox Fixture Worker、CodeMirror DOM Mount Plan 与 Selection AI Application Flow：新增 deterministic sandbox fixture worker adapter、timeout teardown/payload limit enforcement、CodeMirror `domViewMount` descriptor、Application/IPC/preload/renderer selection preview generation，以及 preview-only selection diff；仍不执行任意第三方插件代码、不默认切换 CodeMirror、不自动应用 selection rewrite。
 - 完成 M75-M77 Selection Event UI Wiring、Selection Preview Apply Confirmation 与 Plugin Sandbox Isolation Spike：新增 textarea selection event extraction、renderer runtime selection state、selection preview button 接 Application-backed AI preview、stored selection preview explicit apply、`before-ai-apply` snapshot，以及 sandbox isolation plan DTO；仍不默认切换 CodeMirror、不启动真实 isolation worker、不保存 selection rewrite 到章节文件。
 - 完成 M78-M80 CodeMirror DOM View、Plugin Isolation Worker Prototype 与 Workflow Designer Layout Persistence：新增 `PRODUCT.md` UI product context、`@codemirror/view` explicit DOM view mount contract、signed ready isolation worker prototype adapter、workflow graph layout projection、Studio local layout draft update 和 graph layout UI 坐标；仍不默认切换 CodeMirror、不执行任意第三方插件源码、不做 marketplace 或 workflow layout 项目文件持久化。
+- 完成 M81-M83 Selection Apply Review UX、Plugin Signing and Permission UI 与 Workflow Designer Interaction：新增 selection review DTO/compare/accept/reject/undo、插件 trust/signing/readiness/permission/audit 可见化、workflow layout 写回 JSON draft 和 graph directional movement controls；仍不默认切换 CodeMirror、不执行任意第三方插件源码、不做 marketplace 或完整 drag/drop workflow canvas。
 
 ## Notes
 
 - Phase 7 当前定义的 M0-M18 已完成。
-- 当前已完成 Post-M18 M19-M80；M27 安装后首次使用引导缺口已通过 M48 回补；未经用户确认不得 push。
+- 当前已完成 Post-M18 M19-M83；M27 安装后首次使用引导缺口已通过 M48 回补；未经用户确认不得 push。

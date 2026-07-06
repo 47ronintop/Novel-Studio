@@ -1,7 +1,8 @@
-import { MODEL_PROVIDER_CATALOG } from "@novel-studio/application";
+import { createPluginSecurityAuditReport, MODEL_PROVIDER_CATALOG } from "@novel-studio/application";
 import type {
   ModelProfile,
   NovelStudioApi,
+  PluginSecurityAuditEntry,
   PluginSettingsSnapshot
 } from "@novel-studio/application";
 import type {
@@ -283,6 +284,10 @@ function toPluginProps(
   snapshot: PluginSettingsSnapshot,
   message: string
 ): PluginSettingsPanelProps {
+  const securityByPluginId = new Map(
+    createPluginSecurityAuditReport({ snapshot }).plugins.map((entry) => [entry.pluginId, entry])
+  );
+
   return {
     status: "loaded",
     entries: snapshot.plugins.map((plugin) => ({
@@ -291,10 +296,32 @@ function toPluginProps(
       manifestPath: plugin.manifestPath,
       grantedPermissions: plugin.grantedPermissions,
       manifestStatus: plugin.manifestStatus,
+      ...securityProps(securityByPluginId.get(plugin.pluginId)),
       ...(plugin.manifest === undefined ? {} : { manifest: plugin.manifest }),
       ...(plugin.manifestError === undefined ? {} : { manifestError: plugin.manifestError })
     })),
     feedback: { kind: "info", message }
+  };
+}
+
+function securityProps(
+  security: PluginSecurityAuditEntry | undefined
+): Pick<PluginSettingsPanelProps["entries"][number], "security"> | Record<string, never> {
+  if (security === undefined) {
+    return {};
+  }
+
+  return {
+    security: {
+      trustState: security.trustState,
+      signing: security.signing,
+      readiness: security.readiness,
+      executable: security.executable,
+      deniedCapabilities: security.deniedCapabilities,
+      requestedPermissions: security.requestedPermissions,
+      grantedPermissions: security.grantedPermissions,
+      auditEvents: security.auditEvents
+    }
   };
 }
 

@@ -251,6 +251,45 @@ function WorkflowGraphPreview({
               >
                 Move right
               </button>
+              <button
+                aria-label={`Move workflow node ${node.id} left`}
+                onClick={() =>
+                  onWorkflowLayoutChange?.({
+                    nodeId: node.id,
+                    x: layout.x - 120,
+                    y: layout.y
+                  })
+                }
+                type="button"
+              >
+                Move left
+              </button>
+              <button
+                aria-label={`Move workflow node ${node.id} down`}
+                onClick={() =>
+                  onWorkflowLayoutChange?.({
+                    nodeId: node.id,
+                    x: layout.x,
+                    y: layout.y + 80
+                  })
+                }
+                type="button"
+              >
+                Move down
+              </button>
+              <button
+                aria-label={`Move workflow node ${node.id} up`}
+                onClick={() =>
+                  onWorkflowLayoutChange?.({
+                    nodeId: node.id,
+                    x: layout.x,
+                    y: layout.y - 80
+                  })
+                }
+                type="button"
+              >
+                Move up
+              </button>
             </li>
           );
         })}

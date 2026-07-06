@@ -139,6 +139,10 @@ describe("M23 studio bridge", () => {
       source: "draft",
       nodes: expect.arrayContaining([{ nodeId: "save", x: 360, y: 120 }])
     });
+    expect(JSON.parse(props.selectedAsset.content).layout).toMatchObject({
+      source: "draft",
+      nodes: expect.arrayContaining([{ nodeId: "save", x: 360, y: 120 }])
+    });
     expect(props.selectedAsset.validationStatus).toBe("dirty");
     expect(calls).not.toContain("studio.saveConfigAsset:workflow:wf_review_chapter");
   });

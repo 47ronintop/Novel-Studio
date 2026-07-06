@@ -464,6 +464,13 @@ describe("M14 AI writing workflow session", () => {
       previewOnly: true,
       proposedText: "The opening line tightened.",
       summary: "Rewrites only the selected sentence.",
+      review: {
+        status: "pending",
+        originalText: "Opening line.",
+        proposedText: "The opening line tightened.",
+        rangeLabel: "0-13",
+        compareLabel: "Opening line. -> The opening line tightened."
+      },
       selection: {
         startOffset: 0,
         endOffset: 13,

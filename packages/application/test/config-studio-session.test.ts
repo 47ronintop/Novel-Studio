@@ -10,6 +10,7 @@ import {
 } from "@novel-studio/shared";
 
 import {
+  applyConfigWorkflowGraphLayoutToContent,
   createConfigStudioSession,
   type ConfigAssetPort,
   type ConfigAssetType
@@ -237,5 +238,32 @@ describe("config studio session", () => {
         ]
       }
     });
+  });
+
+  test("applies workflow graph layout edits to workflow draft content", () => {
+    const result = applyConfigWorkflowGraphLayoutToContent({
+      content: workflow,
+      edit: {
+        nodeId: "review",
+        x: 360,
+        y: 140
+      }
+    });
+
+    expect(isOk(result)).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.value.content.layout).toEqual({
+      schemaVersion: "1.0",
+      source: "draft",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [
+        { nodeId: "context", x: 0, y: 0 },
+        { nodeId: "review", x: 360, y: 140 },
+        { nodeId: "save", x: 440, y: 0 }
+      ]
+    });
+    expect(result.value.workflowGraph.layout?.source).toBe("draft");
   });
 });

@@ -48,6 +48,19 @@ describe("M22 settings bridge", () => {
     expect(props.plugins?.entries[0]?.pluginId).toBe("novel.timeline-tools");
     expect(props.plugins?.entries[0]?.manifest?.displayName).toBe("Timeline Tools");
     expect(props.plugins?.entries[0]?.manifest?.version).toBe("1.2.3");
+    expect(props.plugins?.entries[0]?.security).toEqual({
+      trustState: "trusted-local",
+      signing: "required",
+      readiness: "blocked",
+      executable: false,
+      deniedCapabilities: [],
+      requestedPermissions: ["asset:read:timeline"],
+      grantedPermissions: ["asset:read:timeline"],
+      auditEvents: [
+        "Plugin package must be signed or explicitly trusted before isolated execution.",
+        "Real isolated worker execution is not enabled by this spike."
+      ]
+    });
     expect(props.draft.apiKeyRefInput).toBe("");
     expect(props.feedback).toEqual({
       kind: "info",

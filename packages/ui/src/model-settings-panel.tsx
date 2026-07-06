@@ -54,6 +54,7 @@ export interface PluginSettingsEntry {
   readonly manifestPath: string;
   readonly grantedPermissions: readonly PluginSettingsPermissionGrant[];
   readonly manifestStatus: "valid" | "missing" | "invalid";
+  readonly security?: PluginSecuritySummary;
   readonly manifest?: {
     readonly displayName: string;
     readonly version: string;
@@ -83,6 +84,17 @@ export interface PluginSettingsEntry {
     readonly code: string;
     readonly message: string;
   };
+}
+
+export interface PluginSecuritySummary {
+  readonly trustState: "trusted-local" | "signed" | "untrusted";
+  readonly signing: "required" | "satisfied";
+  readonly readiness: "blocked" | "ready";
+  readonly executable: boolean;
+  readonly deniedCapabilities: readonly string[];
+  readonly requestedPermissions: readonly string[];
+  readonly grantedPermissions: readonly string[];
+  readonly auditEvents: readonly string[];
 }
 
 export interface PluginSettingsPanelProps {
@@ -467,6 +479,26 @@ function PluginSettingsSection({
                       ? "none"
                       : plugin.manifest.contributes.workflowSteps.map((step) => step.id).join(", ")}
                   </span>
+                </div>
+              )}
+              {plugin.security === undefined ? null : (
+                <div
+                  className="plugin-settings-detail"
+                  aria-label={`Plugin security ${plugin.pluginId}`}
+                >
+                  <span>Trust {plugin.security.trustState}</span>
+                  <span>Signing {plugin.security.signing}</span>
+                  <span>Readiness {plugin.security.readiness}</span>
+                  <span>Executable {plugin.security.executable ? "yes" : "no"}</span>
+                  <span>
+                    Denied{" "}
+                    {plugin.security.deniedCapabilities.length === 0
+                      ? "none"
+                      : plugin.security.deniedCapabilities.join(", ")}
+                  </span>
+                  <span>Requested {plugin.security.requestedPermissions.join(", ")}</span>
+                  <span>Granted {plugin.security.grantedPermissions.join(", ")}</span>
+                  <span>Audit {plugin.security.auditEvents.join(" | ")}</span>
                 </div>
               )}
               <button

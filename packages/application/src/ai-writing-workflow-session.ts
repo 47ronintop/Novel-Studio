@@ -68,10 +68,19 @@ export interface AiWritingSelectionPreview {
   readonly previewOnly: true;
   readonly proposedText: string;
   readonly summary: string;
+  readonly review: AiWritingSelectionReview;
   readonly selection: AiWritingSelectionRange;
   readonly diffPreview: ChapterSuggestionDiffPreview;
   readonly contextTrace: ContextBundleTrace;
   readonly observability: AiWritingWorkflowObservability;
+}
+
+export interface AiWritingSelectionReview {
+  readonly status: "pending";
+  readonly originalText: string;
+  readonly proposedText: string;
+  readonly rangeLabel: string;
+  readonly compareLabel: string;
 }
 
 export type AiWorkflowObservedStepKind = "context" | "agent" | "confirmation";
@@ -643,6 +652,7 @@ export function createAgentBackedAiWritingWorkflowSession(
         previewOnly: true,
         proposedText: output.proposedText,
         summary: output.summary,
+        review: createSelectionReview(validatedSelection.value, output.proposedText),
         selection: validatedSelection.value,
         diffPreview: {
           title: "Selection AI preview",
@@ -1111,6 +1121,19 @@ function replaceSelection(
   proposedText: string
 ): string {
   return `${body.slice(0, selection.startOffset)}${proposedText}${body.slice(selection.endOffset)}`;
+}
+
+function createSelectionReview(
+  selection: AiWritingSelectionRange,
+  proposedText: string
+): AiWritingSelectionReview {
+  return {
+    status: "pending",
+    originalText: selection.selectedText,
+    proposedText,
+    rangeLabel: `${selection.startOffset}-${selection.endOffset}`,
+    compareLabel: `${selection.selectedText} -> ${proposedText}`
+  };
 }
 
 function estimateSelectionTokens(selectedText: string): number {

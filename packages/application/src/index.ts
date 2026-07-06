@@ -151,14 +151,17 @@ export type {
   PluginSandboxPolicyDecision,
   PluginSandboxPolicyInput,
   PluginSandboxPolicyReport,
-  PluginSandboxTrustState
+  PluginSandboxTrustState,
+  PluginSecurityAuditEntry,
+  PluginSecurityAuditReport
 } from "./plugin-runtime-session.js";
 export {
   createPluginIsolationWorkerPrototypeAdapter,
   createPluginSandboxIsolationPlan,
   createPluginSandboxFixtureWorkerAdapter,
   createPluginRuntimeSession,
-  createPluginSandboxPolicyReport
+  createPluginSandboxPolicyReport,
+  createPluginSecurityAuditReport
 } from "./plugin-runtime-session.js";
 export type {
   ConfigAssetPort,
@@ -171,6 +174,7 @@ export type {
   ConfigStudioSessionOptions,
   ConfigWorkflowNodeInspectorEdit,
   ConfigWorkflowNodeInspectorEditResult,
+  ConfigWorkflowGraphLayoutContentEditResult,
   ConfigWorkflowGraphLayout,
   ConfigWorkflowGraphLayoutEdit,
   ConfigWorkflowGraphLayoutNode,
@@ -180,6 +184,7 @@ export type {
 export {
   applyConfigWorkflowNodeInspectorEdit,
   applyConfigWorkflowGraphLayoutEdit,
+  applyConfigWorkflowGraphLayoutToContent,
   createConfigWorkflowGraphLayout,
   createConfigStudioSession
 } from "./config-studio-session.js";
@@ -190,6 +195,7 @@ export type {
   AiWritingSelectionPreview,
   AiWritingSelectionPreviewRequest,
   AiWritingSelectionRange,
+  AiWritingSelectionReview,
   AiWritingSuggestion,
   AiWritingSuggestionRequest,
   AiWritingWorkflowObservability,

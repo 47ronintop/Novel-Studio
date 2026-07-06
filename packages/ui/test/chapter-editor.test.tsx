@@ -173,4 +173,37 @@ describe("ChapterEditor", () => {
       head: 9
     });
   });
+
+  test("renders selection review compare, reject, accept, and undo controls", () => {
+    const html = renderToStaticMarkup(
+      <ChapterEditor
+        chapter={chapter}
+        saveStatus="Unsaved"
+        dirty={true}
+        versionHistory={[]}
+        diffPreview={{
+          title: "Selection AI preview",
+          changes: [{ kind: "replace", value: "The opening line tightened.\n" }]
+        }}
+        selectionReview={{
+          status: "pending",
+          originalText: "Opening line.",
+          proposedText: "The opening line tightened.",
+          rangeLabel: "0-13",
+          compareLabel: "Opening line. -> The opening line tightened.",
+          canUndo: false
+        }}
+        onSelectionReviewAccept={() => undefined}
+        onSelectionReviewReject={() => undefined}
+        onSelectionReviewUndo={() => undefined}
+      />
+    );
+
+    expect(html).toContain('aria-label="Selection AI review"');
+    expect(html).toContain("Opening line. -&gt; The opening line tightened.");
+    expect(html).toContain('aria-label="Accept selection AI preview"');
+    expect(html).toContain('aria-label="Reject selection AI preview"');
+    expect(html).toContain('aria-label="Undo selection AI rejection"');
+    expect(html).toContain('disabled=""');
+  });
 });

@@ -4,6 +4,7 @@ import { ok } from "@novel-studio/shared";
 
 import {
   createPluginSandboxIsolationPlan,
+  createPluginSecurityAuditReport,
   createPluginSandboxFixtureWorkerAdapter,
   createPluginIsolationWorkerPrototypeAdapter,
   createPluginSandboxPolicyReport,
@@ -494,6 +495,54 @@ describe("PluginRuntimeSession", () => {
           signing: "required"
         }
       }
+    });
+  });
+
+  test("projects plugin signing, permission, and audit state for settings UI", () => {
+    const report = createPluginSecurityAuditReport({
+      snapshot: {
+        ...enabledSnapshot,
+        plugins: [
+          {
+            ...enabledPlugin,
+            manifest: {
+              ...enabledManifest,
+              entryKind: "local-process",
+              requestedPermissions: [
+                ...enabledManifest.requestedPermissions,
+                { permission: "network:access", scopes: ["https://api.example.com"] }
+              ]
+            }
+          }
+        ]
+      },
+      runtimeKind: "utility-process",
+      signedPluginIds: []
+    });
+
+    expect(report).toEqual({
+      schemaVersion: "1.0",
+      plugins: [
+        {
+          pluginId: "novel.structure-tools",
+          trustState: "trusted-local",
+          signing: "required",
+          readiness: "blocked",
+          executable: false,
+          deniedCapabilities: ["network:access"],
+          requestedPermissions: [
+            "project:read:project",
+            "workflow:invoke:project",
+            "network:access:https://api.example.com"
+          ],
+          grantedPermissions: ["project:read:project", "workflow:invoke:project"],
+          auditEvents: [
+            "Plugin package must be signed or explicitly trusted before isolated execution.",
+            "Plugin requests denied sandbox capability network:access.",
+            "Real isolated worker execution is not enabled by this spike."
+          ]
+        }
+      ]
     });
   });
 });

@@ -115,6 +115,23 @@ export interface PluginSandboxIsolationPlan {
   readonly workers: readonly PluginSandboxIsolationWorkerPlan[];
 }
 
+export interface PluginSecurityAuditEntry {
+  readonly pluginId: string;
+  readonly trustState: PluginSandboxTrustState;
+  readonly signing: PluginSandboxIsolationSigning;
+  readonly readiness: PluginSandboxIsolationReadiness;
+  readonly executable: boolean;
+  readonly deniedCapabilities: readonly PluginSandboxDeniedCapability[];
+  readonly requestedPermissions: readonly string[];
+  readonly grantedPermissions: readonly string[];
+  readonly auditEvents: readonly string[];
+}
+
+export interface PluginSecurityAuditReport {
+  readonly schemaVersion: "1.0";
+  readonly plugins: readonly PluginSecurityAuditEntry[];
+}
+
 export interface PluginRuntimeAdapter {
   executeHostCommand(
     input: PluginRuntimeAdapterCommandInput
@@ -310,6 +327,30 @@ export function createPluginSandboxIsolationPlan(
   };
 }
 
+export function createPluginSecurityAuditReport(
+  input: PluginSandboxIsolationInput
+): PluginSecurityAuditReport {
+  const isolationPlan = createPluginSandboxIsolationPlan(input);
+
+  return {
+    schemaVersion: "1.0",
+    plugins: input.snapshot.plugins.map((entry) => {
+      const workerPlan = isolationPlan.workers.find((worker) => worker.pluginId === entry.pluginId);
+      return {
+        pluginId: entry.pluginId,
+        trustState: defaultTrustState(entry),
+        signing: workerPlan?.signing ?? "required",
+        readiness: workerPlan?.readiness ?? "blocked",
+        executable: workerPlan?.executable ?? false,
+        deniedCapabilities: workerPlan?.deniedCapabilities ?? [],
+        requestedPermissions: permissionLabels(entry.manifest?.requestedPermissions ?? []),
+        grantedPermissions: permissionLabels(entry.grantedPermissions),
+        auditEvents: workerPlan?.reasons ?? ["Plugin isolation plan is unavailable."]
+      };
+    })
+  };
+}
+
 export function createPluginIsolationWorkerPrototypeAdapter(
   options: PluginIsolationWorkerPrototypeOptions
 ): PluginRuntimeAdapter {
@@ -494,6 +535,12 @@ function isDeniedSandboxCapability(value: string): value is PluginSandboxDeniedC
     value === "model:invoke" ||
     value === "shell:execute"
   );
+}
+
+function permissionLabels(
+  grants: readonly { readonly permission: string; readonly scopes: readonly string[] }[]
+): readonly string[] {
+  return grants.map((grant) => `${grant.permission}:${grant.scopes.join(",")}`);
 }
 
 function runFixtureWorker(input: {

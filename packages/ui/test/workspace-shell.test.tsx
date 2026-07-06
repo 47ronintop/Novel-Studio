@@ -508,6 +508,44 @@ describe("WorkspaceShell", () => {
     expect(pluginSection).not.toContain("secret://");
   });
 
+  test("renders AI selection review controls in the inspector", () => {
+    const application = createDesktopApplication();
+    const calls: string[] = [];
+    const tree = WorkspaceShell({
+      shellState: application.getShellState(),
+      commands: application.listCommands(),
+      commandPaletteOpen: false,
+      aiWritingWorkflow: {
+        status: "suggestion-ready",
+        instruction: "Rewrite selection.",
+        selectionReview: {
+          status: "pending",
+          originalText: "Opening line.",
+          proposedText: "The opening line tightened.",
+          rangeLabel: "0-13",
+          compareLabel: "Opening line. -> The opening line tightened.",
+          canUndo: false
+        },
+        onInstructionChange: () => undefined,
+        onGenerateSuggestion: () => undefined,
+        onApplySuggestion: () => calls.push("accept"),
+        onRejectSelectionReview: () => calls.push("reject"),
+        onUndoSelectionReview: () => calls.push("undo"),
+        onRetrySuggestion: () => undefined,
+        onCancelStreaming: () => undefined
+      }
+    });
+
+    findElementByAriaLabel(tree, "Accept selection AI preview")?.props.onClick?.();
+    findElementByAriaLabel(tree, "Reject selection AI preview")?.props.onClick?.();
+    findElementByAriaLabel(tree, "Undo selection AI rejection")?.props.onClick?.();
+
+    expect(calls).toEqual(["accept", "reject", "undo"]);
+    const html = renderToStaticMarkup(tree);
+    expect(html).toContain('aria-label="Selection AI review"');
+    expect(html).toContain("Opening line. -&gt; The opening line tightened.");
+  });
+
   test("switches chapter editor tabs through the project workflow callback", () => {
     const application = createDesktopApplication();
     const selectedChapters: string[] = [];

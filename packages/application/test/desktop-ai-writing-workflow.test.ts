@@ -111,6 +111,13 @@ function createFakeAiSession(calls: string[]): AiWritingWorkflowSession {
         previewOnly: true,
         proposedText: "Selection rewrite.",
         summary: "Selection preview.",
+        review: {
+          status: "pending",
+          originalText: request.selection.selectedText,
+          proposedText: "Selection rewrite.",
+          rangeLabel: `${request.selection.startOffset}-${request.selection.endOffset}`,
+          compareLabel: `${request.selection.selectedText} -> Selection rewrite.`
+        },
         selection: request.selection,
         diffPreview: {
           title: "Selection AI preview",

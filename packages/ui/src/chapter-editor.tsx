@@ -43,13 +43,26 @@ export interface ChapterEditorProps {
   readonly dirty: boolean;
   readonly versionHistory: readonly ChapterEditorVersionEntry[];
   readonly diffPreview?: ChapterEditorDiffPreview;
+  readonly selectionReview?: ChapterEditorSelectionReview;
   readonly runtime?: ChapterEditorRuntimeProps;
   readonly onBodyChange?: (nextBody: string) => void;
   readonly onSelectionChange?: (selection: ChapterEditorSelection) => void;
   readonly onSave?: () => void;
+  readonly onSelectionReviewAccept?: () => void;
+  readonly onSelectionReviewReject?: () => void;
+  readonly onSelectionReviewUndo?: () => void;
   readonly onSelectionAiPreview?: (commandId: string) => void;
   readonly onVersionPreview?: (versionId: string) => void;
   readonly onVersionRestore?: (versionId: string) => void;
+}
+
+export interface ChapterEditorSelectionReview {
+  readonly status: "pending" | "rejected" | "applied";
+  readonly originalText: string;
+  readonly proposedText: string;
+  readonly rangeLabel: string;
+  readonly compareLabel: string;
+  readonly canUndo: boolean;
 }
 
 export interface ChapterEditorSelection {
@@ -68,10 +81,14 @@ export function ChapterEditor({
   dirty,
   versionHistory,
   diffPreview,
+  selectionReview,
   runtime,
   onBodyChange,
   onSelectionChange,
   onSave,
+  onSelectionReviewAccept,
+  onSelectionReviewReject,
+  onSelectionReviewUndo,
   onSelectionAiPreview,
   onVersionPreview,
   onVersionRestore
@@ -226,6 +243,18 @@ export function ChapterEditor({
             </ul>
           </section>
         ) : null}
+        {selectionReview === undefined ? null : (
+          <SelectionReviewPanel
+            review={selectionReview}
+            {...(onSelectionReviewAccept === undefined
+              ? {}
+              : { onAccept: onSelectionReviewAccept })}
+            {...(onSelectionReviewReject === undefined
+              ? {}
+              : { onReject: onSelectionReviewReject })}
+            {...(onSelectionReviewUndo === undefined ? {} : { onUndo: onSelectionReviewUndo })}
+          />
+        )}
       </div>
     </section>
   );
@@ -282,6 +311,59 @@ function ChapterEditorRuntime({
           ))}
         </ul>
       )}
+    </section>
+  );
+}
+
+function SelectionReviewPanel({
+  review,
+  onAccept,
+  onReject,
+  onUndo
+}: {
+  readonly review: ChapterEditorSelectionReview;
+  readonly onAccept?: () => void;
+  readonly onReject?: () => void;
+  readonly onUndo?: () => void;
+}) {
+  return (
+    <section className="ns-editor-panel" aria-label="Selection AI review">
+      <div className="ns-editor-panel-header">
+        <span>Selection review</span>
+        <span className="ns-preview-only">{review.status}</span>
+      </div>
+      <p className="ns-diff-summary">
+        Range {review.rangeLabel}: {review.compareLabel}
+      </p>
+      <div className="ns-version-actions">
+        <button
+          aria-label="Accept selection AI preview"
+          className="ns-icon-button"
+          disabled={review.status !== "pending" || onAccept === undefined}
+          onClick={onAccept}
+          type="button"
+        >
+          Accept
+        </button>
+        <button
+          aria-label="Reject selection AI preview"
+          className="ns-icon-button"
+          disabled={review.status !== "pending" || onReject === undefined}
+          onClick={onReject}
+          type="button"
+        >
+          Reject
+        </button>
+        <button
+          aria-label="Undo selection AI rejection"
+          className="ns-icon-button"
+          disabled={!review.canUndo || onUndo === undefined}
+          onClick={onUndo}
+          type="button"
+        >
+          Undo
+        </button>
+      </div>
     </section>
   );
 }

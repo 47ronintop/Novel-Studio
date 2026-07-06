@@ -24,6 +24,7 @@ import {
   BookOpen,
   PanelBottom,
   PanelRight,
+  RotateCcw,
   Search,
   Settings,
   Sparkles,
@@ -147,11 +148,23 @@ export interface AiWritingWorkflowProps {
   readonly failure?: AiWorkflowFailureDiagnosticProps;
   readonly retryPolicy?: AiWorkflowRetryPolicyProps;
   readonly diffPreview?: ChapterEditorProps["diffPreview"];
+  readonly selectionReview?: AiSelectionReviewProps;
   readonly onInstructionChange: (instruction: string) => void;
   readonly onGenerateSuggestion: () => void;
   readonly onApplySuggestion: () => void;
+  readonly onRejectSelectionReview?: () => void;
+  readonly onUndoSelectionReview?: () => void;
   readonly onRetrySuggestion: () => void;
   readonly onCancelStreaming: () => void;
+}
+
+export interface AiSelectionReviewProps {
+  readonly status: "pending" | "rejected" | "applied";
+  readonly originalText: string;
+  readonly proposedText: string;
+  readonly rangeLabel: string;
+  readonly compareLabel: string;
+  readonly canUndo: boolean;
 }
 
 export interface AiWorkflowFailureDiagnosticProps {
@@ -675,6 +688,9 @@ export function WorkspaceShell({
               {aiWritingWorkflow.contextTraceLabel === undefined ? null : (
                 <p className="ns-ai-context">{aiWritingWorkflow.contextTraceLabel}</p>
               )}
+              {aiWritingWorkflow.selectionReview === undefined ? null : (
+                <AiSelectionReviewView workflow={aiWritingWorkflow} />
+              )}
               {aiWritingWorkflow.observability === undefined ? null : (
                 <AiWorkflowObservabilityView observability={aiWritingWorkflow.observability} />
               )}
@@ -976,6 +992,57 @@ function AiWorkflowRetryPolicyView({
           <dd>{retryPolicy.retryableCodesLabel}</dd>
         </div>
       </dl>
+    </section>
+  );
+}
+
+function AiSelectionReviewView({ workflow }: { readonly workflow: AiWritingWorkflowProps }) {
+  const review = workflow.selectionReview;
+  if (review === undefined) {
+    return null;
+  }
+
+  return (
+    <section className="ns-ai-observability" aria-label="Selection AI review">
+      <div className="ns-ai-observability-header">
+        <span>Selection review</span>
+        <span>{review.status}</span>
+      </div>
+      <p className="ns-ai-context">
+        Range {review.rangeLabel}: {review.compareLabel}
+      </p>
+      <div className="ns-ai-actions">
+        <button
+          aria-label="Accept selection AI preview"
+          className="ns-icon-text-button"
+          disabled={workflow.status !== "suggestion-ready" || review.status !== "pending"}
+          onClick={workflow.onApplySuggestion}
+          type="button"
+        >
+          <Check aria-hidden="true" size={14} />
+          Accept
+        </button>
+        <button
+          aria-label="Reject selection AI preview"
+          className="ns-icon-text-button"
+          disabled={review.status !== "pending" || workflow.onRejectSelectionReview === undefined}
+          onClick={workflow.onRejectSelectionReview}
+          type="button"
+        >
+          <X aria-hidden="true" size={14} />
+          Reject
+        </button>
+        <button
+          aria-label="Undo selection AI rejection"
+          className="ns-icon-text-button"
+          disabled={!review.canUndo || workflow.onUndoSelectionReview === undefined}
+          onClick={workflow.onUndoSelectionReview}
+          type="button"
+        >
+          <RotateCcw aria-hidden="true" size={14} />
+          Undo
+        </button>
+      </div>
     </section>
   );
 }

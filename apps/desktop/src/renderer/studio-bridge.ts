@@ -1,5 +1,6 @@
 import {
   applyConfigWorkflowGraphLayoutEdit,
+  applyConfigWorkflowGraphLayoutToContent,
   applyConfigWorkflowNodeInspectorEdit,
   createConfigWorkflowGraphLayout,
   type ConfigAssetType,
@@ -125,14 +126,27 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
       return toProps();
     },
     updateWorkflowGraphLayout(edit) {
-      if (selectedAsset.workflowGraph === undefined) {
+      const content = parseJsonObject(selectedAsset.content);
+      if (selectedAsset.workflowGraph === undefined || content === undefined) {
+        return toProps();
+      }
+
+      const persistedLayout = applyConfigWorkflowGraphLayoutToContent({
+        content,
+        edit
+      });
+      if (!persistedLayout.ok) {
+        selectedAsset = { ...selectedAsset, validationStatus: "invalid" };
+        status = "error";
+        feedback = { kind: "error", message: persistedLayout.error.message };
         return toProps();
       }
 
       selectedAsset = {
         ...selectedAsset,
         validationStatus: selectedAsset.validationStatus === "invalid" ? "invalid" : "dirty",
-        workflowGraph: applyConfigWorkflowGraphLayoutEdit(selectedAsset.workflowGraph, edit)
+        content: JSON.stringify(persistedLayout.value.content, null, 2),
+        workflowGraph: applyConfigWorkflowGraphLayoutEdit(persistedLayout.value.workflowGraph, edit)
       };
       selectedWorkflowNodeId = selectedWorkflowNodeIdForGraph(
         selectedAsset.workflowGraph,

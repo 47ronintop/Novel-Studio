@@ -768,7 +768,10 @@ export function App() {
               ? current
               : {
                   ...current,
-                  diffPreview
+                  diffPreview,
+                  ...(nextAiWritingWorkflow.selectionReview === undefined
+                    ? {}
+                    : { selectionReview: nextAiWritingWorkflow.selectionReview })
                 }
           );
         });
@@ -784,6 +787,50 @@ export function App() {
     void aiWritingWorkflowBridge.applySuggestion().then((nextChapterEditor) => {
       setChapterEditor(nextChapterEditor);
       setAiWritingWorkflow(aiWritingWorkflowBridge.getProps());
+    });
+  }, [aiWritingWorkflowBridge]);
+
+  const handleRejectSelectionReview = useCallback(() => {
+    if (aiWritingWorkflowBridge === undefined) {
+      return;
+    }
+
+    const nextAiWritingWorkflow = aiWritingWorkflowBridge.rejectSelectionPreview();
+    setAiWritingWorkflow(nextAiWritingWorkflow);
+    setChapterEditor((current) => {
+      if (current === undefined) {
+        return current;
+      }
+      const { selectionReview, ...withoutSelectionReview } = current;
+      void selectionReview;
+      return nextAiWritingWorkflow.selectionReview === undefined
+        ? withoutSelectionReview
+        : {
+            ...withoutSelectionReview,
+            selectionReview: nextAiWritingWorkflow.selectionReview
+          };
+    });
+  }, [aiWritingWorkflowBridge]);
+
+  const handleUndoSelectionReview = useCallback(() => {
+    if (aiWritingWorkflowBridge === undefined) {
+      return;
+    }
+
+    const nextAiWritingWorkflow = aiWritingWorkflowBridge.undoSelectionPreviewRejection();
+    setAiWritingWorkflow(nextAiWritingWorkflow);
+    setChapterEditor((current) => {
+      if (current === undefined) {
+        return current;
+      }
+      const { selectionReview, ...withoutSelectionReview } = current;
+      void selectionReview;
+      return nextAiWritingWorkflow.selectionReview === undefined
+        ? withoutSelectionReview
+        : {
+            ...withoutSelectionReview,
+            selectionReview: nextAiWritingWorkflow.selectionReview
+          };
     });
   }, [aiWritingWorkflowBridge]);
 
@@ -1039,6 +1086,9 @@ export function App() {
           runtime: createChapterEditorRuntime(chapterEditor, chapterSelection),
           onBodyChange: handleBodyChange,
           onSelectionChange: handleSelectionChange,
+          onSelectionReviewAccept: handleApplyAiSuggestion,
+          onSelectionReviewReject: handleRejectSelectionReview,
+          onSelectionReviewUndo: handleUndoSelectionReview,
           onSelectionAiPreview: handleSelectionAiPreview,
           onSave: handleSave,
           onVersionPreview: handleVersionPreview,
@@ -1072,6 +1122,8 @@ export function App() {
               onInstructionChange: handleAiInstructionChange,
               onGenerateSuggestion: handleGenerateAiSuggestion,
               onApplySuggestion: handleApplyAiSuggestion,
+              onRejectSelectionReview: handleRejectSelectionReview,
+              onUndoSelectionReview: handleUndoSelectionReview,
               onRetrySuggestion: handleGenerateAiSuggestion,
               onCancelStreaming: handleCancelAiStreaming
             } satisfies AiWritingWorkflowProps
