@@ -3,7 +3,8 @@ import { Boxes, RotateCcw, Save } from "lucide-react";
 import type {
   ConfigWorkflowDesignerAvailability,
   ConfigWorkflowGraphLayoutEdit,
-  ConfigWorkflowGraphSnapshot
+  ConfigWorkflowGraphSnapshot,
+  ConfigWorkflowSemanticEdit
 } from "@novel-studio/application";
 
 export type ConfigStudioAssetType = "prompt" | "agent" | "workflow";
@@ -53,6 +54,7 @@ export interface ConfigStudioPanelProps {
   readonly onWorkflowNodeSelect?: (nodeId: string) => void;
   readonly onWorkflowEdgeSelect?: (edgeId: string) => void;
   readonly onWorkflowNodeEdit?: (edit: ConfigStudioWorkflowNodeEdit) => void;
+  readonly onWorkflowSemanticEdit?: (edit: ConfigWorkflowSemanticEdit) => void;
   readonly onWorkflowLayoutChange?: (edit: ConfigWorkflowGraphLayoutEdit) => void;
   readonly onWorkflowNodeDragCommit?: (edit: ConfigWorkflowGraphLayoutEdit) => void;
   readonly onSave?: () => void;
@@ -72,6 +74,7 @@ export function ConfigStudioPanel({
   onWorkflowNodeSelect,
   onWorkflowEdgeSelect,
   onWorkflowNodeEdit,
+  onWorkflowSemanticEdit,
   onWorkflowLayoutChange,
   onWorkflowNodeDragCommit,
   onSave,
@@ -161,6 +164,7 @@ export function ConfigStudioPanel({
               {...(onWorkflowNodeSelect === undefined ? {} : { onWorkflowNodeSelect })}
               {...(onWorkflowEdgeSelect === undefined ? {} : { onWorkflowEdgeSelect })}
               {...(onWorkflowNodeEdit === undefined ? {} : { onWorkflowNodeEdit })}
+              {...(onWorkflowSemanticEdit === undefined ? {} : { onWorkflowSemanticEdit })}
               {...(onWorkflowLayoutChange === undefined ? {} : { onWorkflowLayoutChange })}
               {...(onWorkflowNodeDragCommit === undefined ? {} : { onWorkflowNodeDragCommit })}
             />
@@ -210,6 +214,7 @@ function WorkflowGraphPreview({
   onWorkflowNodeSelect,
   onWorkflowEdgeSelect,
   onWorkflowNodeEdit,
+  onWorkflowSemanticEdit,
   onWorkflowLayoutChange,
   onWorkflowNodeDragCommit
 }: {
@@ -219,6 +224,7 @@ function WorkflowGraphPreview({
   readonly onWorkflowNodeSelect?: (nodeId: string) => void;
   readonly onWorkflowEdgeSelect?: (edgeId: string) => void;
   readonly onWorkflowNodeEdit?: (edit: ConfigStudioWorkflowNodeEdit) => void;
+  readonly onWorkflowSemanticEdit?: (edit: ConfigWorkflowSemanticEdit) => void;
   readonly onWorkflowLayoutChange?: (edit: ConfigWorkflowGraphLayoutEdit) => void;
   readonly onWorkflowNodeDragCommit?: (edit: ConfigWorkflowGraphLayoutEdit) => void;
 }) {
@@ -374,6 +380,7 @@ function WorkflowGraphPreview({
         workflowGraph={workflowGraph}
         selectedWorkflowNodeId={activeNodeId}
         {...(onWorkflowNodeEdit === undefined ? {} : { onWorkflowNodeEdit })}
+        {...(onWorkflowSemanticEdit === undefined ? {} : { onWorkflowSemanticEdit })}
       />
     </section>
   );
@@ -428,11 +435,13 @@ function WorkflowDesignerAvailabilityBanner({
 function WorkflowNodeInspector({
   workflowGraph,
   selectedWorkflowNodeId,
-  onWorkflowNodeEdit
+  onWorkflowNodeEdit,
+  onWorkflowSemanticEdit
 }: {
   readonly workflowGraph: ConfigWorkflowGraphSnapshot;
   readonly selectedWorkflowNodeId?: string;
   readonly onWorkflowNodeEdit?: (edit: ConfigStudioWorkflowNodeEdit) => void;
+  readonly onWorkflowSemanticEdit?: (edit: ConfigWorkflowSemanticEdit) => void;
 }) {
   const selectedNode =
     workflowGraph.graph.nodes.find((node) => node.id === selectedWorkflowNodeId) ??
@@ -460,6 +469,45 @@ function WorkflowNodeInspector({
       <h4>Selected node {selectedNode.label}</h4>
       <p>Kind {selectedNode.kind}</p>
       <p>Metadata {JSON.stringify(selectedNode.metadata)}</p>
+      <div className="config-studio-workflow-semantic-actions">
+        <button
+          aria-label={`Add confirmation node after ${selectedNode.id}`}
+          disabled={onWorkflowSemanticEdit === undefined}
+          onClick={() =>
+            onWorkflowSemanticEdit?.({
+              kind: "add-node",
+              afterStepId: selectedNode.stepId,
+              step: {
+                id: `${selectedNode.stepId}_confirmation`,
+                kind: "confirmation",
+                ...((nextStepId || defaultNextStepId).length === 0
+                  ? {}
+                  : { nextStepId: nextStepId || defaultNextStepId })
+              },
+              layout: {
+                x: 0,
+                y: 120
+              }
+            })
+          }
+          type="button"
+        >
+          Add confirmation
+        </button>
+        <button
+          aria-label={`Delete workflow node ${selectedNode.id}`}
+          disabled={onWorkflowSemanticEdit === undefined}
+          onClick={() =>
+            onWorkflowSemanticEdit?.({
+              kind: "delete-node",
+              stepId: selectedNode.stepId
+            })
+          }
+          type="button"
+        >
+          Delete node
+        </button>
+      </div>
       <div className="config-studio-workflow-inspector-fields">
         <label>
           <span>Next step</span>

@@ -10,6 +10,7 @@ import {
 } from "@novel-studio/shared";
 
 import {
+  applyConfigWorkflowSemanticEdit,
   applyConfigWorkflowGraphLayoutToContent,
   createConfigWorkflowDesignerAvailability,
   createConfigStudioSession,
@@ -338,5 +339,162 @@ describe("config studio session", () => {
     });
     expect(availability.blockerMessages).toContain("Workflow edge points to a missing step.");
     expect(availability.blockerMessages).toContain("Workflow layout is not available.");
+  });
+
+  test("applies semantic workflow node insertion to a draft and preserves layout metadata", () => {
+    const result = applyConfigWorkflowSemanticEdit({
+      content: {
+        ...workflow,
+        layout: {
+          schemaVersion: "1.0",
+          source: "draft",
+          viewport: { x: 0, y: 0, zoom: 1 },
+          nodes: [
+            { nodeId: "context", x: 0, y: 0 },
+            { nodeId: "review", x: 220, y: 0 },
+            { nodeId: "save", x: 440, y: 0 }
+          ]
+        }
+      },
+      edit: {
+        kind: "add-node",
+        afterStepId: "review",
+        step: {
+          id: "confirm",
+          kind: "confirmation",
+          nextStepId: "save"
+        },
+        layout: { x: 660, y: 120 }
+      },
+      now: () => "2026-07-06T12:00:00.000Z"
+    });
+
+    expect(isOk(result)).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.value.content.updatedAt).toBe("2026-07-06T12:00:00.000Z");
+    expect(result.value.content.steps).toEqual([
+      { id: "context", kind: "context", nextStepId: "review" },
+      { id: "review", kind: "agent", agentId: "agent_reviewer_default", nextStepId: "confirm" },
+      { id: "confirm", kind: "confirmation", nextStepId: "save" },
+      { id: "save", kind: "save" }
+    ]);
+    expect(result.value.content.layout).toMatchObject({
+      source: "draft",
+      nodes: expect.arrayContaining([{ nodeId: "confirm", x: 660, y: 120 }])
+    });
+    expect(result.value.workflowGraph.validation.status).toBe("valid");
+  });
+
+  test("applies semantic workflow edge and branch edits to a draft", () => {
+    const branchWorkflow = {
+      ...workflow,
+      entryStepId: "choose",
+      steps: [
+        {
+          id: "choose",
+          kind: "branch",
+          branches: [
+            {
+              id: "draft",
+              label: "Draft",
+              condition: "manual:draft",
+              nextStepId: "review"
+            }
+          ],
+          defaultNextStepId: "save"
+        },
+        {
+          id: "review",
+          kind: "agent",
+          agentId: "agent_reviewer_default",
+          nextStepId: "save"
+        },
+        {
+          id: "save",
+          kind: "save"
+        }
+      ]
+    } satisfies JsonObject;
+
+    const retargeted = applyConfigWorkflowSemanticEdit({
+      content: branchWorkflow,
+      edit: {
+        kind: "retarget-edge",
+        fromStepId: "review",
+        edgeKind: "next",
+        toStepId: "choose"
+      },
+      now: () => "2026-07-06T12:00:00.000Z"
+    });
+    expect(isOk(retargeted)).toBe(true);
+    if (!retargeted.ok) {
+      return;
+    }
+
+    const branchEdited = applyConfigWorkflowSemanticEdit({
+      content: retargeted.value.content,
+      edit: {
+        kind: "edit-branch-edge",
+        fromStepId: "choose",
+        branchId: "draft",
+        label: "Revise",
+        condition: "manual:revise",
+        toStepId: "save"
+      },
+      now: () => "2026-07-06T12:01:00.000Z"
+    });
+
+    expect(isOk(branchEdited)).toBe(true);
+    if (!branchEdited.ok) {
+      return;
+    }
+    expect(branchEdited.value.content.steps).toEqual([
+      {
+        id: "choose",
+        kind: "branch",
+        branches: [
+          {
+            id: "draft",
+            label: "Revise",
+            condition: "manual:revise",
+            nextStepId: "save"
+          }
+        ],
+        defaultNextStepId: "save"
+      },
+      {
+        id: "review",
+        kind: "agent",
+        agentId: "agent_reviewer_default",
+        nextStepId: "choose"
+      },
+      {
+        id: "save",
+        kind: "save"
+      }
+    ]);
+  });
+
+  test("deletes workflow nodes and removes dangling semantic references", () => {
+    const result = applyConfigWorkflowSemanticEdit({
+      content: workflow,
+      edit: {
+        kind: "delete-node",
+        stepId: "review"
+      },
+      now: () => "2026-07-06T12:00:00.000Z"
+    });
+
+    expect(isOk(result)).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.value.content.steps).toEqual([
+      { id: "context", kind: "context" },
+      { id: "save", kind: "save" }
+    ]);
+    expect(result.value.workflowGraph.validation.status).toBe("invalid");
   });
 });

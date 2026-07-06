@@ -7,6 +7,7 @@ import {
   createPluginSecurityAuditReport,
   createPluginSandboxFixtureWorkerAdapter,
   createPluginIsolationWorkerPrototypeAdapter,
+  createPluginRuntimeHardeningReport,
   createPluginSandboxPolicyReport,
   createPluginRuntimeSession,
   type PluginRuntimeAdapter
@@ -541,6 +542,48 @@ describe("PluginRuntimeSession", () => {
             "Plugin requests denied sandbox capability network:access.",
             "Real isolated worker execution is not enabled by this spike."
           ]
+        }
+      ]
+    });
+  });
+
+  test("creates a plugin runtime hardening report with signing trust and audit retention gates", () => {
+    const report = createPluginRuntimeHardeningReport({
+      snapshot: enabledSnapshot,
+      runtimeKind: "utility-process",
+      signedPluginIds: ["novel.structure-tools"],
+      trustedPluginIds: ["novel.structure-tools"],
+      auditRetentionDays: 90
+    });
+
+    expect(report).toEqual({
+      schemaVersion: "1.0",
+      runtimeKind: "utility-process",
+      status: "ready",
+      signingTrustPolicy: {
+        required: true,
+        trustedPluginIds: ["novel.structure-tools"],
+        signedPluginIds: ["novel.structure-tools"]
+      },
+      auditRetention: {
+        mode: "local-jsonl",
+        path: "history/plugin-audit",
+        retentionDays: 90,
+        protectedFromCacheClear: true
+      },
+      marketplaceBoundary: {
+        status: "blocked",
+        reasons: ["Marketplace install/update is outside v1 and requires a future RFC."]
+      },
+      plugins: [
+        {
+          pluginId: "novel.structure-tools",
+          readiness: "ready",
+          executable: true,
+          signing: "satisfied",
+          trustState: "trusted-local",
+          deniedCapabilities: [],
+          auditEvents: []
         }
       ]
     });

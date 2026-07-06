@@ -1055,6 +1055,19 @@ export function App() {
     [studioBridge]
   );
 
+  const handleStudioWorkflowSemanticEdit = useCallback<
+    NonNullable<ConfigStudioPanelProps["onWorkflowSemanticEdit"]>
+  >(
+    (edit) => {
+      if (studioBridge === undefined) {
+        return;
+      }
+
+      setStudio(studioBridge.applyWorkflowSemanticEdit(edit));
+    },
+    [studioBridge]
+  );
+
   const handleStudioWorkflowLayoutChange = useCallback<
     NonNullable<ConfigStudioPanelProps["onWorkflowLayoutChange"]>
   >(
@@ -1212,6 +1225,7 @@ export function App() {
               onWorkflowNodeSelect: handleStudioWorkflowNodeSelect,
               onWorkflowEdgeSelect: handleStudioWorkflowEdgeSelect,
               onWorkflowNodeEdit: handleStudioWorkflowNodeEdit,
+              onWorkflowSemanticEdit: handleStudioWorkflowSemanticEdit,
               onWorkflowLayoutChange: handleStudioWorkflowLayoutChange,
               onWorkflowNodeDragCommit: handleStudioWorkflowNodeDragCommit,
               onSave: handleStudioSave,

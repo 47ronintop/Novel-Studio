@@ -8,6 +8,7 @@ import {
   createSelectionAwareAiPreviewDraft,
   createTextareaChapterEditorRuntimeProps,
   createTextareaEditorRuntimeAdapter,
+  createEditorLocalDiffReview,
   evaluateEditorRuntimeDefaultReadiness,
   resolveEditorRuntimeAdapter,
   type EditorRuntimeEvent
@@ -400,6 +401,54 @@ describe("editor runtime adapter resolver", () => {
         changes: [{ kind: "insert", value: "Rewritten paragraph.\n" }]
       }).visualDiffSummaryLabel
     ).toBe("Visual diff preview: 1 change");
+  });
+
+  test("creates local diff review metadata with fallback rollback and large document smoke evidence", () => {
+    const handle = createCodeMirrorEditorRuntimeAdapter().mount({
+      body: Array.from({ length: 220 }, (_, index) => `Line ${index + 1}`).join("\n"),
+      saveStatus: "Saved",
+      domMountTarget: {
+        targetId: "chapter-editor-root",
+        ownerDocumentLabel: "renderer-document"
+      },
+      domMountElement: { nodeType: 1 }
+    });
+
+    const review = createEditorLocalDiffReview(handle.getSnapshot(), {
+      title: "Local diff review",
+      changes: [{ kind: "replace", value: "Line 1" }]
+    });
+
+    expect(review).toMatchObject({
+      title: "Local diff review",
+      status: "reviewing",
+      runtimeId: "codemirror",
+      previewOnly: true,
+      fallbackRuntimeId: "textarea",
+      rollbackLabel: "Rollback to textarea runtime",
+      largeDocumentSmoke: {
+        status: "passed",
+        lineCount: 220,
+        threshold: 200
+      },
+      reviewActions: {
+        canAccept: true,
+        canReject: true,
+        canRollback: true
+      }
+    });
+    expect(review.decorations[0]).toMatchObject({
+      kind: "replace",
+      rangeSource: "body-match",
+      valuePreview: "Line 1",
+      previewOnly: true
+    });
+    expect(
+      buildChapterEditorRuntimeProps(handle.getSnapshot(), {
+        title: "Local diff review",
+        changes: [{ kind: "replace", value: "Line 1" }]
+      }).localDiffReviewLabel
+    ).toBe("Local diff review: 1 change, rollback textarea");
   });
 
   test("creates selection-aware AI preview drafts without applying content", () => {

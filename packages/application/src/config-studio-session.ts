@@ -6,9 +6,13 @@ import {
   validateWorkflowGraph
 } from "@novel-studio/workflow-engine";
 import type {
+  WorkflowBranch,
+  WorkflowDefinition,
   WorkflowNodeInspectorEdit,
   WorkflowGraphViewModel,
-  WorkflowValidationReport
+  WorkflowValidationReport,
+  WorkflowStep,
+  WorkflowStepKind
 } from "@novel-studio/workflow-engine";
 
 export type ConfigAssetType = "prompt" | "agent" | "workflow";
@@ -86,6 +90,51 @@ export interface ConfigWorkflowNodeInspectorEditResult {
 }
 
 export interface ConfigWorkflowGraphLayoutContentEditResult {
+  readonly content: JsonObject;
+  readonly workflowGraph: ConfigWorkflowGraphSnapshot;
+}
+
+export type ConfigWorkflowSemanticEdit =
+  | {
+      readonly kind: "add-node";
+      readonly afterStepId?: string;
+      readonly step: ConfigWorkflowSemanticStepDraft;
+      readonly layout?: {
+        readonly x: number;
+        readonly y: number;
+      };
+    }
+  | {
+      readonly kind: "delete-node";
+      readonly stepId: string;
+    }
+  | {
+      readonly kind: "retarget-edge";
+      readonly fromStepId: string;
+      readonly edgeKind: "next" | "default";
+      readonly toStepId?: string;
+    }
+  | {
+      readonly kind: "edit-branch-edge";
+      readonly fromStepId: string;
+      readonly branchId: string;
+      readonly label: string;
+      readonly condition: string;
+      readonly toStepId: string;
+    };
+
+export interface ConfigWorkflowSemanticStepDraft {
+  readonly id: string;
+  readonly kind: WorkflowStepKind;
+  readonly agentId?: string;
+  readonly pluginId?: string;
+  readonly contributionId?: string;
+  readonly nextStepId?: string;
+  readonly defaultNextStepId?: string;
+  readonly branches?: readonly WorkflowBranch[];
+}
+
+export interface ConfigWorkflowSemanticEditResult {
   readonly content: JsonObject;
   readonly workflowGraph: ConfigWorkflowGraphSnapshot;
 }
@@ -286,6 +335,41 @@ export function createConfigWorkflowDesignerAvailability(
   };
 }
 
+export function applyConfigWorkflowSemanticEdit(input: {
+  readonly content: JsonObject;
+  readonly edit: ConfigWorkflowSemanticEdit;
+  readonly now: () => string;
+}): Result<ConfigWorkflowSemanticEditResult, UnifiedError> {
+  const parsed = parseWorkflowDefinition(input.content, { traceId: "config-studio-semantic" });
+  if (!parsed.ok) {
+    return parsed;
+  }
+
+  const definition = applySemanticEditToDefinition(parsed.value, input.edit, input.now());
+  const graph = buildWorkflowGraphViewModel(definition);
+  const previousLayout = readWorkflowLayout(input.content["layout"]);
+  const layout = applySemanticLayoutEdit(
+    createConfigWorkflowGraphLayout(graph, previousLayout),
+    input.edit
+  );
+  const validation = validateWorkflowGraph(definition);
+
+  return {
+    ok: true,
+    value: {
+      content: {
+        ...(definition as unknown as JsonObject),
+        layout: workflowLayoutToJsonObject(layout)
+      },
+      workflowGraph: {
+        graph,
+        validation,
+        layout
+      }
+    }
+  };
+}
+
 function workflowGraphForContent(
   assetType: ConfigAssetType,
   content: JsonObject,
@@ -382,5 +466,187 @@ function workflowLayoutToJsonObject(layout: ConfigWorkflowGraphLayout): JsonObje
       x: node.x,
       y: node.y
     }))
+  };
+}
+
+function applySemanticEditToDefinition(
+  definition: WorkflowDefinition,
+  edit: ConfigWorkflowSemanticEdit,
+  updatedAt: string
+): WorkflowDefinition {
+  switch (edit.kind) {
+    case "add-node":
+      return addSemanticWorkflowNode(definition, edit, updatedAt);
+    case "delete-node":
+      return deleteSemanticWorkflowNode(definition, edit.stepId, updatedAt);
+    case "retarget-edge":
+      return {
+        ...definition,
+        updatedAt,
+        steps: definition.steps.map((step) =>
+          step.id === edit.fromStepId ? retargetWorkflowStepEdge(step, edit) : step
+        )
+      };
+    case "edit-branch-edge":
+      return {
+        ...definition,
+        updatedAt,
+        steps: definition.steps.map((step) =>
+          step.id === edit.fromStepId ? editWorkflowStepBranch(step, edit) : step
+        )
+      };
+  }
+}
+
+function addSemanticWorkflowNode(
+  definition: WorkflowDefinition,
+  edit: Extract<ConfigWorkflowSemanticEdit, { readonly kind: "add-node" }>,
+  updatedAt: string
+): WorkflowDefinition {
+  const step = semanticStepDraftToWorkflowStep(edit.step);
+  const afterIndex =
+    edit.afterStepId === undefined
+      ? -1
+      : definition.steps.findIndex((candidate) => candidate.id === edit.afterStepId);
+  const steps = [...definition.steps];
+  steps.splice(afterIndex >= 0 ? afterIndex + 1 : steps.length, 0, step);
+
+  return {
+    ...definition,
+    updatedAt,
+    steps: steps.map((candidate) =>
+      edit.afterStepId !== undefined && candidate.id === edit.afterStepId
+        ? retargetStepNextToInsertedNode(candidate, step.id)
+        : candidate
+    )
+  };
+}
+
+function deleteSemanticWorkflowNode(
+  definition: WorkflowDefinition,
+  stepId: string,
+  updatedAt: string
+): WorkflowDefinition {
+  const steps = definition.steps
+    .filter((step) => step.id !== stepId)
+    .map((step) => removeReferencesToStep(step, stepId));
+  const entryStepId =
+    definition.entryStepId === stepId
+      ? (steps[0]?.id ?? definition.entryStepId)
+      : definition.entryStepId;
+
+  return {
+    ...definition,
+    entryStepId,
+    updatedAt,
+    steps
+  };
+}
+
+function semanticStepDraftToWorkflowStep(step: ConfigWorkflowSemanticStepDraft): WorkflowStep {
+  return {
+    id: step.id,
+    kind: step.kind,
+    ...(step.agentId === undefined ? {} : { agentId: step.agentId }),
+    ...(step.pluginId === undefined ? {} : { pluginId: step.pluginId }),
+    ...(step.contributionId === undefined ? {} : { contributionId: step.contributionId }),
+    ...(step.nextStepId === undefined ? {} : { nextStepId: step.nextStepId }),
+    ...(step.defaultNextStepId === undefined ? {} : { defaultNextStepId: step.defaultNextStepId }),
+    ...(step.branches === undefined ? {} : { branches: step.branches })
+  };
+}
+
+function retargetStepNextToInsertedNode(step: WorkflowStep, insertedStepId: string): WorkflowStep {
+  return {
+    ...step,
+    nextStepId: insertedStepId
+  };
+}
+
+function retargetWorkflowStepEdge(
+  step: WorkflowStep,
+  edit: Extract<ConfigWorkflowSemanticEdit, { readonly kind: "retarget-edge" }>
+): WorkflowStep {
+  if (edit.edgeKind === "next") {
+    return edit.toStepId === undefined
+      ? removeOptionalWorkflowStepField(step, "nextStepId")
+      : { ...step, nextStepId: edit.toStepId };
+  }
+
+  return edit.toStepId === undefined
+    ? removeOptionalWorkflowStepField(step, "defaultNextStepId")
+    : { ...step, defaultNextStepId: edit.toStepId };
+}
+
+function editWorkflowStepBranch(
+  step: WorkflowStep,
+  edit: Extract<ConfigWorkflowSemanticEdit, { readonly kind: "edit-branch-edge" }>
+): WorkflowStep {
+  const branches = step.branches ?? [];
+  const branchExists = branches.some((branch) => branch.id === edit.branchId);
+  const nextBranch = {
+    id: edit.branchId,
+    label: edit.label,
+    condition: edit.condition,
+    nextStepId: edit.toStepId
+  };
+
+  return {
+    ...step,
+    branches: branchExists
+      ? branches.map((branch) => (branch.id === edit.branchId ? nextBranch : branch))
+      : [...branches, nextBranch]
+  };
+}
+
+function removeReferencesToStep(step: WorkflowStep, deletedStepId: string): WorkflowStep {
+  let next =
+    step.nextStepId === deletedStepId ? removeOptionalWorkflowStepField(step, "nextStepId") : step;
+  next =
+    next.defaultNextStepId === deletedStepId
+      ? removeOptionalWorkflowStepField(next, "defaultNextStepId")
+      : next;
+  if (next.branches?.some((branch) => branch.nextStepId === deletedStepId) === true) {
+    return {
+      ...next,
+      branches: next.branches.filter((branch) => branch.nextStepId !== deletedStepId)
+    };
+  }
+
+  return next;
+}
+
+function removeOptionalWorkflowStepField(
+  step: WorkflowStep,
+  key: "nextStepId" | "defaultNextStepId"
+): WorkflowStep {
+  const next: {
+    -readonly [Key in keyof WorkflowStep]: WorkflowStep[Key];
+  } = { ...step };
+  if (key === "nextStepId") {
+    delete next.nextStepId;
+    return next as WorkflowStep;
+  }
+
+  delete next.defaultNextStepId;
+  return next as WorkflowStep;
+}
+
+function applySemanticLayoutEdit(
+  layout: ConfigWorkflowGraphLayout,
+  edit: ConfigWorkflowSemanticEdit
+): ConfigWorkflowGraphLayout {
+  if (edit.kind !== "add-node" || edit.layout === undefined) {
+    return layout;
+  }
+
+  return {
+    ...layout,
+    source: "draft",
+    nodes: layout.nodes.map((node) =>
+      node.nodeId === edit.step.id
+        ? { nodeId: edit.step.id, x: edit.layout?.x ?? node.x, y: edit.layout?.y ?? node.y }
+        : node
+    )
   };
 }

@@ -141,6 +141,7 @@ describe("ChapterEditor", () => {
             label: "Preview selection rewrite"
           },
           visualDiffSummaryLabel: "Visual diff preview: 2 changes",
+          localDiffReviewLabel: "Local diff review: 2 changes, rollback textarea",
           autosaveLabel: "Autosave armed",
           shortcutProfileLabel: "Default shortcuts",
           warnings: ["Large document optimizations inactive"]
@@ -156,6 +157,7 @@ describe("ChapterEditor", () => {
     expect(html).toContain('aria-label="Preview selection rewrite"');
     expect(html).toContain("Preview selection rewrite");
     expect(html).toContain("Visual diff preview: 2 changes");
+    expect(html).toContain("Local diff review: 2 changes, rollback textarea");
     expect(html).toContain("Autosave armed");
     expect(html).toContain("Default shortcuts");
     expect(html).toContain("Large document optimizations inactive");

@@ -132,6 +132,38 @@ export interface PluginSecurityAuditReport {
   readonly plugins: readonly PluginSecurityAuditEntry[];
 }
 
+export interface PluginRuntimeHardeningReportPlugin {
+  readonly pluginId: string;
+  readonly readiness: PluginSandboxIsolationReadiness;
+  readonly executable: boolean;
+  readonly signing: PluginSandboxIsolationSigning;
+  readonly trustState: PluginSandboxTrustState;
+  readonly deniedCapabilities: readonly PluginSandboxDeniedCapability[];
+  readonly auditEvents: readonly string[];
+}
+
+export interface PluginRuntimeHardeningReport {
+  readonly schemaVersion: "1.0";
+  readonly runtimeKind: PluginSandboxIsolationRuntimeKind;
+  readonly status: PluginSandboxIsolationReadiness;
+  readonly signingTrustPolicy: {
+    readonly required: true;
+    readonly trustedPluginIds: readonly string[];
+    readonly signedPluginIds: readonly string[];
+  };
+  readonly auditRetention: {
+    readonly mode: "local-jsonl";
+    readonly path: "history/plugin-audit";
+    readonly retentionDays: number;
+    readonly protectedFromCacheClear: true;
+  };
+  readonly marketplaceBoundary: {
+    readonly status: "blocked";
+    readonly reasons: readonly string[];
+  };
+  readonly plugins: readonly PluginRuntimeHardeningReportPlugin[];
+}
+
 export interface PluginRuntimeAdapter {
   executeHostCommand(
     input: PluginRuntimeAdapterCommandInput
@@ -351,6 +383,63 @@ export function createPluginSecurityAuditReport(
   };
 }
 
+export function createPluginRuntimeHardeningReport(input: {
+  readonly snapshot: PluginSettingsSnapshot;
+  readonly runtimeKind?: PluginSandboxIsolationRuntimeKind;
+  readonly timeoutMs?: number;
+  readonly maxOutputBytes?: number;
+  readonly signedPluginIds?: readonly string[];
+  readonly trustedPluginIds?: readonly string[];
+  readonly auditRetentionDays?: number;
+}): PluginRuntimeHardeningReport {
+  const runtimeKind = input.runtimeKind ?? "utility-process";
+  const signedPluginIds = input.signedPluginIds ?? [];
+  const trustedPluginIds = input.trustedPluginIds ?? [];
+  const isolationPlan = createPluginSandboxIsolationPlan({
+    snapshot: input.snapshot,
+    runtimeKind,
+    ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
+    ...(input.maxOutputBytes === undefined ? {} : { maxOutputBytes: input.maxOutputBytes }),
+    signedPluginIds
+  });
+  const trustedPluginIdsSet = new Set(trustedPluginIds);
+  const plugins = isolationPlan.workers.map((worker) => ({
+    pluginId: worker.pluginId,
+    readiness: worker.readiness,
+    executable: worker.executable,
+    signing: worker.signing,
+    trustState: trustedPluginIdsSet.has(worker.pluginId)
+      ? ("trusted-local" as const)
+      : defaultTrustStateForPluginId(input.snapshot, worker.pluginId),
+    deniedCapabilities: worker.deniedCapabilities,
+    auditEvents: worker.reasons.filter(
+      (reason) => reason !== "Real isolated worker execution is not enabled by this spike."
+    )
+  }));
+
+  return {
+    schemaVersion: "1.0",
+    runtimeKind,
+    status: plugins.every((plugin) => plugin.readiness === "ready") ? "ready" : "blocked",
+    signingTrustPolicy: {
+      required: true,
+      trustedPluginIds,
+      signedPluginIds
+    },
+    auditRetention: {
+      mode: "local-jsonl",
+      path: "history/plugin-audit",
+      retentionDays: input.auditRetentionDays ?? 90,
+      protectedFromCacheClear: true
+    },
+    marketplaceBoundary: {
+      status: "blocked",
+      reasons: ["Marketplace install/update is outside v1 and requires a future RFC."]
+    },
+    plugins
+  };
+}
+
 export function createPluginIsolationWorkerPrototypeAdapter(
   options: PluginIsolationWorkerPrototypeOptions
 ): PluginRuntimeAdapter {
@@ -512,6 +601,14 @@ function hasPermission(
 
 function defaultTrustState(entry: PluginSettingsEntry): PluginSandboxTrustState {
   return entry.manifestStatus === "valid" && entry.enabled ? "trusted-local" : "untrusted";
+}
+
+function defaultTrustStateForPluginId(
+  snapshot: PluginSettingsSnapshot,
+  pluginId: string
+): PluginSandboxTrustState {
+  const entry = snapshot.plugins.find((plugin) => plugin.pluginId === pluginId);
+  return entry === undefined ? "untrusted" : defaultTrustState(entry);
 }
 
 function deniedSandboxCapabilities(

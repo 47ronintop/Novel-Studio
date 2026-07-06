@@ -2029,6 +2029,23 @@ textarea:focus-visible,
   padding-top: 10px;
 }
 
+.config-studio-workflow-semantic-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.config-studio-workflow-semantic-actions button {
+  background: transparent;
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  color: var(--ns-ink);
+  cursor: pointer;
+  font-size: 12px;
+  min-height: 28px;
+  padding: 4px 8px;
+}
+
 .config-studio-workflow-inspector-fields {
   display: grid;
   gap: 8px;

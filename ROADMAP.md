@@ -510,19 +510,30 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - `resolveEditorRuntimeAdapter()` 默认仍保持 textarea；M85 只给出 default readiness 决策，不自动切换 CodeMirror。
 - M84-M85 不包含 edge 语义编辑、完整图形化工作流编辑器、Workflow Designer Product Ready、真实 CodeMirror 默认迁移或局部 diff editor。
 
+## M86-M88 完成内容
+
+- 新增 `docs/productization/m86-m88-plugin-workflow-editor-hardening.md`，明确 plugin hardening、workflow semantic editing 和 editor local diff review 的范围。
+- Plugin Runtime 新增 hardening report，汇总 utility/process isolation runtime、signed/trusted plugin ids、audit retention、marketplace boundary 和 per-plugin readiness。
+- Hardening report 明确 `history/plugin-audit` 为 local jsonl retention 目标，并标注 protected from cache clear；仍不启用 marketplace 或任意第三方源码执行。
+- Config Studio Application 新增 semantic workflow edit helper，支持 add node、delete node、retarget edge 和 edit branch edge，并返回 refreshed graph validation 和 layout draft。
+- Studio bridge/UI 接入最小 semantic edit 入口：Add confirmation after selected node 与 Delete selected node，继续写入 workflow JSON draft，不调用 preload save API。
+- Editor Runtime 新增 local diff review DTO，包含 preview-only decorations、large-document smoke、textarea fallback rollback label 和 review actions。
+- Chapter Editor runtime strip 显示 local diff review label；默认 editor runtime 仍保持 textarea。
+- M86-M88 不包含真实外部进程插件执行、签名信任持久化、marketplace、完整 graph editor、CodeMirror 默认迁移或自动应用 AI diff。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19-M85，其中 M27 首次使用引导已通过 M48 回补完成。
+- Post-M18 产品化打磨已完成 M19-M88，其中 M27 首次使用引导已通过 M48 回补完成。
 - 当前产品状态是 beta productization：主干闭环可运行，但多个宪法/UI 指南能力仍是 Product Gap。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- M86 建议进入 Plugin Runtime Hardening：补真实 process/utility isolation 方案验证、签名信任策略和审计日志留存。
-- M87 建议进入 Workflow Designer Semantic Editing：补 edge/branch 语义编辑、节点增删和 graph-to-definition 保存策略。
-- M88 建议进入 Editor Local Diff Review：补 CodeMirror 局部 diff review UI、large-document smoke fixture 和 fallback 回滚 UX。
+- M89 建议进入 Plugin Runtime Trust Store：补签名信任持久化、审计日志 Repository 和真实 utility/process isolation ADR。
+- M90 建议进入 Workflow Designer Product Editing：补节点类型选择、edge/branch 表单、删除确认和完整 graph-to-definition UI。
+- M91 建议进入 CodeMirror Default Migration Gate：补 E2E parity、large-document benchmark、fallback rollback UX 和默认切换开关。
 
 ## 当前技术债重点
 

@@ -207,6 +207,7 @@ describe("M8 Settings and Studio UI", () => {
         onContentChange={() => undefined}
         onWorkflowNodeSelect={() => undefined}
         onWorkflowEdgeSelect={() => undefined}
+        onWorkflowSemanticEdit={() => undefined}
         onWorkflowNodeDragCommit={() => undefined}
         onSave={() => undefined}
         onRestoreVersion={() => undefined}
@@ -244,6 +245,8 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).toContain("Selected node save");
     expect(html).toContain("Kind save");
     expect(html).toContain('aria-label="Workflow node next step"');
+    expect(html).toContain('aria-label="Add confirmation node after save"');
+    expect(html).toContain('aria-label="Delete workflow node save"');
     expect(html).toContain('name="nextStepId"');
     expect(html).toContain("Incoming context → save");
     expect(html).toContain("WORKFLOW_GRAPH_NODE_UNREACHABLE");

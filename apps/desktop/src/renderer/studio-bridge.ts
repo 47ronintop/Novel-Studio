@@ -2,10 +2,12 @@ import {
   applyConfigWorkflowGraphLayoutEdit,
   applyConfigWorkflowGraphLayoutToContent,
   applyConfigWorkflowNodeInspectorEdit,
+  applyConfigWorkflowSemanticEdit,
   createConfigWorkflowGraphLayout,
   type ConfigAssetType,
   type ConfigWorkflowGraphLayoutEdit,
   type ConfigWorkflowNodeInspectorEdit,
+  type ConfigWorkflowSemanticEdit,
   type NovelStudioApi
 } from "@novel-studio/application";
 import type {
@@ -42,6 +44,7 @@ export interface StudioBridge {
   selectWorkflowNode(nodeId: string): ConfigStudioPanelProps;
   selectWorkflowEdge(edgeId: string): ConfigStudioPanelProps;
   applyWorkflowNodeEdit(edit: ConfigWorkflowNodeInspectorEdit): ConfigStudioPanelProps;
+  applyWorkflowSemanticEdit(edit: ConfigWorkflowSemanticEdit): ConfigStudioPanelProps;
   updateWorkflowGraphLayout(edit: ConfigWorkflowGraphLayoutEdit): ConfigStudioPanelProps;
   commitWorkflowNodeDrag(edit: ConfigWorkflowGraphLayoutEdit): ConfigStudioPanelProps;
   beginSave(): ConfigStudioPanelProps;
@@ -137,6 +140,46 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
         result.value.workflowGraph,
         selectedWorkflowEdgeId
       );
+      status = "idle";
+      feedback = undefined;
+      return toProps();
+    },
+    applyWorkflowSemanticEdit(edit) {
+      const content = parseJsonObject(selectedAsset.content);
+      if (selectedAsset.assetType !== "workflow" || content === undefined) {
+        selectedAsset = { ...selectedAsset, validationStatus: "invalid" };
+        status = "error";
+        feedback = {
+          kind: "error",
+          message: "Workflow JSON must be valid before semantic graph edits."
+        };
+        return toProps();
+      }
+
+      const result = applyConfigWorkflowSemanticEdit({
+        content,
+        edit,
+        now: () => new Date().toISOString()
+      });
+      if (!result.ok) {
+        selectedAsset = { ...selectedAsset, validationStatus: "invalid" };
+        status = "error";
+        feedback = { kind: "error", message: result.error.message };
+        return toProps();
+      }
+
+      selectedAsset = {
+        ...selectedAsset,
+        content: JSON.stringify(result.value.content, null, 2),
+        validationStatus:
+          result.value.workflowGraph.validation.status === "invalid" ? "invalid" : "dirty",
+        workflowGraph: result.value.workflowGraph
+      };
+      selectedWorkflowNodeId = selectedWorkflowNodeIdForGraph(
+        result.value.workflowGraph,
+        semanticEditSelectedNodeId(edit)
+      );
+      selectedWorkflowEdgeId = undefined;
       status = "idle";
       feedback = undefined;
       return toProps();
@@ -320,6 +363,7 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
       onContentChange: () => undefined,
       onWorkflowNodeSelect: () => undefined,
       onWorkflowEdgeSelect: () => undefined,
+      onWorkflowSemanticEdit: () => undefined,
       onWorkflowLayoutChange: () => undefined,
       onWorkflowNodeDragCommit: () => undefined,
       onSave: () => undefined,
@@ -371,6 +415,18 @@ function selectedWorkflowEdgeIdForGraph(
   return workflowGraph.graph.edges.some((edge) => edge.id === preferredEdgeId)
     ? preferredEdgeId
     : undefined;
+}
+
+function semanticEditSelectedNodeId(edit: ConfigWorkflowSemanticEdit): string | undefined {
+  switch (edit.kind) {
+    case "add-node":
+      return edit.step.id;
+    case "delete-node":
+      return undefined;
+    case "retarget-edge":
+    case "edit-branch-edge":
+      return edit.fromStepId;
+  }
 }
 
 function assetFromSnapshot(

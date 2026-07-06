@@ -200,6 +200,34 @@ describe("M23 studio bridge", () => {
     expect(calls).not.toContain("studio.saveConfigAsset:workflow:wf_review_chapter");
   });
 
+  test("applies workflow semantic edits through the Studio draft without saving", async () => {
+    const calls: string[] = [];
+    const bridge = createStudioBridge(createApi(calls));
+
+    await bridge.selectAsset("workflow", "wf_review_chapter");
+    bridge.selectWorkflowNode("context");
+    const props = bridge.applyWorkflowSemanticEdit({
+      kind: "add-node",
+      afterStepId: "context",
+      step: {
+        id: "confirm",
+        kind: "confirmation",
+        nextStepId: "save"
+      },
+      layout: { x: 240, y: 120 }
+    });
+
+    expect(props.selectedWorkflowNodeId).toBe("confirm");
+    expect(props.selectedAsset.validationStatus).toBe("dirty");
+    expect(JSON.parse(props.selectedAsset.content).steps).toEqual([
+      { id: "context", kind: "context", nextStepId: "confirm" },
+      { id: "confirm", kind: "confirmation", nextStepId: "save" },
+      { id: "save", kind: "save" }
+    ]);
+    expect(props.selectedAsset.workflowGraph?.validation.status).toBe("valid");
+    expect(calls).not.toContain("studio.saveConfigAsset:workflow:wf_review_chapter");
+  });
+
   test("selects workflow graph nodes and blocks invalid workflow saves before preload", async () => {
     const calls: string[] = [];
     const bridge = createStudioBridge(createApi(calls));

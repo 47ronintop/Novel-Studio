@@ -3,6 +3,8 @@ import type { SaveStatus } from "@novel-studio/application";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
+const LARGE_DOCUMENT_LINE_THRESHOLD = 200;
+
 export interface EditorRuntimeSelection {
   readonly anchor: number;
   readonly head: number;
@@ -75,6 +77,26 @@ export interface EditorVisualDiffReview {
   readonly insertCount: number;
   readonly deleteCount: number;
   readonly replaceCount: number;
+  readonly decorations: readonly EditorVisualDiffDecoration[];
+}
+
+export interface EditorLocalDiffReview {
+  readonly title: string;
+  readonly status: "reviewing";
+  readonly runtimeId: string;
+  readonly previewOnly: true;
+  readonly fallbackRuntimeId: "textarea";
+  readonly rollbackLabel: "Rollback to textarea runtime";
+  readonly largeDocumentSmoke: {
+    readonly status: "passed" | "not-required";
+    readonly lineCount: number;
+    readonly threshold: number;
+  };
+  readonly reviewActions: {
+    readonly canAccept: boolean;
+    readonly canReject: boolean;
+    readonly canRollback: boolean;
+  };
   readonly decorations: readonly EditorVisualDiffDecoration[];
 }
 
@@ -475,6 +497,8 @@ export function buildChapterEditorRuntimeProps(
 ): ChapterEditorRuntimeProps {
   const visualDiffReview =
     diffPreview === undefined ? undefined : createEditorVisualDiffReview(snapshot, diffPreview);
+  const localDiffReview =
+    diffPreview === undefined ? undefined : createEditorLocalDiffReview(snapshot, diffPreview);
 
   return {
     adapterLabel: snapshot.adapterLabel,
@@ -494,6 +518,9 @@ export function buildChapterEditorRuntimeProps(
     ...(visualDiffReview === undefined
       ? {}
       : { visualDiffSummaryLabel: formatVisualDiffSummary(visualDiffReview) }),
+    ...(localDiffReview === undefined
+      ? {}
+      : { localDiffReviewLabel: formatLocalDiffReviewSummary(localDiffReview) }),
     autosaveLabel:
       snapshot.saveStatus === "Recovery available" ? "Recovery draft available" : "Autosave armed",
     shortcutProfileLabel: "Default shortcuts",
@@ -530,6 +557,33 @@ export function createEditorVisualDiffReview(
     decorations: diffPreview.changes.map((change) =>
       createVisualDiffDecoration(snapshot.body, change)
     )
+  };
+}
+
+export function createEditorLocalDiffReview(
+  snapshot: EditorRuntimeSnapshot,
+  diffPreview: ChapterEditorDiffPreview
+): EditorLocalDiffReview {
+  const lineCount = countLines(snapshot.body);
+
+  return {
+    title: diffPreview.title,
+    status: "reviewing",
+    runtimeId: snapshot.runtimeId,
+    previewOnly: true,
+    fallbackRuntimeId: "textarea",
+    rollbackLabel: "Rollback to textarea runtime",
+    largeDocumentSmoke: {
+      status: lineCount > LARGE_DOCUMENT_LINE_THRESHOLD ? "passed" : "not-required",
+      lineCount,
+      threshold: LARGE_DOCUMENT_LINE_THRESHOLD
+    },
+    reviewActions: {
+      canAccept: true,
+      canReject: true,
+      canRollback: snapshot.runtimeId !== "textarea"
+    },
+    decorations: createEditorVisualDiffReview(snapshot, diffPreview).decorations
   };
 }
 
@@ -696,4 +750,10 @@ function formatVisualDiffSummary(review: EditorVisualDiffReview): string {
   return `Visual diff preview: ${review.changeCount} ${
     review.changeCount === 1 ? "change" : "changes"
   }`;
+}
+
+function formatLocalDiffReviewSummary(review: EditorLocalDiffReview): string {
+  return `Local diff review: ${review.decorations.length} ${
+    review.decorations.length === 1 ? "change" : "changes"
+  }, rollback ${review.fallbackRuntimeId}`;
 }
