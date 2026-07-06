@@ -200,6 +200,50 @@ function WorkflowGraphPreview({
           ))}
         </ol>
       )}
+      <WorkflowNodeInspector workflowGraph={workflowGraph} />
+    </section>
+  );
+}
+
+function WorkflowNodeInspector({
+  workflowGraph
+}: {
+  readonly workflowGraph: ConfigWorkflowGraphSnapshot;
+}) {
+  const selectedNode =
+    workflowGraph.graph.nodes.find((node) => node.id === workflowGraph.graph.entryNodeId) ??
+    workflowGraph.graph.nodes[0];
+
+  if (selectedNode === undefined) {
+    return null;
+  }
+
+  const incomingEdges = workflowGraph.graph.edges.filter(
+    (edge) => edge.toNodeId === selectedNode.id
+  );
+  const outgoingEdges = workflowGraph.graph.edges.filter(
+    (edge) => edge.fromNodeId === selectedNode.id
+  );
+
+  return (
+    <section className="config-studio-workflow-inspector" aria-label="Workflow node inspector">
+      <h4>Selected node {selectedNode.label}</h4>
+      <p>Kind {selectedNode.kind}</p>
+      <p>Metadata {JSON.stringify(selectedNode.metadata)}</p>
+      <ol aria-label="Workflow node outgoing edges">
+        {outgoingEdges.map((edge) => (
+          <li key={edge.id}>
+            Outgoing {edge.fromNodeId} {"\u2192"} {edge.toNodeId}
+          </li>
+        ))}
+      </ol>
+      <ol aria-label="Workflow node incoming edges">
+        {incomingEdges.map((edge) => (
+          <li key={edge.id}>
+            Incoming {edge.fromNodeId} {"\u2192"} {edge.toNodeId}
+          </li>
+        ))}
+      </ol>
     </section>
   );
 }

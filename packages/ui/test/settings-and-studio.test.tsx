@@ -172,8 +172,15 @@ describe("M8 Settings and Studio UI", () => {
               ]
             },
             validation: {
-              status: "valid",
-              issues: []
+              status: "invalid",
+              issues: [
+                {
+                  code: "WORKFLOW_GRAPH_NODE_UNREACHABLE",
+                  severity: "error",
+                  stepId: "save",
+                  message: "Workflow step is not reachable from the entry step."
+                }
+              ]
             }
           }
         }}
@@ -207,7 +214,13 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).toContain("Nodes 2");
     expect(html).toContain("Edges 1");
     expect(html).toContain("context → save");
-    expect(html).toContain("Validation valid");
+    expect(html).toContain("Validation invalid");
+    expect(html).toContain('aria-label="Workflow node inspector"');
+    expect(html).toContain("Selected node context");
+    expect(html).toContain("Kind context");
+    expect(html).toContain("Outgoing context → save");
+    expect(html).toContain("WORKFLOW_GRAPH_NODE_UNREACHABLE");
+    expect(html).toContain("Workflow step is not reachable from the entry step.");
     expect(html).not.toMatch(/filesystem|node:|fs\./i);
   });
 });

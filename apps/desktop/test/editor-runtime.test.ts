@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
   buildChapterEditorRuntimeProps,
   createCodeMirrorEditorRuntimeAdapter,
+  createEditorSelectionCommand,
   createTextareaEditorRuntimeAdapter,
   resolveEditorRuntimeAdapter,
   type EditorRuntimeEvent
@@ -149,5 +150,51 @@ describe("editor runtime adapter resolver", () => {
 
     expect(adapter.runtimeId).toBe("codemirror");
     expect(adapter.adapterLabel).toBe("CodeMirror Adapter (flagged)");
+  });
+
+  test("summarizes normalized editor selections for future focused commands", () => {
+    const handle = createTextareaEditorRuntimeAdapter().mount({
+      body: "First line\nSecond line\nThird line",
+      saveStatus: "Saved"
+    });
+
+    handle.updateSelection({ anchor: 22, head: 6 });
+
+    expect(handle.getSnapshot().selectionSummary).toEqual({
+      startOffset: 6,
+      endOffset: 22,
+      characterCount: 16,
+      lineStart: 1,
+      lineEnd: 2,
+      selectedTextPreview: "line\nSecond line",
+      collapsed: false
+    });
+    expect(buildChapterEditorRuntimeProps(handle.getSnapshot()).selectionSummaryLabel).toBe(
+      "Selection 16 chars, lines 1-2"
+    );
+  });
+
+  test("creates selection command DTOs without executing AI actions", () => {
+    const handle = createTextareaEditorRuntimeAdapter().mount({
+      body: "Alpha\nBeta",
+      saveStatus: "Saved"
+    });
+    handle.updateSelection({ anchor: 7, head: 7 });
+
+    expect(
+      createEditorSelectionCommand(handle.getSnapshot(), "editor.ai.rewrite-selection")
+    ).toEqual({
+      commandId: "editor.ai.rewrite-selection",
+      runtimeId: "textarea",
+      selection: {
+        startOffset: 7,
+        endOffset: 7,
+        characterCount: 0,
+        lineStart: 2,
+        lineEnd: 2,
+        selectedTextPreview: "",
+        collapsed: true
+      }
+    });
   });
 });

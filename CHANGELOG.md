@@ -74,8 +74,9 @@
 - 完成 M57/M58 Plugin Runtime Host Commands 与 Plugin Workflow Step Adapter：新增 Application PluginRuntimeSession、plugin command contribution listing/execution、Command Palette disabled reason 展示、Workflow Engine `plugin` step 与 `run-plugin-step` action，以及 mockable workflow-step adapter 边界；仍不执行任意第三方插件代码。
 - 完成 M59/M60 Editor Runtime Adapter 与 Workflow Graph Projection：新增 renderer textarea runtime adapter、结构化 editor runtime events、runtime props 派生模块，以及 Workflow Engine graph view model、next/branch/default edges 和结构化 validation report；仍不启用 CodeMirror 或 Workflow Designer UI。
 - 完成 M61/M62 CodeMirror Adapter Flag 与 Workflow Studio Graph Read-only View：新增 feature-flagged CodeMirror adapter contract、adapter resolver、Application-attached workflow graph DTO、Studio bridge mapping 和 workflow graph preview；仍不启用真实 CodeMirror 包或 graph 编辑。
+- 完成 M63/M64 Editor Selection Metadata 与 Workflow Studio Inspector：新增 runtime selection summary、selection command DTO、runtime selection label，以及 Workflow Studio entry node inspector、edge detail 和 validation detail；仍不执行 selection-aware AI 或 graph 编辑。
 
 ## Notes
 
 - Phase 7 当前定义的 M0-M18 已完成。
-- 当前已完成 Post-M18 M19-M62；M27 安装后首次使用引导缺口已通过 M48 回补；未经用户确认不得 push。
+- 当前已完成 Post-M18 M19-M64；M27 安装后首次使用引导缺口已通过 M48 回补；未经用户确认不得 push。

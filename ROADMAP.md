@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.36 | Status: Active | Last Updated: 2026-07-06
+Version: 1.37 | Status: Active | Last Updated: 2026-07-06
 
 ## 目标
 
@@ -80,6 +80,8 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M60       | Workflow Graph Projection | Workflow graph view model、edges 和结构化 validator               | Complete |
 | M61       | CodeMirror Adapter Flag   | CodeMirror runtime adapter contract、feature flag 和 parity tests | Complete |
 | M62       | Workflow Studio Graph     | workflow config snapshot graph DTO 和 Studio 只读 graph view      | Complete |
+| M63       | Editor Selection Metadata | 选择区 summary、runtime label 和 selection command DTO            | Complete |
+| M64       | Workflow Studio Inspector | entry node inspector、metadata、edges 和 validation detail        | Complete |
 
 ## M15 完成内容
 
@@ -396,19 +398,29 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - Studio bridge 将 workflow graph snapshot 映射到 UI props，`ConfigStudioPanel` 在 workflow asset 下显示只读 graph preview、node/edge 统计、edges 和 validation 状态。
 - M61/M62 不包含 selection-aware AI commands、visual diff runtime、graph node editing、inspector edits、graph layout persistence 或 workflow graph save path。
 
+## M63/M64 完成内容
+
+- 新增 `docs/productization/m63-m64-selection-workflow-inspector.md`，明确 selection metadata 与 Workflow Studio inspector 的实施范围。
+- Editor runtime snapshot 新增 `selectionSummary`，包含 normalized offsets、字符数、行范围、selected text preview 和 collapsed 状态。
+- Editor runtime props 新增 selection summary label，运行时状态条可显示当前选择区摘要。
+- 新增 `createEditorSelectionCommand()`，为后续 selection-aware AI/编辑命令提供结构化 DTO；M63 不执行 AI 动作。
+- Workflow Studio graph preview 新增只读 node inspector，默认选中 entry node，显示节点 kind、metadata、incoming/outgoing edges。
+- Workflow graph validation issues 在 inspector 区域可见，便于将 graph 结构和错误诊断关联。
+- M63/M64 不包含真实 CodeMirror 包、selection-aware AI 执行、visual diff runtime、graph node editing 或 graph layout persistence。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19-M62，其中 M27 首次使用引导已通过 M48 回补完成。
+- Post-M18 产品化打磨已完成 M19-M64，其中 M27 首次使用引导已通过 M48 回补完成。
 - 当前产品状态是 beta productization：主干闭环可运行，但多个宪法/UI 指南能力仍是 Product Gap。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- 下一步建议进入 M63 Editor Selection Metadata：按 RFC-0002 增加 selection summary 和 selection-aware command DTO。
-- M64 建议进入 Workflow Studio Inspector Read-only：按 RFC-0003 显示 selected node inspector 和 validation detail。
-- M65 建议进入 Plugin Runtime Sandbox RFC：为 sandboxed-code、签名、timeout teardown 和权限提示单独定稿。
+- 下一步建议进入 M65 Plugin Runtime Sandbox RFC：为 sandboxed-code、签名、timeout teardown 和权限提示单独定稿。
+- M66 建议进入 Workflow Studio Node Inspector Editing：在保存前 UI 校验基础上支持节点字段编辑。
+- M67 建议进入 Editor Visual Diff Runtime：按 RFC-0002 接入 visual diff review adapter/decorations。
 
 ## 当前技术债重点
 
