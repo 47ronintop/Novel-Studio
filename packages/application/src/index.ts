@@ -149,10 +149,15 @@ export type {
   ConfigCreatedBy,
   ConfigStudioSession,
   ConfigStudioSessionOptions,
+  ConfigWorkflowNodeInspectorEdit,
+  ConfigWorkflowNodeInspectorEditResult,
   ConfigWorkflowGraphSnapshot,
   ConfigVersionSummary
 } from "./config-studio-session.js";
-export { createConfigStudioSession } from "./config-studio-session.js";
+export {
+  applyConfigWorkflowNodeInspectorEdit,
+  createConfigStudioSession
+} from "./config-studio-session.js";
 export type {
   AiWorkflowObservedStep,
   AiWorkflowObservedStepKind,

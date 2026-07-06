@@ -1,4 +1,4 @@
-import type { ChapterEditorRuntimeProps } from "@novel-studio/ui";
+import type { ChapterEditorDiffPreview, ChapterEditorRuntimeProps } from "@novel-studio/ui";
 import type { SaveStatus } from "@novel-studio/application";
 
 export interface EditorRuntimeSelection {
@@ -20,6 +20,25 @@ export interface EditorSelectionCommand {
   readonly commandId: string;
   readonly runtimeId: string;
   readonly selection: EditorRuntimeSelectionSummary;
+}
+
+export interface EditorVisualDiffDecoration {
+  readonly kind: "insert" | "delete" | "replace";
+  readonly startOffset: number;
+  readonly endOffset: number;
+  readonly rangeSource: "body-match" | "document-end" | "full-document";
+  readonly valuePreview: string;
+  readonly previewOnly: true;
+}
+
+export interface EditorVisualDiffReview {
+  readonly title: string;
+  readonly previewOnly: true;
+  readonly changeCount: number;
+  readonly insertCount: number;
+  readonly deleteCount: number;
+  readonly replaceCount: number;
+  readonly decorations: readonly EditorVisualDiffDecoration[];
 }
 
 export type EditorRuntimeEvent =
@@ -196,8 +215,12 @@ function createMemoryBackedEditorRuntimeAdapter(input: {
 }
 
 export function buildChapterEditorRuntimeProps(
-  snapshot: EditorRuntimeSnapshot
+  snapshot: EditorRuntimeSnapshot,
+  diffPreview?: ChapterEditorDiffPreview
 ): ChapterEditorRuntimeProps {
+  const visualDiffReview =
+    diffPreview === undefined ? undefined : createEditorVisualDiffReview(snapshot, diffPreview);
+
   return {
     adapterLabel: snapshot.adapterLabel,
     documentMode: snapshot.documentMode,
@@ -205,6 +228,9 @@ export function buildChapterEditorRuntimeProps(
     ...(snapshot.selectionSummary === undefined
       ? {}
       : { selectionSummaryLabel: formatSelectionSummary(snapshot.selectionSummary) }),
+    ...(visualDiffReview === undefined
+      ? {}
+      : { visualDiffSummaryLabel: formatVisualDiffSummary(visualDiffReview) }),
     autosaveLabel:
       snapshot.saveStatus === "Recovery available" ? "Recovery draft available" : "Autosave armed",
     shortcutProfileLabel: "Default shortcuts",
@@ -227,9 +253,27 @@ export function createEditorSelectionCommand(
   };
 }
 
+export function createEditorVisualDiffReview(
+  snapshot: EditorRuntimeSnapshot,
+  diffPreview: ChapterEditorDiffPreview
+): EditorVisualDiffReview {
+  return {
+    title: diffPreview.title,
+    previewOnly: true,
+    changeCount: diffPreview.changes.length,
+    insertCount: diffPreview.changes.filter((change) => change.kind === "insert").length,
+    deleteCount: diffPreview.changes.filter((change) => change.kind === "delete").length,
+    replaceCount: diffPreview.changes.filter((change) => change.kind === "replace").length,
+    decorations: diffPreview.changes.map((change) =>
+      createVisualDiffDecoration(snapshot.body, change)
+    )
+  };
+}
+
 export function createTextareaChapterEditorRuntimeProps(input: {
   readonly body: string;
   readonly saveStatus: SaveStatus;
+  readonly diffPreview?: ChapterEditorDiffPreview;
 }): ChapterEditorRuntimeProps {
   const adapter = createTextareaEditorRuntimeAdapter();
   const handle = adapter.mount(input);
@@ -239,7 +283,7 @@ export function createTextareaChapterEditorRuntimeProps(input: {
     handle.reportWarning("Large document optimizations active");
   }
 
-  return buildChapterEditorRuntimeProps(handle.getSnapshot());
+  return buildChapterEditorRuntimeProps(handle.getSnapshot(), input.diffPreview);
 }
 
 function formatActiveRange(snapshot: EditorRuntimeSnapshot): string {
@@ -287,4 +331,51 @@ function formatSelectionSummary(selection: EditorRuntimeSelectionSummary): strin
   }
 
   return `Selection ${selection.characterCount} chars, lines ${selection.lineStart}-${selection.lineEnd}`;
+}
+
+function createVisualDiffDecoration(
+  body: string,
+  change: ChapterEditorDiffPreview["changes"][number]
+): EditorVisualDiffDecoration {
+  if (change.kind === "insert") {
+    return {
+      kind: change.kind,
+      startOffset: body.length,
+      endOffset: body.length,
+      rangeSource: "document-end",
+      valuePreview: previewValue(change.value),
+      previewOnly: true
+    };
+  }
+
+  const startOffset = body.indexOf(change.value);
+  if (startOffset >= 0) {
+    return {
+      kind: change.kind,
+      startOffset,
+      endOffset: startOffset + change.value.length,
+      rangeSource: "body-match",
+      valuePreview: previewValue(change.value),
+      previewOnly: true
+    };
+  }
+
+  return {
+    kind: change.kind,
+    startOffset: 0,
+    endOffset: body.length,
+    rangeSource: "full-document",
+    valuePreview: previewValue(change.value),
+    previewOnly: true
+  };
+}
+
+function previewValue(value: string): string {
+  return value.slice(0, 120);
+}
+
+function formatVisualDiffSummary(review: EditorVisualDiffReview): string {
+  return `Visual diff preview: ${review.changeCount} ${
+    review.changeCount === 1 ? "change" : "changes"
+  }`;
 }

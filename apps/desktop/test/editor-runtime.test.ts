@@ -4,6 +4,7 @@ import {
   buildChapterEditorRuntimeProps,
   createCodeMirrorEditorRuntimeAdapter,
   createEditorSelectionCommand,
+  createEditorVisualDiffReview,
   createTextareaEditorRuntimeAdapter,
   resolveEditorRuntimeAdapter,
   type EditorRuntimeEvent
@@ -196,5 +197,53 @@ describe("editor runtime adapter resolver", () => {
         collapsed: true
       }
     });
+  });
+
+  test("derives preview-only visual diff review metadata for runtime decorations", () => {
+    const handle = createTextareaEditorRuntimeAdapter().mount({
+      body: "Original paragraph.\n",
+      saveStatus: "Saved"
+    });
+
+    const review = createEditorVisualDiffReview(handle.getSnapshot(), {
+      title: "AI suggestion",
+      changes: [
+        { kind: "delete", value: "Original paragraph.\n" },
+        { kind: "insert", value: "Rewritten paragraph.\n" }
+      ]
+    });
+
+    expect(review).toEqual({
+      title: "AI suggestion",
+      previewOnly: true,
+      changeCount: 2,
+      insertCount: 1,
+      deleteCount: 1,
+      replaceCount: 0,
+      decorations: [
+        {
+          kind: "delete",
+          startOffset: 0,
+          endOffset: 20,
+          rangeSource: "body-match",
+          valuePreview: "Original paragraph.\n",
+          previewOnly: true
+        },
+        {
+          kind: "insert",
+          startOffset: 20,
+          endOffset: 20,
+          rangeSource: "document-end",
+          valuePreview: "Rewritten paragraph.\n",
+          previewOnly: true
+        }
+      ]
+    });
+    expect(
+      buildChapterEditorRuntimeProps(handle.getSnapshot(), {
+        title: "AI suggestion",
+        changes: [{ kind: "insert", value: "Rewritten paragraph.\n" }]
+      }).visualDiffSummaryLabel
+    ).toBe("Visual diff preview: 1 change");
   });
 });

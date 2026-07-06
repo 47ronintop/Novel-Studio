@@ -1,10 +1,12 @@
 import type { JsonObject, Result, UnifiedError } from "@novel-studio/shared";
 import {
   buildWorkflowGraphViewModel,
+  applyWorkflowNodeInspectorEdit,
   parseWorkflowDefinition,
   validateWorkflowGraph
 } from "@novel-studio/workflow-engine";
 import type {
+  WorkflowNodeInspectorEdit,
   WorkflowGraphViewModel,
   WorkflowValidationReport
 } from "@novel-studio/workflow-engine";
@@ -40,6 +42,13 @@ export interface ConfigAssetRestoreInput {
   readonly assetId: string;
   readonly versionId: string;
   readonly createdBy?: ConfigCreatedBy;
+}
+
+export type ConfigWorkflowNodeInspectorEdit = Omit<WorkflowNodeInspectorEdit, "updatedAt">;
+
+export interface ConfigWorkflowNodeInspectorEditResult {
+  readonly content: JsonObject;
+  readonly workflowGraph: ConfigWorkflowGraphSnapshot;
 }
 
 export interface ConfigAssetPort {
@@ -110,6 +119,36 @@ export function createConfigStudioSession(
           ...workflowGraphForContent(input.assetType, content.value, "config-studio-restore")
         }
       };
+    }
+  };
+}
+
+export function applyConfigWorkflowNodeInspectorEdit(input: {
+  readonly content: JsonObject;
+  readonly edit: ConfigWorkflowNodeInspectorEdit;
+  readonly now: () => string;
+}): Result<ConfigWorkflowNodeInspectorEditResult, UnifiedError> {
+  const parsed = parseWorkflowDefinition(input.content, { traceId: "config-studio-inspector" });
+  if (!parsed.ok) {
+    return parsed;
+  }
+
+  const edited = applyWorkflowNodeInspectorEdit(parsed.value, {
+    ...input.edit,
+    updatedAt: input.now()
+  });
+  if (!edited.ok) {
+    return edited;
+  }
+
+  return {
+    ok: true,
+    value: {
+      content: edited.value as unknown as JsonObject,
+      workflowGraph: {
+        graph: buildWorkflowGraphViewModel(edited.value),
+        validation: validateWorkflowGraph(edited.value)
+      }
     }
   };
 }

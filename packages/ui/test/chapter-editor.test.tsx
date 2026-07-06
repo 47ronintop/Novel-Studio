@@ -136,6 +136,7 @@ describe("ChapterEditor", () => {
           adapterLabel: "Textarea Runtime",
           documentMode: "Markdown",
           activeRangeLabel: "Lines 1-1",
+          visualDiffSummaryLabel: "Visual diff preview: 2 changes",
           autosaveLabel: "Autosave armed",
           shortcutProfileLabel: "Default shortcuts",
           warnings: ["Large document optimizations inactive"]
@@ -147,6 +148,7 @@ describe("ChapterEditor", () => {
     expect(html).toContain("Textarea Runtime");
     expect(html).toContain("Markdown");
     expect(html).toContain("Lines 1-1");
+    expect(html).toContain("Visual diff preview: 2 changes");
     expect(html).toContain("Autosave armed");
     expect(html).toContain("Default shortcuts");
     expect(html).toContain("Large document optimizations inactive");

@@ -1,3 +1,6 @@
+import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
+
+import { workflowError } from "./errors.js";
 import type { WorkflowDefinition, WorkflowStep, WorkflowStepKind } from "./types.js";
 
 export type WorkflowGraphEdgeKind = "next" | "branch" | "default";
@@ -56,6 +59,16 @@ export interface WorkflowGraphValidationIssue {
 export interface WorkflowValidationReport {
   readonly status: WorkflowGraphValidationStatus;
   readonly issues: readonly WorkflowGraphValidationIssue[];
+}
+
+export interface WorkflowNodeInspectorEdit {
+  readonly stepId: string;
+  readonly agentId?: string;
+  readonly pluginId?: string;
+  readonly contributionId?: string;
+  readonly nextStepId?: string;
+  readonly defaultNextStepId?: string;
+  readonly updatedAt: string;
 }
 
 export function buildWorkflowGraphViewModel(
@@ -141,6 +154,32 @@ export function validateWorkflowGraph(definition: WorkflowDefinition): WorkflowV
   };
 }
 
+export function applyWorkflowNodeInspectorEdit(
+  definition: WorkflowDefinition,
+  edit: WorkflowNodeInspectorEdit
+): Result<WorkflowDefinition, UnifiedError> {
+  const stepExists = definition.steps.some((step) => step.id === edit.stepId);
+  if (!stepExists) {
+    return err(
+      workflowError({
+        code: "WORKFLOW_STEP_NOT_FOUND",
+        message: "Workflow references a step that does not exist.",
+        suggestedAction: "Select an existing workflow node before editing inspector fields.",
+        traceId: "workflow-inspector-edit",
+        redactedDetail: { stepId: edit.stepId }
+      })
+    );
+  }
+
+  return ok({
+    ...definition,
+    updatedAt: edit.updatedAt,
+    steps: definition.steps.map((step) =>
+      step.id === edit.stepId ? applyInspectorEditToStep(step, edit) : step
+    )
+  });
+}
+
 function createNodeMetadata(step: WorkflowStep): WorkflowGraphNodeMetadata {
   switch (step.kind) {
     case "agent":
@@ -163,6 +202,88 @@ function createNodeMetadata(step: WorkflowStep): WorkflowGraphNodeMetadata {
       return {};
   }
 }
+
+function applyInspectorEditToStep(
+  step: WorkflowStep,
+  edit: WorkflowNodeInspectorEdit
+): WorkflowStep {
+  const edited: EditableWorkflowStep = { ...step };
+  applyOptionalStringEdit(edited, "agentId", edit);
+  applyOptionalStringEdit(edited, "pluginId", edit);
+  applyOptionalStringEdit(edited, "contributionId", edit);
+  applyOptionalStringEdit(edited, "nextStepId", edit);
+  applyOptionalStringEdit(edited, "defaultNextStepId", edit);
+
+  return edited as unknown as WorkflowStep;
+}
+
+function nonEmptyString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed === undefined || trimmed.length === 0 ? undefined : trimmed;
+}
+
+function applyOptionalStringEdit(
+  target: EditableWorkflowStep,
+  key: EditableWorkflowOptionalStringKey,
+  edit: WorkflowNodeInspectorEdit
+): void {
+  if (!(key in edit)) {
+    return;
+  }
+
+  const value = nonEmptyString(edit[key]);
+  assignOptionalString(target, key, value);
+}
+
+function assignOptionalString(
+  target: EditableWorkflowStep,
+  key: EditableWorkflowOptionalStringKey,
+  value: string | undefined
+): void {
+  switch (key) {
+    case "agentId":
+      if (value === undefined) {
+        delete target.agentId;
+        return;
+      }
+      target.agentId = value;
+      return;
+    case "pluginId":
+      if (value === undefined) {
+        delete target.pluginId;
+        return;
+      }
+      target.pluginId = value;
+      return;
+    case "contributionId":
+      if (value === undefined) {
+        delete target.contributionId;
+        return;
+      }
+      target.contributionId = value;
+      return;
+    case "nextStepId":
+      if (value === undefined) {
+        delete target.nextStepId;
+        return;
+      }
+      target.nextStepId = value;
+      return;
+    case "defaultNextStepId":
+      if (value === undefined) {
+        delete target.defaultNextStepId;
+        return;
+      }
+      target.defaultNextStepId = value;
+  }
+}
+
+type EditableWorkflowStep = {
+  -readonly [Key in keyof WorkflowStep]: WorkflowStep[Key];
+};
+
+type EditableWorkflowOptionalStringKey =
+  "agentId" | "pluginId" | "contributionId" | "nextStepId" | "defaultNextStepId";
 
 function createEdges(step: WorkflowStep): readonly WorkflowGraphEdge[] {
   const edges: WorkflowGraphEdge[] = [];

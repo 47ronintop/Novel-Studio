@@ -1,4 +1,9 @@
-import type { ConfigAssetType, NovelStudioApi } from "@novel-studio/application";
+import {
+  applyConfigWorkflowNodeInspectorEdit,
+  type ConfigAssetType,
+  type ConfigWorkflowNodeInspectorEdit,
+  type NovelStudioApi
+} from "@novel-studio/application";
 import type {
   ConfigStudioAsset,
   ConfigStudioAssetSummary,
@@ -30,6 +35,7 @@ export interface StudioBridge {
   load(): Promise<ConfigStudioPanelProps>;
   selectAsset(assetType: ConfigAssetType, assetId: string): Promise<ConfigStudioPanelProps>;
   updateContent(nextContent: string): ConfigStudioPanelProps;
+  applyWorkflowNodeEdit(edit: ConfigWorkflowNodeInspectorEdit): ConfigStudioPanelProps;
   beginSave(): ConfigStudioPanelProps;
   save(): Promise<ConfigStudioPanelProps>;
   beginRestore(): ConfigStudioPanelProps;
@@ -60,6 +66,41 @@ export function createStudioBridge(api: NovelStudioApi): StudioBridge {
         ...selectedAsset,
         content: nextContent,
         validationStatus: parseJsonObject(nextContent) === undefined ? "invalid" : "dirty"
+      };
+      status = "idle";
+      feedback = undefined;
+      return toProps();
+    },
+    applyWorkflowNodeEdit(edit) {
+      const content = parseJsonObject(selectedAsset.content);
+      if (selectedAsset.assetType !== "workflow" || content === undefined) {
+        selectedAsset = { ...selectedAsset, validationStatus: "invalid" };
+        status = "error";
+        feedback = {
+          kind: "error",
+          message: "Workflow JSON must be valid before editing inspector fields."
+        };
+        return toProps();
+      }
+
+      const result = applyConfigWorkflowNodeInspectorEdit({
+        content,
+        edit,
+        now: () => new Date().toISOString()
+      });
+      if (!result.ok) {
+        selectedAsset = { ...selectedAsset, validationStatus: "invalid" };
+        status = "error";
+        feedback = { kind: "error", message: result.error.message };
+        return toProps();
+      }
+
+      selectedAsset = {
+        ...selectedAsset,
+        content: JSON.stringify(result.value.content, null, 2),
+        validationStatus:
+          result.value.workflowGraph.validation.status === "invalid" ? "invalid" : "dirty",
+        workflowGraph: result.value.workflowGraph
       };
       status = "idle";
       feedback = undefined;

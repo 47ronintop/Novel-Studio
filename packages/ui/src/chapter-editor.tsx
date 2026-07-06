@@ -26,6 +26,7 @@ export interface ChapterEditorRuntimeProps {
   readonly documentMode: string;
   readonly activeRangeLabel: string;
   readonly selectionSummaryLabel?: string;
+  readonly visualDiffSummaryLabel?: string;
   readonly autosaveLabel: string;
   readonly shortcutProfileLabel: string;
   readonly warnings: readonly string[];
@@ -203,6 +204,9 @@ function ChapterEditorRuntime({ runtime }: { readonly runtime: ChapterEditorRunt
         <span>{runtime.activeRangeLabel}</span>
         {runtime.selectionSummaryLabel === undefined ? null : (
           <span>{runtime.selectionSummaryLabel}</span>
+        )}
+        {runtime.visualDiffSummaryLabel === undefined ? null : (
+          <span>{runtime.visualDiffSummaryLabel}</span>
         )}
         <span>{runtime.autosaveLabel}</span>
         <span>{runtime.shortcutProfileLabel}</span>

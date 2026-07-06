@@ -20,6 +20,7 @@ export type {
   ConfigStudioPanelProps,
   ConfigStudioStatus,
   ConfigStudioVersionEntry,
+  ConfigStudioWorkflowNodeEdit,
   ConfigValidationStatus
 } from "./config-studio-panel.js";
 export { ModelSettingsPanel } from "./model-settings-panel.js";

@@ -218,6 +218,8 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).toContain('aria-label="Workflow node inspector"');
     expect(html).toContain("Selected node context");
     expect(html).toContain("Kind context");
+    expect(html).toContain('aria-label="Workflow node next step"');
+    expect(html).toContain('name="nextStepId"');
     expect(html).toContain("Outgoing context → save");
     expect(html).toContain("WORKFLOW_GRAPH_NODE_UNREACHABLE");
     expect(html).toContain("Workflow step is not reachable from the entry step.");

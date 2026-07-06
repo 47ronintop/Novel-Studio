@@ -114,6 +114,33 @@ describe("M23 studio bridge", () => {
       validation: { status: "valid", issues: [] }
     });
   });
+
+  test("applies workflow inspector edits to the JSON draft and refreshes graph validation", async () => {
+    const calls: string[] = [];
+    const bridge = createStudioBridge(createApi(calls));
+
+    await bridge.selectAsset("workflow", "wf_review_chapter");
+    const props = bridge.applyWorkflowNodeEdit({
+      stepId: "save",
+      nextStepId: "missing"
+    });
+
+    expect(props.selectedAsset.validationStatus).toBe("invalid");
+    expect(props.selectedAsset.content).toContain('"nextStepId": "missing"');
+    expect(props.selectedAsset.workflowGraph?.validation).toEqual({
+      status: "invalid",
+      issues: [
+        {
+          code: "WORKFLOW_GRAPH_EDGE_TARGET_MISSING",
+          severity: "error",
+          stepId: "save",
+          message: "Workflow edge points to a missing step.",
+          targetStepId: "missing"
+        }
+      ]
+    });
+    expect(calls).not.toContain("studio.saveConfigAsset:workflow:wf_review_chapter");
+  });
 });
 
 function createApi(calls: string[]): NovelStudioApi {

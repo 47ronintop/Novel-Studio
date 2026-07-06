@@ -26,6 +26,15 @@ export interface ConfigStudioVersionEntry {
   readonly createdAt: string;
 }
 
+export interface ConfigStudioWorkflowNodeEdit {
+  readonly stepId: string;
+  readonly agentId?: string;
+  readonly pluginId?: string;
+  readonly contributionId?: string;
+  readonly nextStepId?: string;
+  readonly defaultNextStepId?: string;
+}
+
 export interface ConfigStudioPanelProps {
   readonly assets: readonly ConfigStudioAssetSummary[];
   readonly selectedAsset: ConfigStudioAsset;
@@ -34,6 +43,7 @@ export interface ConfigStudioPanelProps {
   readonly feedback?: { readonly kind: "info" | "error"; readonly message: string };
   readonly onAssetSelect?: (assetType: ConfigStudioAssetType, assetId: string) => void;
   readonly onContentChange?: (nextContent: string) => void;
+  readonly onWorkflowNodeEdit?: (edit: ConfigStudioWorkflowNodeEdit) => void;
   readonly onSave?: () => void;
   readonly onRestoreVersion?: (versionId: string) => void;
 }
@@ -46,6 +56,7 @@ export function ConfigStudioPanel({
   feedback,
   onAssetSelect,
   onContentChange,
+  onWorkflowNodeEdit,
   onSave,
   onRestoreVersion
 }: ConfigStudioPanelProps) {
@@ -121,7 +132,10 @@ export function ConfigStudioPanel({
             readOnly={onContentChange === undefined}
           />
           {selectedAsset.workflowGraph === undefined ? null : (
-            <WorkflowGraphPreview workflowGraph={selectedAsset.workflowGraph} />
+            <WorkflowGraphPreview
+              workflowGraph={selectedAsset.workflowGraph}
+              {...(onWorkflowNodeEdit === undefined ? {} : { onWorkflowNodeEdit })}
+            />
           )}
         </main>
 
@@ -162,9 +176,11 @@ function validationLabel(status: ConfigValidationStatus): string {
 }
 
 function WorkflowGraphPreview({
-  workflowGraph
+  workflowGraph,
+  onWorkflowNodeEdit
 }: {
   readonly workflowGraph: ConfigWorkflowGraphSnapshot;
+  readonly onWorkflowNodeEdit?: (edit: ConfigStudioWorkflowNodeEdit) => void;
 }) {
   return (
     <section className="config-studio-workflow-graph" aria-label="Workflow graph preview">
@@ -200,15 +216,20 @@ function WorkflowGraphPreview({
           ))}
         </ol>
       )}
-      <WorkflowNodeInspector workflowGraph={workflowGraph} />
+      <WorkflowNodeInspector
+        workflowGraph={workflowGraph}
+        {...(onWorkflowNodeEdit === undefined ? {} : { onWorkflowNodeEdit })}
+      />
     </section>
   );
 }
 
 function WorkflowNodeInspector({
-  workflowGraph
+  workflowGraph,
+  onWorkflowNodeEdit
 }: {
   readonly workflowGraph: ConfigWorkflowGraphSnapshot;
+  readonly onWorkflowNodeEdit?: (edit: ConfigStudioWorkflowNodeEdit) => void;
 }) {
   const selectedNode =
     workflowGraph.graph.nodes.find((node) => node.id === workflowGraph.graph.entryNodeId) ??
@@ -224,12 +245,102 @@ function WorkflowNodeInspector({
   const outgoingEdges = workflowGraph.graph.edges.filter(
     (edge) => edge.fromNodeId === selectedNode.id
   );
+  const nextStepId = outgoingEdges.find((edge) => edge.kind === "next")?.toNodeId ?? "";
+  const defaultNextStepId =
+    outgoingEdges.find((edge) => edge.kind === "default")?.toNodeId ??
+    selectedNode.metadata.defaultNextStepId ??
+    "";
 
   return (
     <section className="config-studio-workflow-inspector" aria-label="Workflow node inspector">
       <h4>Selected node {selectedNode.label}</h4>
       <p>Kind {selectedNode.kind}</p>
       <p>Metadata {JSON.stringify(selectedNode.metadata)}</p>
+      <div className="config-studio-workflow-inspector-fields">
+        <label>
+          <span>Next step</span>
+          <input
+            aria-label="Workflow node next step"
+            name="nextStepId"
+            readOnly={onWorkflowNodeEdit === undefined}
+            value={nextStepId}
+            onChange={(event) =>
+              onWorkflowNodeEdit?.({
+                stepId: selectedNode.stepId,
+                nextStepId: event.currentTarget.value
+              })
+            }
+          />
+        </label>
+        {selectedNode.kind === "agent" ? (
+          <label>
+            <span>Agent</span>
+            <input
+              aria-label="Workflow node agent"
+              name="agentId"
+              readOnly={onWorkflowNodeEdit === undefined}
+              value={selectedNode.metadata.agentId ?? ""}
+              onChange={(event) =>
+                onWorkflowNodeEdit?.({
+                  stepId: selectedNode.stepId,
+                  agentId: event.currentTarget.value
+                })
+              }
+            />
+          </label>
+        ) : null}
+        {selectedNode.kind === "plugin" ? (
+          <>
+            <label>
+              <span>Plugin</span>
+              <input
+                aria-label="Workflow node plugin"
+                name="pluginId"
+                readOnly={onWorkflowNodeEdit === undefined}
+                value={selectedNode.metadata.pluginId ?? ""}
+                onChange={(event) =>
+                  onWorkflowNodeEdit?.({
+                    stepId: selectedNode.stepId,
+                    pluginId: event.currentTarget.value
+                  })
+                }
+              />
+            </label>
+            <label>
+              <span>Contribution</span>
+              <input
+                aria-label="Workflow node contribution"
+                name="contributionId"
+                readOnly={onWorkflowNodeEdit === undefined}
+                value={selectedNode.metadata.contributionId ?? ""}
+                onChange={(event) =>
+                  onWorkflowNodeEdit?.({
+                    stepId: selectedNode.stepId,
+                    contributionId: event.currentTarget.value
+                  })
+                }
+              />
+            </label>
+          </>
+        ) : null}
+        {selectedNode.kind === "branch" ? (
+          <label>
+            <span>Default next</span>
+            <input
+              aria-label="Workflow node default next step"
+              name="defaultNextStepId"
+              readOnly={onWorkflowNodeEdit === undefined}
+              value={defaultNextStepId}
+              onChange={(event) =>
+                onWorkflowNodeEdit?.({
+                  stepId: selectedNode.stepId,
+                  defaultNextStepId: event.currentTarget.value
+                })
+              }
+            />
+          </label>
+        ) : null}
+      </div>
       <ol aria-label="Workflow node outgoing edges">
         {outgoingEdges.map((edge) => (
           <li key={edge.id}>

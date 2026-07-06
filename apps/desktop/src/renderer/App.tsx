@@ -901,6 +901,19 @@ export function App() {
     [studioBridge]
   );
 
+  const handleStudioWorkflowNodeEdit = useCallback<
+    NonNullable<ConfigStudioPanelProps["onWorkflowNodeEdit"]>
+  >(
+    (edit) => {
+      if (studioBridge === undefined) {
+        return;
+      }
+
+      setStudio(studioBridge.applyWorkflowNodeEdit(edit));
+    },
+    [studioBridge]
+  );
+
   const handleStudioSave = useCallback<NonNullable<ConfigStudioPanelProps["onSave"]>>(() => {
     if (studioBridge === undefined) {
       return;
@@ -1022,6 +1035,7 @@ export function App() {
               ...studio,
               onAssetSelect: handleStudioAssetSelect,
               onContentChange: handleStudioContentChange,
+              onWorkflowNodeEdit: handleStudioWorkflowNodeEdit,
               onSave: handleStudioSave,
               onRestoreVersion: handleStudioRestoreVersion
             } satisfies ConfigStudioPanelProps
@@ -1154,6 +1168,7 @@ function applyShellPreferences(
 function createChapterEditorRuntime(chapterEditor: ChapterEditorProps): ChapterEditorRuntimeProps {
   return createTextareaChapterEditorRuntimeProps({
     body: chapterEditor.chapter.body,
-    saveStatus: chapterEditor.saveStatus
+    saveStatus: chapterEditor.saveStatus,
+    ...(chapterEditor.diffPreview === undefined ? {} : { diffPreview: chapterEditor.diffPreview })
   });
 }

@@ -1,10 +1,12 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  applyWorkflowNodeInspectorEdit,
   buildWorkflowGraphViewModel,
   validateWorkflowGraph,
   type WorkflowDefinition
 } from "../src/index.js";
+import { isErr, isOk } from "@novel-studio/shared";
 
 const graphWorkflow: WorkflowDefinition = {
   schemaVersion: "1.0",
@@ -233,5 +235,41 @@ describe("Workflow graph projection", () => {
         }
       ]
     });
+  });
+
+  test("applies structured inspector edits to workflow nodes without executing the workflow", () => {
+    const edited = applyWorkflowNodeInspectorEdit(graphWorkflow, {
+      stepId: "writer",
+      agentId: "agent_reviewer",
+      nextStepId: "plugin_score",
+      updatedAt: "2026-07-06T01:00:00.000Z"
+    });
+
+    expect(isOk(edited)).toBe(true);
+    if (!edited.ok) {
+      return;
+    }
+    expect(edited.value.updatedAt).toBe("2026-07-06T01:00:00.000Z");
+    expect(edited.value.steps.find((step) => step.id === "writer")).toEqual({
+      id: "writer",
+      kind: "agent",
+      agentId: "agent_reviewer",
+      nextStepId: "plugin_score"
+    });
+    expect(validateWorkflowGraph(edited.value).status).toBe("valid");
+  });
+
+  test("returns a stable error when inspector edits target a missing node", () => {
+    const edited = applyWorkflowNodeInspectorEdit(graphWorkflow, {
+      stepId: "missing",
+      agentId: "agent_reviewer",
+      updatedAt: "2026-07-06T01:00:00.000Z"
+    });
+
+    expect(isErr(edited)).toBe(true);
+    if (edited.ok) {
+      return;
+    }
+    expect(edited.error.code).toBe("WORKFLOW_STEP_NOT_FOUND");
   });
 });
