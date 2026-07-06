@@ -210,14 +210,14 @@ const DEFAULT_SHELL_STATE: DesktopShellState = {
   projectTitle: "未打开项目",
   activeActivity: "workspace",
   navigatorCollapsed: false,
-  inspectorCollapsed: false,
-  bottomPanelVisible: true,
+  inspectorCollapsed: true,
+  bottomPanelVisible: false,
   activeBottomPanelTab: "工作流运行",
   workspaceLayout: {
     splitView: false,
     navigatorWidth: 260,
     inspectorWidth: 320,
-    bottomPanelHeight: 220
+    bottomPanelHeight: 180
   },
   commandPaletteOpen: false,
   saveStatus: "Saved",

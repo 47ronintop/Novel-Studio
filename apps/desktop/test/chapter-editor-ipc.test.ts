@@ -26,7 +26,7 @@ describe("chapter editor IPC vertical slice", () => {
       createProjectDesktopApplication({
         projectRoot,
         chapterId,
-        projectTitle: "Minimal Chapter Project",
+        projectTitle: "未命名长篇项目",
         now: () => "2026-07-04T00:00:00.000Z",
         createVersionId: (() => {
           const ids = ["ver_manual_save", "ver_before_rollback"];

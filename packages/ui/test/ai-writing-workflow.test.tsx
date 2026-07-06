@@ -9,7 +9,7 @@ describe("AI writing workflow UI", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
-        shellState={application.getShellState()}
+        shellState={{ ...application.getShellState(), activeActivity: "ai" }}
         commands={application.listCommands()}
         commandPaletteOpen={false}
         aiWritingWorkflow={{
@@ -153,7 +153,7 @@ describe("AI writing workflow UI", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
-        shellState={application.getShellState()}
+        shellState={{ ...application.getShellState(), activeActivity: "ai" }}
         commands={application.listCommands()}
         commandPaletteOpen={false}
         aiWritingWorkflow={{

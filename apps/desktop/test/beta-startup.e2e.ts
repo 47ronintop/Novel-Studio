@@ -21,9 +21,9 @@ test("starts with an editable bootstrapped beta project when no source fixtures 
     const page = await electronApp.firstWindow();
     const body = page.getByLabel("章节正文");
 
-    await expect(page.getByText("Minimal Chapter Project")).toBeVisible();
+    await expect(page.getByText("未命名长篇项目")).toBeVisible();
     await expect(body).toBeVisible();
-    await expect(body).toHaveValue("原始章节正文。\n");
+    await expect(body).toHaveValue("这是第一章的正文。你可以直接开始写作。\n");
 
     await body.fill("安装版启动后可以编辑。\n");
     await expect(page.getByText("未保存").first()).toBeVisible();

@@ -21,6 +21,7 @@ test("generates an AI writing suggestion and applies it only after confirmation"
 
   try {
     const page = await electronApp.firstWindow();
+    const activityBar = page.getByLabel("活动栏");
 
     await page.getByLabel("项目路径").fill(projectRoot);
     await page.getByRole("button", { name: "创建项目" }).click();
@@ -30,17 +31,23 @@ test("generates an AI writing suggestion and applies it only after confirmation"
     await expect(body).toBeVisible();
     await body.fill("Opening line.");
 
+    await activityBar.getByRole("button", { name: "AI 工作流" }).click();
     await page.getByLabel("AI 写作指令").fill("Continue the active scene.");
     await page.getByRole("button", { name: "生成 AI 建议" }).click();
 
     await expect(page.getByText("Generated a local mock continuation for review.")).toBeVisible();
     await expect(page.getByLabel("AI 建议差异")).toContainText("AI continuation draft.");
-    await expect(body).toHaveValue(/Opening line\./);
-    await expect(body).not.toHaveValue(/AI continuation draft\./);
+    await activityBar.getByRole("button", { name: "工作区" }).click();
+    await expect(page.getByLabel("章节正文")).toHaveValue(/Opening line\./);
+    await expect(page.getByLabel("章节正文")).not.toHaveValue(/AI continuation draft\./);
 
+    await activityBar.getByRole("button", { name: "AI 工作流" }).click();
     await page.getByRole("button", { name: "应用 AI 建议" }).click();
 
-    await expect(body).toHaveValue("Opening line.\nAI continuation draft.\n");
+    await activityBar.getByRole("button", { name: "工作区" }).click();
+    await expect(page.getByLabel("章节正文")).toHaveValue(
+      "Opening line.\nAI continuation draft.\n"
+    );
     await expect(page.getByText("未保存").first()).toBeVisible();
   } finally {
     await electronApp.close();
@@ -63,6 +70,7 @@ test("completes the core writing journey across save, close, reopen, and continu
 
   try {
     const page = await firstApp.firstWindow();
+    const activityBar = page.getByLabel("活动栏");
 
     await page.getByLabel("项目路径").fill(projectRoot);
     await page.getByRole("button", { name: "创建项目" }).click();
@@ -72,14 +80,20 @@ test("completes the core writing journey across save, close, reopen, and continu
     await expect(body).toBeVisible();
     await body.fill("Core journey opening line.");
 
+    await activityBar.getByRole("button", { name: "AI 工作流" }).click();
     await page.getByLabel("AI 写作指令").fill("Continue the current chapter for the core journey.");
     await page.getByRole("button", { name: "生成 AI 建议" }).click();
 
     await expect(page.getByLabel("AI 建议差异")).toContainText("AI continuation draft.");
-    await expect(body).toHaveValue("Core journey opening line.");
+    await activityBar.getByRole("button", { name: "工作区" }).click();
+    await expect(page.getByLabel("章节正文")).toHaveValue("Core journey opening line.");
 
+    await activityBar.getByRole("button", { name: "AI 工作流" }).click();
     await page.getByRole("button", { name: "应用 AI 建议" }).click();
-    await expect(body).toHaveValue("Core journey opening line.\nAI continuation draft.\n");
+    await activityBar.getByRole("button", { name: "工作区" }).click();
+    await expect(page.getByLabel("章节正文")).toHaveValue(
+      "Core journey opening line.\nAI continuation draft.\n"
+    );
     await expect(page.getByText("未保存").first()).toBeVisible();
 
     await page.getByRole("button", { name: "保存章节" }).click();

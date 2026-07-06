@@ -226,9 +226,9 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).toContain('aria-label="恢复配置版本 Before save"');
     expect(html).toContain('aria-label="选择配置资产 Reviewer Prompt"');
     expect(html).toContain('aria-label="Workflow graph preview"');
-    expect(html).toContain('aria-label="Workflow designer canvas blocked"');
-    expect(html).toContain("Nodes 2");
-    expect(html).toContain("Edges 1");
+    expect(html).toContain('aria-label="工作流画布暂不可编辑"');
+    expect(html).toContain("节点 2");
+    expect(html).toContain("连线 1");
     expect(html).toContain('data-canvas-x="240"');
     expect(html).toContain('data-canvas-y="80"');
     expect(html).toContain('style="--canvas-x:240px;--canvas-y:80px"');
@@ -240,10 +240,10 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).toContain('data-selected-node="true"');
     expect(html).toContain('data-selected-edge="true"');
     expect(html).toContain("context → save");
-    expect(html).toContain("Validation invalid");
+    expect(html).toContain("校验：有问题");
     expect(html).toContain('aria-label="Workflow node inspector"');
-    expect(html).toContain("Selected node save");
-    expect(html).toContain("Kind save");
+    expect(html).toContain("当前节点：save");
+    expect(html).toContain("类型：保存");
     expect(html).toContain('aria-label="Workflow node next step"');
     expect(html).toContain('aria-label="Add confirmation node after save"');
     expect(html).toContain('aria-label="Workflow new node kind"');
@@ -256,7 +256,7 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).toContain('aria-label="Confirm delete workflow node save"');
     expect(html).toContain('aria-label="Delete workflow node save"');
     expect(html).toContain('name="nextStepId"');
-    expect(html).toContain("Incoming context → save");
+    expect(html).toContain("入站 context → save");
     expect(html).toContain("WORKFLOW_GRAPH_NODE_UNREACHABLE");
     expect(html).toContain("Workflow step is not reachable from the entry step.");
     expect(html).not.toMatch(/filesystem|node:|fs\./i);

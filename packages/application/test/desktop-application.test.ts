@@ -79,14 +79,14 @@ describe("desktop application command bridge", () => {
       projectTitle: "未打开项目",
       activeActivity: "workspace",
       navigatorCollapsed: false,
-      inspectorCollapsed: false,
-      bottomPanelVisible: true,
+      inspectorCollapsed: true,
+      bottomPanelVisible: false,
       activeBottomPanelTab: "工作流运行",
       workspaceLayout: {
         splitView: false,
         navigatorWidth: 260,
         inspectorWidth: 320,
-        bottomPanelHeight: 220
+        bottomPanelHeight: 180
       },
       saveStatus: "Saved"
     });
@@ -177,7 +177,7 @@ describe("desktop application command bridge", () => {
 
     expect(result.ok).toBe(true);
     expect(application.getShellState()).toMatchObject({
-      bottomPanelVisible: false,
+      bottomPanelVisible: true,
       activeBottomPanelTab: "工作流运行"
     });
   });
@@ -196,7 +196,7 @@ describe("desktop application command bridge", () => {
       splitView: true,
       navigatorWidth: 300,
       inspectorWidth: 280,
-      bottomPanelHeight: 220
+      bottomPanelHeight: 180
     });
   });
 
@@ -405,7 +405,7 @@ describe("desktop application command bridge", () => {
         historyRepository,
         now: () => "2026-07-04T00:00:00.000Z"
       }),
-      projectTitle: "Minimal Chapter Project",
+      projectTitle: "未命名长篇项目",
       navigatorSections: [{ id: "chapters", title: "Chapters", itemCount: 1 }]
     });
 
@@ -417,7 +417,7 @@ describe("desktop application command bridge", () => {
     }
     expect(loaded.value.state.chapter.body).toBe("原始章节正文。\n");
     expect(application.getShellState()).toMatchObject({
-      projectTitle: "Minimal Chapter Project",
+      projectTitle: "未命名长篇项目",
       saveStatus: "Saved",
       navigatorSections: [{ id: "chapters", title: "Chapters", itemCount: 1 }]
     });

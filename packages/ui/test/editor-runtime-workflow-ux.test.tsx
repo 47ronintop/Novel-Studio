@@ -38,11 +38,11 @@ describe("M52/M53 editor runtime and workflow UX", () => {
     );
 
     expect(html).toContain('aria-label="Editor Runtime"');
-    expect(html).toContain("Textarea Runtime");
+    expect(html).toContain("基础编辑器");
     expect(html).toContain("Markdown");
-    expect(html).toContain("Lines 1-1");
-    expect(html).toContain("Autosave armed");
-    expect(html).toContain("Default shortcuts");
+    expect(html).toContain("第 1-1 行");
+    expect(html).toContain("自动保存已启用");
+    expect(html).toContain("默认快捷键");
     expect(html).toContain("Large document optimizations inactive");
     expect(html).not.toMatch(/filesystem|node:fs|projectRoot/i);
   });
@@ -51,7 +51,7 @@ describe("M52/M53 editor runtime and workflow UX", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
-        shellState={application.getShellState()}
+        shellState={{ ...application.getShellState(), activeActivity: "ai" }}
         commands={application.listCommands()}
         commandPaletteOpen={false}
         aiWritingWorkflow={{
@@ -116,7 +116,7 @@ describe("M52/M53 editor runtime and workflow UX", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
-        shellState={application.getShellState()}
+        shellState={{ ...application.getShellState(), activeActivity: "ai" }}
         commands={application.listCommands()}
         commandPaletteOpen={false}
         aiWritingWorkflow={{

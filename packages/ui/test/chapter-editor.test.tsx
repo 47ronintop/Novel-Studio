@@ -117,8 +117,8 @@ describe("ChapterEditor", () => {
       />
     );
 
-    expect(html).toContain("260 lines");
-    expect(html).toContain("520 words");
+    expect(html).toContain("260 行");
+    expect(html).toContain("2231 字符");
     expect(html).toContain("Large document mode");
     expect(html).toContain("Diff summary: 1 insert / 1 delete / 1 replace");
     expect(html).toContain('data-large-document="true"');
@@ -152,16 +152,16 @@ describe("ChapterEditor", () => {
     );
 
     expect(html).toContain('aria-label="Editor Runtime"');
-    expect(html).toContain("Textarea Runtime");
+    expect(html).toContain("基础编辑器");
     expect(html).toContain("Markdown");
-    expect(html).toContain("Lines 1-1");
+    expect(html).toContain("第 1-1 行");
     expect(html).toContain('aria-label="Preview selection rewrite"');
     expect(html).toContain("Preview selection rewrite");
     expect(html).toContain("Visual diff preview: 2 changes");
     expect(html).toContain("Local diff review: 2 changes, rollback textarea");
     expect(html).toContain("CodeMirror default blocked: opt-in disabled");
-    expect(html).toContain("Autosave armed");
-    expect(html).toContain("Default shortcuts");
+    expect(html).toContain("自动保存已启用");
+    expect(html).toContain("默认快捷键");
     expect(html).toContain("Large document optimizations inactive");
     expect(html).not.toMatch(/filesystem|node:fs|projectRoot/i);
   });

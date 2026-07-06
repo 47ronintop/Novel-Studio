@@ -30,7 +30,7 @@ describe("beta startup default project", () => {
     const loaded = await application.loadActiveChapter();
     const chapters = await application.listProjectChapters();
 
-    expect(shellState.projectTitle).toBe("Minimal Chapter Project");
+    expect(shellState.projectTitle).toBe("未命名长篇项目");
     expect(shellState.navigatorSections.find((section) => section.id === "chapters")).toMatchObject(
       {
         itemCount: 1
@@ -45,7 +45,7 @@ describe("beta startup default project", () => {
               id: DEFAULT_FIXTURE_CHAPTER_ID,
               title: "第一章"
             },
-            body: "原始章节正文。\n"
+            body: "这是第一章的正文。你可以直接开始写作。\n"
           },
           saveStatus: "Saved"
         }

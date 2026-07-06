@@ -125,9 +125,8 @@ export function ChapterEditor({
           aria-label="Editor document metrics"
           data-large-document={largeDocument}
         >
-          <span>{metrics.lineCount} lines</span>
-          <span>{metrics.wordCount} words</span>
-          <span>{metrics.characterCount} chars</span>
+          <span>{metrics.lineCount} 行</span>
+          <span>{metrics.characterCount} 字符</span>
           {largeDocument ? <span>Large document mode</span> : null}
         </div>
         <button
@@ -281,9 +280,9 @@ function ChapterEditorRuntime({
   return (
     <section className="ns-editor-runtime" aria-label="Editor Runtime">
       <div className="ns-editor-runtime-main">
-        <span>{runtime.adapterLabel}</span>
-        <span>{runtime.documentMode}</span>
-        <span>{runtime.activeRangeLabel}</span>
+        <span>{runtimeAdapterLabel(runtime.adapterLabel)}</span>
+        <span>{documentModeLabel(runtime.documentMode)}</span>
+        <span>{activeRangeLabel(runtime.activeRangeLabel)}</span>
         {runtime.selectionSummaryLabel === undefined ? null : (
           <span>{runtime.selectionSummaryLabel}</span>
         )}
@@ -309,8 +308,8 @@ function ChapterEditorRuntime({
             {selectionAiPreviewCommand.label}
           </button>
         )}
-        <span>{runtime.autosaveLabel}</span>
-        <span>{runtime.shortcutProfileLabel}</span>
+        <span>{autosaveLabel(runtime.autosaveLabel)}</span>
+        <span>{shortcutProfileLabel(runtime.shortcutProfileLabel)}</span>
       </div>
       {runtime.warnings.length === 0 ? null : (
         <ul className="ns-editor-runtime-warnings" aria-label="Editor Runtime warnings">
@@ -414,6 +413,33 @@ function saveStatusLabel(status: ChapterEditorProps["saveStatus"]): string {
     case "Recovery available":
       return "有可恢复内容";
   }
+}
+
+function runtimeAdapterLabel(label: string): string {
+  return label === "Textarea Runtime" ? "基础编辑器" : label;
+}
+
+function documentModeLabel(label: string): string {
+  return label === "Markdown" ? "Markdown" : label;
+}
+
+function activeRangeLabel(label: string): string {
+  const match = /^Lines ([0-9]+)-([0-9]+)$/.exec(label);
+  return match === null ? label : `第 ${match[1]}-${match[2]} 行`;
+}
+
+function autosaveLabel(label: string): string {
+  if (label === "Autosave armed") {
+    return "自动保存已启用";
+  }
+  if (label === "Recovery draft available") {
+    return "有可恢复草稿";
+  }
+  return label;
+}
+
+function shortcutProfileLabel(label: string): string {
+  return label === "Default shortcuts" ? "默认快捷键" : label;
 }
 
 function diffKindLabel(kind: ChapterEditorDiffChange["kind"]): string {

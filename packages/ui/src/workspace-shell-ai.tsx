@@ -1,4 +1,4 @@
-﻿import { Check, RotateCcw, X } from "lucide-react";
+﻿import { Check, RotateCcw, Sparkles, X } from "lucide-react";
 
 import type {
   AiWorkflowFailureDiagnosticProps,
@@ -11,6 +11,178 @@ import type {
   AiWritingWorkflowProps,
   AiWritingWorkflowStatus
 } from "./workspace-shell.js";
+
+export function AiWritingAssistantPanel({
+  workflow,
+  compact = false
+}: {
+  readonly workflow: AiWritingWorkflowProps;
+  readonly compact?: boolean;
+}) {
+  const instruction = workflow.instruction.trim();
+  const assistantReply = aiAssistantReply(workflow);
+  const showSummary =
+    workflow.summary !== undefined && (compact || workflow.summary !== assistantReply);
+
+  return (
+    <section className="ns-ai-workflow" aria-label="AI 写作工作流" data-compact={compact}>
+      <div className="ns-editor-panel-header">
+        <span>{compact ? "AI 助手" : "对话式写作助手"}</span>
+        <span className="ns-muted">{statusLabel(workflow.status)}</span>
+      </div>
+      {compact ? null : (
+        <p className="ns-ai-context">
+          输入你想让 AI 做的事，例如“续写当前场景”“让对白更自然”或“检查人物动机”。AI
+          结果会先进入建议区，不会直接覆盖正文。
+        </p>
+      )}
+      {compact ? null : (
+        <div className="ns-ai-chat-log" aria-label="AI 对话记录">
+          <article className="ns-ai-message" data-speaker="assistant">
+            <span>AI 写作助手</span>
+            <p>告诉我你想续写、改写或检查哪里。我会结合当前章节生成建议。</p>
+          </article>
+          {instruction.length === 0 ? null : (
+            <article className="ns-ai-message" data-speaker="user">
+              <span>你</span>
+              <p>{instruction}</p>
+            </article>
+          )}
+          {assistantReply === undefined ? null : (
+            <article className="ns-ai-message" data-speaker="assistant">
+              <span>AI 写作助手</span>
+              <p>{assistantReply}</p>
+            </article>
+          )}
+        </div>
+      )}
+      <textarea
+        aria-label="AI 写作指令"
+        className="ns-ai-instruction"
+        onChange={(event) => workflow.onInstructionChange(event.currentTarget.value)}
+        placeholder="和 AI 说明你想怎么改写或续写当前章节"
+        value={workflow.instruction}
+      />
+      <div className="ns-ai-actions">
+        <button
+          aria-label="生成 AI 建议"
+          className="ns-icon-text-button"
+          disabled={workflow.status === "generating" || workflow.status === "streaming"}
+          onClick={workflow.onGenerateSuggestion}
+          title="生成 AI 建议"
+          type="button"
+        >
+          <Sparkles aria-hidden="true" size={14} />
+          生成建议
+        </button>
+        <button
+          aria-label="应用 AI 建议"
+          className="ns-icon-text-button"
+          disabled={workflow.status !== "suggestion-ready"}
+          onClick={workflow.onApplySuggestion}
+          title="应用 AI 建议"
+          type="button"
+        >
+          <Check aria-hidden="true" size={14} />
+          应用到正文
+        </button>
+        {workflow.status === "streaming" ? (
+          <button
+            aria-label="取消 AI 流式输出"
+            className="ns-icon-text-button"
+            onClick={workflow.onCancelStreaming}
+            title="取消 AI 流式输出"
+            type="button"
+          >
+            <X aria-hidden="true" size={14} />
+            取消
+          </button>
+        ) : null}
+        {workflow.status === "failed" ? (
+          <button
+            aria-label="重试 AI 工作流"
+            className="ns-icon-text-button"
+            onClick={workflow.onRetrySuggestion}
+            title="重试 AI 工作流"
+            type="button"
+          >
+            <Sparkles aria-hidden="true" size={14} />
+            重试
+          </button>
+        ) : null}
+      </div>
+      {showSummary ? <p className="ns-ai-summary">{workflow.summary}</p> : null}
+      {workflow.streamPreview === undefined ? null : (
+        <pre className="ns-ai-stream-preview" aria-label="AI 流式输出预览">
+          {workflow.streamPreview}
+        </pre>
+      )}
+      {workflow.diffPreview === undefined ? null : (
+        <AiSuggestionDiffPreview diffPreview={workflow.diffPreview} />
+      )}
+      {workflow.contextTraceLabel === undefined || compact ? null : (
+        <p className="ns-ai-context">{workflow.contextTraceLabel}</p>
+      )}
+      {workflow.selectionReview === undefined ? null : (
+        <AiSelectionReviewView workflow={workflow} />
+      )}
+      {workflow.observability === undefined || compact ? null : (
+        <AiWorkflowObservabilityView observability={workflow.observability} />
+      )}
+      {workflow.failure === undefined ? null : (
+        <AiWorkflowFailureDiagnosticView failure={workflow.failure} />
+      )}
+      {workflow.retryPolicy === undefined || compact ? null : (
+        <AiWorkflowRetryPolicyView retryPolicy={workflow.retryPolicy} />
+      )}
+      {workflow.history === undefined || compact ? null : (
+        <AiWorkflowRunHistoryView history={workflow.history} />
+      )}
+    </section>
+  );
+}
+
+function AiSuggestionDiffPreview({
+  diffPreview
+}: {
+  readonly diffPreview: NonNullable<AiWritingWorkflowProps["diffPreview"]>;
+}) {
+  return (
+    <section className="ns-editor-panel" aria-label="AI 建议差异">
+      <div className="ns-editor-panel-header">
+        <span>{diffPreview.title}</span>
+        <span className="ns-preview-only">仅预览</span>
+      </div>
+      <ul className="ns-diff-list">
+        {diffPreview.changes.map((change, index) => (
+          <li className={`ns-diff-item ns-diff-${change.kind}`} key={`${change.kind}-${index}`}>
+            <span>{change.kind}</span>
+            <pre>{change.value}</pre>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function aiAssistantReply(workflow: AiWritingWorkflowProps): string | undefined {
+  switch (workflow.status) {
+    case "idle":
+      return workflow.summary;
+    case "generating":
+      return "正在整理当前章节、选中内容和项目设定。";
+    case "streaming":
+      return workflow.streamPreview ?? "正在生成建议，你可以随时取消。";
+    case "suggestion-ready":
+      return workflow.summary ?? workflow.streamPreview ?? "建议已生成，确认后可以写入正文。";
+    case "applied":
+      return workflow.summary ?? "建议已应用到正文。";
+    case "failed":
+      return workflow.failure?.message ?? "生成失败，可以调整指令后重试。";
+    case "cancelled":
+      return "本次生成已取消，正文没有被修改。";
+  }
+}
 
 export function AiWorkflowRunHistoryView({
   history

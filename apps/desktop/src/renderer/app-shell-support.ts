@@ -24,14 +24,14 @@ export const rendererShellState: DesktopShellState = {
   projectTitle: "未打开项目",
   activeActivity: "workspace",
   navigatorCollapsed: false,
-  inspectorCollapsed: false,
-  bottomPanelVisible: true,
+  inspectorCollapsed: true,
+  bottomPanelVisible: false,
   activeBottomPanelTab: "工作流运行",
   workspaceLayout: {
     splitView: false,
     navigatorWidth: 260,
     inspectorWidth: 320,
-    bottomPanelHeight: 220
+    bottomPanelHeight: 180
   },
   commandPaletteOpen: false,
   saveStatus: "Saved",
@@ -141,7 +141,7 @@ export function createOnboardingProps(input: {
     input.chapterEditor !== undefined || (input.projectWorkflow?.chapters.length ?? 0) > 0;
 
   return {
-    visible: true,
+    visible: !input.dismissed && (!hasProject || !hasChapter),
     dismissed: input.dismissed,
     steps: [
       {

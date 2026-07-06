@@ -63,10 +63,9 @@ test("creates a project, creates a chapter, edits it, and saves through Electron
   }
 });
 
-test("creates an example project from the onboarding quick start", async () => {
+test("starts public install users in a ready default project without quick start", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-onboarding-e2e-"));
   const defaultProjectRoot = join(tempRoot, "Default Project");
-  const exampleRoot = join(tempRoot, "Example Smoke");
   const electronApp = await electron.launch({
     args: [electronMain],
     env: {
@@ -78,32 +77,26 @@ test("creates an example project from the onboarding quick start", async () => {
   try {
     const page = await electronApp.firstWindow();
 
-    await expect(page.getByRole("region", { name: "快速开始" })).toBeVisible();
-    await page.getByLabel("项目路径").fill(exampleRoot);
-    await page.getByRole("button", { name: "创建示例项目" }).click();
-
     const projectNavigator = page.getByLabel("项目导航");
-    await expect(page.getByText("示例小说项目")).toBeVisible();
-    await expect(projectNavigator.getByRole("button", { name: /示例章节/ })).toBeVisible();
-    await expect(page.getByLabel("章节正文")).toHaveValue(/这是一个本地示例章节/);
+    await expect(page.getByRole("region", { name: "快速开始" })).toHaveCount(0);
+    await expect(projectNavigator.getByRole("button", { name: "打开项目" })).toBeVisible();
+    await expect(projectNavigator.getByRole("button", { name: "创建项目" })).toBeVisible();
+    await expect(projectNavigator.getByRole("button", { name: "新建章节" })).toBeVisible();
+    await expect(page.getByText("未命名长篇项目")).toBeVisible();
+    await expect(page.getByRole("tab", { name: "第一章" })).toBeVisible();
+    await expect(page.getByLabel("章节正文")).toHaveValue(/这是第一章的正文/);
 
-    const chapterFiles = (await readdir(join(exampleRoot, "chapters"))).filter((entry) =>
+    const chapterFiles = (await readdir(join(defaultProjectRoot, "chapters"))).filter((entry) =>
       entry.endsWith(".md")
     );
     expect(chapterFiles).toHaveLength(1);
-    const [chapterFile] = chapterFiles;
-    if (chapterFile === undefined) {
-      throw new Error("Expected one example chapter file.");
-    }
-    const savedChapter = await readFile(join(exampleRoot, "chapters", chapterFile), "utf8");
-    expect(savedChapter).toContain("这是一个本地示例章节");
   } finally {
     await electronApp.close();
     await rm(tempRoot, { recursive: true, force: true });
   }
 });
 
-test("persists onboarding dismissal in user preferences", async () => {
+test("keeps quick start hidden after relaunch when a default project is ready", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-preferences-e2e-"));
   const userDataRoot = join(tempRoot, "User Data");
   const firstApp = await electron.launch({
@@ -117,9 +110,8 @@ test("persists onboarding dismissal in user preferences", async () => {
 
   try {
     const page = await firstApp.firstWindow();
-    await expect(page.getByRole("region", { name: "快速开始" })).toBeVisible();
-    await page.getByRole("button", { name: "隐藏快速开始" }).click();
-    await expect(page.getByRole("region", { name: "快速开始" })).toBeHidden();
+    await expect(page.getByLabel("编辑区")).toBeVisible();
+    await expect(page.getByRole("region", { name: "快速开始" })).toHaveCount(0);
   } finally {
     await firstApp.close();
   }
@@ -137,9 +129,6 @@ test("persists onboarding dismissal in user preferences", async () => {
     const page = await secondApp.firstWindow();
     await expect(page.getByLabel("编辑区")).toBeVisible();
     await expect(page.getByRole("region", { name: "快速开始" })).toHaveCount(0);
-
-    const preferencesFile = await readFile(join(userDataRoot, "user-preferences.json"), "utf8");
-    expect(preferencesFile).toContain('"dismissed": true');
   } finally {
     await secondApp.close();
     await rm(tempRoot, { recursive: true, force: true });
@@ -260,17 +249,18 @@ test("switches visible beta activity views from the left activity bar", async ()
 
   try {
     const page = await electronApp.firstWindow();
+    const activityBar = page.getByLabel("活动栏");
 
-    await page.getByRole("button", { name: "搜索" }).click();
+    await activityBar.getByRole("button", { name: "搜索" }).click();
     await expect(page.getByRole("heading", { name: "搜索项目" })).toBeVisible();
 
-    await page.getByRole("button", { name: "时间线" }).click();
+    await activityBar.getByRole("button", { name: "时间线" }).click();
     await expect(page.getByRole("heading", { name: "时间线" })).toBeVisible();
 
-    await page.getByRole("button", { name: "设置" }).click();
+    await activityBar.getByRole("button", { name: "设置" }).click();
     await expect(page.getByRole("heading", { name: "设置" })).toBeVisible();
 
-    await page.getByRole("button", { name: "工作区" }).click();
+    await activityBar.getByRole("button", { name: "工作区" }).click();
     await expect(page.getByLabel("编辑区")).toBeVisible();
   } finally {
     await electronApp.close();

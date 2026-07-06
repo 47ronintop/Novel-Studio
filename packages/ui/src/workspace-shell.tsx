@@ -9,12 +9,11 @@
 import type { ChapterSummary } from "@novel-studio/shared";
 import type { CSSProperties } from "react";
 import type { ChapterEditorProps } from "./chapter-editor.js";
-import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
+import type { ConfigStudioAssetType, ConfigStudioPanelProps } from "./config-studio-panel.js";
 import type { ModelSettingsPanelProps } from "./model-settings-panel.js";
 import {
   Bot,
   Boxes,
-  Check,
   Clock3,
   FilePlus,
   FolderTree,
@@ -25,7 +24,6 @@ import {
   PanelRight,
   Search,
   Settings,
-  Sparkles,
   X
 } from "lucide-react";
 
@@ -34,14 +32,7 @@ import { CommandPalette } from "./command-palette.js";
 import type { CommandPaletteFeedback } from "./command-palette.js";
 import { ConfigStudioPanel } from "./config-studio-panel.js";
 import { ModelSettingsPanel } from "./model-settings-panel.js";
-import {
-  AiWorkflowFailureDiagnosticView,
-  AiSelectionReviewView,
-  AiWorkflowObservabilityView,
-  AiWorkflowRetryPolicyView,
-  AiWorkflowRunHistoryView,
-  statusLabel
-} from "./workspace-shell-ai.js";
+import { AiWritingAssistantPanel, statusLabel } from "./workspace-shell-ai.js";
 import {
   ProjectSearchView,
   StoryBibleEditorView,
@@ -363,6 +354,20 @@ const navigatorSectionLabels: ReadonlyMap<string, string> = new Map([
   ["workflows", "工作流"]
 ]);
 
+const storyBibleKindByNavigatorSection: ReadonlyMap<string, StoryBibleEditorKind> = new Map([
+  ["characters", "character"],
+  ["world", "world"],
+  ["outline", "outline"],
+  ["timeline", "timeline"],
+  ["memories", "memory"]
+]);
+
+const studioAssetTypeByNavigatorSection: ReadonlyMap<string, ConfigStudioAssetType> = new Map([
+  ["prompts", "prompt"],
+  ["agents", "agent"],
+  ["workflows", "workflow"]
+]);
+
 const bottomPanelLabels: ReadonlyMap<string, string> = new Map([
   ["Workflow Run", "工作流运行"],
   ["Problems", "问题"],
@@ -408,9 +413,15 @@ export function WorkspaceShell({
       : (shellState.bottomPanelTabs[0] ?? "工作流运行");
   const workspaceLayout = shellState.workspaceLayout ?? defaultWorkspaceLayout;
   const workspaceGridStyle = {
-    "--ns-navigator-width": `${workspaceLayout.navigatorWidth}px`,
-    "--ns-inspector-width": `${workspaceLayout.inspectorWidth}px`,
-    "--ns-bottom-panel-height": `${workspaceLayout.bottomPanelHeight}px`
+    "--ns-navigator-width": shellState.navigatorCollapsed
+      ? "0px"
+      : `${workspaceLayout.navigatorWidth}px`,
+    "--ns-inspector-width": shellState.inspectorCollapsed
+      ? "0px"
+      : `${workspaceLayout.inspectorWidth}px`,
+    "--ns-bottom-panel-height": shellState.bottomPanelVisible
+      ? `${workspaceLayout.bottomPanelHeight}px`
+      : "0px"
   } as CSSProperties;
 
   return (
@@ -418,7 +429,7 @@ export function WorkspaceShell({
       <header className="ns-titlebar">
         <div className="ns-project-status">
           <span className="ns-project-title">{shellState.projectTitle}</span>
-          <span className="ns-save-status">{shellState.saveStatus}</span>
+          <span className="ns-save-status">{saveStatusLabel(shellState.saveStatus)}</span>
         </div>
         <button
           aria-label="打开命令面板"
@@ -432,6 +443,15 @@ export function WorkspaceShell({
         </button>
         <div className="ns-layout-controls" aria-label="布局控制">
           <button
+            aria-label="切换底部面板"
+            className="ns-icon-button"
+            onClick={() => onCommandExecute?.("workspace.toggle-bottom-panel")}
+            title="切换底部面板"
+            type="button"
+          >
+            <PanelBottom aria-hidden="true" size={14} />
+          </button>
+          <button
             aria-label="切换 Split View"
             className="ns-icon-button"
             onClick={() => onCommandExecute?.("workspace.toggle-split-view")}
@@ -439,42 +459,6 @@ export function WorkspaceShell({
             type="button"
           >
             <PanelRight aria-hidden="true" size={14} />
-          </button>
-          <button
-            aria-label="收窄导航面板"
-            className="ns-icon-button"
-            onClick={() => onCommandExecute?.("workspace.narrow-navigator")}
-            title="收窄导航面板"
-            type="button"
-          >
-            -
-          </button>
-          <button
-            aria-label="加宽导航面板"
-            className="ns-icon-button"
-            onClick={() => onCommandExecute?.("workspace.widen-navigator")}
-            title="加宽导航面板"
-            type="button"
-          >
-            +
-          </button>
-          <button
-            aria-label="收窄检查器"
-            className="ns-icon-button"
-            onClick={() => onCommandExecute?.("workspace.narrow-inspector")}
-            title="收窄检查器"
-            type="button"
-          >
-            [
-          </button>
-          <button
-            aria-label="加宽检查器"
-            className="ns-icon-button"
-            onClick={() => onCommandExecute?.("workspace.widen-inspector")}
-            title="加宽检查器"
-            type="button"
-          >
-            ]
           </button>
         </div>
       </header>
@@ -575,9 +559,22 @@ export function WorkspaceShell({
           )}
           <ul className="ns-tree">
             {shellState.navigatorSections.map((section) => (
-              <li className="ns-tree-row" key={section.id}>
-                <span>{navigatorSectionLabels.get(section.id) ?? section.title}</span>
-                <span>{section.itemCount}</span>
+              <li key={section.id}>
+                <button
+                  className="ns-tree-row"
+                  onClick={() =>
+                    handleNavigatorSectionOpen({
+                      sectionId: section.id,
+                      onActivitySelect,
+                      storyBibleEditor,
+                      studio
+                    })
+                  }
+                  type="button"
+                >
+                  <span>{navigatorSectionLabels.get(section.id) ?? section.title}</span>
+                  <span>{section.itemCount}</span>
+                </button>
               </li>
             ))}
           </ul>
@@ -630,139 +627,53 @@ export function WorkspaceShell({
           data-collapsed={shellState.inspectorCollapsed}
           data-region="inspector"
         >
-          <div className="ns-panel-header">
-            <span>检查器</span>
-            <PanelRight aria-hidden="true" size={15} />
-          </div>
-          <dl className="ns-meta-list">
-            <div>
-              <dt>状态</dt>
-              <dd>{saveStatusLabel(shellState.saveStatus)}</dd>
-            </div>
-            <div>
-              <dt>历史</dt>
-              <dd>暂无快照</dd>
-            </div>
-            <div>
-              <dt>上下文</dt>
-              <dd>{aiWritingWorkflow?.contextTraceLabel ?? "暂无工作流运行"}</dd>
-            </div>
-          </dl>
-          {aiWritingWorkflow === undefined ? null : (
-            <section className="ns-ai-workflow" aria-label="AI 写作工作流">
-              <div className="ns-editor-panel-header">
-                <span>AI 工作流</span>
-                <span className="ns-muted">{statusLabel(aiWritingWorkflow.status)}</span>
+          {shellState.inspectorCollapsed ? null : (
+            <>
+              <div className="ns-panel-header">
+                <span>检查器</span>
+                <PanelRight aria-hidden="true" size={15} />
               </div>
-              <textarea
-                aria-label="AI 写作指令"
-                className="ns-ai-instruction"
-                onChange={(event) =>
-                  aiWritingWorkflow.onInstructionChange(event.currentTarget.value)
-                }
-                value={aiWritingWorkflow.instruction}
-              />
-              <div className="ns-ai-actions">
-                <button
-                  aria-label="生成 AI 建议"
-                  className="ns-icon-text-button"
-                  disabled={
-                    aiWritingWorkflow.status === "generating" ||
-                    aiWritingWorkflow.status === "streaming"
-                  }
-                  onClick={aiWritingWorkflow.onGenerateSuggestion}
-                  title="生成 AI 建议"
-                  type="button"
-                >
-                  <Sparkles aria-hidden="true" size={14} />
-                  生成
-                </button>
-                <button
-                  aria-label="应用 AI 建议"
-                  className="ns-icon-text-button"
-                  disabled={aiWritingWorkflow.status !== "suggestion-ready"}
-                  onClick={aiWritingWorkflow.onApplySuggestion}
-                  title="应用 AI 建议"
-                  type="button"
-                >
-                  <Check aria-hidden="true" size={14} />
-                  应用
-                </button>
-                {aiWritingWorkflow.status === "streaming" ? (
-                  <button
-                    aria-label="取消 AI 流式输出"
-                    className="ns-icon-text-button"
-                    onClick={aiWritingWorkflow.onCancelStreaming}
-                    title="取消 AI 流式输出"
-                    type="button"
-                  >
-                    <X aria-hidden="true" size={14} />
-                    取消
-                  </button>
-                ) : null}
-                {aiWritingWorkflow.status === "failed" ? (
-                  <button
-                    aria-label="重试 AI 工作流"
-                    className="ns-icon-text-button"
-                    onClick={aiWritingWorkflow.onRetrySuggestion}
-                    title="重试 AI 工作流"
-                    type="button"
-                  >
-                    <Sparkles aria-hidden="true" size={14} />
-                    重试
-                  </button>
-                ) : null}
-              </div>
-              {aiWritingWorkflow.summary === undefined ? null : (
-                <p className="ns-ai-summary">{aiWritingWorkflow.summary}</p>
+              <dl className="ns-meta-list">
+                <div>
+                  <dt>状态</dt>
+                  <dd>{saveStatusLabel(shellState.saveStatus)}</dd>
+                </div>
+                <div>
+                  <dt>历史</dt>
+                  <dd>暂无快照</dd>
+                </div>
+                <div>
+                  <dt>上下文</dt>
+                  <dd>{aiWritingWorkflow?.contextTraceLabel ?? "暂无工作流运行"}</dd>
+                </div>
+              </dl>
+              {aiWritingWorkflow === undefined ? null : (
+                <AiWritingAssistantPanel workflow={aiWritingWorkflow} compact={true} />
               )}
-              {aiWritingWorkflow.streamPreview === undefined ? null : (
-                <pre className="ns-ai-stream-preview" aria-label="AI 流式输出预览">
-                  {aiWritingWorkflow.streamPreview}
-                </pre>
+              {storyBible === undefined ? null : (
+                <section className="ns-story-bible-summary" aria-label="故事圣经摘要">
+                  <div className="ns-editor-panel-header">
+                    <span>故事圣经</span>
+                    <span className="ns-muted">{storyBible.assets.length}</span>
+                  </div>
+                  <ul className="ns-story-bible-list">
+                    {storyBible.assets.map((asset) => (
+                      <li className="ns-story-bible-item" key={asset.id}>
+                        <div className="ns-story-bible-title">
+                          <span>{asset.title}</span>
+                          <span>{asset.type}</span>
+                        </div>
+                        <p>{asset.summary}</p>
+                        <div className="ns-story-bible-meta">
+                          <span>{asset.status}</span>
+                          {asset.contextEligible === true ? <span>可进入上下文</span> : null}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
               )}
-              {aiWritingWorkflow.contextTraceLabel === undefined ? null : (
-                <p className="ns-ai-context">{aiWritingWorkflow.contextTraceLabel}</p>
-              )}
-              {aiWritingWorkflow.selectionReview === undefined ? null : (
-                <AiSelectionReviewView workflow={aiWritingWorkflow} />
-              )}
-              {aiWritingWorkflow.observability === undefined ? null : (
-                <AiWorkflowObservabilityView observability={aiWritingWorkflow.observability} />
-              )}
-              {aiWritingWorkflow.failure === undefined ? null : (
-                <AiWorkflowFailureDiagnosticView failure={aiWritingWorkflow.failure} />
-              )}
-              {aiWritingWorkflow.retryPolicy === undefined ? null : (
-                <AiWorkflowRetryPolicyView retryPolicy={aiWritingWorkflow.retryPolicy} />
-              )}
-              {aiWritingWorkflow.history === undefined ? null : (
-                <AiWorkflowRunHistoryView history={aiWritingWorkflow.history} />
-              )}
-            </section>
-          )}
-          {storyBible === undefined ? null : (
-            <section className="ns-story-bible-summary" aria-label="故事圣经摘要">
-              <div className="ns-editor-panel-header">
-                <span>故事圣经</span>
-                <span className="ns-muted">{storyBible.assets.length}</span>
-              </div>
-              <ul className="ns-story-bible-list">
-                {storyBible.assets.map((asset) => (
-                  <li className="ns-story-bible-item" key={asset.id}>
-                    <div className="ns-story-bible-title">
-                      <span>{asset.title}</span>
-                      <span>{asset.type}</span>
-                    </div>
-                    <p>{asset.summary}</p>
-                    <div className="ns-story-bible-meta">
-                      <span>{asset.status}</span>
-                      {asset.contextEligible === true ? <span>可进入上下文</span> : null}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </section>
+            </>
           )}
         </aside>
 
@@ -1077,14 +988,12 @@ function ActivityEmptyState({
   if (activityId === "ai") {
     return (
       <section className="ns-activity-view" aria-label="AI 工作流主视图">
-        <h1>AI 工作流</h1>
-        <p>AI 输出保持建议态，应用到正文前需要你确认。</p>
+        <h1>AI 写作助手</h1>
+        <p>像对话一样提出写作要求，AI 只生成建议；写入正文前仍需要你确认应用。</p>
         {aiWritingWorkflow === undefined ? (
           <p>打开项目章节后可以生成写作建议。</p>
         ) : (
-          <div className="ns-activity-view-actions">
-            <span>当前状态：{statusLabel(aiWritingWorkflow.status)}</span>
-          </div>
+          <AiWritingAssistantPanel workflow={aiWritingWorkflow} />
         )}
       </section>
     );
@@ -1141,6 +1050,43 @@ function activityViewCopy(activityId: Exclude<ActivityId, "workspace" | "ai" | "
 
 function isProjectWorkflowBusy(projectWorkflow: ProjectWorkflowProps): boolean {
   return projectWorkflow.status === "opening" || projectWorkflow.status === "creating";
+}
+
+function handleNavigatorSectionOpen({
+  sectionId,
+  onActivitySelect,
+  storyBibleEditor,
+  studio
+}: {
+  readonly sectionId: string;
+  readonly onActivitySelect: ((activityId: ActivityId) => void) | undefined;
+  readonly storyBibleEditor: StoryBibleEditorProps | undefined;
+  readonly studio: ConfigStudioPanelProps | undefined;
+}) {
+  const storyBibleKind = storyBibleKindByNavigatorSection.get(sectionId);
+  if (storyBibleKind !== undefined) {
+    if (sectionId === "timeline") {
+      onActivitySelect?.("timeline");
+    } else {
+      onActivitySelect?.("storyBible");
+    }
+    storyBibleEditor?.onKindSelect(storyBibleKind);
+    return;
+  }
+
+  const studioAssetType = studioAssetTypeByNavigatorSection.get(sectionId);
+  if (studioAssetType !== undefined) {
+    onActivitySelect?.("studio");
+    const firstAsset = studio?.assets.find((asset) => asset.assetType === studioAssetType);
+    if (firstAsset !== undefined) {
+      studio?.onAssetSelect?.(firstAsset.assetType, firstAsset.assetId);
+    }
+    return;
+  }
+
+  if (sectionId === "chapters") {
+    onActivitySelect?.("workspace");
+  }
 }
 
 function saveStatusLabel(status: DesktopShellState["saveStatus"]): string {

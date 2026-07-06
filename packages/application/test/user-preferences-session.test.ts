@@ -24,14 +24,14 @@ describe("UserPreferencesSession", () => {
         onboarding: { dismissed: false },
         shell: {
           navigatorCollapsed: false,
-          inspectorCollapsed: false,
-          bottomPanelVisible: true,
+          inspectorCollapsed: true,
+          bottomPanelVisible: false,
           activeBottomPanelTab: "工作流运行",
           workspaceLayout: {
             splitView: false,
             navigatorWidth: 260,
             inspectorWidth: 320,
-            bottomPanelHeight: 220
+            bottomPanelHeight: 180
           }
         }
       })
@@ -53,14 +53,14 @@ describe("UserPreferencesSession", () => {
       onboarding: { dismissed: true },
       shell: {
         navigatorCollapsed: true,
-        inspectorCollapsed: false,
+        inspectorCollapsed: true,
         bottomPanelVisible: false,
         activeBottomPanelTab: "搜索",
         workspaceLayout: {
           splitView: true,
           navigatorWidth: 300,
           inspectorWidth: 280,
-          bottomPanelHeight: 220
+          bottomPanelHeight: 180
         }
       }
     });
@@ -73,5 +73,46 @@ describe("UserPreferencesSession", () => {
       expect(loaded.value.shell.workspaceLayout.splitView).toBe(true);
       expect(loaded.value.shell.activeBottomPanelTab).toBe("搜索");
     }
+  });
+
+  test("migrates the legacy expanded default layout to the calmer writing default", async () => {
+    const session = createUserPreferencesSession({
+      preferencesPort: {
+        readUserPreferences: async () =>
+          ok({
+            schemaVersion: "1.0",
+            onboarding: { dismissed: false },
+            shell: {
+              navigatorCollapsed: false,
+              inspectorCollapsed: false,
+              bottomPanelVisible: true,
+              activeBottomPanelTab: "工作流运行",
+              workspaceLayout: {
+                splitView: false,
+                navigatorWidth: 260,
+                inspectorWidth: 320,
+                bottomPanelHeight: 220
+              }
+            }
+          }),
+        writeUserPreferences: async (preferences) => ok(preferences)
+      }
+    });
+
+    const loaded = await session.load();
+
+    expect(loaded).toMatchObject({
+      ok: true,
+      value: {
+        shell: {
+          navigatorCollapsed: false,
+          inspectorCollapsed: true,
+          bottomPanelVisible: false,
+          workspaceLayout: {
+            bottomPanelHeight: 180
+          }
+        }
+      }
+    });
   });
 });

@@ -369,7 +369,7 @@ describe("WorkspaceShell", () => {
     const application = createDesktopApplication();
     const calls: string[] = [];
     const tree = WorkspaceShell({
-      shellState: application.getShellState(),
+      shellState: { ...application.getShellState(), inspectorCollapsed: false },
       commands: application.listCommands(),
       commandPaletteOpen: false,
       projectWorkflow: {
@@ -512,7 +512,7 @@ describe("WorkspaceShell", () => {
     const application = createDesktopApplication();
     const calls: string[] = [];
     const tree = WorkspaceShell({
-      shellState: application.getShellState(),
+      shellState: { ...application.getShellState(), inspectorCollapsed: false },
       commands: application.listCommands(),
       commandPaletteOpen: false,
       aiWritingWorkflow: {
@@ -598,6 +598,8 @@ describe("WorkspaceShell", () => {
     const tree = WorkspaceShell({
       shellState: {
         ...application.getShellState(),
+        inspectorCollapsed: false,
+        bottomPanelVisible: true,
         workspaceLayout: {
           splitView: true,
           navigatorWidth: 300,
@@ -722,7 +724,7 @@ describe("WorkspaceShell", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
-        shellState={application.getShellState()}
+        shellState={{ ...application.getShellState(), inspectorCollapsed: false }}
         commands={application.listCommands()}
         commandPaletteOpen={false}
         projectWorkflow={{
@@ -835,7 +837,7 @@ describe("WorkspaceShell", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
-        shellState={application.getShellState()}
+        shellState={{ ...application.getShellState(), inspectorCollapsed: false }}
         commands={application.listCommands()}
         commandPaletteOpen={false}
         storyBible={{

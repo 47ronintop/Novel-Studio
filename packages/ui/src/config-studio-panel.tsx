@@ -93,10 +93,7 @@ export function ConfigStudioPanel({
       <header className="config-studio-header">
         <div>
           <h1>创作系统</h1>
-          <p>
-            编辑 Prompt、Agent 和 Workflow JSON。保存前会通过 Application/Repository 进行 schema
-            校验。
-          </p>
+          <p>管理 AI 写作提示词、Agent 和工作流。这里是高级配置区，正文写作不会被打断。</p>
         </div>
         <span className="config-studio-status">{statusLabel(status)}</span>
       </header>
@@ -241,11 +238,11 @@ function WorkflowGraphPreview({
     <section className="config-studio-workflow-graph" aria-label="Workflow graph preview">
       <header>
         <h3>{workflowGraph.graph.title}</h3>
-        <span>Validation {workflowGraph.validation.status}</span>
+        <span>校验：{workflowValidationLabel(workflowGraph.validation.status)}</span>
       </header>
       <div className="config-studio-graph-stats">
-        <span>Nodes {workflowGraph.graph.nodes.length}</span>
-        <span>Edges {workflowGraph.graph.edges.length}</span>
+        <span>节点 {workflowGraph.graph.nodes.length}</span>
+        <span>连线 {workflowGraph.graph.edges.length}</span>
       </div>
       <WorkflowDesignerAvailabilityBanner availability={availability} />
       <ol
@@ -293,7 +290,7 @@ function WorkflowGraphPreview({
                 }
                 type="button"
               >
-                Move right
+                右移
               </button>
               <button
                 aria-label={`Move workflow node ${node.id} left`}
@@ -307,7 +304,7 @@ function WorkflowGraphPreview({
                 }
                 type="button"
               >
-                Move left
+                左移
               </button>
               <button
                 aria-label={`Move workflow node ${node.id} down`}
@@ -321,7 +318,7 @@ function WorkflowGraphPreview({
                 }
                 type="button"
               >
-                Move down
+                下移
               </button>
               <button
                 aria-label={`Move workflow node ${node.id} up`}
@@ -335,7 +332,7 @@ function WorkflowGraphPreview({
                 }
                 type="button"
               >
-                Move up
+                上移
               </button>
               <button
                 aria-label={`Commit workflow node drag ${node.id}`}
@@ -349,7 +346,7 @@ function WorkflowGraphPreview({
                 }
                 type="button"
               >
-                Commit drag
+                保存位置
               </button>
             </li>
           );
@@ -394,13 +391,13 @@ function createWorkflowDesignerAvailability(
 ): ConfigWorkflowDesignerAvailability {
   const blockerMessages = [
     ...workflowGraph.validation.issues.map((issue) => issue.message),
-    ...(workflowGraph.layout === undefined ? ["Workflow layout is not available."] : [])
+    ...(workflowGraph.layout === undefined ? ["缺少工作流画布布局。"] : [])
   ];
   const ready = blockerMessages.length === 0;
 
   return {
     status: ready ? "ready" : "blocked",
-    message: ready ? "Workflow designer canvas ready" : "Workflow designer canvas blocked",
+    message: ready ? "工作流画布可编辑" : "工作流画布暂不可编辑",
     blockerMessages,
     nodeCount: workflowGraph.graph.nodes.length,
     edgeCount: workflowGraph.graph.edges.length,
@@ -422,7 +419,7 @@ function WorkflowDesignerAvailabilityBanner({
     >
       <span>{availability.message}</span>
       <span>
-        Canvas {availability.nodeCount} nodes / {availability.edgeCount} edges
+        {availability.nodeCount} 个节点 / {availability.edgeCount} 条连线
       </span>
       {availability.blockerMessages.length === 0 ? null : (
         <ol aria-label="Workflow designer blockers">
@@ -469,17 +466,17 @@ function WorkflowNodeInspector({
   const editableEdge = incomingEdges[0] ?? outgoingEdges[0];
   const [newNodeKind, setNewNodeKind] = useState<WorkflowEditableNodeKind>("confirmation");
   const [edgeTarget, setEdgeTarget] = useState(defaultNextStepId || nextStepId || selectedNode.id);
-  const [branchLabel, setBranchLabel] = useState("Needs review");
+  const [branchLabel, setBranchLabel] = useState("需要确认");
   const [branchCondition, setBranchCondition] = useState("manual:needs-review");
 
   return (
     <section className="config-studio-workflow-inspector" aria-label="Workflow node inspector">
-      <h4>Selected node {selectedNode.label}</h4>
-      <p>Kind {selectedNode.kind}</p>
-      <p>Metadata {JSON.stringify(selectedNode.metadata)}</p>
+      <h4>当前节点：{selectedNode.label}</h4>
+      <p>类型：{workflowNodeKindLabel(selectedNode.kind)}</p>
+      <p>元数据：{JSON.stringify(selectedNode.metadata)}</p>
       <div className="config-studio-workflow-semantic-actions">
         <label>
-          <span>Node type</span>
+          <span>节点类型</span>
           <select
             aria-label="Workflow new node kind"
             value={newNodeKind}
@@ -487,12 +484,12 @@ function WorkflowNodeInspector({
               setNewNodeKind(event.currentTarget.value as WorkflowEditableNodeKind)
             }
           >
-            <option value="context">context</option>
-            <option value="agent">agent</option>
-            <option value="confirmation">confirmation</option>
-            <option value="save">save</option>
-            <option value="branch">branch</option>
-            <option value="plugin">plugin</option>
+            <option value="context">上下文</option>
+            <option value="agent">Agent</option>
+            <option value="confirmation">确认</option>
+            <option value="save">保存</option>
+            <option value="branch">分支</option>
+            <option value="plugin">插件</option>
           </select>
         </label>
         <button
@@ -517,7 +514,7 @@ function WorkflowNodeInspector({
           }
           type="button"
         >
-          Add type
+          添加所选类型
         </button>
         <button
           aria-label={`Add confirmation node after ${selectedNode.id}`}
@@ -541,7 +538,7 @@ function WorkflowNodeInspector({
           }
           type="button"
         >
-          Add confirmation
+          添加确认节点
         </button>
         <button
           aria-label={`Confirm delete workflow node ${selectedNode.id}`}
@@ -554,7 +551,7 @@ function WorkflowNodeInspector({
           }
           type="button"
         >
-          Confirm delete
+          确认删除
         </button>
         <button
           aria-label={`Delete workflow node ${selectedNode.id}`}
@@ -567,12 +564,12 @@ function WorkflowNodeInspector({
           }
           type="button"
         >
-          Delete node
+          删除节点
         </button>
       </div>
       <div className="config-studio-workflow-product-actions">
         <label>
-          <span>Retarget to</span>
+          <span>调整到</span>
           <input
             aria-label="Workflow edge retarget target"
             value={edgeTarget}
@@ -595,10 +592,10 @@ function WorkflowNodeInspector({
           }}
           type="button"
         >
-          Retarget edge
+          更新连线
         </button>
         <label>
-          <span>Branch label</span>
+          <span>分支名称</span>
           <input
             aria-label="Workflow branch label"
             value={branchLabel}
@@ -606,7 +603,7 @@ function WorkflowNodeInspector({
           />
         </label>
         <label>
-          <span>Branch condition</span>
+          <span>分支条件</span>
           <input
             aria-label="Workflow branch condition"
             value={branchCondition}
@@ -628,12 +625,12 @@ function WorkflowNodeInspector({
           }
           type="button"
         >
-          Apply branch
+          应用分支
         </button>
       </div>
       <div className="config-studio-workflow-inspector-fields">
         <label>
-          <span>Next step</span>
+          <span>下一步</span>
           <input
             aria-label="Workflow node next step"
             name="nextStepId"
@@ -667,7 +664,7 @@ function WorkflowNodeInspector({
         {selectedNode.kind === "plugin" ? (
           <>
             <label>
-              <span>Plugin</span>
+              <span>插件</span>
               <input
                 aria-label="Workflow node plugin"
                 name="pluginId"
@@ -682,7 +679,7 @@ function WorkflowNodeInspector({
               />
             </label>
             <label>
-              <span>Contribution</span>
+              <span>贡献点</span>
               <input
                 aria-label="Workflow node contribution"
                 name="contributionId"
@@ -700,7 +697,7 @@ function WorkflowNodeInspector({
         ) : null}
         {selectedNode.kind === "branch" ? (
           <label>
-            <span>Default next</span>
+            <span>默认下一步</span>
             <input
               aria-label="Workflow node default next step"
               name="defaultNextStepId"
@@ -719,19 +716,51 @@ function WorkflowNodeInspector({
       <ol aria-label="Workflow node outgoing edges">
         {outgoingEdges.map((edge) => (
           <li key={edge.id}>
-            Outgoing {edge.fromNodeId} {"\u2192"} {edge.toNodeId}
+            出站 {edge.fromNodeId} {"\u2192"} {edge.toNodeId}
           </li>
         ))}
       </ol>
       <ol aria-label="Workflow node incoming edges">
         {incomingEdges.map((edge) => (
           <li key={edge.id}>
-            Incoming {edge.fromNodeId} {"\u2192"} {edge.toNodeId}
+            入站 {edge.fromNodeId} {"\u2192"} {edge.toNodeId}
           </li>
         ))}
       </ol>
     </section>
   );
+}
+
+function workflowValidationLabel(
+  status: ConfigWorkflowGraphSnapshot["validation"]["status"]
+): string {
+  switch (status) {
+    case "valid":
+      return "通过";
+    case "invalid":
+      return "有问题";
+    default:
+      return status;
+  }
+}
+
+function workflowNodeKindLabel(kind: string): string {
+  switch (kind) {
+    case "context":
+      return "上下文";
+    case "agent":
+      return "Agent";
+    case "confirmation":
+      return "确认";
+    case "save":
+      return "保存";
+    case "branch":
+      return "分支";
+    case "plugin":
+      return "插件";
+    default:
+      return kind;
+  }
 }
 
 function assetTypeLabel(assetType: ConfigStudioAssetType): string {

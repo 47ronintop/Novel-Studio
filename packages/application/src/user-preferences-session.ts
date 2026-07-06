@@ -35,7 +35,7 @@ export function createUserPreferencesSession(
         return loaded;
       }
 
-      current = loaded.value ?? createDefaultUserPreferences();
+      current = normalizeUserPreferences(loaded.value ?? createDefaultUserPreferences());
       return ok(current);
     },
     async save(input) {
@@ -75,7 +75,7 @@ export function createUserPreferencesSession(
       return loaded;
     }
 
-    return ok(loaded.value ?? createDefaultUserPreferences());
+    return ok(normalizeUserPreferences(loaded.value ?? createDefaultUserPreferences()));
   }
 }
 
@@ -87,15 +87,47 @@ export function createDefaultUserPreferences(): UserPreferencesSnapshot {
     },
     shell: {
       navigatorCollapsed: false,
-      inspectorCollapsed: false,
-      bottomPanelVisible: true,
+      inspectorCollapsed: true,
+      bottomPanelVisible: false,
       activeBottomPanelTab: "工作流运行",
       workspaceLayout: {
         splitView: false,
         navigatorWidth: 260,
         inspectorWidth: 320,
-        bottomPanelHeight: 220
+        bottomPanelHeight: 180
       }
     }
   };
+}
+
+function normalizeUserPreferences(preferences: UserPreferencesSnapshot): UserPreferencesSnapshot {
+  if (!isLegacyExpandedDefaultLayout(preferences.shell)) {
+    return preferences;
+  }
+
+  return {
+    ...preferences,
+    shell: {
+      ...preferences.shell,
+      inspectorCollapsed: true,
+      bottomPanelVisible: false,
+      workspaceLayout: {
+        ...preferences.shell.workspaceLayout,
+        bottomPanelHeight: 180
+      }
+    }
+  };
+}
+
+function isLegacyExpandedDefaultLayout(shell: UserPreferencesSnapshot["shell"]): boolean {
+  return (
+    shell.navigatorCollapsed === false &&
+    shell.inspectorCollapsed === false &&
+    shell.bottomPanelVisible === true &&
+    shell.activeBottomPanelTab === "工作流运行" &&
+    shell.workspaceLayout.splitView === false &&
+    shell.workspaceLayout.navigatorWidth === 260 &&
+    shell.workspaceLayout.inspectorWidth === 320 &&
+    shell.workspaceLayout.bottomPanelHeight === 220
+  );
 }

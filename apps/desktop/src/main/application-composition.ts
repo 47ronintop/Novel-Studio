@@ -36,10 +36,10 @@ import {
 } from "@novel-studio/repository";
 
 export const DEFAULT_FIXTURE_CHAPTER_ID = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D0";
-const DEFAULT_PROJECT_TITLE = "Minimal Chapter Project";
+const DEFAULT_PROJECT_TITLE = "未命名长篇项目";
 const DEFAULT_PROJECT_ID = "prj_minimal_chapter";
 const DEFAULT_CHAPTER_TITLE = "第一章";
-const DEFAULT_CHAPTER_BODY = "原始章节正文。\n";
+const DEFAULT_CHAPTER_BODY = "这是第一章的正文。你可以直接开始写作。\n";
 
 export interface ProjectDesktopApplicationOptions {
   readonly projectRoot: string;
