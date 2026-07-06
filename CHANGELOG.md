@@ -97,8 +97,9 @@
 - 完成 M96 Story Bible Consistency Minimum：新增 Story Bible 最小一致性报告、IPC/preload/API/renderer bridge 和编辑器 warning UI；只提示显式 conflict/contradict/冲突/矛盾 标记命中的人物设定冲突，并提供 Story Bible 条目跳转，不做知识图谱或 Timeline 深编辑。
 - 完成 M97 Public Install Release Gate：新增公开 Windows 安装门禁文档，`release:check` 验证 M97 文档、核心 E2E、artifact secret scan、release channel、release notes 和 installer config，并明确不 push、不上传、不发布。
 - 执行 M96/M97 后 Scope Review：确认下一步只剩 M98 V1 Ship Audit；M98 只能做 ship 审计和阅读朗读 go/no-go 裁决，不得直接扩成新功能实现。
+- 完成 M98 V1 Ship Audit：新增 `docs/releases/m98-v1-ship-readiness.md`，记录 v1 ship decision: GO、核心闭环证据、验证命令、已知限制、v2/backlog 延期清单和阅读朗读裁决；`release:check` 新增 M98 readiness gate，明确不新增 M99/M100，阅读朗读只进入 v1.1 backlog。
 
 ## Notes
 
 - Phase 7 当前定义的 M0-M18 已完成。
-- 当前已完成 Post-M18 M19-M97，M98 已按最终确认的 v1 核心闭环裁剪规划；M27 安装后首次使用引导缺口已通过 M48 回补；未经用户确认不得 push。
+- 当前已完成 Post-M18 M19-M98，M98 已按最终确认的 v1 核心闭环完成 ship audit；M27 安装后首次使用引导缺口已通过 M48 回补；未经用户确认不得 push。

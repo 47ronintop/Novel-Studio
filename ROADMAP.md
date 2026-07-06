@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.51 | Status: Active | Last Updated: 2026-07-06
+Version: 1.52 | Status: Active | Last Updated: 2026-07-07
 
 ## 目标
 
@@ -115,7 +115,7 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M95       | Provider Compatibility Ship     | 支持公开用户常见 API：OpenAI/GPT、Claude、DeepSeek、GLM、通义等 AI 建议闭环  | Complete |
 | M96       | Story Bible Consistency Minimum | 聚焦作者继续写作所需的 Story Bible 引用/一致性提示                           | Complete |
 | M97       | Public Install Release Gate     | 面向公开安装用户的 installer、签名/证书策略、release channel 和核心旅程验证  | Complete |
-| M98       | V1 Ship Audit                   | 只按核心闭环证据裁决 v1 ship；同步裁决阅读朗读等 v1.1 候选功能               | Planned  |
+| M98       | V1 Ship Audit                   | 只按核心闭环证据裁决 v1 ship；同步裁决阅读朗读等 v1.1 候选功能               | Complete |
 
 ## M15 完成内容
 
@@ -642,6 +642,15 @@ Scope Review 必须回答：
 | 文件重构阈值     | 本次新增 API/bridge/UI 增量较小，未引入新的超大文件风险                                                                    | 暂不新增结构性 milestone；M98 审计时继续检查结构门禁                                    |
 | 可砍/延后项      | 阅读朗读、完整知识图谱、Timeline 深编辑、provider streaming、live benchmark、真实证书签名自动化仍不阻断核心闭环            | 继续留到 M98 裁决或 v2/backlog；M98 只允许产出 go/no-go 和必要 blocker 清单             |
 
+## Scope Review - 2026-07-07 after M98
+
+| 检查项           | 结论                                                                                                                                                                 | 处理                                                                                          |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| 核心写作闭环     | `docs/releases/m98-v1-ship-readiness.md` 已记录 v1 ship decision: GO；核心写作旅程、AI 审阅应用、保存重开、恢复、Story Bible 冲突提示和公开安装门禁都有测试/门禁证据 | 可以进入 v1 handoff；不得把非核心候选项重新塞回 v1 主线                                       |
+| 接下来 milestone | M98 未发现必须新增 M99/M100 的 v1 blocker；阅读朗读裁决为 v1.1 backlog go，而不是 v1 blocker                                                                         | 不新增 M99/M100；若要做阅读朗读，必须另开 v1.1 milestone，第一版边界受 M98 readiness 文档约束 |
+| 文件重构阈值     | `workspace-shell.tsx` 1157 行、`App.tsx` 1171 行、`ai-writing-workflow-session.ts` 984 行，均低于硬阈值但接近边界                                                    | 不阻塞 v1 ship；v1.1 新功能前必须再次 Scope Review，避免继续在近阈值文件上堆大功能            |
+| 可砍/延后项      | 插件市场、生产级第三方插件执行、Workflow Designer 完整编辑、CodeMirror 默认迁移、Timeline 深编辑、streaming/live benchmark、coverage threshold 等不影响核心闭环      | 全部保留在 v2/backlog；触发条件继续按下方规则执行，不能因为“完成度低”自动回到主线路线图       |
+
 ## 裁剪后后续路线
 
 - M92 Structural Refactor Gate：已完成。拆分 `workspace-shell.tsx`、`App.tsx` 和 `ai-writing-workflow-session.ts` 的职责边界，不新增用户功能；结构门禁已覆盖硬拆分阈值。
@@ -650,7 +659,7 @@ Scope Review 必须回答：
 - M95 Provider Compatibility Ship：已完成。常见公开 provider 可通过 `createProviderRouter()` 接入兼容或原生 runtime；桌面组合层可注入 provider router，DeepSeek 默认 profile 已有 AI 建议闭环测试证据。
 - M96 Story Bible Consistency Minimum：已完成。Story Bible 编辑器可显示显式冲突标记驱动的最小一致性提示，并提供跳转到相关 Story Bible 条目。
 - M97 Public Install Release Gate：已完成。`release:check` 验证公开安装门禁文档、核心 E2E、artifact secret scan、release channel、release notes 和 installer config；不 push、不上传、不发布。
-- M98 V1 Ship Audit：只按 v1 ship 验收场景裁决是否发布，并同步裁决阅读预览/角色朗读是否进入 v1.1 第一批实施。完成判定：验收场景证据、测试命令、已知限制和延期清单写入 release readiness；所有非核心功能明确标记为 v2/backlog；阅读朗读有明确 go/no-go 记录，若 go，则后续 milestone 只允许先做“阅读预览 + Story Bible 人物声音设定 + 系统语音默认 + Edge TTS 实验 provider”，不得直接扩成有声书导出、情绪配音或全自动角色推断。
+- M98 V1 Ship Audit：已完成。`docs/releases/m98-v1-ship-readiness.md` 记录 v1 ship decision: GO、核心闭环证据、验证命令、已知限制、v2/backlog 延期清单和阅读朗读 go/no-go；阅读朗读只进入 v1.1 backlog，不构成 v1 blocker；未授权 M99/M100。
 
 ## V2 / Backlog 触发条件
 
@@ -659,7 +668,7 @@ Scope Review 必须回答：
 - CodeMirror 默认迁移、完整 inline diff editor：仅当 textarea 在长文档性能、选择区编辑或 diff 审阅上被核心旅程测试证明不够用时启动。
 - Timeline 深编辑、拖拽排序、正文双向定位：仅当“冲突提示 + 跳转链接”的最小 Story Bible 一致性不足以支持继续写作时启动。
 - Provider streaming、live benchmark、非主流 provider 专用 translator：仅当公开用户反馈流式输出显著影响写作体验，或某 provider 不能通过 OpenAI-compatible/native 最小路径完成 AI 建议闭环时启动。
-- 阅读预览与角色配音朗读：M98 前不得抢占 v1 主线；M98 若裁决进入 v1.1，则触发条件是核心写作闭环、数据安全和公开安装门禁已通过。第一版只支持章节阅读预览、旁白/角色基础换声、Story Bible 人物声音设定、系统语音默认和 Edge TTS 实验开关；仅当真实用户需要音频成品交付时，才启动有声书导出、复杂情绪配音、云 TTS 计费集成或全自动说话人识别。
+- 阅读预览与角色配音朗读：M98 已裁决为 v1.1 backlog go、v1 blocker no。第一版只支持章节阅读预览、旁白/角色基础换声、Story Bible 人物声音设定、系统语音默认和 Edge TTS 实验开关；仅当真实用户需要音频成品交付时，才启动有声书导出、复杂情绪配音、云 TTS 计费集成或全自动说话人识别。
 - macOS notarization、托管自动更新：仅当对应平台或自动更新渠道纳入公开分发时启动；Windows 公开安装签名/证书策略保留在 v1 主线。
 - coverage threshold、dependency boundary 专用工具、schema codegen：仅当核心旅程稳定后，或实际回归表明现有测试门禁不足时启动；其中 boundary 检查可在 M92 后作为结构风险工具优先评估。
 
@@ -670,3 +679,4 @@ Scope Review 必须回答：
 - schema codegen 和更强 dependency boundary 工具尚未最终选择。
 - history 归档/压缩策略、stale lock recovery UI、完整多窗口状态编排仍需后续设计。
 - Provider Matrix 配置与运行时路由已覆盖 v1 主路径；Claude 仍需要在真实 runtime 中注入 Anthropic/native provider 或明确兼容代理。streaming、live benchmark、密钥库和长尾 provider 专用 translator 进入 v2/backlog 触发项。
+- `workspace-shell.tsx`、`App.tsx` 和 `ai-writing-workflow-session.ts` 低于 M92 硬阈值但接近边界；v1.1 新功能前必须先做 Scope Review，避免重新形成超大文件风险。

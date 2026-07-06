@@ -12,6 +12,7 @@ await checkElectronBuilderConfig();
 await checkReleaseChannelManifest();
 await checkReleaseNotes();
 await checkPublicInstallGate();
+await checkV1ShipReadiness();
 
 if (failures.length > 0) {
   for (const failure of failures) {
@@ -21,6 +22,7 @@ if (failures.length > 0) {
 } else {
   console.log("Release check passed");
   console.log("Public install release gate passed");
+  console.log("V1 ship readiness gate passed");
 }
 
 async function checkPackageScripts() {
@@ -141,6 +143,33 @@ async function checkPublicInstallGate() {
   for (const phrase of requiredPhrases) {
     if (!publicGate.includes(phrase)) {
       failures.push(`Public install release gate document must include: ${phrase}`);
+    }
+  }
+}
+
+async function checkV1ShipReadiness() {
+  const readinessPath = "docs/releases/m98-v1-ship-readiness.md";
+  if (!(await fileExists(readinessPath))) {
+    failures.push(`V1 ship readiness document is missing: ${readinessPath}`);
+    return;
+  }
+
+  const readiness = await readFile(join(root, readinessPath), "utf8");
+  const requiredPhrases = [
+    "V1 ship decision: GO",
+    "Core writing journey evidence",
+    "npm run test:e2e",
+    "npm run release:check",
+    "Known limitations do not block the core writing loop.",
+    "V2/backlog deferred scope",
+    "Reading aloud decision: GO for v1.1 backlog, NO for v1 blocker.",
+    "No M99/M100 is authorized unless M98 finds a v1 blocker.",
+    "M98 final gate: ship readiness is documented"
+  ];
+
+  for (const phrase of requiredPhrases) {
+    if (!readiness.includes(phrase)) {
+      failures.push(`V1 ship readiness document must include: ${phrase}`);
     }
   }
 }
