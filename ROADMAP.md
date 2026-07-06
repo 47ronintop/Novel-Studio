@@ -521,19 +521,30 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 - Chapter Editor runtime strip 显示 local diff review label；默认 editor runtime 仍保持 textarea。
 - M86-M88 不包含真实外部进程插件执行、签名信任持久化、marketplace、完整 graph editor、CodeMirror 默认迁移或自动应用 AI diff。
 
+## M89-M91 完成内容
+
+- 新增 `docs/productization/m89-m91-trust-workflow-editor-gates.md`，明确 trust store、workflow product editing 和 CodeMirror migration gate 的切片边界。
+- Plugin Runtime 新增 trust store snapshot/edit DTO，支持 trust plugin 与 revoke plugin，并保持敏感字段不落入结构化快照。
+- Plugin Runtime 新增 cache-protected local JSONL audit record projection，目标路径为 `history/plugin-audit/YYYY-MM-DD.jsonl`，并对 API key/secret/token 类字段做 redaction。
+- Config Studio Application 新增 product workflow edit helper，支持 typed node insertion、selected edge retarget、branch form edit 和 delete confirmation gate，继续返回 refreshed graph validation/layout。
+- Workflow Studio UI 新增节点类型选择、selected kind 插入、edge retarget target、branch label/condition 表单和 confirm delete 控件，仍只通过 callback 发结构化 edit。
+- Editor Runtime 新增 CodeMirror migration gate DTO，要求 opt-in、default readiness、E2E parity、large-document benchmark 和 textarea rollback 全部通过才允许推荐 CodeMirror default。
+- Chapter Editor runtime strip 显示 migration gate label；默认 editor runtime 仍保持 textarea。
+- M89-M91 不包含 marketplace、真实第三方插件执行、真实 audit Repository 写盘、完整拖拽 graph editor、完整 inline diff editor 或强制 CodeMirror 默认切换。
+
 ## 当前状态
 
 - Phase 1-6 已完成。
 - Phase 7 当前定义的 M0-M18 已完成。
-- Post-M18 产品化打磨已完成 M19-M88，其中 M27 首次使用引导已通过 M48 回补完成。
+- Post-M18 产品化打磨已完成 M19-M91，其中 M27 首次使用引导已通过 M48 回补完成。
 - 当前产品状态是 beta productization：主干闭环可运行，但多个宪法/UI 指南能力仍是 Product Gap。
 - 未经用户确认不得 push。
 
 ## 建议后续路线
 
-- M89 建议进入 Plugin Runtime Trust Store：补签名信任持久化、审计日志 Repository 和真实 utility/process isolation ADR。
-- M90 建议进入 Workflow Designer Product Editing：补节点类型选择、edge/branch 表单、删除确认和完整 graph-to-definition UI。
-- M91 建议进入 CodeMirror Default Migration Gate：补 E2E parity、large-document benchmark、fallback rollback UX 和默认切换开关。
+- M92 建议进入 Plugin Runtime Repository Persistence：补 trust store/audit Repository 写盘、history retention 读取和设置页信任操作闭环。
+- M93 建议进入 Workflow Designer Completion Gate：补 edge/branch 表单状态管理、删除确认二次校验、复杂 graph E2E 和 Product Ready 缺口复核。
+- M94 建议进入 Editor Runtime Rollout UX：补 CodeMirror opt-in 设置、rollback 操作 UI、inline diff review 和 large-document benchmark fixture。
 
 ## 当前技术债重点
 

@@ -84,8 +84,9 @@
 - 完成 M81-M83 Selection Apply Review UX、Plugin Signing and Permission UI 与 Workflow Designer Interaction：新增 selection review DTO/compare/accept/reject/undo、插件 trust/signing/readiness/permission/audit 可见化、workflow layout 写回 JSON draft 和 graph directional movement controls；仍不默认切换 CodeMirror、不执行任意第三方插件源码、不做 marketplace 或完整 drag/drop workflow canvas。
 - 完成 M84/M85 Workflow Designer Canvas 与 Editor Runtime Default Readiness：新增 workflow designer availability gate、selected edge state、structured node drag commit、canvas coordinate UI、CodeMirror default readiness evaluator 和 fallback decision；仍不做 edge 语义编辑、不默认切换 CodeMirror、不完成 Product Ready workflow designer。
 - 完成 M86-M88 Plugin Runtime Hardening、Workflow Designer Semantic Editing 与 Editor Local Diff Review：新增 plugin hardening report、audit retention/marketplace boundary DTO、workflow add/delete/retarget/branch semantic draft helper、Studio semantic action入口、editor local diff review metadata、large-document smoke 和 textarea rollback label；仍不执行任意第三方插件源码、不做完整 graph editor、不默认切换 CodeMirror。
+- 完成 M89-M91 Plugin Runtime Trust Store、Workflow Designer Product Editing 与 CodeMirror Default Migration Gate：新增 plugin trust store edit DTO、cache-protected audit JSONL record projection、workflow product edit helper、节点类型/edge/branch/delete-confirm UI 控件、CodeMirror migration gate 和 runtime strip label；仍不写真实 audit Repository、不执行任意第三方插件源码、不强制切换 CodeMirror 默认。
 
 ## Notes
 
 - Phase 7 当前定义的 M0-M18 已完成。
-- 当前已完成 Post-M18 M19-M88；M27 安装后首次使用引导缺口已通过 M48 回补；未经用户确认不得 push。
+- 当前已完成 Post-M18 M19-M91；M27 安装后首次使用引导缺口已通过 M48 回补；未经用户确认不得 push。

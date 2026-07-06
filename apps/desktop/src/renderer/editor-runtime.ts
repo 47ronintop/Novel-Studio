@@ -191,6 +191,28 @@ export interface EditorRuntimeDefaultReadinessDecision {
   readonly migrationRisk: "low" | "medium" | "high";
 }
 
+export interface EditorRuntimeLargeDocumentBenchmark {
+  readonly status: "passed" | "failed" | "not-run";
+  readonly lineCount: number;
+  readonly maxLatencyMs: number;
+}
+
+export interface EditorRuntimeMigrationGate {
+  readonly schemaVersion: "1.0";
+  readonly status: "ready" | "blocked";
+  readonly defaultRuntimeId: "textarea" | "codemirror";
+  readonly fallbackRuntimeId: "textarea";
+  readonly canSwitchDefault: boolean;
+  readonly label: string;
+  readonly blockers: readonly string[];
+  readonly evidence: {
+    readonly readinessStatus: "ready" | "blocked";
+    readonly e2eParityPassed: boolean;
+    readonly largeDocumentBenchmark: EditorRuntimeLargeDocumentBenchmark;
+    readonly rollbackReady: boolean;
+  };
+}
+
 export function createTextareaEditorRuntimeAdapter(): EditorRuntimeAdapter {
   return createMemoryBackedEditorRuntimeAdapter({
     runtimeId: "textarea",
@@ -249,6 +271,43 @@ export function evaluateEditorRuntimeDefaultReadiness(
     blockerMessages,
     warningMessages,
     migrationRisk: ready ? "low" : blockerMessages.length > 2 ? "high" : "medium"
+  };
+}
+
+export function createEditorRuntimeMigrationGate(input: {
+  readonly optInEnabled: boolean;
+  readonly readiness: EditorRuntimeDefaultReadinessDecision;
+  readonly e2eParityPassed: boolean;
+  readonly largeDocumentBenchmark: EditorRuntimeLargeDocumentBenchmark;
+  readonly rollbackReady: boolean;
+}): EditorRuntimeMigrationGate {
+  const blockers = [
+    ...(input.optInEnabled ? [] : ["CodeMirror default opt-in is disabled."]),
+    ...input.readiness.blockerMessages,
+    ...(input.e2eParityPassed ? [] : ["CodeMirror E2E parity has not passed."]),
+    ...(input.largeDocumentBenchmark.status === "passed"
+      ? []
+      : ["Large document benchmark has not passed."]),
+    ...(input.rollbackReady ? [] : ["Textarea rollback is not ready."])
+  ];
+  const ready = blockers.length === 0;
+
+  return {
+    schemaVersion: "1.0",
+    status: ready ? "ready" : "blocked",
+    defaultRuntimeId: ready ? "codemirror" : "textarea",
+    fallbackRuntimeId: "textarea",
+    canSwitchDefault: ready,
+    label: ready
+      ? "CodeMirror default ready with textarea rollback"
+      : `CodeMirror default blocked: ${formatMigrationGateBlockers(blockers)}`,
+    blockers,
+    evidence: {
+      readinessStatus: input.readiness.status,
+      e2eParityPassed: input.e2eParityPassed,
+      largeDocumentBenchmark: input.largeDocumentBenchmark,
+      rollbackReady: input.rollbackReady
+    }
   };
 }
 
@@ -493,7 +552,8 @@ function createCodeMirrorBackedEditorRuntimeAdapter(): EditorRuntimeAdapter {
 
 export function buildChapterEditorRuntimeProps(
   snapshot: EditorRuntimeSnapshot,
-  diffPreview?: ChapterEditorDiffPreview
+  diffPreview?: ChapterEditorDiffPreview,
+  migrationGate?: EditorRuntimeMigrationGate
 ): ChapterEditorRuntimeProps {
   const visualDiffReview =
     diffPreview === undefined ? undefined : createEditorVisualDiffReview(snapshot, diffPreview);
@@ -521,6 +581,7 @@ export function buildChapterEditorRuntimeProps(
     ...(localDiffReview === undefined
       ? {}
       : { localDiffReviewLabel: formatLocalDiffReviewSummary(localDiffReview) }),
+    ...(migrationGate === undefined ? {} : { migrationGateLabel: migrationGate.label }),
     autosaveLabel:
       snapshot.saveStatus === "Recovery available" ? "Recovery draft available" : "Autosave armed",
     shortcutProfileLabel: "Default shortcuts",
@@ -756,4 +817,18 @@ function formatLocalDiffReviewSummary(review: EditorLocalDiffReview): string {
   return `Local diff review: ${review.decorations.length} ${
     review.decorations.length === 1 ? "change" : "changes"
   }, rollback ${review.fallbackRuntimeId}`;
+}
+
+function formatMigrationGateBlockers(blockers: readonly string[]): string {
+  return blockers
+    .map((blocker) => {
+      if (blocker === "CodeMirror default opt-in is disabled.") {
+        return "opt-in disabled";
+      }
+      if (blocker === "Textarea rollback is not ready.") {
+        return "rollback unavailable";
+      }
+      return blocker.toLowerCase();
+    })
+    .join(", ");
 }

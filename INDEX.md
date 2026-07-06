@@ -97,7 +97,7 @@ Version: 1.55 | Last Updated: 2026-07-06
 | Phase 5 开发规范      | Complete | `CODING_STANDARDS.md`、`TESTING.md` | 已完成     |
 | Phase 6 Task Planning | Complete | `ROADMAP.md`                        | 已完成     |
 | Phase 7 正式开发      | Complete | M0-M18 已完成                       | 已完成     |
-| Post-M18 产品化打磨   | Active   | M19-M88 已完成                      | 下一步 M89 |
+| Post-M18 产品化打磨   | Active   | M19-M91 已完成                      | 下一步 M92 |
 
 ## 当前本地状态
 
@@ -144,6 +144,7 @@ Version: 1.55 | Last Updated: 2026-07-06
 - 当前已完成 M81 Selection Apply Review UX、M82 Plugin Signing and Permission UI 与 M83 Workflow Designer Interaction。
 - 当前已完成 M84 Workflow Designer Canvas 与 M85 Editor Runtime Default Readiness。
 - 当前已完成 M86 Plugin Runtime Hardening、M87 Workflow Designer Semantic Editing 与 M88 Editor Local Diff Review。
+- 当前已完成 M89 Plugin Runtime Trust Store、M90 Workflow Designer Product Editing 与 M91 CodeMirror Default Migration Gate。
 - 当前 `Complete` 只表示里程碑切片完成；产品完整度以 M35 的 `Product Ready` 口径为准。
 - 未经用户确认不得 push。
 - 当前本地 artifact 位于被忽略的 `release/` 目录，不提交到仓库。

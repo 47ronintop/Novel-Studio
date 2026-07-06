@@ -33,6 +33,7 @@ export interface ChapterEditorRuntimeProps {
   };
   readonly visualDiffSummaryLabel?: string;
   readonly localDiffReviewLabel?: string;
+  readonly migrationGateLabel?: string;
   readonly autosaveLabel: string;
   readonly shortcutProfileLabel: string;
   readonly warnings: readonly string[];
@@ -291,6 +292,9 @@ function ChapterEditorRuntime({
         )}
         {runtime.localDiffReviewLabel === undefined ? null : (
           <span>{runtime.localDiffReviewLabel}</span>
+        )}
+        {runtime.migrationGateLabel === undefined ? null : (
+          <span>{runtime.migrationGateLabel}</span>
         )}
         {selectionAiPreviewCommand === undefined ? null : (
           <button

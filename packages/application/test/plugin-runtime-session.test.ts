@@ -3,6 +3,8 @@ import { describe, expect, test } from "vitest";
 import { ok } from "@novel-studio/shared";
 
 import {
+  applyPluginTrustStoreEdit,
+  createPluginAuditLogRecord,
   createPluginSandboxIsolationPlan,
   createPluginSecurityAuditReport,
   createPluginSandboxFixtureWorkerAdapter,
@@ -587,6 +589,104 @@ describe("PluginRuntimeSession", () => {
         }
       ]
     });
+  });
+
+  test("applies plugin trust store edits without storing plaintext secrets", () => {
+    const trusted = applyPluginTrustStoreEdit({
+      snapshot: {
+        schemaVersion: "1.0",
+        updatedAt: "2026-07-06T12:00:00.000Z",
+        entries: []
+      },
+      edit: {
+        kind: "trust-plugin",
+        pluginId: "novel.structure-tools",
+        trustState: "signed",
+        source: "signature",
+        signatureFingerprint: "sha256:abc123",
+        reason: "Verified local package signature"
+      },
+      now: () => "2026-07-06T12:01:00.000Z"
+    });
+
+    expect(trusted).toEqual({
+      schemaVersion: "1.0",
+      updatedAt: "2026-07-06T12:01:00.000Z",
+      entries: [
+        {
+          pluginId: "novel.structure-tools",
+          trustState: "signed",
+          source: "signature",
+          signatureFingerprint: "sha256:abc123",
+          reason: "Verified local package signature",
+          trustedAt: "2026-07-06T12:01:00.000Z"
+        }
+      ]
+    });
+
+    const revoked = applyPluginTrustStoreEdit({
+      snapshot: trusted,
+      edit: {
+        kind: "revoke-plugin",
+        pluginId: "novel.structure-tools",
+        reason: "Signature no longer trusted"
+      },
+      now: () => "2026-07-06T12:02:00.000Z"
+    });
+
+    expect(revoked.entries[0]).toMatchObject({
+      pluginId: "novel.structure-tools",
+      trustState: "untrusted",
+      revokedAt: "2026-07-06T12:02:00.000Z",
+      reason: "Signature no longer trusted"
+    });
+    expect(JSON.stringify(revoked)).not.toMatch(/sk-|api[_-]?key|secret/i);
+  });
+
+  test("creates cache-protected plugin audit JSONL records", () => {
+    const record = createPluginAuditLogRecord({
+      pluginId: "novel.structure-tools",
+      eventKind: "trust-updated",
+      decision: "allowed",
+      traceId: "trace_plugin_trust",
+      createdAt: "2026-07-06T12:03:00.000Z",
+      redactedDetail: {
+        trustState: "signed",
+        apiKey: "sk-should-not-appear"
+      }
+    });
+
+    expect(record).toEqual({
+      schemaVersion: "1.0",
+      mode: "local-jsonl",
+      path: "history/plugin-audit/2026-07-06.jsonl",
+      protectedFromCacheClear: true,
+      record: {
+        schemaVersion: "1.0",
+        pluginId: "novel.structure-tools",
+        eventKind: "trust-updated",
+        decision: "allowed",
+        traceId: "trace_plugin_trust",
+        createdAt: "2026-07-06T12:03:00.000Z",
+        redactedDetail: {
+          trustState: "signed",
+          apiKey: "[redacted]"
+        }
+      },
+      jsonl: JSON.stringify({
+        schemaVersion: "1.0",
+        pluginId: "novel.structure-tools",
+        eventKind: "trust-updated",
+        decision: "allowed",
+        traceId: "trace_plugin_trust",
+        createdAt: "2026-07-06T12:03:00.000Z",
+        redactedDetail: {
+          trustState: "signed",
+          apiKey: "[redacted]"
+        }
+      })
+    });
+    expect(record.jsonl).not.toContain("sk-should-not-appear");
   });
 });
 

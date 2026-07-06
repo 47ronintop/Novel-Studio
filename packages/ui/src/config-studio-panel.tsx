@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { useState } from "react";
 import { Boxes, RotateCcw, Save } from "lucide-react";
 import type {
   ConfigWorkflowDesignerAvailability,
@@ -40,6 +41,8 @@ export interface ConfigStudioWorkflowNodeEdit {
   readonly nextStepId?: string;
   readonly defaultNextStepId?: string;
 }
+
+type WorkflowEditableNodeKind = "context" | "agent" | "confirmation" | "save" | "branch" | "plugin";
 
 export interface ConfigStudioPanelProps {
   readonly assets: readonly ConfigStudioAssetSummary[];
@@ -463,6 +466,11 @@ function WorkflowNodeInspector({
     outgoingEdges.find((edge) => edge.kind === "default")?.toNodeId ??
     selectedNode.metadata.defaultNextStepId ??
     "";
+  const editableEdge = incomingEdges[0] ?? outgoingEdges[0];
+  const [newNodeKind, setNewNodeKind] = useState<WorkflowEditableNodeKind>("confirmation");
+  const [edgeTarget, setEdgeTarget] = useState(defaultNextStepId || nextStepId || selectedNode.id);
+  const [branchLabel, setBranchLabel] = useState("Needs review");
+  const [branchCondition, setBranchCondition] = useState("manual:needs-review");
 
   return (
     <section className="config-studio-workflow-inspector" aria-label="Workflow node inspector">
@@ -470,6 +478,47 @@ function WorkflowNodeInspector({
       <p>Kind {selectedNode.kind}</p>
       <p>Metadata {JSON.stringify(selectedNode.metadata)}</p>
       <div className="config-studio-workflow-semantic-actions">
+        <label>
+          <span>Node type</span>
+          <select
+            aria-label="Workflow new node kind"
+            value={newNodeKind}
+            onChange={(event) =>
+              setNewNodeKind(event.currentTarget.value as WorkflowEditableNodeKind)
+            }
+          >
+            <option value="context">context</option>
+            <option value="agent">agent</option>
+            <option value="confirmation">confirmation</option>
+            <option value="save">save</option>
+            <option value="branch">branch</option>
+            <option value="plugin">plugin</option>
+          </select>
+        </label>
+        <button
+          aria-label={`Add selected workflow node kind after ${selectedNode.id}`}
+          disabled={onWorkflowSemanticEdit === undefined}
+          onClick={() =>
+            onWorkflowSemanticEdit?.({
+              kind: "add-node",
+              afterStepId: selectedNode.stepId,
+              step: {
+                id: `${selectedNode.stepId}_${newNodeKind}`,
+                kind: newNodeKind,
+                ...((nextStepId || defaultNextStepId).length === 0
+                  ? {}
+                  : { nextStepId: nextStepId || defaultNextStepId })
+              },
+              layout: {
+                x: 0,
+                y: 120
+              }
+            })
+          }
+          type="button"
+        >
+          Add type
+        </button>
         <button
           aria-label={`Add confirmation node after ${selectedNode.id}`}
           disabled={onWorkflowSemanticEdit === undefined}
@@ -495,6 +544,19 @@ function WorkflowNodeInspector({
           Add confirmation
         </button>
         <button
+          aria-label={`Confirm delete workflow node ${selectedNode.id}`}
+          disabled={onWorkflowSemanticEdit === undefined}
+          onClick={() =>
+            onWorkflowSemanticEdit?.({
+              kind: "delete-node",
+              stepId: selectedNode.stepId
+            })
+          }
+          type="button"
+        >
+          Confirm delete
+        </button>
+        <button
           aria-label={`Delete workflow node ${selectedNode.id}`}
           disabled={onWorkflowSemanticEdit === undefined}
           onClick={() =>
@@ -506,6 +568,67 @@ function WorkflowNodeInspector({
           type="button"
         >
           Delete node
+        </button>
+      </div>
+      <div className="config-studio-workflow-product-actions">
+        <label>
+          <span>Retarget to</span>
+          <input
+            aria-label="Workflow edge retarget target"
+            value={edgeTarget}
+            onChange={(event) => setEdgeTarget(event.currentTarget.value)}
+          />
+        </label>
+        <button
+          aria-label={`Retarget workflow edge ${editableEdge?.id ?? selectedNode.id}`}
+          disabled={onWorkflowSemanticEdit === undefined || editableEdge === undefined}
+          onClick={() => {
+            if (editableEdge === undefined) {
+              return;
+            }
+            onWorkflowSemanticEdit?.({
+              kind: "retarget-edge",
+              fromStepId: editableEdge.fromNodeId,
+              edgeKind: editableEdge.kind === "default" ? "default" : "next",
+              toStepId: edgeTarget
+            });
+          }}
+          type="button"
+        >
+          Retarget edge
+        </button>
+        <label>
+          <span>Branch label</span>
+          <input
+            aria-label="Workflow branch label"
+            value={branchLabel}
+            onChange={(event) => setBranchLabel(event.currentTarget.value)}
+          />
+        </label>
+        <label>
+          <span>Branch condition</span>
+          <input
+            aria-label="Workflow branch condition"
+            value={branchCondition}
+            onChange={(event) => setBranchCondition(event.currentTarget.value)}
+          />
+        </label>
+        <button
+          aria-label={`Apply workflow branch edit for ${selectedNode.id}`}
+          disabled={onWorkflowSemanticEdit === undefined}
+          onClick={() =>
+            onWorkflowSemanticEdit?.({
+              kind: "edit-branch-edge",
+              fromStepId: selectedNode.stepId,
+              branchId: `${selectedNode.stepId}_branch`,
+              label: branchLabel,
+              condition: branchCondition,
+              toStepId: edgeTarget
+            })
+          }
+          type="button"
+        >
+          Apply branch
         </button>
       </div>
       <div className="config-studio-workflow-inspector-fields">

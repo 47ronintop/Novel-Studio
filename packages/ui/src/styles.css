@@ -2035,12 +2035,43 @@ textarea:focus-visible,
   gap: 6px;
 }
 
+.config-studio-workflow-product-actions {
+  align-items: end;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.config-studio-workflow-semantic-actions label,
+.config-studio-workflow-product-actions label {
+  display: grid;
+  gap: 4px;
+}
+
+.config-studio-workflow-semantic-actions span,
+.config-studio-workflow-product-actions span {
+  color: var(--ns-muted);
+  font-size: 12px;
+}
+
 .config-studio-workflow-semantic-actions button {
   background: transparent;
   border: 1px solid var(--ns-border);
   border-radius: 6px;
   color: var(--ns-ink);
   cursor: pointer;
+  font-size: 12px;
+  min-height: 28px;
+  padding: 4px 8px;
+}
+
+.config-studio-workflow-product-actions button,
+.config-studio-workflow-product-actions input,
+.config-studio-workflow-semantic-actions select {
+  background: transparent;
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  color: var(--ns-ink);
   font-size: 12px;
   min-height: 28px;
   padding: 4px 8px;

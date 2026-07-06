@@ -139,6 +139,39 @@ export interface ConfigWorkflowSemanticEditResult {
   readonly workflowGraph: ConfigWorkflowGraphSnapshot;
 }
 
+export type ConfigWorkflowProductEdit =
+  | {
+      readonly kind: "insert-node-after";
+      readonly afterStepId: string;
+      readonly stepId: string;
+      readonly stepKind: WorkflowStepKind;
+      readonly x: number;
+      readonly y: number;
+    }
+  | {
+      readonly kind: "retarget-selected-edge";
+      readonly edgeId: string;
+      readonly toStepId: string;
+    }
+  | {
+      readonly kind: "edit-branch-form";
+      readonly fromStepId: string;
+      readonly branchId: string;
+      readonly label: string;
+      readonly condition: string;
+      readonly toStepId: string;
+    }
+  | {
+      readonly kind: "confirm-delete-node";
+      readonly stepId: string;
+      readonly confirmed: boolean;
+    };
+
+export interface ConfigWorkflowProductEditResult extends ConfigWorkflowSemanticEditResult {
+  readonly applied: boolean;
+  readonly blockedReason?: string;
+}
+
 export interface ConfigAssetPort {
   readConfigAsset(
     assetType: ConfigAssetType,
@@ -366,6 +399,59 @@ export function applyConfigWorkflowSemanticEdit(input: {
         validation,
         layout
       }
+    }
+  };
+}
+
+export function applyConfigWorkflowProductEdit(input: {
+  readonly content: JsonObject;
+  readonly edit: ConfigWorkflowProductEdit;
+  readonly now: () => string;
+}): Result<ConfigWorkflowProductEditResult, UnifiedError> {
+  if (input.edit.kind === "confirm-delete-node" && !input.edit.confirmed) {
+    const parsed = parseWorkflowDefinition(input.content, { traceId: "config-studio-product" });
+    if (!parsed.ok) {
+      return parsed;
+    }
+    const graph = buildWorkflowGraphViewModel(parsed.value);
+    return {
+      ok: true,
+      value: {
+        content: input.content,
+        workflowGraph: {
+          graph,
+          validation: validateWorkflowGraph(parsed.value),
+          layout: createConfigWorkflowGraphLayout(
+            graph,
+            readWorkflowLayout(input.content["layout"])
+          )
+        },
+        applied: false,
+        blockedReason: "Workflow node deletion requires confirmation."
+      }
+    };
+  }
+
+  const parsed = parseWorkflowDefinition(input.content, { traceId: "config-studio-product" });
+  if (!parsed.ok) {
+    return parsed;
+  }
+
+  const semanticEdit = productEditToSemanticEdit(parsed.value, input.edit);
+  const result = applyConfigWorkflowSemanticEdit({
+    content: input.content,
+    edit: semanticEdit,
+    now: input.now
+  });
+  if (!result.ok) {
+    return result;
+  }
+
+  return {
+    ok: true,
+    value: {
+      ...result.value,
+      applied: true
     }
   };
 }
@@ -648,5 +734,63 @@ function applySemanticLayoutEdit(
         ? { nodeId: edit.step.id, x: edit.layout?.x ?? node.x, y: edit.layout?.y ?? node.y }
         : node
     )
+  };
+}
+
+function productEditToSemanticEdit(
+  definition: WorkflowDefinition,
+  edit: ConfigWorkflowProductEdit
+): ConfigWorkflowSemanticEdit {
+  switch (edit.kind) {
+    case "insert-node-after": {
+      const afterStep = definition.steps.find((step) => step.id === edit.afterStepId);
+      return {
+        kind: "add-node",
+        afterStepId: edit.afterStepId,
+        step: {
+          id: edit.stepId,
+          kind: edit.stepKind,
+          ...(afterStep?.nextStepId === undefined ? {} : { nextStepId: afterStep.nextStepId })
+        },
+        layout: {
+          x: edit.x,
+          y: edit.y
+        }
+      };
+    }
+    case "retarget-selected-edge": {
+      const edge = parseWorkflowEdgeId(edit.edgeId);
+      return {
+        kind: "retarget-edge",
+        fromStepId: edge.fromStepId,
+        edgeKind: edge.edgeKind,
+        toStepId: edit.toStepId
+      };
+    }
+    case "edit-branch-form":
+      return {
+        kind: "edit-branch-edge",
+        fromStepId: edit.fromStepId,
+        branchId: edit.branchId,
+        label: edit.label,
+        condition: edit.condition,
+        toStepId: edit.toStepId
+      };
+    case "confirm-delete-node":
+      return {
+        kind: "delete-node",
+        stepId: edit.stepId
+      };
+  }
+}
+
+function parseWorkflowEdgeId(edgeId: string): {
+  readonly fromStepId: string;
+  readonly edgeKind: "next" | "default";
+} {
+  const [fromStepId, edgeKind] = edgeId.split(":");
+  return {
+    fromStepId: fromStepId ?? "",
+    edgeKind: edgeKind === "default" ? "default" : "next"
   };
 }

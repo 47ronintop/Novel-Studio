@@ -246,6 +246,14 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).toContain("Kind save");
     expect(html).toContain('aria-label="Workflow node next step"');
     expect(html).toContain('aria-label="Add confirmation node after save"');
+    expect(html).toContain('aria-label="Workflow new node kind"');
+    expect(html).toContain('aria-label="Add selected workflow node kind after save"');
+    expect(html).toContain('aria-label="Workflow edge retarget target"');
+    expect(html).toContain('aria-label="Retarget workflow edge context:next:save"');
+    expect(html).toContain('aria-label="Workflow branch label"');
+    expect(html).toContain('aria-label="Workflow branch condition"');
+    expect(html).toContain('aria-label="Apply workflow branch edit for save"');
+    expect(html).toContain('aria-label="Confirm delete workflow node save"');
     expect(html).toContain('aria-label="Delete workflow node save"');
     expect(html).toContain('name="nextStepId"');
     expect(html).toContain("Incoming context → save");

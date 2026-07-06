@@ -154,10 +154,18 @@ export type {
   PluginSandboxTrustState,
   PluginSecurityAuditEntry,
   PluginSecurityAuditReport,
+  PluginAuditLogEntry,
+  PluginAuditLogEventKind,
+  PluginAuditLogRecord,
   PluginRuntimeHardeningReport,
-  PluginRuntimeHardeningReportPlugin
+  PluginRuntimeHardeningReportPlugin,
+  PluginTrustStoreEdit,
+  PluginTrustStoreEntry,
+  PluginTrustStoreSnapshot
 } from "./plugin-runtime-session.js";
 export {
+  applyPluginTrustStoreEdit,
+  createPluginAuditLogRecord,
   createPluginIsolationWorkerPrototypeAdapter,
   createPluginSandboxIsolationPlan,
   createPluginSandboxFixtureWorkerAdapter,
@@ -177,6 +185,8 @@ export type {
   ConfigStudioSessionOptions,
   ConfigWorkflowNodeInspectorEdit,
   ConfigWorkflowNodeInspectorEditResult,
+  ConfigWorkflowProductEdit,
+  ConfigWorkflowProductEditResult,
   ConfigWorkflowSemanticEdit,
   ConfigWorkflowSemanticEditResult,
   ConfigWorkflowSemanticStepDraft,
@@ -190,6 +200,7 @@ export type {
 } from "./config-studio-session.js";
 export {
   applyConfigWorkflowNodeInspectorEdit,
+  applyConfigWorkflowProductEdit,
   applyConfigWorkflowSemanticEdit,
   applyConfigWorkflowGraphLayoutEdit,
   applyConfigWorkflowGraphLayoutToContent,

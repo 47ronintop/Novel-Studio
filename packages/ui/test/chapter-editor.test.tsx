@@ -142,6 +142,7 @@ describe("ChapterEditor", () => {
           },
           visualDiffSummaryLabel: "Visual diff preview: 2 changes",
           localDiffReviewLabel: "Local diff review: 2 changes, rollback textarea",
+          migrationGateLabel: "CodeMirror default blocked: opt-in disabled",
           autosaveLabel: "Autosave armed",
           shortcutProfileLabel: "Default shortcuts",
           warnings: ["Large document optimizations inactive"]
@@ -158,6 +159,7 @@ describe("ChapterEditor", () => {
     expect(html).toContain("Preview selection rewrite");
     expect(html).toContain("Visual diff preview: 2 changes");
     expect(html).toContain("Local diff review: 2 changes, rollback textarea");
+    expect(html).toContain("CodeMirror default blocked: opt-in disabled");
     expect(html).toContain("Autosave armed");
     expect(html).toContain("Default shortcuts");
     expect(html).toContain("Large document optimizations inactive");

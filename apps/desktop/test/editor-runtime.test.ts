@@ -9,6 +9,7 @@ import {
   createTextareaChapterEditorRuntimeProps,
   createTextareaEditorRuntimeAdapter,
   createEditorLocalDiffReview,
+  createEditorRuntimeMigrationGate,
   evaluateEditorRuntimeDefaultReadiness,
   resolveEditorRuntimeAdapter,
   type EditorRuntimeEvent
@@ -449,6 +450,104 @@ describe("editor runtime adapter resolver", () => {
         changes: [{ kind: "replace", value: "Line 1" }]
       }).localDiffReviewLabel
     ).toBe("Local diff review: 1 change, rollback textarea");
+  });
+
+  test("blocks CodeMirror default migration without opt-in rollback evidence", () => {
+    const gate = createEditorRuntimeMigrationGate({
+      optInEnabled: false,
+      readiness: evaluateEditorRuntimeDefaultReadiness({
+        codeMirrorEnabled: true,
+        domViewMount: {
+          status: "mounted",
+          packageName: "@codemirror/view",
+          role: "dom-view",
+          targetId: "chapter-editor-root",
+          ownerDocumentLabel: "renderer-document",
+          fallbackRuntimeId: "textarea"
+        },
+        eventParityPassed: true,
+        fallbackRuntimeAvailable: true,
+        largeDocumentSmokePassed: true
+      }),
+      e2eParityPassed: true,
+      largeDocumentBenchmark: {
+        status: "passed",
+        lineCount: 1200,
+        maxLatencyMs: 32
+      },
+      rollbackReady: false
+    });
+
+    expect(gate).toEqual({
+      schemaVersion: "1.0",
+      status: "blocked",
+      defaultRuntimeId: "textarea",
+      fallbackRuntimeId: "textarea",
+      canSwitchDefault: false,
+      label: "CodeMirror default blocked: opt-in disabled, rollback unavailable",
+      blockers: ["CodeMirror default opt-in is disabled.", "Textarea rollback is not ready."],
+      evidence: {
+        readinessStatus: "ready",
+        e2eParityPassed: true,
+        largeDocumentBenchmark: {
+          status: "passed",
+          lineCount: 1200,
+          maxLatencyMs: 32
+        },
+        rollbackReady: false
+      }
+    });
+  });
+
+  test("allows CodeMirror default migration only when every gate passes", () => {
+    const gate = createEditorRuntimeMigrationGate({
+      optInEnabled: true,
+      readiness: evaluateEditorRuntimeDefaultReadiness({
+        codeMirrorEnabled: true,
+        domViewMount: {
+          status: "mounted",
+          packageName: "@codemirror/view",
+          role: "dom-view",
+          targetId: "chapter-editor-root",
+          ownerDocumentLabel: "renderer-document",
+          fallbackRuntimeId: "textarea"
+        },
+        eventParityPassed: true,
+        fallbackRuntimeAvailable: true,
+        largeDocumentSmokePassed: true
+      }),
+      e2eParityPassed: true,
+      largeDocumentBenchmark: {
+        status: "passed",
+        lineCount: 1200,
+        maxLatencyMs: 28
+      },
+      rollbackReady: true
+    });
+
+    expect(gate).toMatchObject({
+      status: "ready",
+      defaultRuntimeId: "codemirror",
+      canSwitchDefault: true,
+      label: "CodeMirror default ready with textarea rollback"
+    });
+    expect(
+      buildChapterEditorRuntimeProps(
+        createCodeMirrorEditorRuntimeAdapter()
+          .mount({
+            body: "Ready",
+            saveStatus: "Saved",
+            domMountTarget: {
+              targetId: "chapter-editor-root",
+              ownerDocumentLabel: "renderer-document"
+            },
+            domMountElement: { nodeType: 1 }
+          })
+          .getSnapshot(),
+        undefined,
+        gate
+      ).migrationGateLabel
+    ).toBe("CodeMirror default ready with textarea rollback");
   });
 
   test("creates selection-aware AI preview drafts without applying content", () => {

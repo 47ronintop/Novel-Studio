@@ -164,6 +164,59 @@ export interface PluginRuntimeHardeningReport {
   readonly plugins: readonly PluginRuntimeHardeningReportPlugin[];
 }
 
+export interface PluginTrustStoreEntry {
+  readonly pluginId: string;
+  readonly trustState: PluginSandboxTrustState;
+  readonly source: "signature" | "user-approval" | "revocation";
+  readonly signatureFingerprint?: string;
+  readonly reason: string;
+  readonly trustedAt?: string;
+  readonly revokedAt?: string;
+}
+
+export interface PluginTrustStoreSnapshot {
+  readonly schemaVersion: "1.0";
+  readonly updatedAt: string;
+  readonly entries: readonly PluginTrustStoreEntry[];
+}
+
+export type PluginTrustStoreEdit =
+  | {
+      readonly kind: "trust-plugin";
+      readonly pluginId: string;
+      readonly trustState: Extract<PluginSandboxTrustState, "signed" | "trusted-local">;
+      readonly source: "signature" | "user-approval";
+      readonly signatureFingerprint?: string;
+      readonly reason: string;
+    }
+  | {
+      readonly kind: "revoke-plugin";
+      readonly pluginId: string;
+      readonly reason: string;
+    };
+
+export type PluginAuditLogEventKind =
+  "trust-updated" | "execution-blocked" | "execution-allowed" | "permission-denied";
+
+export interface PluginAuditLogEntry {
+  readonly schemaVersion: "1.0";
+  readonly pluginId: string;
+  readonly eventKind: PluginAuditLogEventKind;
+  readonly decision: "allowed" | "blocked";
+  readonly traceId: string;
+  readonly createdAt: string;
+  readonly redactedDetail?: JsonObject;
+}
+
+export interface PluginAuditLogRecord {
+  readonly schemaVersion: "1.0";
+  readonly mode: "local-jsonl";
+  readonly path: `history/plugin-audit/${string}.jsonl`;
+  readonly protectedFromCacheClear: true;
+  readonly record: PluginAuditLogEntry;
+  readonly jsonl: string;
+}
+
 export interface PluginRuntimeAdapter {
   executeHostCommand(
     input: PluginRuntimeAdapterCommandInput
@@ -440,6 +493,72 @@ export function createPluginRuntimeHardeningReport(input: {
   };
 }
 
+export function applyPluginTrustStoreEdit(input: {
+  readonly snapshot: PluginTrustStoreSnapshot;
+  readonly edit: PluginTrustStoreEdit;
+  readonly now: () => string;
+}): PluginTrustStoreSnapshot {
+  const updatedAt = input.now();
+  const nextEntry =
+    input.edit.kind === "trust-plugin"
+      ? {
+          pluginId: input.edit.pluginId,
+          trustState: input.edit.trustState,
+          source: input.edit.source,
+          ...(input.edit.signatureFingerprint === undefined
+            ? {}
+            : { signatureFingerprint: input.edit.signatureFingerprint }),
+          reason: input.edit.reason,
+          trustedAt: updatedAt
+        }
+      : {
+          pluginId: input.edit.pluginId,
+          trustState: "untrusted" as const,
+          source: "revocation" as const,
+          reason: input.edit.reason,
+          revokedAt: updatedAt
+        };
+  const withoutEditedPlugin = input.snapshot.entries.filter(
+    (entry) => entry.pluginId !== input.edit.pluginId
+  );
+
+  return {
+    schemaVersion: "1.0",
+    updatedAt,
+    entries: [...withoutEditedPlugin, nextEntry]
+  };
+}
+
+export function createPluginAuditLogRecord(input: {
+  readonly pluginId: string;
+  readonly eventKind: PluginAuditLogEventKind;
+  readonly decision: "allowed" | "blocked";
+  readonly traceId: string;
+  readonly createdAt: string;
+  readonly redactedDetail?: JsonObject;
+}): PluginAuditLogRecord {
+  const record: PluginAuditLogEntry = {
+    schemaVersion: "1.0",
+    pluginId: input.pluginId,
+    eventKind: input.eventKind,
+    decision: input.decision,
+    traceId: input.traceId,
+    createdAt: input.createdAt,
+    ...(input.redactedDetail === undefined
+      ? {}
+      : { redactedDetail: redactPluginAuditDetail(input.redactedDetail) })
+  };
+
+  return {
+    schemaVersion: "1.0",
+    mode: "local-jsonl",
+    path: `history/plugin-audit/${input.createdAt.slice(0, 10)}.jsonl`,
+    protectedFromCacheClear: true,
+    record,
+    jsonl: JSON.stringify(record)
+  };
+}
+
 export function createPluginIsolationWorkerPrototypeAdapter(
   options: PluginIsolationWorkerPrototypeOptions
 ): PluginRuntimeAdapter {
@@ -638,6 +757,19 @@ function permissionLabels(
   grants: readonly { readonly permission: string; readonly scopes: readonly string[] }[]
 ): readonly string[] {
   return grants.map((grant) => `${grant.permission}:${grant.scopes.join(",")}`);
+}
+
+function redactPluginAuditDetail(detail: JsonObject): JsonObject {
+  return Object.fromEntries(
+    Object.entries(detail).map(([key, value]) => [
+      key,
+      isSensitivePluginAuditKey(key) ? "[redacted]" : value
+    ])
+  );
+}
+
+function isSensitivePluginAuditKey(key: string): boolean {
+  return /api[_-]?key|secret|token|credential/i.test(key);
 }
 
 function runFixtureWorker(input: {

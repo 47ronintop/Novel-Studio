@@ -10,6 +10,7 @@ import {
 } from "@novel-studio/shared";
 
 import {
+  applyConfigWorkflowProductEdit,
   applyConfigWorkflowSemanticEdit,
   applyConfigWorkflowGraphLayoutToContent,
   createConfigWorkflowDesignerAvailability,
@@ -496,5 +497,137 @@ describe("config studio session", () => {
       { id: "save", kind: "save" }
     ]);
     expect(result.value.workflowGraph.validation.status).toBe("invalid");
+  });
+
+  test("applies workflow product edits for typed node insertion and selected edge retargeting", () => {
+    const inserted = applyConfigWorkflowProductEdit({
+      content: workflow,
+      edit: {
+        kind: "insert-node-after",
+        afterStepId: "review",
+        stepId: "confirm_review",
+        stepKind: "confirmation",
+        x: 660,
+        y: 120
+      },
+      now: () => "2026-07-06T12:10:00.000Z"
+    });
+
+    expect(isOk(inserted)).toBe(true);
+    if (!inserted.ok) {
+      return;
+    }
+    expect(inserted.value.content.steps).toContainEqual({
+      id: "confirm_review",
+      kind: "confirmation",
+      nextStepId: "save"
+    });
+
+    const retargeted = applyConfigWorkflowProductEdit({
+      content: inserted.value.content,
+      edit: {
+        kind: "retarget-selected-edge",
+        edgeId: "context:next:review",
+        toStepId: "confirm_review"
+      },
+      now: () => "2026-07-06T12:11:00.000Z"
+    });
+
+    expect(isOk(retargeted)).toBe(true);
+    if (!retargeted.ok) {
+      return;
+    }
+    expect(retargeted.value.content.steps).toEqual([
+      { id: "context", kind: "context", nextStepId: "confirm_review" },
+      {
+        id: "review",
+        kind: "agent",
+        agentId: "agent_reviewer_default",
+        nextStepId: "confirm_review"
+      },
+      { id: "confirm_review", kind: "confirmation", nextStepId: "save" },
+      { id: "save", kind: "save" }
+    ]);
+  });
+
+  test("applies workflow product branch form edits and blocks unconfirmed deletion", () => {
+    const branchWorkflow = {
+      ...workflow,
+      entryStepId: "choose",
+      steps: [
+        {
+          id: "choose",
+          kind: "branch",
+          branches: [
+            {
+              id: "needs_review",
+              label: "Needs review",
+              condition: "manual:old",
+              nextStepId: "save"
+            }
+          ],
+          defaultNextStepId: "save"
+        },
+        {
+          id: "review",
+          kind: "agent",
+          agentId: "agent_reviewer_default",
+          nextStepId: "save"
+        },
+        {
+          id: "save",
+          kind: "save"
+        }
+      ]
+    } satisfies JsonObject;
+
+    const blockedDelete = applyConfigWorkflowProductEdit({
+      content: branchWorkflow,
+      edit: {
+        kind: "confirm-delete-node",
+        stepId: "review",
+        confirmed: false
+      },
+      now: () => "2026-07-06T12:12:00.000Z"
+    });
+
+    expect(isOk(blockedDelete)).toBe(true);
+    if (!blockedDelete.ok) {
+      return;
+    }
+    expect(blockedDelete.value.applied).toBe(false);
+    expect(blockedDelete.value.blockedReason).toBe("Workflow node deletion requires confirmation.");
+
+    const branchEdited = applyConfigWorkflowProductEdit({
+      content: branchWorkflow,
+      edit: {
+        kind: "edit-branch-form",
+        fromStepId: "choose",
+        branchId: "needs_review",
+        label: "Needs review",
+        condition: "manual:needs-review",
+        toStepId: "review"
+      },
+      now: () => "2026-07-06T12:13:00.000Z"
+    });
+
+    expect(isOk(branchEdited)).toBe(true);
+    if (!branchEdited.ok) {
+      return;
+    }
+    expect(branchEdited.value.applied).toBe(true);
+    expect(branchEdited.value.content.steps).toContainEqual({
+      id: "choose",
+      kind: "branch",
+      branches: [
+        {
+          id: "needs_review",
+          label: "Needs review",
+          condition: "manual:needs-review",
+          nextStepId: "review"
+        }
+      ],
+      defaultNextStepId: "save"
+    });
   });
 });
