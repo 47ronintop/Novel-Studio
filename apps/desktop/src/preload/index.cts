@@ -48,6 +48,9 @@ import type {
   ChapterVersionContent,
   ChapterVersionSummary,
   CreateChapterInput,
+  DeleteChapterInput,
+  DuplicateChapterInput,
+  RenameChapterInput,
   Result,
   UnifiedError
 } from "@novel-studio/shared";
@@ -85,6 +88,21 @@ const api: NovelStudioApi = {
     createChapter: (input: CreateChapterInput) =>
       invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
         "application:project:create-chapter",
+        input
+      ),
+    renameChapter: (input: RenameChapterInput) =>
+      invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
+        "application:project:rename-chapter",
+        input
+      ),
+    duplicateChapter: (input: DuplicateChapterInput) =>
+      invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
+        "application:project:duplicate-chapter",
+        input
+      ),
+    deleteChapter: (input: DeleteChapterInput) =>
+      invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
+        "application:project:delete-chapter",
         input
       ),
     selectChapter: (chapterId: string) =>

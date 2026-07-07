@@ -39,6 +39,7 @@ import {
 } from "./app-shell-support.js";
 import { useRendererAppEffects } from "./renderer-app-effects.js";
 import { RendererWorkspaceShell } from "./renderer-workspace-shell.js";
+import { useProjectWorkflowActions } from "./project-workflow-actions.js";
 
 export function App() {
   const [api] = useState(() => getNovelStudioApi());
@@ -89,6 +90,7 @@ export function App() {
   const [commandPaletteSelectedCommandId, setCommandPaletteSelectedCommandId] = useState<
     ApplicationCommandId | undefined
   >(undefined);
+  const [navigatorSearchQuery, setNavigatorSearchQuery] = useState("");
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
   const [editorPreferences, setEditorPreferences] = useState<EditorPreferences>(
     DEFAULT_EDITOR_PREFERENCES
@@ -191,147 +193,36 @@ export function App() {
     [chapterBridge]
   );
 
-  const refreshProjectWorkflow = useCallback(
-    async (nextWorkflow: NonNullable<typeof projectWorkflow>) => {
-      setProjectWorkflow(nextWorkflow);
-      if (api !== undefined) {
-        setShellState(await api.getShellState());
-      }
-      if (chapterBridge !== undefined && nextWorkflow.activeChapterId !== undefined) {
-        setChapterEditor(undefined);
-        setChapterEditor(await chapterBridge.load());
-      }
-      if (storyBibleBridge !== undefined) {
-        setStoryBible(await storyBibleBridge.load());
-        setStoryBibleEditor(storyBibleBridge.getEditorProps());
-      }
-      if (settingsBridge !== undefined) {
-        setSettings(await settingsBridge.load());
-      }
-      if (studioBridge !== undefined) {
-        setStudio(await studioBridge.load());
-      }
-    },
-    [api, chapterBridge, settingsBridge, storyBibleBridge, studioBridge]
-  );
-
-  const handleProjectRootChange = useCallback(
-    (projectRoot: string) => {
-      if (projectWorkflowBridge === undefined) {
-        return;
-      }
-
-      setProjectWorkflow(projectWorkflowBridge.setProjectRootInput(projectRoot));
-    },
-    [projectWorkflowBridge]
-  );
-
-  const handleOpenProject = useCallback(() => {
-    if (projectWorkflowBridge === undefined) {
-      return;
-    }
-
-    setProjectWorkflow({
-      ...projectWorkflowBridge.getProps(),
-      status: "opening"
-    });
-    void projectWorkflowBridge.openProject().then(refreshProjectWorkflow);
-  }, [projectWorkflowBridge, refreshProjectWorkflow]);
-
-  const handleCreateProject = useCallback(() => {
-    if (projectWorkflowBridge === undefined) {
-      return;
-    }
-
-    setProjectWorkflow({
-      ...projectWorkflowBridge.getProps(),
-      status: "creating"
-    });
-    void projectWorkflowBridge.createProject().then(refreshProjectWorkflow);
-  }, [projectWorkflowBridge, refreshProjectWorkflow]);
-
-  const handleCreateExampleProject = useCallback(() => {
-    if (projectWorkflowBridge === undefined) {
-      return;
-    }
-
-    setProjectWorkflow({
-      ...projectWorkflowBridge.getProps(),
-      status: "creating"
-    });
-    void projectWorkflowBridge.createExampleProject().then(refreshProjectWorkflow);
-  }, [projectWorkflowBridge, refreshProjectWorkflow]);
-
-  const handleCreateChapter = useCallback(() => {
-    if (projectWorkflowBridge === undefined) {
-      return;
-    }
-
-    void projectWorkflowBridge.createChapter().then(refreshProjectWorkflow);
-  }, [projectWorkflowBridge, refreshProjectWorkflow]);
-
-  const handleSelectChapter = useCallback(
-    (chapterId: string) => {
-      if (projectWorkflowBridge === undefined) {
-        return;
-      }
-
-      void projectWorkflowBridge.selectChapter(chapterId).then(refreshProjectWorkflow);
-    },
-    [projectWorkflowBridge, refreshProjectWorkflow]
-  );
-
-  const handleCloseChapterTab = useCallback(
-    (chapterId: string) => {
-      if (projectWorkflowBridge === undefined) {
-        return;
-      }
-
-      void projectWorkflowBridge.closeChapterTab(chapterId).then(refreshProjectWorkflow);
-    },
-    [projectWorkflowBridge, refreshProjectWorkflow]
-  );
-
-  const handlePreviewRecoveryDraft = useCallback(
-    (sessionId: string) => {
-      if (projectWorkflowBridge === undefined) {
-        return;
-      }
-
-      void projectWorkflowBridge.previewRecoveryDraft(sessionId).then(setProjectWorkflow);
-    },
-    [projectWorkflowBridge]
-  );
-
-  const handleApplyRecoveryDraft = useCallback(
-    (sessionId: string) => {
-      if (projectWorkflowBridge === undefined) {
-        return;
-      }
-
-      void projectWorkflowBridge.applyRecoveryDraft(sessionId).then(async (result) => {
-        setProjectWorkflow(result.projectWorkflow);
-        if (result.chapterEditor !== undefined) {
-          setChapterEditor(result.chapterEditor);
-        }
-        if (api !== undefined) {
-          setShellState(await api.getShellState());
-        }
-      });
-    },
-    [api, projectWorkflowBridge]
-  );
-
-  const handleDiscardRecoveryDraft = useCallback(
-    (sessionId: string) => {
-      if (projectWorkflowBridge === undefined) {
-        return;
-      }
-
-      void projectWorkflowBridge.discardRecoveryDraft(sessionId).then(setProjectWorkflow);
-    },
-    [projectWorkflowBridge]
-  );
+  const {
+    refreshProjectWorkflow,
+    handleProjectRootChange,
+    handleOpenProject,
+    handleCreateProject,
+    handleCreateExampleProject,
+    handleCreateChapter,
+    handleRenameChapter,
+    handleDuplicateChapter,
+    handleDeleteChapter,
+    handleSelectChapter,
+    handleCloseChapterTab,
+    handlePreviewRecoveryDraft,
+    handleApplyRecoveryDraft,
+    handleDiscardRecoveryDraft
+  } = useProjectWorkflowActions({
+    api,
+    chapterBridge,
+    projectWorkflowBridge,
+    settingsBridge,
+    storyBibleBridge,
+    studioBridge,
+    setChapterEditor,
+    setProjectWorkflow,
+    setSettings,
+    setShellState,
+    setStoryBible,
+    setStoryBibleEditor,
+    setStudio
+  });
 
   const persistUserPreferences = useCallback(
     (input: UserPreferencesSaveInput) => {
@@ -364,6 +255,20 @@ export function App() {
         const next = {
           ...current,
           activeBottomPanelTab: tab
+        };
+        persistUserPreferences({ shell: shellPreferencesFromState(next) });
+        return next;
+      });
+    },
+    [persistUserPreferences]
+  );
+
+  const handleNavigatorExpandedSectionIdsChange = useCallback(
+    (sectionIds: readonly string[]) => {
+      setShellState((current) => {
+        const next = {
+          ...current,
+          navigatorExpandedSectionIds: [...sectionIds]
         };
         persistUserPreferences({ shell: shellPreferencesFromState(next) });
         return next;
@@ -1003,6 +908,9 @@ export function App() {
       onOpenProject={handleOpenProject}
       onCreateProject={handleCreateProject}
       onCreateChapter={handleCreateChapter}
+      onRenameChapter={handleRenameChapter}
+      onDuplicateChapter={handleDuplicateChapter}
+      onDeleteChapter={handleDeleteChapter}
       onSelectChapter={handleSelectChapter}
       onCloseChapterTab={handleCloseChapterTab}
       onPreviewRecoveryDraft={handlePreviewRecoveryDraft}
@@ -1042,6 +950,9 @@ export function App() {
       onSearchResultOpen={handleSearchResultOpen}
       onTimelineEntryOpen={handleTimelineEntryOpen}
       onActivitySelect={handleActivitySelect}
+      navigatorSearchQuery={navigatorSearchQuery}
+      onNavigatorSearchQueryChange={setNavigatorSearchQuery}
+      onNavigatorExpandedSectionIdsChange={handleNavigatorExpandedSectionIdsChange}
     />
   );
 }

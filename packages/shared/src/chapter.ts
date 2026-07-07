@@ -53,6 +53,21 @@ export interface CreateChapterInput extends JsonObject {
   status?: ChapterStatus;
 }
 
+export interface RenameChapterInput extends JsonObject {
+  chapterId: string;
+  title: string;
+}
+
+export interface DuplicateChapterInput extends JsonObject {
+  sourceChapterId: string;
+  chapterId: string;
+  title: string;
+}
+
+export interface DeleteChapterInput extends JsonObject {
+  chapterId: string;
+}
+
 export interface ChapterDraftRepositoryPort {
   readChapter(chapterId: string): Promise<Result<ChapterDocument, UnifiedError>>;
   writeChapter(chapter: ChapterDocument): Promise<Result<ChapterDocument, UnifiedError>>;
@@ -61,6 +76,12 @@ export interface ChapterDraftRepositoryPort {
 export interface ChapterCatalogRepositoryPort {
   listChapters(): Promise<Result<readonly ChapterSummary[], UnifiedError>>;
   createChapter(input: CreateChapterInput): Promise<Result<ChapterDocument, UnifiedError>>;
+}
+
+export interface ChapterMaintenanceRepositoryPort {
+  renameChapter(input: RenameChapterInput): Promise<Result<ChapterDocument, UnifiedError>>;
+  duplicateChapter(input: DuplicateChapterInput): Promise<Result<ChapterDocument, UnifiedError>>;
+  deleteChapter(input: DeleteChapterInput): Promise<Result<ChapterDocument, UnifiedError>>;
 }
 
 export interface ChapterVersionSummary extends JsonObject {

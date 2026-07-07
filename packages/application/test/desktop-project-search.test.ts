@@ -64,6 +64,15 @@ describe("DesktopApplication project search", () => {
         createChapter: async () => {
           throw new Error("not used");
         },
+        renameChapter: async () => {
+          throw new Error("not used");
+        },
+        duplicateChapter: async () => {
+          throw new Error("not used");
+        },
+        deleteChapter: async () => {
+          throw new Error("not used");
+        },
         selectChapter: async () => {
           throw new Error("not used");
         },

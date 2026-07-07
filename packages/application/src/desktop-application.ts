@@ -2,8 +2,11 @@ import { createUnifiedError, err, ok } from "@novel-studio/shared";
 import type {
   ChapterSummary,
   CreateChapterInput,
+  DeleteChapterInput,
+  DuplicateChapterInput,
   ChapterVersionContent,
   ChapterVersionSummary,
+  RenameChapterInput,
   Result,
   UnifiedError
 } from "@novel-studio/shared";
@@ -100,6 +103,7 @@ export interface DesktopShellState {
   readonly projectTitle: string;
   readonly activeActivity: ActivityId;
   readonly navigatorCollapsed: boolean;
+  readonly navigatorExpandedSectionIds?: readonly string[];
   readonly inspectorCollapsed: boolean;
   readonly bottomPanelVisible: boolean;
   readonly activeBottomPanelTab: string;
@@ -121,6 +125,15 @@ export interface DesktopApplication {
   listProjectChapters(): Promise<Result<readonly ChapterSummary[], UnifiedError>>;
   createProjectChapter(
     input: CreateChapterInput
+  ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  renameProjectChapter(
+    input: RenameChapterInput
+  ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  duplicateProjectChapter(
+    input: DuplicateChapterInput
+  ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  deleteProjectChapter(
+    input: DeleteChapterInput
   ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   selectProjectChapter(chapterId: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   previewRecoveryDraft(
@@ -218,6 +231,17 @@ const DEFAULT_SHELL_STATE: DesktopShellState = {
   projectTitle: "未打开项目",
   activeActivity: "workspace",
   navigatorCollapsed: false,
+  navigatorExpandedSectionIds: [
+    "chapters",
+    "characters",
+    "world",
+    "outline",
+    "timeline",
+    "memories",
+    "prompts",
+    "agents",
+    "workflows"
+  ],
   inspectorCollapsed: true,
   bottomPanelVisible: false,
   activeBottomPanelTab: "工作流运行",
@@ -342,6 +366,27 @@ export function createDesktopApplication(
       }
 
       return projectWorkspaceSession.createChapter(input);
+    },
+    async renameProjectChapter(input) {
+      if (projectWorkspaceSession === undefined) {
+        return projectWorkspaceUnavailable();
+      }
+
+      return projectWorkspaceSession.renameChapter(input);
+    },
+    async duplicateProjectChapter(input) {
+      if (projectWorkspaceSession === undefined) {
+        return projectWorkspaceUnavailable();
+      }
+
+      return projectWorkspaceSession.duplicateChapter(input);
+    },
+    async deleteProjectChapter(input) {
+      if (projectWorkspaceSession === undefined) {
+        return projectWorkspaceUnavailable();
+      }
+
+      return projectWorkspaceSession.deleteChapter(input);
     },
     async selectProjectChapter(chapterId) {
       if (projectWorkspaceSession === undefined) {

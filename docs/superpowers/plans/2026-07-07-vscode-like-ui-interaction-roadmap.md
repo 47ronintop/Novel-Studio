@@ -411,26 +411,26 @@ Verification result on 2026-07-07: targeted VUI-05 tests passed, full Vitest sui
 - Modify: `apps/desktop/src/renderer/project-workflow-bridge.ts`
 - Modify: `packages/ui/src/styles.css`
 - Test: `packages/application/test/project-workflow-session.test.ts`
-- Test: `packages/ui/test/ai-writing-workflow.test.tsx`
+- Test: `packages/ui/test/workspace-navigator.test.tsx`
 - Test: `apps/desktop/test/project-workflow-bridge.test.ts`
 
 **Steps:**
 
-- [ ] 从 `workspace-shell.tsx` 拆出 Navigator 子组件，降低主 shell 文件行数。
-- [ ] Navigator 数据使用 Application DTO：章节、Story Bible、Prompt、Agent、Workflow，不直接读文件系统。
-- [ ] 分组支持展开/折叠，状态写入 user preferences。
-- [ ] 增加搜索框，按标题、类型、摘要过滤并高亮命中。
-- [ ] 增加右键或更多菜单：新建、重命名、复制、删除；删除必须二次确认。
-- [ ] 每个条目展示最少必要元数据：dirty、字数、冲突、最近修改或健康状态。
+- [x] 从 `workspace-shell.tsx` 拆出 Navigator 子组件，降低主 shell 文件行数。
+- [x] Navigator 数据使用 Application DTO：章节、Story Bible、Prompt、Agent、Workflow，不直接读文件系统。
+- [x] 分组支持展开/折叠，状态写入 user preferences。
+- [x] 增加搜索框，章节和 Story Bible 资产按标题/状态/正文过滤并高亮命中；Studio 资产使用现有 DTO 展示标题与类型。
+- [x] 增加 Navigator 新建章节入口和章节更多菜单：重命名、复制、删除；删除必须二次确认并走软删除。
+- [x] 每个章节条目展示最少必要元数据：dirty、字数、状态、最近修改。
 
 **Verification:**
 
 ```powershell
-npm test -- packages/application/test/project-workflow-session.test.ts apps/desktop/test/project-workflow-bridge.test.ts packages/ui/test/ai-writing-workflow.test.tsx
+npm test -- packages/application/test/project-workflow-session.test.ts apps/desktop/test/project-workflow-bridge.test.ts packages/ui/test/workspace-navigator.test.tsx packages/application/test/user-preferences-session.test.ts packages/repository/test/user-preferences-repository.test.ts
 npm run typecheck
 ```
 
-**Manual acceptance:** 右键章节能新建、重命名、复制、删除；分组可折叠；搜索能过滤并高亮章节或故事资产；操作不绕过保存/恢复逻辑。
+**Manual acceptance:** Navigator 内能新建章节；章节更多菜单能重命名、复制、删除；分组可折叠；搜索能过滤并高亮章节或故事资产；操作不绕过保存/恢复逻辑。
 
 **Commit message:** `feat: upgrade workspace navigator`
 

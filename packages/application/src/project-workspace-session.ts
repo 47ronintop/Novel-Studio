@@ -3,17 +3,23 @@ import type {
   ChapterCatalogRepositoryPort,
   ChapterDraftRepositoryPort,
   ChapterHistoryRepositoryPort,
+  ChapterMaintenanceRepositoryPort,
   ChapterSummary,
   CreateChapterInput,
+  DeleteChapterInput,
+  DuplicateChapterInput,
   JsonObject,
   RecoveryRepositoryPort,
   RecoveryRecord,
+  RenameChapterInput,
   Result,
   UnifiedError
 } from "@novel-studio/shared";
 
 import { createChapterEditorSession } from "./chapter-editor-session.js";
 import type { ChapterEditorSession, ChapterEditorSnapshot } from "./chapter-editor-session.js";
+
+export type { DeleteChapterInput, DuplicateChapterInput, RenameChapterInput } from "@novel-studio/shared";
 
 export interface ProjectMetadata extends JsonObject {
   schemaVersion: "1.0";
@@ -127,7 +133,8 @@ export interface ProjectWorkspaceLockPort {
 }
 
 export type ProjectChapterRepositoryPort = ChapterDraftRepositoryPort &
-  ChapterCatalogRepositoryPort;
+  ChapterCatalogRepositoryPort &
+  Partial<ChapterMaintenanceRepositoryPort>;
 
 export interface ProjectWorkspaceSessionOptions {
   createProjectRepository(projectRoot: string): ProjectRepositoryPort;
@@ -145,6 +152,11 @@ export interface ProjectWorkspaceSession {
   createProject(input: CreateProjectInput): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   listChapters(): Promise<Result<readonly ChapterSummary[], UnifiedError>>;
   createChapter(input: CreateChapterInput): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  renameChapter(input: RenameChapterInput): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  duplicateChapter(
+    input: DuplicateChapterInput
+  ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  deleteChapter(input: DeleteChapterInput): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   selectChapter(chapterId: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   previewRecoveryDraft(
     sessionId: string
@@ -221,6 +233,62 @@ export function createProjectWorkspaceSession(
       }
 
       return activateChapter(created.value.frontmatter.id);
+    },
+    async renameChapter(input) {
+      if (state === undefined || chapterRepository === undefined) {
+        return workspaceUnavailable();
+      }
+      if (chapterRepository.renameChapter === undefined) {
+        return chapterMaintenanceUnavailable();
+      }
+
+      const renamed = await chapterRepository.renameChapter(input);
+      if (!renamed.ok) {
+        return renamed;
+      }
+
+      return refreshWorkspaceChapters(state.activeChapterId);
+    },
+    async duplicateChapter(input) {
+      if (state === undefined || chapterRepository === undefined) {
+        return workspaceUnavailable();
+      }
+      if (chapterRepository.duplicateChapter === undefined) {
+        return chapterMaintenanceUnavailable();
+      }
+
+      const duplicated = await chapterRepository.duplicateChapter(input);
+      if (!duplicated.ok) {
+        return duplicated;
+      }
+
+      return activateChapter(duplicated.value.frontmatter.id);
+    },
+    async deleteChapter(input) {
+      if (state === undefined || chapterRepository === undefined) {
+        return workspaceUnavailable();
+      }
+      if (chapterRepository.deleteChapter === undefined) {
+        return chapterMaintenanceUnavailable();
+      }
+
+      const deleted = await chapterRepository.deleteChapter(input);
+      if (!deleted.ok) {
+        return deleted;
+      }
+
+      const chapters = await chapterRepository.listChapters();
+      if (!chapters.ok) {
+        return chapters;
+      }
+
+      const nextActiveChapterId =
+        state.activeChapterId === input.chapterId ? chapters.value[0]?.id : state.activeChapterId;
+      if (nextActiveChapterId !== undefined) {
+        return activateChapter(nextActiveChapterId);
+      }
+
+      return refreshWorkspaceChapters(undefined);
     },
     async selectChapter(chapterId) {
       if (state === undefined) {
@@ -565,6 +633,41 @@ export function createProjectWorkspaceSession(
     return ok(state);
   }
 
+  async function refreshWorkspaceChapters(
+    activeChapterId: string | undefined
+  ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>> {
+    if (state === undefined || chapterRepository === undefined) {
+      return workspaceUnavailable();
+    }
+
+    const chapters = await chapterRepository.listChapters();
+    if (!chapters.ok) {
+      return chapters;
+    }
+    const recovery = await loadRecoverySummary(state.project.projectId);
+    if (!recovery.ok) {
+      return recovery;
+    }
+
+    const nextState: ProjectWorkspaceSnapshot = {
+      ...state,
+      chapters: chapters.value,
+      recovery: recovery.value,
+      health: buildProjectHealth({
+        checkedAt: currentTimestamp(),
+        chapters: chapters.value,
+        recovery: recovery.value,
+        ...(state.lock === undefined ? {} : { lock: state.lock })
+      }),
+      ...(activeChapterId === undefined ? {} : { activeChapterId })
+    };
+    state = nextState;
+    activeChapterEditorSession =
+      activeChapterId === undefined ? undefined : createActiveChapterEditorSession(activeChapterId);
+
+    return ok(state);
+  }
+
   function currentTimestamp(): string {
     return options.now?.() ?? new Date().toISOString();
   }
@@ -759,6 +862,19 @@ function workspaceUnavailable<T>(): Result<T, UnifiedError> {
       message: "No project workspace is open.",
       recoverability: "user-action",
       suggestedAction: "Create or open a project before using workspace commands.",
+      traceId: "project-workspace-session"
+    })
+  );
+}
+
+function chapterMaintenanceUnavailable<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "PROJECT_CHAPTER_ACTION_UNAVAILABLE",
+      category: "UserError",
+      message: "Chapter navigator actions are not available for this project workspace.",
+      recoverability: "user-action",
+      suggestedAction: "Use a project repository that supports chapter maintenance actions.",
       traceId: "project-workspace-session"
     })
   );

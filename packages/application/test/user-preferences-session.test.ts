@@ -29,6 +29,17 @@ describe("UserPreferencesSession", () => {
         },
         shell: {
           navigatorCollapsed: false,
+          navigatorExpandedSectionIds: [
+            "chapters",
+            "characters",
+            "world",
+            "outline",
+            "timeline",
+            "memories",
+            "prompts",
+            "agents",
+            "workflows"
+          ],
           inspectorCollapsed: true,
           bottomPanelVisible: false,
           activeBottomPanelTab: "工作流运行",
@@ -59,6 +70,7 @@ describe("UserPreferencesSession", () => {
       onboarding: { dismissed: true },
       shell: {
         navigatorCollapsed: true,
+        navigatorExpandedSectionIds: ["chapters", "prompts"],
         inspectorCollapsed: true,
         bottomPanelVisible: false,
         activeBottomPanelTab: "搜索",
@@ -83,6 +95,7 @@ describe("UserPreferencesSession", () => {
       expect(loaded.value.onboarding.dismissed).toBe(true);
       expect(loaded.value.shell.workspaceLayout.splitView).toBe(true);
       expect(loaded.value.shell.activeBottomPanelTab).toBe("搜索");
+      expect(loaded.value.shell.navigatorExpandedSectionIds).toEqual(["chapters", "prompts"]);
       expect(loaded.value.editor).toEqual({
         fontFamily: "serif",
         fontSize: 16,
@@ -105,6 +118,7 @@ describe("UserPreferencesSession", () => {
             },
             shell: {
               navigatorCollapsed: false,
+              navigatorExpandedSectionIds: ["chapters"],
               inspectorCollapsed: false,
               bottomPanelVisible: true,
               activeBottomPanelTab: "工作流运行",

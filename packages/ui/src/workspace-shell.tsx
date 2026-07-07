@@ -6,7 +6,7 @@ import type {
 import type { ChapterSummary } from "@novel-studio/shared";
 import type { CSSProperties } from "react";
 import type { ChapterEditorProps } from "./chapter-editor.js";
-import type { ConfigStudioAssetType, ConfigStudioPanelProps } from "./config-studio-panel.js";
+import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
 import type { ModelSettingsPanelProps } from "./model-settings-panel.js";
 import {
   Bot,
@@ -14,8 +14,6 @@ import {
   Clock3,
   FilePlus,
   FolderTree,
-  FolderOpen,
-  FolderPlus,
   BookOpen,
   Maximize2,
   PanelBottom,
@@ -37,12 +35,12 @@ import {
   TimelineMainView
 } from "./workspace-shell-story-search.js";
 import { AutosaveRecoveryNotice, OnboardingQuickStart } from "./workspace-shell-project-assist.js";
+import { WorkspaceNavigator } from "./workspace-navigator.js";
 import type {
   AiWritingWorkflowProps,
   OnboardingProps,
   ProjectSearchProps,
   ProjectWorkflowProps,
-  StoryBibleEditorKind,
   StoryBibleEditorProps,
   WorkspaceShellProps
 } from "./workspace-shell-types.js";
@@ -56,32 +54,6 @@ const activities = [
   { id: "studio", label: "创作系统", icon: Boxes },
   { id: "settings", label: "设置", icon: Settings }
 ] as const;
-
-const navigatorSectionLabels: ReadonlyMap<string, string> = new Map([
-  ["chapters", "章节"],
-  ["characters", "人物"],
-  ["world", "世界观"],
-  ["outline", "大纲"],
-  ["timeline", "时间线"],
-  ["memories", "记忆"],
-  ["prompts", "提示词"],
-  ["agents", "Agent"],
-  ["workflows", "工作流"]
-]);
-
-const storyBibleKindByNavigatorSection: ReadonlyMap<string, StoryBibleEditorKind> = new Map([
-  ["characters", "character"],
-  ["world", "world"],
-  ["outline", "outline"],
-  ["timeline", "timeline"],
-  ["memories", "memory"]
-]);
-
-const studioAssetTypeByNavigatorSection: ReadonlyMap<string, ConfigStudioAssetType> = new Map([
-  ["prompts", "prompt"],
-  ["agents", "agent"],
-  ["workflows", "workflow"]
-]);
 
 const bottomPanelLabels: ReadonlyMap<string, string> = new Map([
   ["Workflow Run", "工作流运行"],
@@ -120,7 +92,10 @@ export function WorkspaceShell({
   onBottomPanelTabSelect,
   onSearchResultOpen,
   onTimelineEntryOpen,
-  onActivitySelect
+  onActivitySelect,
+  navigatorSearchQuery,
+  onNavigatorSearchQueryChange,
+  onNavigatorExpandedSectionIdsChange
 }: WorkspaceShellProps) {
   const focusMode = shellState.focusMode === true;
   const activeBottomPanelTab =
@@ -219,122 +194,20 @@ export function WorkspaceShell({
           })}
         </aside>
 
-        <nav
-          aria-label="项目导航"
-          className="ns-navigator"
-          data-collapsed={focusMode || shellState.navigatorCollapsed}
-          data-focus-hidden={focusMode}
-          data-region="navigator"
-        >
-          <div className="ns-panel-header">
-            <span>项目</span>
-            <span>{shellState.navigatorSections.length}</span>
-          </div>
-          {projectWorkflow === undefined ? null : (
-            <div className="ns-project-workflow">
-              <input
-                aria-label="项目路径"
-                className="ns-project-path"
-                onChange={(event) => projectWorkflow.onProjectRootChange(event.currentTarget.value)}
-                placeholder="选择或输入项目文件夹"
-                value={projectWorkflow.projectRootInput}
-              />
-              <div className="ns-project-actions">
-                <button
-                  aria-label="打开项目"
-                  className="ns-icon-text-button"
-                  disabled={isProjectWorkflowBusy(projectWorkflow)}
-                  onClick={projectWorkflow.onOpenProject}
-                  title="打开项目"
-                  type="button"
-                >
-                  <FolderOpen aria-hidden="true" size={14} />
-                  {projectWorkflow.status === "opening" ? "正在打开" : "打开项目"}
-                </button>
-                <button
-                  aria-label="创建项目"
-                  className="ns-icon-text-button"
-                  disabled={isProjectWorkflowBusy(projectWorkflow)}
-                  onClick={projectWorkflow.onCreateProject}
-                  title="创建项目"
-                  type="button"
-                >
-                  <FolderPlus aria-hidden="true" size={14} />
-                  {projectWorkflow.status === "creating" ? "正在创建" : "创建项目"}
-                </button>
-                <button
-                  aria-label="新建章节"
-                  className="ns-icon-text-button"
-                  disabled={isProjectWorkflowBusy(projectWorkflow)}
-                  onClick={projectWorkflow.onCreateChapter}
-                  title="新建章节"
-                  type="button"
-                >
-                  <FilePlus aria-hidden="true" size={14} />
-                  新建章节
-                </button>
-              </div>
-              {projectWorkflow.feedback === undefined ? null : (
-                <p
-                  className="ns-project-feedback"
-                  data-kind={projectWorkflow.feedback.kind}
-                  role="status"
-                >
-                  {projectWorkflow.feedback.message}
-                </p>
-              )}
-            </div>
-          )}
-          <ul className="ns-tree">
-            {shellState.navigatorSections.map((section) => {
-              const label = navigatorSectionLabels.get(section.id) ?? section.title;
-              return (
-                <li key={section.id}>
-                  <details
-                    aria-label={`${label} 分组`}
-                    className="ns-tree-group"
-                    data-selected={navigatorSectionSelected(section.id, shellState.activeActivity)}
-                    open
-                  >
-                    <summary
-                      className="ns-tree-row"
-                      onClick={() =>
-                        handleNavigatorSectionOpen({
-                          sectionId: section.id,
-                          onActivitySelect,
-                          storyBibleEditor,
-                          studio
-                        })
-                      }
-                    >
-                      <span>{label}</span>
-                      <span>{section.itemCount}</span>
-                    </summary>
-                    {section.id === "chapters" && projectWorkflow !== undefined ? (
-                      <ul className="ns-chapter-tree" aria-label="章节">
-                        {projectWorkflow.chapters.map((chapter) => (
-                          <li key={chapter.id}>
-                            <button
-                              {...(projectWorkflow.activeChapterId === chapter.id
-                                ? { "aria-current": "true" as const }
-                                : {})}
-                              className="ns-chapter-row"
-                              onClick={() => projectWorkflow.onSelectChapter(chapter.id)}
-                              type="button"
-                            >
-                              <span>{chapter.title}</span>
-                              <span>{chapter.order}</span>
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : null}
-                  </details>
-                </li>
-              );
-            })}
-          </ul>
-        </nav>
+        <WorkspaceNavigator
+          activeActivity={shellState.activeActivity}
+          collapsed={focusMode || shellState.navigatorCollapsed}
+          expandedSectionIds={shellState.navigatorExpandedSectionIds}
+          focusHidden={focusMode}
+          onActivitySelect={onActivitySelect}
+          onExpandedSectionIdsChange={onNavigatorExpandedSectionIdsChange}
+          onSearchQueryChange={onNavigatorSearchQueryChange}
+          projectWorkflow={projectWorkflow}
+          searchQuery={navigatorSearchQuery}
+          sections={shellState.navigatorSections}
+          storyBibleEditor={storyBibleEditor}
+          studio={studio}
+        />
 
         <div
           aria-label="Navigator resize handle"
@@ -524,26 +397,6 @@ function StatusBar({
       <span>{aiStatus}</span>
     </footer>
   );
-}
-
-function navigatorSectionSelected(sectionId: string, activeActivity: ActivityId): boolean {
-  if (sectionId === "chapters") {
-    return activeActivity === "workspace";
-  }
-
-  if (sectionId === "timeline") {
-    return activeActivity === "timeline";
-  }
-
-  if (storyBibleKindByNavigatorSection.has(sectionId)) {
-    return activeActivity === "storyBible";
-  }
-
-  if (studioAssetTypeByNavigatorSection.has(sectionId)) {
-    return activeActivity === "studio";
-  }
-
-  return false;
 }
 
 function BottomPanelContent({
@@ -872,43 +725,6 @@ function activityViewCopy(activityId: Exclude<ActivityId, "workspace" | "ai" | "
 
 function isProjectWorkflowBusy(projectWorkflow: ProjectWorkflowProps): boolean {
   return projectWorkflow.status === "opening" || projectWorkflow.status === "creating";
-}
-
-function handleNavigatorSectionOpen({
-  sectionId,
-  onActivitySelect,
-  storyBibleEditor,
-  studio
-}: {
-  readonly sectionId: string;
-  readonly onActivitySelect: ((activityId: ActivityId) => void) | undefined;
-  readonly storyBibleEditor: StoryBibleEditorProps | undefined;
-  readonly studio: ConfigStudioPanelProps | undefined;
-}) {
-  const storyBibleKind = storyBibleKindByNavigatorSection.get(sectionId);
-  if (storyBibleKind !== undefined) {
-    if (sectionId === "timeline") {
-      onActivitySelect?.("timeline");
-    } else {
-      onActivitySelect?.("storyBible");
-    }
-    storyBibleEditor?.onKindSelect(storyBibleKind);
-    return;
-  }
-
-  const studioAssetType = studioAssetTypeByNavigatorSection.get(sectionId);
-  if (studioAssetType !== undefined) {
-    onActivitySelect?.("studio");
-    const firstAsset = studio?.assets.find((asset) => asset.assetType === studioAssetType);
-    if (firstAsset !== undefined) {
-      studio?.onAssetSelect?.(firstAsset.assetType, firstAsset.assetId);
-    }
-    return;
-  }
-
-  if (sectionId === "chapters") {
-    onActivitySelect?.("workspace");
-  }
 }
 
 function saveStatusLabel(status: DesktopShellState["saveStatus"]): string {

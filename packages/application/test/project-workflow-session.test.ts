@@ -91,6 +91,78 @@ describe("M12 project workflow session", () => {
     expect(loaded.value.chapter.frontmatter.title).toBe("第二章");
   });
 
+  test("renames, duplicates, and soft-deletes chapters from the workspace navigator", async () => {
+    const projectRoot = await createTempRoot();
+    const session = createProjectWorkspaceSession({
+      now: () => "2026-07-07T00:00:00.000Z",
+      createProjectRepository: (root) =>
+        new ProjectFileRepository({
+          projectRoot: root,
+          now: () => "2026-07-07T00:00:00.000Z"
+        }),
+      createChapterRepository: (root) =>
+        new ChapterFileRepository({
+          projectRoot: root,
+          now: () => "2026-07-07T00:00:00.000Z"
+        }),
+      createHistoryRepository: (root) =>
+        new HistoryRepository({
+          projectRoot: root,
+          now: () => "2026-07-07T00:00:00.000Z",
+          createVersionId: () => "ver_vui_06"
+        }),
+      createRecoveryRepository: () => emptyRecoveryRepository()
+    });
+
+    await session.createProject({
+      projectRoot,
+      projectId: "prj_vui_06",
+      title: "VUI 06 Project",
+      language: "zh-CN"
+    });
+    await session.createChapter({
+      chapterId: "ch_opening",
+      title: "开篇",
+      body: "第一段正文\n"
+    });
+
+    const renamed = await session.renameChapter({
+      chapterId: "ch_opening",
+      title: "改名后的开篇"
+    });
+    const duplicated = await session.duplicateChapter({
+      sourceChapterId: "ch_opening",
+      chapterId: "ch_opening_copy",
+      title: "开篇副本"
+    });
+    const deleted = await session.deleteChapter({ chapterId: "ch_opening" });
+
+    expect(isOk(renamed)).toBe(true);
+    expect(isOk(duplicated)).toBe(true);
+    expect(isOk(deleted)).toBe(true);
+    if (isErr(deleted)) {
+      throw new Error(deleted.error.message);
+    }
+    expect(deleted.value.activeChapterId).toBe("ch_opening_copy");
+    expect(deleted.value.chapters.map((chapter) => chapter.id)).toEqual(["ch_opening_copy"]);
+    expect(deleted.value.chapters[0]).toMatchObject({
+      title: "开篇副本",
+      order: 2,
+      status: "draft"
+    });
+
+    const deletedChapter = await new ChapterFileRepository({
+      projectRoot,
+      now: () => "2026-07-07T00:00:00.000Z"
+    }).readChapter("ch_opening");
+    expect(isOk(deletedChapter)).toBe(true);
+    if (isErr(deletedChapter)) {
+      throw new Error(deletedChapter.error.message);
+    }
+    expect(deletedChapter.value.frontmatter.status).toBe("deleted");
+    expect(deletedChapter.value.body).toBe("第一段正文\n");
+  });
+
   test("exposes dirty chapter recovery records in the workspace snapshot", async () => {
     const projectRoot = await createTempRoot();
     const recoveryRecords: RecoveryRecord[] = [

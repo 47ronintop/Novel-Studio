@@ -16,7 +16,14 @@ import type {
   StoryBibleContextCandidateOptions,
   UserPreferencesSaveInput
 } from "@novel-studio/application";
-import type { CreateChapterInput, Result, UnifiedError } from "@novel-studio/shared";
+import type {
+  CreateChapterInput,
+  DeleteChapterInput,
+  DuplicateChapterInput,
+  RenameChapterInput,
+  Result,
+  UnifiedError
+} from "@novel-studio/shared";
 import { createUnifiedError, err } from "@novel-studio/shared";
 import type { ModelSecretStore } from "./model-runtime.js";
 
@@ -94,6 +101,15 @@ export function createApplicationIpcHandlers(
 
       return application.createProjectChapter(createInput);
     },
+    "application:project:rename-chapter": (input: unknown) => {
+      return application.renameProjectChapter(toRenameChapterInput(input));
+    },
+    "application:project:duplicate-chapter": (input: unknown) => {
+      return application.duplicateProjectChapter(toDuplicateChapterInput(input));
+    },
+    "application:project:delete-chapter": (input: unknown) => {
+      return application.deleteProjectChapter(toDeleteChapterInput(input));
+    },
     "application:project:select-chapter": (chapterId: unknown) => {
       if (typeof chapterId !== "string") {
         return application.selectProjectChapter("");
@@ -131,12 +147,11 @@ export function createApplicationIpcHandlers(
       const abortController = new AbortController();
       nextAiSuggestionStreamId += 1;
       const streamId = `ai_stream_${nextAiSuggestionStreamId}`;
-      const iterator = application
-        .streamActiveChapterSuggestion({
-          ...toAiWritingSuggestionRequest(request),
-          abortSignal: abortController.signal
-        })
-        [Symbol.asyncIterator]();
+      const suggestionStream = application.streamActiveChapterSuggestion({
+        ...toAiWritingSuggestionRequest(request),
+        abortSignal: abortController.signal
+      });
+      const iterator = suggestionStream[Symbol.asyncIterator]();
       activeAiSuggestionStreams.set(streamId, {
         abortController,
         iterator
@@ -581,6 +596,44 @@ function toCreateChapterInput(value: unknown): CreateChapterInput | undefined {
     ...(value.body === undefined ? {} : { body: value.body }),
     ...(value.order === undefined ? {} : { order: value.order }),
     ...(value.status === undefined ? {} : { status: value.status })
+  };
+}
+
+function toRenameChapterInput(value: unknown): RenameChapterInput {
+  if (!isRecord(value) || typeof value.chapterId !== "string" || typeof value.title !== "string") {
+    return { chapterId: "", title: "" };
+  }
+
+  return {
+    chapterId: value.chapterId,
+    title: value.title
+  };
+}
+
+function toDuplicateChapterInput(value: unknown): DuplicateChapterInput {
+  if (
+    !isRecord(value) ||
+    typeof value.sourceChapterId !== "string" ||
+    typeof value.chapterId !== "string" ||
+    typeof value.title !== "string"
+  ) {
+    return { sourceChapterId: "", chapterId: "", title: "" };
+  }
+
+  return {
+    sourceChapterId: value.sourceChapterId,
+    chapterId: value.chapterId,
+    title: value.title
+  };
+}
+
+function toDeleteChapterInput(value: unknown): DeleteChapterInput {
+  if (!isRecord(value) || typeof value.chapterId !== "string") {
+    return { chapterId: "" };
+  }
+
+  return {
+    chapterId: value.chapterId
   };
 }
 

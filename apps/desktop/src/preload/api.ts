@@ -45,6 +45,9 @@ import type {
 import type {
   ChapterSummary,
   CreateChapterInput,
+  DeleteChapterInput,
+  DuplicateChapterInput,
+  RenameChapterInput,
   ChapterVersionContent,
   ChapterVersionSummary,
   Result,
@@ -99,6 +102,24 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
         invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
           ipc,
           "application:project:create-chapter",
+          input
+        ),
+      renameChapter: (input: RenameChapterInput) =>
+        invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
+          ipc,
+          "application:project:rename-chapter",
+          input
+        ),
+      duplicateChapter: (input: DuplicateChapterInput) =>
+        invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
+          ipc,
+          "application:project:duplicate-chapter",
+          input
+        ),
+      deleteChapter: (input: DeleteChapterInput) =>
+        invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
+          ipc,
+          "application:project:delete-chapter",
           input
         ),
       selectChapter: (chapterId: string) =>

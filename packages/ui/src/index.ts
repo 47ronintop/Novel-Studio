@@ -51,6 +51,8 @@ export type {
   PluginSettingsStatus
 } from "./model-settings-panel.js";
 export { WorkspaceShell } from "./workspace-shell.js";
+export { WorkspaceNavigator } from "./workspace-navigator.js";
+export type { WorkspaceNavigatorProps } from "./workspace-navigator.js";
 export type {
   AiWorkflowObservabilityProps,
   AiWorkflowObservedStepKind,

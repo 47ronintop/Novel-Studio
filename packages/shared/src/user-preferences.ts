@@ -20,6 +20,7 @@ export interface UserEditorPreferences {
 
 export interface UserShellPreferences {
   readonly navigatorCollapsed: boolean;
+  readonly navigatorExpandedSectionIds: readonly string[];
   readonly inspectorCollapsed: boolean;
   readonly bottomPanelVisible: boolean;
   readonly activeBottomPanelTab: string;

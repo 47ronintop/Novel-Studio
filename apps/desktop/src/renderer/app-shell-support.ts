@@ -25,10 +25,23 @@ declare global {
   }
 }
 
+const DEFAULT_NAVIGATOR_EXPANDED_SECTION_IDS = [
+  "chapters",
+  "characters",
+  "world",
+  "outline",
+  "timeline",
+  "memories",
+  "prompts",
+  "agents",
+  "workflows"
+] as const;
+
 export const rendererShellState: DesktopShellState = {
   projectTitle: "未打开项目",
   activeActivity: "workspace",
   navigatorCollapsed: false,
+  navigatorExpandedSectionIds: DEFAULT_NAVIGATOR_EXPANDED_SECTION_IDS,
   inspectorCollapsed: true,
   bottomPanelVisible: false,
   activeBottomPanelTab: "工作流运行",
@@ -186,6 +199,8 @@ export function shellPreferencesFromState(
 ): NonNullable<UserPreferencesSaveInput["shell"]> {
   return {
     navigatorCollapsed: shellState.navigatorCollapsed,
+    navigatorExpandedSectionIds:
+      shellState.navigatorExpandedSectionIds ?? DEFAULT_NAVIGATOR_EXPANDED_SECTION_IDS,
     inspectorCollapsed: shellState.inspectorCollapsed,
     bottomPanelVisible: shellState.bottomPanelVisible,
     activeBottomPanelTab: shellState.activeBottomPanelTab,
@@ -203,6 +218,9 @@ export function applyShellPreferences(
     ...(preferences.navigatorCollapsed === undefined
       ? {}
       : { navigatorCollapsed: preferences.navigatorCollapsed }),
+    ...(preferences.navigatorExpandedSectionIds === undefined
+      ? {}
+      : { navigatorExpandedSectionIds: preferences.navigatorExpandedSectionIds }),
     ...(preferences.inspectorCollapsed === undefined
       ? {}
       : { inspectorCollapsed: preferences.inspectorCollapsed }),

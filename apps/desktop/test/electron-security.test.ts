@@ -45,6 +45,9 @@ describe("Electron security baseline", () => {
       "application:project:create",
       "application:project:list-chapters",
       "application:project:create-chapter",
+      "application:project:rename-chapter",
+      "application:project:duplicate-chapter",
+      "application:project:delete-chapter",
       "application:project:select-chapter",
       "application:project:preview-recovery-draft",
       "application:project:apply-recovery-draft",
@@ -111,6 +114,13 @@ describe("Electron security baseline", () => {
     await api.commands.execute("workspace.toggle-navigator");
     await api.project.chooseOpenDirectory();
     await api.project.chooseCreateDirectory();
+    await api.project.renameChapter({ chapterId: "ch_opening", title: "Opening" });
+    await api.project.duplicateChapter({
+      sourceChapterId: "ch_opening",
+      chapterId: "ch_opening_copy",
+      title: "Opening Copy"
+    });
+    await api.project.deleteChapter({ chapterId: "ch_opening" });
     await api.project.previewRecoveryDraft("session_recovery");
     await api.project.applyRecoveryDraft("session_recovery");
     await api.project.discardRecoveryDraft("session_recovery");
@@ -196,6 +206,9 @@ describe("Electron security baseline", () => {
       "application:execute-command",
       "application:project:choose-open-directory",
       "application:project:choose-create-directory",
+      "application:project:rename-chapter",
+      "application:project:duplicate-chapter",
+      "application:project:delete-chapter",
       "application:project:preview-recovery-draft",
       "application:project:apply-recovery-draft",
       "application:project:discard-recovery-draft",

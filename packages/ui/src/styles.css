@@ -194,7 +194,7 @@ textarea:focus-visible,
   border-right: 1px solid var(--ns-border);
   grid-area: navigator;
   min-width: 0;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .ns-navigator[data-collapsed="true"] {
@@ -297,6 +297,28 @@ textarea:focus-visible,
   border-color: color-mix(in oklch, var(--ns-info) 65%, var(--ns-border));
 }
 
+.ns-navigator-search {
+  align-items: center;
+  border-bottom: 1px solid var(--ns-border);
+  color: var(--ns-muted);
+  display: flex;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 8px;
+}
+
+.ns-navigator-search input {
+  background: transparent;
+  border: 0;
+  color: var(--ns-ink);
+  min-width: 0;
+  width: 100%;
+}
+
+.ns-navigator-search input::placeholder {
+  color: var(--ns-muted);
+}
+
 .ns-tree-row {
   align-items: center;
   background: transparent;
@@ -324,13 +346,171 @@ textarea:focus-visible,
   margin-right: 5px;
 }
 
-.ns-tree-group[open] > .ns-tree-row::before {
+.ns-tree-group[open] > .ns-tree-row::before,
+.ns-tree-group[data-expanded="true"] > .ns-tree-row::before {
   transform: rotate(90deg);
 }
 
 .ns-tree-row:hover {
   background: color-mix(in srgb, var(--ns-ink) 7%, transparent);
   color: var(--ns-ink);
+}
+
+.ns-navigator-item-list {
+  display: grid;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  padding: 2px 0 6px 14px;
+}
+
+.ns-navigator-item {
+  border-radius: 6px;
+  column-gap: 4px;
+  display: grid;
+  grid-template-areas:
+    "main actions"
+    "meta actions";
+  grid-template-columns: minmax(0, 1fr) 24px;
+  padding: 2px 2px 3px 0;
+}
+
+.ns-navigator-item[data-active="true"] {
+  background: color-mix(in srgb, var(--ns-primary) 11%, transparent);
+  color: var(--ns-ink);
+}
+
+.ns-navigator-item-main {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  font-size: 13px;
+  gap: 8px;
+  grid-area: main;
+  justify-content: space-between;
+  min-height: 24px;
+  min-width: 0;
+  padding: 0 6px;
+  text-align: left;
+  width: 100%;
+}
+
+.ns-navigator-item-main span,
+.ns-navigator-asset-button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ns-navigator-item-main span:first-child,
+.ns-navigator-asset-button span:first-child {
+  color: var(--ns-ink);
+}
+
+.ns-navigator-item-main span:last-child,
+.ns-navigator-asset-button span:last-child {
+  color: var(--ns-muted);
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+
+.ns-navigator-item-meta {
+  color: var(--ns-muted);
+  display: flex;
+  font-size: 11px;
+  gap: 6px;
+  grid-area: meta;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 6px;
+}
+
+.ns-navigator-item-meta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ns-navigator-actions {
+  align-self: start;
+  grid-area: actions;
+  position: relative;
+}
+
+.ns-navigator-actions summary {
+  align-items: center;
+  border-radius: 5px;
+  color: var(--ns-muted);
+  cursor: pointer;
+  display: inline-flex;
+  height: 24px;
+  justify-content: center;
+  list-style: none;
+  width: 24px;
+}
+
+.ns-navigator-actions summary::-webkit-details-marker {
+  display: none;
+}
+
+.ns-navigator-actions summary:hover {
+  background: color-mix(in srgb, var(--ns-ink) 8%, transparent);
+  color: var(--ns-ink);
+}
+
+.ns-navigator-action-menu {
+  background: var(--ns-surface-raised);
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  display: grid;
+  margin: 2px 0 0 -72px;
+  min-width: 96px;
+  padding: 3px;
+}
+
+.ns-navigator-action-menu button,
+.ns-navigator-asset-button {
+  background: transparent;
+  border: 0;
+  color: var(--ns-ink);
+  cursor: pointer;
+  min-width: 0;
+  text-align: left;
+}
+
+.ns-navigator-action-menu button {
+  border-radius: 4px;
+  font-size: 12px;
+  min-height: 24px;
+  padding: 0 7px;
+}
+
+.ns-navigator-action-menu button:hover,
+.ns-navigator-asset-button:hover {
+  background: color-mix(in srgb, var(--ns-ink) 8%, transparent);
+}
+
+.ns-navigator-asset-button {
+  align-items: center;
+  border-radius: 6px;
+  display: flex;
+  font-size: 13px;
+  gap: 8px;
+  justify-content: space-between;
+  min-height: 26px;
+  padding: 0 6px;
+  width: 100%;
+}
+
+.ns-navigator mark {
+  background: color-mix(in oklch, var(--ns-accent) 34%, transparent);
+  border-radius: 3px;
+  color: var(--ns-ink);
+  padding: 0 2px;
 }
 
 .ns-chapter-tree {

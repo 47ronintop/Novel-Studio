@@ -98,6 +98,7 @@ export function createDefaultUserPreferences(): UserPreferencesSnapshot {
     },
     shell: {
       navigatorCollapsed: false,
+      navigatorExpandedSectionIds: defaultNavigatorExpandedSectionIds(),
       inspectorCollapsed: true,
       bottomPanelVisible: false,
       activeBottomPanelTab: "工作流运行",
@@ -118,6 +119,9 @@ function normalizeUserPreferences(preferences: UserPreferencesSnapshot): UserPre
     editor: normalizeEditorPreferences(preferences.editor ?? createDefaultUserPreferences().editor),
     shell: {
       ...preferences.shell,
+      navigatorExpandedSectionIds: normalizeNavigatorExpandedSectionIds(
+        preferences.shell.navigatorExpandedSectionIds
+      ),
       focusMode: preferences.shell.focusMode ?? false
     }
   };
@@ -149,6 +153,29 @@ function normalizeEditorPreferences(preferences: UserEditorPreferences): UserEdi
     fontSize: clampNumber(preferences.fontSize, 12, 20),
     lineHeight: clampNumber(preferences.lineHeight, 1.4, 2)
   };
+}
+
+function normalizeNavigatorExpandedSectionIds(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) {
+    return defaultNavigatorExpandedSectionIds();
+  }
+
+  const ids = [...new Set(value.filter((item): item is string => typeof item === "string"))];
+  return ids.length === 0 ? defaultNavigatorExpandedSectionIds() : ids;
+}
+
+function defaultNavigatorExpandedSectionIds(): readonly string[] {
+  return [
+    "chapters",
+    "characters",
+    "world",
+    "outline",
+    "timeline",
+    "memories",
+    "prompts",
+    "agents",
+    "workflows"
+  ];
 }
 
 function clampNumber(value: number, min: number, max: number): number {

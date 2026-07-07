@@ -66,6 +66,8 @@ export type {
 export { createDesktopApplication } from "./desktop-application.js";
 export type {
   CreateProjectInput,
+  DeleteChapterInput,
+  DuplicateChapterInput,
   ProjectChapterRepositoryPort,
   ProjectHealthSeverity,
   ProjectHealthSource,
@@ -85,6 +87,7 @@ export type {
   ProjectWorkspaceSession,
   ProjectWorkspaceSessionOptions,
   ProjectWorkspaceSnapshot,
+  RenameChapterInput,
   WorkspaceProjectSettings
 } from "./project-workspace-session.js";
 export { createProjectWorkspaceSession } from "./project-workspace-session.js";

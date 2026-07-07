@@ -46,6 +46,9 @@ export interface RendererWorkspaceShellProps {
   readonly onOpenProject: ProjectWorkflowProps["onOpenProject"];
   readonly onCreateProject: ProjectWorkflowProps["onCreateProject"];
   readonly onCreateChapter: ProjectWorkflowProps["onCreateChapter"];
+  readonly onRenameChapter: NonNullable<ProjectWorkflowProps["onRenameChapter"]>;
+  readonly onDuplicateChapter: NonNullable<ProjectWorkflowProps["onDuplicateChapter"]>;
+  readonly onDeleteChapter: NonNullable<ProjectWorkflowProps["onDeleteChapter"]>;
   readonly onSelectChapter: ProjectWorkflowProps["onSelectChapter"];
   readonly onCloseChapterTab: NonNullable<ProjectWorkflowProps["onCloseChapterTab"]>;
   readonly onPreviewRecoveryDraft: NonNullable<ProjectWorkflowProps["onPreviewRecoveryDraft"]>;
@@ -99,6 +102,13 @@ export interface RendererWorkspaceShellProps {
   readonly onSearchResultOpen: (result: ProjectSearchResultItem) => void;
   readonly onTimelineEntryOpen: (entryId: string) => void;
   readonly onActivitySelect: (activityId: ActivityId) => void;
+  readonly navigatorSearchQuery: string;
+  readonly onNavigatorSearchQueryChange: NonNullable<
+    WorkspaceShellProps["onNavigatorSearchQueryChange"]
+  >;
+  readonly onNavigatorExpandedSectionIdsChange: NonNullable<
+    WorkspaceShellProps["onNavigatorExpandedSectionIdsChange"]
+  >;
 }
 
 export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
@@ -128,6 +138,9 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
               onOpenProject: props.onOpenProject,
               onCreateProject: props.onCreateProject,
               onCreateChapter: props.onCreateChapter,
+              onRenameChapter: props.onRenameChapter,
+              onDuplicateChapter: props.onDuplicateChapter,
+              onDeleteChapter: props.onDeleteChapter,
               onSelectChapter: props.onSelectChapter,
               onCloseChapterTab: props.onCloseChapterTab,
               onPreviewRecoveryDraft: props.onPreviewRecoveryDraft,
@@ -213,6 +226,9 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
       onSearchResultOpen={props.onSearchResultOpen}
       onTimelineEntryOpen={props.onTimelineEntryOpen}
       onActivitySelect={props.onActivitySelect}
+      navigatorSearchQuery={props.navigatorSearchQuery}
+      onNavigatorSearchQueryChange={props.onNavigatorSearchQueryChange}
+      onNavigatorExpandedSectionIdsChange={props.onNavigatorExpandedSectionIdsChange}
     />
   );
 }

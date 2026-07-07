@@ -1,6 +1,9 @@
 import type {
   ChapterSummary,
   CreateChapterInput,
+  DeleteChapterInput,
+  DuplicateChapterInput,
+  RenameChapterInput,
   ChapterVersionContent,
   ChapterVersionSummary,
   Result,
@@ -75,6 +78,11 @@ export interface NovelStudioApi {
     createChapter(
       input: CreateChapterInput
     ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+    renameChapter(input: RenameChapterInput): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+    duplicateChapter(
+      input: DuplicateChapterInput
+    ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+    deleteChapter(input: DeleteChapterInput): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
     selectChapter(chapterId: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
     previewRecoveryDraft(
       sessionId: string

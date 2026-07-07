@@ -7,8 +7,12 @@ import type {
   ChapterCatalogRepositoryPort,
   ChapterDocument,
   ChapterDraftRepositoryPort,
+  ChapterMaintenanceRepositoryPort,
   ChapterSummary,
-  CreateChapterInput
+  CreateChapterInput,
+  DeleteChapterInput,
+  DuplicateChapterInput,
+  RenameChapterInput
 } from "@novel-studio/shared";
 
 import { writeTextAtomically } from "./atomic-write.js";
@@ -31,7 +35,7 @@ export interface ChapterFileRepositoryOptions {
 }
 
 export class ChapterFileRepository
-  implements ChapterDraftRepositoryPort, ChapterCatalogRepositoryPort
+  implements ChapterDraftRepositoryPort, ChapterCatalogRepositoryPort, ChapterMaintenanceRepositoryPort
 {
   private readonly traceId: string;
 
@@ -146,9 +150,9 @@ export class ChapterFileRepository
     }
 
     return ok(
-      summaries.sort(
-        (left, right) => left.order - right.order || left.title.localeCompare(right.title)
-      )
+      summaries
+        .filter((chapter) => chapter.status !== "deleted")
+        .sort((left, right) => left.order - right.order || left.title.localeCompare(right.title))
     );
   }
 
@@ -204,6 +208,58 @@ export class ChapterFileRepository
     }
 
     return this.writeChapter(chapter);
+  }
+
+  public async renameChapter(
+    input: RenameChapterInput
+  ): Promise<Result<ChapterDocument, UnifiedError>> {
+    const loaded = await this.readChapter(input.chapterId);
+    if (!loaded.ok) {
+      return loaded;
+    }
+
+    return this.writeChapter({
+      ...loaded.value,
+      frontmatter: {
+        ...loaded.value.frontmatter,
+        title: input.title,
+        updatedAt: this.options.now?.() ?? new Date().toISOString()
+      }
+    });
+  }
+
+  public async duplicateChapter(
+    input: DuplicateChapterInput
+  ): Promise<Result<ChapterDocument, UnifiedError>> {
+    const loaded = await this.readChapter(input.sourceChapterId);
+    if (!loaded.ok) {
+      return loaded;
+    }
+
+    return this.createChapter({
+      chapterId: input.chapterId,
+      title: input.title,
+      body: loaded.value.body,
+      status: "draft"
+    });
+  }
+
+  public async deleteChapter(
+    input: DeleteChapterInput
+  ): Promise<Result<ChapterDocument, UnifiedError>> {
+    const loaded = await this.readChapter(input.chapterId);
+    if (!loaded.ok) {
+      return loaded;
+    }
+
+    return this.writeChapter({
+      ...loaded.value,
+      frontmatter: {
+        ...loaded.value.frontmatter,
+        status: "deleted",
+        updatedAt: this.options.now?.() ?? new Date().toISOString()
+      }
+    });
   }
 
   private async nextChapterOrder(): Promise<number> {

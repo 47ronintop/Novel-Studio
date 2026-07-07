@@ -140,6 +140,47 @@ describe("project workflow bridge", () => {
     expect(calls).toContain("project.selectChapter:ch_opening");
   });
 
+  test("forwards navigator chapter rename, duplicate, and delete actions through the preload API", async () => {
+    const calls: string[] = [];
+    let chapters: readonly ChapterSummary[] = [
+      {
+        id: "ch_opening",
+        title: "开篇",
+        order: 1,
+        status: "draft",
+        updatedAt: "2026-07-04T00:00:00.000Z"
+      }
+    ];
+    const api = createApi({
+      record: calls,
+      getChapters: () => chapters,
+      setChapters: (nextChapters) => {
+        chapters = nextChapters;
+      },
+      chooseOpenProjectRoot: "D:/Novel/VUI06"
+    });
+    const bridge = createProjectWorkflowBridge(api, {
+      createChapterId: () => "ch_opening_copy"
+    });
+
+    await bridge.openProject();
+    const renamed = await bridge.renameChapter("ch_opening", "改名后的开篇");
+    const duplicated = await bridge.duplicateChapter("ch_opening");
+    const deleted = await bridge.deleteChapter("ch_opening");
+
+    expect(renamed.chapters[0]?.title).toBe("改名后的开篇");
+    expect(duplicated.chapters.map((chapter) => chapter.id)).toEqual([
+      "ch_opening",
+      "ch_opening_copy"
+    ]);
+    expect(deleted.chapters.map((chapter) => chapter.id)).toEqual(["ch_opening_copy"]);
+    expect(calls).toContain("project.renameChapter:ch_opening:改名后的开篇");
+    expect(calls).toContain(
+      "project.duplicateChapter:ch_opening:ch_opening_copy:改名后的开篇 副本"
+    );
+    expect(calls).toContain("project.deleteChapter:ch_opening");
+  });
+
   test("maps workspace recovery records to dirty chapter tabs and a recovery notice", async () => {
     const calls: string[] = [];
     const chapters: readonly ChapterSummary[] = [
@@ -393,6 +434,57 @@ function createApi(options: {
           projectRoot: currentProjectRoot,
           chapters: nextChapters,
           activeChapterId: input.chapterId
+        });
+      },
+      renameChapter: async (input) => {
+        options.record.push(`project.renameChapter:${input.chapterId}:${input.title}`);
+        const nextChapters = options.getChapters().map((chapter) =>
+          chapter.id === input.chapterId
+            ? { ...chapter, title: input.title, updatedAt: "2026-07-04T00:00:00.000Z" }
+            : chapter
+        );
+        options.setChapters(nextChapters);
+        return ok({
+          ...emptySnapshot,
+          projectRoot: currentProjectRoot,
+          chapters: nextChapters,
+          activeChapterId: input.chapterId
+        });
+      },
+      duplicateChapter: async (input) => {
+        options.record.push(
+          `project.duplicateChapter:${input.sourceChapterId}:${input.chapterId}:${input.title}`
+        );
+        const source = options.getChapters().find((chapter) => chapter.id === input.sourceChapterId);
+        const nextChapters = [
+          ...options.getChapters(),
+          {
+            id: input.chapterId,
+            title: input.title,
+            order: (source?.order ?? options.getChapters().length) + 1,
+            status: "draft" as const,
+            updatedAt: "2026-07-04T00:00:00.000Z"
+          }
+        ];
+        options.setChapters(nextChapters);
+        return ok({
+          ...emptySnapshot,
+          projectRoot: currentProjectRoot,
+          chapters: nextChapters,
+          activeChapterId: input.chapterId
+        });
+      },
+      deleteChapter: async (input) => {
+        options.record.push(`project.deleteChapter:${input.chapterId}`);
+        const nextChapters = options
+          .getChapters()
+          .filter((chapter) => chapter.id !== input.chapterId);
+        options.setChapters(nextChapters);
+        return ok({
+          ...emptySnapshot,
+          projectRoot: currentProjectRoot,
+          chapters: nextChapters,
+          activeChapterId: nextChapters[0]?.id
         });
       },
       selectChapter: async (chapterId) => {

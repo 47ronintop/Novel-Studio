@@ -38,6 +38,10 @@ export interface WorkspaceShellProps {
   readonly onSearchResultOpen?: ((result: ProjectSearchResultItem) => void) | undefined;
   readonly onTimelineEntryOpen?: ((entryId: string) => void) | undefined;
   readonly onActivitySelect?: (activityId: ActivityId) => void;
+  readonly navigatorSearchQuery?: string | undefined;
+  readonly onNavigatorSearchQueryChange?: ((query: string) => void) | undefined;
+  readonly onNavigatorExpandedSectionIdsChange?:
+    ((sectionIds: readonly string[]) => void) | undefined;
 }
 
 export interface ProjectWorkflowProps {
@@ -54,6 +58,9 @@ export interface ProjectWorkflowProps {
   readonly onOpenProject: () => void;
   readonly onCreateProject: () => void;
   readonly onCreateChapter: () => void;
+  readonly onRenameChapter?: (chapterId: string, title: string) => void;
+  readonly onDuplicateChapter?: (chapterId: string) => void;
+  readonly onDeleteChapter?: (chapterId: string) => void;
   readonly onSelectChapter: (chapterId: string) => void;
   readonly onCloseChapterTab?: (chapterId: string) => void;
   readonly onPreviewRecoveryDraft?: (sessionId: string) => void;

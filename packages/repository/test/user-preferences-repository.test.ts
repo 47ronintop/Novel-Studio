@@ -37,6 +37,7 @@ describe("UserPreferencesFileRepository", () => {
       },
       shell: {
         navigatorCollapsed: true,
+        navigatorExpandedSectionIds: ["chapters", "prompts"],
         inspectorCollapsed: false,
         bottomPanelVisible: true,
         activeBottomPanelTab: "问题",

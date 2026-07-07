@@ -15,6 +15,9 @@ export interface ProjectWorkflowBridge {
   createProject(): Promise<ProjectWorkflowProps>;
   createExampleProject(): Promise<ProjectWorkflowProps>;
   createChapter(): Promise<ProjectWorkflowProps>;
+  renameChapter(chapterId: string, title: string): Promise<ProjectWorkflowProps>;
+  duplicateChapter(chapterId: string): Promise<ProjectWorkflowProps>;
+  deleteChapter(chapterId: string): Promise<ProjectWorkflowProps>;
   selectChapter(chapterId: string): Promise<ProjectWorkflowProps>;
   closeChapterTab(chapterId: string): Promise<ProjectWorkflowProps>;
   previewRecoveryDraft(sessionId: string): Promise<ProjectWorkflowProps>;
@@ -157,6 +160,33 @@ export function createProjectWorkflowBridge(
         })
       );
       projectRootInput = snapshot.projectRoot;
+      addOpenChapterTab(snapshot.activeChapterId);
+      return toProps();
+    },
+    async renameChapter(chapterId, title) {
+      snapshot = await unwrap(api.project.renameChapter({ chapterId, title }));
+      projectRootInput = snapshot.projectRoot;
+      return toProps();
+    },
+    async duplicateChapter(chapterId) {
+      const source = snapshot?.chapters.find((chapter) => chapter.id === chapterId);
+      const nextTitle = `${source?.title ?? "未命名章节"} 副本`;
+      const nextChapterId = createChapterId();
+      snapshot = await unwrap(
+        api.project.duplicateChapter({
+          sourceChapterId: chapterId,
+          chapterId: nextChapterId,
+          title: nextTitle
+        })
+      );
+      projectRootInput = snapshot.projectRoot;
+      addOpenChapterTab(snapshot.activeChapterId);
+      return toProps();
+    },
+    async deleteChapter(chapterId) {
+      snapshot = await unwrap(api.project.deleteChapter({ chapterId }));
+      projectRootInput = snapshot.projectRoot;
+      openChapterTabIds = openChapterTabIds.filter((openChapterId) => openChapterId !== chapterId);
       addOpenChapterTab(snapshot.activeChapterId);
       return toProps();
     },
@@ -311,6 +341,9 @@ export function createProjectWorkflowBridge(
       onOpenProject: () => undefined,
       onCreateProject: () => undefined,
       onCreateChapter: () => undefined,
+      onRenameChapter: () => undefined,
+      onDuplicateChapter: () => undefined,
+      onDeleteChapter: () => undefined,
       onSelectChapter: () => undefined,
       onCloseChapterTab: () => undefined
     };
