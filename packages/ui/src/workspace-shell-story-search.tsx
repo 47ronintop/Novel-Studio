@@ -6,7 +6,7 @@ import type {
   StoryBibleConsistencyIssueProps,
   StoryBibleEditorKind,
   StoryBibleEditorProps
-} from "./workspace-shell.js";
+} from "./workspace-shell-types.js";
 
 export function TimelineMainView({
   editor,

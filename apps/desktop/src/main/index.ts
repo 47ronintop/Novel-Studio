@@ -1,10 +1,11 @@
-import { app, BrowserWindow, Menu, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage } from "electron";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createBootstrappedDefaultDesktopApplication } from "./application-composition.js";
 import { createApplicationIpcHandlers } from "./ipc-handlers.js";
 import { createApplicationMenuTemplate } from "./menu.js";
+import { createDesktopModelRuntime, createEncryptedFileModelSecretStore } from "./model-runtime.js";
 import { createSecureWebPreferences } from "./security.js";
 import type { DesktopApplication } from "@novel-studio/application";
 
@@ -17,13 +18,24 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     process.env["NOVEL_STUDIO_PROJECT_ROOT"] ??
     join(app.getPath("userData"), "projects", "minimal-chapter");
   const userDataRoot = process.env["NOVEL_STUDIO_USER_DATA_ROOT"] ?? app.getPath("userData");
+  const modelSecretStore = createEncryptedFileModelSecretStore({
+    userDataRoot,
+    cipher: safeStorage
+  });
+  const modelRuntime = createDesktopModelRuntime({
+    userDataRoot,
+    secretStore: modelSecretStore
+  });
   activeDesktopApplication = await createBootstrappedDefaultDesktopApplication({
     projectRoot,
-    userDataRoot
+    userDataRoot,
+    modelConnectionTester: modelRuntime.modelConnectionTester,
+    createAiProvider: modelRuntime.createAiProvider
   });
   const handlers = createApplicationIpcHandlers(activeDesktopApplication, {
     chooseOpenProjectDirectory: () => chooseProjectDirectory("Open Novel Studio project"),
-    chooseCreateProjectDirectory: () => chooseProjectDirectory("Create Novel Studio project")
+    chooseCreateProjectDirectory: () => chooseProjectDirectory("Create Novel Studio project"),
+    modelSecretStore
   });
 
   for (const [channel, handler] of Object.entries(handlers)) {

@@ -204,6 +204,8 @@ export function createAgentBackedAiWritingWorkflowSession(
         llmRequest: createLlmRequest(
           runState.workflowRunId,
           request.instruction,
+          chapterState.chapter.body,
+          contextBundle.value.trace,
           runtimeProfile.value.modelProfile,
           runtimeProfile.value.parameters
         ),
@@ -786,6 +788,8 @@ async function resolveModelRuntimeProfile(
 function createLlmRequest(
   workflowRunId: string,
   instruction: string,
+  currentBody: string,
+  contextTrace: ContextBundleTrace,
   modelProfile: LlmModelProfile,
   parameters: LlmParameters
 ): LlmRequest {
@@ -802,7 +806,13 @@ function createLlmRequest(
       },
       {
         role: "user",
-        content: instruction
+        content: [
+          `Instruction: ${instruction}`,
+          `Current chapter body:\n${currentBody}`,
+          `Available context refs: ${contextTrace.includedRefs
+            .map((ref) => `${ref.refType}:${ref.refId}`)
+            .join(", ")}`
+        ].join("\n\n")
       }
     ],
     parameters,

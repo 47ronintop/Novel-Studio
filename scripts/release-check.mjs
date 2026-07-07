@@ -22,7 +22,7 @@ if (failures.length > 0) {
 } else {
   console.log("Release check passed");
   console.log("Public install release gate passed");
-  console.log("V1 ship readiness gate passed");
+  console.log("V1 conditional ship readiness gate recorded");
 }
 
 async function checkPackageScripts() {
@@ -156,15 +156,15 @@ async function checkV1ShipReadiness() {
 
   const readiness = await readFile(join(root, readinessPath), "utf8");
   const requiredPhrases = [
-    "V1 ship decision: GO",
+    "V1 ship decision: CONDITIONAL HOLD",
     "Core writing journey evidence",
     "npm run test:e2e",
     "npm run release:check",
-    "Known limitations do not block the core writing loop.",
+    "live provider manual verification pending",
     "V2/backlog deferred scope",
     "Reading aloud decision: GO for v1.1 backlog, NO for v1 blocker.",
     "No M99/M100 is authorized unless M98 finds a v1 blocker.",
-    "M98 final gate: ship readiness is documented"
+    "M98 final gate: conditional hold until manual live provider verification passes."
   ];
 
   for (const phrase of requiredPhrases) {

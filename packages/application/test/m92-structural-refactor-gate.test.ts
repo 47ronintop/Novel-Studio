@@ -7,12 +7,12 @@ const workspaceRoot = resolve(__dirname, "../../..");
 const structuralTargets = [
   {
     path: "packages/ui/src/workspace-shell.tsx",
-    maxLines: 1200,
+    maxLines: 950,
     rationale: "UI shell is above the forced split threshold."
   },
   {
     path: "apps/desktop/src/renderer/App.tsx",
-    maxLines: 1200,
+    maxLines: 1050,
     rationale: "Renderer composition is above the forced split threshold."
   },
   {

@@ -71,4 +71,4 @@ export type {
   StoryBibleSummaryProps,
   StoryTimelineEvent,
   WorkspaceShellProps
-} from "./workspace-shell.js";
+} from "./workspace-shell-types.js";

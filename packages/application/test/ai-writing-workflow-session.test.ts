@@ -255,6 +255,9 @@ describe("M14 AI writing workflow session", () => {
       maxTokens: 2048,
       topP: 0.9
     });
+    expect(requests[0]?.messages.map((message) => message.content).join("\n")).toContain(
+      "Current chapter body:\nOpening line."
+    );
   });
 
   test("resolves the runtime model profile when generating a suggestion", async () => {

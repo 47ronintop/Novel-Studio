@@ -198,6 +198,13 @@ export function createSettingsBridge(
       return toProps();
     }
 
+    const secretSaved = await saveDraftSecret(profile, draft);
+    if (!secretSaved.ok) {
+      saveStatus = "error";
+      feedback = { kind: "error", message: secretSaved.error.message };
+      return toProps();
+    }
+
     const result = await api.settings.saveModelProfile(profile, saveOptions);
     if (!result.ok) {
       saveStatus = "error";
@@ -229,7 +236,7 @@ export function createSettingsBridge(
     }
 
     const existingProfile = profiles.find((entry) => entry.id === selectedProfileId);
-    const apiKeyRef = nextDraft.apiKeyRefInput.trim() || existingProfile?.apiKeyRef;
+    const apiKeyRef = apiKeyRefFromDraft(nextDraft, existingProfile?.apiKeyRef);
     if (apiKeyRef === undefined || !apiKeyRef.startsWith("secret://")) {
       return undefined;
     }
@@ -250,6 +257,15 @@ export function createSettingsBridge(
       ...(nextDraft.baseUrl.trim().length === 0 ? {} : { baseUrl: nextDraft.baseUrl.trim() }),
       ...(topP === undefined ? {} : { topP })
     };
+  }
+
+  async function saveDraftSecret(profile: ModelProfile, nextDraft: ModelSettingsDraft) {
+    const secretInput = nextDraft.apiKeyRefInput.trim();
+    if (secretInput.length === 0 || secretInput.startsWith("secret://")) {
+      return { ok: true as const, value: undefined };
+    }
+
+    return api.settings.saveModelSecret(profile.apiKeyRef, secretInput);
   }
 
   function toProps(): ModelSettingsPanelProps {
@@ -347,7 +363,7 @@ function newDraft(profileId: string): ModelSettingsDraft {
     displayName: "新模型配置",
     baseUrl: "",
     modelName: "",
-    apiKeyRefInput: `secret://${profileId}/api_key`,
+    apiKeyRefInput: "",
     temperature: "0.7",
     maxTokens: "4096",
     topP: "1",
@@ -358,6 +374,20 @@ function newDraft(profileId: string): ModelSettingsDraft {
 function parseNumber(value: string): number | undefined {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function apiKeyRefFromDraft(
+  nextDraft: ModelSettingsDraft,
+  existingApiKeyRef: string | undefined
+): string | undefined {
+  const input = nextDraft.apiKeyRefInput.trim();
+  if (input.startsWith("secret://")) {
+    return input;
+  }
+  if (input.length > 0) {
+    return `secret://${nextDraft.id.trim()}/api_key`;
+  }
+  return existingApiKeyRef;
 }
 
 function parseInteger(value: string): number | undefined {

@@ -95,6 +95,32 @@ describe("M22 settings bridge", () => {
     });
   });
 
+  test("stores pasted API keys through the secret API and only saves secret refs in settings", async () => {
+    const calls: string[] = [];
+    const savedSecrets = new Map<string, string>();
+    const bridge = createSettingsBridge(createApi(calls, savedSecrets));
+    await bridge.load();
+
+    bridge.updateDraft({
+      displayName: "DeepSeek",
+      provider: "deepseek",
+      baseUrl: "https://api.deepseek.com/v1",
+      modelName: "deepseek-chat",
+      apiKeyRefInput: "sk-real-key-from-user",
+      temperature: "0.2",
+      maxTokens: "2048",
+      topP: "",
+      timeoutMs: "30000"
+    });
+    const saved = await bridge.saveDraft({ makeDefault: true });
+
+    expect(savedSecrets.get("secret://model_default/api_key")).toBe("sk-real-key-from-user");
+    expect(calls).toContain("settings.saveModelSecret:secret://model_default/api_key");
+    expect(calls).toContain("settings.saveModelProfile:model_default:deepseek:true");
+    expect(saved.profiles[0]?.apiKeyRef).toBe("secret://model_default/api_key");
+    expect(JSON.stringify(saved.profiles)).not.toContain("sk-real-key-from-user");
+  });
+
   test("tests the selected model profile through the injected desktop tester", async () => {
     const calls: string[] = [];
     const bridge = createSettingsBridge(createApi(calls));
@@ -144,7 +170,7 @@ describe("M22 settings bridge", () => {
   });
 });
 
-function createApi(calls: string[]): NovelStudioApi {
+function createApi(calls: string[], savedSecrets = new Map<string, string>()): NovelStudioApi {
   let snapshot: ModelSettingsSnapshot = {
     defaultProfileId: "model_default",
     profiles: [defaultProfile]
@@ -254,6 +280,11 @@ function createApi(calls: string[]): NovelStudioApi {
           profiles: snapshot.profiles.map((entry) => (entry.id === profile.id ? profile : entry))
         };
         return ok(snapshot);
+      },
+      saveModelSecret: async (secretRef, secret) => {
+        calls.push(`settings.saveModelSecret:${secretRef}`);
+        savedSecrets.set(secretRef, secret);
+        return ok(undefined);
       },
       testModelProfileConnection: async (profileId) => {
         calls.push(`settings.testModelProfileConnection:${profileId}`);

@@ -16,6 +16,8 @@ import type {
   UserPreferencesSaveInput
 } from "@novel-studio/application";
 import type { CreateChapterInput } from "@novel-studio/shared";
+import { createUnifiedError, err } from "@novel-studio/shared";
+import type { ModelSecretStore } from "./model-runtime.js";
 
 export type ApplicationIpcHandlers = {
   readonly [Channel in ApplicationIpcChannel]: (...args: readonly unknown[]) => Promise<unknown>;
@@ -24,6 +26,7 @@ export type ApplicationIpcHandlers = {
 export interface ApplicationIpcHandlerOptions {
   readonly chooseOpenProjectDirectory?: () => Promise<string | undefined>;
   readonly chooseCreateProjectDirectory?: () => Promise<string | undefined>;
+  readonly modelSecretStore?: ModelSecretStore;
 }
 
 export function createApplicationIpcHandlers(
@@ -184,6 +187,27 @@ export function createApplicationIpcHandlers(
         modelProfile,
         isSaveModelProfileOptions(options) ? options : {}
       );
+    },
+    "application:settings:save-model-secret": (secretRef: unknown, secret: unknown) => {
+      if (options.modelSecretStore === undefined) {
+        return Promise.resolve(
+          err(
+            createUnifiedError({
+              code: "MODEL_SECRET_STORE_UNAVAILABLE",
+              category: "StorageError",
+              message: "No model secret store is configured.",
+              recoverability: "user-action",
+              suggestedAction: "Run the desktop app with Electron safeStorage enabled.",
+              traceId: "desktop-ipc-handlers"
+            })
+          )
+        );
+      }
+      if (typeof secretRef !== "string" || typeof secret !== "string") {
+        return options.modelSecretStore.saveSecret("", "");
+      }
+
+      return options.modelSecretStore.saveSecret(secretRef, secret);
     },
     "application:settings:test-model-profile": (profileId: unknown) => {
       if (typeof profileId !== "string") {

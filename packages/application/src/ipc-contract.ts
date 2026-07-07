@@ -29,6 +29,7 @@ export const APPLICATION_IPC_CHANNELS = [
   "application:chapter:preview-suggestion-diff",
   "application:settings:list-model-profiles",
   "application:settings:save-model-profile",
+  "application:settings:save-model-secret",
   "application:settings:test-model-profile",
   "application:plugins:load-registry",
   "application:plugins:set-enabled",

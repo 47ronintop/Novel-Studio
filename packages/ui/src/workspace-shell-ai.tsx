@@ -10,7 +10,7 @@ import type {
   AiWorkflowRunHistoryProps,
   AiWritingWorkflowProps,
   AiWritingWorkflowStatus
-} from "./workspace-shell.js";
+} from "./workspace-shell-types.js";
 
 export function AiWritingAssistantPanel({
   workflow,
@@ -34,6 +34,11 @@ export function AiWritingAssistantPanel({
         <p className="ns-ai-context">
           输入你想让 AI 做的事，例如“续写当前场景”“让对白更自然”或“检查人物动机”。AI
           结果会先进入建议区，不会直接覆盖正文。
+        </p>
+      )}
+      {workflow.runtimeNotice === undefined ? null : (
+        <p className="ns-project-feedback" data-kind="error" role="status">
+          {workflow.runtimeNotice}
         </p>
       )}
       {compact ? null : (

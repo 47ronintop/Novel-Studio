@@ -4,7 +4,7 @@ import type {
   OnboardingProps,
   ProjectWorkflowProps,
   ProjectWorkflowRecoveryItemProps
-} from "./workspace-shell.js";
+} from "./workspace-shell-types.js";
 
 export function OnboardingQuickStart({
   onboarding

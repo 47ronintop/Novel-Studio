@@ -250,6 +250,7 @@ export function ModelSettingsPanel({
                   <ModelField label="Profile ID">
                     <input
                       aria-label="模型 Profile ID"
+                      aria-description="粘贴真实 API Key，保存后会加密存储；留空则沿用已保存 API Key。"
                       className="ns-search-input"
                       onChange={(event) => onDraftChange?.({ id: event.currentTarget.value })}
                       value={draft.id}
@@ -306,9 +307,10 @@ export function ModelSettingsPanel({
                       }
                       placeholder={
                         selectedProfile === undefined
-                          ? "secret://model_id/api_key"
+                          ? "粘贴真实 API Key，保存后会加密存储"
                           : "留空则沿用已保存密钥引用"
                       }
+                      type="password"
                       value={draft.apiKeyRefInput}
                     />
                   </ModelField>

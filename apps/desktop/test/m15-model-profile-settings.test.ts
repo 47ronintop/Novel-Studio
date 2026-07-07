@@ -13,6 +13,7 @@ import type { Result, UnifiedError } from "@novel-studio/shared";
 
 import { createProjectDesktopApplication } from "../src/main/application-composition.js";
 import { createApplicationIpcHandlers } from "../src/main/ipc-handlers.js";
+import type { ModelSecretStore } from "../src/main/model-runtime.js";
 
 const fixtureRoot = join(process.cwd(), "fixtures", "projects", "minimal-chapter");
 const chapterId = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D0";
@@ -28,6 +29,22 @@ describe("M15 desktop model profile settings", () => {
   test("lists, saves, defaults, and tests project model profiles through IPC", async () => {
     const projectRoot = await copyFixtureProject();
     const testedProfiles: ModelProfile[] = [];
+    const savedSecrets = new Map<string, string>();
+    const modelSecretStore: ModelSecretStore = {
+      async saveSecret(secretRef, secret) {
+        savedSecrets.set(secretRef, secret);
+        return { ok: true, value: undefined };
+      },
+      async readSecret(secretRef) {
+        return { ok: true, value: savedSecrets.get(secretRef) };
+      },
+      async markVerified() {
+        return { ok: true, value: undefined };
+      },
+      async isVerified() {
+        return { ok: true, value: true };
+      }
+    };
     const tester: ModelConnectionTester = {
       async testConnection(profile): Promise<Result<ModelConnectionResult, UnifiedError>> {
         testedProfiles.push(profile);
@@ -48,7 +65,8 @@ describe("M15 desktop model profile settings", () => {
         chapterId,
         projectTitle: "Minimal Chapter Project",
         modelConnectionTester: tester
-      })
+      }),
+      { modelSecretStore }
     );
 
     const listed = await handlers["application:settings:list-model-profiles"]();
@@ -85,6 +103,13 @@ describe("M15 desktop model profile settings", () => {
     expect(settingsJson).toContain('"provider": "ollama"');
     expect(settingsJson).toContain('"apiKeyRef": "secret://model_ollama/api_key"');
     expect(settingsJson).not.toMatch(/\bsk-[A-Za-z0-9_-]+/);
+
+    const secretSaved = await handlers["application:settings:save-model-secret"](
+      "secret://model_ollama/api_key",
+      "sk-real-ollama-compatible-key"
+    );
+    assertOk<undefined>(secretSaved);
+    expect(savedSecrets.get("secret://model_ollama/api_key")).toBe("sk-real-ollama-compatible-key");
   });
 });
 

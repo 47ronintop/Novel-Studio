@@ -271,6 +271,9 @@ function toProps(
     status: "suggestion-ready",
     instruction,
     summary: suggestion.summary,
+    ...(suggestion.observability.model.provider === "mock"
+      ? { runtimeNotice: "当前是演示模式，未配置真实Key。" }
+      : {}),
     contextTraceLabel: traceLabel(suggestion),
     observability: toObservabilityProps(suggestion.observability),
     ...(history === undefined ? {} : { history }),
@@ -287,6 +290,9 @@ function toSelectionPreviewProps(
     status: "suggestion-ready",
     instruction,
     summary: preview.summary,
+    ...(preview.observability.model.provider === "mock"
+      ? { runtimeNotice: "当前是演示模式，未配置真实Key。" }
+      : {}),
     contextTraceLabel: traceLabel(preview),
     observability: toObservabilityProps(preview.observability),
     ...(history === undefined ? {} : { history }),

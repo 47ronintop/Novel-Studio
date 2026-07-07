@@ -219,6 +219,13 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           profile,
           options
         ),
+      saveModelSecret: (secretRef: string, secret: string) =>
+        invokeTyped<Result<void, UnifiedError>>(
+          ipc,
+          "application:settings:save-model-secret",
+          secretRef,
+          secret
+        ),
       testModelProfileConnection: (profileId: string) =>
         invokeTyped<Result<ModelConnectionResult, UnifiedError>>(
           ipc,

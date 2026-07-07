@@ -550,9 +550,9 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 ## M92 完成内容
 
 - 新增 `packages/application/test/m92-structural-refactor-gate.test.ts`，把 UI/renderer 1200 行、Application session 1000 行硬拆分阈值变成可执行门禁。
-- `packages/ui/src/workspace-shell.tsx` 拆出 AI inspector 视图、Story Bible/Timeline/Search 主视图和 onboarding/recovery 辅助视图，主文件降至 1139 行。
-- `apps/desktop/src/renderer/App.tsx` 拆出 renderer shell 默认状态、命令和纯 helper 到 `app-shell-support.ts`，主文件降至 1174 行。
-- `packages/application/src/ai-writing-workflow-session.ts` 拆出 AI workflow DTO、history record、session options 到 `ai-writing-workflow-types.ts`，实现文件降至 986 行，并保留旧 session 模块 type re-export 兼容。
+- `packages/ui/src/workspace-shell.tsx` 拆出 AI inspector 视图、Story Bible/Timeline/Search 主视图、onboarding/recovery 辅助视图和 shell prop types，主文件降至 900 行。
+- `apps/desktop/src/renderer/App.tsx` 拆出 renderer shell 默认状态、命令、纯 helper、startup effects 和 WorkspaceShell prop composition，主文件降至 1017 行。
+- `packages/application/src/ai-writing-workflow-session.ts` 拆出 AI workflow DTO、history record、session options 到 `ai-writing-workflow-types.ts`，实现文件保持 984 行，并保留旧 session 模块 type re-export 兼容。
 - M92 不新增用户功能；现有 workspace shell、renderer bridge 和 AI workflow session 测试继续通过。
 
 ## M93 完成内容
@@ -571,9 +571,11 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 
 - `@novel-studio/llm-adapter` 新增 `createProviderRouter()`，将 OpenAI/GPT、DeepSeek、GLM/Zhipu、通义、OpenRouter 和本地 OpenAI-compatible 服务路由到兼容 runtime provider；Anthropic/Claude 保留原生 provider 路径。
 - LLM Adapter 成功响应和 streaming start/done 事件的 `provider` 改为用户选择的 model profile provider，避免 DeepSeek 经兼容层执行后在观测里显示成内部 provider。
-- Desktop 组合层新增 `createAiProvider` 注入点；默认离线仍使用本地 mock，测试和未来真实运行时可注入 provider router，不再把 AI workflow 永久固定在 mock provider。
+- Desktop 默认启动路径已注入真实 provider runtime：从 settings profile 解析默认 provider，通过 Electron `safeStorage` backed secret store 读取真实 API Key，并用 provider router 调用 OpenAI-compatible runtime；只有未保存真实 Key 时才进入带明确提示的演示模式。
+- Settings 保存真实 API Key 时写入加密 secret store，`settings.json` 只保留 `secret://<profileId>/api_key` 引用；“测试连接”会发起真实 `/chat/completions` 请求，成功后记录该 profile/key 已通过验证，AI 建议只有在 key 已保存且验证通过后才走真实 provider。
 - 新增 `apps/desktop/test/m95-provider-runtime-routing.test.ts`，验证默认 DeepSeek profile 能进入 OpenAI-compatible runtime provider，并在 AI 建议观测里保留 DeepSeek provider 信息。
-- M95 不包含 live benchmark、streaming 体验补完、密钥库实现或长尾 provider 专用 translator；这些不影响作者先完成“AI 建议→审阅→手动应用”的 v1 核心闭环。
+- 新增 `apps/desktop/test/m95-real-provider-runtime.test.ts`，验证密钥密文落盘、真实连接测试请求携带 Bearer key、已验证 DeepSeek profile 的 AI 建议不再返回 mock 文案。
+- M95 仍不包含 live benchmark、streaming 体验补完或长尾 provider 专用 translator；真实 API Key 人工验收仍需用户在桌面 dev/打包环境里完成，不能仅以 npm test 作为 ship-ready 结论。
 
 ## M96 完成内容
 
@@ -644,22 +646,22 @@ Scope Review 必须回答：
 
 ## Scope Review - 2026-07-07 after M98
 
-| 检查项           | 结论                                                                                                                                                                 | 处理                                                                                          |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| 核心写作闭环     | `docs/releases/m98-v1-ship-readiness.md` 已记录 v1 ship decision: GO；核心写作旅程、AI 审阅应用、保存重开、恢复、Story Bible 冲突提示和公开安装门禁都有测试/门禁证据 | 可以进入 v1 handoff；不得把非核心候选项重新塞回 v1 主线                                       |
-| 接下来 milestone | M98 未发现必须新增 M99/M100 的 v1 blocker；阅读朗读裁决为 v1.1 backlog go，而不是 v1 blocker                                                                         | 不新增 M99/M100；若要做阅读朗读，必须另开 v1.1 milestone，第一版边界受 M98 readiness 文档约束 |
-| 文件重构阈值     | `workspace-shell.tsx` 1157 行、`App.tsx` 1171 行、`ai-writing-workflow-session.ts` 984 行，均低于硬阈值但接近边界                                                    | 不阻塞 v1 ship；v1.1 新功能前必须再次 Scope Review，避免继续在近阈值文件上堆大功能            |
-| 可砍/延后项      | 插件市场、生产级第三方插件执行、Workflow Designer 完整编辑、CodeMirror 默认迁移、Timeline 深编辑、streaming/live benchmark、coverage threshold 等不影响核心闭环      | 全部保留在 v2/backlog；触发条件继续按下方规则执行，不能因为“完成度低”自动回到主线路线图       |
+| 检查项           | 结论                                                                                                                                                                                                              | 处理                                                                                          |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| 核心写作闭环     | `docs/releases/m98-v1-ship-readiness.md` 已下调为 conditional：核心写作旅程、保存重开、恢复、Story Bible 冲突提示和公开安装门禁有测试/门禁证据；真实 provider 默认启动路径已修复，但仍待用户用真实 Key 做人工验收 | 人工验收通过前不得宣称 v1 provider ship-ready；不得把非核心候选项重新塞回 v1 主线             |
+| 接下来 milestone | M98 未发现必须新增 M99/M100 的 v1 blocker；阅读朗读裁决为 v1.1 backlog go，而不是 v1 blocker                                                                                                                      | 不新增 M99/M100；若要做阅读朗读，必须另开 v1.1 milestone，第一版边界受 M98 readiness 文档约束 |
+| 文件重构阈值     | `workspace-shell.tsx` 900 行、`App.tsx` 1017 行、`ai-writing-workflow-session.ts` 984 行，均低于硬阈值；UI shell 和 renderer App 已按 M92 边界继续拆分                                                            | 不阻塞 provider 修复；v1.1 新功能前必须再次 Scope Review，避免继续在近阈值文件上堆大功能      |
+| 可砍/延后项      | 插件市场、生产级第三方插件执行、Workflow Designer 完整编辑、CodeMirror 默认迁移、Timeline 深编辑、streaming/live benchmark、coverage threshold 等不影响核心闭环                                                   | 全部保留在 v2/backlog；触发条件继续按下方规则执行，不能因为“完成度低”自动回到主线路线图       |
 
 ## 裁剪后后续路线
 
 - M92 Structural Refactor Gate：已完成。拆分 `workspace-shell.tsx`、`App.tsx` 和 `ai-writing-workflow-session.ts` 的职责边界，不新增用户功能；结构门禁已覆盖硬拆分阈值。
 - M93 Core Writing Journey E2E：已完成。E2E 覆盖创建/打开项目、写正文、生成 AI 建议、审阅应用、保存、关闭重开、继续编辑，且正文和历史不丢。
 - M94 Data Loss Hardening：已完成。dirty recovery、file-ref recovery、版本回滚前快照和 stale lock 类型化提示均有可复现测试；stale lock 不会自动删除受保护锁文件。
-- M95 Provider Compatibility Ship：已完成。常见公开 provider 可通过 `createProviderRouter()` 接入兼容或原生 runtime；桌面组合层可注入 provider router，DeepSeek 默认 profile 已有 AI 建议闭环测试证据。
+- M95 Provider Compatibility Ship：实现已完成，人工真实 Key 验收待用户确认。常见公开 provider 可通过 `createProviderRouter()` 接入兼容或原生 runtime；桌面默认启动路径已注入真实 provider runtime、加密 secret store 和真实连接测试；DeepSeek 默认 profile 已有自动化 AI 建议闭环测试证据。
 - M96 Story Bible Consistency Minimum：已完成。Story Bible 编辑器可显示显式冲突标记驱动的最小一致性提示，并提供跳转到相关 Story Bible 条目。
 - M97 Public Install Release Gate：已完成。`release:check` 验证公开安装门禁文档、核心 E2E、artifact secret scan、release channel、release notes 和 installer config；不 push、不上传、不发布。
-- M98 V1 Ship Audit：已完成。`docs/releases/m98-v1-ship-readiness.md` 记录 v1 ship decision: GO、核心闭环证据、验证命令、已知限制、v2/backlog 延期清单和阅读朗读 go/no-go；阅读朗读只进入 v1.1 backlog，不构成 v1 blocker；未授权 M99/M100。
+- M98 V1 Ship Audit：需复核。`docs/releases/m98-v1-ship-readiness.md` 已更新为 conditional：真实 provider 默认路径修复后仍需用户完成真实 API Key 人工验收；阅读朗读只进入 v1.1 backlog，不构成 v1 blocker；未授权 M99/M100。
 
 ## V2 / Backlog 触发条件
 
@@ -678,5 +680,5 @@ Scope Review 必须回答：
 - Windows 公开安装的签名/证书策略已有 M97 gate 文档和 release-check；真实证书材料和签名执行仍在仓库外。macOS notarization 和托管自动更新仅在对应分发渠道纳入 v1 时进入主线。
 - schema codegen 和更强 dependency boundary 工具尚未最终选择。
 - history 归档/压缩策略、stale lock recovery UI、完整多窗口状态编排仍需后续设计。
-- Provider Matrix 配置与运行时路由已覆盖 v1 主路径；Claude 仍需要在真实 runtime 中注入 Anthropic/native provider 或明确兼容代理。streaming、live benchmark、密钥库和长尾 provider 专用 translator 进入 v2/backlog 触发项。
+- Provider Matrix 配置、运行时路由、真实密钥加密存储和真实连接测试已覆盖 v1 主路径；Claude 仍需要在真实 runtime 中注入 Anthropic/native provider 或明确兼容代理。streaming、live benchmark 和长尾 provider 专用 translator 进入 v2/backlog 触发项。
 - `workspace-shell.tsx`、`App.tsx` 和 `ai-writing-workflow-session.ts` 低于 M92 硬阈值但接近边界；v1.1 新功能前必须先做 Scope Review，避免重新形成超大文件风险。

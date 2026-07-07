@@ -1,4 +1,4 @@
-﻿import type {
+import type {
   ActivityId,
   ApplicationCommand,
   ApplicationCommandId,
@@ -7,21 +7,16 @@
   UserPreferencesSaveInput
 } from "@novel-studio/application";
 import type {
-  AiWritingWorkflowProps,
   ChapterEditorSelection,
   ChapterEditorProps,
   CommandPaletteFeedback,
   ConfigStudioPanelProps,
   ModelSettingsDraft,
-  ModelSettingsPanelProps,
-  ProjectSearchProps,
   StoryBibleEditorDraft,
   StoryBibleEditorKind,
-  StoryBibleEditorProps,
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
-import { WorkspaceShell } from "@novel-studio/ui";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
 import { createAiWritingWorkflowBridge } from "./ai-writing-workflow-bridge.js";
 import { createChapterEditorBridge } from "./chapter-editor-bridge.js";
@@ -31,13 +26,11 @@ import { createProjectSearchBridge } from "./project-search-bridge.js";
 import { createStoryBibleBridge } from "./story-bible-bridge.js";
 import { createSettingsBridge } from "./settings-bridge.js";
 import { createStudioBridge } from "./studio-bridge.js";
-import { reduceRendererShortcut } from "./shortcuts.js";
 import {
   createEditorSelectionCommand,
   createTextareaEditorRuntimeAdapter
 } from "./editor-runtime.js";
 import {
-  applyShellPreferences,
   createChapterEditorRuntime,
   createOnboardingProps,
   getNovelStudioApi,
@@ -45,6 +38,8 @@ import {
   rendererShellState,
   shellPreferencesFromState
 } from "./app-shell-support.js";
+import { useRendererAppEffects } from "./renderer-app-effects.js";
+import { RendererWorkspaceShell } from "./renderer-workspace-shell.js";
 
 export function App() {
   const [api] = useState(() => getNovelStudioApi());
@@ -97,126 +92,23 @@ export function App() {
   >(undefined);
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const result = reduceRendererShortcut(shortcutState, event);
-
-      if (result.handled) {
-        event.preventDefault();
-        setShortcutState(result.state);
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [shortcutState]);
-
-  useEffect(() => {
-    if (api === undefined) {
-      return;
-    }
-
-    let active = true;
-
-    void api.getShellState().then((nextShellState) => {
-      if (active) {
-        setShellState(nextShellState);
-      }
-    });
-    void api.commands.list().then((nextCommands) => {
-      if (active) {
-        setCommands(nextCommands);
-      }
-    });
-    void api.preferences.load().then((result) => {
-      if (!active || !result.ok) {
-        return;
-      }
-
-      setOnboardingDismissed(result.value.onboarding.dismissed);
-      setShellState((current) => applyShellPreferences(current, result.value.shell));
-    });
-
-    return () => {
-      active = false;
-    };
-  }, [api]);
-
-  useEffect(() => {
-    if (chapterBridge === undefined) {
-      return;
-    }
-
-    let active = true;
-
-    void chapterBridge.load().then((nextChapterEditor) => {
-      if (active) {
-        setChapterEditor(nextChapterEditor);
-      }
-    });
-
-    return () => {
-      active = false;
-    };
-  }, [chapterBridge]);
-
-  useEffect(() => {
-    if (storyBibleBridge === undefined) {
-      return;
-    }
-
-    let active = true;
-
-    void storyBibleBridge.load().then((nextStoryBible) => {
-      if (active) {
-        setStoryBible(nextStoryBible);
-        setStoryBibleEditor(storyBibleBridge.getEditorProps());
-      }
-    });
-
-    return () => {
-      active = false;
-    };
-  }, [storyBibleBridge]);
-
-  useEffect(() => {
-    if (settingsBridge === undefined) {
-      return;
-    }
-
-    let active = true;
-
-    void settingsBridge.load().then((nextSettings) => {
-      if (active) {
-        setSettings(nextSettings);
-      }
-    });
-
-    return () => {
-      active = false;
-    };
-  }, [settingsBridge]);
-
-  useEffect(() => {
-    if (studioBridge === undefined) {
-      return;
-    }
-
-    let active = true;
-
-    void studioBridge.load().then((nextStudio) => {
-      if (active) {
-        setStudio(nextStudio);
-      }
-    });
-
-    return () => {
-      active = false;
-    };
-  }, [studioBridge]);
+  useRendererAppEffects({
+    api,
+    chapterBridge,
+    storyBibleBridge,
+    settingsBridge,
+    studioBridge,
+    shortcutState,
+    setShortcutState,
+    setShellState,
+    setCommands,
+    setOnboardingDismissed,
+    setChapterEditor,
+    setStoryBible,
+    setStoryBibleEditor,
+    setSettings,
+    setStudio
+  });
 
   const handleBodyChange = useCallback(
     (nextBody: string) => {
@@ -1055,109 +947,63 @@ export function App() {
   });
 
   return (
-    <WorkspaceShell
-      {...(aiWritingWorkflow === undefined
-        ? {}
-        : {
-            aiWritingWorkflow: {
-              ...aiWritingWorkflow,
-              onInstructionChange: handleAiInstructionChange,
-              onGenerateSuggestion: handleGenerateAiSuggestion,
-              onApplySuggestion: handleApplyAiSuggestion,
-              onRejectSelectionReview: handleRejectSelectionReview,
-              onUndoSelectionReview: handleUndoSelectionReview,
-              onRetrySuggestion: handleGenerateAiSuggestion,
-              onCancelStreaming: handleCancelAiStreaming
-            } satisfies AiWritingWorkflowProps
-          })}
-      {...(projectWorkflow === undefined
-        ? {}
-        : {
-            projectWorkflow: {
-              ...projectWorkflow,
-              onProjectRootChange: handleProjectRootChange,
-              onOpenProject: handleOpenProject,
-              onCreateProject: handleCreateProject,
-              onCreateChapter: handleCreateChapter,
-              onSelectChapter: handleSelectChapter,
-              onCloseChapterTab: handleCloseChapterTab,
-              onPreviewRecoveryDraft: handlePreviewRecoveryDraft,
-              onApplyRecoveryDraft: handleApplyRecoveryDraft,
-              onDiscardRecoveryDraft: handleDiscardRecoveryDraft
-            }
-          })}
-      {...(projectSearch === undefined
-        ? {}
-        : {
-            search: {
-              ...projectSearch,
-              onQueryChange: handleSearchQueryChange,
-              onSearch: handleProjectSearch,
-              onRebuildIndex: handleRebuildSearchIndex
-            } satisfies ProjectSearchProps
-          })}
-      {...(settings === undefined
-        ? {}
-        : {
-            settings: {
-              ...settings,
-              onSelectProfile: handleSettingsProfileSelect,
-              onDraftChange: handleSettingsDraftChange,
-              onNewProfile: handleNewSettingsProfile,
-              onSaveProfile: handleSaveSettingsProfile,
-              onTestConnection: handleTestSettingsConnection,
-              onMakeDefault: handleMakeSettingsDefault,
-              ...(settings.plugins === undefined
-                ? {}
-                : {
-                    plugins: {
-                      ...settings.plugins,
-                      onRefresh: handleRefreshPluginRegistry,
-                      onSetEnabled: handleSetPluginEnabled
-                    }
-                  })
-            } satisfies ModelSettingsPanelProps
-          })}
-      {...(studio === undefined
-        ? {}
-        : {
-            studio: {
-              ...studio,
-              onAssetSelect: handleStudioAssetSelect,
-              onContentChange: handleStudioContentChange,
-              onWorkflowNodeSelect: handleStudioWorkflowNodeSelect,
-              onWorkflowEdgeSelect: handleStudioWorkflowEdgeSelect,
-              onWorkflowNodeEdit: handleStudioWorkflowNodeEdit,
-              onWorkflowSemanticEdit: handleStudioWorkflowSemanticEdit,
-              onWorkflowLayoutChange: handleStudioWorkflowLayoutChange,
-              onWorkflowNodeDragCommit: handleStudioWorkflowNodeDragCommit,
-              onSave: handleStudioSave,
-              onRestoreVersion: handleStudioRestoreVersion
-            } satisfies ConfigStudioPanelProps
-          })}
-      {...(interactiveChapterEditor === undefined
-        ? {}
-        : { chapterEditor: interactiveChapterEditor })}
+    <RendererWorkspaceShell
+      aiWritingWorkflow={aiWritingWorkflow}
+      projectWorkflow={projectWorkflow}
+      projectSearch={projectSearch}
+      settings={settings}
+      studio={studio}
+      chapterEditor={interactiveChapterEditor}
       onboarding={onboarding}
-      {...(storyBible === undefined ? {} : { storyBible })}
-      {...(storyBibleEditor === undefined
-        ? {}
-        : {
-            storyBibleEditor: {
-              ...storyBibleEditor,
-              onKindSelect: handleStoryBibleKindSelect,
-              onEntrySelect: handleStoryBibleEntrySelect,
-              onDraftChange: handleStoryBibleDraftChange,
-              onNewDraft: handleNewStoryBibleDraft,
-              onSave: handleSaveStoryBibleDraft
-            } satisfies StoryBibleEditorProps
-          })}
+      storyBible={storyBible}
+      storyBibleEditor={storyBibleEditor}
       shellState={shellState}
       commands={commands}
       commandPaletteOpen={shortcutState.commandPaletteOpen}
       commandPaletteFeedback={commandPaletteFeedback}
       commandPaletteQuery={commandPaletteQuery}
       commandPaletteSelectedCommandId={commandPaletteSelectedCommandId}
+      onAiInstructionChange={handleAiInstructionChange}
+      onGenerateAiSuggestion={handleGenerateAiSuggestion}
+      onApplyAiSuggestion={handleApplyAiSuggestion}
+      onRejectSelectionReview={handleRejectSelectionReview}
+      onUndoSelectionReview={handleUndoSelectionReview}
+      onCancelAiStreaming={handleCancelAiStreaming}
+      onProjectRootChange={handleProjectRootChange}
+      onOpenProject={handleOpenProject}
+      onCreateProject={handleCreateProject}
+      onCreateChapter={handleCreateChapter}
+      onSelectChapter={handleSelectChapter}
+      onCloseChapterTab={handleCloseChapterTab}
+      onPreviewRecoveryDraft={handlePreviewRecoveryDraft}
+      onApplyRecoveryDraft={handleApplyRecoveryDraft}
+      onDiscardRecoveryDraft={handleDiscardRecoveryDraft}
+      onSearchQueryChange={handleSearchQueryChange}
+      onProjectSearch={handleProjectSearch}
+      onRebuildSearchIndex={handleRebuildSearchIndex}
+      onSettingsProfileSelect={handleSettingsProfileSelect}
+      onSettingsDraftChange={handleSettingsDraftChange}
+      onNewSettingsProfile={handleNewSettingsProfile}
+      onSaveSettingsProfile={handleSaveSettingsProfile}
+      onTestSettingsConnection={handleTestSettingsConnection}
+      onMakeSettingsDefault={handleMakeSettingsDefault}
+      onRefreshPluginRegistry={handleRefreshPluginRegistry}
+      onSetPluginEnabled={handleSetPluginEnabled}
+      onStudioAssetSelect={handleStudioAssetSelect}
+      onStudioContentChange={handleStudioContentChange}
+      onStudioWorkflowNodeSelect={handleStudioWorkflowNodeSelect}
+      onStudioWorkflowEdgeSelect={handleStudioWorkflowEdgeSelect}
+      onStudioWorkflowNodeEdit={handleStudioWorkflowNodeEdit}
+      onStudioWorkflowSemanticEdit={handleStudioWorkflowSemanticEdit}
+      onStudioWorkflowLayoutChange={handleStudioWorkflowLayoutChange}
+      onStudioWorkflowNodeDragCommit={handleStudioWorkflowNodeDragCommit}
+      onStudioSave={handleStudioSave}
+      onStudioRestoreVersion={handleStudioRestoreVersion}
+      onStoryBibleKindSelect={handleStoryBibleKindSelect}
+      onStoryBibleEntrySelect={handleStoryBibleEntrySelect}
+      onStoryBibleDraftChange={handleStoryBibleDraftChange}
+      onNewStoryBibleDraft={handleNewStoryBibleDraft}
+      onSaveStoryBibleDraft={handleSaveStoryBibleDraft}
       onCommandExecute={handleCommandExecute}
       onCommandPaletteActiveCommandChange={handleCommandPaletteActiveCommandChange}
       onCommandPaletteOpen={handleCommandPaletteOpen}

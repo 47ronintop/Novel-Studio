@@ -12,6 +12,7 @@ import type {
 
 export interface OpenAiCompatibleTransportRequest {
   readonly url: string;
+  readonly headers?: JsonObject;
   readonly body: JsonObject;
   readonly timeoutMs?: number;
 }
@@ -23,6 +24,7 @@ export type OpenAiCompatibleTransport = (
 export interface OpenAiCompatibleProviderOptions {
   readonly transport: OpenAiCompatibleTransport;
   readonly streamTransport?: OpenAiCompatibleStreamTransport;
+  readonly resolveApiKey?: (apiKeyRef: string) => Promise<string | undefined>;
 }
 
 export type OpenAiCompatibleStreamTransport = (
@@ -59,7 +61,7 @@ export function createOpenAiCompatibleProvider(
     id: "openai-compatible",
     async complete(request) {
       try {
-        const payload = await options.transport(createTransportRequest(request));
+        const payload = await options.transport(await createTransportRequest(request, options));
         return parseChatCompletion(payload);
       } catch (error) {
         throw normalizeOpenAiCompatibleError(error);
@@ -70,17 +72,20 @@ export function createOpenAiCompatibleProvider(
         return unsupportedStream();
       }
 
-      return streamChatCompletion(options.streamTransport, request);
+      return streamChatCompletion(options.streamTransport, request, options);
     }
   };
 }
 
 async function* streamChatCompletion(
   streamTransport: OpenAiCompatibleStreamTransport,
-  request: LlmRequest
+  request: LlmRequest,
+  options: Pick<OpenAiCompatibleProviderOptions, "resolveApiKey">
 ): AsyncIterable<LlmProviderStreamEvent> {
   try {
-    for await (const chunk of streamTransport(createTransportRequest(request, true))) {
+    for await (const chunk of streamTransport(
+      await createTransportRequest(request, options, true)
+    )) {
       for (const event of parseStreamChunk(chunk)) {
         yield event;
       }
@@ -108,8 +113,9 @@ function unsupportedStream(): AsyncIterable<LlmProviderStreamEvent> {
 
 function createTransportRequest(
   request: LlmRequest,
+  options: Pick<OpenAiCompatibleProviderOptions, "resolveApiKey">,
   streaming = false
-): OpenAiCompatibleTransportRequest {
+): Promise<OpenAiCompatibleTransportRequest> {
   const baseUrl = request.modelProfile.baseUrl;
   if (baseUrl === undefined || baseUrl.length === 0) {
     throw new LlmProviderFailure({
@@ -140,11 +146,33 @@ function createTransportRequest(
     body
   };
 
-  return request.modelProfile.timeoutMs === undefined
-    ? transportRequest
+  return createTransportRequestWithSecret(request, options, transportRequest);
+}
+
+async function createTransportRequestWithSecret(
+  request: LlmRequest,
+  options: Pick<OpenAiCompatibleProviderOptions, "resolveApiKey">,
+  transportRequest: Pick<OpenAiCompatibleTransportRequest, "url" | "body">
+): Promise<OpenAiCompatibleTransportRequest> {
+  const apiKey =
+    options.resolveApiKey === undefined
+      ? undefined
+      : await options.resolveApiKey(request.modelProfile.apiKeyRef ?? "");
+  const requestWithTimeout =
+    request.modelProfile.timeoutMs === undefined
+      ? transportRequest
+      : {
+          ...transportRequest,
+          timeoutMs: request.modelProfile.timeoutMs
+        };
+
+  return apiKey === undefined
+    ? requestWithTimeout
     : {
-        ...transportRequest,
-        timeoutMs: request.modelProfile.timeoutMs
+        ...requestWithTimeout,
+        headers: {
+          authorization: `Bearer ${apiKey}`
+        }
       };
 }
 

@@ -119,6 +119,7 @@ export interface NovelStudioApi {
       profile: ModelProfile,
       options?: { readonly makeDefault?: boolean }
     ): Promise<Result<ModelSettingsSnapshot, UnifiedError>>;
+    saveModelSecret(secretRef: string, secret: string): Promise<Result<void, UnifiedError>>;
     testModelProfileConnection(
       profileId: string
     ): Promise<Result<ModelConnectionResult, UnifiedError>>;

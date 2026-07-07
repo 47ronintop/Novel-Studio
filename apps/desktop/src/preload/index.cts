@@ -179,6 +179,12 @@ const api: NovelStudioApi = {
         profile,
         options
       ),
+    saveModelSecret: (secretRef: string, secret: string) =>
+      invokeTyped<Result<void, UnifiedError>>(
+        "application:settings:save-model-secret",
+        secretRef,
+        secret
+      ),
     testModelProfileConnection: (profileId: string) =>
       invokeTyped<Result<ModelConnectionResult, UnifiedError>>(
         "application:settings:test-model-profile",
