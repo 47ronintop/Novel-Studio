@@ -103,6 +103,7 @@ export interface DesktopShellState {
   readonly inspectorCollapsed: boolean;
   readonly bottomPanelVisible: boolean;
   readonly activeBottomPanelTab: string;
+  readonly focusMode: boolean;
   readonly workspaceLayout: WorkspaceLayoutState;
   readonly commandPaletteOpen: boolean;
   readonly saveStatus: SaveStatus;
@@ -220,6 +221,7 @@ const DEFAULT_SHELL_STATE: DesktopShellState = {
   inspectorCollapsed: true,
   bottomPanelVisible: false,
   activeBottomPanelTab: "工作流运行",
+  focusMode: false,
   workspaceLayout: {
     splitView: false,
     navigatorWidth: 260,
@@ -889,6 +891,8 @@ function reduceShellState(
           splitView: !shellState.workspaceLayout.splitView
         }
       };
+    case "workspace.toggle-focus-mode":
+      return { ...shellState, focusMode: !shellState.focusMode };
     case "workspace.narrow-navigator":
       return {
         ...shellState,

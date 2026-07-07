@@ -1,11 +1,13 @@
 import { ok, type Result, type UnifiedError } from "@novel-studio/shared";
 import type {
+  UserEditorPreferences,
   UserPreferencesPort,
   UserPreferencesSaveInput,
   UserPreferencesSnapshot
 } from "@novel-studio/shared";
 
 export type {
+  UserEditorPreferences,
   UserOnboardingPreferences,
   UserPreferencesPort,
   UserPreferencesSaveInput,
@@ -50,6 +52,10 @@ export function createUserPreferencesSession(
           ...baseResult.value.onboarding,
           ...input.onboarding
         },
+        editor: normalizeEditorPreferences({
+          ...baseResult.value.editor,
+          ...input.editor
+        }),
         shell: {
           ...baseResult.value.shell,
           ...input.shell,
@@ -85,11 +91,17 @@ export function createDefaultUserPreferences(): UserPreferencesSnapshot {
     onboarding: {
       dismissed: false
     },
+    editor: {
+      fontFamily: "mono",
+      fontSize: 13,
+      lineHeight: 1.7
+    },
     shell: {
       navigatorCollapsed: false,
       inspectorCollapsed: true,
       bottomPanelVisible: false,
       activeBottomPanelTab: "工作流运行",
+      focusMode: false,
       workspaceLayout: {
         splitView: false,
         navigatorWidth: 260,
@@ -101,22 +113,50 @@ export function createDefaultUserPreferences(): UserPreferencesSnapshot {
 }
 
 function normalizeUserPreferences(preferences: UserPreferencesSnapshot): UserPreferencesSnapshot {
-  if (!isLegacyExpandedDefaultLayout(preferences.shell)) {
-    return preferences;
+  const normalized: UserPreferencesSnapshot = {
+    ...preferences,
+    editor: normalizeEditorPreferences(preferences.editor ?? createDefaultUserPreferences().editor),
+    shell: {
+      ...preferences.shell,
+      focusMode: preferences.shell.focusMode ?? false
+    }
+  };
+
+  if (!isLegacyExpandedDefaultLayout(normalized.shell)) {
+    return normalized;
   }
 
   return {
-    ...preferences,
+    ...normalized,
     shell: {
-      ...preferences.shell,
+      ...normalized.shell,
       inspectorCollapsed: true,
       bottomPanelVisible: false,
       workspaceLayout: {
-        ...preferences.shell.workspaceLayout,
+        ...normalized.shell.workspaceLayout,
         bottomPanelHeight: 180
       }
     }
   };
+}
+
+function normalizeEditorPreferences(preferences: UserEditorPreferences): UserEditorPreferences {
+  return {
+    fontFamily:
+      preferences.fontFamily === "serif" || preferences.fontFamily === "sans"
+        ? preferences.fontFamily
+        : "mono",
+    fontSize: clampNumber(preferences.fontSize, 12, 20),
+    lineHeight: clampNumber(preferences.lineHeight, 1.4, 2)
+  };
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+
+  return Math.min(max, Math.max(min, value));
 }
 
 function isLegacyExpandedDefaultLayout(shell: UserPreferencesSnapshot["shell"]): boolean {

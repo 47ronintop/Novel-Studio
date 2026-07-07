@@ -38,6 +38,7 @@ export type {
 } from "./desktop-application.js";
 export { createProjectSearchSession } from "./project-search-session.js";
 export type {
+  UserEditorPreferences,
   UserOnboardingPreferences,
   UserPreferencesPort,
   UserPreferencesSaveInput,

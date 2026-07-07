@@ -30,11 +30,17 @@ describe("UserPreferencesFileRepository", () => {
     const written = await repository.writeUserPreferences({
       schemaVersion: "1.0",
       onboarding: { dismissed: true },
+      editor: {
+        fontFamily: "serif",
+        fontSize: 16,
+        lineHeight: 1.8
+      },
       shell: {
         navigatorCollapsed: true,
         inspectorCollapsed: false,
         bottomPanelVisible: true,
         activeBottomPanelTab: "问题",
+        focusMode: false,
         workspaceLayout: {
           splitView: true,
           navigatorWidth: 300,

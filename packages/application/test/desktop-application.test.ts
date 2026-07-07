@@ -82,6 +82,7 @@ describe("desktop application command bridge", () => {
       inspectorCollapsed: true,
       bottomPanelVisible: false,
       activeBottomPanelTab: "工作流运行",
+      focusMode: false,
       workspaceLayout: {
         splitView: false,
         navigatorWidth: 260,
@@ -130,6 +131,13 @@ describe("desktop application command bridge", () => {
         defaultShortcut: "Ctrl/Cmd+\\"
       },
       {
+        id: "workspace.toggle-focus-mode",
+        title: "切换专注模式",
+        scope: "workspace",
+        riskLevel: "safe",
+        defaultShortcut: "Ctrl/Cmd+Shift+F"
+      },
+      {
         id: "workspace.narrow-navigator",
         title: "收窄项目导航",
         scope: "workspace",
@@ -168,6 +176,23 @@ describe("desktop application command bridge", () => {
 
     expect(result.ok).toBe(true);
     expect(application.getShellState().navigatorCollapsed).toBe(true);
+  });
+
+  test("toggles focus mode as a safe workspace command", () => {
+    const application = createDesktopApplication();
+
+    const enabled = application.executeCommand("workspace.toggle-focus-mode");
+    const disabled = application.executeCommand("workspace.toggle-focus-mode");
+
+    expect(enabled.ok).toBe(true);
+    expect(disabled.ok).toBe(true);
+    expect(enabled).toMatchObject({
+      ok: true,
+      value: {
+        focusMode: true
+      }
+    });
+    expect(application.getShellState().focusMode).toBe(false);
   });
 
   test("toggles bottom panel visibility without changing the active bottom tab", () => {

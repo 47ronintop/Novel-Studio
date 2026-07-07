@@ -32,6 +32,7 @@ export const rendererShellState: DesktopShellState = {
   inspectorCollapsed: true,
   bottomPanelVisible: false,
   activeBottomPanelTab: "工作流运行",
+  focusMode: false,
   workspaceLayout: {
     splitView: false,
     navigatorWidth: 260,
@@ -89,6 +90,13 @@ export const rendererCommands: readonly ApplicationCommand[] = [
     scope: "workspace",
     riskLevel: "safe",
     defaultShortcut: "Ctrl/Cmd+\\"
+  },
+  {
+    id: "workspace.toggle-focus-mode",
+    title: "切换专注模式",
+    scope: "workspace",
+    riskLevel: "safe",
+    defaultShortcut: "Ctrl/Cmd+Shift+F"
   },
   {
     id: "workspace.narrow-navigator",
@@ -181,6 +189,7 @@ export function shellPreferencesFromState(
     inspectorCollapsed: shellState.inspectorCollapsed,
     bottomPanelVisible: shellState.bottomPanelVisible,
     activeBottomPanelTab: shellState.activeBottomPanelTab,
+    focusMode: shellState.focusMode,
     workspaceLayout: shellState.workspaceLayout
   };
 }
@@ -203,6 +212,7 @@ export function applyShellPreferences(
     ...(preferences.activeBottomPanelTab === undefined
       ? {}
       : { activeBottomPanelTab: preferences.activeBottomPanelTab }),
+    ...(preferences.focusMode === undefined ? {} : { focusMode: preferences.focusMode }),
     workspaceLayout: {
       ...shellState.workspaceLayout,
       ...preferences.workspaceLayout

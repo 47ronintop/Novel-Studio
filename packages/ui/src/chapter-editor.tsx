@@ -1,6 +1,14 @@
 import type { ChapterDocument } from "@novel-studio/shared";
 import { Eye, History, RotateCcw, Save, SquarePen } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
+import { EditorFindReplace } from "./editor-find-replace.js";
+import {
+  calculateWritingMetrics,
+  DEFAULT_EDITOR_PREFERENCES,
+  editorFontFamilyValue,
+  EditorToolbar,
+  type EditorPreferences
+} from "./editor-toolbar.js";
 
 const LARGE_DOCUMENT_LINE_THRESHOLD = 200;
 const MAX_RENDERED_GUTTER_LINES = 120;
@@ -48,8 +56,11 @@ export interface ChapterEditorProps {
   readonly diffPreview?: ChapterEditorDiffPreview;
   readonly selectionReview?: ChapterEditorSelectionReview;
   readonly runtime?: ChapterEditorRuntimeProps;
+  readonly editorPreferences?: EditorPreferences;
   readonly onBodyChange?: (nextBody: string) => void;
   readonly onSelectionChange?: (selection: ChapterEditorSelection) => void;
+  readonly onEditorPreferencesChange?: (preferences: EditorPreferences) => void;
+  readonly onFocusModeToggle?: () => void;
   readonly onSave?: () => void;
   readonly onSelectionReviewAccept?: () => void;
   readonly onSelectionReviewReject?: () => void;
@@ -86,8 +97,11 @@ export function ChapterEditor({
   diffPreview,
   selectionReview,
   runtime,
+  editorPreferences = DEFAULT_EDITOR_PREFERENCES,
   onBodyChange,
   onSelectionChange,
+  onEditorPreferencesChange,
+  onFocusModeToggle,
   onSave,
   onSelectionReviewAccept,
   onSelectionReviewReject,
@@ -97,8 +111,10 @@ export function ChapterEditor({
   onVersionRestore
 }: ChapterEditorProps) {
   const editorStateLabel = dirty ? "已修改" : "未修改";
+  const [findReplaceOpen, setFindReplaceOpen] = useState(false);
   const documentLines = useMemo(() => chapter.body.split("\n"), [chapter.body]);
   const metrics = useMemo(() => calculateDocumentMetrics(chapter.body), [chapter.body]);
+  const writingMetrics = useMemo(() => calculateWritingMetrics(chapter.body), [chapter.body]);
   const largeDocument = metrics.lineCount > LARGE_DOCUMENT_LINE_THRESHOLD;
   const gutterLines = largeDocument
     ? documentLines.slice(0, MAX_RENDERED_GUTTER_LINES)
@@ -107,6 +123,11 @@ export function ChapterEditor({
   const handleSelectionChange = (source: TextareaSelectionSource) => {
     onSelectionChange?.(readTextareaSelection(source));
   };
+  const editorStyle = {
+    "--ns-editor-font-family": editorFontFamilyValue(editorPreferences.fontFamily),
+    "--ns-editor-font-size": `${editorPreferences.fontSize}px`,
+    "--ns-editor-line-height": String(editorPreferences.lineHeight)
+  } as CSSProperties;
 
   return (
     <section className="ns-editor-layout" aria-label="章节编辑器">
@@ -149,10 +170,28 @@ export function ChapterEditor({
         />
       )}
 
+      <EditorToolbar
+        findReplaceOpen={findReplaceOpen}
+        metrics={writingMetrics}
+        preferences={editorPreferences}
+        onFindReplaceToggle={() => setFindReplaceOpen((current) => !current)}
+        {...(onEditorPreferencesChange === undefined
+          ? {}
+          : { onPreferencesChange: onEditorPreferencesChange })}
+        {...(onFocusModeToggle === undefined ? {} : { onFocusModeToggle })}
+      />
+      <EditorFindReplace
+        body={chapter.body}
+        open={findReplaceOpen}
+        {...(onBodyChange === undefined ? {} : { onBodyChange })}
+        {...(onSelectionChange === undefined ? {} : { onSelectionChange })}
+      />
+
       <div
         className="ns-editor-body"
         data-dirty={dirty}
         data-large-document={largeDocument}
+        style={editorStyle}
         {...(runtime?.runtimeId === undefined ? {} : { "data-runtime-id": runtime.runtimeId })}
       >
         <textarea
@@ -160,6 +199,12 @@ export function ChapterEditor({
           className="ns-editor-textarea"
           onChange={(event) => {
             onBodyChange?.(event.currentTarget.value);
+          }}
+          onKeyDown={(event) => {
+            if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "h") {
+              event.preventDefault();
+              setFindReplaceOpen(true);
+            }
           }}
           onKeyUp={(event) => {
             handleSelectionChange(event.currentTarget);

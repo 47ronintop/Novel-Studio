@@ -11,11 +11,13 @@ import type {
   ChapterEditorProps,
   CommandPaletteFeedback,
   ConfigStudioPanelProps,
+  EditorPreferences,
   ModelSettingsDraft,
   StoryBibleEditorDraft,
   StoryBibleEditorKind,
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
+import { DEFAULT_EDITOR_PREFERENCES } from "@novel-studio/ui";
 import { useCallback, useState } from "react";
 
 import { createAiWritingWorkflowBridge } from "./ai-writing-workflow-bridge.js";
@@ -88,6 +90,9 @@ export function App() {
     ApplicationCommandId | undefined
   >(undefined);
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
+  const [editorPreferences, setEditorPreferences] = useState<EditorPreferences>(
+    DEFAULT_EDITOR_PREFERENCES
+  );
 
   useRendererAppEffects({
     api,
@@ -101,6 +106,7 @@ export function App() {
     setShellState,
     setCommands,
     setOnboardingDismissed,
+    setEditorPreferences,
     setChapterEditor,
     setStoryBible,
     setStoryBibleEditor,
@@ -935,8 +941,14 @@ export function App() {
       : {
           ...chapterEditor,
           runtime: createChapterEditorRuntime(chapterEditor, chapterSelection),
+          editorPreferences,
           onBodyChange: handleBodyChange,
           onSelectionChange: handleSelectionChange,
+          onEditorPreferencesChange: (preferences: EditorPreferences) => {
+            setEditorPreferences(preferences);
+            persistUserPreferences({ editor: preferences });
+          },
+          onFocusModeToggle: () => handleCommandExecute("workspace.toggle-focus-mode"),
           onSelectionReviewAccept: handleApplyAiSuggestion,
           onSelectionReviewReject: handleRejectSelectionReview,
           onSelectionReviewUndo: handleUndoSelectionReview,

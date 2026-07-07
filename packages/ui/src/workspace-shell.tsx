@@ -17,6 +17,7 @@ import {
   FolderOpen,
   FolderPlus,
   BookOpen,
+  Maximize2,
   PanelBottom,
   PanelRight,
   Search,
@@ -121,23 +122,22 @@ export function WorkspaceShell({
   onTimelineEntryOpen,
   onActivitySelect
 }: WorkspaceShellProps) {
+  const focusMode = shellState.focusMode === true;
   const activeBottomPanelTab =
     shellState.bottomPanelTabs.includes(shellState.activeBottomPanelTab) === true
       ? shellState.activeBottomPanelTab
       : (shellState.bottomPanelTabs[0] ?? "工作流运行");
   const workspaceLayout = shellState.workspaceLayout ?? defaultWorkspaceLayout;
   const workspaceGridStyle = {
-    "--ns-navigator-width": shellState.navigatorCollapsed
-      ? "0px"
-      : `${workspaceLayout.navigatorWidth}px`,
-    "--ns-ai-panel-width": `${workspaceLayout.inspectorWidth}px`,
-    "--ns-bottom-panel-height": shellState.bottomPanelVisible
-      ? `${workspaceLayout.bottomPanelHeight}px`
-      : "0px"
+    "--ns-navigator-width":
+      focusMode || shellState.navigatorCollapsed ? "0px" : `${workspaceLayout.navigatorWidth}px`,
+    "--ns-ai-panel-width": focusMode ? "0px" : `${workspaceLayout.inspectorWidth}px`,
+    "--ns-bottom-panel-height":
+      !focusMode && shellState.bottomPanelVisible ? `${workspaceLayout.bottomPanelHeight}px` : "0px"
   } as CSSProperties;
 
   return (
-    <div className="ns-shell" data-theme="dark">
+    <div className="ns-shell" data-focus-mode={focusMode} data-theme="dark">
       <header className="ns-titlebar">
         <div className="ns-project-status">
           <span className="ns-project-title">{shellState.projectTitle}</span>
@@ -172,15 +172,30 @@ export function WorkspaceShell({
           >
             <PanelRight aria-hidden="true" size={14} />
           </button>
+          <button
+            aria-label="切换专注模式"
+            className="ns-icon-button"
+            onClick={() => onCommandExecute?.("workspace.toggle-focus-mode")}
+            title="切换专注模式"
+            type="button"
+          >
+            <Maximize2 aria-hidden="true" size={14} />
+          </button>
         </div>
       </header>
 
       <div
         className="ns-workspace-grid"
+        data-focus-mode={focusMode}
         data-split-view={workspaceLayout.splitView}
         style={workspaceGridStyle}
       >
-        <aside className="ns-activity-bar" data-region="activity-bar" aria-label="活动栏">
+        <aside
+          className="ns-activity-bar"
+          data-focus-hidden={focusMode}
+          data-region="activity-bar"
+          aria-label="活动栏"
+        >
           {activities.map((activity) => {
             const Icon = activity.icon;
             const selected = activity.id === shellState.activeActivity;
@@ -207,7 +222,8 @@ export function WorkspaceShell({
         <nav
           aria-label="项目导航"
           className="ns-navigator"
-          data-collapsed={shellState.navigatorCollapsed}
+          data-collapsed={focusMode || shellState.navigatorCollapsed}
+          data-focus-hidden={focusMode}
           data-region="navigator"
         >
           <div className="ns-panel-header">
@@ -327,6 +343,7 @@ export function WorkspaceShell({
           aria-valuemin={220}
           aria-valuenow={workspaceLayout.navigatorWidth}
           className="ns-resize-handle ns-resize-handle-navigator"
+          data-focus-hidden={focusMode}
           onPointerDown={createPanelResizeHandler("navigator")}
           role="separator"
         />
@@ -360,11 +377,17 @@ export function WorkspaceShell({
           aria-valuemin={280}
           aria-valuenow={workspaceLayout.inspectorWidth}
           className="ns-resize-handle ns-resize-handle-ai"
+          data-focus-hidden={focusMode}
           onPointerDown={createPanelResizeHandler("ai")}
           role="separator"
         />
 
-        <aside aria-label="AI 对话面板" className="ns-ai-panel" data-region="ai-panel">
+        <aside
+          aria-label="AI 对话面板"
+          className="ns-ai-panel"
+          data-focus-hidden={focusMode}
+          data-region="ai-panel"
+        >
           <div className="ns-panel-header">
             <span>AI 对话</span>
             <PanelRight aria-hidden="true" size={15} />
@@ -429,8 +452,9 @@ export function WorkspaceShell({
         <section
           aria-label="底部面板"
           className="ns-bottom-panel"
+          data-focus-hidden={focusMode}
           data-region="bottom-panel"
-          data-visible={shellState.bottomPanelVisible}
+          data-visible={!focusMode && shellState.bottomPanelVisible}
         >
           <div className="ns-bottom-tabs" role="tablist" aria-label="底部面板标签">
             <PanelBottom aria-hidden="true" size={15} />

@@ -22,11 +22,17 @@ describe("UserPreferencesSession", () => {
       ok({
         schemaVersion: "1.0",
         onboarding: { dismissed: false },
+        editor: {
+          fontFamily: "mono",
+          fontSize: 13,
+          lineHeight: 1.7
+        },
         shell: {
           navigatorCollapsed: false,
           inspectorCollapsed: true,
           bottomPanelVisible: false,
           activeBottomPanelTab: "工作流运行",
+          focusMode: false,
           workspaceLayout: {
             splitView: false,
             navigatorWidth: 260,
@@ -62,6 +68,11 @@ describe("UserPreferencesSession", () => {
           inspectorWidth: 280,
           bottomPanelHeight: 180
         }
+      },
+      editor: {
+        fontFamily: "serif",
+        fontSize: 16,
+        lineHeight: 1.8
       }
     });
     const loaded = await session.load();
@@ -72,6 +83,11 @@ describe("UserPreferencesSession", () => {
       expect(loaded.value.onboarding.dismissed).toBe(true);
       expect(loaded.value.shell.workspaceLayout.splitView).toBe(true);
       expect(loaded.value.shell.activeBottomPanelTab).toBe("搜索");
+      expect(loaded.value.editor).toEqual({
+        fontFamily: "serif",
+        fontSize: 16,
+        lineHeight: 1.8
+      });
     }
   });
 
@@ -82,11 +98,17 @@ describe("UserPreferencesSession", () => {
           ok({
             schemaVersion: "1.0",
             onboarding: { dismissed: false },
+            editor: {
+              fontFamily: "mono",
+              fontSize: 13,
+              lineHeight: 1.7
+            },
             shell: {
               navigatorCollapsed: false,
               inspectorCollapsed: false,
               bottomPanelVisible: true,
               activeBottomPanelTab: "工作流运行",
+              focusMode: false,
               workspaceLayout: {
                 splitView: false,
                 navigatorWidth: 260,

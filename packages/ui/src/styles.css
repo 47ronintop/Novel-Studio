@@ -150,6 +150,17 @@ textarea:focus-visible,
   overflow: hidden;
 }
 
+.ns-shell[data-focus-mode="true"] .ns-titlebar,
+.ns-workspace-grid[data-focus-mode="true"] [data-focus-hidden="true"] {
+  display: none;
+}
+
+.ns-workspace-grid[data-focus-mode="true"] {
+  grid-template-areas: "editor";
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
 .ns-activity-bar {
   align-items: center;
   background: oklch(0.13 0.004 180);
@@ -1030,6 +1041,81 @@ textarea:focus-visible,
   color: var(--ns-warning);
 }
 
+.ns-editor-toolbar,
+.ns-editor-toolbar-metrics,
+.ns-editor-toolbar-actions,
+.ns-editor-find-replace {
+  align-items: center;
+  display: flex;
+}
+
+.ns-editor-toolbar {
+  background: color-mix(in oklch, var(--ns-surface) 86%, var(--ns-bg));
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  justify-content: space-between;
+  min-height: 34px;
+  padding: 5px 8px;
+}
+
+.ns-editor-toolbar-metrics,
+.ns-editor-toolbar-actions,
+.ns-editor-find-replace {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ns-editor-toolbar-metrics span,
+.ns-editor-find-count {
+  border: 1px solid var(--ns-border);
+  border-radius: 999px;
+  color: var(--ns-muted);
+  font-size: 12px;
+  min-height: 24px;
+  padding: 3px 8px;
+}
+
+.ns-editor-preference-control,
+.ns-editor-case-toggle {
+  align-items: center;
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  color: var(--ns-muted);
+  display: inline-flex;
+  gap: 5px;
+  min-height: 24px;
+  padding: 0 6px;
+}
+
+.ns-editor-preference-control select,
+.ns-editor-find-replace input {
+  background: transparent;
+  border: 0;
+  color: var(--ns-ink);
+  font: inherit;
+  outline: none;
+}
+
+.ns-editor-preference-control select {
+  max-width: 78px;
+}
+
+.ns-editor-find-replace {
+  background: color-mix(in oklch, var(--ns-surface) 86%, var(--ns-bg));
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  justify-content: flex-end;
+  padding: 6px 8px;
+}
+
+.ns-editor-find-replace input {
+  border: 1px solid var(--ns-border);
+  border-radius: 5px;
+  min-height: 26px;
+  padding: 0 8px;
+  width: min(180px, 34vw);
+}
+
 .ns-editor-title {
   font-size: 18px;
   margin: 0;
@@ -1090,10 +1176,17 @@ textarea:focus-visible,
   background: var(--ns-bg);
   border: 0;
   color: var(--ns-ink);
-  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 13px;
+  font-family: var(
+    --ns-editor-font-family,
+    "Cascadia Mono",
+    "SFMono-Regular",
+    Consolas,
+    "Liberation Mono",
+    monospace
+  );
+  font-size: var(--ns-editor-font-size, 13px);
   grid-column: 2;
-  line-height: 1.7;
+  line-height: var(--ns-editor-line-height, 1.7);
   min-height: 360px;
   outline: none;
   padding: 18px 20px;

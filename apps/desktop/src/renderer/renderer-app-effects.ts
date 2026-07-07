@@ -6,6 +6,7 @@ import type {
 import type {
   AiWritingWorkflowProps,
   ChapterEditorProps,
+  EditorPreferences,
   StoryBibleEditorProps,
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
@@ -31,6 +32,7 @@ export interface RendererAppEffectsInput {
   readonly setShellState: Dispatch<SetStateAction<DesktopShellState>>;
   readonly setCommands: Dispatch<SetStateAction<readonly ApplicationCommand[]>>;
   readonly setOnboardingDismissed: Dispatch<SetStateAction<boolean>>;
+  readonly setEditorPreferences: Dispatch<SetStateAction<EditorPreferences>>;
   readonly setChapterEditor: Dispatch<SetStateAction<ChapterEditorProps | undefined>>;
   readonly setAiWritingWorkflow: Dispatch<SetStateAction<AiWritingWorkflowProps | undefined>>;
   readonly setStoryBible: Dispatch<SetStateAction<StoryBibleSummaryProps | undefined>>;
@@ -53,6 +55,7 @@ export function useRendererAppEffects(input: RendererAppEffectsInput): void {
     setChapterEditor,
     setAiWritingWorkflow,
     setCommands,
+    setEditorPreferences,
     setOnboardingDismissed,
     setSettings,
     setShellState,
@@ -102,13 +105,14 @@ export function useRendererAppEffects(input: RendererAppEffectsInput): void {
       }
 
       setOnboardingDismissed(result.value.onboarding.dismissed);
+      setEditorPreferences(result.value.editor);
       setShellState((current) => applyShellPreferences(current, result.value.shell));
     });
 
     return () => {
       active = false;
     };
-  }, [api, setCommands, setOnboardingDismissed, setShellState]);
+  }, [api, setCommands, setEditorPreferences, setOnboardingDismissed, setShellState]);
 
   useEffect(() => {
     if (aiWritingWorkflowBridge === undefined) {

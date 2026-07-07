@@ -125,6 +125,35 @@ describe("ChapterEditor", () => {
     expect(html.match(/ns-editor-line-number/g)?.length).toBe(120);
   });
 
+  test("renders editor toolbar metrics, find-replace entry, and editor style preferences", () => {
+    const html = renderToStaticMarkup(
+      <ChapterEditor
+        chapter={{
+          ...chapter,
+          body: "她走进雨里。\nA quiet room waits."
+        }}
+        saveStatus="Unsaved"
+        dirty={true}
+        versionHistory={[]}
+        editorPreferences={{
+          fontFamily: "serif",
+          fontSize: 16,
+          lineHeight: 1.8
+        }}
+        onEditorPreferencesChange={() => undefined}
+        onFocusModeToggle={() => undefined}
+      />
+    );
+
+    expect(html).toContain('aria-label="编辑器工具栏"');
+    expect(html).toContain("9 字");
+    expect(html).toContain("约 1 分钟阅读");
+    expect(html).toContain('aria-label="打开查找替换"');
+    expect(html).toContain('aria-label="切换专注模式"');
+    expect(html).toContain("--ns-editor-font-size:16px");
+    expect(html).toContain("--ns-editor-line-height:1.8");
+  });
+
   test("renders editor runtime status without filesystem details", () => {
     const html = renderToStaticMarkup(
       <ChapterEditor

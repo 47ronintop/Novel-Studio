@@ -4,6 +4,7 @@ export type WorkspaceApplicationCommandId =
   | "workspace.toggle-inspector"
   | "workspace.toggle-bottom-panel"
   | "workspace.toggle-split-view"
+  | "workspace.toggle-focus-mode"
   | "workspace.narrow-navigator"
   | "workspace.widen-navigator"
   | "workspace.narrow-inspector"
@@ -66,6 +67,13 @@ export const DEFAULT_APPLICATION_COMMANDS: readonly (ApplicationCommand & {
     scope: "workspace",
     riskLevel: "safe",
     defaultShortcut: "Ctrl/Cmd+\\"
+  },
+  {
+    id: "workspace.toggle-focus-mode",
+    title: "切换专注模式",
+    scope: "workspace",
+    riskLevel: "safe",
+    defaultShortcut: "Ctrl/Cmd+Shift+F"
   },
   {
     id: "workspace.narrow-navigator",

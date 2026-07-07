@@ -13,6 +13,19 @@ export type {
   ChapterEditorSelection,
   ChapterEditorVersionEntry
 } from "./chapter-editor.js";
+export {
+  findEditorMatches,
+  replaceAllEditorMatches,
+  replaceCurrentEditorMatch
+} from "./editor-find-replace.js";
+export type { EditorTextRange } from "./editor-find-replace.js";
+export {
+  calculateWritingMetrics,
+  DEFAULT_EDITOR_PREFERENCES,
+  EditorToolbar,
+  editorFontFamilyValue
+} from "./editor-toolbar.js";
+export type { EditorFontFamily, EditorPreferences, WritingMetrics } from "./editor-toolbar.js";
 export { ConfigStudioPanel } from "./config-studio-panel.js";
 export type {
   ConfigStudioAsset,

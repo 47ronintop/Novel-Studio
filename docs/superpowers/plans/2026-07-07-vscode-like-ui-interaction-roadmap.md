@@ -365,23 +365,35 @@ Verification result on 2026-07-07: targeted runtime/UI tests passed, Electron pr
 - Modify: `packages/application/src/user-preferences-session.ts`
 - Modify: `apps/desktop/src/renderer/app-shell-support.ts`
 - Modify: `packages/ui/src/styles.css`
-- Test: `packages/ui/test/editor-runtime-workflow-ux.test.tsx`
-- Test: `packages/application/test/project-workflow-session.test.ts`
+- Test: `packages/ui/test/editor-toolbar.test.tsx`
+- Test: `packages/ui/test/editor-find-replace.test.ts`
+- Test: `packages/ui/test/chapter-editor.test.tsx`
+- Test: `packages/ui/test/workspace-shell.test.tsx`
+- Test: `packages/application/test/user-preferences-session.test.ts`
+- Test: `packages/application/test/desktop-application.test.ts`
+- Test: `packages/repository/test/user-preferences-repository.test.ts`
 
 **Steps:**
 
-- [ ] 增加实时字数和阅读时间计算；中文按字符计数，英文按词计数，空白不计入中文字符。
-- [ ] 增加 `Ctrl+H` 查找替换条，支持上一处/下一处、区分大小写、替换当前、全部替换。
-- [ ] 增加专注模式命令：隐藏 Navigator、AI/Inspector、Bottom Panel，只保留编辑器和状态栏。
-- [ ] 增加字体和行高偏好，写入 user preferences，重启后恢复。
-- [ ] 所有工具按钮使用图标、tooltip、accessible label，不使用大段说明文字占据编辑器。
+- [x] 增加实时字数和阅读时间计算；中文按字符计数，英文按词计数，空白不计入中文字符。
+- [x] 增加 `Ctrl+H` 查找替换条，支持上一处/下一处、区分大小写、替换当前、全部替换。
+- [x] 增加专注模式命令：隐藏 Navigator、AI/Inspector、Bottom Panel，只保留编辑器和状态栏。
+- [x] 增加字体和行高偏好，写入 user preferences，重启后恢复。
+- [x] 所有工具按钮使用图标、tooltip、accessible label，不使用大段说明文字占据编辑器。
 
 **Verification:**
 
 ```powershell
-npm test -- packages/ui/test/editor-runtime-workflow-ux.test.tsx packages/application/test/project-workflow-session.test.ts
+npm test -- packages/ui/test/editor-find-replace.test.ts packages/ui/test/editor-toolbar.test.tsx packages/ui/test/chapter-editor.test.tsx packages/ui/test/workspace-shell.test.tsx packages/application/test/user-preferences-session.test.ts packages/application/test/desktop-application.test.ts packages/repository/test/user-preferences-repository.test.ts apps/desktop/test/app-shell-support.test.ts
+npm test
 npm run typecheck
+npm run build
+npx playwright test apps/desktop/test/project-workflow.e2e.ts
 ```
+
+Execution status on 2026-07-07: implemented compact editor toolbar metrics, find/replace pure operations and UI strip, focus mode command/layout markers, and persisted editor font/line-height preferences. Full save/recovery/history flow remains unchanged; find/replace applies through the existing editor body change callback.
+
+Verification result on 2026-07-07: targeted VUI-05 tests passed, full Vitest suite passed, typecheck passed, build passed with existing Vite browser-externalization/chunk-size warnings, Electron project workflow E2E passed, and `git diff --check` reported no whitespace errors. A separate headless browser smoke was attempted but skipped because no Playwright/browser executable was installed in the local profile; Electron E2E covered the desktop renderer path.
 
 **Manual acceptance:** 输入正文后字数和阅读时间实时变化；按 `Ctrl+H` 能查找、跳转和替换；专注模式只保留写作核心区；字体/行高调整后重启仍保留。
 

@@ -89,6 +89,49 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("当前查询 oath");
   });
 
+  test("marks navigator, AI panel, and bottom panel hidden in focus mode", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{
+          ...application.getShellState(),
+          focusMode: true,
+          navigatorCollapsed: false,
+          inspectorCollapsed: false,
+          bottomPanelVisible: true
+        }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        chapterEditor={{
+          chapter: {
+            frontmatter: {
+              schemaVersion: "1.0",
+              id: "ch_focus",
+              type: "chapter",
+              title: "Focus Chapter",
+              order: 1,
+              status: "draft",
+              createdAt: "2026-07-07T00:00:00.000Z",
+              updatedAt: "2026-07-07T00:00:00.000Z"
+            },
+            body: "Focus body."
+          },
+          saveStatus: "Saved",
+          dirty: false,
+          versionHistory: []
+        }}
+      />
+    );
+
+    expect(html).toContain('data-focus-mode="true"');
+    expect(html).toContain('data-region="navigator"');
+    expect(html).toContain('data-focus-hidden="true"');
+    expect(html).toContain('data-region="ai-panel"');
+    expect(html).toContain('data-region="bottom-panel"');
+    expect(html).toContain('aria-label="编辑区"');
+    expect(html).toContain('aria-label="状态栏"');
+  });
+
   test("renders project health diagnostics in the problems panel", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(

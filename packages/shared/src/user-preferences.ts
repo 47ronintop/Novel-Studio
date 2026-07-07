@@ -12,22 +12,31 @@ export interface UserOnboardingPreferences {
   readonly dismissed: boolean;
 }
 
+export interface UserEditorPreferences {
+  readonly fontFamily: "mono" | "serif" | "sans";
+  readonly fontSize: number;
+  readonly lineHeight: number;
+}
+
 export interface UserShellPreferences {
   readonly navigatorCollapsed: boolean;
   readonly inspectorCollapsed: boolean;
   readonly bottomPanelVisible: boolean;
   readonly activeBottomPanelTab: string;
+  readonly focusMode: boolean;
   readonly workspaceLayout: UserWorkspaceLayoutPreferences;
 }
 
 export interface UserPreferencesSnapshot {
   readonly schemaVersion: "1.0";
   readonly onboarding: UserOnboardingPreferences;
+  readonly editor: UserEditorPreferences;
   readonly shell: UserShellPreferences;
 }
 
 export type UserPreferencesSaveInput = Partial<{
   readonly onboarding: Partial<UserOnboardingPreferences>;
+  readonly editor: Partial<UserEditorPreferences>;
   readonly shell: Partial<UserShellPreferences> & {
     readonly workspaceLayout?: Partial<UserWorkspaceLayoutPreferences>;
   };
