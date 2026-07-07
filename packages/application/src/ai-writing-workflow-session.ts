@@ -3,7 +3,6 @@ import { runAgent, type AgentConfig } from "@novel-studio/agent-engine";
 import type {
   LlmModelProfile,
   LlmParameters,
-  LlmRequest,
   LlmUsage
 } from "@novel-studio/llm-adapter";
 import {
@@ -25,7 +24,12 @@ import {
 } from "@novel-studio/shared";
 
 import type { ModelRuntimeProfile } from "./model-settings-session.js";
+import {
+  createChapterSuggestionLlmRequest,
+  createSelectionPreviewLlmRequest
+} from "./ai-writing-llm-requests.js";
 import type {
+  AiWritingConversationMessage,
   AiWritingSelectionPreview,
   AiWritingSelectionRange,
   AiWritingSelectionReview,
@@ -102,10 +106,13 @@ export function createAgentBackedAiWritingWorkflowSession(
   const now = options.now ?? (() => new Date().toISOString());
   const createWorkflowRunId = options.createWorkflowRunId ?? (() => `wfrun_${Date.now()}`);
   const createSuggestionId = options.createSuggestionId ?? (() => `sug_${Date.now()}`);
+  const createConversationMessageId =
+    options.createConversationMessageId ?? (() => `msg_${Date.now()}`);
   const createAgentRunId = options.createAgentRunId ?? (() => `agentrun_${Date.now()}`);
   const createHandoffId = options.createHandoffId ?? (() => `handoff_${Date.now()}`);
   const suggestions = new Map<string, StoredSuggestion>();
   const selectionPreviews = new Map<string, StoredSelectionPreview>();
+  const conversationMessages: AiWritingConversationMessage[] = [];
 
   return {
     async generateChapterSuggestion(request) {
@@ -201,14 +208,15 @@ export function createAgentBackedAiWritingWorkflowSession(
           currentBody: chapterState.chapter.body
         },
         contextBundle: contextBundle.value,
-        llmRequest: createLlmRequest(
-          runState.workflowRunId,
-          request.instruction,
-          chapterState.chapter.body,
-          contextBundle.value.trace,
-          runtimeProfile.value.modelProfile,
-          runtimeProfile.value.parameters
-        ),
+        llmRequest: createChapterSuggestionLlmRequest({
+          workflowRunId: runState.workflowRunId,
+          instruction: request.instruction,
+          currentBody: chapterState.chapter.body,
+          contextTrace: contextBundle.value.trace,
+          modelProfile: runtimeProfile.value.modelProfile,
+          parameters: runtimeProfile.value.parameters,
+          conversationMessages
+        }),
         llmAdapter: options.llmAdapter,
         validateSchema: validateAiWritingSchema,
         now
@@ -276,12 +284,22 @@ export function createAgentBackedAiWritingWorkflowSession(
         modelProfile: runtimeProfile.value.modelProfile,
         usage: handoff.value.usage
       });
+      const suggestionId = createSuggestionId();
+      const nextConversationMessages = appendConversationTurn(conversationMessages, {
+        instruction: request.instruction,
+        summary: output.summary,
+        generatedAt,
+        workflowRunId: runState.workflowRunId,
+        suggestionId,
+        createConversationMessageId
+      });
       const suggestion: AiWritingSuggestion = {
-        suggestionId: createSuggestionId(),
+        suggestionId,
         workflowRunId: runState.workflowRunId,
         status: "pending-confirmation",
         proposedBody: output.proposedBody,
         summary: output.summary,
+        conversationMessages: nextConversationMessages,
         diffPreview: options.chapterEditorSession.previewSuggestionDiff(output.proposedBody),
         contextTrace: contextBundle.value.trace,
         observability
@@ -418,13 +436,13 @@ export function createAgentBackedAiWritingWorkflowSession(
           }
         },
         contextBundle: contextBundle.value,
-        llmRequest: createSelectionPreviewLlmRequest(
-          runState.workflowRunId,
-          request.instruction,
-          validatedSelection.value,
-          runtimeProfile.value.modelProfile,
-          runtimeProfile.value.parameters
-        ),
+        llmRequest: createSelectionPreviewLlmRequest({
+          workflowRunId: runState.workflowRunId,
+          instruction: request.instruction,
+          selection: validatedSelection.value,
+          modelProfile: runtimeProfile.value.modelProfile,
+          parameters: runtimeProfile.value.parameters
+        }),
         llmAdapter: options.llmAdapter,
         validateSchema: validateAiWritingSchema,
         now
@@ -572,6 +590,39 @@ export function createAgentBackedAiWritingWorkflowSession(
       });
     }
   };
+}
+
+function appendConversationTurn(
+  conversationMessages: AiWritingConversationMessage[],
+  input: {
+    readonly instruction: string;
+    readonly summary: string;
+    readonly generatedAt: string;
+    readonly workflowRunId: string;
+    readonly suggestionId: string;
+    readonly createConversationMessageId: () => string;
+  }
+): readonly AiWritingConversationMessage[] {
+  conversationMessages.push(
+    {
+      messageId: input.createConversationMessageId(),
+      role: "user",
+      content: input.instruction,
+      createdAt: input.generatedAt,
+      workflowRunId: input.workflowRunId,
+      suggestionId: input.suggestionId
+    },
+    {
+      messageId: input.createConversationMessageId(),
+      role: "assistant",
+      content: input.summary,
+      createdAt: input.generatedAt,
+      workflowRunId: input.workflowRunId,
+      suggestionId: input.suggestionId
+    }
+  );
+
+  return [...conversationMessages];
 }
 
 function createWorkflowRunRecord(input: {
@@ -783,77 +834,6 @@ async function resolveModelRuntimeProfile(
     modelProfile: options.modelProfile ?? defaultModelProfile,
     parameters: options.parameters ?? defaultParameters
   });
-}
-
-function createLlmRequest(
-  workflowRunId: string,
-  instruction: string,
-  currentBody: string,
-  contextTrace: ContextBundleTrace,
-  modelProfile: LlmModelProfile,
-  parameters: LlmParameters
-): LlmRequest {
-  return {
-    schemaVersion: "1.0",
-    requestId: `llm_${workflowRunId}`,
-    traceId: "ai-writing-workflow",
-    mode: "non-streaming",
-    modelProfile,
-    messages: [
-      {
-        role: "system",
-        content: "Return JSON with proposedBody and summary for a chapter writing suggestion."
-      },
-      {
-        role: "user",
-        content: [
-          `Instruction: ${instruction}`,
-          `Current chapter body:\n${currentBody}`,
-          `Available context refs: ${contextTrace.includedRefs
-            .map((ref) => `${ref.refType}:${ref.refId}`)
-            .join(", ")}`
-        ].join("\n\n")
-      }
-    ],
-    parameters,
-    responseFormat: {
-      type: "json_object"
-    }
-  };
-}
-
-function createSelectionPreviewLlmRequest(
-  workflowRunId: string,
-  instruction: string,
-  selection: AiWritingSelectionRange,
-  modelProfile: LlmModelProfile,
-  parameters: LlmParameters
-): LlmRequest {
-  return {
-    schemaVersion: "1.0",
-    requestId: `llm_${workflowRunId}`,
-    traceId: "ai-selection-preview",
-    mode: "non-streaming",
-    modelProfile,
-    messages: [
-      {
-        role: "system",
-        content: "Return JSON with proposedText and summary for a selected text rewrite."
-      },
-      {
-        role: "user",
-        content: [
-          `Instruction: ${instruction}`,
-          `Selection offsets: ${selection.startOffset}-${selection.endOffset}`,
-          `Selected text: ${selection.selectedText}`
-        ].join("\n")
-      }
-    ],
-    parameters,
-    responseFormat: {
-      type: "json_object"
-    }
-  };
 }
 
 function validateAiWritingSchema(input: {

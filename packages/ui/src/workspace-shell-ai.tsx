@@ -21,6 +21,7 @@ export function AiWritingAssistantPanel({
 }) {
   const instruction = workflow.instruction.trim();
   const assistantReply = aiAssistantReply(workflow);
+  const conversationMessages = workflow.conversationMessages ?? [];
   const showSummary =
     workflow.summary !== undefined && (compact || workflow.summary !== assistantReply);
 
@@ -47,18 +48,31 @@ export function AiWritingAssistantPanel({
             <span>AI 写作助手</span>
             <p>告诉我你想续写、改写或检查哪里。我会结合当前章节生成建议。</p>
           </article>
-          {instruction.length === 0 ? null : (
+          {conversationMessages.length > 0
+            ? conversationMessages.map((message) => (
+                <article
+                  className="ns-ai-message"
+                  data-speaker={message.role}
+                  key={message.messageId}
+                >
+                  <span>{message.role === "user" ? "你" : "AI 写作助手"}</span>
+                  <p>{message.content}</p>
+                  <small>{message.createdAtLabel}</small>
+                </article>
+              ))
+            : null}
+          {conversationMessages.length === 0 && instruction.length > 0 ? (
             <article className="ns-ai-message" data-speaker="user">
               <span>你</span>
               <p>{instruction}</p>
             </article>
-          )}
-          {assistantReply === undefined ? null : (
+          ) : null}
+          {conversationMessages.length === 0 && assistantReply !== undefined ? (
             <article className="ns-ai-message" data-speaker="assistant">
               <span>AI 写作助手</span>
               <p>{assistantReply}</p>
             </article>
-          )}
+          ) : null}
         </div>
       )}
       <textarea

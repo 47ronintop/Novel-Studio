@@ -173,4 +173,57 @@ describe("AI writing workflow UI", () => {
     expect(html).toContain('aria-label="取消 AI 流式输出"');
     expect(html).toContain("流式输出中");
   });
+
+  test("renders persisted chat messages from the active AI session", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "ai" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        aiWritingWorkflow={{
+          status: "suggestion-ready",
+          instruction: "",
+          summary: "Second answer shortens the prior continuation.",
+          conversationMessages: [
+            {
+              messageId: "msg_user_1",
+              role: "user",
+              content: "续写这段。",
+              createdAtLabel: "2026-07-05 00:00"
+            },
+            {
+              messageId: "msg_assistant_1",
+              role: "assistant",
+              content: "First answer keeps the scene moving.",
+              createdAtLabel: "2026-07-05 00:00"
+            },
+            {
+              messageId: "msg_user_2",
+              role: "user",
+              content: "再短一点。",
+              createdAtLabel: "2026-07-05 00:01"
+            },
+            {
+              messageId: "msg_assistant_2",
+              role: "assistant",
+              content: "Second answer shortens the prior continuation.",
+              createdAtLabel: "2026-07-05 00:01"
+            }
+          ],
+          onInstructionChange: () => undefined,
+          onGenerateSuggestion: () => undefined,
+          onApplySuggestion: () => undefined,
+          onRetrySuggestion: () => undefined,
+          onCancelStreaming: () => undefined
+        }}
+      />
+    );
+
+    expect(html).toContain("续写这段。");
+    expect(html).toContain("First answer keeps the scene moving.");
+    expect(html).toContain("再短一点。");
+    expect(html).toContain("Second answer shortens the prior continuation.");
+    expect(html).toContain("2026-07-05 00:01");
+  });
 });

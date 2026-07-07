@@ -21,6 +21,15 @@ export interface AiWritingSuggestionRequest {
   readonly instruction: string;
 }
 
+export interface AiWritingConversationMessage {
+  readonly messageId: string;
+  readonly role: "user" | "assistant";
+  readonly content: string;
+  readonly createdAt: string;
+  readonly workflowRunId?: string;
+  readonly suggestionId?: string;
+}
+
 export interface AiWritingSelectionRange {
   readonly startOffset: number;
   readonly endOffset: number;
@@ -38,6 +47,7 @@ export interface AiWritingSuggestion {
   readonly status: "pending-confirmation" | "applied";
   readonly proposedBody: string;
   readonly summary: string;
+  readonly conversationMessages: readonly AiWritingConversationMessage[];
   readonly diffPreview: ChapterSuggestionDiffPreview;
   readonly contextTrace: ContextBundleTrace;
   readonly observability: AiWritingWorkflowObservability;
@@ -199,6 +209,7 @@ export interface AiWritingWorkflowSessionOptions {
   readonly now?: () => string;
   readonly createWorkflowRunId?: () => string;
   readonly createSuggestionId?: () => string;
+  readonly createConversationMessageId?: () => string;
   readonly createAgentRunId?: () => string;
   readonly createHandoffId?: () => string;
   readonly workflowRunHistory?: Pick<WorkflowRunHistoryPort, "recordWorkflowRun">;

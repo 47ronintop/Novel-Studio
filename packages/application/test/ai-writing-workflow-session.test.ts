@@ -260,6 +260,115 @@ describe("M14 AI writing workflow session", () => {
     );
   });
 
+  test("keeps single-session chat history and sends prior turns to the next model request", async () => {
+    const requests: LlmRequest[] = [];
+    let responseIndex = 0;
+    const chapterSession = createChapterEditorSession({
+      chapterId: "ch_m14",
+      repository: createRepository([]),
+      now: () => "2026-07-04T00:00:00.000Z"
+    });
+    const loaded = await chapterSession.load();
+    if (isErr(loaded)) {
+      throw new Error(loaded.error.message);
+    }
+
+    const aiWorkflow = createAgentBackedAiWritingWorkflowSession({
+      chapterEditorSession: chapterSession,
+      llmAdapter: createLlmAdapter({
+        provider: {
+          id: "mock",
+          async complete(request) {
+            requests.push(request);
+            responseIndex += 1;
+            return {
+              content: {
+                type: "json",
+                value: {
+                  proposedBody:
+                    responseIndex === 1
+                      ? "Opening line.\nFirst continuation.\n"
+                      : "Opening line.\nShorter continuation.\n",
+                  summary:
+                    responseIndex === 1
+                      ? "First answer keeps the scene moving."
+                      : "Second answer shortens the prior continuation."
+                }
+              }
+            };
+          },
+          async *stream() {
+            yield {
+              type: "delta",
+              value: ""
+            };
+          }
+        },
+        clock: () => "2026-07-04T00:00:00.000Z"
+      }),
+      now: () => "2026-07-04T00:00:00.000Z",
+      createWorkflowRunId: createSequence("wfrun_chat"),
+      createSuggestionId: createSequence("sug_chat"),
+      createAgentRunId: createSequence("agentrun_chat"),
+      createHandoffId: createSequence("handoff_chat")
+    });
+
+    const first = await aiWorkflow.generateChapterSuggestion({
+      instruction: "续写这段。"
+    });
+    const second = await aiWorkflow.generateChapterSuggestion({
+      instruction: "再短一点。"
+    });
+
+    expect(isOk(first)).toBe(true);
+    expect(isOk(second)).toBe(true);
+    if (isErr(first) || isErr(second)) {
+      throw new Error("Expected both chat turns to generate suggestions.");
+    }
+
+    expect(first.value.conversationMessages).toEqual([
+      expect.objectContaining({
+        role: "user",
+        content: "续写这段。"
+      }),
+      expect.objectContaining({
+        role: "assistant",
+        content: "First answer keeps the scene moving.",
+        suggestionId: "sug_chat_1",
+        workflowRunId: "wfrun_chat_1"
+      })
+    ]);
+    expect(second.value.conversationMessages).toEqual([
+      expect.objectContaining({
+        role: "user",
+        content: "续写这段。"
+      }),
+      expect.objectContaining({
+        role: "assistant",
+        content: "First answer keeps the scene moving."
+      }),
+      expect.objectContaining({
+        role: "user",
+        content: "再短一点。"
+      }),
+      expect.objectContaining({
+        role: "assistant",
+        content: "Second answer shortens the prior continuation.",
+        suggestionId: "sug_chat_2",
+        workflowRunId: "wfrun_chat_2"
+      })
+    ]);
+    expect(requests[1]?.messages.map((message) => message.content).join("\n")).toContain(
+      "Previous conversation:"
+    );
+    expect(requests[1]?.messages.map((message) => message.content).join("\n")).toContain(
+      "User: 续写这段。"
+    );
+    expect(requests[1]?.messages.map((message) => message.content).join("\n")).toContain(
+      "Assistant: First answer keeps the scene moving."
+    );
+  });
+
   test("resolves the runtime model profile when generating a suggestion", async () => {
     const requests: LlmRequest[] = [];
     const chapterSession = createChapterEditorSession({
@@ -639,5 +748,13 @@ function createSelectionPreviewProvider(requests: LlmRequest[]): LlmProvider {
         value: ""
       };
     }
+  };
+}
+
+function createSequence(prefix: string): () => string {
+  let next = 0;
+  return () => {
+    next += 1;
+    return `${prefix}_${next}`;
   };
 }

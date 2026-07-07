@@ -222,6 +222,7 @@ export type {
   AiWritingSelectionPreviewRequest,
   AiWritingSelectionRange,
   AiWritingSelectionReview,
+  AiWritingConversationMessage,
   AiWritingSuggestion,
   AiWritingSuggestionRequest,
   AiWritingWorkflowObservability,

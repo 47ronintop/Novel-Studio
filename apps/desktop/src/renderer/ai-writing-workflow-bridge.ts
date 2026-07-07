@@ -1,4 +1,5 @@
 import type {
+  AiWritingConversationMessage,
   AiWritingWorkflowObservability,
   AiWritingSelectionPreview,
   AiWritingSuggestion,
@@ -264,12 +265,13 @@ async function unwrap<T>(promise: Promise<Result<T, UnifiedError>>): Promise<T> 
 
 function toProps(
   suggestion: AiWritingSuggestion,
-  instruction: string,
+  _instruction: string,
   history: AiWorkflowRunHistoryProps | undefined
 ): AiWritingWorkflowProps {
   return createProps({
     status: "suggestion-ready",
-    instruction,
+    instruction: "",
+    conversationMessages: toConversationMessagesProps(suggestion.conversationMessages),
     summary: suggestion.summary,
     ...(suggestion.observability.model.provider === "mock"
       ? { runtimeNotice: "当前是演示模式，未配置真实Key。" }
@@ -312,6 +314,17 @@ function toSelectionReviewProps(
     compareLabel: preview.review.compareLabel,
     canUndo: false
   };
+}
+
+function toConversationMessagesProps(
+  messages: readonly AiWritingConversationMessage[]
+): NonNullable<AiWritingWorkflowProps["conversationMessages"]> {
+  return messages.map((message) => ({
+    messageId: message.messageId,
+    role: message.role,
+    content: message.content,
+    createdAtLabel: formatDateTime(message.createdAt)
+  }));
 }
 
 function createProps(

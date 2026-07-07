@@ -114,6 +114,7 @@ export type AiWritingWorkflowStatus =
 export interface AiWritingWorkflowProps {
   readonly status: AiWritingWorkflowStatus;
   readonly instruction: string;
+  readonly conversationMessages?: readonly AiWritingConversationMessageProps[];
   readonly summary?: string;
   readonly runtimeNotice?: string;
   readonly streamPreview?: string;
@@ -131,6 +132,13 @@ export interface AiWritingWorkflowProps {
   readonly onUndoSelectionReview?: () => void;
   readonly onRetrySuggestion: () => void;
   readonly onCancelStreaming: () => void;
+}
+
+export interface AiWritingConversationMessageProps {
+  readonly messageId: string;
+  readonly role: "user" | "assistant";
+  readonly content: string;
+  readonly createdAtLabel: string;
 }
 
 export interface AiSelectionReviewProps {

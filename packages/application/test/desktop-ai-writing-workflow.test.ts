@@ -14,6 +14,7 @@ const suggestion: AiWritingSuggestion = {
   status: "pending-confirmation",
   proposedBody: "Opening line.\nAI continuation.\n",
   summary: "Continues the current scene.",
+  conversationMessages: [],
   diffPreview: {
     title: "AI suggestion",
     changes: [

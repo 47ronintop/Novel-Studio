@@ -49,7 +49,7 @@
 | --- | ---: | --- |
 | `packages/ui/src/workspace-shell.tsx` | 900 | 主工作区壳已存在 VSCode 式区域，但超过 UI 800 行警戒线，继续加功能前必须优先拆分或把新增逻辑放入子组件。 |
 | `apps/desktop/src/renderer/App.tsx` | 1017 | Renderer 编排层已接近 UI 硬阈值，新增桥接状态前必须避免继续堆在本文件。 |
-| `packages/application/src/ai-writing-workflow-session.ts` | 994 | AI workflow session 已接近 Application 1000 行硬阈值，本轮 AI 对话改造前必须拆出 focused session/helper。 |
+| `packages/application/src/ai-writing-workflow-session.ts` | 974 | VUI-01 已先拆出 LLM request helper，低于 Application 1000 行硬阈值；后续仍接近边界，继续新增 AI session 行为前要优先拆分。 |
 | `packages/ui/src/workspace-shell-ai.tsx` | 495 | AI 面板标题像对话，但当前仍以单条 instruction + 派生 reply 为主，是真实多轮对话的首要改造点。 |
 | `packages/ui/src/chapter-editor.tsx` | 未超本轮硬门禁 | 章节编辑器存在基础编辑 UI，需要补齐编辑器观感、字数、查找替换、专注模式等 IDE 级体验。 |
 | `apps/desktop/src/renderer/editor-runtime.ts` | 未纳入本轮行数门禁表 | 已有 editor runtime / CodeMirror gate 相关工作，启用 CodeMirror 前必须盘点，不得重写。 |
@@ -133,6 +133,8 @@ Result on 2026-07-07: `npm run typecheck` passed; `npm test` passed with 72 test
 
 ### VUI-01: AI 面板真实多轮对话
 
+**Status:** Complete on 2026-07-07. Application session 已保留单 session 消息历史，第二轮请求会携带上一轮对话；bridge 成功发送后清空输入框；UI 渲染真实消息列表。
+
 **目标：** 把当前单条 instruction/reply 改成当前章节编辑 session 内真实追加的消息历史；不做流式、不做多会话管理。
 
 **Files:**
@@ -147,12 +149,12 @@ Result on 2026-07-07: `npm run typecheck` passed; `npm test` passed with 72 test
 
 **Steps:**
 
-- [ ] 在 Application 类型层增加当前 session 消息模型：message id、role、content、createdAt、status、optional suggestion/run id。
-- [ ] 先写 failing test：连续两次发送相关问题后，session 中保留两条 user message 和两条 assistant message，第二次 request 的 prompt/context 能包含前一轮摘要或消息历史。
-- [ ] 把 `ai-writing-workflow-session.ts` 中与 prompt 构建、历史追加有关的逻辑拆到新 helper，避免该文件超过 1000 行硬阈值。
-- [ ] UI 输入框改为“发送后清空”，消息列表按时间顺序渲染并可滚动。
-- [ ] 保留现有失败态、诊断、应用建议、diff/preview 入口，确保改造不回退现有 AI 建议闭环。
-- [ ] 不添加检测规避、人性化错别字、绕过检测等 quick command；AI 腔治理放到 VUI-03A 作为写作质量功能处理。
+- [x] 在 Application 类型层增加当前 session 消息模型：message id、role、content、createdAt、status、optional suggestion/run id。
+- [x] 先写 failing test：连续两次发送相关问题后，session 中保留两条 user message 和两条 assistant message，第二次 request 的 prompt/context 能包含前一轮摘要或消息历史。
+- [x] 把 `ai-writing-workflow-session.ts` 中与 prompt 构建、历史追加有关的逻辑拆到新 helper，避免该文件超过 1000 行硬阈值。
+- [x] UI 输入框改为“发送后清空”，消息列表按时间顺序渲染并可滚动。
+- [x] 保留现有失败态、诊断、应用建议、diff/preview 入口，确保改造不回退现有 AI 建议闭环。
+- [x] 不添加检测规避、人性化错别字、绕过检测等 quick command；AI 腔治理放到 VUI-03A 作为写作质量功能处理。
 
 **Verification:**
 
@@ -160,6 +162,8 @@ Result on 2026-07-07: `npm run typecheck` passed; `npm test` passed with 72 test
 npm test -- packages/application/test/ai-writing-workflow-session.test.ts packages/ui/test/ai-writing-workflow.test.tsx apps/desktop/test/ai-writing-workflow-bridge.test.ts
 npm run typecheck
 ```
+
+Result on 2026-07-07: target tests passed with 3 files and 16 tests; `npm run typecheck` passed.
 
 **Manual acceptance:** 打开一个章节，先问“续写这段”，AI 回复后再问“再短一点”。两轮问答同时留在消息历史里，第二轮能参考第一轮，不覆盖第一轮。
 

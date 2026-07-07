@@ -39,6 +39,7 @@ const suggestion: AiWritingSuggestion = {
   status: "pending-confirmation",
   proposedBody: "Opening line.\nAI continuation draft.\n",
   summary: "Generated a local mock continuation for review.",
+  conversationMessages: [],
   diffPreview: {
     title: "AI suggestion",
     changes: [
@@ -235,6 +236,56 @@ describe("AI writing workflow bridge", () => {
       instruction: "Continue with streaming.",
       streamPreview: "The city answered."
     });
+  });
+
+  test("maps returned chat messages and clears the composer after a successful send", async () => {
+    const calls: string[] = [];
+    const api = createApi(calls);
+    api.ai.generateChapterSuggestion = async (request) => {
+      calls.push(`ai.generate:${request.instruction}`);
+      return ok({
+        ...suggestion,
+        conversationMessages: [
+          {
+            messageId: "msg_user_1",
+            role: "user",
+            content: "续写这段。",
+            createdAt: "2026-07-05T00:00:00.000Z",
+            workflowRunId: "wfrun_m14",
+            suggestionId: "sug_m14"
+          },
+          {
+            messageId: "msg_assistant_1",
+            role: "assistant",
+            content: "Generated a local mock continuation for review.",
+            createdAt: "2026-07-05T00:00:00.000Z",
+            workflowRunId: "wfrun_m14",
+            suggestionId: "sug_m14"
+          }
+        ]
+      });
+    };
+    const bridge = createAiWritingWorkflowBridge(api);
+
+    bridge.beginGenerate("续写这段。");
+    const generated = await bridge.generateSuggestion("续写这段。");
+
+    expect(generated.instruction).toBe("");
+    expect(generated.conversationMessages).toEqual([
+      {
+        messageId: "msg_user_1",
+        role: "user",
+        content: "续写这段。",
+        createdAtLabel: "2026-07-05 00:00"
+      },
+      {
+        messageId: "msg_assistant_1",
+        role: "assistant",
+        content: "Generated a local mock continuation for review.",
+        createdAtLabel: "2026-07-05 00:00"
+      }
+    ]);
+    expect(calls).toEqual(["ai.generate:续写这段。"]);
   });
 
   test("generates selection-aware preview without creating an applyable suggestion", async () => {
