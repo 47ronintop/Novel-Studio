@@ -227,11 +227,11 @@ export function createCodeMirrorEditorRuntimeAdapter(): EditorRuntimeAdapter {
 export function resolveEditorRuntimeAdapter(
   options: EditorRuntimeResolverOptions = {}
 ): EditorRuntimeAdapter {
-  if (options.preferredRuntimeId === "codemirror" && options.codeMirrorEnabled === true) {
-    return createCodeMirrorEditorRuntimeAdapter();
+  if (options.preferredRuntimeId === "textarea" || options.codeMirrorEnabled === false) {
+    return createTextareaEditorRuntimeAdapter();
   }
 
-  return createTextareaEditorRuntimeAdapter();
+  return createCodeMirrorEditorRuntimeAdapter();
 }
 
 export function evaluateEditorRuntimeDefaultReadiness(
@@ -400,7 +400,7 @@ function createMemoryBackedEditorRuntimeAdapter(input: {
 function createCodeMirrorBackedEditorRuntimeAdapter(): EditorRuntimeAdapter {
   return {
     runtimeId: "codemirror",
-    adapterLabel: "CodeMirror 6 Headless Adapter (flagged)",
+    adapterLabel: "CodeMirror 6 Runtime",
     mount(mountInput) {
       let state = EditorState.create({ doc: mountInput.body });
       let view = createCodeMirrorDomView(state, mountInput.domMountElement);
@@ -466,7 +466,7 @@ function createCodeMirrorBackedEditorRuntimeAdapter(): EditorRuntimeAdapter {
           const currentBody = body();
           return {
             runtimeId: "codemirror",
-            adapterLabel: "CodeMirror 6 Headless Adapter (flagged)",
+            adapterLabel: "CodeMirror 6 Runtime",
             runtimePackage: {
               name: "@codemirror/state",
               role: "headless-state"
@@ -561,6 +561,7 @@ export function buildChapterEditorRuntimeProps(
     diffPreview === undefined ? undefined : createEditorLocalDiffReview(snapshot, diffPreview);
 
   return {
+    runtimeId: snapshot.runtimeId === "codemirror" ? "codemirror" : "textarea",
     adapterLabel: snapshot.adapterLabel,
     documentMode: snapshot.documentMode,
     activeRangeLabel: formatActiveRange(snapshot),
@@ -683,15 +684,38 @@ export function createTextareaChapterEditorRuntimeProps(input: {
   readonly selection?: EditorRuntimeSelection;
   readonly diffPreview?: ChapterEditorDiffPreview;
 }): ChapterEditorRuntimeProps {
-  const adapter = createTextareaEditorRuntimeAdapter();
-  const handle = adapter.mount(input);
+  return createChapterEditorRuntimeProps({
+    ...input,
+    preferredRuntimeId: "textarea",
+    codeMirrorEnabled: false
+  });
+}
+
+export function createChapterEditorRuntimeProps(input: {
+  readonly body: string;
+  readonly saveStatus: SaveStatus;
+  readonly selection?: EditorRuntimeSelection;
+  readonly diffPreview?: ChapterEditorDiffPreview;
+  readonly preferredRuntimeId?: EditorRuntimeResolverOptions["preferredRuntimeId"];
+  readonly codeMirrorEnabled?: boolean;
+}): ChapterEditorRuntimeProps {
+  const adapter = resolveEditorRuntimeAdapter({
+    ...(input.preferredRuntimeId === undefined
+      ? {}
+      : { preferredRuntimeId: input.preferredRuntimeId }),
+    ...(input.codeMirrorEnabled === undefined ? {} : { codeMirrorEnabled: input.codeMirrorEnabled })
+  });
+  const handle = adapter.mount({
+    body: input.body,
+    saveStatus: input.saveStatus
+  });
   const lineCount = countLines(input.body);
 
   if (input.selection !== undefined) {
     handle.updateSelection(input.selection);
   }
 
-  if (lineCount > 200) {
+  if (lineCount > LARGE_DOCUMENT_LINE_THRESHOLD) {
     handle.reportWarning("Large document optimizations active");
   }
 

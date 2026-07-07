@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   buildChapterEditorRuntimeProps,
+  createChapterEditorRuntimeProps,
   createCodeMirrorEditorRuntimeAdapter,
   createEditorSelectionCommand,
   createEditorVisualDiffReview,
@@ -32,6 +33,7 @@ describe("textarea editor runtime adapter", () => {
       destroyed: false
     });
     expect(buildChapterEditorRuntimeProps(handle.getSnapshot())).toEqual({
+      runtimeId: "textarea",
       adapterLabel: "Textarea Runtime",
       documentMode: "Markdown",
       activeRangeLabel: "Lines 1-2",
@@ -109,7 +111,21 @@ describe("textarea editor runtime adapter", () => {
 });
 
 describe("editor runtime adapter resolver", () => {
-  test("keeps textarea as the default while CodeMirror default readiness has blockers", () => {
+  test("uses CodeMirror as the default runtime with textarea fallback available", () => {
+    const adapter = resolveEditorRuntimeAdapter();
+    const handle = adapter.mount({
+      body: "Default runtime body",
+      saveStatus: "Saved"
+    });
+
+    expect(adapter.runtimeId).toBe("codemirror");
+    expect(buildChapterEditorRuntimeProps(handle.getSnapshot())).toMatchObject({
+      adapterLabel: "CodeMirror 6 Runtime",
+      activeRangeLabel: "Lines 1-1"
+    });
+  });
+
+  test("keeps textarea recommended while CodeMirror default readiness has blockers", () => {
     const readiness = evaluateEditorRuntimeDefaultReadiness({
       codeMirrorEnabled: true,
       domViewMount: {
@@ -133,7 +149,6 @@ describe("editor runtime adapter resolver", () => {
       warningMessages: [],
       migrationRisk: "medium"
     });
-    expect(resolveEditorRuntimeAdapter().runtimeId).toBe("textarea");
   });
 
   test("recommends CodeMirror only after default readiness evidence passes", () => {
@@ -172,7 +187,7 @@ describe("editor runtime adapter resolver", () => {
     expect(adapter.adapterLabel).toBe("Textarea Runtime");
   });
 
-  test("selects CodeMirror only when the feature flag is enabled", () => {
+  test("selects CodeMirror when the feature flag is enabled", () => {
     const adapter = resolveEditorRuntimeAdapter({
       preferredRuntimeId: "codemirror",
       codeMirrorEnabled: true
@@ -190,7 +205,7 @@ describe("editor runtime adapter resolver", () => {
     expect(adapter.runtimeId).toBe("codemirror");
     expect(handle.getSnapshot()).toMatchObject({
       runtimeId: "codemirror",
-      adapterLabel: "CodeMirror 6 Headless Adapter (flagged)",
+      adapterLabel: "CodeMirror 6 Runtime",
       documentMode: "Markdown",
       body: "Flagged body\nNext",
       runtimePackage: {
@@ -199,7 +214,7 @@ describe("editor runtime adapter resolver", () => {
       }
     });
     expect(buildChapterEditorRuntimeProps(handle.getSnapshot())).toMatchObject({
-      adapterLabel: "CodeMirror 6 Headless Adapter (flagged)",
+      adapterLabel: "CodeMirror 6 Runtime",
       activeRangeLabel: "Selection 2-9"
     });
     expect(events).toEqual([
@@ -212,7 +227,7 @@ describe("editor runtime adapter resolver", () => {
     const adapter = createCodeMirrorEditorRuntimeAdapter();
 
     expect(adapter.runtimeId).toBe("codemirror");
-    expect(adapter.adapterLabel).toBe("CodeMirror 6 Headless Adapter (flagged)");
+    expect(adapter.adapterLabel).toBe("CodeMirror 6 Runtime");
   });
 
   test("keeps CodeMirror package-backed selection parity with textarea runtime events", () => {
@@ -607,6 +622,39 @@ describe("editor runtime adapter resolver", () => {
         commandId: "editor.ai.preview-selection",
         label: "Preview selection rewrite"
       }
+    });
+  });
+
+  test("derives default CodeMirror chapter runtime props and preserves explicit textarea fallback", () => {
+    expect(
+      createChapterEditorRuntimeProps({
+        body: "Alpha sentence.\nBeta sentence.",
+        saveStatus: "Saved",
+        selection: {
+          anchor: 0,
+          head: 15
+        }
+      })
+    ).toMatchObject({
+      adapterLabel: "CodeMirror 6 Runtime",
+      activeRangeLabel: "Selection 0-15",
+      selectionSummaryLabel: "Selection 15 chars, lines 1-1",
+      selectionAiPreviewCommand: {
+        commandId: "editor.ai.preview-selection",
+        label: "Preview selection rewrite"
+      }
+    });
+
+    expect(
+      createChapterEditorRuntimeProps({
+        body: "Alpha sentence.",
+        saveStatus: "Saved",
+        preferredRuntimeId: "textarea",
+        codeMirrorEnabled: false
+      })
+    ).toMatchObject({
+      adapterLabel: "Textarea Runtime",
+      activeRangeLabel: "Lines 1-1"
     });
   });
 

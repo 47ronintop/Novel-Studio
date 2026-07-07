@@ -166,6 +166,30 @@ describe("ChapterEditor", () => {
     expect(html).not.toMatch(/filesystem|node:fs|projectRoot/i);
   });
 
+  test("marks the editor surface when the CodeMirror runtime is active", () => {
+    const html = renderToStaticMarkup(
+      <ChapterEditor
+        chapter={chapter}
+        saveStatus="Unsaved"
+        dirty={true}
+        versionHistory={[]}
+        runtime={{
+          runtimeId: "codemirror",
+          adapterLabel: "CodeMirror 6 Runtime",
+          documentMode: "Markdown",
+          activeRangeLabel: "Lines 1-1",
+          autosaveLabel: "Autosave armed",
+          shortcutProfileLabel: "Default shortcuts",
+          warnings: []
+        }}
+      />
+    );
+
+    expect(html).toContain('data-runtime-id="codemirror"');
+    expect(html).toContain("CodeMirror 6 Runtime");
+    expect(html).not.toMatch(/filesystem|node:fs|projectRoot/i);
+  });
+
   test("extracts textarea selection offsets for renderer runtime wiring", () => {
     expect(
       readTextareaSelection({

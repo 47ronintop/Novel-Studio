@@ -316,26 +316,38 @@ passed; full `npm test` passed with 72 files and 391 tests.
 - Modify: `ROADMAP.md`
 - Read: `apps/desktop/src/renderer/editor-runtime.ts`
 - Read: `packages/ui/src/chapter-editor.tsx`
+- Modify: `apps/desktop/src/renderer/app-shell-support.ts`
+- Modify: `apps/desktop/src/renderer/App.tsx`
 - Modify: `apps/desktop/src/renderer/editor-runtime.ts`
 - Modify: `packages/ui/src/chapter-editor.tsx`
 - Modify: `packages/ui/src/styles.css`
+- Test: `apps/desktop/test/editor-runtime.test.ts`
+- Test: `apps/desktop/test/app-shell-support.test.ts`
+- Test: `packages/ui/test/chapter-editor.test.tsx`
 - Test: `packages/ui/test/editor-runtime-workflow-ux.test.tsx`
 - Test: `apps/desktop/test/project-workflow.e2e.ts`
 
 **Steps:**
 
-- [ ] 在 `ROADMAP.md` 写 Scope Review：说明这次启用 CodeMirror 是产品定位要求的 IDE 观感升级，不伪造“textarea 已被证明不够用”的理由。
-- [ ] 盘点现有 editor runtime、CodeMirror adapter、feature flag、selection command、visual diff gate，形成 10 行以内结论写进 Scope Review 或本计划执行记录。
-- [ ] 如果现有 adapter 已覆盖输入、保存、selection、AI rewrite 所需事件，则把 CodeMirror 设为默认；否则先补最小 adapter parity test。
-- [ ] 保留 textarea fallback，fallback 只在 adapter 初始化失败或 feature flag 关闭时出现。
-- [ ] 调整字体、行高、gutter、光标、选区、滚动、内边距，让编辑区像 IDE 编辑器而不是浏览器默认表单。
+- [x] 在 `ROADMAP.md` 写 Scope Review：说明这次启用 CodeMirror 是产品定位要求的 IDE 观感升级，不伪造“textarea 已被证明不够用”的理由。
+- [x] 盘点现有 editor runtime、CodeMirror adapter、feature flag、selection command、visual diff gate，形成 10 行以内结论写进 Scope Review 或本计划执行记录。
+- [x] 如果现有 adapter 已覆盖输入、保存、selection、AI rewrite 所需事件，则把 CodeMirror 设为默认；否则先补最小 adapter parity test。
+- [x] 保留 textarea fallback，fallback 只在 adapter 初始化失败或 feature flag 关闭时出现。
+- [x] 调整字体、行高、gutter、光标、选区、滚动、内边距，让编辑区像 IDE 编辑器而不是浏览器默认表单。
 
 **Verification:**
 
 ```powershell
-npm test -- packages/ui/test/editor-runtime-workflow-ux.test.tsx apps/desktop/test/project-workflow.e2e.ts
+npm test -- apps/desktop/test/editor-runtime.test.ts apps/desktop/test/app-shell-support.test.ts packages/ui/test/chapter-editor.test.tsx packages/ui/test/editor-runtime-workflow-ux.test.tsx
+npx playwright test apps/desktop/test/project-workflow.e2e.ts
+npm test
 npm run typecheck
+npm run build
 ```
+
+Execution status on 2026-07-07: implemented CodeMirror as the default editor runtime, kept explicit textarea rollback through resolver options, moved selection-preview command creation onto the default runtime helper, and marked CodeMirror editor surfaces for IDE styling. Existing adapter coverage already included body change, selection, save, command, visual/local diff metadata and selection AI preview DTOs, so no new adapter layer was needed.
+
+Verification result on 2026-07-07: targeted runtime/UI tests passed, Electron project workflow E2E passed, full Vitest suite passed, typecheck passed, build passed with existing Vite browser-externalization/chunk-size warnings, and `git diff --check` reported no whitespace errors.
 
 **Manual acceptance:** 打开任意章节，编辑器呈现真实编辑器观感；输入、选择区 AI 改写、保存、查看历史 diff 都不回归。
 

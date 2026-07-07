@@ -606,14 +606,14 @@ v1 ship 的验收标准是一条可复现用户旅程：作者能连续 3 天使
 
 ## 已确认范围决策
 
-| 决策点             | 最终裁决                                                                                    | 对路线图的影响                                                                                                                                   |
-| ------------------ | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 目标用户           | v1 面向公开安装用户                                                                         | 发布签名/证书策略、release channel、安装/启动 smoke 进入 v1 主线；仅内部 beta 的口径不再足够。                                                   |
-| 插件生态           | 当前没有第三方插件开发者                                                                    | 插件市场、真实第三方源码执行和生产级插件隔离移出 v1；保留现有 manifest/权限边界作为未来扩展基础。                                                |
-| Provider 支持      | v1 需要像同类软件一样支持 GPT、Claude、DeepSeek、GLM、通义等常见 API                        | M95 从“单 provider ship slice”升级为“Provider Compatibility Ship”；OpenAI-compatible 层是主路径。                                                |
-| 编辑器技术         | textarea 暂时可接受                                                                         | CodeMirror 默认迁移、完整 inline diff editor 不进入 v1，除非核心旅程测试证明 textarea 阻碍写作。                                                 |
-| Story Bible 一致性 | v1 只需提示“这个人物设定在前文有冲突”并提供跳转链接，不需要完整知识图谱或 Timeline 深编辑器 | M96 聚焦最小冲突检测、提示和跳转；Timeline 深编辑、拖拽排序、正文双向定位移入 v2/backlog。                                                       |
-| 阅读朗读           | 小说阅读预览与角色配音朗读是公开用户体验增强，不是 v1 写作闭环前置条件                      | 不插入 M92-M97；M98 只做 v1.1 范围裁决。若进入实施，排在 v1 ship gate 之后，以 Story Bible 人物设定优先、系统语音默认、Edge TTS 实验开关为边界。 |
+| 决策点             | 最终裁决                                                                                           | 对路线图的影响                                                                                                                                   |
+| ------------------ | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 目标用户           | v1 面向公开安装用户                                                                                | 发布签名/证书策略、release channel、安装/启动 smoke 进入 v1 主线；仅内部 beta 的口径不再足够。                                                   |
+| 插件生态           | 当前没有第三方插件开发者                                                                           | 插件市场、真实第三方源码执行和生产级插件隔离移出 v1；保留现有 manifest/权限边界作为未来扩展基础。                                                |
+| Provider 支持      | v1 需要像同类软件一样支持 GPT、Claude、DeepSeek、GLM、通义等常见 API                               | M95 从“单 provider ship slice”升级为“Provider Compatibility Ship”；OpenAI-compatible 层是主路径。                                                |
+| 编辑器技术         | v1 核心写作闭环中 textarea 曾经可接受；v1.1 的 VSCode-like UI 体验要求 CodeMirror runtime 默认启用 | CodeMirror 默认 runtime 进入 VUI-04，仍不改变保存/恢复/历史链路；完整 inline diff editor 继续留在 backlog。                                      |
+| Story Bible 一致性 | v1 只需提示“这个人物设定在前文有冲突”并提供跳转链接，不需要完整知识图谱或 Timeline 深编辑器        | M96 聚焦最小冲突检测、提示和跳转；Timeline 深编辑、拖拽排序、正文双向定位移入 v2/backlog。                                                       |
+| 阅读朗读           | 小说阅读预览与角色配音朗读是公开用户体验增强，不是 v1 写作闭环前置条件                             | 不插入 M92-M97；M98 只做 v1.1 范围裁决。若进入实施，排在 v1 ship gate 之后，以 Story Bible 人物设定优先、系统语音默认、Edge TTS 实验开关为边界。 |
 
 ## 范围复核检查点
 
@@ -651,17 +651,26 @@ Scope Review 必须回答：
 | 核心写作闭环     | `docs/releases/m98-v1-ship-readiness.md` 已下调为 conditional：核心写作旅程、保存重开、恢复、Story Bible 冲突提示和公开安装门禁有测试/门禁证据；真实 provider 默认启动路径已修复，但仍待用户用真实 Key 做人工验收 | 人工验收通过前不得宣称 v1 provider ship-ready；不得把非核心候选项重新塞回 v1 主线             |
 | 接下来 milestone | M98 未发现必须新增 M99/M100 的 v1 blocker；阅读朗读裁决为 v1.1 backlog go，而不是 v1 blocker                                                                                                                      | 不新增 M99/M100；若要做阅读朗读，必须另开 v1.1 milestone，第一版边界受 M98 readiness 文档约束 |
 | 文件重构阈值     | `workspace-shell.tsx` 900 行、`App.tsx` 1017 行、`ai-writing-workflow-session.ts` 984 行，均低于硬阈值；UI shell 和 renderer App 已按 M92 边界继续拆分                                                            | 不阻塞 provider 修复；v1.1 新功能前必须再次 Scope Review，避免继续在近阈值文件上堆大功能      |
-| 可砍/延后项      | 插件市场、生产级第三方插件执行、Workflow Designer 完整编辑、CodeMirror 默认迁移、Timeline 深编辑、streaming/live benchmark、coverage threshold 等不影响核心闭环                                                   | 全部保留在 v2/backlog；触发条件继续按下方规则执行，不能因为“完成度低”自动回到主线路线图       |
+| 可砍/延后项      | 插件市场、生产级第三方插件执行、Workflow Designer 完整编辑、完整 inline diff editor、Timeline 深编辑、streaming/live benchmark、coverage threshold 等不影响核心闭环                                               | 全部保留在 v2/backlog；触发条件继续按下方规则执行，不能因为“完成度低”自动回到主线路线图       |
 
 ## Scope Review - 2026-07-07 before VUI-01
 
-| 检查项           | 结论                                                                                                                                                                                                                                  | 处理                                                                                                                                       |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| 核心写作闭环     | M93-M98 已覆盖 v1 核心旅程、保存重开、恢复、Story Bible 最小冲突提示、公开安装 gate 和真实 provider 默认路径；当前 VSCode-like UI/Interaction 规划是 v1.1 体验升级，不是 M99/M100 v1 blocker                                      | 不新增 M99/M100；`docs/superpowers/plans/2026-07-07-vscode-like-ui-interaction-roadmap.md` 作为 v1.1 UI/Interaction 独立执行计划             |
-| 接下来两个任务   | VUI-01 真实多轮 AI 对话和 VUI-02 流式输出/真实停止都直接服务 AI 写作主链路：用户要能连续追问、看到生成过程、可靠停止请求；它们不改变已完成的保存、恢复、项目锁、Story Bible 最小一致性和公开安装 gate                              | 可以进入 VUI-01/VUI-02，但每个任务必须保持 AI 输出建议态、diff 审阅和用户确认写入，不得回退 M93/M94 数据不丢失保证                         |
-| 文件重构阈值     | 当前实测 `workspace-shell.tsx` 900 行，超过 UI/renderer 800 行警戒但低于 1200 行硬拆；`App.tsx` 1017 行，超过 800 行警戒但低于 1200 行硬拆；`ai-writing-workflow-session.ts` 994 行，距离 Application 1000 行硬拆只剩 6 行              | VUI-01 前必须先从 `ai-writing-workflow-session.ts` 拆出 prompt/history/session helper，不能直接添加多轮对话；后续触碰 `workspace-shell.tsx` 或 `App.tsx` 时必须拆子组件/bridge helper |
-| 范围边界         | AI 腔治理属于写作质量能力，可以通过文风规则注入和模板表达扫描进入 v1.1；但过朱雀、过检测、检测分数、故意错别字和随机破坏句式仍是明确排除范围                                                                                           | VUI-03A 只实现“AI 腔治理 / 文风去模板化”，不得实现检测规避或以规避检测为卖点的 UI/参数                                                     |
-| 可砍/延后项      | 多会话 AI 管理、完整插件市场、生产级第三方插件执行、完整知识图谱、Timeline 深编辑、有声书导出、复杂角色配音仍不阻断当前 VSCode-like 写作 IDE 主线                                                                                     | 保留在 v2/backlog 或单独立项；不得在 VUI-01/VUI-02 中顺手实现                                                                               |
+| 检查项         | 结论                                                                                                                                                                                                                       | 处理                                                                                                                                                                                  |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 核心写作闭环   | M93-M98 已覆盖 v1 核心旅程、保存重开、恢复、Story Bible 最小冲突提示、公开安装 gate 和真实 provider 默认路径；当前 VSCode-like UI/Interaction 规划是 v1.1 体验升级，不是 M99/M100 v1 blocker                               | 不新增 M99/M100；`docs/superpowers/plans/2026-07-07-vscode-like-ui-interaction-roadmap.md` 作为 v1.1 UI/Interaction 独立执行计划                                                      |
+| 接下来两个任务 | VUI-01 真实多轮 AI 对话和 VUI-02 流式输出/真实停止都直接服务 AI 写作主链路：用户要能连续追问、看到生成过程、可靠停止请求；它们不改变已完成的保存、恢复、项目锁、Story Bible 最小一致性和公开安装 gate                      | 可以进入 VUI-01/VUI-02，但每个任务必须保持 AI 输出建议态、diff 审阅和用户确认写入，不得回退 M93/M94 数据不丢失保证                                                                    |
+| 文件重构阈值   | 当前实测 `workspace-shell.tsx` 900 行，超过 UI/renderer 800 行警戒但低于 1200 行硬拆；`App.tsx` 1017 行，超过 800 行警戒但低于 1200 行硬拆；`ai-writing-workflow-session.ts` 994 行，距离 Application 1000 行硬拆只剩 6 行 | VUI-01 前必须先从 `ai-writing-workflow-session.ts` 拆出 prompt/history/session helper，不能直接添加多轮对话；后续触碰 `workspace-shell.tsx` 或 `App.tsx` 时必须拆子组件/bridge helper |
+| 范围边界       | AI 腔治理属于写作质量能力，可以通过文风规则注入和模板表达扫描进入 v1.1；但过朱雀、过检测、检测分数、故意错别字和随机破坏句式仍是明确排除范围                                                                               | VUI-03A 只实现“AI 腔治理 / 文风去模板化”，不得实现检测规避或以规避检测为卖点的 UI/参数                                                                                                |
+| 可砍/延后项    | 多会话 AI 管理、完整插件市场、生产级第三方插件执行、完整知识图谱、Timeline 深编辑、有声书导出、复杂角色配音仍不阻断当前 VSCode-like 写作 IDE 主线                                                                          | 保留在 v2/backlog 或单独立项；不得在 VUI-01/VUI-02 中顺手实现                                                                                                                         |
+
+## Scope Review - 2026-07-07 before VUI-04
+
+| 检查项       | 结论                                                                                                                                                                                                                       | 处理                                                                                                                                                |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 核心写作闭环 | VUI-01 至 VUI-03A 已增强 AI 写作主链路；M93/M94 仍覆盖保存、关闭重开、恢复和 AI 建议确认写入。VUI-04 启用 CodeMirror default 是 VSCode-like 产品定位要求，不是因为 textarea 已被证明无法完成核心写作                       | 允许进入 VUI-04，但不得更换 Application/Repository 保存链路；必须保留 textarea fallback，并继续验证 selection AI preview、保存和 diff review 不回归 |
+| Runtime 盘点 | 现有 editor runtime 已具备 CodeMirror state/view adapter、resolver feature flag、selection command DTO、selection AI preview draft、visual/local diff metadata 和 migration gate；缺口在 renderer 默认仍走 textarea helper | 只做默认 runtime 切换、renderer helper 复用和 IDE 观感样式；不重写编辑器，不引入新的文档数据格式                                                    |
+| 文件重构阈值 | `App.tsx` 已从 M92 拆分但仍接近警戒线；本次只移除 App 内直接 textarea adapter 依赖，把默认 runtime/selection command 放进 `app-shell-support.ts` 和 `editor-runtime.ts`                                                    | 不在 `App.tsx` 堆新逻辑；若后续 VUI-05 增加工具栏/查找替换，必须拆出编辑器子组件                                                                    |
+| 可砍/延后项  | 完整 CodeMirror DOM 编辑面板、inline diff editor、复杂快捷键系统和编辑器插件仍不阻断本阶段默认 runtime 切换                                                                                                                | VUI-04 只要求 CodeMirror runtime default、textarea rollback、selection/diff 不回归和视觉接近 IDE；完整 inline diff editor 继续留在 backlog          |
 
 ## 裁剪后后续路线
 
@@ -677,7 +686,7 @@ Scope Review 必须回答：
 
 - 插件市场、真实第三方插件源码执行、生产级插件隔离：仅当出现第一个真实第三方插件开发者或明确插件分发生态需求时启动。
 - Workflow Designer 完整可视化编辑：仅当用户实际需要维护复杂 workflow，而 JSON/表单编辑阻碍核心写作时启动。
-- CodeMirror 默认迁移、完整 inline diff editor：仅当 textarea 在长文档性能、选择区编辑或 diff 审阅上被核心旅程测试证明不够用时启动。
+- 完整 inline diff editor：仅当现有 preview-only diff 审阅阻碍真实作者确认 AI 修改时启动。CodeMirror 默认 runtime 已作为 VUI-04 的 VSCode-like 体验升级进入 v1.1 主线，但不改变保存/恢复/历史链路。
 - Timeline 深编辑、拖拽排序、正文双向定位：仅当“冲突提示 + 跳转链接”的最小 Story Bible 一致性不足以支持继续写作时启动。
 - Provider streaming、live benchmark、非主流 provider 专用 translator：仅当公开用户反馈流式输出显著影响写作体验，或某 provider 不能通过 OpenAI-compatible/native 最小路径完成 AI 建议闭环时启动。
 - 阅读预览与角色配音朗读：M98 已裁决为 v1.1 backlog go、v1 blocker no。第一版只支持章节阅读预览、旁白/角色基础换声、Story Bible 人物声音设定、系统语音默认和 Edge TTS 实验开关；仅当真实用户需要音频成品交付时，才启动有声书导出、复杂情绪配音、云 TTS 计费集成或全自动说话人识别。

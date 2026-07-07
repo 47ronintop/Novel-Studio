@@ -1073,12 +1073,13 @@ textarea:focus-visible,
 }
 
 .ns-editor-body {
+  background: var(--ns-bg);
   border: 1px solid var(--ns-border);
-  border-radius: 8px;
+  border-radius: 6px;
   display: grid;
-  grid-template-columns: 1fr 52px;
+  grid-template-columns: 52px minmax(0, 1fr);
+  min-height: 360px;
   overflow: hidden;
-  min-height: 220px;
 }
 
 .ns-editor-body[data-large-document="true"] {
@@ -1089,21 +1090,32 @@ textarea:focus-visible,
   background: var(--ns-bg);
   border: 0;
   color: var(--ns-ink);
-  min-height: 220px;
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  grid-column: 2;
+  line-height: 1.7;
+  min-height: 360px;
   outline: none;
-  padding: 16px 18px;
-  resize: vertical;
+  padding: 18px 20px;
+  resize: none;
+  tab-size: 2;
   width: 100%;
 }
 
+.ns-editor-body[data-runtime-id="codemirror"] .ns-editor-textarea {
+  caret-color: var(--ns-primary);
+}
+
 .ns-editor-gutter {
-  background: var(--ns-surface);
-  border-left: 1px solid var(--ns-border);
+  background: color-mix(in oklch, var(--ns-surface) 82%, var(--ns-bg));
+  border-right: 1px solid var(--ns-border);
   color: var(--ns-muted);
   display: grid;
   font-size: 12px;
   gap: 4px;
-  padding: 16px 10px;
+  grid-column: 1;
+  grid-row: 1;
+  padding: 18px 10px;
 }
 
 .ns-editor-line-number {

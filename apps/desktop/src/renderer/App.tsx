@@ -27,11 +27,8 @@ import { createStoryBibleBridge } from "./story-bible-bridge.js";
 import { createSettingsBridge } from "./settings-bridge.js";
 import { createStudioBridge } from "./studio-bridge.js";
 import {
-  createEditorSelectionCommand,
-  createTextareaEditorRuntimeAdapter
-} from "./editor-runtime.js";
-import {
   createChapterEditorRuntime,
+  createChapterEditorSelectionCommand,
   createOnboardingProps,
   getNovelStudioApi,
   rendererCommands,
@@ -528,13 +525,10 @@ export function App() {
         return;
       }
 
-      const adapter = createTextareaEditorRuntimeAdapter();
-      const handle = adapter.mount({
-        body: chapterEditor.chapter.body,
-        saveStatus: chapterEditor.saveStatus
+      const command = createChapterEditorSelectionCommand(chapterEditor, {
+        commandId,
+        selection: chapterSelection
       });
-      handle.updateSelection(chapterSelection);
-      const command = createEditorSelectionCommand(handle.getSnapshot(), commandId);
       if (command === undefined || command.selection.collapsed) {
         return;
       }
@@ -647,12 +641,14 @@ export function App() {
         return;
       }
 
-      void aiWritingWorkflowBridge.selectDiscoveredModel(modelName).then((nextAiWritingWorkflow) => {
-        setAiWritingWorkflow(nextAiWritingWorkflow);
-        if (settingsBridge !== undefined) {
-          void settingsBridge.load().then(setSettings);
-        }
-      });
+      void aiWritingWorkflowBridge
+        .selectDiscoveredModel(modelName)
+        .then((nextAiWritingWorkflow) => {
+          setAiWritingWorkflow(nextAiWritingWorkflow);
+          if (settingsBridge !== undefined) {
+            void settingsBridge.load().then(setSettings);
+          }
+        });
     },
     [aiWritingWorkflowBridge, settingsBridge]
   );

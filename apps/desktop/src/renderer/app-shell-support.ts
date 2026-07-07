@@ -12,7 +12,12 @@ import type {
   ProjectWorkflowProps
 } from "@novel-studio/ui";
 
-import { createTextareaChapterEditorRuntimeProps } from "./editor-runtime.js";
+import {
+  createChapterEditorRuntimeProps,
+  createEditorSelectionCommand,
+  resolveEditorRuntimeAdapter,
+  type EditorRuntimeResolverOptions
+} from "./editor-runtime.js";
 
 declare global {
   interface Window {
@@ -207,12 +212,30 @@ export function applyShellPreferences(
 
 export function createChapterEditorRuntime(
   chapterEditor: ChapterEditorProps,
-  selection: ChapterEditorSelection | undefined
+  selection: ChapterEditorSelection | undefined,
+  options: EditorRuntimeResolverOptions = {}
 ): ChapterEditorRuntimeProps {
-  return createTextareaChapterEditorRuntimeProps({
+  return createChapterEditorRuntimeProps({
     body: chapterEditor.chapter.body,
     saveStatus: chapterEditor.saveStatus,
     ...(selection === undefined ? {} : { selection }),
-    ...(chapterEditor.diffPreview === undefined ? {} : { diffPreview: chapterEditor.diffPreview })
+    ...(chapterEditor.diffPreview === undefined ? {} : { diffPreview: chapterEditor.diffPreview }),
+    ...options
   });
+}
+
+export function createChapterEditorSelectionCommand(
+  chapterEditor: ChapterEditorProps,
+  input: {
+    readonly commandId: string;
+    readonly selection: ChapterEditorSelection;
+  },
+  options: EditorRuntimeResolverOptions = {}
+) {
+  const handle = resolveEditorRuntimeAdapter(options).mount({
+    body: chapterEditor.chapter.body,
+    saveStatus: chapterEditor.saveStatus
+  });
+  handle.updateSelection(input.selection);
+  return createEditorSelectionCommand(handle.getSnapshot(), input.commandId);
 }

@@ -22,6 +22,7 @@ export interface ChapterEditorDiffPreview {
 }
 
 export interface ChapterEditorRuntimeProps {
+  readonly runtimeId?: "textarea" | "codemirror";
   readonly adapterLabel: string;
   readonly documentMode: string;
   readonly activeRangeLabel: string;
@@ -148,7 +149,12 @@ export function ChapterEditor({
         />
       )}
 
-      <div className="ns-editor-body" data-dirty={dirty} data-large-document={largeDocument}>
+      <div
+        className="ns-editor-body"
+        data-dirty={dirty}
+        data-large-document={largeDocument}
+        {...(runtime?.runtimeId === undefined ? {} : { "data-runtime-id": runtime.runtimeId })}
+      >
         <textarea
           aria-label="章节正文"
           className="ns-editor-textarea"
