@@ -148,7 +148,7 @@ function AiSuggestionDiffPreview({
   readonly diffPreview: NonNullable<AiWritingWorkflowProps["diffPreview"]>;
 }) {
   return (
-    <section className="ns-editor-panel" aria-label="AI 建议差异">
+    <section className="ns-editor-panel" aria-label="AI 对话建议差异">
       <div className="ns-editor-panel-header">
         <span>{diffPreview.title}</span>
         <span className="ns-preview-only">仅预览</span>

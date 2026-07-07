@@ -9,7 +9,7 @@ import type { ModelSettingsPanelProps } from "../src/index.js";
 import { WorkspaceShell } from "../src/index.js";
 
 describe("WorkspaceShell", () => {
-  test("renders the desktop IDE workspace regions", () => {
+  test("renders the VS Code style application shell regions", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
@@ -22,13 +22,18 @@ describe("WorkspaceShell", () => {
     expect(html).toContain('data-region="activity-bar"');
     expect(html).toContain('data-region="navigator"');
     expect(html).toContain('data-region="editor-area"');
-    expect(html).toContain('data-region="inspector"');
-    expect(html).toContain('data-region="bottom-panel"');
+    expect(html).toContain('data-region="ai-panel"');
+    expect(html).toContain('data-region="status-bar"');
     expect(html).toContain('aria-label="活动栏"');
     expect(html).toContain('aria-label="项目导航"');
     expect(html).toContain('aria-label="编辑区"');
-    expect(html).toContain('aria-label="检查器"');
-    expect(html).toContain('aria-label="底部面板"');
+    expect(html).toContain('aria-label="AI 对话面板"');
+    expect(html).toContain('aria-label="状态栏"');
+    expect(html).toContain('aria-label="Navigator resize handle"');
+    expect(html).toContain('aria-label="AI panel resize handle"');
+    expect(html).toContain('aria-label="章节 分组"');
+    expect(html).toContain('aria-label="AI 写作工作流"');
+    expect(html).toContain("Markdown");
   });
 
   test("renders the editor tab strip without unfinished disabled copy", () => {
@@ -620,7 +625,7 @@ describe("WorkspaceShell", () => {
     const html = renderToStaticMarkup(tree);
     expect(html).toContain('data-split-view="true"');
     expect(html).toContain("--ns-navigator-width:300px");
-    expect(html).toContain("--ns-inspector-width:360px");
+    expect(html).toContain("--ns-ai-panel-width:360px");
     expect(html).toContain("--ns-bottom-panel-height:240px");
     expect(html).toContain('aria-label="拆分参考窗格"');
   });
