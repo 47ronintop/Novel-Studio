@@ -34,6 +34,7 @@ export type {
   RecoveryRepositoryPort
 } from "./recovery.js";
 export type {
+  UserAppearancePreferences,
   UserEditorPreferences,
   UserOnboardingPreferences,
   UserPreferencesPort,

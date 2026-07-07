@@ -13,6 +13,7 @@ import type {
   ConfigStudioPanelProps,
   EditorPreferences,
   ModelSettingsDraft,
+  SettingsPanelSection,
   StoryBibleEditorDraft,
   StoryBibleEditorKind,
   StoryBibleSummaryProps
@@ -644,6 +645,17 @@ export function App() {
     [settingsBridge]
   );
 
+  const handleSettingsSectionSelect = useCallback(
+    (section: SettingsPanelSection) => {
+      if (settingsBridge === undefined) {
+        return;
+      }
+
+      setSettings(settingsBridge.selectSection(section));
+    },
+    [settingsBridge]
+  );
+
   const handleSettingsDraftChange = useCallback(
     (draft: Partial<ModelSettingsDraft>) => {
       if (settingsBridge === undefined) {
@@ -920,6 +932,7 @@ export function App() {
       onProjectSearch={handleProjectSearch}
       onRebuildSearchIndex={handleRebuildSearchIndex}
       onSettingsProfileSelect={handleSettingsProfileSelect}
+      onSettingsSectionSelect={handleSettingsSectionSelect}
       onSettingsDraftChange={handleSettingsDraftChange}
       onNewSettingsProfile={handleNewSettingsProfile}
       onSaveSettingsProfile={handleSaveSettingsProfile}

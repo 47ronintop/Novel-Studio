@@ -1,6 +1,11 @@
 import { CheckCircle, FilePlus, PlugZap, Power, RefreshCw, Save, Shield, Star } from "lucide-react";
 import type { ReactNode } from "react";
 import type { ModelDiscoverySnapshot } from "@novel-studio/application";
+import {
+  SettingsPanelTabs,
+  type SettingsPanelActiveSection,
+  type SettingsPanelSection
+} from "./settings-panel-tabs.js";
 
 export interface ModelSettingsProfile {
   readonly id: string;
@@ -106,7 +111,30 @@ export interface PluginSettingsPanelProps {
   readonly onSetEnabled?: (pluginId: string, enabled: boolean) => void;
 }
 
+export interface ModelSettingsAppearancePreferences {
+  readonly theme: "dark" | "system";
+  readonly density: "compact" | "comfortable";
+  readonly editor?: {
+    readonly fontFamily: "mono" | "serif" | "sans";
+    readonly fontSize: number;
+    readonly lineHeight: number;
+  };
+}
+
+export interface ModelSettingsWritingPreferences {
+  readonly autosaveEnabled: boolean;
+  readonly historyPolicy: string;
+  readonly styleRules: {
+    readonly enabled: boolean;
+    readonly strength: "light" | "standard" | "strict";
+    readonly customCautionTerms: readonly string[];
+  };
+}
+
 export interface ModelSettingsPanelProps {
+  readonly activeSection?: SettingsPanelSection;
+  readonly appearancePreferences?: ModelSettingsAppearancePreferences;
+  readonly writingPreferences?: ModelSettingsWritingPreferences;
   readonly defaultProfileId: string;
   readonly selectedProfileId?: string;
   readonly profiles: readonly ModelSettingsProfile[];
@@ -123,9 +151,13 @@ export interface ModelSettingsPanelProps {
   readonly onSaveProfile?: () => void;
   readonly onTestConnection?: (profileId: string) => void;
   readonly onMakeDefault?: (profileId: string) => void;
+  readonly onSectionSelect?: (section: SettingsPanelSection) => void;
 }
 
 export function ModelSettingsPanel({
+  activeSection,
+  appearancePreferences,
+  writingPreferences,
   defaultProfileId,
   selectedProfileId,
   profiles,
@@ -141,8 +173,10 @@ export function ModelSettingsPanel({
   onNewProfile,
   onSaveProfile,
   onTestConnection,
-  onMakeDefault
+  onMakeDefault,
+  onSectionSelect
 }: ModelSettingsPanelProps) {
+  const effectiveSection: SettingsPanelActiveSection = activeSection ?? "overview";
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
   const canSave =
     saveStatus !== "saving" &&
@@ -164,257 +198,425 @@ export function ModelSettingsPanel({
       </header>
 
       <div className="model-settings-grid">
-        <aside className="model-settings-nav" aria-label="设置分区">
-          <span aria-current="page">模型配置</span>
-          <span>自动保存与历史</span>
-          <span>隐私与安全</span>
-          <span>插件</span>
-          <span>高级</span>
-        </aside>
+        <SettingsPanelTabs
+          activeSection={effectiveSection}
+          onSectionSelect={onSectionSelect}
+        />
 
         <div className="model-settings-main">
-          <section className="model-settings-card" aria-label="模型配置">
-            <div className="model-settings-section-header">
-              <div>
-                <h2>模型配置</h2>
-                <p>
-                  配置 OpenAI Compatible、OpenAI 或 Ollama profile。保存前仍由 Application 层校验。
-                </p>
-              </div>
-              {feedback === undefined ? null : (
-                <p className="ns-project-feedback" data-kind={feedback.kind} role="status">
-                  {feedback.message}
-                </p>
-              )}
-            </div>
+          {effectiveSection === "overview" || effectiveSection === "models" ? (
+            <ModelProfileSettingsSection
+              canSave={canSave}
+              connectionStatus={connectionStatus}
+              defaultProfileId={defaultProfileId}
+              draft={draft}
+              feedback={feedback}
+              modelDiscovery={modelDiscovery}
+              onDraftChange={onDraftChange}
+              onMakeDefault={onMakeDefault}
+              onSaveProfile={onSaveProfile}
+              onSelectProfile={onSelectProfile}
+              onTestConnection={onTestConnection}
+              profiles={profiles}
+              providerOptions={providerOptions}
+              saveStatus={saveStatus}
+              selectedProfile={selectedProfile}
+              selectedProfileId={selectedProfileId}
+            />
+          ) : null}
 
-            <div className="model-profile-layout">
-              <div className="model-profile-list" aria-label="模型 Profile 列表">
-                {profiles.map((profile) => {
-                  const isDefault = profile.id === defaultProfileId;
-                  const isSelected = profile.id === selectedProfileId;
-                  const status =
-                    connectionStatus?.profileId === profile.id ? connectionStatus.status : "idle";
-                  return (
-                    <article
-                      className="model-profile-row"
-                      data-selected={isSelected}
-                      key={profile.id}
-                    >
-                      <button
-                        aria-label={`编辑模型 ${profile.displayName}`}
-                        className="model-profile-select"
-                        onClick={() => onSelectProfile?.(profile.id)}
-                        type="button"
-                      >
-                        <span>{profile.displayName}</span>
-                        <span>
-                          {profile.provider} · {profile.modelName}
-                        </span>
-                        <span>已保存密钥引用</span>
-                        <span>{profile.timeoutMs}ms 超时</span>
-                      </button>
-                      <div className="model-profile-actions">
-                        {isDefault ? (
-                          <span className="default-profile-badge">
-                            <CheckCircle aria-hidden="true" size={14} /> 默认
-                          </span>
-                        ) : (
-                          <button
-                            type="button"
-                            aria-label={`设为默认模型 ${profile.displayName}`}
-                            onClick={() => onMakeDefault?.(profile.id)}
-                          >
-                            <Star aria-hidden="true" size={14} />
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          aria-label={`测试连接 ${profile.displayName}`}
-                          onClick={() => onTestConnection?.(profile.id)}
-                        >
-                          <PlugZap aria-hidden="true" size={14} />
-                        </button>
-                        <span>{statusLabel(status)}</span>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
+          {effectiveSection === "overview" ? <LegacyWritingSummarySection /> : null}
 
-              <form
-                className="model-profile-form"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  onSaveProfile?.();
-                }}
-              >
-                <div className="model-profile-form-grid">
-                  <ModelField label="Profile ID">
-                    <input
-                      aria-label="模型 Profile ID"
-                      aria-description="粘贴真实 API Key，保存后会加密存储；留空则沿用已保存 API Key。"
-                      className="ns-search-input"
-                      onChange={(event) => onDraftChange?.({ id: event.currentTarget.value })}
-                      value={draft.id}
-                    />
-                  </ModelField>
-                  <ModelField label="显示名称">
-                    <input
-                      aria-label="模型显示名称"
-                      className="ns-search-input"
-                      onChange={(event) =>
-                        onDraftChange?.({ displayName: event.currentTarget.value })
-                      }
-                      value={draft.displayName}
-                    />
-                  </ModelField>
-                  <ModelField label="Provider">
-                    <select
-                      aria-label="模型 Provider"
-                      className="model-settings-select"
-                      onChange={(event) => onDraftChange?.({ provider: event.currentTarget.value })}
-                      value={draft.provider}
-                    >
-                      {(providerOptions ?? []).map((provider) => (
-                        <option key={provider.id} value={provider.id}>
-                          {provider.label}
-                        </option>
-                      ))}
-                    </select>
-                  </ModelField>
-                  <ModelField label="模型名称">
-                    {modelDiscovery?.status === "loaded" && modelDiscovery.models.length > 0 ? (
-                      <select
-                        aria-label="Discovered model name"
-                        className="model-settings-select"
-                        onChange={(event) =>
-                          onDraftChange?.({ modelName: event.currentTarget.value })
-                        }
-                        value={draft.modelName}
-                      >
-                        {modelDiscovery.models.map((model) => (
-                          <option key={model.id} value={model.id}>
-                            {model.displayName}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <>
-                        <input
-                          aria-label="模型名称"
-                          className="ns-search-input"
-                          onChange={(event) =>
-                            onDraftChange?.({ modelName: event.currentTarget.value })
-                          }
-                          value={draft.modelName}
-                        />
-                        {modelDiscovery?.status === "fallback" ? (
-                          <small className="model-discovery-fallback">
-                            {modelDiscovery.fallbackReason}
-                          </small>
-                        ) : null}
-                      </>
-                    )}
-                  </ModelField>
-                  <ModelField label="Base URL">
-                    <input
-                      aria-label="模型 Base URL"
-                      className="ns-search-input"
-                      onChange={(event) => onDraftChange?.({ baseUrl: event.currentTarget.value })}
-                      value={draft.baseUrl}
-                    />
-                  </ModelField>
-                  <ModelField label="密钥引用">
-                    <input
-                      aria-label="密钥引用"
-                      className="ns-search-input"
-                      onChange={(event) =>
-                        onDraftChange?.({ apiKeyRefInput: event.currentTarget.value })
-                      }
-                      placeholder={
-                        selectedProfile === undefined
-                          ? "粘贴真实 API Key，保存后会加密存储"
-                          : "留空则沿用已保存密钥引用"
-                      }
-                      type="password"
-                      value={draft.apiKeyRefInput}
-                    />
-                  </ModelField>
-                  <ModelField label="Temperature">
-                    <input
-                      aria-label="Temperature"
-                      className="ns-search-input"
-                      inputMode="decimal"
-                      onChange={(event) =>
-                        onDraftChange?.({ temperature: event.currentTarget.value })
-                      }
-                      value={draft.temperature}
-                    />
-                  </ModelField>
-                  <ModelField label="Max Tokens">
-                    <input
-                      aria-label="Max Tokens"
-                      className="ns-search-input"
-                      inputMode="numeric"
-                      onChange={(event) =>
-                        onDraftChange?.({ maxTokens: event.currentTarget.value })
-                      }
-                      value={draft.maxTokens}
-                    />
-                  </ModelField>
-                  <ModelField label="Top P">
-                    <input
-                      aria-label="Top P"
-                      className="ns-search-input"
-                      inputMode="decimal"
-                      onChange={(event) => onDraftChange?.({ topP: event.currentTarget.value })}
-                      value={draft.topP}
-                    />
-                  </ModelField>
-                  <ModelField label="Timeout">
-                    <input
-                      aria-label="Timeout"
-                      className="ns-search-input"
-                      inputMode="numeric"
-                      onChange={(event) =>
-                        onDraftChange?.({ timeoutMs: event.currentTarget.value })
-                      }
-                      value={draft.timeoutMs}
-                    />
-                  </ModelField>
-                </div>
-                <div className="model-profile-form-actions">
-                  <button className="ns-icon-text-button" disabled={!canSave} type="submit">
-                    <Save aria-hidden="true" size={14} />
-                    {saveStatus === "saving" ? "保存中" : "保存模型配置"}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </section>
+          {effectiveSection === "writing" ? (
+            <WritingSettingsSection preferences={writingPreferences} />
+          ) : null}
 
-          <section className="model-settings-card" aria-label="自动保存与历史">
-            <h2>自动保存与历史</h2>
-            <p>
-              当前版本沿用项目 settings.json 中的 autosave/history
-              策略。后续可在这里补齐间隔、快照策略和恢复草稿提示。
-            </p>
-          </section>
+          {effectiveSection === "appearance" ? (
+            <AppearanceSettingsSection preferences={appearancePreferences} />
+          ) : null}
 
-          <PluginSettingsSection plugins={plugins} />
+          {effectiveSection === "overview" || effectiveSection === "plugins" ? (
+            <PluginSettingsSection plugins={plugins} />
+          ) : null}
 
-          <section className="model-settings-card" aria-label="隐私与安全">
-            <h2>隐私与安全</h2>
-            <div className="model-security-note">
-              <Shield aria-hidden="true" size={16} />
-              <p>
-                API Key 不会以明文写入 settings.json，也不会显示在列表、错误或日志中。这里仅接受
-                secret:// 引用，真实密钥由桌面端安全存储能力管理。
-              </p>
-            </div>
-          </section>
+          {effectiveSection === "overview" || effectiveSection === "advanced" ? (
+            <AdvancedSettingsSection />
+          ) : null}
         </div>
+      </div>
+    </section>
+  );
+}
+
+function ModelProfileSettingsSection({
+  canSave,
+  connectionStatus,
+  defaultProfileId,
+  draft,
+  feedback,
+  modelDiscovery,
+  onDraftChange,
+  onMakeDefault,
+  onSaveProfile,
+  onSelectProfile,
+  onTestConnection,
+  profiles,
+  providerOptions,
+  saveStatus,
+  selectedProfile,
+  selectedProfileId
+}: {
+  readonly canSave: boolean;
+  readonly connectionStatus: ModelConnectionStatus | undefined;
+  readonly defaultProfileId: string;
+  readonly draft: ModelSettingsDraft;
+  readonly feedback: ModelSettingsPanelProps["feedback"];
+  readonly modelDiscovery: ModelDiscoverySnapshot | undefined;
+  readonly onDraftChange: ModelSettingsPanelProps["onDraftChange"];
+  readonly onMakeDefault: ModelSettingsPanelProps["onMakeDefault"];
+  readonly onSaveProfile: ModelSettingsPanelProps["onSaveProfile"];
+  readonly onSelectProfile: ModelSettingsPanelProps["onSelectProfile"];
+  readonly onTestConnection: ModelSettingsPanelProps["onTestConnection"];
+  readonly profiles: readonly ModelSettingsProfile[];
+  readonly providerOptions: readonly ModelProviderOption[] | undefined;
+  readonly saveStatus: ModelSettingsSaveStatus;
+  readonly selectedProfile: ModelSettingsProfile | undefined;
+  readonly selectedProfileId: string | undefined;
+}) {
+  return (
+    <section className="model-settings-card" aria-label="模型配置">
+      <div className="model-settings-section-header">
+        <div>
+          <h2>模型配置</h2>
+          <p>配置 OpenAI Compatible、OpenAI 或 Ollama profile。保存前仍由 Application 层校验。</p>
+        </div>
+        {feedback === undefined ? null : (
+          <p className="ns-project-feedback" data-kind={feedback.kind} role="status">
+            {feedback.message}
+          </p>
+        )}
+      </div>
+
+      <div className="model-profile-layout">
+        <div className="model-profile-list" aria-label="模型 Profile 列表">
+          {profiles.map((profile) => {
+            const isDefault = profile.id === defaultProfileId;
+            const isSelected = profile.id === selectedProfileId;
+            const status =
+              connectionStatus?.profileId === profile.id ? connectionStatus.status : "idle";
+            return (
+              <article className="model-profile-row" data-selected={isSelected} key={profile.id}>
+                <button
+                  aria-label={`编辑模型 ${profile.displayName}`}
+                  className="model-profile-select"
+                  onClick={() => onSelectProfile?.(profile.id)}
+                  type="button"
+                >
+                  <span>{profile.displayName}</span>
+                  <span>
+                    {profile.provider} · {profile.modelName}
+                  </span>
+                  <span>已保存密钥引用</span>
+                  <span>{profile.timeoutMs}ms 超时</span>
+                </button>
+                <div className="model-profile-actions">
+                  {isDefault ? (
+                    <span className="default-profile-badge">
+                      <CheckCircle aria-hidden="true" size={14} /> 默认
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      aria-label={`设为默认模型 ${profile.displayName}`}
+                      onClick={() => onMakeDefault?.(profile.id)}
+                    >
+                      <Star aria-hidden="true" size={14} />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    aria-label={`测试连接 ${profile.displayName}`}
+                    onClick={() => onTestConnection?.(profile.id)}
+                  >
+                    <PlugZap aria-hidden="true" size={14} />
+                  </button>
+                  <span>{statusLabel(status)}</span>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+
+        <form
+          className="model-profile-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSaveProfile?.();
+          }}
+        >
+          <div className="model-profile-form-grid">
+            <ModelField label="Profile ID">
+              <input
+                aria-label="模型 Profile ID"
+                aria-description="粘贴真实 API Key，保存后会加密存储；留空则沿用已保存 API Key。"
+                className="ns-search-input"
+                onChange={(event) => onDraftChange?.({ id: event.currentTarget.value })}
+                value={draft.id}
+              />
+            </ModelField>
+            <ModelField label="显示名称">
+              <input
+                aria-label="模型显示名称"
+                className="ns-search-input"
+                onChange={(event) => onDraftChange?.({ displayName: event.currentTarget.value })}
+                value={draft.displayName}
+              />
+            </ModelField>
+            <ModelField label="Provider">
+              <select
+                aria-label="模型 Provider"
+                className="model-settings-select"
+                onChange={(event) => onDraftChange?.({ provider: event.currentTarget.value })}
+                value={draft.provider}
+              >
+                {(providerOptions ?? []).map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.label}
+                  </option>
+                ))}
+              </select>
+            </ModelField>
+            <ModelField label="模型名称">
+              {modelDiscovery?.status === "loaded" && modelDiscovery.models.length > 0 ? (
+                <select
+                  aria-label="Discovered model name"
+                  className="model-settings-select"
+                  onChange={(event) => onDraftChange?.({ modelName: event.currentTarget.value })}
+                  value={draft.modelName}
+                >
+                  {modelDiscovery.models.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.displayName}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <>
+                  <input
+                    aria-label="模型名称"
+                    className="ns-search-input"
+                    onChange={(event) => onDraftChange?.({ modelName: event.currentTarget.value })}
+                    value={draft.modelName}
+                  />
+                  {modelDiscovery?.status === "fallback" ? (
+                    <small className="model-discovery-fallback">
+                      {modelDiscovery.fallbackReason}
+                    </small>
+                  ) : null}
+                </>
+              )}
+            </ModelField>
+            <ModelField label="Base URL">
+              <input
+                aria-label="模型 Base URL"
+                className="ns-search-input"
+                onChange={(event) => onDraftChange?.({ baseUrl: event.currentTarget.value })}
+                value={draft.baseUrl}
+              />
+            </ModelField>
+            <ModelField label="密钥引用">
+              <input
+                aria-label="密钥引用"
+                className="ns-search-input"
+                onChange={(event) =>
+                  onDraftChange?.({ apiKeyRefInput: event.currentTarget.value })
+                }
+                placeholder={
+                  selectedProfile === undefined
+                    ? "粘贴真实 API Key，保存后会加密存储"
+                    : "留空则沿用已保存密钥引用"
+                }
+                type="password"
+                value={draft.apiKeyRefInput}
+              />
+            </ModelField>
+            <ModelField label="Temperature">
+              <input
+                aria-label="Temperature"
+                className="ns-search-input"
+                inputMode="decimal"
+                onChange={(event) => onDraftChange?.({ temperature: event.currentTarget.value })}
+                value={draft.temperature}
+              />
+            </ModelField>
+            <ModelField label="Max Tokens">
+              <input
+                aria-label="Max Tokens"
+                className="ns-search-input"
+                inputMode="numeric"
+                onChange={(event) => onDraftChange?.({ maxTokens: event.currentTarget.value })}
+                value={draft.maxTokens}
+              />
+            </ModelField>
+            <ModelField label="Top P">
+              <input
+                aria-label="Top P"
+                className="ns-search-input"
+                inputMode="decimal"
+                onChange={(event) => onDraftChange?.({ topP: event.currentTarget.value })}
+                value={draft.topP}
+              />
+            </ModelField>
+            <ModelField label="Timeout">
+              <input
+                aria-label="Timeout"
+                className="ns-search-input"
+                inputMode="numeric"
+                onChange={(event) => onDraftChange?.({ timeoutMs: event.currentTarget.value })}
+                value={draft.timeoutMs}
+              />
+            </ModelField>
+          </div>
+          <div className="model-profile-form-actions">
+            <button className="ns-icon-text-button" disabled={!canSave} type="submit">
+              <Save aria-hidden="true" size={14} />
+              {saveStatus === "saving" ? "保存中" : "保存模型配置"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+  );
+}
+
+function LegacyWritingSummarySection() {
+  return (
+    <section className="model-settings-card" aria-label="自动保存与历史">
+      <h2>自动保存与历史</h2>
+      <p>
+        当前版本沿用项目 settings.json 中的 autosave/history
+        策略。后续可在这里补齐间隔、快照策略和恢复草稿提示。
+      </p>
+    </section>
+  );
+}
+
+function WritingSettingsSection({
+  preferences
+}: {
+  readonly preferences: ModelSettingsWritingPreferences | undefined;
+}) {
+  const resolved = preferences ?? {
+    autosaveEnabled: false,
+    historyPolicy: "manual",
+    styleRules: {
+      enabled: false,
+      strength: "standard" as const,
+      customCautionTerms: []
+    }
+  };
+
+  return (
+    <section className="model-settings-card" aria-label="写作设置">
+      <div className="model-settings-section-header">
+        <div>
+          <h2>写作设置</h2>
+          <p>调整默认保存行为、历史策略和项目级文风规则。</p>
+        </div>
+      </div>
+      <dl className="settings-summary-grid">
+        <div>
+          <dt>自动保存</dt>
+          <dd>{resolved.autosaveEnabled ? "自动保存已启用" : "自动保存未启用"}</dd>
+        </div>
+        <div>
+          <dt>历史策略</dt>
+          <dd>{resolved.historyPolicy}</dd>
+        </div>
+        <div>
+          <dt>写作质量</dt>
+          <dd>
+            {resolved.styleRules.enabled ? "文风规则已启用" : "文风规则未启用"} ·{" "}
+            {resolved.styleRules.strength}
+          </dd>
+        </div>
+        <div>
+          <dt>项目语气</dt>
+          <dd>
+            {resolved.styleRules.customCautionTerms.length === 0
+              ? "未配置慎用表达"
+              : resolved.styleRules.customCautionTerms.join("、")}
+          </dd>
+        </div>
+      </dl>
+    </section>
+  );
+}
+
+function AppearanceSettingsSection({
+  preferences
+}: {
+  readonly preferences: ModelSettingsAppearancePreferences | undefined;
+}) {
+  const resolved = preferences ?? {
+    theme: "dark" as const,
+    density: "compact" as const,
+    editor: {
+      fontFamily: "mono" as const,
+      fontSize: 13,
+      lineHeight: 1.7
+    }
+  };
+  const editor = resolved.editor ?? {
+    fontFamily: "mono" as const,
+    fontSize: 13,
+    lineHeight: 1.7
+  };
+
+  return (
+    <section className="model-settings-card" aria-label="外观设置">
+      <div className="model-settings-section-header">
+        <div>
+          <h2>外观设置</h2>
+          <p>管理主题、密度和编辑器排版偏好。</p>
+        </div>
+      </div>
+      <dl className="settings-summary-grid">
+        <div>
+          <dt>主题</dt>
+          <dd>{themeLabel(resolved.theme)}</dd>
+        </div>
+        <div>
+          <dt>密度</dt>
+          <dd>{densityLabel(resolved.density)}</dd>
+        </div>
+        <div>
+          <dt>字体</dt>
+          <dd>{editor.fontFamily}</dd>
+        </div>
+        <div>
+          <dt>字号</dt>
+          <dd>{editor.fontSize}px</dd>
+        </div>
+        <div>
+          <dt>行高</dt>
+          <dd>{editor.lineHeight}</dd>
+        </div>
+      </dl>
+    </section>
+  );
+}
+
+function AdvancedSettingsSection() {
+  return (
+    <section className="model-settings-card" aria-label="隐私与安全">
+      <h2>隐私与安全</h2>
+      <div className="model-security-note">
+        <Shield aria-hidden="true" size={16} />
+        <p>
+          API Key 不会以明文写入 settings.json，也不会显示在列表、错误或日志中。这里仅接受
+          secret:// 引用，真实密钥由桌面端安全存储能力管理。
+        </p>
       </div>
     </section>
   );
@@ -577,4 +779,12 @@ function statusLabel(status: ModelConnectionStatusValue): string {
     case "failed":
       return "失败";
   }
+}
+
+function themeLabel(theme: ModelSettingsAppearancePreferences["theme"]): string {
+  return theme === "system" ? "跟随系统" : "深色";
+}
+
+function densityLabel(density: ModelSettingsAppearancePreferences["density"]): string {
+  return density === "comfortable" ? "舒适" : "紧凑";
 }

@@ -9,7 +9,8 @@ import type {
 import type {
   ModelSettingsDraft,
   ModelSettingsPanelProps,
-  PluginSettingsPanelProps
+  PluginSettingsPanelProps,
+  SettingsPanelSection
 } from "@novel-studio/ui";
 
 export interface SettingsBridgeOptions {
@@ -21,6 +22,7 @@ export interface SettingsBridge {
   load(): Promise<ModelSettingsPanelProps>;
   loadPlugins(): Promise<ModelSettingsPanelProps>;
   setPluginEnabled(pluginId: string, enabled: boolean): Promise<ModelSettingsPanelProps>;
+  selectSection(section: SettingsPanelSection): ModelSettingsPanelProps;
   selectProfile(profileId: string): ModelSettingsPanelProps;
   discoverModelOptions(profileId: string): Promise<ModelSettingsPanelProps>;
   updateDraft(draft: Partial<ModelSettingsDraft>): ModelSettingsPanelProps;
@@ -44,6 +46,7 @@ export function createSettingsBridge(
   let saveStatus: ModelSettingsPanelProps["saveStatus"] = "idle";
   let connectionStatus: ModelSettingsPanelProps["connectionStatus"] | undefined;
   let modelDiscovery: ModelDiscoverySnapshot | undefined;
+  let activeSection: SettingsPanelSection = "models";
   let plugins: PluginSettingsPanelProps = {
     status: "idle",
     entries: [],
@@ -94,6 +97,10 @@ export function createSettingsBridge(
       }
 
       plugins = toPluginProps(result.value, "插件状态已更新。");
+      return toProps();
+    },
+    selectSection(section) {
+      activeSection = section;
       return toProps();
     },
     selectProfile(profileId) {
@@ -157,23 +164,25 @@ export function createSettingsBridge(
     async testConnection(profileId) {
       const result = await api.settings.testModelProfileConnection(profileId);
       if (!result.ok) {
+        const message = redactSettingsDetail(result.error.message);
         connectionStatus = {
           profileId,
           status: "failed",
-          detail: result.error.message
+          detail: message
         };
-        feedback = { kind: "error", message: result.error.message };
+        feedback = { kind: "error", message };
         return toProps();
       }
 
+      const detail = redactSettingsDetail(result.value.detail);
       connectionStatus = {
         profileId,
         status: result.value.ok ? "success" : "failed",
-        detail: result.value.detail
+        detail
       };
       feedback = {
         kind: result.value.ok ? "info" : "error",
-        message: result.value.detail
+        message: detail
       };
       return toProps();
     }
@@ -284,6 +293,7 @@ export function createSettingsBridge(
   function toProps(): ModelSettingsPanelProps {
     return {
       defaultProfileId,
+      activeSection,
       ...(selectedProfileId === undefined ? {} : { selectedProfileId }),
       profiles,
       draft,
@@ -305,7 +315,8 @@ export function createSettingsBridge(
       onNewProfile: () => undefined,
       onSaveProfile: () => undefined,
       onTestConnection: () => undefined,
-      onMakeDefault: () => undefined
+      onMakeDefault: () => undefined,
+      onSectionSelect: () => undefined
     };
   }
 
@@ -418,4 +429,10 @@ function apiKeyRefFromDraft(
 function parseInteger(value: string): number | undefined {
   const parsed = Number(value);
   return Number.isInteger(parsed) ? parsed : undefined;
+}
+
+function redactSettingsDetail(detail: string): string {
+  return detail
+    .replace(/\bsk-[A-Za-z0-9_-]+/g, "[redacted-secret]")
+    .replace(/secret:\/\/[^\s"'<>]+/g, "[redacted-secret-ref]");
 }

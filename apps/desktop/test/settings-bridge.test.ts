@@ -156,6 +156,36 @@ describe("M22 settings bridge", () => {
     });
   });
 
+  test("redacts failed connection details before exposing settings feedback", async () => {
+    const calls: string[] = [];
+    const bridge = createSettingsBridge(createApi(calls, new Map(), { connectionFails: true }));
+    await bridge.load();
+
+    const tested = await bridge.testConnection("model_default");
+
+    expect(tested.connectionStatus).toMatchObject({
+      profileId: "model_default",
+      status: "failed"
+    });
+    const exposedFeedback = JSON.stringify({
+      connectionStatus: tested.connectionStatus,
+      feedback: tested.feedback
+    });
+    expect(exposedFeedback).not.toContain("sk-secret");
+    expect(exposedFeedback).not.toContain("secret://model_default/api_key");
+  });
+
+  test("switches the active settings section without reloading model profiles", async () => {
+    const calls: string[] = [];
+    const bridge = createSettingsBridge(createApi(calls));
+    await bridge.load();
+
+    const switched = bridge.selectSection("appearance");
+
+    expect(switched.activeSection).toBe("appearance");
+    expect(calls.filter((call) => call === "settings.listModelProfiles")).toHaveLength(1);
+  });
+
   test("refreshes plugin registry through the preload API without blocking model settings", async () => {
     const calls: string[] = [];
     const bridge = createSettingsBridge(createApi(calls));
@@ -183,7 +213,11 @@ describe("M22 settings bridge", () => {
   });
 });
 
-function createApi(calls: string[], savedSecrets = new Map<string, string>()): NovelStudioApi {
+function createApi(
+  calls: string[],
+  savedSecrets = new Map<string, string>(),
+  options: { readonly connectionFails?: boolean } = {}
+): NovelStudioApi {
   let snapshot: ModelSettingsSnapshot = {
     defaultProfileId: "model_default",
     profiles: [defaultProfile]
@@ -301,6 +335,23 @@ function createApi(calls: string[], savedSecrets = new Map<string, string>()): N
       },
       testModelProfileConnection: async (profileId) => {
         calls.push(`settings.testModelProfileConnection:${profileId}`);
+        if (options.connectionFails === true) {
+          return {
+            ok: false,
+            error: {
+              schemaVersion: "1.0",
+              errorId: "err_model_secret",
+              code: "MODEL_CONNECTION_FAILED",
+              category: "LLMAdapterError",
+              message:
+                "Provider rejected sk-secret for secret://model_default/api_key during test.",
+              recoverability: "user-action",
+              suggestedAction: "Check the model profile.",
+              traceId: "settings-bridge-test",
+              createdAt: "2026-07-08T00:00:00.000Z"
+            }
+          };
+        }
         const profile = snapshot.profiles.find((entry) => entry.id === profileId) ?? defaultProfile;
         const result: ModelConnectionResult = {
           ok: true,

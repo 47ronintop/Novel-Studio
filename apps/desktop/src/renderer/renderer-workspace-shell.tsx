@@ -58,6 +58,7 @@ export interface RendererWorkspaceShellProps {
   readonly onProjectSearch: ProjectSearchProps["onSearch"];
   readonly onRebuildSearchIndex: ProjectSearchProps["onRebuildIndex"];
   readonly onSettingsProfileSelect: NonNullable<ModelSettingsPanelProps["onSelectProfile"]>;
+  readonly onSettingsSectionSelect: NonNullable<ModelSettingsPanelProps["onSectionSelect"]>;
   readonly onSettingsDraftChange: NonNullable<ModelSettingsPanelProps["onDraftChange"]>;
   readonly onNewSettingsProfile: NonNullable<ModelSettingsPanelProps["onNewProfile"]>;
   readonly onSaveSettingsProfile: NonNullable<ModelSettingsPanelProps["onSaveProfile"]>;
@@ -164,6 +165,7 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
             settings: {
               ...props.settings,
               onSelectProfile: props.onSettingsProfileSelect,
+              onSectionSelect: props.onSettingsSectionSelect,
               onDraftChange: props.onSettingsDraftChange,
               onNewProfile: props.onNewSettingsProfile,
               onSaveProfile: props.onSaveSettingsProfile,

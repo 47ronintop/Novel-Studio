@@ -38,13 +38,16 @@ export type {
   ConfigValidationStatus
 } from "./config-studio-panel.js";
 export { ModelSettingsPanel } from "./model-settings-panel.js";
+export type { SettingsPanelSection } from "./settings-panel-tabs.js";
 export type {
   ModelConnectionStatus,
   ModelConnectionStatusValue,
+  ModelSettingsAppearancePreferences,
   ModelSettingsDraft,
   ModelSettingsPanelProps,
   ModelSettingsProfile,
   ModelSettingsSaveStatus,
+  ModelSettingsWritingPreferences,
   PluginSettingsEntry,
   PluginSettingsPanelProps,
   PluginSettingsPermissionGrant,

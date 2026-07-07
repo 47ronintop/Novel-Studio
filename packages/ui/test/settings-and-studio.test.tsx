@@ -4,6 +4,63 @@ import { describe, expect, test } from "vitest";
 import { ConfigStudioPanel, ModelSettingsPanel } from "../src/index.js";
 
 describe("M8 Settings and Studio UI", () => {
+  test("renders VSCode-like settings tabs with scoped writing and appearance panels", () => {
+    const appearanceHtml = renderToStaticMarkup(
+      <ModelSettingsPanel
+        {...createModelSettingsPanelProps()}
+        activeSection="appearance"
+        appearancePreferences={{
+          theme: "dark",
+          density: "compact",
+          editor: {
+            fontFamily: "serif",
+            fontSize: 16,
+            lineHeight: 1.8
+          }
+        }}
+      />
+    );
+    const writingHtml = renderToStaticMarkup(
+      <ModelSettingsPanel
+        {...createModelSettingsPanelProps()}
+        activeSection="writing"
+        writingPreferences={{
+          autosaveEnabled: true,
+          historyPolicy: "manual-and-interval",
+          styleRules: {
+            enabled: true,
+            strength: "standard",
+            customCautionTerms: ["显而易见", "不可否认"]
+          }
+        }}
+      />
+    );
+
+    expect(appearanceHtml).toContain('aria-label="设置分类"');
+    expect(appearanceHtml).toContain('aria-current="page"');
+    expect(appearanceHtml).toContain("模型");
+    expect(appearanceHtml).toContain("写作");
+    expect(appearanceHtml).toContain("外观");
+    expect(appearanceHtml).toContain("插件");
+    expect(appearanceHtml).toContain("高级");
+    expect(appearanceHtml).toContain('aria-label="外观设置"');
+    expect(appearanceHtml).toContain("深色");
+    expect(appearanceHtml).toContain("紧凑");
+    expect(appearanceHtml).toContain("serif");
+    expect(appearanceHtml).toContain("16px");
+    expect(appearanceHtml).toContain("1.8");
+    expect(appearanceHtml).not.toContain('aria-label="模型配置"');
+
+    expect(writingHtml).toContain('aria-label="写作设置"');
+    expect(writingHtml).toContain("自动保存已启用");
+    expect(writingHtml).toContain("manual-and-interval");
+    expect(writingHtml).toContain("文风规则已启用");
+    expect(writingHtml).toContain("写作质量");
+    expect(writingHtml).toContain("项目语气");
+    expect(writingHtml).toContain("显而易见");
+    expect(writingHtml).not.toMatch(/检测规避|过检测/);
+  });
+
   test("renders model profile settings without plaintext secrets", () => {
     const html = renderToStaticMarkup(
       <ModelSettingsPanel
@@ -291,3 +348,38 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).not.toMatch(/filesystem|node:|fs\./i);
   });
 });
+
+function createModelSettingsPanelProps(): Parameters<typeof ModelSettingsPanel>[0] {
+  return {
+    defaultProfileId: "model_default",
+    selectedProfileId: "model_default",
+    profiles: [
+      {
+        id: "model_default",
+        provider: "openai-compatible",
+        displayName: "Default Model",
+        baseUrl: "https://api.example.com/v1",
+        modelName: "example-model",
+        apiKeyRef: "secret://model_default/api_key",
+        temperature: 0.7,
+        maxTokens: 4096,
+        topP: 1,
+        timeoutMs: 60000
+      }
+    ],
+    draft: {
+      id: "model_default",
+      provider: "openai-compatible",
+      displayName: "Default Model",
+      baseUrl: "https://api.example.com/v1",
+      modelName: "example-model",
+      apiKeyRefInput: "",
+      temperature: "0.7",
+      maxTokens: "4096",
+      topP: "1",
+      timeoutMs: "60000"
+    },
+    saveStatus: "idle",
+    providerOptions: [{ id: "openai-compatible", label: "OpenAI Compatible" }]
+  };
+}

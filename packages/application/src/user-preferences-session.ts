@@ -1,5 +1,6 @@
 import { ok, type Result, type UnifiedError } from "@novel-studio/shared";
 import type {
+  UserAppearancePreferences,
   UserEditorPreferences,
   UserPreferencesPort,
   UserPreferencesSaveInput,
@@ -7,6 +8,7 @@ import type {
 } from "@novel-studio/shared";
 
 export type {
+  UserAppearancePreferences,
   UserEditorPreferences,
   UserOnboardingPreferences,
   UserPreferencesPort,
@@ -56,6 +58,10 @@ export function createUserPreferencesSession(
           ...baseResult.value.editor,
           ...input.editor
         }),
+        appearance: normalizeAppearancePreferences({
+          ...baseResult.value.appearance,
+          ...input.appearance
+        }),
         shell: {
           ...baseResult.value.shell,
           ...input.shell,
@@ -96,6 +102,10 @@ export function createDefaultUserPreferences(): UserPreferencesSnapshot {
       fontSize: 13,
       lineHeight: 1.7
     },
+    appearance: {
+      theme: "dark",
+      density: "compact"
+    },
     shell: {
       navigatorCollapsed: false,
       navigatorExpandedSectionIds: defaultNavigatorExpandedSectionIds(),
@@ -117,6 +127,9 @@ function normalizeUserPreferences(preferences: UserPreferencesSnapshot): UserPre
   const normalized: UserPreferencesSnapshot = {
     ...preferences,
     editor: normalizeEditorPreferences(preferences.editor ?? createDefaultUserPreferences().editor),
+    appearance: normalizeAppearancePreferences(
+      preferences.appearance ?? createDefaultUserPreferences().appearance
+    ),
     shell: {
       ...preferences.shell,
       navigatorExpandedSectionIds: normalizeNavigatorExpandedSectionIds(
@@ -141,6 +154,15 @@ function normalizeUserPreferences(preferences: UserPreferencesSnapshot): UserPre
         bottomPanelHeight: 180
       }
     }
+  };
+}
+
+function normalizeAppearancePreferences(
+  preferences: UserAppearancePreferences
+): UserAppearancePreferences {
+  return {
+    theme: preferences.theme === "system" ? "system" : "dark",
+    density: preferences.density === "comfortable" ? "comfortable" : "compact"
   };
 }
 

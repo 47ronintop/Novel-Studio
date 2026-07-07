@@ -27,6 +27,10 @@ describe("UserPreferencesSession", () => {
           fontSize: 13,
           lineHeight: 1.7
         },
+        appearance: {
+          theme: "dark",
+          density: "compact"
+        },
         shell: {
           navigatorCollapsed: false,
           navigatorExpandedSectionIds: [
@@ -85,6 +89,10 @@ describe("UserPreferencesSession", () => {
         fontFamily: "serif",
         fontSize: 16,
         lineHeight: 1.8
+      },
+      appearance: {
+        theme: "dark",
+        density: "comfortable"
       }
     });
     const loaded = await session.load();
@@ -101,6 +109,10 @@ describe("UserPreferencesSession", () => {
         fontSize: 16,
         lineHeight: 1.8
       });
+      expect(loaded.value.appearance).toEqual({
+        theme: "dark",
+        density: "comfortable"
+      });
     }
   });
 
@@ -115,6 +127,10 @@ describe("UserPreferencesSession", () => {
               fontFamily: "mono",
               fontSize: 13,
               lineHeight: 1.7
+            },
+            appearance: {
+              theme: "dark",
+              density: "compact"
             },
             shell: {
               navigatorCollapsed: false,

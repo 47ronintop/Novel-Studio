@@ -35,6 +35,10 @@ describe("UserPreferencesFileRepository", () => {
         fontSize: 16,
         lineHeight: 1.8
       },
+      appearance: {
+        theme: "dark",
+        density: "comfortable"
+      },
       shell: {
         navigatorCollapsed: true,
         navigatorExpandedSectionIds: ["chapters", "prompts"],

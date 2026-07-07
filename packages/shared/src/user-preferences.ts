@@ -18,6 +18,11 @@ export interface UserEditorPreferences {
   readonly lineHeight: number;
 }
 
+export interface UserAppearancePreferences {
+  readonly theme: "dark" | "system";
+  readonly density: "compact" | "comfortable";
+}
+
 export interface UserShellPreferences {
   readonly navigatorCollapsed: boolean;
   readonly navigatorExpandedSectionIds: readonly string[];
@@ -32,12 +37,14 @@ export interface UserPreferencesSnapshot {
   readonly schemaVersion: "1.0";
   readonly onboarding: UserOnboardingPreferences;
   readonly editor: UserEditorPreferences;
+  readonly appearance: UserAppearancePreferences;
   readonly shell: UserShellPreferences;
 }
 
 export type UserPreferencesSaveInput = Partial<{
   readonly onboarding: Partial<UserOnboardingPreferences>;
   readonly editor: Partial<UserEditorPreferences>;
+  readonly appearance: Partial<UserAppearancePreferences>;
   readonly shell: Partial<UserShellPreferences> & {
     readonly workspaceLayout?: Partial<UserWorkspaceLayoutPreferences>;
   };
