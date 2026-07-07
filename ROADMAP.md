@@ -653,6 +653,16 @@ Scope Review 必须回答：
 | 文件重构阈值     | `workspace-shell.tsx` 900 行、`App.tsx` 1017 行、`ai-writing-workflow-session.ts` 984 行，均低于硬阈值；UI shell 和 renderer App 已按 M92 边界继续拆分                                                            | 不阻塞 provider 修复；v1.1 新功能前必须再次 Scope Review，避免继续在近阈值文件上堆大功能      |
 | 可砍/延后项      | 插件市场、生产级第三方插件执行、Workflow Designer 完整编辑、CodeMirror 默认迁移、Timeline 深编辑、streaming/live benchmark、coverage threshold 等不影响核心闭环                                                   | 全部保留在 v2/backlog；触发条件继续按下方规则执行，不能因为“完成度低”自动回到主线路线图       |
 
+## Scope Review - 2026-07-07 before VUI-01
+
+| 检查项           | 结论                                                                                                                                                                                                                                  | 处理                                                                                                                                       |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| 核心写作闭环     | M93-M98 已覆盖 v1 核心旅程、保存重开、恢复、Story Bible 最小冲突提示、公开安装 gate 和真实 provider 默认路径；当前 VSCode-like UI/Interaction 规划是 v1.1 体验升级，不是 M99/M100 v1 blocker                                      | 不新增 M99/M100；`docs/superpowers/plans/2026-07-07-vscode-like-ui-interaction-roadmap.md` 作为 v1.1 UI/Interaction 独立执行计划             |
+| 接下来两个任务   | VUI-01 真实多轮 AI 对话和 VUI-02 流式输出/真实停止都直接服务 AI 写作主链路：用户要能连续追问、看到生成过程、可靠停止请求；它们不改变已完成的保存、恢复、项目锁、Story Bible 最小一致性和公开安装 gate                              | 可以进入 VUI-01/VUI-02，但每个任务必须保持 AI 输出建议态、diff 审阅和用户确认写入，不得回退 M93/M94 数据不丢失保证                         |
+| 文件重构阈值     | 当前实测 `workspace-shell.tsx` 900 行，超过 UI/renderer 800 行警戒但低于 1200 行硬拆；`App.tsx` 1017 行，超过 800 行警戒但低于 1200 行硬拆；`ai-writing-workflow-session.ts` 994 行，距离 Application 1000 行硬拆只剩 6 行              | VUI-01 前必须先从 `ai-writing-workflow-session.ts` 拆出 prompt/history/session helper，不能直接添加多轮对话；后续触碰 `workspace-shell.tsx` 或 `App.tsx` 时必须拆子组件/bridge helper |
+| 范围边界         | AI 腔治理属于写作质量能力，可以通过文风规则注入和模板表达扫描进入 v1.1；但过朱雀、过检测、检测分数、故意错别字和随机破坏句式仍是明确排除范围                                                                                           | VUI-03A 只实现“AI 腔治理 / 文风去模板化”，不得实现检测规避或以规避检测为卖点的 UI/参数                                                     |
+| 可砍/延后项      | 多会话 AI 管理、完整插件市场、生产级第三方插件执行、完整知识图谱、Timeline 深编辑、有声书导出、复杂角色配音仍不阻断当前 VSCode-like 写作 IDE 主线                                                                                     | 保留在 v2/backlog 或单独立项；不得在 VUI-01/VUI-02 中顺手实现                                                                               |
+
 ## 裁剪后后续路线
 
 - M92 Structural Refactor Gate：已完成。拆分 `workspace-shell.tsx`、`App.tsx` 和 `ai-writing-workflow-session.ts` 的职责边界，不新增用户功能；结构门禁已覆盖硬拆分阈值。
