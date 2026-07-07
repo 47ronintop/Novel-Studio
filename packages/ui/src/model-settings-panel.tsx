@@ -1,5 +1,6 @@
 import { CheckCircle, FilePlus, PlugZap, Power, RefreshCw, Save, Shield, Star } from "lucide-react";
 import type { ReactNode } from "react";
+import type { ModelDiscoverySnapshot } from "@novel-studio/application";
 
 export interface ModelSettingsProfile {
   readonly id: string;
@@ -113,6 +114,7 @@ export interface ModelSettingsPanelProps {
   readonly saveStatus: ModelSettingsSaveStatus;
   readonly connectionStatus?: ModelConnectionStatus;
   readonly providerOptions?: readonly ModelProviderOption[];
+  readonly modelDiscovery?: ModelDiscoverySnapshot;
   readonly plugins?: PluginSettingsPanelProps;
   readonly feedback?: { readonly kind: "info" | "error"; readonly message: string };
   readonly onSelectProfile?: (profileId: string) => void;
@@ -131,6 +133,7 @@ export function ModelSettingsPanel({
   saveStatus,
   connectionStatus,
   providerOptions,
+  modelDiscovery,
   plugins,
   feedback,
   onSelectProfile,
@@ -281,14 +284,38 @@ export function ModelSettingsPanel({
                     </select>
                   </ModelField>
                   <ModelField label="模型名称">
-                    <input
-                      aria-label="模型名称"
-                      className="ns-search-input"
-                      onChange={(event) =>
-                        onDraftChange?.({ modelName: event.currentTarget.value })
-                      }
-                      value={draft.modelName}
-                    />
+                    {modelDiscovery?.status === "loaded" && modelDiscovery.models.length > 0 ? (
+                      <select
+                        aria-label="Discovered model name"
+                        className="model-settings-select"
+                        onChange={(event) =>
+                          onDraftChange?.({ modelName: event.currentTarget.value })
+                        }
+                        value={draft.modelName}
+                      >
+                        {modelDiscovery.models.map((model) => (
+                          <option key={model.id} value={model.id}>
+                            {model.displayName}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <>
+                        <input
+                          aria-label="模型名称"
+                          className="ns-search-input"
+                          onChange={(event) =>
+                            onDraftChange?.({ modelName: event.currentTarget.value })
+                          }
+                          value={draft.modelName}
+                        />
+                        {modelDiscovery?.status === "fallback" ? (
+                          <small className="model-discovery-fallback">
+                            {modelDiscovery.fallbackReason}
+                          </small>
+                        ) : null}
+                      </>
+                    )}
                   </ModelField>
                   <ModelField label="Base URL">
                     <input

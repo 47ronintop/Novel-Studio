@@ -24,6 +24,7 @@ export function AiWritingAssistantPanel({
   const conversationMessages = workflow.conversationMessages ?? [];
   const showSummary =
     workflow.summary !== undefined && (compact || workflow.summary !== assistantReply);
+  const reasoningControl = selectedReasoningControl(workflow);
 
   return (
     <section className="ns-ai-workflow" aria-label="AI 写作工作流" data-compact={compact}>
@@ -31,6 +32,39 @@ export function AiWritingAssistantPanel({
         <span>{compact ? "AI 助手" : "对话式写作助手"}</span>
         <span className="ns-muted">{statusLabel(workflow.status)}</span>
       </div>
+      {workflow.modelDiscovery?.status === "loaded" &&
+      workflow.modelDiscovery.models.length > 0 ? (
+        <div className="ns-ai-model-controls" aria-label="AI model controls">
+          <select
+            aria-label="AI model selector"
+            className="model-settings-select"
+            onChange={(event) => workflow.onModelSelect?.(event.currentTarget.value)}
+            value={workflow.selectedModelName ?? workflow.modelDiscovery.models[0]?.id ?? ""}
+          >
+            {workflow.modelDiscovery.models.map((model) => (
+              <option key={model.id} value={model.id}>
+                {model.displayName}
+              </option>
+            ))}
+          </select>
+          {reasoningControl?.status === "available" ? (
+            <label className="ns-ai-reasoning-control">
+              <span>{reasoningControl.providerParamName}</span>
+              <select
+                aria-label="Reasoning effort"
+                className="model-settings-select"
+                defaultValue={reasoningControl.defaultValue}
+              >
+                {reasoningControl.allowedValues.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+        </div>
+      ) : null}
       {compact ? null : (
         <p className="ns-ai-context">
           输入你想让 AI 做的事，例如“续写当前场景”“让对白更自然”或“检查人物动机”。AI
@@ -159,6 +193,13 @@ export function AiWritingAssistantPanel({
       )}
     </section>
   );
+}
+
+function selectedReasoningControl(workflow: AiWritingWorkflowProps) {
+  const selectedModel = workflow.modelDiscovery?.models.find(
+    (model) => model.id === workflow.selectedModelName
+  );
+  return selectedModel?.reasoningStrength ?? workflow.modelDiscovery?.reasoningStrength;
 }
 
 function AiSuggestionDiffPreview({

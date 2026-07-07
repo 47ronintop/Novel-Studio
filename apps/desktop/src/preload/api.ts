@@ -18,6 +18,7 @@ import type {
   ConfigVersionSummary,
   DesktopShellState,
   ModelConnectionResult,
+  ModelDiscoverySnapshot,
   ModelProfile,
   ModelSettingsSnapshot,
   NovelStudioApi,
@@ -219,6 +220,12 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
         invokeTyped<Result<ModelSettingsSnapshot, UnifiedError>>(
           ipc,
           "application:settings:list-model-profiles"
+        ),
+      discoverModelOptions: (profileId: string) =>
+        invokeTyped<Result<ModelDiscoverySnapshot, UnifiedError>>(
+          ipc,
+          "application:settings:discover-models",
+          profileId
         ),
       saveModelProfile: (profile: ModelProfile, options?: { readonly makeDefault?: boolean }) =>
         invokeTyped<Result<ModelSettingsSnapshot, UnifiedError>>(

@@ -4,10 +4,12 @@ import type {
   NovelStudioApi
 } from "@novel-studio/application";
 import type {
+  AiWritingWorkflowProps,
   ChapterEditorProps,
   StoryBibleEditorProps,
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
+import type { AiWritingWorkflowBridge } from "./ai-writing-workflow-bridge.js";
 import { useEffect, type Dispatch, type SetStateAction } from "react";
 
 import type { ChapterEditorBridge } from "./chapter-editor-bridge.js";
@@ -19,6 +21,7 @@ import { reduceRendererShortcut } from "./shortcuts.js";
 
 export interface RendererAppEffectsInput {
   readonly api: NovelStudioApi | undefined;
+  readonly aiWritingWorkflowBridge: AiWritingWorkflowBridge | undefined;
   readonly chapterBridge: ChapterEditorBridge | undefined;
   readonly storyBibleBridge: StoryBibleBridge | undefined;
   readonly settingsBridge: SettingsBridge | undefined;
@@ -29,6 +32,7 @@ export interface RendererAppEffectsInput {
   readonly setCommands: Dispatch<SetStateAction<readonly ApplicationCommand[]>>;
   readonly setOnboardingDismissed: Dispatch<SetStateAction<boolean>>;
   readonly setChapterEditor: Dispatch<SetStateAction<ChapterEditorProps | undefined>>;
+  readonly setAiWritingWorkflow: Dispatch<SetStateAction<AiWritingWorkflowProps | undefined>>;
   readonly setStoryBible: Dispatch<SetStateAction<StoryBibleSummaryProps | undefined>>;
   readonly setStoryBibleEditor: Dispatch<SetStateAction<StoryBibleEditorProps | undefined>>;
   readonly setSettings: Dispatch<
@@ -40,12 +44,14 @@ export interface RendererAppEffectsInput {
 export function useRendererAppEffects(input: RendererAppEffectsInput): void {
   const {
     api,
+    aiWritingWorkflowBridge,
     chapterBridge,
     settingsBridge,
     shortcutState,
     storyBibleBridge,
     studioBridge,
     setChapterEditor,
+    setAiWritingWorkflow,
     setCommands,
     setOnboardingDismissed,
     setSettings,
@@ -103,6 +109,24 @@ export function useRendererAppEffects(input: RendererAppEffectsInput): void {
       active = false;
     };
   }, [api, setCommands, setOnboardingDismissed, setShellState]);
+
+  useEffect(() => {
+    if (aiWritingWorkflowBridge === undefined) {
+      return;
+    }
+
+    let active = true;
+
+    void aiWritingWorkflowBridge.loadModelDiscovery().then((nextAiWritingWorkflow) => {
+      if (active) {
+        setAiWritingWorkflow(nextAiWritingWorkflow);
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [aiWritingWorkflowBridge, setAiWritingWorkflow]);
 
   useEffect(() => {
     if (chapterBridge === undefined) {

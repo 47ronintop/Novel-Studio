@@ -17,6 +17,7 @@ import type {
   ChapterEditorSession,
   DesktopApplication,
   ModelConnectionTester,
+  ModelDiscoveryPort,
   ProjectSettings,
   ProjectSettingsPort
 } from "@novel-studio/application";
@@ -49,6 +50,7 @@ export interface ProjectDesktopApplicationOptions {
   readonly now?: () => string;
   readonly createVersionId?: () => string;
   readonly modelConnectionTester?: ModelConnectionTester;
+  readonly modelDiscoveryPort?: ModelDiscoveryPort;
   readonly createAiProvider?: (input: DesktopAiProviderFactoryInput) => LlmProvider;
 }
 
@@ -58,6 +60,7 @@ export interface BootstrappedDefaultDesktopApplicationOptions {
   readonly now?: () => string;
   readonly createVersionId?: () => string;
   readonly modelConnectionTester?: ModelConnectionTester;
+  readonly modelDiscoveryPort?: ModelDiscoveryPort;
   readonly createAiProvider?: (input: DesktopAiProviderFactoryInput) => LlmProvider;
 }
 
@@ -140,7 +143,10 @@ export function createProjectDesktopApplication(
       settingsPort,
       ...(options.modelConnectionTester === undefined
         ? {}
-        : { connectionTester: options.modelConnectionTester })
+        : { connectionTester: options.modelConnectionTester }),
+      ...(options.modelDiscoveryPort === undefined
+        ? {}
+        : { discoveryPort: options.modelDiscoveryPort })
     }),
     pluginSettingsSession: createPluginSettingsSession({
       pluginRegistryPort: {
@@ -333,6 +339,9 @@ export async function createBootstrappedDefaultDesktopApplication(
     ...(options.modelConnectionTester === undefined
       ? {}
       : { modelConnectionTester: options.modelConnectionTester }),
+    ...(options.modelDiscoveryPort === undefined
+      ? {}
+      : { modelDiscoveryPort: options.modelDiscoveryPort }),
     ...(options.createAiProvider === undefined
       ? {}
       : { createAiProvider: options.createAiProvider })

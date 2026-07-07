@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import type {
   ModelConnectionResult,
+  ModelDiscoverySnapshot,
   ModelProfile,
   ModelSettingsSnapshot,
   NovelStudioApi
@@ -30,8 +31,20 @@ describe("M22 settings bridge", () => {
 
     const props = await bridge.load();
 
-    expect(calls).toEqual(["settings.listModelProfiles", "plugins.loadRegistry"]);
+    expect(calls).toEqual([
+      "settings.listModelProfiles",
+      "plugins.loadRegistry",
+      "settings.discoverModelOptions:model_default"
+    ]);
     expect(props.profiles[0]?.displayName).toBe("Default Model");
+    expect(props.modelDiscovery).toMatchObject({
+      profileId: "model_default",
+      status: "loaded",
+      models: [
+        { id: "example-model", displayName: "example-model" },
+        { id: "gpt-5", displayName: "gpt-5" }
+      ]
+    });
     expect(props.providerOptions.map((provider) => provider.id)).toEqual([
       "openai-compatible",
       "openai",
@@ -294,6 +307,38 @@ function createApi(calls: string[], savedSecrets = new Map<string, string>()): N
           provider: profile.provider,
           modelName: profile.modelName,
           detail: "Profile validated by injected tester"
+        };
+        return ok(result);
+      },
+      discoverModelOptions: async (profileId) => {
+        calls.push(`settings.discoverModelOptions:${profileId}`);
+        const profile = snapshot.profiles.find((entry) => entry.id === profileId) ?? defaultProfile;
+        const result: ModelDiscoverySnapshot = {
+          profileId,
+          provider: profile.provider,
+          status: "loaded",
+          models: [
+            {
+              id: "example-model",
+              displayName: "example-model",
+              provider: profile.provider
+            },
+            {
+              id: "gpt-5",
+              displayName: "gpt-5",
+              provider: profile.provider,
+              reasoningStrength: {
+                status: "available",
+                providerParamName: "reasoning_effort",
+                allowedValues: ["low", "medium", "high"],
+                defaultValue: "medium"
+              }
+            }
+          ],
+          reasoningStrength: {
+            status: "hidden",
+            reason: "Select a whitelisted reasoning model before exposing reasoning controls."
+          }
         };
         return ok(result);
       }

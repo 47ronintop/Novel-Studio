@@ -3,8 +3,13 @@ import { dirname, join } from "node:path";
 
 import type {
   ChapterEditorSession,
+  ModelDiscoveryPort,
   ModelConnectionTester,
   ModelProfile
+} from "@novel-studio/application";
+import {
+  createModelDiscoveryFallback,
+  createModelDiscoverySnapshot
 } from "@novel-studio/application";
 import {
   createOpenAiCompatibleProvider,
@@ -54,6 +59,7 @@ export interface ModelSecretStore {
 
 export interface DesktopModelRuntime {
   readonly modelConnectionTester: ModelConnectionTester;
+  readonly modelDiscoveryPort: ModelDiscoveryPort;
   readonly createAiProvider: (input: {
     readonly chapterEditorSession: ChapterEditorSession;
   }) => LlmProvider;
@@ -235,6 +241,40 @@ export function createDesktopModelRuntime(
           });
         } catch (error) {
           return ok(failedConnection(profile, connectionFailureMessage(error)));
+        }
+      }
+    },
+    modelDiscoveryPort: {
+      async discoverModels(profile) {
+        const secret = await readProfileSecret(secretStore, profile);
+        if (!secret.ok) {
+          return ok(createModelDiscoveryFallback(profile, secret.error.message));
+        }
+        if (secret.value === undefined) {
+          return ok(
+            createModelDiscoveryFallback(
+              profile,
+              "No API key is stored for this model profile. Enter the model name manually."
+            )
+          );
+        }
+
+        try {
+          const payload = await getOpenAiCompatibleJson(fetchImpl, {
+            url: `${requiredBaseUrl(profile).replace(/\/+$/, "")}/models`,
+            headers: {
+              authorization: `Bearer ${secret.value}`
+            },
+            timeoutMs: profile.timeoutMs
+          });
+          return ok(
+            createModelDiscoverySnapshot({
+              profile,
+              models: normalizeOpenAiCompatibleModels(payload)
+            })
+          );
+        } catch (error) {
+          return ok(createModelDiscoveryFallback(profile, connectionFailureMessage(error)));
         }
       }
     },
@@ -606,6 +646,76 @@ async function postOpenAiCompatibleJson(
       clearTimeout(timeout);
     }
   }
+}
+
+async function getOpenAiCompatibleJson(
+  fetchImpl: typeof fetch,
+  request: Pick<OpenAiCompatibleTransportRequest, "url" | "headers" | "timeoutMs">
+): Promise<unknown> {
+  const controller = new AbortController();
+  const timeout =
+    request.timeoutMs === undefined
+      ? undefined
+      : setTimeout(() => controller.abort(), request.timeoutMs);
+  try {
+    const response = await fetchImpl(request.url, {
+      method: "GET",
+      headers: stringHeaders(request.headers),
+      signal: controller.signal
+    });
+    const text = await response.text();
+    const payload = parseProviderJsonPayload(response, text);
+    if (!response.ok) {
+      throw new OpenAiCompatibleHttpError({
+        status: response.status,
+        message: `Provider returned HTTP ${response.status}.`,
+        body: payload
+      });
+    }
+    return payload;
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function normalizeOpenAiCompatibleModels(
+  payload: unknown
+): readonly { readonly id: string; readonly displayName: string; readonly contextWindow?: number }[] {
+  if (!isJsonRecord(payload) || !Array.isArray(payload["data"])) {
+    throw new OpenAiCompatibleHttpError({
+      status: 502,
+      message: "Provider returned a malformed model list.",
+      body: payload
+    });
+  }
+
+  return payload["data"]
+    .filter(isJsonRecord)
+    .map((entry) => {
+      const id = stringValue(entry["id"]);
+      if (id === undefined) {
+        return undefined;
+      }
+      const contextWindow = optionalNumber(entry["context_window"] ?? entry["contextWindow"]);
+      return {
+        id,
+        displayName: id,
+        ...(contextWindow === undefined ? {} : { contextWindow })
+      };
+    })
+    .filter((entry): entry is { id: string; displayName: string; contextWindow?: number } =>
+      entry !== undefined
+    );
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function parseProviderJsonPayload(response: Response, text: string): unknown {

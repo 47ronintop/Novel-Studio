@@ -4,6 +4,9 @@ import type {
   AiWritingSelectionPreview,
   AiWritingSuggestion,
   ChapterEditorSnapshot,
+  ModelDiscoverySnapshot,
+  ModelProfile,
+  ModelSettingsSnapshot,
   NovelStudioApi,
   WorkflowRunRecord,
   WorkflowRunSummary
@@ -177,7 +180,48 @@ const selectionPreview: AiWritingSelectionPreview = {
   }
 };
 
+const defaultModelProfile: ModelProfile = {
+  id: "model_default",
+  provider: "openai-compatible",
+  displayName: "Default Model",
+  baseUrl: "https://api.example.com/v1",
+  apiKeyRef: "secret://model_default/api_key",
+  modelName: "example-model",
+  temperature: 0.7,
+  maxTokens: 4096,
+  topP: 1,
+  timeoutMs: 60000
+};
+
 describe("AI writing workflow bridge", () => {
+  test("loads shared model discovery and saves selected model on the default profile", async () => {
+    const calls: string[] = [];
+    const bridge = createAiWritingWorkflowBridge(createApi(calls));
+
+    const loaded = await bridge.loadModelDiscovery();
+    const selected = await bridge.selectDiscoveredModel("gpt-5");
+
+    expect(loaded.modelDiscovery).toMatchObject({
+      profileId: "model_default",
+      status: "loaded",
+      models: [
+        { id: "example-model", displayName: "example-model" },
+        { id: "gpt-5", displayName: "gpt-5" }
+      ]
+    });
+    expect(selected.selectedModelName).toBe("gpt-5");
+    expect(selected.modelDiscovery?.models[1]?.reasoningStrength).toMatchObject({
+      status: "available",
+      providerParamName: "reasoning_effort",
+      allowedValues: ["low", "medium", "high"]
+    });
+    expect(calls).toEqual([
+      "settings.listModelProfiles",
+      "settings.discoverModelOptions:model_default",
+      "settings.saveModelProfile:model_default:gpt-5:false"
+    ]);
+  });
+
   test("generates a preview-only suggestion and applies it through the preload API", async () => {
     const calls: string[] = [];
     const bridge = createAiWritingWorkflowBridge(createApi(calls));
@@ -459,6 +503,11 @@ describe("AI writing workflow bridge", () => {
 });
 
 function createApi(calls: string[]): NovelStudioApi {
+  let modelSnapshot: ModelSettingsSnapshot = {
+    defaultProfileId: "model_default",
+    profiles: [defaultModelProfile]
+  };
+
   return {
     getShellState: async () => ({
       projectTitle: "M14",
@@ -581,13 +630,59 @@ function createApi(calls: string[]): NovelStudioApi {
     },
     settings: {
       listModelProfiles: async () => {
-        throw new Error("not used");
+        calls.push("settings.listModelProfiles");
+        return ok(modelSnapshot);
       },
-      saveModelProfile: async () => {
-        throw new Error("not used");
+      saveModelProfile: async (profile, options) => {
+        calls.push(
+          `settings.saveModelProfile:${profile.id}:${profile.modelName}:${
+            options?.makeDefault === true
+          }`
+        );
+        modelSnapshot = {
+          defaultProfileId:
+            options?.makeDefault === true ? profile.id : modelSnapshot.defaultProfileId,
+          profiles: modelSnapshot.profiles.map((entry) =>
+            entry.id === profile.id ? profile : entry
+          )
+        };
+        return ok(modelSnapshot);
       },
       testModelProfileConnection: async () => {
         throw new Error("not used");
+      },
+      discoverModelOptions: async (profileId) => {
+        calls.push(`settings.discoverModelOptions:${profileId}`);
+        const profile =
+          modelSnapshot.profiles.find((entry) => entry.id === profileId) ?? defaultModelProfile;
+        const discovery: ModelDiscoverySnapshot = {
+          profileId,
+          provider: profile.provider,
+          status: "loaded",
+          models: [
+            {
+              id: "example-model",
+              displayName: "example-model",
+              provider: profile.provider
+            },
+            {
+              id: "gpt-5",
+              displayName: "gpt-5",
+              provider: profile.provider,
+              reasoningStrength: {
+                status: "available",
+                providerParamName: "reasoning_effort",
+                allowedValues: ["low", "medium", "high"],
+                defaultValue: "medium"
+              }
+            }
+          ],
+          reasoningStrength: {
+            status: "hidden",
+            reason: "Select a whitelisted reasoning model before exposing reasoning controls."
+          }
+        };
+        return ok(discovery);
       }
     },
     studio: {

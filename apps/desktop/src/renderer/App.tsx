@@ -94,6 +94,7 @@ export function App() {
 
   useRendererAppEffects({
     api,
+    aiWritingWorkflowBridge,
     chapterBridge,
     storyBibleBridge,
     settingsBridge,
@@ -107,6 +108,7 @@ export function App() {
     setStoryBible,
     setStoryBibleEditor,
     setSettings,
+    setAiWritingWorkflow,
     setStudio
   });
 
@@ -639,6 +641,22 @@ export function App() {
     setAiWritingWorkflow(aiWritingWorkflowBridge.cancelStreaming());
   }, [aiWritingWorkflowBridge]);
 
+  const handleAiModelSelect = useCallback(
+    (modelName: string) => {
+      if (aiWritingWorkflowBridge === undefined) {
+        return;
+      }
+
+      void aiWritingWorkflowBridge.selectDiscoveredModel(modelName).then((nextAiWritingWorkflow) => {
+        setAiWritingWorkflow(nextAiWritingWorkflow);
+        if (settingsBridge !== undefined) {
+          void settingsBridge.load().then(setSettings);
+        }
+      });
+    },
+    [aiWritingWorkflowBridge, settingsBridge]
+  );
+
   const handleStoryBibleKindSelect = useCallback(
     (kind: StoryBibleEditorKind) => {
       if (storyBibleBridge === undefined) {
@@ -714,6 +732,7 @@ export function App() {
       }
 
       setSettings(settingsBridge.selectProfile(profileId));
+      void settingsBridge.discoverModelOptions(profileId).then(setSettings);
     },
     [settingsBridge]
   );
@@ -968,6 +987,7 @@ export function App() {
       onAiInstructionChange={handleAiInstructionChange}
       onGenerateAiSuggestion={handleGenerateAiSuggestion}
       onApplyAiSuggestion={handleApplyAiSuggestion}
+      onAiModelSelect={handleAiModelSelect}
       onRejectSelectionReview={handleRejectSelectionReview}
       onUndoSelectionReview={handleUndoSelectionReview}
       onCancelAiStreaming={handleCancelAiStreaming}

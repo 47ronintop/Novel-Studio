@@ -30,6 +30,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     projectRoot,
     userDataRoot,
     modelConnectionTester: modelRuntime.modelConnectionTester,
+    modelDiscoveryPort: modelRuntime.modelDiscoveryPort,
     createAiProvider: modelRuntime.createAiProvider
   });
   const handlers = createApplicationIpcHandlers(activeDesktopApplication, {

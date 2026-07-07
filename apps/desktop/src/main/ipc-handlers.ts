@@ -237,6 +237,13 @@ export function createApplicationIpcHandlers(
       return Promise.resolve(application.previewActiveChapterSuggestionDiff(nextBody));
     },
     "application:settings:list-model-profiles": () => application.listModelProfiles(),
+    "application:settings:discover-models": (profileId: unknown) => {
+      if (typeof profileId !== "string") {
+        return application.discoverModelOptions("");
+      }
+
+      return application.discoverModelOptions(profileId);
+    },
     "application:settings:save-model-profile": (profile: unknown, options: unknown) => {
       const modelProfile = toModelProfile(profile);
       if (modelProfile === undefined) {

@@ -4,6 +4,8 @@ import type {
   AiWritingSelectionPreview,
   AiWritingSuggestion,
   ChapterEditorSnapshot,
+  ModelDiscoverySnapshot,
+  ModelProfile,
   NovelStudioApi,
   WorkflowRunRecord,
   WorkflowRunRecordStatus,
@@ -41,6 +43,8 @@ export interface AiWritingWorkflowBridge {
   undoSelectionPreviewRejection(): AiWritingWorkflowProps;
   applySelectionPreview(): Promise<ChapterEditorProps>;
   applySuggestion(): Promise<ChapterEditorProps>;
+  loadModelDiscovery(): Promise<AiWritingWorkflowProps>;
+  selectDiscoveredModel(modelName: string): Promise<AiWritingWorkflowProps>;
 }
 
 export interface AiSelectionPreviewBridgeInput {
@@ -56,10 +60,37 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
   let rejectedSelectionPreview: AiWritingSelectionPreview | undefined;
   let currentStreamController: AbortController | undefined;
   let currentStreamToken = 0;
+  let currentModelProfile: ModelProfile | undefined;
+  let modelDiscovery: ModelDiscoverySnapshot | undefined;
   let props: AiWritingWorkflowProps = createProps({
     status: "idle",
     instruction: ""
   });
+
+  async function loadModelDiscoveryState(): Promise<AiWritingWorkflowProps> {
+    const listed = await api.settings.listModelProfiles();
+    if (!listed.ok) {
+      return props;
+    }
+    const profile =
+      listed.value.profiles.find((entry) => entry.id === listed.value.defaultProfileId) ??
+      listed.value.profiles[0];
+    if (profile === undefined) {
+      return props;
+    }
+
+    currentModelProfile = profile;
+    const discovered = await api.settings.discoverModelOptions(profile.id);
+    if (discovered.ok) {
+      modelDiscovery = discovered.value;
+    }
+    props = createProps({
+      ...props,
+      ...(modelDiscovery === undefined ? {} : { modelDiscovery }),
+      selectedModelName: profile.modelName
+    });
+    return props;
+  }
 
   return {
     getProps: () => props,
@@ -322,6 +353,34 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
       currentSuggestionId = undefined;
       rejectedSelectionPreview = undefined;
       return toChapterEditorProps(snapshot);
+    },
+    async loadModelDiscovery() {
+      return loadModelDiscoveryState();
+    },
+    async selectDiscoveredModel(modelName) {
+      if (currentModelProfile === undefined) {
+        await loadModelDiscoveryState();
+      }
+      if (currentModelProfile === undefined) {
+        return props;
+      }
+
+      const nextProfile: ModelProfile = {
+        ...currentModelProfile,
+        modelName
+      };
+      const saved = await api.settings.saveModelProfile(nextProfile, {});
+      if (!saved.ok) {
+        return props;
+      }
+      currentModelProfile =
+        saved.value.profiles.find((entry) => entry.id === nextProfile.id) ?? nextProfile;
+      props = createProps({
+        ...props,
+        ...(modelDiscovery === undefined ? {} : { modelDiscovery }),
+        selectedModelName: modelName
+      });
+      return props;
     }
   };
 }

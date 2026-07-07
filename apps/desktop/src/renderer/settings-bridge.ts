@@ -1,5 +1,6 @@
 import { createPluginSecurityAuditReport, MODEL_PROVIDER_CATALOG } from "@novel-studio/application";
 import type {
+  ModelDiscoverySnapshot,
   ModelProfile,
   NovelStudioApi,
   PluginSecurityAuditEntry,
@@ -21,6 +22,7 @@ export interface SettingsBridge {
   loadPlugins(): Promise<ModelSettingsPanelProps>;
   setPluginEnabled(pluginId: string, enabled: boolean): Promise<ModelSettingsPanelProps>;
   selectProfile(profileId: string): ModelSettingsPanelProps;
+  discoverModelOptions(profileId: string): Promise<ModelSettingsPanelProps>;
   updateDraft(draft: Partial<ModelSettingsDraft>): ModelSettingsPanelProps;
   newProfile(): ModelSettingsPanelProps;
   beginSave(): ModelSettingsPanelProps;
@@ -41,6 +43,7 @@ export function createSettingsBridge(
   let draft: ModelSettingsDraft = newDraft(createProfileId());
   let saveStatus: ModelSettingsPanelProps["saveStatus"] = "idle";
   let connectionStatus: ModelSettingsPanelProps["connectionStatus"] | undefined;
+  let modelDiscovery: ModelDiscoverySnapshot | undefined;
   let plugins: PluginSettingsPanelProps = {
     status: "idle",
     entries: [],
@@ -62,6 +65,10 @@ export function createSettingsBridge(
       const selected = profiles.find((profile) => profile.id === defaultProfileId) ?? profiles[0];
       selectedProfileId = selected?.id;
       draft = selected === undefined ? newDraft(createProfileId()) : draftFromProfile(selected);
+      modelDiscovery = undefined;
+      if (selected !== undefined) {
+        await discoverModels(selected.id);
+      }
       saveStatus = "idle";
       feedback = { kind: "info", message: "模型配置已加载。" };
       return toProps();
@@ -98,8 +105,13 @@ export function createSettingsBridge(
 
       selectedProfileId = profile.id;
       draft = draftFromProfile(profile);
+      modelDiscovery = undefined;
       saveStatus = "idle";
       feedback = undefined;
+      return toProps();
+    },
+    async discoverModelOptions(profileId) {
+      await discoverModels(profileId);
       return toProps();
     },
     updateDraft(nextDraft) {
@@ -216,6 +228,7 @@ export function createSettingsBridge(
     profiles = result.value.profiles;
     selectedProfileId = profile.id;
     draft = draftFromProfile(profile);
+    await discoverModels(profile.id);
     saveStatus = "saved";
     feedback = { kind: "info", message: "模型配置已保存。" };
     return toProps();
@@ -280,6 +293,7 @@ export function createSettingsBridge(
         id: provider.id,
         label: provider.label
       })),
+      ...(modelDiscovery === undefined ? {} : { modelDiscovery }),
       plugins: {
         ...plugins,
         onRefresh: () => undefined,
@@ -293,6 +307,17 @@ export function createSettingsBridge(
       onTestConnection: () => undefined,
       onMakeDefault: () => undefined
     };
+  }
+
+  async function discoverModels(profileId: string): Promise<void> {
+    const result = await api.settings.discoverModelOptions(profileId);
+    if (!result.ok) {
+      modelDiscovery = undefined;
+      feedback = { kind: "error", message: result.error.message };
+      return;
+    }
+
+    modelDiscovery = result.value;
   }
 }
 

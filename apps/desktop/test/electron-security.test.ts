@@ -68,6 +68,7 @@ describe("Electron security baseline", () => {
       "application:chapter:restore-version",
       "application:chapter:preview-suggestion-diff",
       "application:settings:list-model-profiles",
+      "application:settings:discover-models",
       "application:settings:save-model-profile",
       "application:settings:save-model-secret",
       "application:settings:test-model-profile",
@@ -88,6 +89,7 @@ describe("Electron security baseline", () => {
     expect(isApplicationIpcChannel("application:project:preview-recovery-draft")).toBe(true);
     expect(isApplicationIpcChannel("application:chapter:save")).toBe(true);
     expect(isApplicationIpcChannel("application:settings:list-model-profiles")).toBe(true);
+    expect(isApplicationIpcChannel("application:settings:discover-models")).toBe(true);
     expect(isApplicationIpcChannel("application:story-bible:load")).toBe(true);
     expect(isApplicationIpcChannel("application:studio:save-config-asset")).toBe(true);
     expect(isApplicationIpcChannel("application:preferences:load")).toBe(true);
@@ -133,6 +135,7 @@ describe("Electron security baseline", () => {
     await api.chapter.restoreVersion("ver_01");
     await api.chapter.previewSuggestionDiff("AI suggestion body");
     await api.settings.listModelProfiles();
+    await api.settings.discoverModelOptions("model_default");
     await api.settings.saveModelProfile({
       id: "model_default",
       provider: "openai-compatible",
@@ -210,6 +213,7 @@ describe("Electron security baseline", () => {
       "application:chapter:restore-version",
       "application:chapter:preview-suggestion-diff",
       "application:settings:list-model-profiles",
+      "application:settings:discover-models",
       "application:settings:save-model-profile",
       "application:settings:test-model-profile",
       "application:plugins:load-registry",
@@ -254,6 +258,12 @@ describe("Electron security baseline", () => {
       error: { code: "CHAPTER_EDITOR_UNAVAILABLE" }
     });
     await expect(handlers["application:settings:list-model-profiles"]()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "MODEL_SETTINGS_UNAVAILABLE" }
+    });
+    await expect(
+      handlers["application:settings:discover-models"]("model_default")
+    ).resolves.toMatchObject({
       ok: false,
       error: { code: "MODEL_SETTINGS_UNAVAILABLE" }
     });

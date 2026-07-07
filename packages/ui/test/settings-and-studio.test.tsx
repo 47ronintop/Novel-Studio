@@ -78,6 +78,33 @@ describe("M8 Settings and Studio UI", () => {
           { id: "lm-studio", label: "LM Studio" },
           { id: "vllm", label: "vLLM" }
         ]}
+        modelDiscovery={{
+          profileId: "model_default",
+          provider: "openai-compatible",
+          status: "loaded",
+          models: [
+            {
+              id: "example-model",
+              displayName: "example-model",
+              provider: "openai-compatible"
+            },
+            {
+              id: "gpt-5",
+              displayName: "gpt-5",
+              provider: "openai-compatible",
+              reasoningStrength: {
+                status: "available",
+                providerParamName: "reasoning_effort",
+                allowedValues: ["low", "medium", "high"],
+                defaultValue: "medium"
+              }
+            }
+          ],
+          reasoningStrength: {
+            status: "hidden",
+            reason: "Select a whitelisted reasoning model before exposing reasoning controls."
+          }
+        }}
         onDraftChange={() => undefined}
         onNewProfile={() => undefined}
         onSelectProfile={() => undefined}
@@ -98,6 +125,8 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).toContain("隐私与安全");
     expect(html).toContain("自动保存与历史");
     expect(html).toContain("openai-compatible");
+    expect(html).toContain('aria-label="Discovered model name"');
+    expect(html).toContain('value="gpt-5"');
     expect(html).toContain("anthropic");
     expect(html).toContain("google-gemini");
     expect(html).toContain("openrouter");

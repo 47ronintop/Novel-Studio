@@ -3,6 +3,7 @@ import type {
   ApplicationCommand,
   ApplicationCommandId,
   DesktopShellState,
+  ModelDiscoverySnapshot,
   ProjectSearchResultItem,
   ProjectWorkspaceHealth
 } from "@novel-studio/application";
@@ -125,9 +126,12 @@ export interface AiWritingWorkflowProps {
   readonly retryPolicy?: AiWorkflowRetryPolicyProps;
   readonly diffPreview?: ChapterEditorProps["diffPreview"];
   readonly selectionReview?: AiSelectionReviewProps;
+  readonly modelDiscovery?: ModelDiscoverySnapshot;
+  readonly selectedModelName?: string;
   readonly onInstructionChange: (instruction: string) => void;
   readonly onGenerateSuggestion: () => void;
   readonly onApplySuggestion: () => void;
+  readonly onModelSelect?: (modelName: string) => void;
   readonly onRejectSelectionReview?: () => void;
   readonly onUndoSelectionReview?: () => void;
   readonly onRetrySuggestion: () => void;

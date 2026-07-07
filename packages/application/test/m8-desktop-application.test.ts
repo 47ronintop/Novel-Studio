@@ -30,6 +30,19 @@ describe("desktop application M8 boundary", () => {
           modelName: "mock-model",
           detail: "Connection succeeded"
         });
+      },
+      async discoverModelOptions(profileId) {
+        return ok({
+          profileId,
+          provider: "mock",
+          status: "fallback",
+          models: [],
+          fallbackReason: "Discovery is not configured.",
+          reasoningStrength: {
+            status: "hidden",
+            reason: "Select a whitelisted reasoning model before exposing reasoning controls."
+          }
+        });
       }
     };
     const configStudioSession: ConfigStudioSession = {

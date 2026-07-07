@@ -243,6 +243,14 @@ npm run typecheck
 
 **Commit message:** `feat: share provider model discovery`
 
+**Execution status (2026-07-07):** Done.
+
+- Added shared `ModelDiscoverySnapshot` DTO and `ModelDiscoveryPort`.
+- Added OpenAI-compatible `GET {baseUrl}/models` discovery in desktop runtime with typed fallback on missing key, HTTP error, non-JSON response, or malformed payload.
+- Settings and AI panel now reuse the same discovery DTO; Settings uses a discovered-model dropdown on success and keeps manual entry on fallback.
+- AI panel model selector saves the selected model back to the default profile, so later generation uses the existing runtime profile path.
+- Reasoning strength is exposed only for an explicit OpenAI-style whitelist with `reasoning_effort: low | medium | high`; unknown models keep the control hidden.
+
 ### VUI-03A: AI 腔治理与文风规则注入
 
 **目标：** 把“减少 AI 味”定义为写作质量控制：在生成/改写请求前注入文风规则，减少常见 AI 套话、模板句和机械表达；生成后给出本地规则命中提示。该任务不做检测规避，不承诺通过任何 AI 内容检测系统。

@@ -34,6 +34,7 @@ import type {
   ModelSettingsSession,
   ModelSettingsSnapshot
 } from "./model-settings-session.js";
+import type { ModelDiscoverySnapshot } from "./model-discovery-session.js";
 import { pluginRegistryUnavailable } from "./plugin-settings-session.js";
 import type { PluginSettingsSession, PluginSettingsSnapshot } from "./plugin-settings-session.js";
 import type { PluginRuntimeSession } from "./plugin-runtime-session.js";
@@ -166,6 +167,7 @@ export interface DesktopApplication {
     nextBody: string
   ): Result<ChapterSuggestionDiffPreview, UnifiedError>;
   listModelProfiles(): Promise<Result<ModelSettingsSnapshot, UnifiedError>>;
+  discoverModelOptions(profileId: string): Promise<Result<ModelDiscoverySnapshot, UnifiedError>>;
   saveModelProfile(
     profile: ModelProfile,
     options?: { readonly makeDefault?: boolean }
@@ -555,6 +557,13 @@ export function createDesktopApplication(
       }
 
       return modelSettingsSession.listModelProfiles();
+    },
+    async discoverModelOptions(profileId) {
+      if (modelSettingsSession === undefined) {
+        return modelSettingsUnavailable();
+      }
+
+      return modelSettingsSession.discoverModelOptions(profileId);
     },
     async saveModelProfile(profile, saveOptions) {
       if (modelSettingsSession === undefined) {

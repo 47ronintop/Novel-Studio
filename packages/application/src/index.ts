@@ -112,6 +112,22 @@ export { createStoryBibleSession } from "./story-bible-session.js";
 export type { ModelProvider, ModelProviderCatalogEntry } from "./model-provider-catalog.js";
 export { MODEL_PROVIDER_CATALOG, isModelProvider } from "./model-provider-catalog.js";
 export type {
+  ModelDiscoveryOption,
+  ModelDiscoveryPort,
+  ModelDiscoverySnapshot,
+  ModelDiscoveryStatus,
+  ModelReasoningStrengthAvailable,
+  ModelReasoningStrengthControl,
+  ModelReasoningStrengthHidden,
+  ModelReasoningStrengthValue
+} from "./model-discovery-session.js";
+export {
+  createModelDiscoveryFallback,
+  createModelDiscoverySnapshot,
+  hiddenReasoningStrength,
+  reasoningStrengthForModel
+} from "./model-discovery-session.js";
+export type {
   AutosaveSettings,
   HistorySettings,
   ModelConnectionResult,

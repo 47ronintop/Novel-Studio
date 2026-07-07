@@ -14,6 +14,7 @@ import {
   MODEL_PROVIDER_CATALOG,
   resolveDefaultModelRuntimeProfile,
   type ModelConnectionTester,
+  type ModelDiscoveryPort,
   type ModelProfile,
   type ProjectSettings,
   type ProjectSettingsPort
@@ -162,6 +163,122 @@ describe("model settings session", () => {
     expect(result.error.code).toBe("MODEL_CONNECTION_FAILED");
     expect(JSON.stringify(result.error)).not.toContain("sk-secret");
     expect(JSON.stringify(result.error)).not.toContain("secret://model_default/api_key");
+  });
+
+  test("discovers provider models through the injected discovery port", async () => {
+    const discoveryCalls: ModelProfile[] = [];
+    const discoveryPort: ModelDiscoveryPort = {
+      async discoverModels(profile) {
+        discoveryCalls.push(profile);
+        return ok({
+          profileId: profile.id,
+          provider: profile.provider,
+          status: "loaded",
+          models: [
+            {
+              id: "example-model",
+              displayName: "example-model",
+              provider: profile.provider,
+              contextWindow: 128000
+            },
+            {
+              id: "gpt-5",
+              displayName: "gpt-5",
+              provider: profile.provider,
+              reasoningStrength: {
+                status: "available",
+                providerParamName: "reasoning_effort",
+                allowedValues: ["low", "medium", "high"],
+                defaultValue: "medium"
+              }
+            }
+          ],
+          reasoningStrength: {
+            status: "hidden",
+            reason: "Select a whitelisted reasoning model before exposing reasoning controls."
+          }
+        });
+      }
+    };
+    const session = createModelSettingsSession({
+      settingsPort: staticSettingsPort(settings),
+      discoveryPort
+    });
+
+    const result = await session.discoverModelOptions("model_default");
+
+    expect(isOk(result)).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(discoveryCalls).toHaveLength(1);
+    expect(result.value).toMatchObject({
+      profileId: "model_default",
+      provider: "openai-compatible",
+      status: "loaded",
+      models: [
+        {
+          id: "example-model",
+          displayName: "example-model",
+          provider: "openai-compatible",
+          contextWindow: 128000
+        },
+        {
+          id: "gpt-5",
+          reasoningStrength: {
+            status: "available",
+            providerParamName: "reasoning_effort",
+            allowedValues: ["low", "medium", "high"],
+            defaultValue: "medium"
+          }
+        }
+      ],
+      reasoningStrength: {
+        status: "hidden"
+      }
+    });
+    expect(JSON.stringify(result.value)).not.toContain("secret://model_default/api_key");
+  });
+
+  test("returns fallback discovery state instead of throwing when discovery fails", async () => {
+    const discoveryPort: ModelDiscoveryPort = {
+      async discoverModels() {
+        return {
+          ok: false,
+          error: createUnifiedError({
+            code: "MODEL_DISCOVERY_UPSTREAM_FAILED",
+            category: "ModelProviderError",
+            message: "Provider rejected sk-secret for secret://model_default/api_key.",
+            recoverability: "user-action",
+            suggestedAction: "Check the provider endpoint.",
+            traceId: "test-model-discovery"
+          })
+        };
+      }
+    };
+    const session = createModelSettingsSession({
+      settingsPort: staticSettingsPort(settings),
+      discoveryPort
+    });
+
+    const result = await session.discoverModelOptions("model_default");
+
+    expect(isOk(result)).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.value).toMatchObject({
+      profileId: "model_default",
+      provider: "openai-compatible",
+      status: "fallback",
+      models: [],
+      reasoningStrength: {
+        status: "hidden"
+      }
+    });
+    expect(result.value.fallbackReason).toContain("Provider rejected");
+    expect(JSON.stringify(result.value)).not.toContain("sk-secret");
+    expect(JSON.stringify(result.value)).not.toContain("secret://model_default/api_key");
   });
 
   test("rejects unsupported providers and non-secret key references before writing settings", async () => {

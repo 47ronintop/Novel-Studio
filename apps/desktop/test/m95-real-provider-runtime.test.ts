@@ -123,6 +123,98 @@ describe("M95 real provider runtime", () => {
     expect(JSON.stringify(tested)).not.toContain("Unexpected token");
   });
 
+  test("discovers OpenAI-compatible models through the stored key and /models endpoint", async () => {
+    const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-runtime-models-"));
+    tempRoots.push(userDataRoot);
+    const calls: FetchCall[] = [];
+    const secretStore = createEncryptedFileModelSecretStore({
+      userDataRoot,
+      cipher: testCipher
+    });
+    await secretStore.saveSecret(apiKeyRef, "sk-real-deepseek-key");
+    const runtime = createDesktopModelRuntime({
+      userDataRoot,
+      secretStore,
+      fetch: createModelsFetch(calls, {
+        data: [
+          { id: "deepseek-chat", object: "model", context_window: 64000 },
+          { id: "deepseek-reasoner", object: "model" }
+        ]
+      })
+    });
+
+    const discovered = await runtime.modelDiscoveryPort.discoverModels(createDeepSeekProfile());
+
+    expect(discovered).toMatchObject({
+      ok: true,
+      value: {
+        profileId: "model_deepseek",
+        provider: "deepseek",
+        status: "loaded",
+        models: [
+          {
+            id: "deepseek-chat",
+            displayName: "deepseek-chat",
+            provider: "deepseek",
+            contextWindow: 64000
+          },
+          {
+            id: "deepseek-reasoner",
+            displayName: "deepseek-reasoner",
+            provider: "deepseek"
+          }
+        ],
+        reasoningStrength: {
+          status: "hidden"
+        }
+      }
+    });
+    expect(calls[0]).toMatchObject({
+      url: "https://api.deepseek.com/v1/models",
+      method: "GET",
+      headers: {
+        authorization: "Bearer sk-real-deepseek-key"
+      }
+    });
+    expect(JSON.stringify(discovered)).not.toContain("secret://model_deepseek/api_key");
+  });
+
+  test("falls back to manual model entry when provider model discovery fails", async () => {
+    const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-runtime-models-fallback-"));
+    tempRoots.push(userDataRoot);
+    const secretStore = createEncryptedFileModelSecretStore({
+      userDataRoot,
+      cipher: testCipher
+    });
+    await secretStore.saveSecret(apiKeyRef, "sk-real-deepseek-key");
+    const runtime = createDesktopModelRuntime({
+      userDataRoot,
+      secretStore,
+      fetch: (async () =>
+        new Response("<!doctype html><html><body>Wrong endpoint</body></html>", {
+          status: 200,
+          headers: { "content-type": "text/html" }
+        })) as typeof fetch
+    });
+
+    const discovered = await runtime.modelDiscoveryPort.discoverModels(createDeepSeekProfile());
+
+    expect(discovered).toMatchObject({
+      ok: true,
+      value: {
+        profileId: "model_deepseek",
+        provider: "deepseek",
+        status: "fallback",
+        models: [],
+        reasoningStrength: {
+          status: "hidden"
+        }
+      }
+    });
+    expect(discovered.ok && discovered.value.fallbackReason).toContain("non-JSON response");
+    expect(JSON.stringify(discovered)).not.toContain("sk-real-deepseek-key");
+  });
+
   test("routes default AI suggestions through the real provider after the profile key is verified", async () => {
     const projectRoot = await copyDeepSeekProject();
     const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-real-provider-"));
@@ -270,8 +362,9 @@ const testCipher: DesktopSecretCipher = {
 
 interface FetchCall {
   readonly url: string;
+  readonly method?: string;
   readonly headers: Record<string, string>;
-  readonly body: unknown;
+  readonly body?: unknown;
   readonly signal?: AbortSignal;
   aborted?: boolean;
 }
@@ -314,8 +407,23 @@ function createJsonFetch(calls: FetchCall[], payload: unknown): typeof fetch {
     const headers = normalizeHeaders(init?.headers);
     calls.push({
       url: String(url),
+      method: init?.method,
       headers,
       body: JSON.parse(String(init?.body ?? "{}")) as unknown
+    });
+    return new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  }) as typeof fetch;
+}
+
+function createModelsFetch(calls: FetchCall[], payload: unknown): typeof fetch {
+  return (async (url, init) => {
+    calls.push({
+      url: String(url),
+      method: init?.method,
+      headers: normalizeHeaders(init?.headers)
     });
     return new Response(JSON.stringify(payload), {
       status: 200,
@@ -328,6 +436,7 @@ function createStreamingFetch(calls: FetchCall[]): typeof fetch {
   return (async (url, init) => {
     const call: FetchCall = {
       url: String(url),
+      method: init?.method,
       headers: normalizeHeaders(init?.headers),
       body: JSON.parse(String(init?.body ?? "{}")) as unknown,
       ...(init?.signal === null || init?.signal === undefined

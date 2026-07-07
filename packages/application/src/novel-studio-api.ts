@@ -29,6 +29,7 @@ import type {
   ConfigVersionSummary
 } from "./config-studio-session.js";
 import type { DesktopShellState } from "./desktop-application.js";
+import type { ModelDiscoverySnapshot } from "./model-discovery-session.js";
 import type {
   ModelConnectionResult,
   ModelProfile,
@@ -120,6 +121,7 @@ export interface NovelStudioApi {
   };
   settings: {
     listModelProfiles(): Promise<Result<ModelSettingsSnapshot, UnifiedError>>;
+    discoverModelOptions(profileId: string): Promise<Result<ModelDiscoverySnapshot, UnifiedError>>;
     saveModelProfile(
       profile: ModelProfile,
       options?: { readonly makeDefault?: boolean }

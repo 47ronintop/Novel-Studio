@@ -112,9 +112,38 @@ describe("AI writing workflow UI", () => {
             backoffLabel: "用户手动重试",
             retryableCodesLabel: "LLM_TIMEOUT / LLM_RATE_LIMITED / LLM_PROVIDER_ERROR"
           },
+          modelDiscovery: {
+            profileId: "model_default",
+            provider: "openai-compatible",
+            status: "loaded",
+            models: [
+              {
+                id: "example-model",
+                displayName: "example-model",
+                provider: "openai-compatible"
+              },
+              {
+                id: "gpt-5",
+                displayName: "gpt-5",
+                provider: "openai-compatible",
+                reasoningStrength: {
+                  status: "available",
+                  providerParamName: "reasoning_effort",
+                  allowedValues: ["low", "medium", "high"],
+                  defaultValue: "medium"
+                }
+              }
+            ],
+            reasoningStrength: {
+              status: "hidden",
+              reason: "Select a whitelisted reasoning model before exposing reasoning controls."
+            }
+          },
+          selectedModelName: "gpt-5",
           onInstructionChange: () => undefined,
           onGenerateSuggestion: () => undefined,
           onApplySuggestion: () => undefined,
+          onModelSelect: () => undefined,
           onRetrySuggestion: () => undefined,
           onCancelStreaming: () => undefined
         }}
@@ -130,6 +159,10 @@ describe("AI writing workflow UI", () => {
     expect(html).toContain('aria-label="AI 工作流运行观测"');
     expect(html).toContain("Continue Chapter");
     expect(html).toContain("Default Model / example-model");
+    expect(html).toContain('aria-label="AI model selector"');
+    expect(html).toContain('value="gpt-5" selected=""');
+    expect(html).toContain('aria-label="Reasoning effort"');
+    expect(html).toContain("reasoning_effort");
     expect(html).toContain("24 tokens · estimated");
     expect(html).toContain("USD 0.000000 · estimated");
     expect(html).toContain("构建上下文");

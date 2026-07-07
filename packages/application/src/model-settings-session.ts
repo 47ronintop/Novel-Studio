@@ -8,6 +8,8 @@ import {
   type UnifiedError
 } from "@novel-studio/shared";
 import type { LlmModelProfile, LlmParameters } from "@novel-studio/llm-adapter";
+import { createModelDiscoveryFallback } from "./model-discovery-session.js";
+import type { ModelDiscoveryPort, ModelDiscoverySnapshot } from "./model-discovery-session.js";
 import { isModelProvider, type ModelProvider } from "./model-provider-catalog.js";
 
 export interface ModelProfile extends JsonObject {
@@ -85,11 +87,13 @@ export interface ModelSettingsSession {
   testModelProfileConnection(
     profileId: string
   ): Promise<Result<ModelConnectionResult, UnifiedError>>;
+  discoverModelOptions(profileId: string): Promise<Result<ModelDiscoverySnapshot, UnifiedError>>;
 }
 
 export interface ModelSettingsSessionOptions {
   readonly settingsPort: ProjectSettingsPort;
   readonly connectionTester?: ModelConnectionTester;
+  readonly discoveryPort?: ModelDiscoveryPort;
 }
 
 export function createModelSettingsSession(
@@ -185,6 +189,29 @@ export function createModelSettingsSession(
           })
         })
       );
+    },
+
+    async discoverModelOptions(profileId) {
+      const profileResult = await readModelProfile(options.settingsPort, profileId);
+      if (!profileResult.ok) {
+        return profileResult;
+      }
+      const profile = profileResult.value;
+      if (options.discoveryPort === undefined) {
+        return ok(
+          createModelDiscoveryFallback(
+            profile,
+            "Model discovery is not configured in this runtime. Enter the model name manually."
+          )
+        );
+      }
+
+      const result = await options.discoveryPort.discoverModels(profile);
+      if (result.ok) {
+        return result;
+      }
+
+      return ok(createModelDiscoveryFallback(profile, result.error.message));
     }
   };
 }
@@ -252,6 +279,32 @@ function upsertProfile(profiles: readonly ModelProfile[], profile: ModelProfile)
   }
 
   return profiles.map((entry) => (entry.id === profile.id ? profile : entry));
+}
+
+async function readModelProfile(
+  settingsPort: ProjectSettingsPort,
+  profileId: string
+): Promise<Result<ModelProfile, UnifiedError>> {
+  const settings = await settingsPort.readSettings();
+  if (!settings.ok) {
+    return settings;
+  }
+  const profile = settings.value.models.profiles.find((entry) => entry.id === profileId);
+  if (profile === undefined) {
+    return err(
+      createUnifiedError({
+        code: "MODEL_PROFILE_NOT_FOUND",
+        category: "UserError",
+        message: "The requested model profile does not exist.",
+        recoverability: "user-action",
+        suggestedAction: "Choose an existing model profile and retry.",
+        traceId: "application-model-settings",
+        redactedDetail: { profileId }
+      })
+    );
+  }
+
+  return ok(profile);
 }
 
 function validateModelProfile(profile: ModelProfile): Result<ModelProvider, UnifiedError> {
