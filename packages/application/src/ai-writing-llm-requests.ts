@@ -1,5 +1,10 @@
 import type { ContextBundleTrace } from "@novel-studio/context-engine";
-import type { LlmModelProfile, LlmParameters, LlmRequest } from "@novel-studio/llm-adapter";
+import type {
+  LlmMode,
+  LlmModelProfile,
+  LlmParameters,
+  LlmRequest
+} from "@novel-studio/llm-adapter";
 
 import type {
   AiWritingConversationMessage,
@@ -14,12 +19,14 @@ export function createChapterSuggestionLlmRequest(input: {
   readonly modelProfile: LlmModelProfile;
   readonly parameters: LlmParameters;
   readonly conversationMessages: readonly AiWritingConversationMessage[];
+  readonly mode?: LlmMode;
+  readonly abortSignal?: AbortSignal;
 }): LlmRequest {
-  return {
+  const request: LlmRequest = {
     schemaVersion: "1.0",
     requestId: `llm_${input.workflowRunId}`,
     traceId: "ai-writing-workflow",
-    mode: "non-streaming",
+    mode: input.mode ?? "non-streaming",
     modelProfile: input.modelProfile,
     messages: [
       {
@@ -45,6 +52,13 @@ export function createChapterSuggestionLlmRequest(input: {
       type: "json_object"
     }
   };
+
+  return input.abortSignal === undefined
+    ? request
+    : {
+        ...request,
+        abortSignal: input.abortSignal
+      };
 }
 
 export function createSelectionPreviewLlmRequest(input: {

@@ -12,6 +12,9 @@ import {
   LlmProviderFailure,
   OpenAiCompatibleHttpError,
   type LlmProvider,
+  type LlmProviderStreamEvent,
+  type LlmRequest,
+  type LlmUsage,
   type OpenAiCompatibleTransport,
   type OpenAiCompatibleTransportRequest
 } from "@novel-studio/llm-adapter";
@@ -190,6 +193,8 @@ export function createDesktopModelRuntime(
 
   const transport: OpenAiCompatibleTransport = (request) =>
     postOpenAiCompatibleJson(fetchImpl, request);
+  const streamTransport = (request: OpenAiCompatibleTransportRequest) =>
+    streamOpenAiCompatibleJson(fetchImpl, request);
 
   return {
     modelConnectionTester: {
@@ -238,6 +243,7 @@ export function createDesktopModelRuntime(
         providers: {
           "openai-compatible": createOpenAiCompatibleProvider({
             transport,
+            streamTransport,
             resolveApiKey: async (secretRef) => {
               const secret = await secretStore.readSecret(secretRef);
               if (!secret.ok) {
@@ -302,12 +308,268 @@ export function createDesktopModelRuntime(
 
           return verifiedProvider.complete(request);
         },
-        stream(request) {
-          return realProvider.stream(request);
+        async *stream(request) {
+          const secretRef = request.modelProfile.apiKeyRef;
+          if (secretRef === undefined) {
+            yield* demoProvider.stream(request);
+            return;
+          }
+          const secret = await secretStore.readSecret(secretRef);
+          if (!secret.ok) {
+            throw new LlmProviderFailure({
+              code: "LLM_PROVIDER_ERROR",
+              message: secret.error.message,
+              retryable: false
+            });
+          }
+          if (secret.value === undefined) {
+            yield* demoProvider.stream(request);
+            return;
+          }
+          const verified = await secretStore.isVerified(secretRef, request.modelProfile);
+          if (!verified.ok) {
+            throw new LlmProviderFailure({
+              code: "LLM_PROVIDER_ERROR",
+              message: verified.error.message,
+              retryable: false
+            });
+          }
+          if (!verified.value) {
+            throw new LlmProviderFailure({
+              code: "LLM_PROVIDER_ERROR",
+              message: "Model profile API key has not passed a real connection test.",
+              retryable: false
+            });
+          }
+
+          yield* streamVerifiedOpenAiCompatibleRequest(fetchImpl, request, secret.value);
         }
       };
     }
   };
+}
+
+async function* streamVerifiedOpenAiCompatibleRequest(
+  fetchImpl: typeof fetch,
+  request: LlmRequest,
+  apiKey: string
+): AsyncIterable<LlmProviderStreamEvent> {
+  const baseUrl = request.modelProfile.baseUrl;
+  if (baseUrl === undefined || baseUrl.trim().length === 0) {
+    throw new OpenAiCompatibleHttpError({
+      status: 400,
+      message: "OpenAI-compatible model profiles require a Base URL."
+    });
+  }
+
+  const body: JsonObject = {
+    model: request.modelProfile.modelName,
+    messages: request.messages.map((message) => ({
+      role: message.role,
+      content: message.content
+    })),
+    stream: true
+  };
+  if (request.parameters.temperature !== undefined) {
+    body.temperature = request.parameters.temperature;
+  }
+  if (request.parameters.maxTokens !== undefined) {
+    body.max_tokens = request.parameters.maxTokens;
+  }
+  if (request.parameters.topP !== undefined) {
+    body.top_p = request.parameters.topP;
+  }
+
+  for await (const chunk of streamOpenAiCompatibleJson(fetchImpl, {
+    url: `${baseUrl.replace(/\/+$/, "")}/chat/completions`,
+    headers: {
+      authorization: `Bearer ${apiKey}`
+    },
+    body,
+    ...(request.modelProfile.timeoutMs === undefined
+      ? {}
+      : { timeoutMs: request.modelProfile.timeoutMs }),
+    ...(request.abortSignal === undefined ? {} : { abortSignal: request.abortSignal })
+  })) {
+    for (const event of parseOpenAiCompatibleStreamEvent(chunk)) {
+      yield event;
+    }
+  }
+}
+
+async function* streamOpenAiCompatibleJson(
+  fetchImpl: typeof fetch,
+  request: OpenAiCompatibleTransportRequest
+): AsyncIterable<unknown> {
+  const timeoutController = new AbortController();
+  const signal = combineAbortSignals(request.abortSignal, timeoutController.signal);
+  const timeout =
+    request.timeoutMs === undefined
+      ? undefined
+      : setTimeout(() => timeoutController.abort(), request.timeoutMs);
+
+  try {
+    if (request.abortSignal?.aborted === true) {
+      return;
+    }
+    const response = await fetchImpl(request.url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...stringHeaders(request.headers)
+      },
+      body: JSON.stringify(request.body),
+      signal
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new OpenAiCompatibleHttpError({
+        status: response.status,
+        message: `Provider returned HTTP ${response.status}.`,
+        body: parseProviderJsonPayload(response, text)
+      });
+    }
+    if (response.body === null) {
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      if (isAbortSignalAborted(request.abortSignal)) {
+        void reader.cancel();
+        return;
+      }
+      const read = await reader.read();
+      if (read.done) {
+        break;
+      }
+      buffer += decoder.decode(read.value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() ?? "";
+      for (const part of parts) {
+        const parsed = parseServerSentEventPart(part);
+        if (parsed !== undefined) {
+          yield parsed;
+        }
+      }
+    }
+    buffer += decoder.decode();
+    const parsed = parseServerSentEventPart(buffer);
+    if (parsed !== undefined) {
+      yield parsed;
+    }
+  } catch (error) {
+    if (isAbortError(error)) {
+      return;
+    }
+    throw error;
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function combineAbortSignals(
+  requestSignal: AbortSignal | undefined,
+  timeoutSignal: AbortSignal
+): AbortSignal {
+  if (requestSignal === undefined) {
+    return timeoutSignal;
+  }
+  return AbortSignal.any([requestSignal, timeoutSignal]);
+}
+
+function isAbortSignalAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
+function parseServerSentEventPart(part: string): unknown | undefined {
+  const payload = part
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice("data:".length).trim())
+    .join("\n")
+    .trim();
+  if (payload.length === 0 || payload === "[DONE]") {
+    return undefined;
+  }
+  return JSON.parse(payload) as unknown;
+}
+
+function parseOpenAiCompatibleStreamEvent(chunk: unknown): readonly LlmProviderStreamEvent[] {
+  if (!isJsonRecord(chunk)) {
+    throw new OpenAiCompatibleHttpError({
+      status: 502,
+      message: "Provider returned a malformed streaming chunk.",
+      body: chunk
+    });
+  }
+  const choices = chunk["choices"];
+  if (!Array.isArray(choices)) {
+    throw new OpenAiCompatibleHttpError({
+      status: 502,
+      message: "Provider returned a streaming chunk without choices.",
+      body: chunk
+    });
+  }
+
+  const events: LlmProviderStreamEvent[] = [];
+  for (const choice of choices) {
+    if (!isJsonRecord(choice)) {
+      continue;
+    }
+    const delta = choice["delta"];
+    if (!isJsonRecord(delta)) {
+      continue;
+    }
+    const content = delta["content"];
+    if (typeof content === "string" && content.length > 0) {
+      events.push({
+        type: "delta",
+        value: content
+      });
+    }
+  }
+
+  const usage = parseOpenAiCompatibleUsage(chunk["usage"]);
+  if (usage !== undefined) {
+    events.push({
+      type: "usage",
+      usage
+    });
+  }
+  return events;
+}
+
+function parseOpenAiCompatibleUsage(value: unknown): LlmUsage | undefined {
+  if (!isJsonRecord(value)) {
+    return undefined;
+  }
+  const inputTokens = numberValue(value["prompt_tokens"]);
+  const outputTokens = numberValue(value["completion_tokens"]);
+  const totalTokens = numberValue(value["total_tokens"]) ?? inputTokens + outputTokens;
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    usageStatus: "actual",
+    cost: {
+      amount: 0,
+      currency: "USD",
+      status: "unknown"
+    }
+  };
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function isJsonRecord(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function postOpenAiCompatibleJson(
@@ -404,6 +666,10 @@ function connectionFailureMessage(error: unknown): string {
     return error.name === "AbortError" ? "Connection timed out." : error.message;
   }
   return "Connection failed.";
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 async function readSecretFile(path: string): Promise<Result<SecretFile, UnifiedError>> {

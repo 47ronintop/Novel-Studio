@@ -494,23 +494,25 @@ export function App() {
       aiWritingWorkflow.instruction.trim().length === 0
         ? "Continue the active chapter."
         : aiWritingWorkflow.instruction;
-    setAiWritingWorkflow(aiWritingWorkflowBridge.beginGenerate(instruction));
-    void aiWritingWorkflowBridge.generateSuggestion(instruction).then((nextAiWritingWorkflow) => {
-      setAiWritingWorkflow(nextAiWritingWorkflow);
-      const diffPreview = nextAiWritingWorkflow.diffPreview;
-      if (diffPreview === undefined) {
-        return;
-      }
+    setAiWritingWorkflow(aiWritingWorkflowBridge.beginStreamingGenerate(instruction));
+    void aiWritingWorkflowBridge
+      .generateStreamingSuggestion(instruction, setAiWritingWorkflow)
+      .then((nextAiWritingWorkflow) => {
+        setAiWritingWorkflow(nextAiWritingWorkflow);
+        const diffPreview = nextAiWritingWorkflow.diffPreview;
+        if (diffPreview === undefined) {
+          return;
+        }
 
-      setChapterEditor((current) =>
-        current === undefined
-          ? current
-          : {
-              ...current,
-              diffPreview
-            }
-      );
-    });
+        setChapterEditor((current) =>
+          current === undefined
+            ? current
+            : {
+                ...current,
+                diffPreview
+              }
+        );
+      });
   }, [aiWritingWorkflow, aiWritingWorkflowBridge]);
 
   const handleSelectionAiPreview = useCallback(

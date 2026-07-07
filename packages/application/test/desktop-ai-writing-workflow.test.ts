@@ -104,6 +104,13 @@ function createFakeAiSession(calls: string[]): AiWritingWorkflowSession {
       calls.push(`generate:${request.instruction}`);
       return ok(suggestion);
     },
+    async *streamChapterSuggestion(request) {
+      calls.push(`stream:${request.instruction}`);
+      yield ok({
+        type: "suggestion",
+        suggestion
+      });
+    },
     async generateSelectionPreview(request) {
       calls.push(`selection:${request.instruction}`);
       return ok({

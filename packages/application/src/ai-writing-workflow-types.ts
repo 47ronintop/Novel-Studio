@@ -21,6 +21,10 @@ export interface AiWritingSuggestionRequest {
   readonly instruction: string;
 }
 
+export interface AiWritingSuggestionStreamRequest extends AiWritingSuggestionRequest {
+  readonly abortSignal?: AbortSignal;
+}
+
 export interface AiWritingConversationMessage {
   readonly messageId: string;
   readonly role: "user" | "assistant";
@@ -52,6 +56,29 @@ export interface AiWritingSuggestion {
   readonly contextTrace: ContextBundleTrace;
   readonly observability: AiWritingWorkflowObservability;
 }
+
+export type AiWritingSuggestionStreamEvent =
+  | {
+      readonly type: "delta";
+      readonly value: string;
+    }
+  | {
+      readonly type: "suggestion";
+      readonly suggestion: AiWritingSuggestion;
+    };
+
+export interface AiWritingSuggestionStreamHandle {
+  readonly streamId: string;
+}
+
+export type AiWritingSuggestionStreamNext =
+  | {
+      readonly done: true;
+    }
+  | {
+      readonly done: false;
+      readonly event: AiWritingSuggestionStreamEvent;
+    };
 
 export interface AiWritingSelectionPreview {
   readonly previewId: string;
@@ -191,6 +218,9 @@ export interface AiWritingWorkflowSession {
   generateChapterSuggestion(
     request: AiWritingSuggestionRequest
   ): Promise<Result<AiWritingSuggestion, UnifiedError>>;
+  streamChapterSuggestion(
+    request: AiWritingSuggestionStreamRequest
+  ): AsyncIterable<Result<AiWritingSuggestionStreamEvent, UnifiedError>>;
   generateSelectionPreview(
     request: AiWritingSelectionPreviewRequest
   ): Promise<Result<AiWritingSelectionPreview, UnifiedError>>;

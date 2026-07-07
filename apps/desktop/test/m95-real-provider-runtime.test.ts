@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
-import type { AiWritingSuggestion } from "@novel-studio/application";
+import { createChapterEditorSession, type AiWritingSuggestion } from "@novel-studio/application";
+import type { LlmProviderStreamEvent, LlmRequest } from "@novel-studio/llm-adapter";
 import type { Result, UnifiedError } from "@novel-studio/shared";
 
 import { createProjectDesktopApplication } from "../src/main/application-composition.js";
@@ -179,6 +180,82 @@ describe("M95 real provider runtime", () => {
       authorization: "Bearer sk-real-deepseek-key"
     });
   });
+
+  test("streams through demo mode when the profile key has not been stored", async () => {
+    const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-stream-demo-"));
+    tempRoots.push(userDataRoot);
+    const calls: FetchCall[] = [];
+    const runtime = createDesktopModelRuntime({
+      userDataRoot,
+      secretStore: createEncryptedFileModelSecretStore({
+        userDataRoot,
+        cipher: testCipher
+      }),
+      fetch: createJsonFetch(calls, {})
+    });
+    const chapterEditorSession = await createLoadedChapterEditorSession();
+    const provider = runtime.createAiProvider({
+      chapterEditorSession
+    });
+
+    const events = await collectProviderStream(provider.stream(streamingRequest()));
+
+    expect(events).toEqual([{ type: "delta", value: "当前是演示模式，未配置真实Key。" }]);
+    expect(calls).toEqual([]);
+  });
+
+  test("streams through a verified OpenAI-compatible profile and aborts the fetch when cancelled", async () => {
+    const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-stream-real-"));
+    tempRoots.push(userDataRoot);
+    const secretStore = createEncryptedFileModelSecretStore({
+      userDataRoot,
+      cipher: testCipher
+    });
+    await secretStore.saveSecret(apiKeyRef, "sk-real-deepseek-key");
+    await secretStore.markVerified(apiKeyRef, {
+      provider: "deepseek",
+      baseUrl: "https://api.deepseek.com/v1",
+      modelName: "deepseek-chat"
+    });
+    const controller = new AbortController();
+    const calls: FetchCall[] = [];
+    const runtime = createDesktopModelRuntime({
+      userDataRoot,
+      secretStore,
+      fetch: createStreamingFetch(calls)
+    });
+    const chapterEditorSession = await createLoadedChapterEditorSession();
+    const provider = runtime.createAiProvider({
+      chapterEditorSession
+    });
+    const iterator = provider.stream({
+      ...streamingRequest(),
+      abortSignal: controller.signal
+    })[Symbol.asyncIterator]();
+
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: {
+        type: "delta",
+        value: "The city"
+      }
+    });
+    controller.abort();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await iterator.return?.();
+
+    expect(calls[0]).toMatchObject({
+      url: "https://api.deepseek.com/v1/chat/completions",
+      headers: {
+        authorization: "Bearer sk-real-deepseek-key"
+      },
+      body: {
+        model: "deepseek-chat",
+        stream: true
+      }
+    });
+    expect(calls[0]?.signal?.aborted).toBe(true);
+  });
 });
 
 const testCipher: DesktopSecretCipher = {
@@ -195,6 +272,41 @@ interface FetchCall {
   readonly url: string;
   readonly headers: Record<string, string>;
   readonly body: unknown;
+  readonly signal?: AbortSignal;
+  aborted?: boolean;
+}
+
+async function createLoadedChapterEditorSession() {
+  const session = createChapterEditorSession({
+    chapterId,
+    repository: {
+      async readChapter() {
+        return {
+          ok: true,
+          value: {
+            frontmatter: {
+              schemaVersion: "1.0",
+              id: chapterId,
+              type: "chapter",
+              title: "第一章",
+              order: 1,
+              status: "draft",
+              createdAt: "2026-07-04T00:00:00.000Z",
+              updatedAt: "2026-07-04T00:00:00.000Z"
+            },
+            body: "Opening line.\n"
+          }
+        };
+      },
+      async writeChapter(chapter) {
+        return { ok: true, value: chapter };
+      }
+    },
+    now: () => "2026-07-07T00:00:00.000Z"
+  });
+  const loaded = await session.load();
+  assertOk(loaded);
+  return session;
 }
 
 function createJsonFetch(calls: FetchCall[], payload: unknown): typeof fetch {
@@ -210,6 +322,85 @@ function createJsonFetch(calls: FetchCall[], payload: unknown): typeof fetch {
       headers: { "content-type": "application/json" }
     });
   }) as typeof fetch;
+}
+
+function createStreamingFetch(calls: FetchCall[]): typeof fetch {
+  return (async (url, init) => {
+    const call: FetchCall = {
+      url: String(url),
+      headers: normalizeHeaders(init?.headers),
+      body: JSON.parse(String(init?.body ?? "{}")) as unknown,
+      ...(init?.signal === null || init?.signal === undefined
+        ? {}
+        : { signal: init.signal }),
+      aborted: false
+    };
+    calls.push(call);
+    init?.signal?.addEventListener("abort", () => {
+      call.aborted = true;
+    });
+    return new Response(
+      streamUntilAbort(
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "The city" } }] })}\n\n`,
+        init?.signal
+      ),
+      {
+        status: 200,
+        headers: { "content-type": "text/event-stream" }
+      }
+    );
+  }) as typeof fetch;
+}
+
+function streamUntilAbort(
+  firstChunk: string,
+  signal: AbortSignal | null | undefined
+): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let sent = false;
+  return new ReadableStream({
+    start(controller) {
+      signal?.addEventListener(
+        "abort",
+        () => {
+          controller.close();
+        },
+        { once: true }
+      );
+    },
+    pull(controller) {
+      if (sent) {
+        return;
+      }
+      sent = true;
+      controller.enqueue(encoder.encode(firstChunk));
+    }
+  });
+}
+
+async function collectProviderStream(
+  stream: AsyncIterable<LlmProviderStreamEvent>
+): Promise<readonly LlmProviderStreamEvent[]> {
+  const events: LlmProviderStreamEvent[] = [];
+  for await (const event of stream) {
+    events.push(event);
+  }
+  return events;
+}
+
+function streamingRequest(): LlmRequest {
+  return {
+    schemaVersion: "1.0",
+    requestId: "llmreq_stream_real",
+    traceId: "desktop-model-runtime-stream",
+    mode: "streaming",
+    modelProfile: createDeepSeekProfile(),
+    messages: [{ role: "user", content: "Continue." }],
+    parameters: {
+      temperature: 0.7,
+      maxTokens: 64
+    }
+  };
 }
 
 function normalizeHeaders(headers: HeadersInit | undefined): Record<string, string> {

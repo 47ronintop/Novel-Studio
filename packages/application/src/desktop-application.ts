@@ -42,6 +42,8 @@ import type {
   AiWritingSelectionPreview,
   AiWritingSelectionPreviewRequest,
   AiWritingSuggestionRequest,
+  AiWritingSuggestionStreamEvent,
+  AiWritingSuggestionStreamRequest,
   AiWritingWorkflowSession,
   WorkflowRunHistoryPort,
   WorkflowRunRecord,
@@ -136,6 +138,9 @@ export interface DesktopApplication {
   generateActiveChapterSuggestion(
     request: AiWritingSuggestionRequest
   ): Promise<Result<AiWritingSuggestion, UnifiedError>>;
+  streamActiveChapterSuggestion(
+    request: AiWritingSuggestionStreamRequest
+  ): AsyncIterable<Result<AiWritingSuggestionStreamEvent, UnifiedError>>;
   generateActiveSelectionPreview(
     request: AiWritingSelectionPreviewRequest
   ): Promise<Result<AiWritingSelectionPreview, UnifiedError>>;
@@ -420,6 +425,15 @@ export function createDesktopApplication(
       }
 
       return activeAiWritingWorkflowSession.generateChapterSuggestion(request);
+    },
+    async *streamActiveChapterSuggestion(request) {
+      const activeAiWritingWorkflowSession = getAiWritingWorkflowSession();
+      if (activeAiWritingWorkflowSession === undefined) {
+        yield aiWritingWorkflowUnavailable();
+        return;
+      }
+
+      yield* activeAiWritingWorkflowSession.streamChapterSuggestion(request);
     },
     async generateActiveSelectionPreview(request) {
       const activeAiWritingWorkflowSession = getAiWritingWorkflowSession();

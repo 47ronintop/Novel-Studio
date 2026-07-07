@@ -15,6 +15,7 @@ export interface OpenAiCompatibleTransportRequest {
   readonly headers?: JsonObject;
   readonly body: JsonObject;
   readonly timeoutMs?: number;
+  readonly abortSignal?: AbortSignal;
 }
 
 export type OpenAiCompatibleTransport = (
@@ -154,6 +155,7 @@ async function createTransportRequestWithSecret(
   options: Pick<OpenAiCompatibleProviderOptions, "resolveApiKey">,
   transportRequest: Pick<OpenAiCompatibleTransportRequest, "url" | "body">
 ): Promise<OpenAiCompatibleTransportRequest> {
+  const abortSignal = request.abortSignal;
   const apiKey =
     options.resolveApiKey === undefined
       ? undefined
@@ -165,11 +167,18 @@ async function createTransportRequestWithSecret(
           ...transportRequest,
           timeoutMs: request.modelProfile.timeoutMs
         };
+  const requestWithAbortSignal =
+    abortSignal === undefined
+      ? requestWithTimeout
+      : {
+          ...requestWithTimeout,
+          abortSignal
+        };
 
   return apiKey === undefined
-    ? requestWithTimeout
+    ? requestWithAbortSignal
     : {
-        ...requestWithTimeout,
+        ...requestWithAbortSignal,
         headers: {
           authorization: `Bearer ${apiKey}`
         }

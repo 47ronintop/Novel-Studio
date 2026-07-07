@@ -13,6 +13,7 @@ import type {
   AiWritingSelectionPreview,
   AiWritingSelectionPreviewRequest,
   AiWritingSuggestionRequest,
+  AiWritingSuggestionStreamEvent,
   WorkflowRunRecord,
   WorkflowRunSummary
 } from "./ai-writing-workflow-session.js";
@@ -88,6 +89,10 @@ export interface NovelStudioApi {
     generateChapterSuggestion(
       request: AiWritingSuggestionRequest
     ): Promise<Result<AiWritingSuggestion, UnifiedError>>;
+    streamChapterSuggestion(
+      request: AiWritingSuggestionRequest,
+      options?: AiWritingSuggestionStreamOptions
+    ): AsyncIterable<Result<AiWritingSuggestionStreamEvent, UnifiedError>>;
     generateSelectionPreview(
       request: AiWritingSelectionPreviewRequest
     ): Promise<Result<AiWritingSelectionPreview, UnifiedError>>;
@@ -156,6 +161,10 @@ export interface NovelStudioApi {
     load(): Promise<Result<UserPreferencesSnapshot, UnifiedError>>;
     save(input: UserPreferencesSaveInput): Promise<Result<UserPreferencesSnapshot, UnifiedError>>;
   };
+}
+
+export interface AiWritingSuggestionStreamOptions {
+  readonly signal?: AbortSignal;
 }
 
 export interface ProjectDirectorySelection {

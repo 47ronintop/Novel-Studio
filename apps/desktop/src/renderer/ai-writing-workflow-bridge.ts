@@ -31,6 +31,10 @@ export interface AiWritingWorkflowBridge {
   beginStreamingGenerate(instruction: string): AiWritingWorkflowProps;
   appendStreamDelta(delta: string): AiWritingWorkflowProps;
   cancelStreaming(): AiWritingWorkflowProps;
+  generateStreamingSuggestion(
+    instruction: string,
+    onUpdate: (props: AiWritingWorkflowProps) => void
+  ): Promise<AiWritingWorkflowProps>;
   generateSuggestion(instruction: string): Promise<AiWritingWorkflowProps>;
   generateSelectionPreview(input: AiSelectionPreviewBridgeInput): Promise<AiWritingWorkflowProps>;
   rejectSelectionPreview(): AiWritingWorkflowProps;
@@ -50,6 +54,8 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
   let currentSelectionPreviewId: string | undefined;
   let currentSelectionPreview: AiWritingSelectionPreview | undefined;
   let rejectedSelectionPreview: AiWritingSelectionPreview | undefined;
+  let currentStreamController: AbortController | undefined;
+  let currentStreamToken = 0;
   let props: AiWritingWorkflowProps = createProps({
     status: "idle",
     instruction: ""
@@ -90,10 +96,76 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
       return props;
     },
     cancelStreaming() {
+      currentStreamController?.abort();
+      currentStreamController = undefined;
+      currentStreamToken += 1;
       props = createProps({
         ...props,
         status: "cancelled"
       });
+      return props;
+    },
+    async generateStreamingSuggestion(instruction, onUpdate) {
+      currentStreamController?.abort();
+      const controller = new AbortController();
+      currentStreamController = controller;
+      currentStreamToken += 1;
+      const streamToken = currentStreamToken;
+
+      try {
+        for await (const result of api.ai.streamChapterSuggestion(
+          { instruction },
+          { signal: controller.signal }
+        )) {
+          if (streamToken !== currentStreamToken || controller.signal.aborted) {
+            return props;
+          }
+
+          if (!result.ok) {
+            currentSuggestionId = undefined;
+            currentSelectionPreviewId = undefined;
+            currentSelectionPreview = undefined;
+            const history = await loadLatestHistory(api);
+            props = createProps({
+              ...props,
+              status: "failed",
+              instruction,
+              failure: toFailureProps(result.error),
+              retryPolicy: toRetryPolicyProps(undefined),
+              ...(history === undefined ? {} : { history })
+            });
+            onUpdate(props);
+            return props;
+          }
+
+          if (result.value.type === "delta") {
+            props = createProps({
+              ...props,
+              status: "streaming",
+              instruction,
+              streamPreview: `${props.streamPreview ?? ""}${result.value.value}`
+            });
+            onUpdate(props);
+          }
+
+          if (result.value.type === "suggestion") {
+            const suggestion = result.value.suggestion;
+            currentSuggestionId = suggestion.suggestionId;
+            currentSelectionPreviewId = undefined;
+            currentSelectionPreview = undefined;
+            rejectedSelectionPreview = undefined;
+            const history = await loadHistory(api, suggestion.workflowRunId);
+            props = toProps(suggestion, instruction, history);
+            onUpdate(props);
+            return props;
+          }
+        }
+      } finally {
+        if (streamToken === currentStreamToken) {
+          currentStreamController = undefined;
+        }
+      }
+
       return props;
     },
     async generateSuggestion(instruction) {

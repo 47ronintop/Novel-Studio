@@ -6,6 +6,10 @@ import type {
   AiWritingSelectionPreviewRequest,
   AiWritingSuggestion,
   AiWritingSuggestionRequest,
+  AiWritingSuggestionStreamEvent,
+  AiWritingSuggestionStreamHandle,
+  AiWritingSuggestionStreamNext,
+  AiWritingSuggestionStreamOptions,
   ChapterEditorSnapshot,
   ChapterSuggestionDiffPreview,
   ConfigAssetRestoreInput,
@@ -109,6 +113,10 @@ const api: NovelStudioApi = {
         "application:ai:generate-chapter-suggestion",
         request
       ),
+    streamChapterSuggestion: (
+      request: AiWritingSuggestionRequest,
+      options?: AiWritingSuggestionStreamOptions
+    ) => streamChapterSuggestionViaIpc(request, options),
     generateSelectionPreview: (request: AiWritingSelectionPreviewRequest) =>
       invokeTyped<Result<AiWritingSelectionPreview, UnifiedError>>(
         "application:ai:generate-selection-preview",
@@ -256,6 +264,84 @@ const api: NovelStudioApi = {
 };
 
 contextBridge.exposeInMainWorld("novelStudio", api);
+
+function streamChapterSuggestionViaIpc(
+  request: AiWritingSuggestionRequest,
+  options: AiWritingSuggestionStreamOptions | undefined
+): AsyncIterable<Result<AiWritingSuggestionStreamEvent, UnifiedError>> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      let streamId: string | undefined;
+      let finished = false;
+      let cancelPromise: Promise<unknown> | undefined;
+      const cancel = () => {
+        if (streamId === undefined || cancelPromise !== undefined) {
+          return;
+        }
+        cancelPromise = invokeTyped<Result<void, UnifiedError>>(
+          "application:ai:cancel-chapter-suggestion-stream",
+          streamId
+        ).catch(() => undefined);
+      };
+      const signal = options?.signal;
+      const onAbort = () => {
+        cancel();
+      };
+
+      if (signal?.aborted === true) {
+        return;
+      }
+      signal?.addEventListener("abort", onAbort, { once: true });
+
+      try {
+        const started = await invokeTyped<Result<AiWritingSuggestionStreamHandle, UnifiedError>>(
+          "application:ai:start-chapter-suggestion-stream",
+          request
+        );
+        if (!started.ok) {
+          yield { ok: false, error: started.error };
+          return;
+        }
+        streamId = started.value.streamId;
+        if (isAbortSignalAborted(signal)) {
+          cancel();
+          return;
+        }
+
+        while (true) {
+          const next = await invokeTyped<Result<AiWritingSuggestionStreamNext, UnifiedError>>(
+            "application:ai:next-chapter-suggestion-stream",
+            streamId
+          );
+          if (isAbortSignalAborted(signal)) {
+            cancel();
+            return;
+          }
+          if (!next.ok) {
+            yield { ok: false, error: next.error };
+            return;
+          }
+          if (next.value.done) {
+            finished = true;
+            return;
+          }
+
+          yield { ok: true, value: next.value.event };
+        }
+      } finally {
+        signal?.removeEventListener("abort", onAbort);
+        if (!finished) {
+          cancel();
+          await cancelPromise;
+        }
+      }
+    }
+  };
+}
+
+function isAbortSignalAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
 
 async function invokeTyped<T>(
   channel: ApplicationIpcChannel,

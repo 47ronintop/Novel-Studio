@@ -369,6 +369,63 @@ describe("M14 AI writing workflow session", () => {
     );
   });
 
+  test("streams a chapter suggestion and forwards the abort signal to the LLM request", async () => {
+    const requests: LlmRequest[] = [];
+    const controller = new AbortController();
+    const chapterSession = createChapterEditorSession({
+      chapterId: "ch_m14",
+      repository: createRepository([]),
+      now: () => "2026-07-04T00:00:00.000Z"
+    });
+    const loaded = await chapterSession.load();
+    if (isErr(loaded)) {
+      throw new Error(loaded.error.message);
+    }
+
+    const aiWorkflow = createAgentBackedAiWritingWorkflowSession({
+      chapterEditorSession: chapterSession,
+      llmAdapter: createLlmAdapter({
+        provider: createStreamingJsonProvider(requests),
+        clock: () => "2026-07-04T00:00:00.000Z"
+      }),
+      now: () => "2026-07-04T00:00:00.000Z",
+      createWorkflowRunId: createSequence("wfrun_stream"),
+      createSuggestionId: createSequence("sug_stream"),
+      createAgentRunId: createSequence("agentrun_stream"),
+      createHandoffId: createSequence("handoff_stream")
+    });
+
+    const events = [];
+    for await (const event of aiWorkflow.streamChapterSuggestion({
+      instruction: "Continue.",
+      abortSignal: controller.signal
+    })) {
+      events.push(event);
+    }
+
+    expect(requests[0]?.mode).toBe("streaming");
+    expect(requests[0]?.abortSignal).toBe(controller.signal);
+    expect(events[0]).toEqual(ok({ type: "delta", value: "{\"proposedBody\":" }));
+    expect(events[1]).toEqual(
+      ok({ type: "delta", value: "\"Opening line.\\nAI continuation.\\n\"" })
+    );
+    expect(events[2]).toEqual(
+      ok({ type: "delta", value: ",\"summary\":\"Continues the current scene.\"}" })
+    );
+    expect(events[3]).toMatchObject({
+      ok: true,
+      value: {
+        type: "suggestion",
+        suggestion: {
+          suggestionId: "sug_stream_1",
+          workflowRunId: "wfrun_stream_1",
+          proposedBody,
+          summary: "Continues the current scene."
+        }
+      }
+    });
+  });
+
   test("resolves the runtime model profile when generating a suggestion", async () => {
     const requests: LlmRequest[] = [];
     const chapterSession = createChapterEditorSession({
@@ -722,6 +779,39 @@ function createCapturingProvider(requests: LlmRequest[]): LlmProvider {
       yield {
         type: "delta",
         value: ""
+      };
+    }
+  };
+}
+
+function createStreamingJsonProvider(requests: LlmRequest[]): LlmProvider {
+  return {
+    id: "openai-compatible",
+    async complete(request) {
+      requests.push(request);
+      return {
+        content: {
+          type: "json",
+          value: {
+            proposedBody,
+            summary: "Continues the current scene."
+          }
+        }
+      };
+    },
+    async *stream(request) {
+      requests.push(request);
+      yield {
+        type: "delta",
+        value: "{\"proposedBody\":"
+      };
+      yield {
+        type: "delta",
+        value: "\"Opening line.\\nAI continuation.\\n\""
+      };
+      yield {
+        type: "delta",
+        value: ",\"summary\":\"Continues the current scene.\"}"
       };
     }
   };

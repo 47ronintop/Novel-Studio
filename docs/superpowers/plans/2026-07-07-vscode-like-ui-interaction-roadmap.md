@@ -169,6 +169,8 @@ Result on 2026-07-07: target tests passed with 3 files and 16 tests; `npm run ty
 
 **Commit message:** `feat: add single-session ai chat history`
 
+**VUI-02 Status:** Complete on 2026-07-07. 已完成真实 provider stream 校验/兜底/AbortSignal 传递、Application session 流式建议生成、IPC/preload `start/next/cancel` 通道、renderer bridge/UI 真流式追加与停止。验证：`npm run typecheck`、VUI-02 目标测试组、`npm test` 均通过。
+
 ### VUI-02: AI 流式输出与真实停止
 
 **目标：** 在 VUI-01 的消息线程上接入真实增量输出，并让“停止生成”取消后端请求。
@@ -201,6 +203,8 @@ npm run typecheck
 **Manual acceptance:** 触发较长生成，1 秒内看到文字开始增长；生成中点击停止，后端请求终止，UI 不再继续追加文字。
 
 **Commit message:** `feat: stream ai chat with real cancellation`
+
+Completion note on 2026-07-07: all VUI-02 checklist items are implemented. Added regression coverage for unverified/missing provider stream fallback, real fetch abort, session streaming suggestion creation, IPC/preload cancellation, and bridge stop-after-delta behavior.
 
 ### VUI-03: 共享模型发现与受控推理强度
 

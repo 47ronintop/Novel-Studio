@@ -232,6 +232,74 @@ describe("M14 AI writing workflow IPC", () => {
     ]);
   });
 
+  test("streams chapter suggestion events through the preload API", async () => {
+    const calls: string[] = [];
+    let nextCount = 0;
+    const api = createNovelStudioApi({
+      async invoke(channel, ...args) {
+        calls.push(`${channel}:${args.length}`);
+        if (channel === "application:ai:start-chapter-suggestion-stream") {
+          return ok({ streamId: "stream_m14" });
+        }
+        if (channel === "application:ai:next-chapter-suggestion-stream") {
+          nextCount += 1;
+          return nextCount === 1
+            ? ok({ done: false, event: { type: "delta", value: "The city" } })
+            : ok({ done: true });
+        }
+        if (channel === "application:ai:cancel-chapter-suggestion-stream") {
+          return ok(undefined);
+        }
+        throw new Error(`Unexpected channel: ${channel}`);
+      }
+    });
+
+    const events = [];
+    for await (const event of api.ai.streamChapterSuggestion({ instruction: "Continue." })) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([ok({ type: "delta", value: "The city" })]);
+    expect(calls).toEqual([
+      "application:ai:start-chapter-suggestion-stream:1",
+      "application:ai:next-chapter-suggestion-stream:1",
+      "application:ai:next-chapter-suggestion-stream:1"
+    ]);
+  });
+
+  test("cancels the preload stream when the caller aborts", async () => {
+    const calls: string[] = [];
+    const controller = new AbortController();
+    const api = createNovelStudioApi({
+      async invoke(channel, ...args) {
+        calls.push(`${channel}:${args.length}`);
+        if (channel === "application:ai:start-chapter-suggestion-stream") {
+          return ok({ streamId: "stream_cancel_m14" });
+        }
+        if (channel === "application:ai:next-chapter-suggestion-stream") {
+          return ok({ done: false, event: { type: "delta", value: "The city" } });
+        }
+        if (channel === "application:ai:cancel-chapter-suggestion-stream") {
+          return ok(undefined);
+        }
+        throw new Error(`Unexpected channel: ${channel}`);
+      }
+    });
+
+    const iterator = api.ai
+      .streamChapterSuggestion({ instruction: "Continue." }, { signal: controller.signal })
+      [Symbol.asyncIterator]();
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: ok({ type: "delta", value: "The city" })
+    });
+    controller.abort();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await iterator.return?.();
+
+    expect(calls).toContain("application:ai:cancel-chapter-suggestion-stream:1");
+  });
+
   test("routes workflow run history IPC channels to the Application layer", async () => {
     const handlers = createApplicationIpcHandlers(createFakeApplication());
 
@@ -241,6 +309,36 @@ describe("M14 AI writing workflow IPC", () => {
     await expect(handlers["application:ai:read-workflow-run"]("wfrun_m14")).resolves.toEqual(
       ok(workflowRunRecord())
     );
+  });
+
+  test("routes AI stream IPC channels to the Application layer and aborts on cancel", async () => {
+    let abortSignal: AbortSignal | undefined;
+    const application = createFakeApplication();
+    application.streamActiveChapterSuggestion = (request) => {
+      abortSignal = request.abortSignal;
+      return (async function* () {
+        yield ok({ type: "delta", value: "The city" });
+        yield ok({ type: "suggestion", suggestion });
+      })();
+    };
+    const handlers = createApplicationIpcHandlers(application);
+
+    const started = await handlers["application:ai:start-chapter-suggestion-stream"]({
+      instruction: "Continue."
+    });
+
+    expect(started).toMatchObject({ ok: true, value: { streamId: expect.any(String) } });
+    if (!isOkStreamStart(started)) {
+      throw new Error("Expected the stream to start.");
+    }
+
+    await expect(
+      handlers["application:ai:next-chapter-suggestion-stream"](started.value.streamId)
+    ).resolves.toEqual(ok({ done: false, event: { type: "delta", value: "The city" } }));
+    await expect(
+      handlers["application:ai:cancel-chapter-suggestion-stream"](started.value.streamId)
+    ).resolves.toEqual(ok(undefined));
+    expect(abortSignal?.aborted).toBe(true);
   });
 });
 
@@ -348,4 +446,20 @@ function chapterSnapshot(): ChapterEditorSnapshot {
 
 async function unsupported<T>(): Promise<Result<T, UnifiedError>> {
   throw new Error("Not used by this test.");
+}
+
+function isOkStreamStart(
+  value: unknown
+): value is { readonly ok: true; readonly value: { readonly streamId: string } } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "ok" in value &&
+    value.ok === true &&
+    "value" in value &&
+    typeof value.value === "object" &&
+    value.value !== null &&
+    "streamId" in value.value &&
+    typeof value.value.streamId === "string"
+  );
 }

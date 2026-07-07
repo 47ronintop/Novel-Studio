@@ -2,6 +2,7 @@ import { createDesktopApplication } from "@novel-studio/application";
 import type { ApplicationIpcChannel, DesktopApplication } from "@novel-studio/application";
 import { ok, type JsonObject, type JsonValue } from "@novel-studio/shared";
 import type {
+  AiWritingSuggestionStreamEvent,
   ConfigAssetRestoreInput,
   ConfigAssetSaveInput,
   ConfigAssetType,
@@ -15,7 +16,7 @@ import type {
   StoryBibleContextCandidateOptions,
   UserPreferencesSaveInput
 } from "@novel-studio/application";
-import type { CreateChapterInput } from "@novel-studio/shared";
+import type { CreateChapterInput, Result, UnifiedError } from "@novel-studio/shared";
 import { createUnifiedError, err } from "@novel-studio/shared";
 import type { ModelSecretStore } from "./model-runtime.js";
 
@@ -29,10 +30,18 @@ export interface ApplicationIpcHandlerOptions {
   readonly modelSecretStore?: ModelSecretStore;
 }
 
+interface ActiveAiSuggestionStream {
+  readonly abortController: AbortController;
+  readonly iterator: AsyncIterator<Result<AiWritingSuggestionStreamEvent, UnifiedError>>;
+}
+
 export function createApplicationIpcHandlers(
   application: DesktopApplication = createDesktopApplication(),
   options: ApplicationIpcHandlerOptions = {}
 ): ApplicationIpcHandlers {
+  const activeAiSuggestionStreams = new Map<string, ActiveAiSuggestionStream>();
+  let nextAiSuggestionStreamId = 0;
+
   return {
     "application:get-shell-state": () => Promise.resolve(application.getShellState()),
     "application:list-commands": () => Promise.resolve(application.listCommands()),
@@ -117,6 +126,57 @@ export function createApplicationIpcHandlers(
     "application:search:query": (input: unknown) => application.searchProject(toSearchQuery(input)),
     "application:ai:generate-chapter-suggestion": (request: unknown) => {
       return application.generateActiveChapterSuggestion(toAiWritingSuggestionRequest(request));
+    },
+    "application:ai:start-chapter-suggestion-stream": (request: unknown) => {
+      const abortController = new AbortController();
+      nextAiSuggestionStreamId += 1;
+      const streamId = `ai_stream_${nextAiSuggestionStreamId}`;
+      const iterator = application
+        .streamActiveChapterSuggestion({
+          ...toAiWritingSuggestionRequest(request),
+          abortSignal: abortController.signal
+        })
+        [Symbol.asyncIterator]();
+      activeAiSuggestionStreams.set(streamId, {
+        abortController,
+        iterator
+      });
+
+      return Promise.resolve(ok({ streamId }));
+    },
+    "application:ai:next-chapter-suggestion-stream": async (streamId: unknown) => {
+      const id = readStreamId(streamId);
+      const stream = id === undefined ? undefined : activeAiSuggestionStreams.get(id);
+      if (id === undefined || stream === undefined) {
+        return streamNotFound();
+      }
+
+      const next = await stream.iterator.next();
+      if (next.done === true) {
+        activeAiSuggestionStreams.delete(id);
+        return ok({ done: true });
+      }
+      if (!next.value.ok) {
+        activeAiSuggestionStreams.delete(id);
+        return next.value;
+      }
+
+      return ok({
+        done: false,
+        event: next.value.value
+      });
+    },
+    "application:ai:cancel-chapter-suggestion-stream": (streamId: unknown) => {
+      const id = readStreamId(streamId);
+      const stream = id === undefined ? undefined : activeAiSuggestionStreams.get(id);
+      if (id === undefined || stream === undefined) {
+        return Promise.resolve(ok(undefined));
+      }
+
+      stream.abortController.abort();
+      void stream.iterator.return?.();
+      activeAiSuggestionStreams.delete(id);
+      return Promise.resolve(ok(undefined));
     },
     "application:ai:generate-selection-preview": (request: unknown) => {
       return application.generateActiveSelectionPreview(
@@ -288,6 +348,23 @@ function toUserPreferencesSaveInput(value: unknown): UserPreferencesSaveInput {
   }
 
   return value as UserPreferencesSaveInput;
+}
+
+function readStreamId(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function streamNotFound<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "AI_STREAM_NOT_FOUND",
+      category: "UserError",
+      message: "The AI stream is no longer active.",
+      recoverability: "user-action",
+      suggestedAction: "Start a new AI writing stream.",
+      traceId: "desktop-ipc-handlers"
+    })
+  );
 }
 
 function toStoryBibleAsset(value: unknown): StoryBibleAsset | undefined {

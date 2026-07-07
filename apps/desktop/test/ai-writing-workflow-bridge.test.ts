@@ -238,6 +238,42 @@ describe("AI writing workflow bridge", () => {
     });
   });
 
+  test("streams deltas through the preload API and aborts the active stream", async () => {
+    const calls: string[] = [];
+    const api = createApi(calls);
+    const aborted = createDeferred<void>();
+    const updates: string[] = [];
+    api.ai.streamChapterSuggestion = async function* (_request, options) {
+      calls.push("ai.stream:start");
+      yield ok({ type: "delta", value: "The city" });
+      await aborted.promise;
+      calls.push(`ai.stream:aborted:${String(options?.signal?.aborted)}`);
+      yield ok({ type: "delta", value: " should not append" });
+    };
+    const bridge = createAiWritingWorkflowBridge(api);
+
+    bridge.beginStreamingGenerate("Continue with streaming.");
+    const streaming = bridge.generateStreamingSuggestion(
+      "Continue with streaming.",
+      (nextProps) => {
+        updates.push(nextProps.streamPreview ?? "");
+        if (nextProps.streamPreview === "The city") {
+          const cancelled = bridge.cancelStreaming();
+          updates.push(cancelled.streamPreview ?? "");
+          aborted.resolve();
+        }
+      }
+    );
+    const finalProps = await streaming;
+
+    expect(finalProps).toMatchObject({
+      status: "cancelled",
+      streamPreview: "The city"
+    });
+    expect(updates).toEqual(["The city", "The city"]);
+    expect(calls).toEqual(["ai.stream:start", "ai.stream:aborted:true"]);
+  });
+
   test("maps returned chat messages and clears the composer after a successful send", async () => {
     const calls: string[] = [];
     const api = createApi(calls);
@@ -711,4 +747,15 @@ function failedWorkflowRunRecord(): WorkflowRunRecord {
       retryableCodes: ["LLM_TIMEOUT", "LLM_RATE_LIMITED", "LLM_PROVIDER_ERROR"]
     }
   };
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+
+  return { promise, resolve, reject };
 }

@@ -28,6 +28,7 @@ import {
   createChapterSuggestionLlmRequest,
   createSelectionPreviewLlmRequest
 } from "./ai-writing-llm-requests.js";
+import { streamChapterSuggestionForSession } from "./ai-writing-streaming-session.js";
 import type {
   AiWritingConversationMessage,
   AiWritingSelectionPreview,
@@ -328,6 +329,20 @@ export function createAgentBackedAiWritingWorkflowSession(
       });
 
       return ok(suggestion);
+    },
+    streamChapterSuggestion(request) {
+      return streamChapterSuggestionForSession({
+        options,
+        request,
+        conversationMessages,
+        now,
+        createWorkflowRunId,
+        createSuggestionId,
+        createConversationMessageId,
+        storeSuggestion(stored) {
+          suggestions.set(stored.suggestion.suggestionId, stored);
+        }
+      });
     },
     async generateSelectionPreview(request) {
       const chapterState = options.chapterEditorSession.getState();

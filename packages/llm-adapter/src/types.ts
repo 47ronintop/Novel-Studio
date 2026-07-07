@@ -54,6 +54,7 @@ export interface LlmRequest {
   readonly modelProfile: LlmModelProfile;
   readonly messages: readonly LlmMessage[];
   readonly parameters: LlmParameters;
+  readonly abortSignal?: AbortSignal;
   readonly responseFormat?: JsonValue;
 }
 
