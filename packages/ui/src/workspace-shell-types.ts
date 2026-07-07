@@ -126,6 +126,7 @@ export interface AiWritingWorkflowProps {
   readonly retryPolicy?: AiWorkflowRetryPolicyProps;
   readonly diffPreview?: ChapterEditorProps["diffPreview"];
   readonly selectionReview?: AiSelectionReviewProps;
+  readonly styleReview?: AiWritingStyleReviewProps;
   readonly modelDiscovery?: ModelDiscoverySnapshot;
   readonly selectedModelName?: string;
   readonly onInstructionChange: (instruction: string) => void;
@@ -152,6 +153,21 @@ export interface AiSelectionReviewProps {
   readonly rangeLabel: string;
   readonly compareLabel: string;
   readonly canUndo: boolean;
+}
+
+export interface AiWritingStyleReviewProps {
+  readonly status: "clean" | "attention";
+  readonly hitCount: number;
+  readonly hits: readonly AiWritingStyleHitProps[];
+}
+
+export interface AiWritingStyleHitProps {
+  readonly ruleId: string;
+  readonly title: string;
+  readonly severity: "notice" | "warning";
+  readonly matchedText: string;
+  readonly positionLabel: string;
+  readonly suggestion: string;
 }
 
 export interface AiWorkflowFailureDiagnosticProps {

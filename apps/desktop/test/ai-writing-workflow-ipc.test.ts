@@ -27,12 +27,20 @@ const shellState: DesktopShellState = {
   bottomPanelTabs: []
 };
 
+const cleanStyleReview = {
+  status: "clean" as const,
+  hitCount: 0,
+  hits: []
+};
+
 const suggestion: AiWritingSuggestion = {
   suggestionId: "sug_m14",
   workflowRunId: "wfrun_m14",
   status: "pending-confirmation",
   proposedBody: "Opening line.\nAI continuation.\n",
   summary: "Continues the current scene.",
+  conversationMessages: [],
+  styleReview: cleanStyleReview,
   diffPreview: {
     title: "AI suggestion",
     changes: [{ kind: "replace", value: "Opening line.\nAI continuation.\n" }]
@@ -78,6 +86,14 @@ const selectionPreview: AiWritingSelectionPreview = {
   previewOnly: true,
   proposedText: "The opening line tightened.",
   summary: "Rewrites only the selected sentence.",
+  styleReview: cleanStyleReview,
+  review: {
+    status: "pending",
+    originalText: "Opening line.",
+    proposedText: "The opening line tightened.",
+    rangeLabel: "0-13",
+    compareLabel: "Opening line. -> The opening line tightened."
+  },
   selection: {
     startOffset: 0,
     endOffset: 13,

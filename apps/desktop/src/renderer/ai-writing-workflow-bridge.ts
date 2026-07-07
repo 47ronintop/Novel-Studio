@@ -410,7 +410,8 @@ function toProps(
     contextTraceLabel: traceLabel(suggestion),
     observability: toObservabilityProps(suggestion.observability),
     ...(history === undefined ? {} : { history }),
-    diffPreview: suggestion.diffPreview
+    diffPreview: suggestion.diffPreview,
+    styleReview: suggestion.styleReview
   });
 }
 
@@ -430,7 +431,8 @@ function toSelectionPreviewProps(
     observability: toObservabilityProps(preview.observability),
     ...(history === undefined ? {} : { history }),
     diffPreview: preview.diffPreview,
-    selectionReview: toSelectionReviewProps(preview)
+    selectionReview: toSelectionReviewProps(preview),
+    styleReview: preview.styleReview
   });
 }
 

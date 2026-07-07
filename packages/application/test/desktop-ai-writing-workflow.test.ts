@@ -8,6 +8,12 @@ import type {
   AiWritingWorkflowSession
 } from "../src/ai-writing-workflow-session.js";
 
+const cleanStyleReview = {
+  status: "clean" as const,
+  hitCount: 0,
+  hits: []
+};
+
 const suggestion: AiWritingSuggestion = {
   suggestionId: "sug_m14",
   workflowRunId: "wfrun_m14",
@@ -15,6 +21,7 @@ const suggestion: AiWritingSuggestion = {
   proposedBody: "Opening line.\nAI continuation.\n",
   summary: "Continues the current scene.",
   conversationMessages: [],
+  styleReview: cleanStyleReview,
   diffPreview: {
     title: "AI suggestion",
     changes: [
@@ -119,6 +126,7 @@ function createFakeAiSession(calls: string[]): AiWritingWorkflowSession {
         previewOnly: true,
         proposedText: "Selection rewrite.",
         summary: "Selection preview.",
+        styleReview: cleanStyleReview,
         review: {
           status: "pending",
           originalText: request.selection.selectedText,

@@ -45,18 +45,18 @@
 
 ## 3. 已核实的关键文件与现状
 
-| 路径 | 当前行数 | 现状一句话 |
-| --- | ---: | --- |
-| `packages/ui/src/workspace-shell.tsx` | 900 | 主工作区壳已存在 VSCode 式区域，但超过 UI 800 行警戒线，继续加功能前必须优先拆分或把新增逻辑放入子组件。 |
-| `apps/desktop/src/renderer/App.tsx` | 1017 | Renderer 编排层已接近 UI 硬阈值，新增桥接状态前必须避免继续堆在本文件。 |
-| `packages/application/src/ai-writing-workflow-session.ts` | 974 | VUI-01 已先拆出 LLM request helper，低于 Application 1000 行硬阈值；后续仍接近边界，继续新增 AI session 行为前要优先拆分。 |
-| `packages/ui/src/workspace-shell-ai.tsx` | 495 | AI 面板标题像对话，但当前仍以单条 instruction + 派生 reply 为主，是真实多轮对话的首要改造点。 |
-| `packages/ui/src/chapter-editor.tsx` | 未超本轮硬门禁 | 章节编辑器存在基础编辑 UI，需要补齐编辑器观感、字数、查找替换、专注模式等 IDE 级体验。 |
-| `apps/desktop/src/renderer/editor-runtime.ts` | 未纳入本轮行数门禁表 | 已有 editor runtime / CodeMirror gate 相关工作，启用 CodeMirror 前必须盘点，不得重写。 |
-| `packages/ui/src/model-settings-panel.tsx` | 550 | 模型设置 UI 存在，但模型列表动态发现、设置分区、连接测试反馈仍需升级。 |
-| `apps/desktop/src/main/model-runtime.ts` | 513 | 真实 provider runtime 存在；`stream()` 当前直接调用 provider stream，需要补齐与 `complete()` 一致的校验/兜底/取消路径。 |
-| `apps/desktop/src/renderer/ai-writing-workflow-bridge.ts` | 未超本轮硬门禁 | Renderer 侧已有 AI workflow bridge，但输入仍围绕 instruction，流式和停止需要真实端到端贯通。 |
-| `packages/application/src/story-bible-session.ts` | 未超本轮硬门禁 | 已有 `buildContextCandidates` 能力，主工作区还没有把候选上下文作为可操作 Inspector 能力充分暴露。 |
+| 路径                                                      |             当前行数 | 现状一句话                                                                                                                 |
+| --------------------------------------------------------- | -------------------: | -------------------------------------------------------------------------------------------------------------------------- |
+| `packages/ui/src/workspace-shell.tsx`                     |                  900 | 主工作区壳已存在 VSCode 式区域，但超过 UI 800 行警戒线，继续加功能前必须优先拆分或把新增逻辑放入子组件。                   |
+| `apps/desktop/src/renderer/App.tsx`                       |                 1017 | Renderer 编排层已接近 UI 硬阈值，新增桥接状态前必须避免继续堆在本文件。                                                    |
+| `packages/application/src/ai-writing-workflow-session.ts` |                  974 | VUI-01 已先拆出 LLM request helper，低于 Application 1000 行硬阈值；后续仍接近边界，继续新增 AI session 行为前要优先拆分。 |
+| `packages/ui/src/workspace-shell-ai.tsx`                  |                  495 | AI 面板标题像对话，但当前仍以单条 instruction + 派生 reply 为主，是真实多轮对话的首要改造点。                              |
+| `packages/ui/src/chapter-editor.tsx`                      |       未超本轮硬门禁 | 章节编辑器存在基础编辑 UI，需要补齐编辑器观感、字数、查找替换、专注模式等 IDE 级体验。                                     |
+| `apps/desktop/src/renderer/editor-runtime.ts`             | 未纳入本轮行数门禁表 | 已有 editor runtime / CodeMirror gate 相关工作，启用 CodeMirror 前必须盘点，不得重写。                                     |
+| `packages/ui/src/model-settings-panel.tsx`                |                  550 | 模型设置 UI 存在，但模型列表动态发现、设置分区、连接测试反馈仍需升级。                                                     |
+| `apps/desktop/src/main/model-runtime.ts`                  |                  513 | 真实 provider runtime 存在；`stream()` 当前直接调用 provider stream，需要补齐与 `complete()` 一致的校验/兜底/取消路径。    |
+| `apps/desktop/src/renderer/ai-writing-workflow-bridge.ts` |       未超本轮硬门禁 | Renderer 侧已有 AI workflow bridge，但输入仍围绕 instruction，流式和停止需要真实端到端贯通。                               |
+| `packages/application/src/story-bible-session.ts`         |       未超本轮硬门禁 | 已有 `buildContextCandidates` 能力，主工作区还没有把候选上下文作为可操作 Inspector 能力充分暴露。                          |
 
 ## 4. 当前 UI 与实现错位清单
 
@@ -258,14 +258,19 @@ npm run typecheck
 **Files:**
 
 - Create: `packages/application/src/ai-writing-style-rules.ts`
+- Modify: `packages/application/src/ai-writing-llm-requests.ts`
 - Modify: `packages/application/src/ai-writing-workflow-types.ts`
 - Modify: `packages/application/src/ai-writing-workflow-session.ts`
+- Modify: `packages/application/src/ai-writing-streaming-session.ts`
 - Modify: `apps/desktop/src/renderer/ai-writing-workflow-bridge.ts`
 - Modify: `packages/ui/src/workspace-shell-ai.tsx`
 - Modify: `packages/ui/src/workspace-shell-types.ts`
+- Modify: `packages/ui/src/styles.css`
 - Test: `packages/application/test/ai-writing-workflow-session.test.ts`
 - Test: `packages/ui/test/ai-writing-workflow.test.tsx`
 - Test: `apps/desktop/test/ai-writing-workflow-bridge.test.ts`
+- Test: `apps/desktop/test/ai-writing-workflow-ipc.test.ts`
+- Test: `packages/application/test/desktop-ai-writing-workflow.test.ts`
 
 **Default rule pack:**
 
@@ -278,13 +283,13 @@ npm run typecheck
 
 **Steps:**
 
-- [ ] 新建 `ai-writing-style-rules.ts`，定义 `AiWritingStyleRulePack`、`AiWritingStyleRule`、`AiWritingStyleHit`，并内置默认中文小说规则包。
-- [ ] 写 failing test：`createLlmRequest()` 和 `createSelectionPreviewLlmRequest()` 生成的 system/user messages 中包含启用的文风规则，但不包含“过检测”“规避检测”等措辞。
-- [ ] 在 `ai-writing-workflow-session.ts` 中把规则注入到 LLM request：生成整章建议和选区改写都走同一 helper，避免两套 prompt 拼接。
-- [ ] 增加本地扫描 helper：对 proposedBody/proposedText 扫描规则命中，返回命中词、规则 id、位置摘要、建议处理方式。
-- [ ] 在 `AiWritingSuggestion` 和 `AiWritingSelectionPreview` 中加入 `styleReview` DTO，UI 可显示“文风规则命中 N 处”。
-- [ ] AI 面板显示轻量结果：没有命中时显示“未发现明显模板表达”；有命中时列出命中规则和短片段，并提供“按文风规则重写”入口的占位命令，但该命令若未实现必须禁用并说明状态。
-- [ ] 不添加错别字、随机破坏句子、检测分数、检测平台名称、绕过检测承诺。
+- [x] 新建 `ai-writing-style-rules.ts`，定义 `AiWritingStyleRulePack`、`AiWritingStyleRule`、`AiWritingStyleHit`，并内置默认中文小说规则包。
+- [x] 写 failing test：章节建议和选区改写生成的 request messages 中包含启用的文风规则，但不包含“过检测”“规避检测”等措辞。
+- [x] 在 `ai-writing-llm-requests.ts` 中把规则注入到 LLM request：生成整章建议、流式整章建议和选区改写都走同一 helper，避免两套 prompt 拼接。
+- [x] 增加本地扫描 helper：对 proposedBody/proposedText 扫描规则命中，返回命中词、规则 id、位置摘要、建议处理方式。
+- [x] 在 `AiWritingSuggestion` 和 `AiWritingSelectionPreview` 中加入 `styleReview` DTO，bridge 透传到 UI。
+- [x] AI 面板显示轻量结果：没有命中时显示“未发现明显模板表达”；有命中时列出命中规则和短片段。本阶段不添加“按文风规则重写”按钮，避免 UI 出现未实现命令。
+- [x] 不添加错别字、随机破坏句子、检测分数、检测平台名称、绕过检测承诺。
 
 **Verification:**
 
@@ -293,9 +298,14 @@ npm test -- packages/application/test/ai-writing-workflow-session.test.ts packag
 npm run typecheck
 ```
 
+Result on 2026-07-07: target tests passed with 3 files and 21 tests; `npm run typecheck`
+passed; full `npm test` passed with 72 files and 391 tests.
+
 **Manual acceptance:** 输入“写第一章开头”并生成建议时，请求后台应包含默认文风规则；返回内容若出现“像……像……”“不是……是……”“冷冷”“压下去”等表达，AI 面板能标出疑似模板表达。界面不得出现“过朱雀”“过检测”“检测分数”等承诺。
 
 **Commit message:** `feat: add ai writing style rules`
+
+**VUI-03A Status:** Complete on 2026-07-07. 已完成默认文风规则包、章节/选区请求注入、返回文本本地扫描、`styleReview` DTO、renderer 透传和 AI 面板轻量展示；该功能按写作质量处理，不做检测规避。
 
 ### VUI-04: 编辑器 Runtime 盘点与 CodeMirror 默认启用
 

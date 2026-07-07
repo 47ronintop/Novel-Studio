@@ -15,6 +15,7 @@ import type {
   ChapterEditorSnapshot,
   ChapterSuggestionDiffPreview
 } from "./chapter-editor-session.js";
+import type { AiWritingStyleReview } from "./ai-writing-style-rules.js";
 import type { ModelRuntimeProfile } from "./model-settings-session.js";
 
 export interface AiWritingSuggestionRequest {
@@ -52,6 +53,7 @@ export interface AiWritingSuggestion {
   readonly proposedBody: string;
   readonly summary: string;
   readonly conversationMessages: readonly AiWritingConversationMessage[];
+  readonly styleReview: AiWritingStyleReview;
   readonly diffPreview: ChapterSuggestionDiffPreview;
   readonly contextTrace: ContextBundleTrace;
   readonly observability: AiWritingWorkflowObservability;
@@ -86,6 +88,7 @@ export interface AiWritingSelectionPreview {
   readonly previewOnly: true;
   readonly proposedText: string;
   readonly summary: string;
+  readonly styleReview: AiWritingStyleReview;
   readonly review: AiWritingSelectionReview;
   readonly selection: AiWritingSelectionRange;
   readonly diffPreview: ChapterSuggestionDiffPreview;

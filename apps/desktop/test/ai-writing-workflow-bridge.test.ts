@@ -43,6 +43,28 @@ const suggestion: AiWritingSuggestion = {
   proposedBody: "Opening line.\nAI continuation draft.\n",
   summary: "Generated a local mock continuation for review.",
   conversationMessages: [],
+  styleReview: {
+    status: "attention",
+    hitCount: 2,
+    hits: [
+      {
+        ruleId: "mechanical-emotion",
+        title: "模板化情绪词",
+        severity: "notice",
+        matchedText: "冷冷",
+        positionLabel: "第 16 字附近",
+        suggestion: "改成可观察的动作、语气或环境反应。"
+      },
+      {
+        ruleId: "stacked-simile",
+        title: "连续比喻",
+        severity: "notice",
+        matchedText: "像风像雨",
+        positionLabel: "第 28 字附近",
+        suggestion: "保留一个更准确的比喻，另一个改成动作或感官细节。"
+      }
+    ]
+  },
   diffPreview: {
     title: "AI suggestion",
     changes: [
@@ -118,6 +140,20 @@ const selectionPreview: AiWritingSelectionPreview = {
   previewOnly: true,
   proposedText: "The opening line tightened.",
   summary: "Rewrites only the selected sentence.",
+  styleReview: {
+    status: "attention",
+    hitCount: 1,
+    hits: [
+      {
+        ruleId: "mechanical-emotion",
+        title: "模板化情绪词",
+        severity: "notice",
+        matchedText: "冷冷",
+        positionLabel: "第 4 字附近",
+        suggestion: "改成可观察的动作、语气或环境反应。"
+      }
+    ]
+  },
   review: {
     status: "pending",
     originalText: "Opening line.",
@@ -236,6 +272,7 @@ describe("AI writing workflow bridge", () => {
     expect(generated.status).toBe("suggestion-ready");
     expect(generated.summary).toBe("Generated a local mock continuation for review.");
     expect(generated.diffPreview?.changes[0]?.value).toContain("AI continuation draft.");
+    expect(generated.styleReview).toEqual(suggestion.styleReview);
     expect(generated.contextTraceLabel).toBe("1 source / 4 tokens");
     expect(generated.observability?.usageLabel).toBe("24 tokens · estimated");
     expect(generated.observability?.modelLabel).toBe("M14 Mock Writer / mock-writer");
@@ -393,6 +430,7 @@ describe("AI writing workflow bridge", () => {
     expect(generated.status).toBe("suggestion-ready");
     expect(generated.summary).toBe("Rewrites only the selected sentence.");
     expect(generated.diffPreview).toEqual(selectionPreview.diffPreview);
+    expect(generated.styleReview).toEqual(selectionPreview.styleReview);
     expect(generated.selectionReview).toEqual({
       status: "pending",
       originalText: "Opening line.",

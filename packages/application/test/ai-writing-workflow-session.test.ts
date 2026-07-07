@@ -260,6 +260,62 @@ describe("M14 AI writing workflow session", () => {
     );
   });
 
+  test("injects writing style rules into chapter requests and reviews returned text locally", async () => {
+    const requests: LlmRequest[] = [];
+    const chapterSession = createChapterEditorSession({
+      chapterId: "ch_m14",
+      repository: createRepository([]),
+      now: () => "2026-07-04T00:00:00.000Z"
+    });
+    const loaded = await chapterSession.load();
+    if (isErr(loaded)) {
+      throw new Error(loaded.error.message);
+    }
+
+    const aiWorkflow = createAgentBackedAiWritingWorkflowSession({
+      chapterEditorSession: chapterSession,
+      llmAdapter: createLlmAdapter({
+        provider: createCapturingProvider(requests, {
+          proposedBody: "Opening line.\n她冷冷地望着门口，像雪落下来像刀锋贴近。\n",
+          summary: "Adds a tense continuation."
+        }),
+        clock: () => "2026-07-04T00:00:00.000Z"
+      }),
+      now: () => "2026-07-04T00:00:00.000Z",
+      createWorkflowRunId: () => "wfrun_style_m14",
+      createSuggestionId: () => "sug_style_m14",
+      createAgentRunId: () => "agentrun_style_m14",
+      createHandoffId: () => "handoff_style_m14"
+    });
+
+    const generated = await aiWorkflow.generateChapterSuggestion({
+      instruction: "续写，但减少模板化表达。"
+    });
+
+    expect(isOk(generated)).toBe(true);
+    if (isErr(generated)) {
+      throw new Error(generated.error.message);
+    }
+    const requestText = requests[0]?.messages.map((message) => message.content).join("\n") ?? "";
+    expect(requestText).toContain("文风规则");
+    expect(requestText).toContain("连续比喻");
+    expect(requestText).toContain("解释性对照");
+    expect(requestText).not.toMatch(/过检测|绕检测|检测分数|AI检测|检测平台/);
+    expect(generated.value.styleReview).toMatchObject({
+      status: "attention",
+      hitCount: 2,
+      hits: expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "mechanical-emotion",
+          matchedText: "冷冷"
+        }),
+        expect.objectContaining({
+          ruleId: "stacked-simile"
+        })
+      ])
+    });
+  });
+
   test("keeps single-session chat history and sends prior turns to the next model request", async () => {
     const requests: LlmRequest[] = [];
     let responseIndex = 0;
@@ -405,12 +461,12 @@ describe("M14 AI writing workflow session", () => {
 
     expect(requests[0]?.mode).toBe("streaming");
     expect(requests[0]?.abortSignal).toBe(controller.signal);
-    expect(events[0]).toEqual(ok({ type: "delta", value: "{\"proposedBody\":" }));
+    expect(events[0]).toEqual(ok({ type: "delta", value: '{"proposedBody":' }));
     expect(events[1]).toEqual(
-      ok({ type: "delta", value: "\"Opening line.\\nAI continuation.\\n\"" })
+      ok({ type: "delta", value: '"Opening line.\\nAI continuation.\\n"' })
     );
     expect(events[2]).toEqual(
-      ok({ type: "delta", value: ",\"summary\":\"Continues the current scene.\"}" })
+      ok({ type: "delta", value: ',"summary":"Continues the current scene."}' })
     );
     expect(events[3]).toMatchObject({
       ok: true,
@@ -662,6 +718,69 @@ describe("M14 AI writing workflow session", () => {
     expect(writes).toEqual([]);
   });
 
+  test("injects writing style rules into selection requests and reviews returned text locally", async () => {
+    const requests: LlmRequest[] = [];
+    const chapterSession = createChapterEditorSession({
+      chapterId: "ch_m14",
+      repository: createRepository([]),
+      now: () => "2026-07-04T00:00:00.000Z"
+    });
+    const loaded = await chapterSession.load();
+    if (isErr(loaded)) {
+      throw new Error(loaded.error.message);
+    }
+
+    const aiWorkflow = createAgentBackedAiWritingWorkflowSession({
+      chapterEditorSession: chapterSession,
+      llmAdapter: createLlmAdapter({
+        provider: createSelectionPreviewProvider(requests, {
+          proposedText: "她冷冷地说，不是害怕，是终于明白该离开了。",
+          summary: "Rewrites the selected sentence with less direct exposition."
+        }),
+        clock: () => "2026-07-04T00:00:00.000Z"
+      }),
+      now: () => "2026-07-04T00:00:00.000Z",
+      createWorkflowRunId: () => "wfrun_selection_style_m74",
+      createSuggestionId: () => "sug_selection_style_m74",
+      createAgentRunId: () => "agentrun_selection_style_m74",
+      createHandoffId: () => "handoff_selection_style_m74"
+    });
+
+    const preview = await aiWorkflow.generateSelectionPreview({
+      instruction: "Rewrite the selected sentence with more tension.",
+      selection: {
+        startOffset: 0,
+        endOffset: 13,
+        selectedText: "Opening line."
+      }
+    });
+
+    expect(isOk(preview)).toBe(true);
+    if (isErr(preview)) {
+      throw new Error(preview.error.message);
+    }
+    const requestText = requests[0]?.messages.map((message) => message.content).join("\n") ?? "";
+    expect(requestText).toContain("文风规则");
+    expect(requestText).toContain("模板化情绪");
+    expect(requestText).not.toMatch(/过检测|绕检测|检测分数|AI检测|检测平台/);
+    expect(preview.value.styleReview).toMatchObject({
+      status: "attention",
+      hitCount: 3,
+      hits: expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "mechanical-emotion",
+          matchedText: "冷冷"
+        }),
+        expect.objectContaining({
+          ruleId: "explanatory-contrast"
+        }),
+        expect.objectContaining({
+          ruleId: "direct-realization"
+        })
+      ])
+    });
+  });
+
   test("applies a stored selection preview only after confirmation", async () => {
     const writes: ChapterDocument[] = [];
     const snapshots: ChapterVersionSnapshotInput[] = [];
@@ -760,7 +879,13 @@ function createHistoryRepository(snapshots: ChapterVersionSnapshotInput[]) {
   };
 }
 
-function createCapturingProvider(requests: LlmRequest[]): LlmProvider {
+function createCapturingProvider(
+  requests: LlmRequest[],
+  output: { readonly proposedBody: string; readonly summary: string } = {
+    proposedBody,
+    summary: "Continues the current scene."
+  }
+): LlmProvider {
   return {
     id: "openai-compatible",
     async complete(request) {
@@ -768,10 +893,7 @@ function createCapturingProvider(requests: LlmRequest[]): LlmProvider {
       return {
         content: {
           type: "json",
-          value: {
-            proposedBody,
-            summary: "Continues the current scene."
-          }
+          value: output
         }
       };
     },
@@ -803,21 +925,27 @@ function createStreamingJsonProvider(requests: LlmRequest[]): LlmProvider {
       requests.push(request);
       yield {
         type: "delta",
-        value: "{\"proposedBody\":"
+        value: '{"proposedBody":'
       };
       yield {
         type: "delta",
-        value: "\"Opening line.\\nAI continuation.\\n\""
+        value: '"Opening line.\\nAI continuation.\\n"'
       };
       yield {
         type: "delta",
-        value: ",\"summary\":\"Continues the current scene.\"}"
+        value: ',"summary":"Continues the current scene."}'
       };
     }
   };
 }
 
-function createSelectionPreviewProvider(requests: LlmRequest[]): LlmProvider {
+function createSelectionPreviewProvider(
+  requests: LlmRequest[],
+  output: { readonly proposedText: string; readonly summary: string } = {
+    proposedText: "The opening line tightened.",
+    summary: "Rewrites only the selected sentence."
+  }
+): LlmProvider {
   return {
     id: "mock",
     async complete(request) {
@@ -825,10 +953,7 @@ function createSelectionPreviewProvider(requests: LlmRequest[]): LlmProvider {
       return {
         content: {
           type: "json",
-          value: {
-            proposedText: "The opening line tightened.",
-            summary: "Rewrites only the selected sentence."
-          }
+          value: output
         }
       };
     },

@@ -1,10 +1,6 @@
 ﻿import { buildContextBundle, type ContextBundleTrace } from "@novel-studio/context-engine";
 import { runAgent, type AgentConfig } from "@novel-studio/agent-engine";
-import type {
-  LlmModelProfile,
-  LlmParameters,
-  LlmUsage
-} from "@novel-studio/llm-adapter";
+import type { LlmModelProfile, LlmParameters, LlmUsage } from "@novel-studio/llm-adapter";
 import {
   completeWorkflowStep,
   confirmWorkflowStep,
@@ -28,6 +24,7 @@ import {
   createChapterSuggestionLlmRequest,
   createSelectionPreviewLlmRequest
 } from "./ai-writing-llm-requests.js";
+import { reviewAiWritingStyle } from "./ai-writing-style-rules.js";
 import { streamChapterSuggestionForSession } from "./ai-writing-streaming-session.js";
 import type {
   AiWritingConversationMessage,
@@ -301,6 +298,7 @@ export function createAgentBackedAiWritingWorkflowSession(
         proposedBody: output.proposedBody,
         summary: output.summary,
         conversationMessages: nextConversationMessages,
+        styleReview: reviewAiWritingStyle(output.proposedBody),
         diffPreview: options.chapterEditorSession.previewSuggestionDiff(output.proposedBody),
         contextTrace: contextBundle.value.trace,
         observability
@@ -505,6 +503,7 @@ export function createAgentBackedAiWritingWorkflowSession(
         previewOnly: true,
         proposedText: output.proposedText,
         summary: output.summary,
+        styleReview: reviewAiWritingStyle(output.proposedText),
         review: createSelectionReview(validatedSelection.value, output.proposedText),
         selection: validatedSelection.value,
         diffPreview: {

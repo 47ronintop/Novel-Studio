@@ -10,6 +10,7 @@ import type {
   AiWritingConversationMessage,
   AiWritingSelectionRange
 } from "./ai-writing-workflow-types.js";
+import { formatAiWritingStyleRulesForPrompt } from "./ai-writing-style-rules.js";
 
 export function createChapterSuggestionLlmRequest(input: {
   readonly workflowRunId: string;
@@ -31,7 +32,10 @@ export function createChapterSuggestionLlmRequest(input: {
     messages: [
       {
         role: "system",
-        content: "Return JSON with proposedBody and summary for a chapter writing suggestion."
+        content: [
+          "Return JSON with proposedBody and summary for a chapter writing suggestion.",
+          formatAiWritingStyleRulesForPrompt()
+        ].join("\n\n")
       },
       {
         role: "user",
@@ -77,7 +81,10 @@ export function createSelectionPreviewLlmRequest(input: {
     messages: [
       {
         role: "system",
-        content: "Return JSON with proposedText and summary for a selected text rewrite."
+        content: [
+          "Return JSON with proposedText and summary for a selected text rewrite.",
+          formatAiWritingStyleRulesForPrompt()
+        ].join("\n\n")
       },
       {
         role: "user",
@@ -95,9 +102,7 @@ export function createSelectionPreviewLlmRequest(input: {
   };
 }
 
-function formatPreviousConversation(
-  messages: readonly AiWritingConversationMessage[]
-): string {
+function formatPreviousConversation(messages: readonly AiWritingConversationMessage[]): string {
   if (messages.length === 0) {
     return "";
   }

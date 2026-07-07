@@ -1335,7 +1335,8 @@ textarea:focus-visible,
 
 .ns-ai-observability,
 .ns-ai-failure,
-.ns-ai-retry-policy {
+.ns-ai-retry-policy,
+.ns-ai-style-review {
   border-top: 1px solid var(--ns-border);
   display: grid;
   gap: 10px;
@@ -1348,6 +1349,57 @@ textarea:focus-visible,
 
 .ns-ai-retry-policy {
   border-color: rgba(59, 130, 246, 0.35);
+}
+
+.ns-ai-style-review {
+  border-color: rgba(245, 158, 11, 0.38);
+}
+
+.ns-ai-style-hit-list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ns-ai-style-hit {
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+}
+
+.ns-ai-style-hit div {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.ns-ai-style-hit span {
+  color: var(--ns-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.ns-ai-style-hit div span:first-child {
+  color: var(--ns-ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ns-ai-style-hit p {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+}
+
+.ns-ai-style-hit strong {
+  color: var(--ns-ink);
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .ns-ai-run-history {

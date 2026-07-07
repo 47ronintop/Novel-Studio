@@ -8,6 +8,7 @@ import type {
   AiWorkflowObservedStepStatus,
   AiWorkflowRetryPolicyProps,
   AiWorkflowRunHistoryProps,
+  AiWritingStyleReviewProps,
   AiWritingWorkflowProps,
   AiWritingWorkflowStatus
 } from "./workspace-shell-types.js";
@@ -32,8 +33,7 @@ export function AiWritingAssistantPanel({
         <span>{compact ? "AI 助手" : "对话式写作助手"}</span>
         <span className="ns-muted">{statusLabel(workflow.status)}</span>
       </div>
-      {workflow.modelDiscovery?.status === "loaded" &&
-      workflow.modelDiscovery.models.length > 0 ? (
+      {workflow.modelDiscovery?.status === "loaded" && workflow.modelDiscovery.models.length > 0 ? (
         <div className="ns-ai-model-controls" aria-label="AI model controls">
           <select
             aria-label="AI model selector"
@@ -173,6 +173,9 @@ export function AiWritingAssistantPanel({
       {workflow.diffPreview === undefined ? null : (
         <AiSuggestionDiffPreview diffPreview={workflow.diffPreview} />
       )}
+      {workflow.styleReview === undefined ? null : (
+        <AiWritingStyleReviewView review={workflow.styleReview} />
+      )}
       {workflow.contextTraceLabel === undefined || compact ? null : (
         <p className="ns-ai-context">{workflow.contextTraceLabel}</p>
       )}
@@ -242,6 +245,38 @@ function aiAssistantReply(workflow: AiWritingWorkflowProps): string | undefined 
     case "cancelled":
       return "本次生成已取消，正文没有被修改。";
   }
+}
+
+function AiWritingStyleReviewView({ review }: { readonly review: AiWritingStyleReviewProps }) {
+  const summary =
+    review.status === "clean" ? "未发现明显模板表达" : `文风规则命中 ${review.hitCount} 处`;
+
+  return (
+    <section className="ns-ai-style-review" aria-label="AI 文风规则检查">
+      <div className="ns-ai-observability-header">
+        <span>文风规则</span>
+        <span>{summary}</span>
+      </div>
+      {review.hits.length === 0 ? (
+        <p className="ns-ai-context">未发现明显模板表达</p>
+      ) : (
+        <ul className="ns-ai-style-hit-list">
+          {review.hits.map((hit, index) => (
+            <li className="ns-ai-style-hit" key={`${hit.ruleId}-${hit.positionLabel}-${index}`}>
+              <div>
+                <span>{hit.title}</span>
+                <span>{hit.positionLabel}</span>
+              </div>
+              <p>
+                <strong>{hit.matchedText}</strong>
+                <span>{hit.suggestion}</span>
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
 }
 
 export function AiWorkflowRunHistoryView({

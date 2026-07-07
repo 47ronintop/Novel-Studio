@@ -235,6 +235,19 @@ export {
   createConfigStudioSession
 } from "./config-studio-session.js";
 export type {
+  AiWritingStyleHit,
+  AiWritingStyleReview,
+  AiWritingStyleRule,
+  AiWritingStyleRuleId,
+  AiWritingStyleRulePack,
+  AiWritingStyleRuleSeverity
+} from "./ai-writing-style-rules.js";
+export {
+  DEFAULT_AI_WRITING_STYLE_RULE_PACK,
+  formatAiWritingStyleRulesForPrompt,
+  reviewAiWritingStyle
+} from "./ai-writing-style-rules.js";
+export type {
   AiWorkflowObservedStep,
   AiWorkflowObservedStepKind,
   AiWorkflowObservedStepStatus,

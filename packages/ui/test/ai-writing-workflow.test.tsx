@@ -16,6 +16,28 @@ describe("AI writing workflow UI", () => {
           status: "failed",
           instruction: "续写当前场景",
           summary: "补写了主角推门后的动作。",
+          styleReview: {
+            status: "attention",
+            hitCount: 2,
+            hits: [
+              {
+                ruleId: "mechanical-emotion",
+                title: "模板化情绪词",
+                severity: "notice",
+                matchedText: "冷冷",
+                positionLabel: "第 16 字附近",
+                suggestion: "改成可观察的动作、语气或环境反应。"
+              },
+              {
+                ruleId: "stacked-simile",
+                title: "连续比喻",
+                severity: "notice",
+                matchedText: "像风像雨",
+                positionLabel: "第 28 字附近",
+                suggestion: "保留一个更准确的比喻，另一个改成动作或感官细节。"
+              }
+            ]
+          },
           contextTraceLabel: "1 source / 4 tokens",
           observability: {
             workflowRunId: "wfrun_m24",
@@ -155,6 +177,11 @@ describe("AI writing workflow UI", () => {
     expect(html).toContain('aria-label="生成 AI 建议"');
     expect(html).toContain('aria-label="应用 AI 建议"');
     expect(html).toContain("补写了主角推门后的动作。");
+    expect(html).toContain('aria-label="AI 文风规则检查"');
+    expect(html).toContain("文风规则命中 2 处");
+    expect(html).toContain("冷冷");
+    expect(html).toContain("连续比喻");
+    expect(html).not.toMatch(/过检测|绕检测|检测分数|AI检测|检测平台/);
     expect(html).toContain("1 source / 4 tokens");
     expect(html).toContain('aria-label="AI 工作流运行观测"');
     expect(html).toContain("Continue Chapter");

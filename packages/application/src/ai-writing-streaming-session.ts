@@ -1,8 +1,5 @@
 import { buildContextBundle, type ContextBundleTrace } from "@novel-studio/context-engine";
-import type {
-  LlmModelProfile,
-  LlmUsage
-} from "@novel-studio/llm-adapter";
+import type { LlmModelProfile, LlmUsage } from "@novel-studio/llm-adapter";
 import {
   completeWorkflowStep,
   evaluateNextWorkflowAction,
@@ -22,6 +19,7 @@ import {
 
 import type { ModelRuntimeProfile } from "./model-settings-session.js";
 import { createChapterSuggestionLlmRequest } from "./ai-writing-llm-requests.js";
+import { reviewAiWritingStyle } from "./ai-writing-style-rules.js";
 import type {
   AiWritingConversationMessage,
   AiWritingSuggestion,
@@ -274,6 +272,7 @@ export async function* streamChapterSuggestionForSession(
     proposedBody: output.proposedBody,
     summary: output.summary,
     conversationMessages: nextConversationMessages,
+    styleReview: reviewAiWritingStyle(output.proposedBody),
     diffPreview: options.chapterEditorSession.previewSuggestionDiff(output.proposedBody),
     contextTrace: contextBundle.value.trace,
     observability
