@@ -209,6 +209,73 @@ describe("AI writing workflow UI", () => {
     expect(html).toContain("失败");
   });
 
+  test("keeps model controls and actions attached to the composer below the chat log", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "ai" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        aiWritingWorkflow={{
+          status: "failed",
+          instruction: "续写当前场景",
+          failure: {
+            title: "工作流失败",
+            code: "AGENT_MODEL_CALL_FAILED",
+            message: "The agent model call failed.",
+            recoverabilityLabel: "可重试",
+            suggestedAction: "Inspect the model profile and retry the workflow step."
+          },
+          modelDiscovery: {
+            profileId: "model_default",
+            provider: "openai-compatible",
+            status: "loaded",
+            models: [
+              {
+                id: "gpt-5",
+                displayName: "gpt-5",
+                provider: "openai-compatible",
+                reasoningStrength: {
+                  status: "available",
+                  providerParamName: "reasoning_effort",
+                  allowedValues: ["low", "medium", "high"],
+                  defaultValue: "medium"
+                }
+              }
+            ],
+            reasoningStrength: {
+              status: "hidden",
+              reason: "Select a whitelisted reasoning model before exposing reasoning controls."
+            }
+          },
+          selectedModelName: "gpt-5",
+          onInstructionChange: () => undefined,
+          onGenerateSuggestion: () => undefined,
+          onApplySuggestion: () => undefined,
+          onModelSelect: () => undefined,
+          onRetrySuggestion: () => undefined,
+          onCancelStreaming: () => undefined
+        }}
+      />
+    );
+
+    const chatIndex = html.indexOf('class="ns-ai-chat-log"');
+    const composerIndex = html.indexOf('class="ns-ai-composer"');
+    const composerEndIndex = html.indexOf("</section>", composerIndex);
+    const modelIndex = html.indexOf('aria-label="AI model controls"');
+    const actionsIndex = html.indexOf('class="ns-ai-actions"');
+    const failureIndex = html.indexOf('aria-label="失败诊断"');
+
+    expect(chatIndex).toBeGreaterThan(-1);
+    expect(composerIndex).toBeGreaterThan(chatIndex);
+    expect(failureIndex).toBeGreaterThan(chatIndex);
+    expect(composerIndex).toBeGreaterThan(failureIndex);
+    expect(modelIndex).toBeGreaterThan(composerIndex);
+    expect(modelIndex).toBeLessThan(composerEndIndex);
+    expect(actionsIndex).toBeGreaterThan(composerIndex);
+    expect(actionsIndex).toBeLessThan(composerEndIndex);
+  });
+
   test("renders streaming preview and cancel control", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(

@@ -1540,9 +1540,9 @@ textarea:focus-visible,
   border-left: 1px solid var(--ns-border);
   display: grid;
   grid-area: ai;
-  grid-template-rows: auto minmax(0, auto) auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   min-width: 0;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .ns-meta-list {
@@ -1569,8 +1569,11 @@ textarea:focus-visible,
 
 .ns-ai-workflow {
   border-top: 1px solid var(--ns-border);
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
+  min-height: 0;
+  overflow: hidden;
   padding: 12px;
 }
 
@@ -1579,14 +1582,31 @@ textarea:focus-visible,
   border: 1px solid var(--ns-border);
   border-radius: 8px;
   margin-top: 4px;
+  min-height: 0;
 }
 
 .ns-ai-chat-log {
   display: grid;
   gap: 8px;
-  max-height: 260px;
+  min-height: 180px;
   overflow: auto;
   padding-right: 2px;
+}
+
+.ns-ai-workflow[data-compact="false"] .ns-ai-chat-log {
+  flex: 1 1 auto;
+}
+
+.ns-ai-chat-log > .ns-ai-observability,
+.ns-ai-chat-log > .ns-ai-failure,
+.ns-ai-chat-log > .ns-ai-retry-policy,
+.ns-ai-chat-log > .ns-ai-style-review,
+.ns-ai-chat-log > .ns-ai-run-history,
+.ns-ai-chat-log > .ns-editor-panel,
+.ns-ai-chat-log > .ns-ai-stream-preview,
+.ns-ai-chat-log > .ns-ai-summary,
+.ns-ai-chat-log > .ns-ai-context {
+  width: 100%;
 }
 
 .ns-ai-message {
@@ -1629,18 +1649,52 @@ textarea:focus-visible,
 
 .ns-ai-instruction {
   background: var(--ns-bg);
-  border: 1px solid var(--ns-border);
+  border: 0;
+  border-top: 1px solid var(--ns-border);
   border-radius: 6px;
   color: var(--ns-ink);
   min-height: 82px;
   padding: 10px;
-  resize: vertical;
+  resize: none;
   width: 100%;
 }
 
-.ns-ai-actions {
+.ns-ai-composer {
+  background: var(--ns-bg);
+  border: 1px solid var(--ns-border);
+  border-radius: 8px;
+  display: grid;
+  flex: 0 0 auto;
+  overflow: hidden;
+}
+
+.ns-ai-model-controls {
+  align-items: center;
   display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px;
+}
+
+.ns-ai-model-controls .model-settings-select {
+  min-height: 28px;
+}
+
+.ns-ai-reasoning-control {
+  align-items: center;
+  color: var(--ns-muted);
+  display: inline-flex;
+  font-size: 11px;
+  gap: 5px;
+}
+
+.ns-ai-actions {
+  border-top: 1px solid var(--ns-border);
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+  justify-content: flex-end;
+  padding: 6px;
 }
 
 .ns-ai-summary,

@@ -33,38 +33,6 @@ export function AiWritingAssistantPanel({
         <span>{compact ? "AI 助手" : "对话式写作助手"}</span>
         <span className="ns-muted">{statusLabel(workflow.status)}</span>
       </div>
-      {workflow.modelDiscovery?.status === "loaded" && workflow.modelDiscovery.models.length > 0 ? (
-        <div className="ns-ai-model-controls" aria-label="AI model controls">
-          <select
-            aria-label="AI model selector"
-            className="model-settings-select"
-            onChange={(event) => workflow.onModelSelect?.(event.currentTarget.value)}
-            value={workflow.selectedModelName ?? workflow.modelDiscovery.models[0]?.id ?? ""}
-          >
-            {workflow.modelDiscovery.models.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.displayName}
-              </option>
-            ))}
-          </select>
-          {reasoningControl?.status === "available" ? (
-            <label className="ns-ai-reasoning-control">
-              <span>{reasoningControl.providerParamName}</span>
-              <select
-                aria-label="Reasoning effort"
-                className="model-settings-select"
-                defaultValue={reasoningControl.defaultValue}
-              >
-                {reasoningControl.allowedValues.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-        </div>
-      ) : null}
       {compact ? null : (
         <p className="ns-ai-context">
           输入你想让 AI 做的事，例如“续写当前场景”“让对白更自然”或“检查人物动机”。AI
@@ -107,39 +75,103 @@ export function AiWritingAssistantPanel({
               <p>{assistantReply}</p>
             </article>
           ) : null}
+          {showSummary ? <p className="ns-ai-summary">{workflow.summary}</p> : null}
+          {workflow.streamPreview === undefined ? null : (
+            <pre className="ns-ai-stream-preview" aria-label="AI 流式输出预览">
+              {workflow.streamPreview}
+            </pre>
+          )}
+          {workflow.diffPreview === undefined ? null : (
+            <AiSuggestionDiffPreview diffPreview={workflow.diffPreview} />
+          )}
+          {workflow.styleReview === undefined ? null : (
+            <AiWritingStyleReviewView review={workflow.styleReview} />
+          )}
+          {workflow.contextTraceLabel === undefined || compact ? null : (
+            <p className="ns-ai-context">{workflow.contextTraceLabel}</p>
+          )}
+          {workflow.selectionReview === undefined ? null : (
+            <AiSelectionReviewView workflow={workflow} />
+          )}
+          {workflow.observability === undefined || compact ? null : (
+            <AiWorkflowObservabilityView observability={workflow.observability} />
+          )}
+          {workflow.failure === undefined ? null : (
+            <AiWorkflowFailureDiagnosticView failure={workflow.failure} />
+          )}
+          {workflow.retryPolicy === undefined || compact ? null : (
+            <AiWorkflowRetryPolicyView retryPolicy={workflow.retryPolicy} />
+          )}
+          {workflow.history === undefined || compact ? null : (
+            <AiWorkflowRunHistoryView history={workflow.history} />
+          )}
         </div>
       )}
-      <textarea
-        aria-label="AI 写作指令"
-        className="ns-ai-instruction"
-        onChange={(event) => workflow.onInstructionChange(event.currentTarget.value)}
-        placeholder="和 AI 说明你想怎么改写或续写当前章节"
-        value={workflow.instruction}
-      />
-      <div className="ns-ai-actions">
-        <button
-          aria-label="生成 AI 建议"
-          className="ns-icon-text-button"
-          disabled={workflow.status === "generating" || workflow.status === "streaming"}
-          onClick={workflow.onGenerateSuggestion}
-          title="生成 AI 建议"
-          type="button"
-        >
-          <Sparkles aria-hidden="true" size={14} />
-          生成建议
-        </button>
-        <button
-          aria-label="应用 AI 建议"
-          className="ns-icon-text-button"
-          disabled={workflow.status !== "suggestion-ready"}
-          onClick={workflow.onApplySuggestion}
-          title="应用 AI 建议"
-          type="button"
-        >
-          <Check aria-hidden="true" size={14} />
-          应用到正文
-        </button>
-        {workflow.status === "streaming" ? (
+      <section className="ns-ai-composer" aria-label="AI 输入区">
+        {workflow.modelDiscovery?.status === "loaded" &&
+        workflow.modelDiscovery.models.length > 0 ? (
+          <div className="ns-ai-model-controls" aria-label="AI model controls">
+            <select
+              aria-label="AI model selector"
+              className="model-settings-select"
+              onChange={(event) => workflow.onModelSelect?.(event.currentTarget.value)}
+              value={workflow.selectedModelName ?? workflow.modelDiscovery.models[0]?.id ?? ""}
+            >
+              {workflow.modelDiscovery.models.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.displayName}
+                </option>
+              ))}
+            </select>
+            {reasoningControl?.status === "available" ? (
+              <label className="ns-ai-reasoning-control">
+                <span>{reasoningControl.providerParamName}</span>
+                <select
+                  aria-label="Reasoning effort"
+                  className="model-settings-select"
+                  defaultValue={reasoningControl.defaultValue}
+                >
+                  {reasoningControl.allowedValues.map((value) => (
+                    <option key={value} value={value}>
+                      {value}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+          </div>
+        ) : null}
+        <textarea
+          aria-label="AI 写作指令"
+          className="ns-ai-instruction"
+          onChange={(event) => workflow.onInstructionChange(event.currentTarget.value)}
+          placeholder="和 AI 说明你想怎么改写或续写当前章节"
+          value={workflow.instruction}
+        />
+        <div className="ns-ai-actions">
+          <button
+            aria-label="生成 AI 建议"
+            className="ns-icon-text-button"
+            disabled={workflow.status === "generating" || workflow.status === "streaming"}
+            onClick={workflow.onGenerateSuggestion}
+            title="生成 AI 建议"
+            type="button"
+          >
+            <Sparkles aria-hidden="true" size={14} />
+            生成建议
+          </button>
+          <button
+            aria-label="应用 AI 建议"
+            className="ns-icon-text-button"
+            disabled={workflow.status !== "suggestion-ready"}
+            onClick={workflow.onApplySuggestion}
+            title="应用 AI 建议"
+            type="button"
+          >
+            <Check aria-hidden="true" size={14} />
+            应用到正文
+          </button>
+          {workflow.status === "streaming" ? (
           <button
             aria-label="取消 AI 流式输出"
             className="ns-icon-text-button"
@@ -150,8 +182,8 @@ export function AiWritingAssistantPanel({
             <X aria-hidden="true" size={14} />
             取消
           </button>
-        ) : null}
-        {workflow.status === "failed" ? (
+          ) : null}
+          {workflow.status === "failed" ? (
           <button
             aria-label="重试 AI 工作流"
             className="ns-icon-text-button"
@@ -162,38 +194,9 @@ export function AiWritingAssistantPanel({
             <Sparkles aria-hidden="true" size={14} />
             重试
           </button>
-        ) : null}
-      </div>
-      {showSummary ? <p className="ns-ai-summary">{workflow.summary}</p> : null}
-      {workflow.streamPreview === undefined ? null : (
-        <pre className="ns-ai-stream-preview" aria-label="AI 流式输出预览">
-          {workflow.streamPreview}
-        </pre>
-      )}
-      {workflow.diffPreview === undefined ? null : (
-        <AiSuggestionDiffPreview diffPreview={workflow.diffPreview} />
-      )}
-      {workflow.styleReview === undefined ? null : (
-        <AiWritingStyleReviewView review={workflow.styleReview} />
-      )}
-      {workflow.contextTraceLabel === undefined || compact ? null : (
-        <p className="ns-ai-context">{workflow.contextTraceLabel}</p>
-      )}
-      {workflow.selectionReview === undefined ? null : (
-        <AiSelectionReviewView workflow={workflow} />
-      )}
-      {workflow.observability === undefined || compact ? null : (
-        <AiWorkflowObservabilityView observability={workflow.observability} />
-      )}
-      {workflow.failure === undefined ? null : (
-        <AiWorkflowFailureDiagnosticView failure={workflow.failure} />
-      )}
-      {workflow.retryPolicy === undefined || compact ? null : (
-        <AiWorkflowRetryPolicyView retryPolicy={workflow.retryPolicy} />
-      )}
-      {workflow.history === undefined || compact ? null : (
-        <AiWorkflowRunHistoryView history={workflow.history} />
-      )}
+          ) : null}
+        </div>
+      </section>
     </section>
   );
 }

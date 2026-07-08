@@ -272,17 +272,19 @@ export function WorkspaceShell({
                 <span className="ns-muted">未加载</span>
               </div>
               <p className="ns-ai-context">打开项目章节后，可以在这里向 AI 提出续写或修改要求。</p>
-              <textarea
-                aria-label="AI 写作指令"
-                className="ns-ai-instruction"
-                disabled
-                placeholder="和 AI 说明你想怎么改写或续写当前章节"
-              />
-              <div className="ns-ai-actions">
-                <button className="ns-icon-text-button" disabled type="button">
-                  生成建议
-                </button>
-              </div>
+              <section className="ns-ai-composer" aria-label="AI 输入区">
+                <textarea
+                  aria-label="AI 写作指令"
+                  className="ns-ai-instruction"
+                  disabled
+                  placeholder="和 AI 说明你想怎么改写或续写当前章节"
+                />
+                <div className="ns-ai-actions">
+                  <button className="ns-icon-text-button" disabled type="button">
+                    生成建议
+                  </button>
+                </div>
+              </section>
             </section>
           ) : (
             <AiWritingAssistantPanel workflow={aiWritingWorkflow} />
