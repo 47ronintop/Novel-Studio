@@ -202,6 +202,32 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
             return props;
           }
         }
+
+        if (streamToken === currentStreamToken && !controller.signal.aborted) {
+          currentSuggestionId = undefined;
+          currentSelectionPreviewId = undefined;
+          currentSelectionPreview = undefined;
+          const history = await loadLatestHistory(api);
+          props = createProps({
+            ...props,
+            status: "failed",
+            instruction,
+            failure: toFailureProps(
+              createUnifiedError({
+                code: "AI_STREAM_ENDED_WITHOUT_SUGGESTION",
+                category: "LLMAdapterError",
+                message: "AI streaming ended before returning a final suggestion.",
+                recoverability: "retryable",
+                suggestedAction: "Retry the request or disable streaming for this provider.",
+                traceId: "ai-writing-workflow"
+              })
+            ),
+            retryPolicy: toRetryPolicyProps(undefined),
+            ...(history === undefined ? {} : { history })
+          });
+          onUpdate(props);
+          return props;
+        }
       } catch (error) {
         if (streamToken !== currentStreamToken || controller.signal.aborted) {
           return props;

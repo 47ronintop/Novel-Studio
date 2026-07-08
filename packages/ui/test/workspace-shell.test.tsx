@@ -39,6 +39,26 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("Markdown");
   });
 
+  test("keeps duplicate save/context metadata out of the AI panel and uses an IDE editor surface", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), saveStatus: "Unsaved" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+      />
+    );
+
+    const aiPanelIndex = html.indexOf('data-region="ai-panel"');
+    const statusBarIndex = html.indexOf('data-region="status-bar"');
+    const aiPanelHtml = html.slice(aiPanelIndex, statusBarIndex);
+
+    expect(html).toContain('data-editor-layout="ide"');
+    expect(html).toContain('class="ns-editor-surface"');
+    expect(aiPanelHtml).not.toContain('class="ns-meta-list"');
+    expect(aiPanelHtml).not.toContain("<dt>保存</dt>");
+  });
+
   test("renders the editor tab strip without unfinished disabled copy", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(

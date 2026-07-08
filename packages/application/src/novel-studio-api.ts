@@ -73,6 +73,7 @@ export interface NovelStudioApi {
     chooseOpenDirectory(): Promise<Result<ProjectDirectorySelection, UnifiedError>>;
     chooseCreateDirectory(): Promise<Result<ProjectDirectorySelection, UnifiedError>>;
     open(projectRoot: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+    readDirectory(projectRoot: string): Promise<Result<ProjectDirectoryTreeItem[], UnifiedError>>;
     create(input: CreateProjectInput): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
     listChapters(): Promise<Result<readonly ChapterSummary[], UnifiedError>>;
     createChapter(
@@ -180,4 +181,12 @@ export interface AiWritingSuggestionStreamOptions {
 export interface ProjectDirectorySelection {
   readonly canceled: boolean;
   readonly projectRoot?: string;
+}
+
+export interface ProjectDirectoryTreeItem {
+  readonly id: string;
+  readonly name: string;
+  readonly kind: "directory" | "file";
+  readonly path: string;
+  readonly children?: ProjectDirectoryTreeItem[];
 }

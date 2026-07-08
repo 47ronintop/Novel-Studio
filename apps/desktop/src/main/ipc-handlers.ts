@@ -1,4 +1,6 @@
 import { createDesktopApplication } from "@novel-studio/application";
+import { readdir } from "node:fs/promises";
+import { join, relative } from "node:path";
 import type { ApplicationIpcChannel, DesktopApplication } from "@novel-studio/application";
 import { ok, type JsonObject, type JsonValue } from "@novel-studio/shared";
 import type {
@@ -12,6 +14,7 @@ import type {
   ModelProfile,
   MemoryRecord,
   ProjectSearchQuery,
+  ProjectDirectoryTreeItem,
   StoryBibleAsset,
   StoryBibleContextCandidateOptions,
   UserPreferencesSaveInput
@@ -75,6 +78,13 @@ export function createApplicationIpcHandlers(
       }
 
       return application.openProject(projectRoot);
+    },
+    "application:project:read-directory": (projectRoot: unknown) => {
+      if (typeof projectRoot !== "string") {
+        return readProjectDirectory("");
+      }
+
+      return readProjectDirectory(projectRoot);
     },
     "application:project:create": (input: unknown) => {
       const createInput = toCreateProjectInput(input);
@@ -387,6 +397,104 @@ function streamNotFound<T>(): Result<T, UnifiedError> {
       traceId: "desktop-ipc-handlers"
     })
   );
+}
+
+const DIRECTORY_READ_MAX_DEPTH = 4;
+const DIRECTORY_READ_MAX_ITEMS = 300;
+const SKIPPED_DIRECTORY_NAMES = new Set([".git", "node_modules", "dist", "release"]);
+
+async function readProjectDirectory(
+  projectRoot: string
+): Promise<Result<ProjectDirectoryTreeItem[], UnifiedError>> {
+  if (projectRoot.trim().length === 0) {
+    return err(
+      createUnifiedError({
+        code: "PROJECT_DIRECTORY_READ_FAILED",
+        category: "StorageError",
+        message: "Project directory could not be read.",
+        recoverability: "user-action",
+        suggestedAction: "Choose a folder that exists on this computer.",
+        traceId: "project-directory-tree"
+      })
+    );
+  }
+
+  try {
+    let count = 0;
+    const items = await readDirectoryChildren(projectRoot, projectRoot, 0, () => {
+      count += 1;
+      return count <= DIRECTORY_READ_MAX_ITEMS;
+    });
+    return ok(items);
+  } catch (error) {
+    return err(
+      createUnifiedError({
+        code: "PROJECT_DIRECTORY_READ_FAILED",
+        category: "StorageError",
+        message: "Project directory could not be read.",
+        recoverability: "user-action",
+        suggestedAction: "Choose a folder that exists on this computer.",
+        traceId: "project-directory-tree",
+        redactedDetail: {
+          reason: error instanceof Error ? error.message : "Unknown directory read error"
+        }
+      })
+    );
+  }
+}
+
+async function readDirectoryChildren(
+  root: string,
+  directory: string,
+  depth: number,
+  canReadMore: () => boolean
+): Promise<ProjectDirectoryTreeItem[]> {
+  if (depth > DIRECTORY_READ_MAX_DEPTH || !canReadMore()) {
+    return [];
+  }
+
+  const entries = await readdir(directory, { withFileTypes: true });
+  const visibleEntries = entries
+    .filter((entry) => !entry.name.startsWith(".") || entry.name === ".novel-studio")
+    .filter((entry) => !(entry.isDirectory() && SKIPPED_DIRECTORY_NAMES.has(entry.name)))
+    .sort((left, right) => {
+      if (left.isDirectory() !== right.isDirectory()) {
+        return left.isDirectory() ? -1 : 1;
+      }
+
+      return left.name.localeCompare(right.name);
+    });
+
+  const items: ProjectDirectoryTreeItem[] = [];
+  for (const entry of visibleEntries) {
+    if (!canReadMore()) {
+      break;
+    }
+
+    const absolutePath = join(directory, entry.name);
+    const relativePath = relative(root, absolutePath).replace(/\\/g, "/");
+    if (entry.isDirectory()) {
+      items.push({
+        id: `folder:${relativePath}`,
+        name: entry.name,
+        kind: "directory",
+        path: relativePath,
+        children: await readDirectoryChildren(root, absolutePath, depth + 1, canReadMore)
+      });
+      continue;
+    }
+
+    if (entry.isFile()) {
+      items.push({
+        id: `file:${relativePath}`,
+        name: entry.name,
+        kind: "file",
+        path: relativePath
+      });
+    }
+  }
+
+  return items;
 }
 
 function toStoryBibleAsset(value: unknown): StoryBibleAsset | undefined {

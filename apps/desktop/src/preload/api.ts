@@ -26,6 +26,7 @@ import type {
   ProjectRecoveryApplyResult,
   ProjectRecoveryDraftPreview,
   ProjectDirectorySelection,
+  ProjectDirectoryTreeItem,
   ProjectSearchIndex,
   ProjectSearchQuery,
   ProjectSearchResults,
@@ -85,6 +86,12 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
         invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
           ipc,
           "application:project:open",
+          projectRoot
+        ),
+      readDirectory: (projectRoot: string) =>
+        invokeTyped<Result<ProjectDirectoryTreeItem[], UnifiedError>>(
+          ipc,
+          "application:project:read-directory",
           projectRoot
         ),
       create: (input: CreateProjectInput) =>

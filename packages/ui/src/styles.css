@@ -532,6 +532,15 @@ textarea:focus-visible,
   width: 100%;
 }
 
+.ns-navigator-file-item {
+  padding-left: calc(var(--ns-tree-depth, 0) * 14px);
+}
+
+.ns-file-chevron-spacer {
+  display: inline-block;
+  width: 14px;
+}
+
 .ns-navigator mark {
   background: color-mix(in oklch, var(--ns-accent) 34%, transparent);
   border-radius: 3px;
@@ -625,6 +634,7 @@ textarea:focus-visible,
 .ns-editor-panes {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  height: 100%;
   min-height: 0;
 }
 
@@ -636,6 +646,14 @@ textarea:focus-visible,
   margin: 28px auto;
   max-width: 78ch;
   padding: 0 24px;
+}
+
+.ns-editor-panes[data-editor-layout="ide"] .ns-editor-surface {
+  display: grid;
+  margin: 0;
+  max-width: none;
+  min-height: 0;
+  padding: 0;
 }
 
 .ns-onboarding {
@@ -1003,7 +1021,51 @@ textarea:focus-visible,
 .model-profile-layout {
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.model-profile-summary {
+  align-items: center;
+  background: var(--ns-bg);
+  border: 1px solid var(--ns-border);
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 9px;
+}
+
+.model-profile-summary label,
+.model-profile-summary > div {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.model-profile-summary span {
+  color: var(--ns-muted);
+  font-size: 12px;
+}
+
+.model-profile-summary .model-profile-select {
+  display: grid;
+}
+
+.model-settings-advanced {
+  border: 1px solid var(--ns-border);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.model-settings-advanced > summary {
+  color: var(--ns-ink);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+  min-height: 28px;
 }
 
 .model-profile-list {
@@ -1913,6 +1975,13 @@ textarea:focus-visible,
   padding: 12px;
 }
 
+.ns-story-bible-summary > summary {
+  color: var(--ns-ink);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+}
+
 .ns-ai-instruction {
   background: transparent;
   border: 0;
@@ -2023,8 +2092,8 @@ textarea:focus-visible,
 .ns-ai-model-controls {
   align-items: center;
   display: flex;
-  min-height: 36px;
-  padding: 6px 8px 0;
+  min-height: 28px;
+  padding: 0;
   position: relative;
   z-index: 3;
 }

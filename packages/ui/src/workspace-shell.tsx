@@ -198,6 +198,7 @@ export function WorkspaceShell({
           activeActivity={shellState.activeActivity}
           collapsed={focusMode || shellState.navigatorCollapsed}
           expandedSectionIds={shellState.navigatorExpandedSectionIds}
+          fileTree={projectWorkflow?.fileTree}
           focusHidden={focusMode}
           onActivitySelect={onActivitySelect}
           onExpandedSectionIdsChange={onNavigatorExpandedSectionIdsChange}
@@ -289,18 +290,9 @@ export function WorkspaceShell({
           ) : (
             <AiWritingAssistantPanel workflow={aiWritingWorkflow} />
           )}
-          <dl className="ns-meta-list">
-            <div>
-              <dt>保存</dt>
-              <dd>{saveStatusLabel(shellState.saveStatus)}</dd>
-            </div>
-            <div>
-              <dt>上下文</dt>
-              <dd>{aiWritingWorkflow?.contextTraceLabel ?? "暂无工作流运行"}</dd>
-            </div>
-          </dl>
           {storyBible === undefined ? null : (
-            <section className="ns-story-bible-summary" aria-label="故事圣经摘要">
+            <details className="ns-story-bible-summary" aria-label="故事圣经摘要">
+              <summary>故事圣经</summary>
               <div className="ns-editor-panel-header">
                 <span>故事圣经</span>
                 <span className="ns-muted">{storyBible.assets.length}</span>
@@ -320,7 +312,7 @@ export function WorkspaceShell({
                   </li>
                 ))}
               </ul>
-            </section>
+            </details>
           )}
         </aside>
 
@@ -570,7 +562,7 @@ function WorkspaceEditorSurface({
           ))
         )}
       </div>
-      <div className="ns-editor-panes" data-split-view={splitView}>
+      <div className="ns-editor-panes" data-editor-layout="ide" data-split-view={splitView}>
         <section className="ns-editor-surface" aria-label="章节编辑器表面">
           <OnboardingQuickStart onboarding={onboarding} />
           <AutosaveRecoveryNotice projectWorkflow={projectWorkflow} />

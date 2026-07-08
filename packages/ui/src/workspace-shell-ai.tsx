@@ -109,14 +109,6 @@ export function AiWritingAssistantPanel({
         </div>
       )}
       <section className="ns-ai-composer ns-ai-vscode-composer" aria-label="AI 输入区">
-        {modelPicker === undefined ? null : (
-          <AiModelControls
-            fallbackReason={workflow.modelDiscovery?.fallbackReason}
-            modelPicker={modelPicker}
-            onModelSelect={workflow.onModelSelect}
-            reasoningControl={reasoningControl}
-          />
-        )}
         <div className="ns-ai-composer-input">
           <textarea
             aria-label="AI 写作指令"
@@ -134,6 +126,14 @@ export function AiWritingAssistantPanel({
             <span>当前章节</span>
           </div>
           <div className="ns-ai-composer-actions">
+            {modelPicker === undefined ? null : (
+              <AiModelControls
+                fallbackReason={workflow.modelDiscovery?.fallbackReason}
+                modelPicker={modelPicker}
+                onModelSelect={workflow.onModelSelect}
+                reasoningControl={reasoningControl}
+              />
+            )}
             {workflow.status === "suggestion-ready" ? (
               <button
                 aria-label="应用 AI 建议"

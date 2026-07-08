@@ -14,7 +14,8 @@ export { APPLICATION_IPC_CHANNELS, isApplicationIpcChannel } from "./ipc-contrac
 export type {
   AiWritingSuggestionStreamOptions,
   NovelStudioApi,
-  ProjectDirectorySelection
+  ProjectDirectorySelection,
+  ProjectDirectoryTreeItem
 } from "./novel-studio-api.js";
 export type {
   ChapterEditorSaveStatus,

@@ -383,6 +383,34 @@ describe("AI writing workflow bridge", () => {
     expect(calls).toEqual(["ai.stream:start"]);
   });
 
+  test("fails instead of staying streaming when the stream closes without a final suggestion", async () => {
+    const calls: string[] = [];
+    const api = createApi(calls);
+    const updates: string[] = [];
+    api.ai.streamChapterSuggestion = async function* () {
+      calls.push("ai.stream:start");
+      yield ok({ type: "delta", value: "Partial answer" });
+    };
+    const bridge = createAiWritingWorkflowBridge(api);
+
+    bridge.beginStreamingGenerate("Continue with streaming.");
+    const finalProps = await bridge.generateStreamingSuggestion(
+      "Continue with streaming.",
+      (nextProps) => {
+        updates.push(`${nextProps.status}:${nextProps.streamPreview ?? ""}`);
+      }
+    );
+
+    expect(finalProps.status).toBe("failed");
+    expect(finalProps.streamPreview).toBe("Partial answer");
+    expect(finalProps.failure).toMatchObject({
+      code: "AI_STREAM_ENDED_WITHOUT_SUGGESTION",
+      message: "AI streaming ended before returning a final suggestion."
+    });
+    expect(updates).toEqual(["streaming:Partial answer", "failed:Partial answer"]);
+    expect(calls).toEqual(["ai.stream:start"]);
+  });
+
   test("shows a runtime notice when streaming automatically ignores unsupported reasoning effort", async () => {
     const calls: string[] = [];
     const api = createApi(calls);

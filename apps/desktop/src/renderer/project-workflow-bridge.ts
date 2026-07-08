@@ -45,6 +45,7 @@ export function createProjectWorkflowBridge(
   let snapshot: ProjectWorkspaceSnapshot | undefined;
   let status: ProjectWorkflowProps["status"] = "idle";
   let feedback: ProjectWorkflowProps["feedback"] | undefined;
+  let fileTree: ProjectWorkflowProps["fileTree"] | undefined;
   let openChapterTabIds: string[] = [];
   let recoveryReview: NonNullable<ProjectWorkflowProps["recovery"]>["review"] | undefined;
 
@@ -68,11 +69,25 @@ export function createProjectWorkflowBridge(
 
         const opened = await api.project.open(selectedProjectRoot);
         if (!opened.ok) {
+          const directory = await api.project.readDirectory(selectedProjectRoot);
+          if (directory.ok) {
+            snapshot = undefined;
+            fileTree = directory.value;
+            projectRootInput = selectedProjectRoot;
+            openChapterTabIds = [];
+            feedback = {
+              kind: "info",
+              message: "已作为普通文件夹打开。可浏览文件，初始化后启用 Novel Studio 项目功能。"
+            };
+            return;
+          }
+
           feedback = { kind: "error", message: opened.error.message };
           return;
         }
 
         snapshot = opened.value;
+        fileTree = undefined;
         projectRootInput = snapshot.projectRoot;
         openChapterTabIds =
           snapshot.activeChapterId === undefined ? [] : [snapshot.activeChapterId];
@@ -101,6 +116,7 @@ export function createProjectWorkflowBridge(
         }
 
         snapshot = created.value;
+        fileTree = undefined;
         projectRootInput = snapshot.projectRoot;
         openChapterTabIds =
           snapshot.activeChapterId === undefined ? [] : [snapshot.activeChapterId];
@@ -144,6 +160,7 @@ export function createProjectWorkflowBridge(
         }
 
         snapshot = createdChapter.value;
+        fileTree = undefined;
         projectRootInput = snapshot.projectRoot;
         openChapterTabIds =
           snapshot.activeChapterId === undefined ? [] : [snapshot.activeChapterId];
@@ -330,6 +347,7 @@ export function createProjectWorkflowBridge(
       ...(status === undefined ? {} : { status }),
       ...(feedback === undefined ? {} : { feedback }),
       chapters: snapshot?.chapters ?? [],
+      ...(fileTree === undefined ? {} : { fileTree }),
       openChapterTabIds,
       dirtyChapterIds: snapshot?.recovery.availableItems.map((item) => item.chapterId) ?? [],
       ...(recovery === undefined ? {} : { recovery }),

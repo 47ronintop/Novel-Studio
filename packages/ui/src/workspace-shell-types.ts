@@ -48,6 +48,7 @@ export interface ProjectWorkflowProps {
   readonly projectRootInput: string;
   readonly status?: ProjectWorkflowStatus;
   readonly feedback?: ProjectWorkflowFeedback;
+  readonly fileTree?: readonly ProjectFileTreeItemProps[];
   readonly chapters: readonly ChapterSummary[];
   readonly activeChapterId?: string;
   readonly openChapterTabIds?: readonly string[];
@@ -66,6 +67,14 @@ export interface ProjectWorkflowProps {
   readonly onPreviewRecoveryDraft?: (sessionId: string) => void;
   readonly onApplyRecoveryDraft?: (sessionId: string) => void;
   readonly onDiscardRecoveryDraft?: (sessionId: string) => void;
+}
+
+export interface ProjectFileTreeItemProps {
+  readonly id: string;
+  readonly name: string;
+  readonly kind: "directory" | "file";
+  readonly path: string;
+  readonly children?: readonly ProjectFileTreeItemProps[];
 }
 
 export interface ProjectWorkflowRecoveryProps {

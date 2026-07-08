@@ -43,6 +43,50 @@ describe("WorkspaceNavigator", () => {
     expect(html).toContain('data-active="true"');
   });
 
+  test("renders ordinary folder files before collapsible Novel Studio asset groups", () => {
+    const html = renderToStaticMarkup(
+      <WorkspaceNavigator
+        {...createNavigatorProps({
+          fileTree: [
+            {
+              id: "folder:docs",
+              name: "docs",
+              kind: "directory",
+              path: "docs",
+              children: [
+                {
+                  id: "file:docs/INDEX.md",
+                  name: "INDEX.md",
+                  kind: "file",
+                  path: "docs/INDEX.md"
+                }
+              ]
+            },
+            {
+              id: "file:project.json",
+              name: "project.json",
+              kind: "file",
+              path: "project.json"
+            }
+          ],
+          expandedSectionIds: ["files", "folder:docs", "chapters"]
+        })}
+      />
+    );
+
+    const filesIndex = html.indexOf('data-navigator-group="files"');
+    const assetsIndex = html.indexOf('data-navigator-group="novel-studio"');
+
+    expect(filesIndex).toBeGreaterThan(-1);
+    expect(assetsIndex).toBeGreaterThan(filesIndex);
+    expect(html).toContain("docs");
+    expect(html).toContain("INDEX.md");
+    expect(html).toContain("project.json");
+    expect(html).toContain('data-navigator-file-kind="directory"');
+    expect(html).toContain('data-navigator-file-kind="file"');
+    expect(html).toContain('aria-label="Novel Studio asset groups"');
+  });
+
   test("wires section collapse, search, chapter actions, and guarded delete", () => {
     const calls: string[] = [];
     (globalThis as { window?: unknown }).window = {
@@ -90,6 +134,7 @@ function createNavigatorProps(
     ],
     expandedSectionIds: ["chapters", "characters", "prompts"],
     searchQuery: "",
+    fileTree: undefined,
     projectWorkflow: {
       projectRootInput: "D:/Novel/VUI06",
       chapters: [
@@ -173,6 +218,16 @@ function findElementByAriaLabel(
   node: ReactNode,
   ariaLabel: string
 ): ReactElement<NavigatorTestElementProps> | undefined {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findElementByAriaLabel(child, ariaLabel);
+      if (found !== undefined) {
+        return found;
+      }
+    }
+    return undefined;
+  }
+
   if (!isValidElement(node)) {
     return undefined;
   }

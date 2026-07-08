@@ -27,6 +27,7 @@ import type {
   NovelStudioApi,
   PluginSettingsSnapshot,
   ProjectDirectorySelection,
+  ProjectDirectoryTreeItem,
   ProjectRecoveryApplyResult,
   ProjectRecoveryDraftPreview,
   ProjectSearchIndex,
@@ -74,6 +75,11 @@ const api: NovelStudioApi = {
     open: (projectRoot: string) =>
       invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
         "application:project:open",
+        projectRoot
+      ),
+    readDirectory: (projectRoot: string) =>
+      invokeTyped<Result<ProjectDirectoryTreeItem[], UnifiedError>>(
+        "application:project:read-directory",
         projectRoot
       ),
     create: (input: CreateProjectInput) =>

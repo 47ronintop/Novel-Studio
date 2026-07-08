@@ -322,6 +322,28 @@ describe("M8 Settings and Studio UI", () => {
     host.remove();
   });
 
+  test("keeps provider visible and moves low-frequency model fields into advanced settings", () => {
+    const html = renderToStaticMarkup(
+      <ModelSettingsPanel {...createModelSettingsPanelProps()} activeSection="models" />
+    );
+
+    const providerIndex = html.indexOf('aria-label="模型 Provider"');
+    const baseUrlIndex = html.indexOf('aria-label="模型 Base URL"');
+    const advancedIndex = html.indexOf('class="model-settings-advanced"');
+    const profileIdIndex = html.indexOf('aria-label="模型 Profile ID"');
+    const temperatureIndex = html.indexOf('aria-label="Temperature"');
+
+    expect(html).toContain('class="model-profile-summary"');
+    expect(html).not.toContain('class="model-profile-list"');
+    expect(html).toContain('class="model-settings-advanced"');
+    expect(html).toContain('aria-label="高级模型设置"');
+    expect(providerIndex).toBeGreaterThan(-1);
+    expect(baseUrlIndex).toBeGreaterThan(-1);
+    expect(advancedIndex).toBeGreaterThan(baseUrlIndex);
+    expect(profileIdIndex).toBeGreaterThan(advancedIndex);
+    expect(temperatureIndex).toBeGreaterThan(advancedIndex);
+  });
+
   test("renders Prompt Agent Workflow studio controls through callback-driven props", () => {
     const html = renderToStaticMarkup(
       <ConfigStudioPanel

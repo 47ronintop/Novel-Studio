@@ -311,7 +311,59 @@ describe("project workflow bridge", () => {
       kind: "error",
       message: "project.json could not be read."
     });
-    expect(calls).toEqual(["project.chooseOpenDirectory", "project.open:D:/Broken Project"]);
+    expect(calls).toEqual([
+      "project.chooseOpenDirectory",
+      "project.open:D:/Broken Project",
+      "project.readDirectory:D:/Broken Project"
+    ]);
+  });
+
+  test("falls back to an ordinary folder file tree when project metadata is missing", async () => {
+    const calls: string[] = [];
+    const api = createApi({
+      record: calls,
+      getChapters: () => [],
+      setChapters: () => undefined,
+      chooseOpenProjectRoot: "D:/Draft Folder",
+      openErrorMessage: "project.json could not be read.",
+      fileTree: [
+        {
+          id: "file:INDEX.md",
+          name: "INDEX.md",
+          kind: "file",
+          path: "INDEX.md"
+        },
+        {
+          id: "folder:notes",
+          name: "notes",
+          kind: "directory",
+          path: "notes",
+          children: [
+            {
+              id: "file:notes/scene.md",
+              name: "scene.md",
+              kind: "file",
+              path: "notes/scene.md"
+            }
+          ]
+        }
+      ]
+    });
+    const bridge = createProjectWorkflowBridge(api);
+
+    const opened = await bridge.openProject();
+
+    expect(opened.projectRootInput).toBe("D:/Draft Folder");
+    expect(opened.fileTree?.map((item) => item.name)).toEqual(["INDEX.md", "notes"]);
+    expect(opened.feedback).toEqual({
+      kind: "info",
+      message: "已作为普通文件夹打开。可浏览文件，初始化后启用 Novel Studio 项目功能。"
+    });
+    expect(calls).toEqual([
+      "project.chooseOpenDirectory",
+      "project.open:D:/Draft Folder",
+      "project.readDirectory:D:/Draft Folder"
+    ]);
   });
 });
 
@@ -322,6 +374,7 @@ function createApi(options: {
   readonly chooseOpenProjectRoot?: string;
   readonly chooseCreateProjectRoot?: string;
   readonly openErrorMessage?: string;
+  readonly fileTree?: NonNullable<ReturnType<typeof createProjectWorkflowBridge>["getProps"]>["fileTree"];
   readonly recovery?: ProjectWorkspaceSnapshot["recovery"];
 }): NovelStudioApi {
   let currentProjectRoot = emptySnapshot.projectRoot;
@@ -539,6 +592,27 @@ function createApi(options: {
           },
           activeChapterId: "ch_opening"
         });
+      },
+      readDirectory: async (projectRoot) => {
+        options.record.push(`project.readDirectory:${projectRoot}`);
+        if (options.fileTree !== undefined) {
+          return ok(options.fileTree);
+        }
+
+        return {
+          ok: false,
+          error: {
+            schemaVersion: "1.0",
+            errorId: "err_directory_read_failed",
+            code: "PROJECT_DIRECTORY_READ_FAILED",
+            category: "StorageError",
+            message: "Project directory could not be read.",
+            recoverability: "user-action",
+            suggestedAction: "Choose a folder that exists on this computer.",
+            traceId: "test",
+            createdAt: "2026-07-05T00:00:00.000Z"
+          }
+        };
       }
     },
     chapter: {

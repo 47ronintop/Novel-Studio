@@ -1,4 +1,7 @@
 import { describe, expect, test } from "vitest";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 import { ok, type ChapterDocument, type Result, type UnifiedError } from "@novel-studio/shared";
 import type {
@@ -107,6 +110,7 @@ describe("M12 project workflow IPC", () => {
     });
 
     await api.project.open("D:/Novel/M12");
+    await api.project.readDirectory("D:/Novel/M12");
     await api.project.create({
       projectRoot: "D:/Novel/M12",
       projectId: "prj_m12",
@@ -124,6 +128,7 @@ describe("M12 project workflow IPC", () => {
 
     expect(calls).toEqual([
       "application:project:open:1",
+      "application:project:read-directory:1",
       "application:project:create:1",
       "application:project:create-chapter:1",
       "application:project:select-chapter:1",
@@ -166,6 +171,45 @@ describe("M12 project workflow IPC", () => {
     await expect(
       handlers["application:project:discard-recovery-draft"]("session_prj_m49_ch_opening")
     ).resolves.toEqual(ok(workspaceSnapshot));
+  });
+
+  test("reads ordinary folder trees through the project directory IPC channel", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-folder-"));
+    try {
+      await mkdir(join(projectRoot, "notes"));
+      await writeFile(join(projectRoot, "INDEX.md"), "# Index\n", "utf8");
+      await writeFile(join(projectRoot, "notes", "scene.md"), "Scene\n", "utf8");
+
+      const handlers = createApplicationIpcHandlers(createFakeApplication());
+      const result = await handlers["application:project:read-directory"](projectRoot);
+
+      expect(result).toEqual(
+        ok([
+          {
+            id: "folder:notes",
+            name: "notes",
+            kind: "directory",
+            path: "notes",
+            children: [
+              {
+                id: "file:notes/scene.md",
+                name: "scene.md",
+                kind: "file",
+                path: "notes/scene.md"
+              }
+            ]
+          },
+          {
+            id: "file:INDEX.md",
+            name: "INDEX.md",
+            kind: "file",
+            path: "INDEX.md"
+          }
+        ])
+      );
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
   });
 });
 

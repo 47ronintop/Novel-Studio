@@ -232,6 +232,8 @@ const DEFAULT_SHELL_STATE: DesktopShellState = {
   activeActivity: "workspace",
   navigatorCollapsed: false,
   navigatorExpandedSectionIds: [
+    "files",
+    "novel-studio",
     "chapters",
     "characters",
     "world",

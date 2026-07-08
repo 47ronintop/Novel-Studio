@@ -278,6 +278,8 @@ describe("AI writing workflow UI", () => {
     expect(modelIndex).toBeLessThan(composerEndIndex);
     expect(toolbarIndex).toBeGreaterThan(composerIndex);
     expect(toolbarIndex).toBeLessThan(composerEndIndex);
+    expect(modelIndex).toBeGreaterThan(toolbarIndex);
+    expect(modelIndex).toBeLessThan(sendIndex);
     expect(sendIndex).toBeGreaterThan(toolbarIndex);
     expect(sendIndex).toBeLessThan(composerEndIndex);
     expect(legacyActionsIndex).toBe(-1);

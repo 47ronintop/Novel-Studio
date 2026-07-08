@@ -17,10 +17,11 @@ import {
   Workflow as WorkflowIcon,
   type LucideIcon
 } from "lucide-react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 import type { ConfigStudioAssetType, ConfigStudioPanelProps } from "./config-studio-panel.js";
 import type {
+  ProjectFileTreeItemProps,
   ProjectWorkflowProps,
   StoryBibleEditorKind,
   StoryBibleEditorProps
@@ -58,6 +59,7 @@ export interface WorkspaceNavigatorProps {
   readonly expandedSectionIds?: readonly string[] | undefined;
   readonly searchQuery?: string | undefined;
   readonly projectWorkflow?: ProjectWorkflowProps | undefined;
+  readonly fileTree?: readonly ProjectFileTreeItemProps[] | undefined;
   readonly storyBibleEditor?: StoryBibleEditorProps | undefined;
   readonly studio?: ConfigStudioPanelProps | undefined;
   readonly collapsed?: boolean | undefined;
@@ -76,6 +78,7 @@ export function WorkspaceNavigator({
   expandedSectionIds = sections.map((section) => section.id),
   searchQuery = "",
   projectWorkflow,
+  fileTree,
   storyBibleEditor,
   studio,
   collapsed = false,
@@ -89,6 +92,8 @@ export function WorkspaceNavigator({
 }: WorkspaceNavigatorProps) {
   const normalizedQuery = searchQuery.trim().toLocaleLowerCase();
   const expanded = new Set(expandedSectionIds);
+  const novelStudioExpanded =
+    expanded.has("novel-studio") || sections.some((section) => expanded.has(section.id));
 
   return (
     <nav
@@ -115,7 +120,89 @@ export function WorkspaceNavigator({
         />
       </label>
       <ul className="ns-tree">
-        {sections.map((section) => {
+        {fileTree === undefined || fileTree.length === 0 ? null : (
+          <li>
+            <section
+              aria-label="Files"
+              className="ns-tree-group"
+              data-expanded={expanded.has("files")}
+              data-navigator-group="files"
+            >
+              <button
+                aria-expanded={expanded.has("files")}
+                aria-label="Toggle file tree"
+                className="ns-tree-row"
+                onClick={() =>
+                  onExpandedSectionIdsChange?.(toggleSection(expandedSectionIds, "files"))
+                }
+                type="button"
+              >
+                <ChevronRight
+                  aria-hidden="true"
+                  className="ns-tree-chevron"
+                  data-navigator-chevron={expanded.has("files") ? "expanded" : "collapsed"}
+                  size={14}
+                />
+                <FolderOpen
+                  aria-hidden="true"
+                  className="ns-tree-type-icon"
+                  data-navigator-type-icon="files"
+                  size={14}
+                />
+                <span className="ns-tree-row-label">文件</span>
+                <span className="ns-tree-row-count">{fileTree.length}</span>
+              </button>
+              {expanded.has("files") ? (
+                <ul className="ns-navigator-item-list">
+                  {fileTree.flatMap((item) =>
+                    renderFileTreeItem(item, {
+                      expandedSectionIds,
+                      expanded,
+                      onExpandedSectionIdsChange,
+                      query: normalizedQuery,
+                      depth: 0
+                    })
+                  )}
+                </ul>
+              ) : null}
+            </section>
+          </li>
+        )}
+        <li>
+          <section
+            aria-label="Novel Studio asset groups"
+            className="ns-tree-group"
+            data-expanded={novelStudioExpanded}
+            data-navigator-group="novel-studio"
+          >
+            <button
+              aria-expanded={novelStudioExpanded}
+              aria-label="Toggle Novel Studio asset groups"
+              className="ns-tree-row"
+              onClick={() =>
+                onExpandedSectionIdsChange?.(toggleSection(expandedSectionIds, "novel-studio"))
+              }
+              type="button"
+            >
+              <ChevronRight
+                aria-hidden="true"
+                className="ns-tree-chevron"
+                data-navigator-chevron={novelStudioExpanded ? "expanded" : "collapsed"}
+                size={14}
+              />
+              <ListTree
+                aria-hidden="true"
+                className="ns-tree-type-icon"
+                data-navigator-type-icon="novel-studio"
+                size={14}
+              />
+              <span className="ns-tree-row-label">Novel Studio</span>
+              <span className="ns-tree-row-count">{sections.length}</span>
+            </button>
+          </section>
+        </li>
+        {novelStudioExpanded
+          ? sections.map((section) => {
           const label = navigatorSectionLabels.get(section.id) ?? section.title;
           const SectionIcon = navigatorSectionIcon(section.id);
           const items = buildSectionItems({
@@ -166,7 +253,8 @@ export function WorkspaceNavigator({
               </section>
             </li>
           );
-        })}
+            })
+          : null}
       </ul>
     </nav>
   );
@@ -373,6 +461,87 @@ function buildSectionItems(input: {
   }
 
   return [];
+}
+
+function renderFileTreeItem(
+  item: ProjectFileTreeItemProps,
+  input: {
+    readonly expandedSectionIds: readonly string[];
+    readonly expanded: ReadonlySet<string>;
+    readonly onExpandedSectionIdsChange?: ((sectionIds: readonly string[]) => void) | undefined;
+    readonly query: string;
+    readonly depth: number;
+  }
+): ReactNode[] {
+  if (!matchesQuery(input.query, [item.name, item.path])) {
+    return [];
+  }
+
+  const isDirectory = item.kind === "directory";
+  const isExpanded = input.expanded.has(item.id);
+  const children = item.children ?? [];
+
+  return [
+    <li key={item.id}>
+      <div
+        className="ns-navigator-file-item"
+        data-navigator-file-kind={item.kind}
+        style={{ "--ns-tree-depth": input.depth } as CSSProperties & Record<"--ns-tree-depth", number>}
+      >
+        <button
+          aria-expanded={isDirectory ? isExpanded : undefined}
+          aria-label={isDirectory ? `Toggle folder ${item.name}` : `Open file ${item.name}`}
+          className="ns-navigator-asset-button"
+          onClick={() => {
+            if (isDirectory) {
+              input.onExpandedSectionIdsChange?.(toggleSection(input.expandedSectionIds, item.id));
+            }
+          }}
+          type="button"
+        >
+          <span className="ns-navigator-item-label">
+            {isDirectory ? (
+              <ChevronRight
+                aria-hidden="true"
+                className="ns-tree-chevron"
+                data-navigator-chevron={isExpanded ? "expanded" : "collapsed"}
+                size={14}
+              />
+            ) : (
+              <span aria-hidden="true" className="ns-file-chevron-spacer" />
+            )}
+            {isDirectory ? (
+              <FolderOpen
+                aria-hidden="true"
+                className="ns-navigator-type-icon"
+                data-navigator-type-icon="file:directory"
+                size={14}
+              />
+            ) : (
+              <FileText
+                aria-hidden="true"
+                className="ns-navigator-type-icon"
+                data-navigator-type-icon="file:file"
+                size={14}
+              />
+            )}
+            <span>{highlightText(item.name, input.query)}</span>
+          </span>
+          <span className="ns-navigator-item-count">{isDirectory ? children.length : ""}</span>
+        </button>
+      </div>
+      {isDirectory && isExpanded ? (
+        <ul className="ns-navigator-item-list">
+          {children.flatMap((child) =>
+            renderFileTreeItem(child, {
+              ...input,
+              depth: input.depth + 1
+            })
+          )}
+        </ul>
+      ) : null}
+    </li>
+  ];
 }
 
 function navigatorSectionIcon(sectionId: string): LucideIcon {

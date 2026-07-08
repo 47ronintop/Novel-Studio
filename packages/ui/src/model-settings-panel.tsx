@@ -348,7 +348,7 @@ function ModelProfileSettingsSection({
       </div>
 
       <div className="model-profile-layout">
-        <div className="model-profile-list" aria-label="模型 Profile 列表">
+        <div className="model-profile-summary" aria-label="当前模型配置">
           {profiles.map((profile) => {
             const isDefault = profile.id === defaultProfileId;
             const isSelected = profile.id === selectedProfileId;
@@ -405,23 +405,6 @@ function ModelProfileSettingsSection({
           }}
         >
           <div className="model-profile-form-grid" data-field-layout="stacked">
-            <ModelField label="Profile ID" note="当前模型配置在项目中的稳定标识。">
-              <input
-                aria-label="模型 Profile ID"
-                aria-description="粘贴真实 API Key，保存后会加密存储；留空则沿用已保存 API Key。"
-                className="ns-search-input"
-                onChange={(event) => onDraftChange?.({ id: event.currentTarget.value })}
-                value={draft.id}
-              />
-            </ModelField>
-            <ModelField label="显示名称" note="显示在模型选择器和设置列表中的名称。">
-              <input
-                aria-label="模型显示名称"
-                className="ns-search-input"
-                onChange={(event) => onDraftChange?.({ displayName: event.currentTarget.value })}
-                value={draft.displayName}
-              />
-            </ModelField>
             <ModelField label="Provider" note="选择请求适配器类型。">
               <select
                 aria-label="模型 Provider"
@@ -538,33 +521,6 @@ function ModelProfileSettingsSection({
                 </button>
               </div>
             </ModelField>
-            <ModelField label="Temperature" note="控制生成结果的随机性。">
-              <input
-                aria-label="Temperature"
-                className="ns-search-input"
-                inputMode="decimal"
-                onChange={(event) => onDraftChange?.({ temperature: event.currentTarget.value })}
-                value={draft.temperature}
-              />
-            </ModelField>
-            <ModelField label="Max Tokens" note="限制单次响应可生成的最大 token 数。">
-              <input
-                aria-label="Max Tokens"
-                className="ns-search-input"
-                inputMode="numeric"
-                onChange={(event) => onDraftChange?.({ maxTokens: event.currentTarget.value })}
-                value={draft.maxTokens}
-              />
-            </ModelField>
-            <ModelField label="Top P" note="控制 nucleus sampling 的采样范围。">
-              <input
-                aria-label="Top P"
-                className="ns-search-input"
-                inputMode="decimal"
-                onChange={(event) => onDraftChange?.({ topP: event.currentTarget.value })}
-                value={draft.topP}
-              />
-            </ModelField>
             <ModelField label="推理强度" note="声明该端点是否支持 reasoning_effort 参数。">
               <label className="model-settings-checkbox">
                 <input
@@ -578,17 +534,79 @@ function ModelProfileSettingsSection({
                 <span>该第三方端点支持 reasoning_effort</span>
               </label>
             </ModelField>
-            <ModelField label="Timeout" note="请求超时时间，单位毫秒。">
-              <input
-                aria-label="Timeout"
-                className="ns-search-input"
-                inputMode="numeric"
-                onChange={(event) => onDraftChange?.({ timeoutMs: event.currentTarget.value })}
-                value={draft.timeoutMs}
-              />
-            </ModelField>
+            <details className="model-settings-advanced" aria-label="高级模型设置">
+              <summary>高级设置</summary>
+              <div className="model-profile-form-grid" data-field-layout="stacked">
+                <ModelField label="Profile ID" note="当前模型配置在项目中的稳定标识。">
+                  <input
+                    aria-label="模型 Profile ID"
+                    aria-description="粘贴真实 API Key，保存后会加密存储；留空则沿用已保存 API Key。"
+                    className="ns-search-input"
+                    onChange={(event) => onDraftChange?.({ id: event.currentTarget.value })}
+                    value={draft.id}
+                  />
+                </ModelField>
+                <ModelField label="显示名称" note="显示在模型选择器和设置列表中的名称。">
+                  <input
+                    aria-label="模型显示名称"
+                    className="ns-search-input"
+                    onChange={(event) =>
+                      onDraftChange?.({ displayName: event.currentTarget.value })
+                    }
+                    value={draft.displayName}
+                  />
+                </ModelField>
+                <ModelField label="Temperature" note="控制生成结果的随机性。">
+                  <input
+                    aria-label="Temperature"
+                    className="ns-search-input"
+                    inputMode="decimal"
+                    onChange={(event) =>
+                      onDraftChange?.({ temperature: event.currentTarget.value })
+                    }
+                    value={draft.temperature}
+                  />
+                </ModelField>
+                <ModelField label="Max Tokens" note="限制单次响应可生成的最大 token 数。">
+                  <input
+                    aria-label="Max Tokens"
+                    className="ns-search-input"
+                    inputMode="numeric"
+                    onChange={(event) => onDraftChange?.({ maxTokens: event.currentTarget.value })}
+                    value={draft.maxTokens}
+                  />
+                </ModelField>
+                <ModelField label="Top P" note="控制 nucleus sampling 的采样范围。">
+                  <input
+                    aria-label="Top P"
+                    className="ns-search-input"
+                    inputMode="decimal"
+                    onChange={(event) => onDraftChange?.({ topP: event.currentTarget.value })}
+                    value={draft.topP}
+                  />
+                </ModelField>
+                <ModelField label="Timeout" note="请求超时时间，单位毫秒。">
+                  <input
+                    aria-label="Timeout"
+                    className="ns-search-input"
+                    inputMode="numeric"
+                    onChange={(event) => onDraftChange?.({ timeoutMs: event.currentTarget.value })}
+                    value={draft.timeoutMs}
+                  />
+                </ModelField>
+              </div>
+            </details>
           </div>
           <div className="model-profile-form-actions">
+            <button
+              className="ns-icon-text-button"
+              disabled={!canRunProfileAction}
+              onClick={() => onTestConnection?.(activeProfileId)}
+              type="button"
+            >
+              <PlugZap aria-hidden="true" size={14} />
+              测试连接
+            </button>
             <button className="ns-icon-text-button" disabled={!canSave} type="submit">
               <Save aria-hidden="true" size={14} />
               {saveStatus === "saving" ? "保存中" : "保存模型配置"}
