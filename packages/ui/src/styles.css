@@ -1834,7 +1834,8 @@ textarea:focus-visible,
   border-radius: 8px;
   display: grid;
   flex: 0 0 auto;
-  overflow: hidden;
+  overflow: visible;
+  position: relative;
 }
 
 .ns-ai-vscode-composer {
@@ -1924,21 +1925,170 @@ textarea:focus-visible,
 .ns-ai-model-controls {
   align-items: center;
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 6px;
+  min-height: 36px;
+  padding: 6px 8px 0;
+  position: relative;
+  z-index: 3;
 }
 
-.ns-ai-model-controls .model-settings-select {
-  min-height: 28px;
+.ns-ai-model-picker {
+  position: relative;
 }
 
-.ns-ai-reasoning-control {
+.ns-ai-model-picker > summary,
+.ns-ai-effort-picker > summary,
+.ns-ai-more-models > summary {
   align-items: center;
+  cursor: pointer;
+  display: flex;
+  list-style: none;
+}
+
+.ns-ai-model-picker > summary::-webkit-details-marker,
+.ns-ai-effort-picker > summary::-webkit-details-marker,
+.ns-ai-more-models > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ns-ai-model-trigger {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--ns-ink);
+  font-size: 12px;
+  gap: 4px;
+  line-height: 1;
+  max-width: 220px;
+  min-height: 24px;
+  padding: 0 7px;
+}
+
+.ns-ai-model-trigger span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ns-ai-model-trigger:hover,
+.ns-ai-model-picker[open] > .ns-ai-model-trigger {
+  background: color-mix(in srgb, var(--ns-surface-raised) 76%, transparent);
+  border-color: var(--ns-border);
+}
+
+.ns-ai-model-popover {
+  background: oklch(0.18 0.007 180);
+  border: 1px solid color-mix(in srgb, var(--ns-border) 85%, var(--ns-muted));
+  border-radius: 6px;
+  box-shadow: 0 8px 14px rgba(0, 0, 0, 0.34);
+  display: grid;
+  gap: 4px;
+  left: 0;
+  min-width: min(300px, calc(100vw - 48px));
+  padding: 5px;
+  position: absolute;
+  top: calc(100% + 4px);
+  z-index: 20;
+}
+
+.ns-ai-current-model {
+  align-items: flex-start;
+  background: color-mix(in srgb, var(--ns-primary) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ns-primary) 34%, var(--ns-border));
+  border-radius: 4px;
+  color: var(--ns-ink);
+  display: grid;
+  gap: 7px;
+  grid-template-columns: 15px minmax(0, 1fr);
+  padding: 7px;
+}
+
+.ns-ai-current-model svg {
+  color: var(--ns-primary-strong);
+  margin-top: 1px;
+}
+
+.ns-ai-current-model div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ns-ai-current-model strong,
+.ns-ai-effort-picker strong,
+.ns-ai-more-models strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ns-ai-current-model span,
+.ns-ai-model-empty {
   color: var(--ns-muted);
-  display: inline-flex;
   font-size: 11px;
-  gap: 5px;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.ns-ai-effort-picker > summary,
+.ns-ai-more-models > summary {
+  border-radius: 4px;
+  color: var(--ns-ink);
+  justify-content: space-between;
+  min-height: 30px;
+  padding: 6px 7px;
+}
+
+.ns-ai-effort-picker > summary:hover,
+.ns-ai-more-models > summary:hover {
+  background: color-mix(in srgb, var(--ns-surface-raised) 64%, transparent);
+}
+
+.ns-ai-effort-picker > summary span {
+  display: grid;
+  gap: 1px;
+}
+
+.ns-ai-effort-picker small {
+  color: var(--ns-muted);
+  font-size: 10px;
+}
+
+.ns-ai-effort-options,
+.ns-ai-model-list {
+  display: grid;
+  gap: 1px;
+  padding: 2px 0;
+}
+
+.ns-ai-menu-option {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--ns-ink);
+  cursor: pointer;
+  display: grid;
+  font: inherit;
+  font-size: 12px;
+  gap: 7px;
+  grid-template-columns: 14px minmax(0, 1fr);
+  min-height: 28px;
+  padding: 0 7px;
+  text-align: left;
+}
+
+.ns-ai-menu-option:hover,
+.ns-ai-menu-option[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--ns-primary) 16%, var(--ns-surface-raised));
+}
+
+.ns-ai-menu-option svg {
+  color: var(--ns-primary-strong);
+}
+
+.ns-ai-menu-option-spacer {
+  display: block;
+  width: 14px;
 }
 
 .ns-ai-actions {

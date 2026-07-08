@@ -186,8 +186,10 @@ describe("AI writing workflow UI", () => {
     expect(html).toContain('aria-label="AI 工作流运行观测"');
     expect(html).toContain("Continue Chapter");
     expect(html).toContain("Default Model / example-model");
-    expect(html).toContain('aria-label="AI model selector"');
-    expect(html).toContain('value="gpt-5" selected=""');
+    expect(html).toContain('aria-label="AI model controls"');
+    expect(html).toContain('class="ns-ai-model-trigger"');
+    expect(html).toContain("gpt-5");
+    expect(html).not.toContain('aria-label="AI model selector"');
     expect(html).toContain('aria-label="Reasoning effort"');
     expect(html).toContain("reasoning_effort");
     expect(html).toContain("24 tokens · estimated");
@@ -279,6 +281,46 @@ describe("AI writing workflow UI", () => {
     expect(sendIndex).toBeGreaterThan(toolbarIndex);
     expect(sendIndex).toBeLessThan(composerEndIndex);
     expect(legacyActionsIndex).toBe(-1);
+  });
+
+  test("keeps model controls visible when model discovery falls back", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "ai" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        aiWritingWorkflow={{
+          status: "idle",
+          instruction: "Continue the scene.",
+          modelDiscovery: {
+            profileId: "model_custom",
+            provider: "openai-compatible",
+            status: "fallback",
+            models: [],
+            fallbackReason: "fetch failed",
+            reasoningStrength: {
+              status: "hidden",
+              reason: "Discovery failed for this endpoint."
+            }
+          },
+          selectedModelName: "manual-proxy-model",
+          onInstructionChange: () => undefined,
+          onGenerateSuggestion: () => undefined,
+          onApplySuggestion: () => undefined,
+          onModelSelect: () => undefined,
+          onRetrySuggestion: () => undefined,
+          onCancelStreaming: () => undefined
+        }}
+      />
+    );
+
+    expect(html).toContain('aria-label="AI model controls"');
+    expect(html).toContain('class="ns-ai-model-trigger"');
+    expect(html).toContain("manual-proxy-model");
+    expect(html).toContain("fetch failed");
+    expect(html).toContain("更多模型");
+    expect(html).not.toContain('aria-label="AI model selector"');
   });
 
   test("renders streaming preview and cancel control", () => {

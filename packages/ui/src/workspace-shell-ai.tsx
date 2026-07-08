@@ -1,4 +1,4 @@
-﻿import { Check, RotateCcw, Sparkles, X } from "lucide-react";
+﻿import { Check, ChevronDown, RotateCcw, Sparkles, X } from "lucide-react";
 
 import type {
   AiWorkflowFailureDiagnosticProps,
@@ -26,6 +26,7 @@ export function AiWritingAssistantPanel({
   const showSummary =
     workflow.summary !== undefined && (compact || workflow.summary !== assistantReply);
   const reasoningControl = selectedReasoningControl(workflow);
+  const modelPicker = aiModelPickerState(workflow);
 
   return (
     <section className="ns-ai-workflow" aria-label="AI 写作工作流" data-compact={compact}>
@@ -108,39 +109,14 @@ export function AiWritingAssistantPanel({
         </div>
       )}
       <section className="ns-ai-composer ns-ai-vscode-composer" aria-label="AI 输入区">
-        {workflow.modelDiscovery?.status === "loaded" &&
-        workflow.modelDiscovery.models.length > 0 ? (
-          <div className="ns-ai-model-controls" aria-label="AI model controls">
-            <select
-              aria-label="AI model selector"
-              className="model-settings-select"
-              onChange={(event) => workflow.onModelSelect?.(event.currentTarget.value)}
-              value={workflow.selectedModelName ?? workflow.modelDiscovery.models[0]?.id ?? ""}
-            >
-              {workflow.modelDiscovery.models.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.displayName}
-                </option>
-              ))}
-            </select>
-            {reasoningControl?.status === "available" ? (
-              <label className="ns-ai-reasoning-control">
-                <span>{reasoningControl.providerParamName}</span>
-                <select
-                  aria-label="Reasoning effort"
-                  className="model-settings-select"
-                  defaultValue={reasoningControl.defaultValue}
-                >
-                  {reasoningControl.allowedValues.map((value) => (
-                    <option key={value} value={value}>
-                      {value}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-          </div>
-        ) : null}
+        {modelPicker === undefined ? null : (
+          <AiModelControls
+            fallbackReason={workflow.modelDiscovery?.fallbackReason}
+            modelPicker={modelPicker}
+            onModelSelect={workflow.onModelSelect}
+            reasoningControl={reasoningControl}
+          />
+        )}
         <div className="ns-ai-composer-input">
           <textarea
             aria-label="AI 写作指令"
@@ -209,6 +185,148 @@ export function AiWritingAssistantPanel({
       </section>
     </section>
   );
+}
+
+function AiModelControls({
+  fallbackReason,
+  modelPicker,
+  onModelSelect,
+  reasoningControl
+}: {
+  readonly fallbackReason: string | undefined;
+  readonly modelPicker: AiModelPickerState;
+  readonly onModelSelect: ((modelName: string) => void) | undefined;
+  readonly reasoningControl: ReturnType<typeof selectedReasoningControl>;
+}) {
+  const currentDescription =
+    fallbackReason ??
+    (modelPicker.current.provider === undefined
+      ? "当前配置的手动模型。"
+      : `${modelPicker.current.provider} endpoint model.`);
+  const otherModels = modelPicker.models.filter((model) => model.id !== modelPicker.current.id);
+
+  return (
+    <div className="ns-ai-model-controls" aria-label="AI model controls">
+      <details className="ns-ai-model-picker">
+        <summary aria-label="Open AI model picker" className="ns-ai-model-trigger">
+          <span>{modelPicker.current.displayName}</span>
+          <ChevronDown aria-hidden="true" size={13} />
+        </summary>
+        <div className="ns-ai-model-popover" role="group" aria-label="AI model picker">
+          <div className="ns-ai-current-model">
+            <Check aria-hidden="true" size={14} />
+            <div>
+              <strong>{modelPicker.current.displayName}</strong>
+              <span>{currentDescription}</span>
+            </div>
+          </div>
+          {reasoningControl?.status === "available" ? (
+            <details className="ns-ai-effort-picker">
+              <summary aria-label="Reasoning effort">
+                <span>
+                  推理强度
+                  <small>{reasoningControl.providerParamName}</small>
+                </span>
+                <strong>{reasoningControl.defaultValue}</strong>
+              </summary>
+              <div className="ns-ai-effort-options">
+                {reasoningControl.allowedValues.map((value) => (
+                  <button
+                    aria-pressed={value === reasoningControl.defaultValue}
+                    className="ns-ai-menu-option"
+                    key={value}
+                    type="button"
+                  >
+                    {value === reasoningControl.defaultValue ? (
+                      <Check aria-hidden="true" size={13} />
+                    ) : (
+                      <span aria-hidden="true" className="ns-ai-menu-option-spacer" />
+                    )}
+                    {value}
+                  </button>
+                ))}
+              </div>
+            </details>
+          ) : null}
+          <details className="ns-ai-more-models" open={otherModels.length > 0}>
+            <summary>
+              <span>更多模型</span>
+              <strong>{otherModels.length}</strong>
+            </summary>
+            {otherModels.length > 0 ? (
+              <div className="ns-ai-model-list">
+                {otherModels.map((model) => (
+                  <button
+                    className="ns-ai-menu-option"
+                    key={model.id}
+                    onClick={() => onModelSelect?.(model.id)}
+                    type="button"
+                  >
+                    <span aria-hidden="true" className="ns-ai-menu-option-spacer" />
+                    <span>{model.displayName}</span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="ns-ai-model-empty">当前端点没有返回可选模型。</p>
+            )}
+          </details>
+        </div>
+      </details>
+    </div>
+  );
+}
+
+interface AiModelPickerState {
+  readonly current: {
+    readonly id: string;
+    readonly displayName: string;
+    readonly provider: string | undefined;
+  };
+  readonly models: readonly {
+    readonly id: string;
+    readonly displayName: string;
+    readonly provider: string | undefined;
+  }[];
+}
+
+function aiModelPickerState(workflow: AiWritingWorkflowProps): AiModelPickerState | undefined {
+  const discoveredModels = workflow.modelDiscovery?.models ?? [];
+  const selectedModelId = workflow.selectedModelName ?? discoveredModels[0]?.id;
+  if (selectedModelId === undefined || selectedModelId.trim().length === 0) {
+    return undefined;
+  }
+
+  const selectedModel = discoveredModels.find((model) => model.id === selectedModelId);
+  const current: AiModelPickerState["current"] =
+    selectedModel === undefined
+      ? {
+          id: selectedModelId,
+          displayName: selectedModelId,
+          provider: workflow.modelDiscovery?.provider
+        }
+      : {
+          id: selectedModel.id,
+          displayName: selectedModel.displayName,
+          provider: selectedModel.provider
+        };
+  const models =
+    selectedModel === undefined
+      ? [
+          current,
+          ...discoveredModels.map((model) => ({
+            id: model.id,
+            displayName: model.displayName,
+            provider: model.provider
+          }))
+        ]
+      : discoveredModels.map((model) => ({
+          id: model.id,
+          displayName: model.displayName,
+          provider: model.provider
+        }));
+
+  return { current, models };
 }
 
 function selectedReasoningControl(workflow: AiWritingWorkflowProps) {
