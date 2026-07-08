@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, test } from "vitest";
 
 import { ConfigStudioPanel, ModelSettingsPanel } from "../src/index.js";
@@ -202,6 +203,36 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).not.toMatch(/filesystem|node:|fs\./i);
   });
 
+  test("lays out model fields as separated rows with field-level actions", () => {
+    const discoverCalls: string[] = [];
+    const testConnectionCalls: string[] = [];
+    const tree = (
+      <ModelSettingsPanel
+        {...createModelSettingsPanelProps()}
+        onDiscoverModelOptions={(profileId) => discoverCalls.push(profileId)}
+        onTestConnection={(profileId) => testConnectionCalls.push(profileId)}
+      />
+    );
+    const html = renderToStaticMarkup(tree);
+
+    expect(html).toContain('data-field-layout="stacked"');
+    expect(html).toContain('class="model-settings-field-header"');
+    expect(html).toContain('class="model-settings-field-label">API Key');
+    expect(html).toContain('aria-label="显示或隐藏 API Key"');
+    expect(html).toContain('type="password"');
+    expect(html).toContain('aria-label="完整 URL"');
+    expect(html).toContain('aria-label="管理与测速"');
+    expect(html).toContain('aria-label="获取模型列表"');
+    expect(html).toContain('class="model-settings-field-note"');
+    expect(html).toContain("请填写兼容 OpenAI 格式的服务端点地址");
+
+    findElementByAriaLabel(tree, "获取模型列表")?.props.onClick?.();
+    findElementByAriaLabel(tree, "管理与测速")?.props.onClick?.();
+
+    expect(discoverCalls).toEqual(["model_default"]);
+    expect(testConnectionCalls).toEqual(["model_default"]);
+  });
+
   test("renders Prompt Agent Workflow studio controls through callback-driven props", () => {
     const html = renderToStaticMarkup(
       <ConfigStudioPanel
@@ -384,4 +415,43 @@ function createModelSettingsPanelProps(): Parameters<typeof ModelSettingsPanel>[
     saveStatus: "idle",
     providerOptions: [{ id: "openai-compatible", label: "OpenAI Compatible" }]
   };
+}
+
+interface InspectableElementProps {
+  readonly children?: ReactNode;
+  readonly onClick?: () => void;
+  readonly "aria-label"?: string;
+}
+
+function findElementByAriaLabel(
+  node: ReactNode,
+  ariaLabel: string
+): ReactElement<InspectableElementProps> | undefined {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const match = findElementByAriaLabel(child, ariaLabel);
+      if (match !== undefined) {
+        return match;
+      }
+    }
+    return undefined;
+  }
+
+  if (!isValidElement<InspectableElementProps>(node)) {
+    return undefined;
+  }
+
+  if (node.props["aria-label"] === ariaLabel) {
+    return node;
+  }
+
+  if (typeof node.type === "function") {
+    const renderComponent = node.type as (props: InspectableElementProps) => ReactNode;
+    const match = findElementByAriaLabel(renderComponent(node.props), ariaLabel);
+    if (match !== undefined) {
+      return match;
+    }
+  }
+
+  return findElementByAriaLabel(node.props.children, ariaLabel);
 }

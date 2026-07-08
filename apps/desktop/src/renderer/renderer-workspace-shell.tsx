@@ -64,6 +64,9 @@ export interface RendererWorkspaceShellProps {
   readonly onSaveSettingsProfile: NonNullable<ModelSettingsPanelProps["onSaveProfile"]>;
   readonly onTestSettingsConnection: NonNullable<ModelSettingsPanelProps["onTestConnection"]>;
   readonly onMakeSettingsDefault: NonNullable<ModelSettingsPanelProps["onMakeDefault"]>;
+  readonly onDiscoverSettingsModelOptions: NonNullable<
+    ModelSettingsPanelProps["onDiscoverModelOptions"]
+  >;
   readonly onRefreshPluginRegistry: NonNullable<
     NonNullable<ModelSettingsPanelProps["plugins"]>["onRefresh"]
   >;
@@ -171,6 +174,7 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
               onSaveProfile: props.onSaveSettingsProfile,
               onTestConnection: props.onTestSettingsConnection,
               onMakeDefault: props.onMakeSettingsDefault,
+              onDiscoverModelOptions: props.onDiscoverSettingsModelOptions,
               ...(props.settings.plugins === undefined
                 ? {}
                 : {

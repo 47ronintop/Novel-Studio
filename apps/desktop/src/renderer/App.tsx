@@ -645,6 +645,17 @@ export function App() {
     [settingsBridge]
   );
 
+  const handleDiscoverSettingsModelOptions = useCallback(
+    (profileId: string) => {
+      if (settingsBridge === undefined) {
+        return;
+      }
+
+      void settingsBridge.discoverModelOptions(profileId).then(setSettings);
+    },
+    [settingsBridge]
+  );
+
   const handleSettingsSectionSelect = useCallback(
     (section: SettingsPanelSection) => {
       if (settingsBridge === undefined) {
@@ -938,6 +949,7 @@ export function App() {
       onSaveSettingsProfile={handleSaveSettingsProfile}
       onTestSettingsConnection={handleTestSettingsConnection}
       onMakeSettingsDefault={handleMakeSettingsDefault}
+      onDiscoverSettingsModelOptions={handleDiscoverSettingsModelOptions}
       onRefreshPluginRegistry={handleRefreshPluginRegistry}
       onSetPluginEnabled={handleSetPluginEnabled}
       onStudioAssetSelect={handleStudioAssetSelect}

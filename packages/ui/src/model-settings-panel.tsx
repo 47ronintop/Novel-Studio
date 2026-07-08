@@ -1,5 +1,16 @@
-import { CheckCircle, FilePlus, PlugZap, Power, RefreshCw, Save, Shield, Star } from "lucide-react";
-import type { ReactNode } from "react";
+import {
+  CheckCircle,
+  Eye,
+  FilePlus,
+  Info,
+  PlugZap,
+  Power,
+  RefreshCw,
+  Save,
+  Shield,
+  Star
+} from "lucide-react";
+import type { MouseEvent, ReactNode } from "react";
 import type { ModelDiscoverySnapshot } from "@novel-studio/application";
 import {
   SettingsPanelTabs,
@@ -153,6 +164,7 @@ export interface ModelSettingsPanelProps {
   readonly onSaveProfile?: () => void;
   readonly onTestConnection?: (profileId: string) => void;
   readonly onMakeDefault?: (profileId: string) => void;
+  readonly onDiscoverModelOptions?: (profileId: string) => void;
   readonly onSectionSelect?: (section: SettingsPanelSection) => void;
 }
 
@@ -176,6 +188,7 @@ export function ModelSettingsPanel({
   onSaveProfile,
   onTestConnection,
   onMakeDefault,
+  onDiscoverModelOptions,
   onSectionSelect
 }: ModelSettingsPanelProps) {
   const effectiveSection: SettingsPanelActiveSection = activeSection ?? "overview";
@@ -219,6 +232,7 @@ export function ModelSettingsPanel({
               onSaveProfile={onSaveProfile}
               onSelectProfile={onSelectProfile}
               onTestConnection={onTestConnection}
+              onDiscoverModelOptions={onDiscoverModelOptions}
               profiles={profiles}
               providerOptions={providerOptions}
               saveStatus={saveStatus}
@@ -262,6 +276,7 @@ function ModelProfileSettingsSection({
   onSaveProfile,
   onSelectProfile,
   onTestConnection,
+  onDiscoverModelOptions,
   profiles,
   providerOptions,
   saveStatus,
@@ -279,12 +294,16 @@ function ModelProfileSettingsSection({
   readonly onSaveProfile: ModelSettingsPanelProps["onSaveProfile"];
   readonly onSelectProfile: ModelSettingsPanelProps["onSelectProfile"];
   readonly onTestConnection: ModelSettingsPanelProps["onTestConnection"];
+  readonly onDiscoverModelOptions: ModelSettingsPanelProps["onDiscoverModelOptions"];
   readonly profiles: readonly ModelSettingsProfile[];
   readonly providerOptions: readonly ModelProviderOption[] | undefined;
   readonly saveStatus: ModelSettingsSaveStatus;
   readonly selectedProfile: ModelSettingsProfile | undefined;
   readonly selectedProfileId: string | undefined;
 }) {
+  const activeProfileId = selectedProfileId ?? draft.id;
+  const canRunProfileAction = activeProfileId.trim().length > 0;
+
   return (
     <section className="model-settings-card" aria-label="模型配置">
       <div className="model-settings-section-header">
@@ -356,7 +375,7 @@ function ModelProfileSettingsSection({
             onSaveProfile?.();
           }}
         >
-          <div className="model-profile-form-grid">
+          <div className="model-profile-form-grid" data-field-layout="stacked">
             <ModelField label="Profile ID">
               <input
                 aria-label="模型 Profile ID"
@@ -388,7 +407,21 @@ function ModelProfileSettingsSection({
                 ))}
               </select>
             </ModelField>
-            <ModelField label="模型名称">
+            <ModelField
+              actions={
+                <button
+                  aria-label="获取模型列表"
+                  className="model-settings-field-button"
+                  disabled={!canRunProfileAction}
+                  onClick={() => onDiscoverModelOptions?.(activeProfileId)}
+                  type="button"
+                >
+                  <RefreshCw aria-hidden="true" size={13} />
+                  获取模型列表
+                </button>
+              }
+              label="模型名称"
+            >
               {modelDiscovery?.status === "loaded" && modelDiscovery.models.length > 0 ? (
                 <select
                   aria-label="Discovered model name"
@@ -418,7 +451,27 @@ function ModelProfileSettingsSection({
                 </>
               )}
             </ModelField>
-            <ModelField label="Base URL">
+            <ModelField
+              actions={
+                <>
+                  <label className="model-settings-switch">
+                    <input aria-label="完整 URL" defaultChecked type="checkbox" />
+                    <span>完整 URL</span>
+                  </label>
+                  <button
+                    aria-label="管理与测速"
+                    className="model-settings-link-button"
+                    disabled={!canRunProfileAction}
+                    onClick={() => onTestConnection?.(activeProfileId)}
+                    type="button"
+                  >
+                    管理与测速
+                  </button>
+                </>
+              }
+              label="API 请求地址"
+              note="请填写兼容 OpenAI 格式的服务端点地址，例如 https://api.example.com/v1。"
+            >
               <input
                 aria-label="模型 Base URL"
                 className="ns-search-input"
@@ -426,21 +479,34 @@ function ModelProfileSettingsSection({
                 value={draft.baseUrl}
               />
             </ModelField>
-            <ModelField label="密钥引用">
-              <input
-                aria-label="密钥引用"
-                className="ns-search-input"
-                onChange={(event) =>
-                  onDraftChange?.({ apiKeyRefInput: event.currentTarget.value })
-                }
-                placeholder={
-                  selectedProfile === undefined
-                    ? "粘贴真实 API Key，保存后会加密存储"
-                    : "留空则沿用已保存密钥引用"
-                }
-                type="password"
-                value={draft.apiKeyRefInput}
-              />
+            <ModelField
+              label="API Key"
+              note="真实密钥只会写入桌面端安全存储；留空会沿用已保存密钥。"
+            >
+              <div className="model-settings-input-with-action">
+                <input
+                  aria-label="密钥引用"
+                  className="ns-search-input"
+                  onChange={(event) =>
+                    onDraftChange?.({ apiKeyRefInput: event.currentTarget.value })
+                  }
+                  placeholder={
+                    selectedProfile === undefined
+                      ? "粘贴真实 API Key，保存后会加密存储"
+                      : "留空则沿用已保存密钥引用"
+                  }
+                  type="password"
+                  value={draft.apiKeyRefInput}
+                />
+                <button
+                  aria-label="显示或隐藏 API Key"
+                  className="model-settings-input-action"
+                  onClick={toggleApiKeyVisibility}
+                  type="button"
+                >
+                  <Eye aria-hidden="true" size={14} />
+                </button>
+              </div>
             </ModelField>
             <ModelField label="Temperature">
               <input
@@ -774,13 +840,43 @@ function permissionSummary(grants: readonly PluginSettingsPermissionGrant[]): st
   return grants.map((grant) => `${grant.permission} · ${grant.scopes.join(", ")}`).join("；");
 }
 
-function ModelField({ label, children }: { readonly label: string; readonly children: ReactNode }) {
+function ModelField({
+  actions,
+  children,
+  label,
+  note
+}: {
+  readonly actions?: ReactNode;
+  readonly children: ReactNode;
+  readonly label: string;
+  readonly note?: string;
+}) {
   return (
-    <label className="model-settings-field">
-      <span>{label}</span>
+    <section className="model-settings-field">
+      <div className="model-settings-field-header">
+        <span className="model-settings-field-label">{label}</span>
+        {actions === undefined ? null : (
+          <div className="model-settings-field-actions">{actions}</div>
+        )}
+      </div>
       {children}
-    </label>
+      {note === undefined ? null : (
+        <p className="model-settings-field-note">
+          <Info aria-hidden="true" size={14} />
+          <span>{note}</span>
+        </p>
+      )}
+    </section>
   );
+}
+
+function toggleApiKeyVisibility(event: MouseEvent<HTMLButtonElement>): void {
+  const input = event.currentTarget.previousElementSibling;
+  if (!(input instanceof HTMLInputElement)) {
+    return;
+  }
+
+  input.type = input.type === "password" ? "text" : "password";
 }
 
 function statusLabel(status: ModelConnectionStatusValue): string {

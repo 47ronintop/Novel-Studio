@@ -317,6 +317,7 @@ export function createSettingsBridge(
       onSaveProfile: () => undefined,
       onTestConnection: () => undefined,
       onMakeDefault: () => undefined,
+      onDiscoverModelOptions: () => undefined,
       onSectionSelect: () => undefined
     };
   }
