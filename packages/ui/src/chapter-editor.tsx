@@ -1,6 +1,8 @@
 import type { ChapterDocument } from "@novel-studio/shared";
+import { Compartment, EditorState } from "@codemirror/state";
+import { EditorView, keymap, lineNumbers, type ViewUpdate } from "@codemirror/view";
 import { Eye, History, RotateCcw, Save, SquarePen } from "lucide-react";
-import { useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { EditorFindReplace } from "./editor-find-replace.js";
 import {
   calculateWritingMetrics,
@@ -194,38 +196,50 @@ export function ChapterEditor({
         style={editorStyle}
         {...(runtime?.runtimeId === undefined ? {} : { "data-runtime-id": runtime.runtimeId })}
       >
-        <textarea
-          aria-label="章节正文"
-          className="ns-editor-textarea"
-          onChange={(event) => {
-            onBodyChange?.(event.currentTarget.value);
-          }}
-          onKeyDown={(event) => {
-            if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "h") {
-              event.preventDefault();
-              setFindReplaceOpen(true);
-            }
-          }}
-          onKeyUp={(event) => {
-            handleSelectionChange(event.currentTarget);
-          }}
-          onMouseUp={(event) => {
-            handleSelectionChange(event.currentTarget);
-          }}
-          onSelect={(event) => {
-            handleSelectionChange(event.currentTarget);
-          }}
-          readOnly={onBodyChange === undefined}
-          value={chapter.body}
-          spellCheck={true}
-        />
-        <div className="ns-editor-gutter" aria-hidden="true">
-          {gutterLines.map((line, index) => (
-            <div className="ns-editor-line-number" key={`${index}-${line.length}`}>
-              {index + 1}
+        {runtime?.runtimeId === "codemirror" ? (
+          <CodeMirrorChapterEditor
+            body={chapter.body}
+            readOnly={onBodyChange === undefined}
+            onFindReplaceOpen={() => setFindReplaceOpen(true)}
+            {...(onBodyChange === undefined ? {} : { onBodyChange })}
+            {...(onSelectionChange === undefined ? {} : { onSelectionChange })}
+          />
+        ) : (
+          <>
+            <textarea
+              aria-label="章节正文"
+              className="ns-editor-textarea"
+              onChange={(event) => {
+                onBodyChange?.(event.currentTarget.value);
+              }}
+              onKeyDown={(event) => {
+                if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "h") {
+                  event.preventDefault();
+                  setFindReplaceOpen(true);
+                }
+              }}
+              onKeyUp={(event) => {
+                handleSelectionChange(event.currentTarget);
+              }}
+              onMouseUp={(event) => {
+                handleSelectionChange(event.currentTarget);
+              }}
+              onSelect={(event) => {
+                handleSelectionChange(event.currentTarget);
+              }}
+              readOnly={onBodyChange === undefined}
+              value={chapter.body}
+              spellCheck={true}
+            />
+            <div className="ns-editor-gutter" aria-hidden="true">
+              {gutterLines.map((line, index) => (
+                <div className="ns-editor-line-number" key={`${index}-${line.length}`}>
+                  {index + 1}
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          </>
+        )}
       </div>
 
       <div className="ns-editor-panels">
@@ -317,6 +331,137 @@ export function readTextareaSelection(source: TextareaSelectionSource): ChapterE
     anchor: source.selectionStart,
     head: source.selectionEnd
   };
+}
+
+function CodeMirrorChapterEditor({
+  body,
+  readOnly,
+  onBodyChange,
+  onFindReplaceOpen,
+  onSelectionChange
+}: {
+  readonly body: string;
+  readonly readOnly: boolean;
+  readonly onBodyChange?: (nextBody: string) => void;
+  readonly onFindReplaceOpen: () => void;
+  readonly onSelectionChange?: (selection: ChapterEditorSelection) => void;
+}) {
+  const mountRef = useRef<HTMLDivElement | null>(null);
+  const viewRef = useRef<EditorView | null>(null);
+  const readOnlyCompartmentRef = useRef(new Compartment());
+  const suppressBodyChangeRef = useRef(false);
+  const callbacksRef = useRef({
+    onBodyChange,
+    onFindReplaceOpen,
+    onSelectionChange
+  });
+
+  useEffect(() => {
+    callbacksRef.current = {
+      onBodyChange,
+      onFindReplaceOpen,
+      onSelectionChange
+    };
+  }, [onBodyChange, onFindReplaceOpen, onSelectionChange]);
+
+  useEffect(() => {
+    const parent = mountRef.current;
+    if (parent === null) {
+      return undefined;
+    }
+
+    const updateListener = EditorView.updateListener.of((update: ViewUpdate) => {
+      if (update.docChanged && !suppressBodyChangeRef.current) {
+        callbacksRef.current.onBodyChange?.(update.state.doc.toString());
+      }
+
+      if (update.selectionSet) {
+        const selection = update.state.selection.main;
+        callbacksRef.current.onSelectionChange?.({
+          anchor: selection.anchor,
+          head: selection.head
+        });
+      }
+    });
+    const findReplaceKeymap = keymap.of([
+      {
+        key: "Mod-h",
+        preventDefault: true,
+        run() {
+          callbacksRef.current.onFindReplaceOpen();
+          return true;
+        }
+      }
+    ]);
+    const state = EditorState.create({
+      doc: body,
+      extensions: [
+        lineNumbers(),
+        readOnlyCompartmentRef.current.of([
+          EditorState.readOnly.of(readOnly),
+          EditorView.editable.of(!readOnly)
+        ]),
+        EditorView.lineWrapping,
+        findReplaceKeymap,
+        updateListener
+      ]
+    });
+    const view = new EditorView({
+      parent,
+      state
+    });
+    viewRef.current = view;
+
+    return () => {
+      view.destroy();
+      viewRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (view === null) {
+      return;
+    }
+
+    view.dispatch({
+      effects: readOnlyCompartmentRef.current.reconfigure([
+        EditorState.readOnly.of(readOnly),
+        EditorView.editable.of(!readOnly)
+      ])
+    });
+  }, [readOnly]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (view === null) {
+      return;
+    }
+
+    const currentBody = view.state.doc.toString();
+    if (currentBody === body) {
+      return;
+    }
+
+    suppressBodyChangeRef.current = true;
+    view.dispatch({
+      changes: {
+        from: 0,
+        to: view.state.doc.length,
+        insert: body
+      }
+    });
+    suppressBodyChangeRef.current = false;
+  }, [body]);
+
+  return (
+    <div
+      aria-label="章节正文"
+      className="ns-editor-codemirror"
+      data-readonly={readOnly}
+      ref={mountRef}
+    />
+  );
 }
 
 function ChapterEditorRuntime({

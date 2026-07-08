@@ -16,6 +16,8 @@
     "typecheck": "tsc -b"
   },
   "dependencies": {
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.6",
     "@novel-studio/application": "0.1.0",
     "@novel-studio/shared": "0.1.0",
     "lucide-react": "^1.23.0",

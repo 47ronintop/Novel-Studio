@@ -1,3 +1,6 @@
+// @vitest-environment jsdom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 
@@ -217,6 +220,80 @@ describe("ChapterEditor", () => {
     expect(html).toContain('data-runtime-id="codemirror"');
     expect(html).toContain("CodeMirror 6 Runtime");
     expect(html).not.toMatch(/filesystem|node:fs|projectRoot/i);
+  });
+
+  test("mounts a real CodeMirror editor surface for the CodeMirror runtime", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+
+    try {
+      await act(async () => {
+        root.render(
+          <ChapterEditor
+            chapter={chapter}
+            saveStatus="Unsaved"
+            dirty={true}
+            versionHistory={[]}
+            runtime={{
+              runtimeId: "codemirror",
+              adapterLabel: "CodeMirror 6 Runtime",
+              documentMode: "Markdown",
+              activeRangeLabel: "Lines 1-1",
+              autosaveLabel: "Autosave armed",
+              shortcutProfileLabel: "Default shortcuts",
+              warnings: []
+            }}
+            onBodyChange={() => undefined}
+          />
+        );
+      });
+
+      expect(container.querySelector(".cm-editor")).not.toBeNull();
+      expect(container.querySelector("textarea")).toBeNull();
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      container.remove();
+    }
+  });
+
+  test("keeps the textarea editor surface for the fallback runtime", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+
+    try {
+      await act(async () => {
+        root.render(
+          <ChapterEditor
+            chapter={chapter}
+            saveStatus="Unsaved"
+            dirty={true}
+            versionHistory={[]}
+            runtime={{
+              runtimeId: "textarea",
+              adapterLabel: "Textarea Runtime",
+              documentMode: "Markdown",
+              activeRangeLabel: "Lines 1-1",
+              autosaveLabel: "Autosave armed",
+              shortcutProfileLabel: "Default shortcuts",
+              warnings: []
+            }}
+            onBodyChange={() => undefined}
+          />
+        );
+      });
+
+      expect(container.querySelector("textarea")).not.toBeNull();
+      expect(container.querySelector(".cm-editor")).toBeNull();
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      container.remove();
+    }
   });
 
   test("extracts textarea selection offsets for renderer runtime wiring", () => {

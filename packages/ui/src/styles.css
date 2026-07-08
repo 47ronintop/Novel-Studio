@@ -1509,8 +1509,75 @@ textarea:focus-visible,
   width: 100%;
 }
 
-.ns-editor-body[data-runtime-id="codemirror"] .ns-editor-textarea {
+.ns-editor-body[data-runtime-id="codemirror"] {
+  display: block;
+}
+
+.ns-editor-codemirror,
+.ns-editor-codemirror .cm-editor {
+  min-height: 360px;
+}
+
+.ns-editor-codemirror {
+  background: var(--ns-bg);
+  color: var(--ns-ink);
+  font-family: var(
+    --ns-editor-font-family,
+    "Cascadia Mono",
+    "SFMono-Regular",
+    Consolas,
+    "Liberation Mono",
+    monospace
+  );
+  font-size: var(--ns-editor-font-size, 13px);
+  line-height: var(--ns-editor-line-height, 1.7);
+  width: 100%;
+}
+
+.ns-editor-codemirror .cm-editor {
+  background: var(--ns-bg);
+  color: var(--ns-ink);
+  font-family: inherit;
+  font-size: inherit;
+  height: 100%;
+  line-height: inherit;
+  outline: none;
+}
+
+.ns-editor-codemirror .cm-editor.cm-focused {
+  outline: 1px solid color-mix(in oklch, var(--ns-primary) 58%, transparent);
+  outline-offset: -1px;
+}
+
+.ns-editor-codemirror .cm-scroller {
+  font-family: inherit;
+  line-height: inherit;
+  min-height: 360px;
+}
+
+.ns-editor-codemirror .cm-content {
   caret-color: var(--ns-primary);
+  padding: 18px 20px;
+}
+
+.ns-editor-codemirror .cm-line {
+  padding: 0;
+}
+
+.ns-editor-codemirror .cm-gutters {
+  background: color-mix(in oklch, var(--ns-surface) 82%, var(--ns-bg));
+  border-right: 1px solid var(--ns-border);
+  color: var(--ns-muted);
+  min-width: 52px;
+}
+
+.ns-editor-codemirror .cm-lineNumbers .cm-gutterElement {
+  padding: 0 12px 0 0;
+}
+
+.ns-editor-codemirror .cm-selectionBackground,
+.ns-editor-codemirror .cm-focused .cm-selectionBackground {
+  background: color-mix(in oklch, var(--ns-primary) 28%, transparent);
 }
 
 .ns-editor-gutter {
