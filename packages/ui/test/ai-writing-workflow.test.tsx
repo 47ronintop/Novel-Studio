@@ -175,7 +175,7 @@ describe("AI writing workflow UI", () => {
     expect(html).toContain('aria-label="AI 写作工作流"');
     expect(html).toContain('aria-label="AI 写作指令"');
     expect(html).toContain('aria-label="生成 AI 建议"');
-    expect(html).toContain('aria-label="应用 AI 建议"');
+    expect(html).not.toContain('aria-label="应用 AI 建议"');
     expect(html).toContain("补写了主角推门后的动作。");
     expect(html).toContain('aria-label="AI 文风规则检查"');
     expect(html).toContain("文风规则命中 2 处");
@@ -260,10 +260,12 @@ describe("AI writing workflow UI", () => {
     );
 
     const chatIndex = html.indexOf('class="ns-ai-chat-log"');
-    const composerIndex = html.indexOf('class="ns-ai-composer"');
+    const composerIndex = html.indexOf('class="ns-ai-composer ns-ai-vscode-composer"');
     const composerEndIndex = html.indexOf("</section>", composerIndex);
     const modelIndex = html.indexOf('aria-label="AI model controls"');
-    const actionsIndex = html.indexOf('class="ns-ai-actions"');
+    const toolbarIndex = html.indexOf('class="ns-ai-composer-toolbar"');
+    const sendIndex = html.indexOf('class="ns-ai-send-button"');
+    const legacyActionsIndex = html.indexOf('class="ns-ai-actions"');
     const failureIndex = html.indexOf('aria-label="失败诊断"');
 
     expect(chatIndex).toBeGreaterThan(-1);
@@ -272,8 +274,11 @@ describe("AI writing workflow UI", () => {
     expect(composerIndex).toBeGreaterThan(failureIndex);
     expect(modelIndex).toBeGreaterThan(composerIndex);
     expect(modelIndex).toBeLessThan(composerEndIndex);
-    expect(actionsIndex).toBeGreaterThan(composerIndex);
-    expect(actionsIndex).toBeLessThan(composerEndIndex);
+    expect(toolbarIndex).toBeGreaterThan(composerIndex);
+    expect(toolbarIndex).toBeLessThan(composerEndIndex);
+    expect(sendIndex).toBeGreaterThan(toolbarIndex);
+    expect(sendIndex).toBeLessThan(composerEndIndex);
+    expect(legacyActionsIndex).toBe(-1);
   });
 
   test("renders streaming preview and cancel control", () => {

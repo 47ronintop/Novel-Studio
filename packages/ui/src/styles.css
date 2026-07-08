@@ -1749,13 +1749,14 @@ textarea:focus-visible,
 }
 
 .ns-ai-instruction {
-  background: var(--ns-bg);
+  background: transparent;
   border: 0;
-  border-top: 1px solid var(--ns-border);
-  border-radius: 6px;
   color: var(--ns-ink);
-  min-height: 82px;
-  padding: 10px;
+  font: inherit;
+  line-height: 1.45;
+  min-height: 74px;
+  outline: none;
+  padding: 0;
   resize: none;
   width: 100%;
 }
@@ -1767,6 +1768,90 @@ textarea:focus-visible,
   display: grid;
   flex: 0 0 auto;
   overflow: hidden;
+}
+
+.ns-ai-vscode-composer {
+  background: color-mix(in srgb, var(--ns-surface) 72%, var(--ns-bg));
+  border-color: color-mix(in srgb, var(--ns-border) 88%, var(--ns-muted));
+  border-radius: 8px;
+  margin: 8px 0 0;
+}
+
+.ns-ai-composer-input {
+  padding: 12px 12px 6px;
+}
+
+.ns-ai-composer-toolbar {
+  align-items: center;
+  border-top: 1px solid color-mix(in srgb, var(--ns-border) 76%, transparent);
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  min-height: 38px;
+  padding: 6px;
+}
+
+.ns-ai-composer-tools,
+.ns-ai-composer-actions {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ns-ai-composer-tools {
+  color: var(--ns-muted);
+  font-size: 12px;
+}
+
+.ns-ai-tool-button,
+.ns-ai-secondary-button,
+.ns-ai-send-button {
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 12px;
+  gap: 5px;
+  justify-content: center;
+  min-height: 28px;
+}
+
+.ns-ai-tool-button {
+  background: transparent;
+  color: var(--ns-muted);
+  width: 28px;
+}
+
+.ns-ai-secondary-button {
+  background: color-mix(in srgb, var(--ns-surface-raised) 82%, transparent);
+  border-color: var(--ns-border);
+  color: var(--ns-ink);
+  padding: 0 8px;
+}
+
+.ns-ai-send-button {
+  background: var(--ns-primary);
+  color: var(--ns-bg);
+  min-width: 30px;
+  padding: 0 8px;
+}
+
+.ns-ai-tool-button:hover,
+.ns-ai-secondary-button:hover {
+  background: var(--ns-surface-raised);
+  color: var(--ns-ink);
+}
+
+.ns-ai-send-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ns-primary) 86%, white);
+}
+
+.ns-ai-send-button:disabled,
+.ns-ai-secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
 }
 
 .ns-ai-model-controls {

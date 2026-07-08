@@ -107,7 +107,7 @@ export function AiWritingAssistantPanel({
           )}
         </div>
       )}
-      <section className="ns-ai-composer" aria-label="AI 输入区">
+      <section className="ns-ai-composer ns-ai-vscode-composer" aria-label="AI 输入区">
         {workflow.modelDiscovery?.status === "loaded" &&
         workflow.modelDiscovery.models.length > 0 ? (
           <div className="ns-ai-model-controls" aria-label="AI model controls">
@@ -141,60 +141,70 @@ export function AiWritingAssistantPanel({
             ) : null}
           </div>
         ) : null}
-        <textarea
-          aria-label="AI 写作指令"
-          className="ns-ai-instruction"
-          onChange={(event) => workflow.onInstructionChange(event.currentTarget.value)}
-          placeholder="和 AI 说明你想怎么改写或续写当前章节"
-          value={workflow.instruction}
-        />
-        <div className="ns-ai-actions">
-          <button
-            aria-label="生成 AI 建议"
-            className="ns-icon-text-button"
-            disabled={workflow.status === "generating" || workflow.status === "streaming"}
-            onClick={workflow.onGenerateSuggestion}
-            title="生成 AI 建议"
-            type="button"
-          >
-            <Sparkles aria-hidden="true" size={14} />
-            生成建议
-          </button>
-          <button
-            aria-label="应用 AI 建议"
-            className="ns-icon-text-button"
-            disabled={workflow.status !== "suggestion-ready"}
-            onClick={workflow.onApplySuggestion}
-            title="应用 AI 建议"
-            type="button"
-          >
-            <Check aria-hidden="true" size={14} />
-            应用到正文
-          </button>
-          {workflow.status === "streaming" ? (
-          <button
-            aria-label="取消 AI 流式输出"
-            className="ns-icon-text-button"
-            onClick={workflow.onCancelStreaming}
-            title="取消 AI 流式输出"
-            type="button"
-          >
-            <X aria-hidden="true" size={14} />
-            取消
-          </button>
-          ) : null}
-          {workflow.status === "failed" ? (
-          <button
-            aria-label="重试 AI 工作流"
-            className="ns-icon-text-button"
-            onClick={workflow.onRetrySuggestion}
-            title="重试 AI 工作流"
-            type="button"
-          >
-            <Sparkles aria-hidden="true" size={14} />
-            重试
-          </button>
-          ) : null}
+        <div className="ns-ai-composer-input">
+          <textarea
+            aria-label="AI 写作指令"
+            className="ns-ai-instruction"
+            onChange={(event) => workflow.onInstructionChange(event.currentTarget.value)}
+            placeholder="和 AI 说明你想怎么改写或续写当前章节"
+            value={workflow.instruction}
+          />
+        </div>
+        <div className="ns-ai-composer-toolbar">
+          <div className="ns-ai-composer-tools" aria-label="AI composer context">
+            <button aria-label="引用当前章节上下文" className="ns-ai-tool-button" type="button">
+              <Sparkles aria-hidden="true" size={14} />
+            </button>
+            <span>当前章节</span>
+          </div>
+          <div className="ns-ai-composer-actions">
+            {workflow.status === "suggestion-ready" ? (
+              <button
+                aria-label="应用 AI 建议"
+                className="ns-ai-secondary-button"
+                onClick={workflow.onApplySuggestion}
+                title="应用 AI 建议"
+                type="button"
+              >
+                <Check aria-hidden="true" size={14} />
+                应用
+              </button>
+            ) : null}
+            {workflow.status === "streaming" ? (
+              <button
+                aria-label="取消 AI 流式输出"
+                className="ns-ai-secondary-button"
+                onClick={workflow.onCancelStreaming}
+                title="取消 AI 流式输出"
+                type="button"
+              >
+                <X aria-hidden="true" size={14} />
+                取消
+              </button>
+            ) : null}
+            {workflow.status === "failed" ? (
+              <button
+                aria-label="重试 AI 工作流"
+                className="ns-ai-secondary-button"
+                onClick={workflow.onRetrySuggestion}
+                title="重试 AI 工作流"
+                type="button"
+              >
+                <Sparkles aria-hidden="true" size={14} />
+                重试
+              </button>
+            ) : null}
+            <button
+              aria-label="生成 AI 建议"
+              className="ns-ai-send-button"
+              disabled={workflow.status === "generating" || workflow.status === "streaming"}
+              onClick={workflow.onGenerateSuggestion}
+              title="生成 AI 建议"
+              type="button"
+            >
+              <Sparkles aria-hidden="true" size={14} />
+            </button>
+          </div>
         </div>
       </section>
     </section>
