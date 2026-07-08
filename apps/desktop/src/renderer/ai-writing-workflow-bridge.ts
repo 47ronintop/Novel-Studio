@@ -17,6 +17,7 @@ import type {
   SnapshotReason,
   UnifiedError
 } from "@novel-studio/shared";
+import { createUnifiedError } from "@novel-studio/shared";
 import type {
   AiWorkflowObservabilityProps,
   AiWorkflowRunHistoryProps,
@@ -179,6 +180,16 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
             onUpdate(props);
           }
 
+          if (result.value.type === "notice") {
+            props = createProps({
+              ...props,
+              status: "streaming",
+              instruction,
+              runtimeNotice: result.value.message
+            });
+            onUpdate(props);
+          }
+
           if (result.value.type === "suggestion") {
             const suggestion = result.value.suggestion;
             currentSuggestionId = suggestion.suggestionId;
@@ -191,6 +202,24 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
             return props;
           }
         }
+      } catch (error) {
+        if (streamToken !== currentStreamToken || controller.signal.aborted) {
+          return props;
+        }
+        currentSuggestionId = undefined;
+        currentSelectionPreviewId = undefined;
+        currentSelectionPreview = undefined;
+        const history = await loadLatestHistory(api);
+        props = createProps({
+          ...props,
+          status: "failed",
+          instruction,
+          failure: toFailureProps(streamingErrorToUnifiedError(error)),
+          retryPolicy: toRetryPolicyProps(undefined),
+          ...(history === undefined ? {} : { history })
+        });
+        onUpdate(props);
+        return props;
       } finally {
         if (streamToken === currentStreamToken) {
           currentStreamController = undefined;
@@ -404,9 +433,11 @@ function toProps(
     instruction: "",
     conversationMessages: toConversationMessagesProps(suggestion.conversationMessages),
     summary: suggestion.summary,
-    ...(suggestion.observability.model.provider === "mock"
-      ? { runtimeNotice: "当前是演示模式，未配置真实Key。" }
-      : {}),
+    ...(suggestion.runtimeNotice !== undefined
+      ? { runtimeNotice: suggestion.runtimeNotice }
+      : suggestion.observability.model.provider === "mock"
+        ? { runtimeNotice: "当前是演示模式，未配置真实Key。" }
+        : {}),
     contextTraceLabel: traceLabel(suggestion),
     observability: toObservabilityProps(suggestion.observability),
     ...(history === undefined ? {} : { history }),
@@ -594,6 +625,17 @@ function toFailureProps(error: UnifiedError): NonNullable<AiWritingWorkflowProps
     recoverabilityLabel: recoverabilityLabel(error.recoverability),
     suggestedAction: error.suggestedAction
   };
+}
+
+function streamingErrorToUnifiedError(error: unknown): UnifiedError {
+  return createUnifiedError({
+    code: "AI_STREAM_FAILED",
+    category: "LLMAdapterError",
+    message: error instanceof Error ? error.message : "AI streaming failed.",
+    recoverability: "retryable",
+    suggestedAction: "Check the model provider response and retry.",
+    traceId: "ai-writing-stream"
+  });
 }
 
 function toRetryPolicyProps(

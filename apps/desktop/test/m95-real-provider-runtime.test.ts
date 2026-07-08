@@ -348,6 +348,42 @@ describe("M95 real provider runtime", () => {
     });
     expect(calls[0]?.signal?.aborted).toBe(true);
   });
+
+  test("fails a verified stream when no SSE chunk arrives before the first-chunk timeout", async () => {
+    const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-stream-timeout-"));
+    tempRoots.push(userDataRoot);
+    const secretStore = createEncryptedFileModelSecretStore({
+      userDataRoot,
+      cipher: testCipher
+    });
+    await secretStore.saveSecret(apiKeyRef, "sk-real-deepseek-key");
+    await secretStore.markVerified(apiKeyRef, {
+      provider: "deepseek",
+      baseUrl: "https://api.deepseek.com/v1",
+      modelName: "deepseek-chat"
+    });
+    const runtime = createDesktopModelRuntime({
+      userDataRoot,
+      secretStore,
+      fetch: createNeverStreamingFetch()
+    });
+    const chapterEditorSession = await createLoadedChapterEditorSession();
+    const provider = runtime.createAiProvider({
+      chapterEditorSession
+    });
+
+    await expect(
+      collectProviderStream(
+        provider.stream({
+          ...streamingRequest(),
+          modelProfile: {
+            ...streamingRequest().modelProfile,
+            timeoutMs: 1
+          }
+        })
+      )
+    ).rejects.toThrow("Provider streaming response timed out before returning an SSE chunk.");
+  });
 });
 
 const testCipher: DesktopSecretCipher = {
@@ -459,6 +495,30 @@ function createStreamingFetch(calls: FetchCall[]): typeof fetch {
       }
     );
   }) as typeof fetch;
+}
+
+function createNeverStreamingFetch(): typeof fetch {
+  return (async (_url, init) =>
+    new Response(streamNeverUntilAbort(init?.signal), {
+      status: 200,
+      headers: { "content-type": "text/event-stream" }
+    })) as typeof fetch;
+}
+
+function streamNeverUntilAbort(signal: AbortSignal | null | undefined): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      signal?.addEventListener(
+        "abort",
+        () => {
+          const error = new Error("The operation was aborted.");
+          error.name = "AbortError";
+          controller.error(error);
+        },
+        { once: true }
+      );
+    }
+  });
 }
 
 function streamUntilAbort(

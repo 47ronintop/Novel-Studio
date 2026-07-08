@@ -95,11 +95,14 @@ describe("M22 settings bridge", () => {
       temperature: "0.2",
       maxTokens: "2048",
       topP: "",
+      reasoningEffortEnabled: true,
       timeoutMs: "30000"
     });
     const saved = await bridge.saveDraft({ makeDefault: true });
 
     expect(calls).toContain("settings.saveModelProfile:model_default:ollama:true");
+    expect(saved.profiles[0]?.reasoningEffortEnabled).toBe(true);
+    expect(saved.draft.reasoningEffortEnabled).toBe(true);
     expect(saved.defaultProfileId).toBe("model_default");
     expect(saved.saveStatus).toBe("saved");
     expect(saved.feedback).toEqual({

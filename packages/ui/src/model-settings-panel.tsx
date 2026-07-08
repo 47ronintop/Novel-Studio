@@ -17,6 +17,7 @@ export interface ModelSettingsProfile {
   readonly temperature: number;
   readonly maxTokens: number;
   readonly topP?: number;
+  readonly reasoningEffortEnabled?: boolean;
   readonly timeoutMs: number;
 }
 
@@ -33,6 +34,7 @@ export interface ModelSettingsDraft {
   readonly temperature: string;
   readonly maxTokens: string;
   readonly topP: string;
+  readonly reasoningEffortEnabled: boolean;
   readonly timeoutMs: string;
 }
 
@@ -466,6 +468,19 @@ function ModelProfileSettingsSection({
                 onChange={(event) => onDraftChange?.({ topP: event.currentTarget.value })}
                 value={draft.topP}
               />
+            </ModelField>
+            <ModelField label="推理强度">
+              <label className="model-settings-checkbox">
+                <input
+                  aria-label="确认该端点支持 reasoning_effort"
+                  checked={draft.reasoningEffortEnabled}
+                  onChange={(event) =>
+                    onDraftChange?.({ reasoningEffortEnabled: event.currentTarget.checked })
+                  }
+                  type="checkbox"
+                />
+                <span>该第三方端点支持 reasoning_effort</span>
+              </label>
             </ModelField>
             <ModelField label="Timeout">
               <input

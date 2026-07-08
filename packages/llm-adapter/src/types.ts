@@ -44,7 +44,10 @@ export interface LlmParameters {
   readonly temperature?: number;
   readonly maxTokens?: number;
   readonly topP?: number;
+  readonly reasoningEffort?: LlmReasoningEffort;
 }
+
+export type LlmReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export interface LlmRequest {
   readonly schemaVersion: "1.0";
@@ -87,6 +90,12 @@ export interface LlmUsage {
   readonly cost: LlmCost;
 }
 
+export interface LlmProviderWarning {
+  readonly type: "warning";
+  readonly code: string;
+  readonly message: string;
+}
+
 export type LlmErrorCode =
   | "LLM_TIMEOUT"
   | "LLM_RATE_LIMITED"
@@ -114,6 +123,7 @@ export interface LlmResponse {
   readonly status: "success";
   readonly content: LlmContent;
   readonly usage: LlmUsage;
+  readonly warnings?: readonly LlmProviderWarning[];
   readonly createdAt: string;
 }
 
@@ -144,16 +154,21 @@ export interface LlmStreamDoneEvent {
 }
 
 export type LlmStreamEvent =
-  LlmStreamStartEvent | LlmStreamDeltaEvent | LlmStreamUsageEvent | LlmStreamDoneEvent;
+  | LlmStreamStartEvent
+  | LlmStreamDeltaEvent
+  | LlmStreamUsageEvent
+  | LlmStreamDoneEvent
+  | LlmProviderWarning;
 
 export type LlmStreamResult = Result<LlmStreamEvent, UnifiedError>;
 
 export interface LlmProviderCompletion {
   readonly content: LlmContent;
   readonly usage?: LlmUsage;
+  readonly warnings?: readonly LlmProviderWarning[];
 }
 
-export type LlmProviderStreamEvent = LlmStreamDeltaEvent | LlmStreamUsageEvent;
+export type LlmProviderStreamEvent = LlmStreamDeltaEvent | LlmStreamUsageEvent | LlmProviderWarning;
 
 export interface LlmProvider {
   readonly id: LlmProviderId;

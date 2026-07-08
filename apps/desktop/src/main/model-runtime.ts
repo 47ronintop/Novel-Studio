@@ -17,9 +17,6 @@ import {
   LlmProviderFailure,
   OpenAiCompatibleHttpError,
   type LlmProvider,
-  type LlmProviderStreamEvent,
-  type LlmRequest,
-  type LlmUsage,
   type OpenAiCompatibleTransport,
   type OpenAiCompatibleTransportRequest
 } from "@novel-studio/llm-adapter";
@@ -279,28 +276,6 @@ export function createDesktopModelRuntime(
       }
     },
     createAiProvider(input) {
-      const realProvider = createProviderRouter({
-        providers: {
-          "openai-compatible": createOpenAiCompatibleProvider({
-            transport,
-            streamTransport,
-            resolveApiKey: async (secretRef) => {
-              const secret = await secretStore.readSecret(secretRef);
-              if (!secret.ok) {
-                throw new LlmProviderFailure({
-                  code: "LLM_PROVIDER_ERROR",
-                  message: secret.error.message,
-                  retryable: false
-                });
-              }
-              if (secret.value === undefined) {
-                return undefined;
-              }
-              return secret.value;
-            }
-          })
-        }
-      });
       const demoProvider = createDemoModeProvider(input.chapterEditorSession);
 
       return {
@@ -382,59 +357,21 @@ export function createDesktopModelRuntime(
             });
           }
 
-          yield* streamVerifiedOpenAiCompatibleRequest(fetchImpl, request, secret.value);
+          const verifiedProvider = createProviderRouter({
+            providers: {
+              "openai-compatible": createOpenAiCompatibleProvider({
+                transport,
+                streamTransport,
+                resolveApiKey: async () => secret.value
+              })
+            }
+          });
+
+          yield* verifiedProvider.stream(request);
         }
       };
     }
   };
-}
-
-async function* streamVerifiedOpenAiCompatibleRequest(
-  fetchImpl: typeof fetch,
-  request: LlmRequest,
-  apiKey: string
-): AsyncIterable<LlmProviderStreamEvent> {
-  const baseUrl = request.modelProfile.baseUrl;
-  if (baseUrl === undefined || baseUrl.trim().length === 0) {
-    throw new OpenAiCompatibleHttpError({
-      status: 400,
-      message: "OpenAI-compatible model profiles require a Base URL."
-    });
-  }
-
-  const body: JsonObject = {
-    model: request.modelProfile.modelName,
-    messages: request.messages.map((message) => ({
-      role: message.role,
-      content: message.content
-    })),
-    stream: true
-  };
-  if (request.parameters.temperature !== undefined) {
-    body.temperature = request.parameters.temperature;
-  }
-  if (request.parameters.maxTokens !== undefined) {
-    body.max_tokens = request.parameters.maxTokens;
-  }
-  if (request.parameters.topP !== undefined) {
-    body.top_p = request.parameters.topP;
-  }
-
-  for await (const chunk of streamOpenAiCompatibleJson(fetchImpl, {
-    url: `${baseUrl.replace(/\/+$/, "")}/chat/completions`,
-    headers: {
-      authorization: `Bearer ${apiKey}`
-    },
-    body,
-    ...(request.modelProfile.timeoutMs === undefined
-      ? {}
-      : { timeoutMs: request.modelProfile.timeoutMs }),
-    ...(request.abortSignal === undefined ? {} : { abortSignal: request.abortSignal })
-  })) {
-    for (const event of parseOpenAiCompatibleStreamEvent(chunk)) {
-      yield event;
-    }
-  }
 }
 
 async function* streamOpenAiCompatibleJson(
@@ -442,11 +379,35 @@ async function* streamOpenAiCompatibleJson(
   request: OpenAiCompatibleTransportRequest
 ): AsyncIterable<unknown> {
   const timeoutController = new AbortController();
-  const signal = combineAbortSignals(request.abortSignal, timeoutController.signal);
+  const firstChunkController = new AbortController();
+  const signal = combineAbortSignals(
+    [
+      request.abortSignal,
+      timeoutController.signal,
+      firstChunkController.signal
+    ].filter((entry): entry is AbortSignal => entry !== undefined)
+  );
   const timeout =
     request.timeoutMs === undefined
       ? undefined
       : setTimeout(() => timeoutController.abort(), request.timeoutMs);
+  const firstChunkTimeoutMs = Math.min(
+    request.timeoutMs ?? DEFAULT_STREAM_FIRST_CHUNK_TIMEOUT_MS,
+    DEFAULT_STREAM_FIRST_CHUNK_TIMEOUT_MS
+  );
+  const firstChunkTimeout = setTimeout(() => {
+    firstChunkController.abort();
+  }, firstChunkTimeoutMs);
+  let firstSseChunkReceived = false;
+  let receivedAnyBytes = false;
+  let sawSseDataLine = false;
+
+  const markFirstSseChunkReceived = () => {
+    if (!firstSseChunkReceived) {
+      firstSseChunkReceived = true;
+      clearTimeout(firstChunkTimeout);
+    }
+  };
 
   try {
     if (request.abortSignal?.aborted === true) {
@@ -470,7 +431,10 @@ async function* streamOpenAiCompatibleJson(
       });
     }
     if (response.body === null) {
-      return;
+      throw new OpenAiCompatibleHttpError({
+        status: 502,
+        message: "Provider returned an empty streaming response."
+      });
     }
 
     const reader = response.body.getReader();
@@ -485,41 +449,72 @@ async function* streamOpenAiCompatibleJson(
       if (read.done) {
         break;
       }
+      receivedAnyBytes = read.value.byteLength > 0 || receivedAnyBytes;
       buffer += decoder.decode(read.value, { stream: true });
       const parts = buffer.split("\n\n");
       buffer = parts.pop() ?? "";
       for (const part of parts) {
+        sawSseDataLine = hasSseDataLine(part) || sawSseDataLine;
         const parsed = parseServerSentEventPart(part);
         if (parsed !== undefined) {
+          markFirstSseChunkReceived();
           yield parsed;
         }
       }
     }
     buffer += decoder.decode();
+    sawSseDataLine = hasSseDataLine(buffer) || sawSseDataLine;
     const parsed = parseServerSentEventPart(buffer);
     if (parsed !== undefined) {
+      markFirstSseChunkReceived();
       yield parsed;
+    }
+    if (receivedAnyBytes && !sawSseDataLine) {
+      throw new OpenAiCompatibleHttpError({
+        status: 502,
+        message: "Provider returned a non-SSE streaming response.",
+        body: {
+          bodyPreview: buffer.slice(0, 120)
+        }
+      });
     }
   } catch (error) {
     if (isAbortError(error)) {
+      if (request.abortSignal?.aborted === true) {
+        return;
+      }
+      if (
+        !firstSseChunkReceived &&
+        (firstChunkController.signal.aborted || timeoutController.signal.aborted)
+      ) {
+        throw new OpenAiCompatibleHttpError({
+          status: 408,
+          message: "Provider streaming response timed out before returning an SSE chunk."
+        });
+      }
+      if (timeoutController.signal.aborted) {
+        throw new OpenAiCompatibleHttpError({
+          status: 408,
+          message: "Provider streaming response timed out."
+        });
+      }
       return;
     }
     throw error;
   } finally {
+    clearTimeout(firstChunkTimeout);
     if (timeout !== undefined) {
       clearTimeout(timeout);
     }
   }
 }
 
-function combineAbortSignals(
-  requestSignal: AbortSignal | undefined,
-  timeoutSignal: AbortSignal
-): AbortSignal {
-  if (requestSignal === undefined) {
-    return timeoutSignal;
+function combineAbortSignals(signals: readonly AbortSignal[]): AbortSignal {
+  const [firstSignal, ...restSignals] = signals;
+  if (firstSignal === undefined) {
+    throw new Error("At least one abort signal is required.");
   }
-  return AbortSignal.any([requestSignal, timeoutSignal]);
+  return restSignals.length === 0 ? firstSignal : AbortSignal.any([firstSignal, ...restSignals]);
 }
 
 function isAbortSignalAborted(signal: AbortSignal | undefined): boolean {
@@ -536,76 +531,21 @@ function parseServerSentEventPart(part: string): unknown | undefined {
   if (payload.length === 0 || payload === "[DONE]") {
     return undefined;
   }
-  return JSON.parse(payload) as unknown;
-}
-
-function parseOpenAiCompatibleStreamEvent(chunk: unknown): readonly LlmProviderStreamEvent[] {
-  if (!isJsonRecord(chunk)) {
+  try {
+    return JSON.parse(payload) as unknown;
+  } catch {
     throw new OpenAiCompatibleHttpError({
       status: 502,
-      message: "Provider returned a malformed streaming chunk.",
-      body: chunk
+      message: "Provider returned a malformed SSE data chunk.",
+      body: {
+        bodyPreview: payload.slice(0, 120)
+      }
     });
   }
-  const choices = chunk["choices"];
-  if (!Array.isArray(choices)) {
-    throw new OpenAiCompatibleHttpError({
-      status: 502,
-      message: "Provider returned a streaming chunk without choices.",
-      body: chunk
-    });
-  }
-
-  const events: LlmProviderStreamEvent[] = [];
-  for (const choice of choices) {
-    if (!isJsonRecord(choice)) {
-      continue;
-    }
-    const delta = choice["delta"];
-    if (!isJsonRecord(delta)) {
-      continue;
-    }
-    const content = delta["content"];
-    if (typeof content === "string" && content.length > 0) {
-      events.push({
-        type: "delta",
-        value: content
-      });
-    }
-  }
-
-  const usage = parseOpenAiCompatibleUsage(chunk["usage"]);
-  if (usage !== undefined) {
-    events.push({
-      type: "usage",
-      usage
-    });
-  }
-  return events;
 }
 
-function parseOpenAiCompatibleUsage(value: unknown): LlmUsage | undefined {
-  if (!isJsonRecord(value)) {
-    return undefined;
-  }
-  const inputTokens = numberValue(value["prompt_tokens"]);
-  const outputTokens = numberValue(value["completion_tokens"]);
-  const totalTokens = numberValue(value["total_tokens"]) ?? inputTokens + outputTokens;
-  return {
-    inputTokens,
-    outputTokens,
-    totalTokens,
-    usageStatus: "actual",
-    cost: {
-      amount: 0,
-      currency: "USD",
-      status: "unknown"
-    }
-  };
-}
-
-function numberValue(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+function hasSseDataLine(part: string): boolean {
+  return part.split(/\r?\n/).some((line) => line.startsWith("data:"));
 }
 
 function isJsonRecord(value: unknown): value is JsonObject {
@@ -887,3 +827,5 @@ const fallbackUnavailableCipher: DesktopSecretCipher = {
     throw new Error("Encryption unavailable.");
   }
 };
+
+const DEFAULT_STREAM_FIRST_CHUNK_TIMEOUT_MS = 30_000;

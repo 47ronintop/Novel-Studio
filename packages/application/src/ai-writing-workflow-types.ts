@@ -52,6 +52,7 @@ export interface AiWritingSuggestion {
   readonly status: "pending-confirmation" | "applied";
   readonly proposedBody: string;
   readonly summary: string;
+  readonly runtimeNotice?: string;
   readonly conversationMessages: readonly AiWritingConversationMessage[];
   readonly styleReview: AiWritingStyleReview;
   readonly diffPreview: ChapterSuggestionDiffPreview;
@@ -63,6 +64,10 @@ export type AiWritingSuggestionStreamEvent =
   | {
       readonly type: "delta";
       readonly value: string;
+    }
+  | {
+      readonly type: "notice";
+      readonly message: string;
     }
   | {
       readonly type: "suggestion";

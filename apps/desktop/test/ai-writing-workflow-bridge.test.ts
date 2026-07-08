@@ -322,7 +322,7 @@ describe("AI writing workflow bridge", () => {
   test("streams deltas through the preload API and aborts the active stream", async () => {
     const calls: string[] = [];
     const api = createApi(calls);
-    const aborted = createDeferred<void>();
+    const aborted = createDeferred<undefined>();
     const updates: string[] = [];
     api.ai.streamChapterSuggestion = async function* (_request, options) {
       calls.push("ai.stream:start");
@@ -341,7 +341,7 @@ describe("AI writing workflow bridge", () => {
         if (nextProps.streamPreview === "The city") {
           const cancelled = bridge.cancelStreaming();
           updates.push(cancelled.streamPreview ?? "");
-          aborted.resolve();
+          aborted.resolve(undefined);
         }
       }
     );
@@ -353,6 +353,76 @@ describe("AI writing workflow bridge", () => {
     });
     expect(updates).toEqual(["The city", "The city"]);
     expect(calls).toEqual(["ai.stream:start", "ai.stream:aborted:true"]);
+  });
+
+  test("renders failed state when the streaming iterator throws before yielding an error result", async () => {
+    const calls: string[] = [];
+    const api = createApi(calls);
+    const updates: string[] = [];
+    api.ai.streamChapterSuggestion = async function* () {
+      calls.push("ai.stream:start");
+      throw new Error("Provider socket closed before the first SSE chunk.");
+      yield ok({ type: "delta", value: "" });
+    };
+    const bridge = createAiWritingWorkflowBridge(api);
+
+    bridge.beginStreamingGenerate("Continue with streaming.");
+    const finalProps = await bridge.generateStreamingSuggestion(
+      "Continue with streaming.",
+      (nextProps) => {
+        updates.push(`${nextProps.status}:${nextProps.failure?.message ?? ""}`);
+      }
+    );
+
+    expect(finalProps.status).toBe("failed");
+    expect(finalProps.failure).toMatchObject({
+      code: "AI_STREAM_FAILED",
+      message: "Provider socket closed before the first SSE chunk."
+    });
+    expect(updates).toEqual(["failed:Provider socket closed before the first SSE chunk."]);
+    expect(calls).toEqual(["ai.stream:start"]);
+  });
+
+  test("shows a runtime notice when streaming automatically ignores unsupported reasoning effort", async () => {
+    const calls: string[] = [];
+    const api = createApi(calls);
+    const updates: string[] = [];
+    api.ai.streamChapterSuggestion = async function* () {
+      calls.push("ai.stream:start");
+      yield ok({
+        type: "notice",
+        message:
+          "该模型/端点不支持推理强度调节，已自动忽略 reasoning_effort 并重试。"
+      });
+      yield ok({ type: "delta", value: "Opening line.\nAI continuation.\n" });
+      yield ok({
+        type: "suggestion",
+        suggestion: {
+          ...suggestion,
+          runtimeNotice:
+            "该模型/端点不支持推理强度调节，已自动忽略 reasoning_effort 并重试。"
+        }
+      });
+    };
+    const bridge = createAiWritingWorkflowBridge(api);
+
+    bridge.beginStreamingGenerate("Continue with streaming.");
+    const finalProps = await bridge.generateStreamingSuggestion(
+      "Continue with streaming.",
+      (nextProps) => {
+        if (nextProps.runtimeNotice !== undefined) {
+          updates.push(nextProps.runtimeNotice);
+        }
+      }
+    );
+
+    expect(finalProps.status).toBe("suggestion-ready");
+    expect(finalProps.runtimeNotice).toBe(
+      "该模型/端点不支持推理强度调节，已自动忽略 reasoning_effort 并重试。"
+    );
+    expect(updates).toContain(
+      "该模型/端点不支持推理强度调节，已自动忽略 reasoning_effort 并重试。"
+    );
   });
 
   test("maps returned chat messages and clears the composer after a successful send", async () => {

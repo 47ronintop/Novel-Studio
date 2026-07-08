@@ -2,7 +2,13 @@ import type { JsonObject, Result, UnifiedError } from "@novel-studio/shared";
 import type { ModelProfile } from "./model-settings-session.js";
 
 export type ModelDiscoveryStatus = "loaded" | "fallback";
-export type ModelReasoningStrengthValue = "low" | "medium" | "high";
+export type ModelReasoningStrengthValue =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh";
 
 export interface ModelReasoningStrengthAvailable extends JsonObject {
   readonly status: "available";
@@ -62,13 +68,21 @@ export function createModelDiscoveryFallback(
 }
 
 export function createModelDiscoverySnapshot(input: {
-  readonly profile: Pick<ModelProfile, "id" | "provider" | "modelName">;
+  readonly profile: Pick<
+    ModelProfile,
+    "id" | "provider" | "modelName" | "baseUrl" | "reasoningEffortEnabled"
+  >;
   readonly models: readonly ModelDiscoveryModelInput[];
 }): ModelDiscoverySnapshot {
   const models: ModelDiscoveryOption[] = input.models.map((model) => ({
     ...model,
     provider: input.profile.provider,
-    reasoningStrength: reasoningStrengthForModel(input.profile.provider, model.id)
+    reasoningStrength: reasoningStrengthForModel(
+      input.profile.provider,
+      model.id,
+      input.profile.baseUrl,
+      input.profile.reasoningEffortEnabled
+    )
   }));
 
   return {
@@ -76,24 +90,41 @@ export function createModelDiscoverySnapshot(input: {
     provider: input.profile.provider,
     status: "loaded",
     models,
-    reasoningStrength: reasoningStrengthForModel(input.profile.provider, input.profile.modelName)
+    reasoningStrength: reasoningStrengthForModel(
+      input.profile.provider,
+      input.profile.modelName,
+      input.profile.baseUrl,
+      input.profile.reasoningEffortEnabled
+    )
   };
 }
 
 export function reasoningStrengthForModel(
   provider: string,
-  modelId: string
+  modelId: string,
+  baseUrl?: string,
+  reasoningEffortEnabled = false
 ): ModelReasoningStrengthControl {
   const normalized = modelId.trim().toLowerCase();
-  if (
-    (provider === "openai" || provider === "openai-compatible") &&
-    OPENAI_REASONING_EFFORT_MODEL_IDS.has(normalized)
-  ) {
+  if (provider !== "openai" && provider !== "openai-compatible") {
+    return hiddenReasoningStrength();
+  }
+
+  if (!isOfficialOpenAiEndpoint(provider, baseUrl) && !reasoningEffortEnabled) {
+    return {
+      status: "hidden",
+      reason:
+        "Reasoning strength is hidden for custom OpenAI-compatible endpoints until this provider is explicitly marked as supporting reasoning_effort."
+    };
+  }
+
+  const spec = reasoningEffortSpecForOpenAiModel(normalized);
+  if (spec !== undefined) {
     return {
       status: "available",
       providerParamName: "reasoning_effort",
-      allowedValues: ["low", "medium", "high"],
-      defaultValue: "medium"
+      allowedValues: spec.allowedValues,
+      defaultValue: spec.defaultValue
     };
   }
 
@@ -113,18 +144,60 @@ function redactDiscoveryText(value: string): string {
     .replace(/secret:\/\/[^\s"'`]+/g, "[REDACTED]");
 }
 
-// VUI-03 intentionally exposes reasoning effort only for known OpenAI-style models.
-// Parameter contract: reasoning_effort accepts low | medium | high.
-const OPENAI_REASONING_EFFORT_MODEL_IDS = new Set([
-  "gpt-5",
-  "gpt-5.1",
-  "gpt-5.2",
-  "gpt-5.3",
-  "gpt-5.4",
-  "gpt-5.5",
-  "o1",
-  "o1-mini",
-  "o3",
-  "o3-mini",
-  "o4-mini"
-]);
+interface ReasoningEffortSpec {
+  readonly allowedValues: ModelReasoningStrengthValue[];
+  readonly defaultValue: ModelReasoningStrengthValue;
+}
+
+function reasoningEffortSpecForOpenAiModel(
+  normalizedModelId: string
+): ReasoningEffortSpec | undefined {
+  if (normalizedModelId === "gpt-5-pro") {
+    return { allowedValues: ["high"], defaultValue: "high" };
+  }
+  if (normalizedModelId.includes("codex") && normalizedModelId.startsWith("gpt-5")) {
+    return {
+      allowedValues: ["minimal", "low", "medium", "high", "xhigh"],
+      defaultValue: "medium"
+    };
+  }
+  if (normalizedModelId === "gpt-5") {
+    return {
+      allowedValues: ["minimal", "low", "medium", "high"],
+      defaultValue: "medium"
+    };
+  }
+  if (normalizedModelId === "gpt-5.5") {
+    return {
+      allowedValues: ["none", "low", "medium", "high", "xhigh"],
+      defaultValue: "medium"
+    };
+  }
+  if (/^gpt-5\.[1-9]\d*/.test(normalizedModelId)) {
+    return {
+      allowedValues: ["none", "low", "medium", "high"],
+      defaultValue: "none"
+    };
+  }
+  if (/^o[134](?:-|$)/.test(normalizedModelId)) {
+    return {
+      allowedValues: ["low", "medium", "high"],
+      defaultValue: "medium"
+    };
+  }
+  return undefined;
+}
+
+function isOfficialOpenAiEndpoint(provider: string, baseUrl: string | undefined): boolean {
+  if (provider === "openai" && (baseUrl === undefined || baseUrl.trim().length === 0)) {
+    return true;
+  }
+  if (baseUrl === undefined) {
+    return false;
+  }
+  try {
+    return new URL(baseUrl).hostname.toLowerCase() === "api.openai.com";
+  } catch {
+    return false;
+  }
+}

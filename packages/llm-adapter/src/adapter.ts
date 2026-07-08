@@ -80,6 +80,7 @@ export function createLlmAdapter(options: LlmAdapterOptions): LlmAdapter {
               completion.usage ?? missingUsage(),
               request.modelProfile.tokenPricing
             ),
+            ...(completion.warnings === undefined ? {} : { warnings: completion.warnings }),
             createdAt: now()
           };
 

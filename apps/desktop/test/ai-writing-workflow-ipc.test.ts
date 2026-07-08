@@ -302,9 +302,11 @@ describe("M14 AI writing workflow IPC", () => {
       }
     });
 
-    const iterator = api.ai
-      .streamChapterSuggestion({ instruction: "Continue." }, { signal: controller.signal })
-      [Symbol.asyncIterator]();
+    const stream = api.ai.streamChapterSuggestion(
+      { instruction: "Continue." },
+      { signal: controller.signal }
+    );
+    const iterator = stream[Symbol.asyncIterator]();
     await expect(iterator.next()).resolves.toEqual({
       done: false,
       value: ok({ type: "delta", value: "The city" })

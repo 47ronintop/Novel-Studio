@@ -110,7 +110,7 @@ export function EditorToolbar({
 export function calculateWritingMetrics(body: string): WritingMetrics {
   const lineCount = body.length === 0 ? 1 : body.split("\n").length;
   const cjkCount = body.match(/\p{Script=Han}/gu)?.length ?? 0;
-  const englishWordCount = body.match(/[A-Za-z0-9]+(?:['’\-][A-Za-z0-9]+)*/g)?.length ?? 0;
+  const englishWordCount = body.match(/[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*/g)?.length ?? 0;
   const writingUnitCount = cjkCount + englishWordCount;
   const readingTimeMinutes =
     writingUnitCount === 0

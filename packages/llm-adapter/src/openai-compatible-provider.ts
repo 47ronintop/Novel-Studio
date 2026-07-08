@@ -6,6 +6,7 @@ import type {
   LlmProvider,
   LlmProviderCompletion,
   LlmProviderStreamEvent,
+  LlmProviderWarning,
   LlmRequest,
   LlmUsage
 } from "./types.js";
@@ -62,8 +63,12 @@ export function createOpenAiCompatibleProvider(
     id: "openai-compatible",
     async complete(request) {
       try {
-        const payload = await options.transport(await createTransportRequest(request, options));
-        return parseChatCompletion(payload);
+        const transportRequest = await createTransportRequest(request, options);
+        const result = await transportWithReasoningFallback(options.transport, transportRequest);
+        return {
+          ...parseChatCompletion(result.payload),
+          ...(result.warning === undefined ? {} : { warnings: [result.warning] })
+        };
       } catch (error) {
         throw normalizeOpenAiCompatibleError(error);
       }
@@ -84,12 +89,27 @@ async function* streamChatCompletion(
   options: Pick<OpenAiCompatibleProviderOptions, "resolveApiKey">
 ): AsyncIterable<LlmProviderStreamEvent> {
   try {
-    for await (const chunk of streamTransport(
-      await createTransportRequest(request, options, true)
-    )) {
-      for (const event of parseStreamChunk(chunk)) {
-        yield event;
+    const transportRequest = await createTransportRequest(request, options, true);
+    let emittedEvent = false;
+    try {
+      for await (const chunk of streamTransport(transportRequest)) {
+        for (const event of parseStreamChunk(chunk)) {
+          emittedEvent = true;
+          yield event;
+        }
       }
+      return;
+    } catch (error) {
+      if (!emittedEvent && shouldRetryWithoutReasoningEffort(error, transportRequest)) {
+        yield reasoningEffortIgnoredWarning();
+        for await (const chunk of streamTransport(omitReasoningEffort(transportRequest))) {
+          for (const event of parseStreamChunk(chunk)) {
+            yield event;
+          }
+        }
+        return;
+      }
+      throw error;
     }
   } catch (error) {
     throw normalizeOpenAiCompatibleError(error);
@@ -141,6 +161,9 @@ function createTransportRequest(
   if (request.parameters.topP !== undefined) {
     body.top_p = request.parameters.topP;
   }
+  if (request.parameters.reasoningEffort !== undefined) {
+    body.reasoning_effort = request.parameters.reasoningEffort;
+  }
 
   const transportRequest = {
     url: `${baseUrl.replace(/\/+$/, "")}/chat/completions`,
@@ -183,6 +206,63 @@ async function createTransportRequestWithSecret(
           authorization: `Bearer ${apiKey}`
         }
       };
+}
+
+async function transportWithReasoningFallback(
+  transport: OpenAiCompatibleTransport,
+  request: OpenAiCompatibleTransportRequest
+): Promise<{ readonly payload: unknown; readonly warning?: LlmProviderWarning }> {
+  try {
+    return { payload: await transport(request) };
+  } catch (error) {
+    if (shouldRetryWithoutReasoningEffort(error, request)) {
+      return {
+        payload: await transport(omitReasoningEffort(request)),
+        warning: reasoningEffortIgnoredWarning()
+      };
+    }
+    throw error;
+  }
+}
+
+function reasoningEffortIgnoredWarning(): LlmProviderWarning {
+  return {
+    type: "warning",
+    code: "LLM_REASONING_EFFORT_IGNORED",
+    message:
+      "The model endpoint does not support reasoning strength controls. reasoning_effort was removed and the request was retried."
+  };
+}
+
+function shouldRetryWithoutReasoningEffort(
+  error: unknown,
+  request: OpenAiCompatibleTransportRequest
+): boolean {
+  if (!hasReasoningEffort(request.body) || !(error instanceof OpenAiCompatibleHttpError)) {
+    return false;
+  }
+  const message = `${error.message}\n${readProviderErrorMessage(error.body) ?? ""}`;
+  return (
+    error.status >= 400 &&
+    error.status < 500 &&
+    /reasoning[_ .-]?effort/i.test(message) &&
+    /(unrecognized|unknown|unsupported|not supported|invalid|not accept)/i.test(message)
+  );
+}
+
+function hasReasoningEffort(body: JsonObject): boolean {
+  return Object.hasOwn(body, "reasoning_effort");
+}
+
+function omitReasoningEffort(
+  request: OpenAiCompatibleTransportRequest
+): OpenAiCompatibleTransportRequest {
+  const body = { ...request.body };
+  delete body.reasoning_effort;
+  return {
+    ...request,
+    body
+  };
 }
 
 function toOpenAiCompatibleMessage(message: LlmMessage): JsonObject {
@@ -307,6 +387,7 @@ function normalizeOpenAiCompatibleError(error: unknown): LlmProviderFailure {
     const detail: JsonObject = {
       providerStatus: error.status
     };
+    const providerMessage = readProviderErrorMessage(error.body);
     const providerRequestId = readProviderRequestId(error.body);
     if (providerRequestId !== undefined) {
       detail.providerRequestId = providerRequestId;
@@ -319,7 +400,7 @@ function normalizeOpenAiCompatibleError(error: unknown): LlmProviderFailure {
 
     return new LlmProviderFailure({
       code: error.status === 429 ? "LLM_RATE_LIMITED" : "LLM_PROVIDER_ERROR",
-      message: error.message,
+      message: providerMessage ?? error.message,
       retryable: error.status === 429 || error.status >= 500,
       redactedDetail: detail
     });
@@ -330,6 +411,23 @@ function normalizeOpenAiCompatibleError(error: unknown): LlmProviderFailure {
     message: "OpenAI-compatible transport failed.",
     retryable: false
   });
+}
+
+function readProviderErrorMessage(body: unknown): string | undefined {
+  if (!isRecord(body)) {
+    return undefined;
+  }
+  if (typeof body.message === "string" && body.message.trim().length > 0) {
+    return body.message;
+  }
+  if (typeof body.error === "string" && body.error.trim().length > 0) {
+    return body.error;
+  }
+  if (isRecord(body.error)) {
+    const message = body.error.message;
+    return typeof message === "string" && message.trim().length > 0 ? message : undefined;
+  }
+  return undefined;
 }
 
 function readProviderRequestId(body: unknown): string | undefined {

@@ -76,7 +76,8 @@
               "topP": { "type": "number", "minimum": 0, "maximum": 1 },
               "timeoutMs": { "type": "integer", "minimum": 1000 },
               "frequencyPenalty": { "type": "number" },
-              "presencePenalty": { "type": "number" }
+              "presencePenalty": { "type": "number" },
+              "reasoningEffortEnabled": { "type": "boolean" }
             },
             "additionalProperties": true
           }

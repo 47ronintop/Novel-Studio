@@ -360,6 +360,158 @@ describe("OpenAI-compatible provider", () => {
       }
     ]);
   });
+
+  test("surfaces provider streaming error messages instead of only the HTTP status", async () => {
+    const provider = createOpenAiCompatibleProvider({
+      transport: async () => readFixture("openai-compatible-chat-success.json"),
+      streamTransport: async function* () {
+        throw new OpenAiCompatibleHttpError({
+          status: 400,
+          message: "Provider returned HTTP 400.",
+          body: {
+            error: {
+              message: "Unrecognized request argument supplied: reasoning_effort",
+              type: "invalid_request_error"
+            }
+          }
+        });
+        yield {};
+      }
+    });
+    const adapter = createLlmAdapter({
+      provider,
+      clock: () => "2026-07-08T00:00:00.000Z"
+    });
+
+    const events = await collectStream(adapter.stream({ ...request, mode: "streaming" }));
+
+    expect(events).toEqual([
+      {
+        ok: true,
+        value: {
+          type: "start",
+          requestId: "llmreq_openai_compatible_01",
+          provider: "openai-compatible",
+          modelName: "fixture-model",
+          createdAt: "2026-07-08T00:00:00.000Z"
+        }
+      },
+      {
+        ok: false,
+        error: expect.objectContaining({
+          code: "LLM_PROVIDER_ERROR",
+          message: "Unrecognized request argument supplied: reasoning_effort"
+        })
+      }
+    ]);
+  });
+
+  test("retries non-streaming requests without reasoning_effort when the provider rejects the parameter", async () => {
+    const calls: OpenAiCompatibleTransportRequest[] = [];
+    const provider = createOpenAiCompatibleProvider({
+      transport: async (transportRequest) => {
+        calls.push(transportRequest);
+        if (calls.length === 1) {
+          throw new OpenAiCompatibleHttpError({
+            status: 400,
+            message: "Provider returned HTTP 400.",
+            body: {
+              error: {
+                message: "Unrecognized request argument supplied: reasoning_effort"
+              }
+            }
+          });
+        }
+        return readFixture("openai-compatible-chat-success.json");
+      }
+    });
+    const adapter = createLlmAdapter({
+      provider,
+      clock: () => "2026-07-08T00:00:00.000Z"
+    });
+
+    const result = await adapter.complete({
+      ...request,
+      parameters: {
+        ...request.parameters,
+        reasoningEffort: "high"
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.body).toMatchObject({
+      reasoning_effort: "high"
+    });
+    expect(calls[1]?.body).not.toHaveProperty("reasoning_effort");
+  });
+
+  test("retries streaming requests without reasoning_effort when the provider rejects the parameter", async () => {
+    const calls: OpenAiCompatibleTransportRequest[] = [];
+    const provider = createOpenAiCompatibleProvider({
+      transport: async () => readFixture("openai-compatible-chat-success.json"),
+      streamTransport: async function* (transportRequest) {
+        calls.push(transportRequest);
+        if (calls.length === 1) {
+          throw new OpenAiCompatibleHttpError({
+            status: 400,
+            message: "Provider returned HTTP 400.",
+            body: {
+              error: {
+                message: "Unrecognized request argument supplied: reasoning_effort"
+              }
+            }
+          });
+        }
+        yield {
+          choices: [
+            {
+              delta: {
+                content: "Retried without reasoning."
+              }
+            }
+          ]
+        };
+      }
+    });
+    const adapter = createLlmAdapter({
+      provider,
+      clock: () => "2026-07-08T00:00:00.000Z"
+    });
+
+    const events = await collectStream(
+      adapter.stream({
+        ...request,
+        mode: "streaming",
+        parameters: {
+          ...request.parameters,
+          reasoningEffort: "high"
+        }
+      })
+    );
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.body).toMatchObject({
+      reasoning_effort: "high"
+    });
+    expect(calls[1]?.body).not.toHaveProperty("reasoning_effort");
+    expect(events).toContainEqual({
+      ok: true,
+      value: {
+        type: "delta",
+        value: "Retried without reasoning."
+      }
+    });
+    expect(events).toContainEqual({
+      ok: true,
+      value: {
+        type: "warning",
+        code: "LLM_REASONING_EFFORT_IGNORED",
+        message:
+          "The model endpoint does not support reasoning strength controls. reasoning_effort was removed and the request was retried."
+      }
+    });
+  });
 });
 
 function readFixture(fileName: string): JsonObject {

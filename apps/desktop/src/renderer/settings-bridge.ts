@@ -277,7 +277,8 @@ export function createSettingsBridge(
     return {
       ...baseProfile,
       ...(nextDraft.baseUrl.trim().length === 0 ? {} : { baseUrl: nextDraft.baseUrl.trim() }),
-      ...(topP === undefined ? {} : { topP })
+      ...(topP === undefined ? {} : { topP }),
+      ...(nextDraft.reasoningEffortEnabled ? { reasoningEffortEnabled: true } : {})
     };
   }
 
@@ -388,6 +389,7 @@ function draftFromProfile(profile: ModelProfile): ModelSettingsDraft {
     temperature: String(profile.temperature),
     maxTokens: String(profile.maxTokens),
     topP: profile.topP === undefined ? "" : String(profile.topP),
+    reasoningEffortEnabled: profile.reasoningEffortEnabled === true,
     timeoutMs: String(profile.timeoutMs)
   };
 }
@@ -403,6 +405,7 @@ function newDraft(profileId: string): ModelSettingsDraft {
     temperature: "0.7",
     maxTokens: "4096",
     topP: "1",
+    reasoningEffortEnabled: false,
     timeoutMs: "60000"
   };
 }

@@ -25,6 +25,7 @@ export interface ModelProfile extends JsonObject {
   readonly timeoutMs: number;
   readonly frequencyPenalty?: number;
   readonly presencePenalty?: number;
+  readonly reasoningEffortEnabled?: boolean;
 }
 
 export interface AutosaveSettings extends JsonObject {

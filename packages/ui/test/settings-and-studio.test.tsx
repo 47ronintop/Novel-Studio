@@ -90,6 +90,7 @@ describe("M8 Settings and Studio UI", () => {
           temperature: "0.7",
           maxTokens: "4096",
           topP: "1",
+          reasoningEffortEnabled: false,
           timeoutMs: "60000"
         }}
         connectionStatus={{
@@ -377,6 +378,7 @@ function createModelSettingsPanelProps(): Parameters<typeof ModelSettingsPanel>[
       temperature: "0.7",
       maxTokens: "4096",
       topP: "1",
+      reasoningEffortEnabled: false,
       timeoutMs: "60000"
     },
     saveStatus: "idle",

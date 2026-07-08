@@ -19,6 +19,7 @@ import {
 
 import type { ModelRuntimeProfile } from "./model-settings-session.js";
 import { createChapterSuggestionLlmRequest } from "./ai-writing-llm-requests.js";
+import { warningRuntimeNotice } from "./ai-writing-runtime-notices.js";
 import { reviewAiWritingStyle } from "./ai-writing-style-rules.js";
 import type {
   AiWritingConversationMessage,
@@ -175,27 +176,68 @@ export async function* streamChapterSuggestionForSession(
   });
   let streamedText = "";
   let usage = missingWorkflowUsage();
+  let runtimeNotice: string | undefined;
 
-  for await (const result of options.llmAdapter.stream(llmRequest)) {
-    if (request.abortSignal?.aborted === true) {
-      return;
-    }
-    if (!result.ok) {
-      yield result;
-      return;
-    }
+  try {
+    for await (const result of options.llmAdapter.stream(llmRequest)) {
+      if (request.abortSignal?.aborted === true) {
+        return;
+      }
+      if (!result.ok) {
+        await recordFailedRun({
+          options,
+          workflowId: parsedWorkflow.value.id,
+          runState,
+          generatedAt: now(),
+          contextTrace: contextBundle.value.trace,
+          modelProfile: runtimeProfile.value.modelProfile,
+          workflowTitle: parsedWorkflow.value.title,
+          error: result.error
+        });
+        yield result;
+        return;
+      }
 
-    const event = result.value;
-    if (event.type === "delta") {
-      streamedText += event.value;
-      yield ok({
-        type: "delta",
-        value: event.value
-      });
+      const event = result.value;
+      if (event.type === "delta") {
+        streamedText += event.value;
+        yield ok({
+          type: "delta",
+          value: event.value
+        });
+      }
+      if (event.type === "usage") {
+        usage = event.usage;
+      }
+      if (event.type === "warning") {
+        runtimeNotice = warningRuntimeNotice(event);
+        yield ok({
+          type: "notice",
+          message: runtimeNotice
+        });
+      }
     }
-    if (event.type === "usage") {
-      usage = event.usage;
-    }
+  } catch (error) {
+    const failure = createUnifiedError({
+      code: "AI_STREAM_FAILED",
+      category: "LLMAdapterError",
+      message: error instanceof Error ? error.message : "AI streaming failed.",
+      recoverability: "retryable",
+      suggestedAction: "Check the model provider response and retry.",
+      traceId: "ai-writing-workflow"
+    });
+    await recordFailedRun({
+      options,
+      workflowId: parsedWorkflow.value.id,
+      runState,
+      generatedAt: now(),
+      contextTrace: contextBundle.value.trace,
+      modelProfile: runtimeProfile.value.modelProfile,
+      workflowTitle: parsedWorkflow.value.title,
+      error: failure
+    });
+    yield err(failure);
+    return;
   }
 
   if (request.abortSignal?.aborted === true) {
@@ -271,6 +313,7 @@ export async function* streamChapterSuggestionForSession(
     status: "pending-confirmation",
     proposedBody: output.proposedBody,
     summary: output.summary,
+    ...(runtimeNotice === undefined ? {} : { runtimeNotice }),
     conversationMessages: nextConversationMessages,
     styleReview: reviewAiWritingStyle(output.proposedBody),
     diffPreview: options.chapterEditorSession.previewSuggestionDiff(output.proposedBody),

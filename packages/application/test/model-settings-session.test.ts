@@ -13,6 +13,7 @@ import {
   createModelSettingsSession,
   MODEL_PROVIDER_CATALOG,
   resolveDefaultModelRuntimeProfile,
+  reasoningStrengthForModel,
   type ModelConnectionTester,
   type ModelDiscoveryPort,
   type ModelProfile,
@@ -64,6 +65,52 @@ const secondaryProfile = {
 } satisfies ModelProfile;
 
 describe("model settings session", () => {
+  test("hides reasoning strength for third-party OpenAI-compatible base URLs by default", () => {
+    const result = reasoningStrengthForModel(
+      "openai-compatible",
+      "gpt-5.5",
+      "https://api.hostcentral.cc/v1"
+    );
+
+    expect(result).toMatchObject({
+      status: "hidden",
+      reason: expect.stringContaining("custom OpenAI-compatible endpoint")
+    });
+  });
+
+  test("uses model-specific reasoning effort values for official OpenAI endpoints", () => {
+    expect(reasoningStrengthForModel("openai", "gpt-5", "https://api.openai.com/v1")).toEqual({
+      status: "available",
+      providerParamName: "reasoning_effort",
+      allowedValues: ["minimal", "low", "medium", "high"],
+      defaultValue: "medium"
+    });
+    expect(
+      reasoningStrengthForModel("openai", "gpt-5.1", "https://api.openai.com/v1")
+    ).toEqual({
+      status: "available",
+      providerParamName: "reasoning_effort",
+      allowedValues: ["none", "low", "medium", "high"],
+      defaultValue: "none"
+    });
+    expect(
+      reasoningStrengthForModel("openai", "gpt-5.5", "https://api.openai.com/v1")
+    ).toEqual({
+      status: "available",
+      providerParamName: "reasoning_effort",
+      allowedValues: ["none", "low", "medium", "high", "xhigh"],
+      defaultValue: "medium"
+    });
+    expect(
+      reasoningStrengthForModel("openai", "gpt-5-pro", "https://api.openai.com/v1")
+    ).toEqual({
+      status: "available",
+      providerParamName: "reasoning_effort",
+      allowedValues: ["high"],
+      defaultValue: "high"
+    });
+  });
+
   test("lists and saves model profiles through an injected settings port", async () => {
     const writes: ProjectSettings[] = [];
     const port: ProjectSettingsPort = {

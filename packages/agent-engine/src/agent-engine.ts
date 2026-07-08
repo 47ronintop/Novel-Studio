@@ -95,6 +95,7 @@ export async function runAgent(input: AgentRunInput): Promise<Result<AgentHandof
       modelName: llmResult.value.modelName
     },
     usage: llmResult.value.usage,
+    ...(llmResult.value.warnings === undefined ? {} : { warnings: llmResult.value.warnings }),
     createdAt: input.now()
   });
 }

@@ -1,6 +1,11 @@
 ﻿import { buildContextBundle, type ContextBundleTrace } from "@novel-studio/context-engine";
 import { runAgent, type AgentConfig } from "@novel-studio/agent-engine";
-import type { LlmModelProfile, LlmParameters, LlmUsage } from "@novel-studio/llm-adapter";
+import type {
+  LlmModelProfile,
+  LlmParameters,
+  LlmProviderWarning,
+  LlmUsage
+} from "@novel-studio/llm-adapter";
 import {
   completeWorkflowStep,
   confirmWorkflowStep,
@@ -24,6 +29,7 @@ import {
   createChapterSuggestionLlmRequest,
   createSelectionPreviewLlmRequest
 } from "./ai-writing-llm-requests.js";
+import { warningRuntimeNotice } from "./ai-writing-runtime-notices.js";
 import { reviewAiWritingStyle } from "./ai-writing-style-rules.js";
 import { streamChapterSuggestionForSession } from "./ai-writing-streaming-session.js";
 import type {
@@ -297,6 +303,7 @@ export function createAgentBackedAiWritingWorkflowSession(
         status: "pending-confirmation",
         proposedBody: output.proposedBody,
         summary: output.summary,
+        ...runtimeNoticeProps(handoff.value.warnings),
         conversationMessages: nextConversationMessages,
         styleReview: reviewAiWritingStyle(output.proposedBody),
         diffPreview: options.chapterEditorSession.previewSuggestionDiff(output.proposedBody),
@@ -639,6 +646,13 @@ function appendConversationTurn(
   return [...conversationMessages];
 }
 
+function runtimeNoticeProps(
+  warnings: readonly LlmProviderWarning[] | undefined
+): Pick<AiWritingSuggestion, "runtimeNotice"> | Record<string, never> {
+  const notice = warnings?.map(warningRuntimeNotice).find((message) => message.length > 0);
+  return notice === undefined ? {} : { runtimeNotice: notice };
+}
+
 function createWorkflowRunRecord(input: {
   readonly workflowId: string;
   readonly status: WorkflowRunRecordStatus;
@@ -937,11 +951,7 @@ function validateSelectionRange(
   return ok(selection);
 }
 
-function replaceSelection(
-  body: string,
-  selection: AiWritingSelectionRange,
-  proposedText: string
-): string {
+function replaceSelection(body: string, selection: AiWritingSelectionRange, proposedText: string): string {
   return `${body.slice(0, selection.startOffset)}${proposedText}${body.slice(selection.endOffset)}`;
 }
 

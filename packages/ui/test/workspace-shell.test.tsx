@@ -496,6 +496,7 @@ describe("WorkspaceShell", () => {
         temperature: "0.7",
         maxTokens: "4096",
         topP: "",
+        reasoningEffortEnabled: false,
         timeoutMs: "60000"
       },
       saveStatus: "idle",

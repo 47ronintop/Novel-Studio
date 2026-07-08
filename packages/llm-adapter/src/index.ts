@@ -26,6 +26,7 @@ export type {
   LlmProviderCompletion,
   LlmProviderId,
   LlmProviderStreamEvent,
+  LlmProviderWarning,
   LlmRequest,
   LlmResponse,
   LlmStreamDeltaEvent,
