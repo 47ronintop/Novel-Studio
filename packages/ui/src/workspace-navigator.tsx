@@ -1,5 +1,22 @@
 import type { ActivityId, NavigatorSection } from "@novel-studio/application";
-import { FilePlus, FolderOpen, FolderPlus, MoreHorizontal, Search } from "lucide-react";
+import {
+  Bot,
+  Brain,
+  ChevronRight,
+  Clock3,
+  FilePlus,
+  FileText,
+  FolderOpen,
+  FolderPlus,
+  Globe2,
+  ListTree,
+  MessageSquareText,
+  MoreHorizontal,
+  Search,
+  UserRound,
+  Workflow as WorkflowIcon,
+  type LucideIcon
+} from "lucide-react";
 import type { ReactNode } from "react";
 
 import type { ConfigStudioAssetType, ConfigStudioPanelProps } from "./config-studio-panel.js";
@@ -85,7 +102,9 @@ export function WorkspaceNavigator({
         <span>项目资产</span>
         <span>{sections.length}</span>
       </div>
-      {projectWorkflow === undefined ? null : <ProjectWorkflowControls projectWorkflow={projectWorkflow} />}
+      {projectWorkflow === undefined ? null : (
+        <ProjectWorkflowControls projectWorkflow={projectWorkflow} />
+      )}
       <label className="ns-navigator-search">
         <Search aria-hidden="true" size={14} />
         <input
@@ -98,6 +117,7 @@ export function WorkspaceNavigator({
       <ul className="ns-tree">
         {sections.map((section) => {
           const label = navigatorSectionLabels.get(section.id) ?? section.title;
+          const SectionIcon = navigatorSectionIcon(section.id);
           const items = buildSectionItems({
             sectionId: section.id,
             query: normalizedQuery,
@@ -127,8 +147,20 @@ export function WorkspaceNavigator({
                   }
                   type="button"
                 >
-                  <span>{label}</span>
-                  <span>{items.length}</span>
+                  <ChevronRight
+                    aria-hidden="true"
+                    className="ns-tree-chevron"
+                    data-navigator-chevron={isExpanded ? "expanded" : "collapsed"}
+                    size={14}
+                  />
+                  <SectionIcon
+                    aria-hidden="true"
+                    className="ns-tree-type-icon"
+                    data-navigator-type-icon={`section:${section.id}`}
+                    size={14}
+                  />
+                  <span className="ns-tree-row-label">{label}</span>
+                  <span className="ns-tree-row-count">{items.length}</span>
                 </button>
                 {isExpanded ? <ul className="ns-navigator-item-list">{items}</ul> : null}
               </section>
@@ -234,8 +266,18 @@ function buildSectionItems(input: {
                 onClick={() => input.projectWorkflow?.onSelectChapter(chapter.id)}
                 type="button"
               >
-                <span>{highlightText(chapter.title, input.query)}</span>
-                <span>{formatChapterMeta(chapter.wordCount)}</span>
+                <span className="ns-navigator-item-label">
+                  <FileText
+                    aria-hidden="true"
+                    className="ns-navigator-type-icon"
+                    data-navigator-type-icon="chapter"
+                    size={14}
+                  />
+                  <span>{highlightText(chapter.title, input.query)}</span>
+                </span>
+                <span className="ns-navigator-item-count">
+                  {formatChapterMeta(chapter.wordCount)}
+                </span>
               </button>
               <div className="ns-navigator-item-meta">
                 <span>{chapter.status}</span>
@@ -264,22 +306,35 @@ function buildSectionItems(input: {
       input.storyBibleEditor?.entries
         .filter((entry) => entry.kind === storyBibleKind)
         .filter((entry) => matchesQuery(input.query, [entry.title, entry.status, entry.body]))
-        .map((entry) => (
-          <li key={entry.id}>
-            <button
-              className="ns-navigator-asset-button"
-              onClick={() => {
-                input.onActivitySelect?.(input.sectionId === "timeline" ? "timeline" : "storyBible");
-                input.storyBibleEditor?.onKindSelect(entry.kind);
-                input.storyBibleEditor?.onEntrySelect(entry.id);
-              }}
-              type="button"
-            >
-              <span>{highlightText(entry.title, input.query)}</span>
-              <span>{entry.status}</span>
-            </button>
-          </li>
-        )) ?? []
+        .map((entry) => {
+          const EntryIcon = navigatorStoryBibleIcon(entry.kind);
+          return (
+            <li key={entry.id}>
+              <button
+                className="ns-navigator-asset-button"
+                onClick={() => {
+                  input.onActivitySelect?.(
+                    input.sectionId === "timeline" ? "timeline" : "storyBible"
+                  );
+                  input.storyBibleEditor?.onKindSelect(entry.kind);
+                  input.storyBibleEditor?.onEntrySelect(entry.id);
+                }}
+                type="button"
+              >
+                <span className="ns-navigator-item-label">
+                  <EntryIcon
+                    aria-hidden="true"
+                    className="ns-navigator-type-icon"
+                    data-navigator-type-icon={`story:${entry.kind}`}
+                    size={14}
+                  />
+                  <span>{highlightText(entry.title, input.query)}</span>
+                </span>
+                <span className="ns-navigator-item-count">{entry.status}</span>
+              </button>
+            </li>
+          );
+        }) ?? []
     );
   }
 
@@ -288,25 +343,91 @@ function buildSectionItems(input: {
     return (
       input.studio?.assets
         .filter((asset) => asset.assetType === studioAssetType)
-        .map((asset) => (
-          <li key={`${asset.assetType}:${asset.assetId}`}>
-            <button
-              className="ns-navigator-asset-button"
-              onClick={() => {
-                input.onActivitySelect?.("studio");
-                input.studio?.onAssetSelect?.(asset.assetType, asset.assetId);
-              }}
-              type="button"
-            >
-              <span>{highlightText(asset.title, input.query)}</span>
-              <span>{asset.assetType}</span>
-            </button>
-          </li>
-        )) ?? []
+        .map((asset) => {
+          const AssetIcon = navigatorStudioAssetIcon(asset.assetType);
+          return (
+            <li key={`${asset.assetType}:${asset.assetId}`}>
+              <button
+                className="ns-navigator-asset-button"
+                onClick={() => {
+                  input.onActivitySelect?.("studio");
+                  input.studio?.onAssetSelect?.(asset.assetType, asset.assetId);
+                }}
+                type="button"
+              >
+                <span className="ns-navigator-item-label">
+                  <AssetIcon
+                    aria-hidden="true"
+                    className="ns-navigator-type-icon"
+                    data-navigator-type-icon={`asset:${asset.assetType}`}
+                    size={14}
+                  />
+                  <span>{highlightText(asset.title, input.query)}</span>
+                </span>
+                <span className="ns-navigator-item-count">{asset.assetType}</span>
+              </button>
+            </li>
+          );
+        }) ?? []
     );
   }
 
   return [];
+}
+
+function navigatorSectionIcon(sectionId: string): LucideIcon {
+  switch (sectionId) {
+    case "chapters":
+      return FileText;
+    case "characters":
+      return UserRound;
+    case "world":
+      return Globe2;
+    case "outline":
+      return ListTree;
+    case "timeline":
+      return Clock3;
+    case "memories":
+      return Brain;
+    case "prompts":
+      return MessageSquareText;
+    case "agents":
+      return Bot;
+    case "workflows":
+      return WorkflowIcon;
+    default:
+      return FileText;
+  }
+}
+
+function navigatorStoryBibleIcon(kind: StoryBibleEditorKind): LucideIcon {
+  switch (kind) {
+    case "character":
+      return UserRound;
+    case "world":
+      return Globe2;
+    case "outline":
+      return ListTree;
+    case "timeline":
+      return Clock3;
+    case "memory":
+      return Brain;
+    default:
+      return FileText;
+  }
+}
+
+function navigatorStudioAssetIcon(type: ConfigStudioAssetType): LucideIcon {
+  switch (type) {
+    case "prompt":
+      return MessageSquareText;
+    case "agent":
+      return Bot;
+    case "workflow":
+      return WorkflowIcon;
+    default:
+      return FileText;
+  }
 }
 
 function renderChapterMoreMenu({

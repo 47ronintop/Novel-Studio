@@ -33,7 +33,14 @@ describe("WorkspaceNavigator", () => {
     expect(html).toContain("主角");
     expect(html).toContain("续写章节");
     expect(html).toContain("prompt");
-    expect(html).toContain('<mark>开篇</mark>');
+    expect(html).toContain("<mark>开篇</mark>");
+    expect(html).toContain("ns-tree-chevron");
+    expect(html).toContain('data-navigator-chevron="expanded"');
+    expect(html).toContain('data-navigator-type-icon="section:chapters"');
+    expect(html).toContain('data-navigator-type-icon="chapter"');
+    expect(html).toContain('data-navigator-type-icon="story:character"');
+    expect(html).toContain('data-navigator-type-icon="asset:prompt"');
+    expect(html).toContain('data-active="true"');
   });
 
   test("wires section collapse, search, chapter actions, and guarded delete", () => {
@@ -46,8 +53,7 @@ describe("WorkspaceNavigator", () => {
       createNavigatorProps({
         expandedSectionIds: ["chapters", "characters"],
         onSearchQueryChange: (query) => calls.push(`search:${query}`),
-        onExpandedSectionIdsChange: (sectionIds) =>
-          calls.push(`expanded:${sectionIds.join(",")}`),
+        onExpandedSectionIdsChange: (sectionIds) => calls.push(`expanded:${sectionIds.join(",")}`),
         onRenameChapter: (chapterId, title) => calls.push(`rename:${chapterId}:${title}`),
         onDuplicateChapter: (chapterId) => calls.push(`duplicate:${chapterId}`),
         onDeleteChapter: (chapterId) => calls.push(`delete:${chapterId}`)
