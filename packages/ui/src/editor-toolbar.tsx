@@ -1,4 +1,4 @@
-import { AlignJustify, Maximize2, Search, Type } from "lucide-react";
+import { Maximize2, Search } from "lucide-react";
 
 export type EditorFontFamily = "mono" | "serif" | "sans";
 
@@ -35,11 +35,9 @@ export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
 
 export function EditorToolbar({
   metrics,
-  preferences,
   findReplaceOpen,
   onFindReplaceToggle,
-  onFocusModeToggle,
-  onPreferencesChange
+  onFocusModeToggle
 }: EditorToolbarProps) {
   return (
     <section className="ns-editor-toolbar" aria-label="编辑器工具栏">
@@ -67,41 +65,6 @@ export function EditorToolbar({
         >
           <Maximize2 aria-hidden="true" size={14} />
         </button>
-        <label className="ns-editor-preference-control" title="编辑器字体">
-          <Type aria-hidden="true" size={14} />
-          <select
-            aria-label="编辑器字体"
-            onChange={(event) =>
-              onPreferencesChange?.({
-                ...preferences,
-                fontFamily: event.currentTarget.value as EditorFontFamily
-              })
-            }
-            value={preferences.fontFamily}
-          >
-            <option value="mono">Mono</option>
-            <option value="serif">Serif</option>
-            <option value="sans">Sans</option>
-          </select>
-        </label>
-        <label className="ns-editor-preference-control" title="编辑器行高">
-          <AlignJustify aria-hidden="true" size={14} />
-          <select
-            aria-label="编辑器行高"
-            onChange={(event) =>
-              onPreferencesChange?.({
-                ...preferences,
-                lineHeight: Number(event.currentTarget.value)
-              })
-            }
-            value={preferences.lineHeight}
-          >
-            <option value={1.5}>1.5</option>
-            <option value={1.7}>1.7</option>
-            <option value={1.8}>1.8</option>
-            <option value={2}>2.0</option>
-          </select>
-        </label>
       </div>
     </section>
   );
@@ -110,7 +73,7 @@ export function EditorToolbar({
 export function calculateWritingMetrics(body: string): WritingMetrics {
   const lineCount = body.length === 0 ? 1 : body.split("\n").length;
   const cjkCount = body.match(/\p{Script=Han}/gu)?.length ?? 0;
-  const englishWordCount = body.match(/[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*/g)?.length ?? 0;
+  const englishWordCount = body.match(/[A-Za-z0-9]+(?:['’][A-Za-z0-9]+)*/g)?.length ?? 0;
   const writingUnitCount = cjkCount + englishWordCount;
   const readingTimeMinutes =
     writingUnitCount === 0

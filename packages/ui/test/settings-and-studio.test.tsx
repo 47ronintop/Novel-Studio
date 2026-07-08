@@ -1,10 +1,79 @@
+// @vitest-environment jsdom
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, test } from "vitest";
 
 import { ConfigStudioPanel, ModelSettingsPanel } from "../src/index.js";
 
+(
+  globalThis as typeof globalThis & {
+    IS_REACT_ACT_ENVIRONMENT?: boolean;
+  }
+).IS_REACT_ACT_ENVIRONMENT = true;
+
 describe("M8 Settings and Studio UI", () => {
+  test("renders VSCode settings structure with editor preferences in settings", () => {
+    const html = renderToStaticMarkup(
+      <ModelSettingsPanel
+        {...createModelSettingsPanelProps()}
+        activeSection="editor"
+        appearancePreferences={{
+          theme: "dark",
+          density: "compact",
+          editor: {
+            fontFamily: "serif",
+            fontSize: 16,
+            lineHeight: 1.8
+          }
+        }}
+      />
+    );
+
+    expect(html).toContain('data-settings-layout="vscode"');
+    expect(html).toContain('aria-label="搜索设置"');
+    expect(html).toContain('class="model-settings-category-list"');
+    expect(html).toContain('class="model-settings-section"');
+    expect(html).toContain("model-settings-item");
+    expect(html).not.toContain("model-settings-card");
+    expect(html).toContain("编辑器: 字体");
+    expect(html).toContain("编辑器: 字号");
+    expect(html).toContain("编辑器: 行高");
+    expect(html).toContain('aria-label="编辑器字体"');
+    expect(html).toContain('aria-label="编辑器字号"');
+    expect(html).toContain('aria-label="编辑器行高"');
+  });
+
+  test("filters settings by search query", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    let root: Root | undefined;
+
+    await act(async () => {
+      root = createRoot(host);
+      root.render(
+        <ModelSettingsPanel {...createModelSettingsPanelProps()} activeSection="models" />
+      );
+    });
+
+    const search = host.querySelector<HTMLInputElement>('input[aria-label="搜索设置"]');
+    expect(search).not.toBeNull();
+
+    await act(async () => {
+      const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      valueSetter?.call(search, "API Key");
+      search!.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    expect(host.textContent).toContain("模型: API Key");
+    expect(host.textContent).not.toContain("模型: Timeout");
+
+    await act(async () => {
+      root?.unmount();
+    });
+    host.remove();
+  });
+
   test("renders VSCode-like settings tabs with scoped writing and appearance panels", () => {
     const appearanceHtml = renderToStaticMarkup(
       <ModelSettingsPanel
@@ -47,9 +116,9 @@ describe("M8 Settings and Studio UI", () => {
     expect(appearanceHtml).toContain('aria-label="外观设置"');
     expect(appearanceHtml).toContain("深色");
     expect(appearanceHtml).toContain("紧凑");
-    expect(appearanceHtml).toContain("serif");
-    expect(appearanceHtml).toContain("16px");
-    expect(appearanceHtml).toContain("1.8");
+    expect(appearanceHtml).not.toContain("编辑器: 字体");
+    expect(appearanceHtml).not.toContain("16px");
+    expect(appearanceHtml).not.toContain("1.8");
     expect(appearanceHtml).not.toContain('aria-label="模型配置"');
 
     expect(writingHtml).toContain('aria-label="写作设置"');
@@ -203,7 +272,7 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).not.toMatch(/filesystem|node:|fs\./i);
   });
 
-  test("lays out model fields as separated rows with field-level actions", () => {
+  test("lays out model fields as separated rows with field-level actions", async () => {
     const discoverCalls: string[] = [];
     const testConnectionCalls: string[] = [];
     const tree = (
@@ -216,21 +285,41 @@ describe("M8 Settings and Studio UI", () => {
     const html = renderToStaticMarkup(tree);
 
     expect(html).toContain('data-field-layout="stacked"');
-    expect(html).toContain('class="model-settings-field-header"');
-    expect(html).toContain('class="model-settings-field-label">API Key');
+    expect(html).toContain("model-settings-field-header");
+    expect(html).toContain("模型: API Key");
     expect(html).toContain('aria-label="显示或隐藏 API Key"');
     expect(html).toContain('type="password"');
     expect(html).toContain('aria-label="完整 URL"');
     expect(html).toContain('aria-label="管理与测速"');
     expect(html).toContain('aria-label="获取模型列表"');
-    expect(html).toContain('class="model-settings-field-note"');
+    expect(html).toContain('class="model-settings-item-description"');
     expect(html).toContain("请填写兼容 OpenAI 格式的服务端点地址");
 
-    findElementByAriaLabel(tree, "获取模型列表")?.props.onClick?.();
-    findElementByAriaLabel(tree, "管理与测速")?.props.onClick?.();
+    const host = document.createElement("div");
+    document.body.append(host);
+    let root: Root | undefined;
+
+    await act(async () => {
+      root = createRoot(host);
+      root.render(tree);
+    });
+
+    await act(async () => {
+      host
+        .querySelector<HTMLButtonElement>('button[aria-label="获取模型列表"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      host
+        .querySelector<HTMLButtonElement>('button[aria-label="管理与测速"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
 
     expect(discoverCalls).toEqual(["model_default"]);
     expect(testConnectionCalls).toEqual(["model_default"]);
+
+    await act(async () => {
+      root?.unmount();
+    });
+    host.remove();
   });
 
   test("renders Prompt Agent Workflow studio controls through callback-driven props", () => {
@@ -415,43 +504,4 @@ function createModelSettingsPanelProps(): Parameters<typeof ModelSettingsPanel>[
     saveStatus: "idle",
     providerOptions: [{ id: "openai-compatible", label: "OpenAI Compatible" }]
   };
-}
-
-interface InspectableElementProps {
-  readonly children?: ReactNode;
-  readonly onClick?: () => void;
-  readonly "aria-label"?: string;
-}
-
-function findElementByAriaLabel(
-  node: ReactNode,
-  ariaLabel: string
-): ReactElement<InspectableElementProps> | undefined {
-  if (Array.isArray(node)) {
-    for (const child of node) {
-      const match = findElementByAriaLabel(child, ariaLabel);
-      if (match !== undefined) {
-        return match;
-      }
-    }
-    return undefined;
-  }
-
-  if (!isValidElement<InspectableElementProps>(node)) {
-    return undefined;
-  }
-
-  if (node.props["aria-label"] === ariaLabel) {
-    return node;
-  }
-
-  if (typeof node.type === "function") {
-    const renderComponent = node.type as (props: InspectableElementProps) => ReactNode;
-    const match = findElementByAriaLabel(renderComponent(node.props), ariaLabel);
-    if (match !== undefined) {
-      return match;
-    }
-  }
-
-  return findElementByAriaLabel(node.props.children, ariaLabel);
 }

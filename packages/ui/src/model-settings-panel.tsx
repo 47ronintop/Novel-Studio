@@ -2,7 +2,6 @@ import {
   CheckCircle,
   Eye,
   FilePlus,
-  Info,
   PlugZap,
   Power,
   RefreshCw,
@@ -10,13 +9,16 @@ import {
   Shield,
   Star
 } from "lucide-react";
-import type { MouseEvent, ReactNode } from "react";
+import { createContext, useContext, useState, type MouseEvent, type ReactNode } from "react";
 import type { ModelDiscoverySnapshot } from "@novel-studio/application";
+import type { EditorPreferences } from "./editor-toolbar.js";
 import {
   SettingsPanelTabs,
   type SettingsPanelActiveSection,
   type SettingsPanelSection
 } from "./settings-panel-tabs.js";
+
+const SettingsSearchQueryContext = createContext("");
 
 export interface ModelSettingsProfile {
   readonly id: string;
@@ -148,6 +150,7 @@ export interface ModelSettingsPanelProps {
   readonly activeSection?: SettingsPanelSection;
   readonly appearancePreferences?: ModelSettingsAppearancePreferences;
   readonly writingPreferences?: ModelSettingsWritingPreferences;
+  readonly editorPreferences?: EditorPreferences;
   readonly defaultProfileId: string;
   readonly selectedProfileId?: string;
   readonly profiles: readonly ModelSettingsProfile[];
@@ -165,6 +168,7 @@ export interface ModelSettingsPanelProps {
   readonly onTestConnection?: (profileId: string) => void;
   readonly onMakeDefault?: (profileId: string) => void;
   readonly onDiscoverModelOptions?: (profileId: string) => void;
+  readonly onEditorPreferencesChange?: (preferences: EditorPreferences) => void;
   readonly onSectionSelect?: (section: SettingsPanelSection) => void;
 }
 
@@ -172,6 +176,7 @@ export function ModelSettingsPanel({
   activeSection,
   appearancePreferences,
   writingPreferences,
+  editorPreferences,
   defaultProfileId,
   selectedProfileId,
   profiles,
@@ -189,10 +194,18 @@ export function ModelSettingsPanel({
   onTestConnection,
   onMakeDefault,
   onDiscoverModelOptions,
+  onEditorPreferencesChange,
   onSectionSelect
 }: ModelSettingsPanelProps) {
   const effectiveSection: SettingsPanelActiveSection = activeSection ?? "overview";
+  const [settingsSearchQuery, setSettingsSearchQuery] = useState("");
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
+  const resolvedEditorPreferences = editorPreferences ??
+    appearancePreferences?.editor ?? {
+      fontFamily: "mono" as const,
+      fontSize: 13,
+      lineHeight: 1.7
+    };
   const canSave =
     saveStatus !== "saving" &&
     draft.id.trim().length > 0 &&
@@ -200,7 +213,7 @@ export function ModelSettingsPanel({
     draft.modelName.trim().length > 0;
 
   return (
-    <section className="model-settings-panel" aria-label="设置">
+    <section className="model-settings-panel" aria-label="设置" data-settings-layout="vscode">
       <header className="model-settings-header">
         <div>
           <h1>设置</h1>
@@ -213,51 +226,67 @@ export function ModelSettingsPanel({
       </header>
 
       <div className="model-settings-grid">
-        <SettingsPanelTabs
-          activeSection={effectiveSection}
-          onSectionSelect={onSectionSelect}
-        />
+        <SettingsPanelTabs activeSection={effectiveSection} onSectionSelect={onSectionSelect} />
 
         <div className="model-settings-main">
-          {effectiveSection === "overview" || effectiveSection === "models" ? (
-            <ModelProfileSettingsSection
-              canSave={canSave}
-              connectionStatus={connectionStatus}
-              defaultProfileId={defaultProfileId}
-              draft={draft}
-              feedback={feedback}
-              modelDiscovery={modelDiscovery}
-              onDraftChange={onDraftChange}
-              onMakeDefault={onMakeDefault}
-              onSaveProfile={onSaveProfile}
-              onSelectProfile={onSelectProfile}
-              onTestConnection={onTestConnection}
-              onDiscoverModelOptions={onDiscoverModelOptions}
-              profiles={profiles}
-              providerOptions={providerOptions}
-              saveStatus={saveStatus}
-              selectedProfile={selectedProfile}
-              selectedProfileId={selectedProfileId}
+          <label className="model-settings-search">
+            <span>搜索设置</span>
+            <input
+              aria-label="搜索设置"
+              className="ns-search-input"
+              onChange={(event) => setSettingsSearchQuery(event.currentTarget.value)}
+              placeholder="搜索设置"
+              value={settingsSearchQuery}
             />
-          ) : null}
+          </label>
+          <SettingsSearchQueryContext.Provider value={settingsSearchQuery}>
+            {effectiveSection === "overview" || effectiveSection === "models" ? (
+              <ModelProfileSettingsSection
+                canSave={canSave}
+                connectionStatus={connectionStatus}
+                defaultProfileId={defaultProfileId}
+                draft={draft}
+                feedback={feedback}
+                modelDiscovery={modelDiscovery}
+                onDraftChange={onDraftChange}
+                onMakeDefault={onMakeDefault}
+                onSaveProfile={onSaveProfile}
+                onSelectProfile={onSelectProfile}
+                onTestConnection={onTestConnection}
+                onDiscoverModelOptions={onDiscoverModelOptions}
+                profiles={profiles}
+                providerOptions={providerOptions}
+                saveStatus={saveStatus}
+                selectedProfile={selectedProfile}
+                selectedProfileId={selectedProfileId}
+              />
+            ) : null}
 
-          {effectiveSection === "overview" ? <LegacyWritingSummarySection /> : null}
+            {effectiveSection === "overview" ? <LegacyWritingSummarySection /> : null}
 
-          {effectiveSection === "writing" ? (
-            <WritingSettingsSection preferences={writingPreferences} />
-          ) : null}
+            {effectiveSection === "overview" || effectiveSection === "editor" ? (
+              <EditorSettingsSection
+                onPreferencesChange={onEditorPreferencesChange}
+                preferences={resolvedEditorPreferences}
+              />
+            ) : null}
 
-          {effectiveSection === "appearance" ? (
-            <AppearanceSettingsSection preferences={appearancePreferences} />
-          ) : null}
+            {effectiveSection === "writing" ? (
+              <WritingSettingsSection preferences={writingPreferences} />
+            ) : null}
 
-          {effectiveSection === "overview" || effectiveSection === "plugins" ? (
-            <PluginSettingsSection plugins={plugins} />
-          ) : null}
+            {effectiveSection === "appearance" ? (
+              <AppearanceSettingsSection preferences={appearancePreferences} />
+            ) : null}
 
-          {effectiveSection === "overview" || effectiveSection === "advanced" ? (
-            <AdvancedSettingsSection />
-          ) : null}
+            {effectiveSection === "overview" || effectiveSection === "plugins" ? (
+              <PluginSettingsSection plugins={plugins} />
+            ) : null}
+
+            {effectiveSection === "overview" || effectiveSection === "advanced" ? (
+              <AdvancedSettingsSection />
+            ) : null}
+          </SettingsSearchQueryContext.Provider>
         </div>
       </div>
     </section>
@@ -305,7 +334,7 @@ function ModelProfileSettingsSection({
   const canRunProfileAction = activeProfileId.trim().length > 0;
 
   return (
-    <section className="model-settings-card" aria-label="模型配置">
+    <section className="model-settings-section" aria-label="模型配置">
       <div className="model-settings-section-header">
         <div>
           <h2>模型配置</h2>
@@ -376,7 +405,7 @@ function ModelProfileSettingsSection({
           }}
         >
           <div className="model-profile-form-grid" data-field-layout="stacked">
-            <ModelField label="Profile ID">
+            <ModelField label="Profile ID" note="当前模型配置在项目中的稳定标识。">
               <input
                 aria-label="模型 Profile ID"
                 aria-description="粘贴真实 API Key，保存后会加密存储；留空则沿用已保存 API Key。"
@@ -385,7 +414,7 @@ function ModelProfileSettingsSection({
                 value={draft.id}
               />
             </ModelField>
-            <ModelField label="显示名称">
+            <ModelField label="显示名称" note="显示在模型选择器和设置列表中的名称。">
               <input
                 aria-label="模型显示名称"
                 className="ns-search-input"
@@ -393,7 +422,7 @@ function ModelProfileSettingsSection({
                 value={draft.displayName}
               />
             </ModelField>
-            <ModelField label="Provider">
+            <ModelField label="Provider" note="选择请求适配器类型。">
               <select
                 aria-label="模型 Provider"
                 className="model-settings-select"
@@ -421,6 +450,7 @@ function ModelProfileSettingsSection({
                 </button>
               }
               label="模型名称"
+              note="写入请求体的模型 ID；模型发现失败时可手动填写。"
             >
               {modelDiscovery?.status === "loaded" && modelDiscovery.models.length > 0 ? (
                 <select
@@ -508,7 +538,7 @@ function ModelProfileSettingsSection({
                 </button>
               </div>
             </ModelField>
-            <ModelField label="Temperature">
+            <ModelField label="Temperature" note="控制生成结果的随机性。">
               <input
                 aria-label="Temperature"
                 className="ns-search-input"
@@ -517,7 +547,7 @@ function ModelProfileSettingsSection({
                 value={draft.temperature}
               />
             </ModelField>
-            <ModelField label="Max Tokens">
+            <ModelField label="Max Tokens" note="限制单次响应可生成的最大 token 数。">
               <input
                 aria-label="Max Tokens"
                 className="ns-search-input"
@@ -526,7 +556,7 @@ function ModelProfileSettingsSection({
                 value={draft.maxTokens}
               />
             </ModelField>
-            <ModelField label="Top P">
+            <ModelField label="Top P" note="控制 nucleus sampling 的采样范围。">
               <input
                 aria-label="Top P"
                 className="ns-search-input"
@@ -535,7 +565,7 @@ function ModelProfileSettingsSection({
                 value={draft.topP}
               />
             </ModelField>
-            <ModelField label="推理强度">
+            <ModelField label="推理强度" note="声明该端点是否支持 reasoning_effort 参数。">
               <label className="model-settings-checkbox">
                 <input
                   aria-label="确认该端点支持 reasoning_effort"
@@ -548,7 +578,7 @@ function ModelProfileSettingsSection({
                 <span>该第三方端点支持 reasoning_effort</span>
               </label>
             </ModelField>
-            <ModelField label="Timeout">
+            <ModelField label="Timeout" note="请求超时时间，单位毫秒。">
               <input
                 aria-label="Timeout"
                 className="ns-search-input"
@@ -572,7 +602,7 @@ function ModelProfileSettingsSection({
 
 function LegacyWritingSummarySection() {
   return (
-    <section className="model-settings-card" aria-label="自动保存与历史">
+    <section className="model-settings-section" aria-label="自动保存与历史">
       <h2>自动保存与历史</h2>
       <p>
         当前版本沿用项目 settings.json 中的 autosave/history
@@ -598,7 +628,7 @@ function WritingSettingsSection({
   };
 
   return (
-    <section className="model-settings-card" aria-label="写作设置">
+    <section className="model-settings-section" aria-label="写作设置">
       <div className="model-settings-section-header">
         <div>
           <h2>写作设置</h2>
@@ -634,6 +664,79 @@ function WritingSettingsSection({
   );
 }
 
+function EditorSettingsSection({
+  onPreferencesChange,
+  preferences
+}: {
+  readonly onPreferencesChange: ((preferences: EditorPreferences) => void) | undefined;
+  readonly preferences: EditorPreferences;
+}) {
+  return (
+    <section className="model-settings-section" aria-label="编辑器设置">
+      <div className="model-settings-section-header">
+        <div>
+          <h2>编辑器设置</h2>
+          <p>调整章节编辑器的字体、字号和行高。</p>
+        </div>
+      </div>
+      <div className="model-profile-form-grid" data-field-layout="stacked">
+        <ModelField category="编辑器" label="字体" note="控制章节正文编辑器使用的字体族。">
+          <select
+            aria-label="编辑器字体"
+            className="model-settings-select"
+            onChange={(event) =>
+              onPreferencesChange?.({
+                ...preferences,
+                fontFamily: event.currentTarget.value as EditorPreferences["fontFamily"]
+              })
+            }
+            value={preferences.fontFamily}
+          >
+            <option value="mono">Mono</option>
+            <option value="serif">Serif</option>
+            <option value="sans">Sans</option>
+          </select>
+        </ModelField>
+        <ModelField category="编辑器" label="字号" note="控制章节正文编辑区的基础字号。">
+          <input
+            aria-label="编辑器字号"
+            className="ns-search-input"
+            inputMode="numeric"
+            min={11}
+            max={22}
+            onChange={(event) =>
+              onPreferencesChange?.({
+                ...preferences,
+                fontSize: Number(event.currentTarget.value)
+              })
+            }
+            type="number"
+            value={preferences.fontSize}
+          />
+        </ModelField>
+        <ModelField category="编辑器" label="行高" note="控制章节正文编辑区的行间距。">
+          <select
+            aria-label="编辑器行高"
+            className="model-settings-select"
+            onChange={(event) =>
+              onPreferencesChange?.({
+                ...preferences,
+                lineHeight: Number(event.currentTarget.value)
+              })
+            }
+            value={preferences.lineHeight}
+          >
+            <option value={1.5}>1.5</option>
+            <option value={1.7}>1.7</option>
+            <option value={1.8}>1.8</option>
+            <option value={2}>2.0</option>
+          </select>
+        </ModelField>
+      </div>
+    </section>
+  );
+}
+
 function AppearanceSettingsSection({
   preferences
 }: {
@@ -641,25 +744,15 @@ function AppearanceSettingsSection({
 }) {
   const resolved = preferences ?? {
     theme: "dark" as const,
-    density: "compact" as const,
-    editor: {
-      fontFamily: "mono" as const,
-      fontSize: 13,
-      lineHeight: 1.7
-    }
-  };
-  const editor = resolved.editor ?? {
-    fontFamily: "mono" as const,
-    fontSize: 13,
-    lineHeight: 1.7
+    density: "compact" as const
   };
 
   return (
-    <section className="model-settings-card" aria-label="外观设置">
+    <section className="model-settings-section" aria-label="外观设置">
       <div className="model-settings-section-header">
         <div>
           <h2>外观设置</h2>
-          <p>管理主题、密度和编辑器排版偏好。</p>
+          <p>管理主题和界面密度。编辑器排版请在编辑器分类中调整。</p>
         </div>
       </div>
       <dl className="settings-summary-grid">
@@ -671,18 +764,6 @@ function AppearanceSettingsSection({
           <dt>密度</dt>
           <dd>{densityLabel(resolved.density)}</dd>
         </div>
-        <div>
-          <dt>字体</dt>
-          <dd>{editor.fontFamily}</dd>
-        </div>
-        <div>
-          <dt>字号</dt>
-          <dd>{editor.fontSize}px</dd>
-        </div>
-        <div>
-          <dt>行高</dt>
-          <dd>{editor.lineHeight}</dd>
-        </div>
       </dl>
     </section>
   );
@@ -690,13 +771,13 @@ function AppearanceSettingsSection({
 
 function AdvancedSettingsSection() {
   return (
-    <section className="model-settings-card" aria-label="隐私与安全">
+    <section className="model-settings-section" aria-label="隐私与安全">
       <h2>隐私与安全</h2>
       <div className="model-security-note">
         <Shield aria-hidden="true" size={16} />
         <p>
-          API Key 不会以明文写入 settings.json，也不会显示在列表、错误或日志中。这里仅接受
-          secret:// 引用，真实密钥由桌面端安全存储能力管理。
+          API Key 不会以明文写入 settings.json，也不会显示在列表、错误或日志中。这里仅接受 secret://
+          引用，真实密钥由桌面端安全存储能力管理。
         </p>
       </div>
     </section>
@@ -711,7 +792,7 @@ function PluginSettingsSection({
   const entries = plugins?.entries ?? [];
 
   return (
-    <section className="model-settings-card" aria-label="插件管理">
+    <section className="model-settings-section" aria-label="插件管理">
       <div className="model-settings-section-header">
         <div>
           <h2>插件管理</h2>
@@ -842,32 +923,50 @@ function permissionSummary(grants: readonly PluginSettingsPermissionGrant[]): st
 
 function ModelField({
   actions,
+  category = "模型",
   children,
   label,
+  keywords,
   note
 }: {
   readonly actions?: ReactNode;
+  readonly category?: string;
   readonly children: ReactNode;
+  readonly keywords?: readonly string[];
   readonly label: string;
   readonly note?: string;
 }) {
+  const searchQuery = useContext(SettingsSearchQueryContext);
+  const title = `${category}: ${label}`;
+
+  if (!matchesSettingsQuery(searchQuery, [title, category, label, note, ...(keywords ?? [])])) {
+    return null;
+  }
+
   return (
-    <section className="model-settings-field">
-      <div className="model-settings-field-header">
-        <span className="model-settings-field-label">{label}</span>
+    <section className="model-settings-item model-settings-field" data-setting-title={title}>
+      <div className="model-settings-item-heading model-settings-field-header">
+        <div className="model-settings-item-copy">
+          <h3 className="model-settings-field-label">{title}</h3>
+          {note === undefined ? null : <p className="model-settings-item-description">{note}</p>}
+        </div>
         {actions === undefined ? null : (
           <div className="model-settings-field-actions">{actions}</div>
         )}
       </div>
-      {children}
-      {note === undefined ? null : (
-        <p className="model-settings-field-note">
-          <Info aria-hidden="true" size={14} />
-          <span>{note}</span>
-        </p>
-      )}
+      <div className="model-settings-item-control">{children}</div>
     </section>
   );
+}
+
+function matchesSettingsQuery(query: string, values: readonly (string | undefined)[]): boolean {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+
+  if (normalizedQuery.length === 0) {
+    return true;
+  }
+
+  return values.some((value) => value?.toLocaleLowerCase().includes(normalizedQuery));
 }
 
 function toggleApiKeyVisibility(event: MouseEvent<HTMLButtonElement>): void {

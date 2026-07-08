@@ -1,3 +1,6 @@
+// @vitest-environment jsdom
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { isValidElement } from "react";
 import type { ReactElement, ReactNode } from "react";
@@ -533,17 +536,35 @@ describe("WorkspaceShell", () => {
         readonly onSetEnabled: () => void;
       };
     };
-    const tree = WorkspaceShell({
-      shellState: { ...application.getShellState(), activeActivity: "settings" },
-      commands: application.listCommands(),
-      commandPaletteOpen: false,
-      settings
-    });
-    const refreshButton = findElementByAriaLabel(tree, "刷新插件注册表");
+    const tree = (
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "settings" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        settings={settings}
+      />
+    );
+    const host = document.createElement("div");
+    document.body.append(host);
+    let root: Root | undefined;
 
-    expect(refreshButton).toBeDefined();
-    refreshButton?.props.onClick?.();
+    act(() => {
+      root = createRoot(host);
+      root.render(tree);
+    });
+
+    act(() => {
+      host
+        .querySelector<HTMLButtonElement>('button[aria-label="刷新插件注册表"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
     expect(refreshCalls).toEqual(["refresh"]);
+
+    act(() => {
+      root?.unmount();
+    });
+    host.remove();
 
     const html = renderToStaticMarkup(tree);
     expect(html).toContain('aria-label="插件管理"');

@@ -5,16 +5,14 @@ import { calculateWritingMetrics, EditorToolbar } from "../src/editor-toolbar.js
 
 describe("editor toolbar", () => {
   test("counts Chinese characters and English words as writing units", () => {
-    expect(calculateWritingMetrics("她走进雨里。\nA quiet room waits.")).toEqual({
-      lineCount: 2,
-      writingUnitCount: 9,
-      readingTimeMinutes: 1,
-      wordCountLabel: "9 字",
-      readingTimeLabel: "约 1 分钟阅读"
-    });
+    const metrics = calculateWritingMetrics("她走进雨里。\nA quiet room waits.");
+
+    expect(metrics.lineCount).toBe(2);
+    expect(metrics.writingUnitCount).toBe(9);
+    expect(metrics.readingTimeMinutes).toBe(1);
   });
 
-  test("renders compact editor controls with labels and preference controls", () => {
+  test("renders compact editor controls without preference selectors", () => {
     const html = renderToStaticMarkup(
       <EditorToolbar
         metrics={calculateWritingMetrics("她走进雨里。\nA quiet room waits.")}
@@ -31,11 +29,10 @@ describe("editor toolbar", () => {
     );
 
     expect(html).toContain('aria-label="编辑器工具栏"');
-    expect(html).toContain("9 字");
-    expect(html).toContain("约 1 分钟阅读");
     expect(html).toContain('aria-label="打开查找替换"');
     expect(html).toContain('aria-label="切换专注模式"');
-    expect(html).toContain('aria-label="编辑器字体"');
-    expect(html).toContain('aria-label="编辑器行高"');
+    expect(html).not.toContain('aria-label="编辑器字体"');
+    expect(html).not.toContain('aria-label="编辑器行高"');
+    expect(html).not.toContain("<select");
   });
 });

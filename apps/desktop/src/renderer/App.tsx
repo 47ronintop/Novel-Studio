@@ -885,6 +885,24 @@ export function App() {
           onVersionPreview: handleVersionPreview,
           onVersionRestore: handleVersionRestore
         };
+  const interactiveSettings =
+    settings === undefined
+      ? undefined
+      : {
+          ...settings,
+          editorPreferences,
+          appearancePreferences: {
+            ...(settings.appearancePreferences ?? {
+              theme: "dark" as const,
+              density: "compact" as const
+            }),
+            editor: editorPreferences
+          },
+          onEditorPreferencesChange: (preferences: EditorPreferences) => {
+            setEditorPreferences(preferences);
+            persistUserPreferences({ editor: preferences });
+          }
+        };
   const onboarding = createOnboardingProps({
     dismissed: onboardingDismissed,
     shellState,
@@ -908,7 +926,7 @@ export function App() {
       aiWritingWorkflow={aiWritingWorkflow}
       projectWorkflow={projectWorkflow}
       projectSearch={projectSearch}
-      settings={settings}
+      settings={interactiveSettings}
       studio={studio}
       chapterEditor={interactiveChapterEditor}
       onboarding={onboarding}
