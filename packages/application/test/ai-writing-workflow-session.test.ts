@@ -482,6 +482,50 @@ describe("M14 AI writing workflow session", () => {
     });
   });
 
+  test("forwards requested reasoning effort to streaming LLM requests", async () => {
+    const requests: LlmRequest[] = [];
+    const chapterSession = createChapterEditorSession({
+      chapterId: "ch_m14",
+      repository: createRepository([]),
+      now: () => "2026-07-04T00:00:00.000Z"
+    });
+    const loaded = await chapterSession.load();
+    if (isErr(loaded)) {
+      throw new Error(loaded.error.message);
+    }
+
+    const aiWorkflow = createAgentBackedAiWritingWorkflowSession({
+      chapterEditorSession: chapterSession,
+      llmAdapter: createLlmAdapter({
+        provider: createStreamingJsonProvider(requests),
+        clock: () => "2026-07-04T00:00:00.000Z"
+      }),
+      parameters: {
+        temperature: 0.4,
+        maxTokens: 2048
+      },
+      now: () => "2026-07-04T00:00:00.000Z",
+      createWorkflowRunId: createSequence("wfrun_reasoning_stream"),
+      createSuggestionId: createSequence("sug_reasoning_stream"),
+      createAgentRunId: createSequence("agentrun_reasoning_stream"),
+      createHandoffId: createSequence("handoff_reasoning_stream")
+    });
+
+    for await (const event of aiWorkflow.streamChapterSuggestion({
+      instruction: "Continue.",
+      reasoningEffort: "high"
+    })) {
+      void event;
+      // Drain the stream so the provider receives the request.
+    }
+
+    expect(requests[0]?.parameters).toEqual({
+      temperature: 0.4,
+      maxTokens: 2048,
+      reasoningEffort: "high"
+    });
+  });
+
   test("resolves the runtime model profile when generating a suggestion", async () => {
     const requests: LlmRequest[] = [];
     const chapterSession = createChapterEditorSession({

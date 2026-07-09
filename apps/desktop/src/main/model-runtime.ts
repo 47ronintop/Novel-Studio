@@ -381,11 +381,9 @@ async function* streamOpenAiCompatibleJson(
   const timeoutController = new AbortController();
   const firstChunkController = new AbortController();
   const signal = combineAbortSignals(
-    [
-      request.abortSignal,
-      timeoutController.signal,
-      firstChunkController.signal
-    ].filter((entry): entry is AbortSignal => entry !== undefined)
+    [request.abortSignal, timeoutController.signal, firstChunkController.signal].filter(
+      (entry): entry is AbortSignal => entry !== undefined
+    )
   );
   const timeout =
     request.timeoutMs === undefined
@@ -451,8 +449,8 @@ async function* streamOpenAiCompatibleJson(
       }
       receivedAnyBytes = read.value.byteLength > 0 || receivedAnyBytes;
       buffer += decoder.decode(read.value, { stream: true });
-      const parts = buffer.split("\n\n");
-      buffer = parts.pop() ?? "";
+      const { parts, rest } = splitSseParts(buffer);
+      buffer = rest;
       for (const part of parts) {
         sawSseDataLine = hasSseDataLine(part) || sawSseDataLine;
         const parsed = parseServerSentEventPart(part);
@@ -519,6 +517,22 @@ function combineAbortSignals(signals: readonly AbortSignal[]): AbortSignal {
 
 function isAbortSignalAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
+}
+
+function splitSseParts(value: string): { readonly parts: string[]; readonly rest: string } {
+  const parts: string[] = [];
+  let start = 0;
+  const delimiterPattern = /\r?\n\r?\n/g;
+  let match: RegExpExecArray | null;
+  while ((match = delimiterPattern.exec(value)) !== null) {
+    parts.push(value.slice(start, match.index));
+    start = match.index + match[0].length;
+  }
+
+  return {
+    parts,
+    rest: value.slice(start)
+  };
 }
 
 function parseServerSentEventPart(part: string): unknown | undefined {
@@ -620,9 +634,11 @@ async function getOpenAiCompatibleJson(
   }
 }
 
-function normalizeOpenAiCompatibleModels(
-  payload: unknown
-): readonly { readonly id: string; readonly displayName: string; readonly contextWindow?: number }[] {
+function normalizeOpenAiCompatibleModels(payload: unknown): readonly {
+  readonly id: string;
+  readonly displayName: string;
+  readonly contextWindow?: number;
+}[] {
   if (!isJsonRecord(payload) || !Array.isArray(payload["data"])) {
     throw new OpenAiCompatibleHttpError({
       status: 502,
@@ -645,8 +661,9 @@ function normalizeOpenAiCompatibleModels(
         ...(contextWindow === undefined ? {} : { contextWindow })
       };
     })
-    .filter((entry): entry is { id: string; displayName: string; contextWindow?: number } =>
-      entry !== undefined
+    .filter(
+      (entry): entry is { id: string; displayName: string; contextWindow?: number } =>
+        entry !== undefined
     );
 }
 

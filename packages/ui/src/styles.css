@@ -1980,7 +1980,9 @@ textarea:focus-visible,
   grid-area: ai;
   grid-template-rows: auto minmax(0, 1fr) auto;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
+  position: relative;
+  z-index: 3;
 }
 
 .ns-meta-list {
@@ -2011,7 +2013,7 @@ textarea:focus-visible,
   flex-direction: column;
   gap: 10px;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
   padding: 12px;
 }
 
@@ -2285,24 +2287,30 @@ textarea:focus-visible,
   border-color: var(--ns-border);
 }
 
+.ns-ai-model-popover-layer {
+  bottom: calc(100% + 6px);
+  display: none;
+  position: absolute;
+  right: 0;
+  width: min(300px, calc(100vw - 48px));
+  z-index: 60;
+}
+
+.ns-ai-model-picker[open] > .ns-ai-model-popover-layer {
+  display: block;
+}
+
 .ns-ai-model-popover {
   background: oklch(0.18 0.007 180);
   border: 1px solid color-mix(in srgb, var(--ns-border) 85%, var(--ns-muted));
   border-radius: 6px;
   box-shadow: 0 8px 14px rgba(0, 0, 0, 0.34);
-  bottom: calc(100% + 6px);
   display: grid;
   gap: 4px;
-  left: auto;
   max-height: min(360px, calc(100vh - 160px));
-  max-width: calc(100vw - 48px);
-  min-width: min(300px, calc(100vw - 48px));
+  width: 100%;
   overflow: auto;
   padding: 5px;
-  position: absolute;
-  right: 0;
-  top: auto;
-  z-index: 20;
 }
 
 .ns-ai-current-model {

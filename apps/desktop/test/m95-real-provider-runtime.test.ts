@@ -320,10 +320,11 @@ describe("M95 real provider runtime", () => {
     const provider = runtime.createAiProvider({
       chapterEditorSession
     });
-    const iterator = provider.stream({
+    const stream = provider.stream({
       ...streamingRequest(),
       abortSignal: controller.signal
-    })[Symbol.asyncIterator]();
+    });
+    const iterator = stream[Symbol.asyncIterator]();
 
     await expect(iterator.next()).resolves.toEqual({
       done: false,
@@ -347,6 +348,42 @@ describe("M95 real provider runtime", () => {
       }
     });
     expect(calls[0]?.signal?.aborted).toBe(true);
+  });
+
+  test("parses CRLF-delimited SSE chunks from verified OpenAI-compatible streams", async () => {
+    const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-stream-crlf-"));
+    tempRoots.push(userDataRoot);
+    const secretStore = createEncryptedFileModelSecretStore({
+      userDataRoot,
+      cipher: testCipher
+    });
+    await secretStore.saveSecret(apiKeyRef, "sk-real-deepseek-key");
+    await secretStore.markVerified(apiKeyRef, {
+      provider: "deepseek",
+      baseUrl: "https://api.deepseek.com/v1",
+      modelName: "deepseek-chat"
+    });
+    const calls: FetchCall[] = [];
+    const runtime = createDesktopModelRuntime({
+      userDataRoot,
+      secretStore,
+      fetch: createStreamingFetch(calls, "\r\n\r\n")
+    });
+    const chapterEditorSession = await createLoadedChapterEditorSession();
+    const provider = runtime.createAiProvider({
+      chapterEditorSession
+    });
+
+    const iterator = provider.stream(streamingRequest())[Symbol.asyncIterator]();
+
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: {
+        type: "delta",
+        value: "The city"
+      }
+    });
+    await iterator.return?.();
   });
 
   test("fails a verified stream when no SSE chunk arrives before the first-chunk timeout", async () => {
@@ -468,16 +505,14 @@ function createModelsFetch(calls: FetchCall[], payload: unknown): typeof fetch {
   }) as typeof fetch;
 }
 
-function createStreamingFetch(calls: FetchCall[]): typeof fetch {
+function createStreamingFetch(calls: FetchCall[], delimiter = "\n\n"): typeof fetch {
   return (async (url, init) => {
     const call: FetchCall = {
       url: String(url),
       method: init?.method,
       headers: normalizeHeaders(init?.headers),
       body: JSON.parse(String(init?.body ?? "{}")) as unknown,
-      ...(init?.signal === null || init?.signal === undefined
-        ? {}
-        : { signal: init.signal }),
+      ...(init?.signal === null || init?.signal === undefined ? {} : { signal: init.signal }),
       aborted: false
     };
     calls.push(call);
@@ -486,7 +521,7 @@ function createStreamingFetch(calls: FetchCall[]): typeof fetch {
     });
     return new Response(
       streamUntilAbort(
-        `data: ${JSON.stringify({ choices: [{ delta: { content: "The city" } }] })}\n\n`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "The city" } }] })}${delimiter}`,
         init?.signal
       ),
       {

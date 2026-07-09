@@ -90,7 +90,8 @@ export function createProjectWorkflowBridge(
         }
 
         snapshot = opened.value;
-        fileTree = undefined;
+        const directory = await api.project.readDirectory(snapshot.projectRoot);
+        fileTree = directory.ok ? directory.value : undefined;
         canInitializeProject = false;
         projectRootInput = snapshot.projectRoot;
         openChapterTabIds =

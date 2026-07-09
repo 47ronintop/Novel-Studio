@@ -102,6 +102,13 @@ export function createSelectionPreviewLlmRequest(input: {
   };
 }
 
+export function withRequestedReasoningEffort(
+  parameters: LlmParameters,
+  reasoningEffort: LlmParameters["reasoningEffort"] | undefined
+): LlmParameters {
+  return reasoningEffort === undefined ? parameters : { ...parameters, reasoningEffort };
+}
+
 function formatPreviousConversation(messages: readonly AiWritingConversationMessage[]): string {
   if (messages.length === 0) {
     return "";

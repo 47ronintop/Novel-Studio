@@ -34,7 +34,6 @@ import { createStudioBridge } from "./studio-bridge.js";
 import { createPlainFileEditorBridge } from "./plain-file-editor-bridge.js";
 import {
   createChapterEditorRuntime,
-  createChapterEditorSelectionCommand,
   createOnboardingProps,
   getNovelStudioApi,
   rendererCommands,
@@ -44,6 +43,7 @@ import {
 import { useRendererAppEffects } from "./renderer-app-effects.js";
 import { RendererWorkspaceShell } from "./renderer-workspace-shell.js";
 import { useProjectWorkflowActions } from "./project-workflow-actions.js";
+import { useAiWritingWorkflowActions } from "./ai-writing-workflow-actions.js";
 
 export function App() {
   const [api] = useState(() => getNovelStudioApi());
@@ -452,185 +452,26 @@ export function App() {
     [projectWorkflowBridge, refreshProjectWorkflow, storyBibleBridge]
   );
 
-  const handleAiInstructionChange = useCallback(
-    (instruction: string) => {
-      if (aiWritingWorkflowBridge === undefined) {
-        return;
-      }
-
-      setAiWritingWorkflow(aiWritingWorkflowBridge.setInstruction(instruction));
-    },
-    [aiWritingWorkflowBridge]
-  );
-
-  const handleGenerateAiSuggestion = useCallback(() => {
-    if (aiWritingWorkflowBridge === undefined || aiWritingWorkflow === undefined) {
-      return;
-    }
-
-    const instruction =
-      aiWritingWorkflow.instruction.trim().length === 0
-        ? "Continue the active chapter."
-        : aiWritingWorkflow.instruction;
-    setAiWritingWorkflow(aiWritingWorkflowBridge.beginStreamingGenerate(instruction));
-    void aiWritingWorkflowBridge
-      .generateStreamingSuggestion(instruction, setAiWritingWorkflow)
-      .then((nextAiWritingWorkflow) => {
-        setAiWritingWorkflow(nextAiWritingWorkflow);
-        const diffPreview = nextAiWritingWorkflow.diffPreview;
-        if (diffPreview === undefined) {
-          return;
-        }
-
-        setChapterEditor((current) =>
-          current === undefined
-            ? current
-            : {
-                ...current,
-                diffPreview
-              }
-        );
-      });
-  }, [aiWritingWorkflow, aiWritingWorkflowBridge]);
-
-  const handleSelectionAiPreview = useCallback(
-    (commandId: string) => {
-      if (
-        aiWritingWorkflowBridge === undefined ||
-        aiWritingWorkflow === undefined ||
-        chapterEditor === undefined ||
-        chapterSelection === undefined
-      ) {
-        return;
-      }
-
-      const command = createChapterEditorSelectionCommand(chapterEditor, {
-        commandId,
-        selection: chapterSelection
-      });
-      if (command === undefined || command.selection.collapsed) {
-        return;
-      }
-
-      const instruction =
-        aiWritingWorkflow.instruction.trim().length === 0
-          ? "Rewrite the selected text."
-          : aiWritingWorkflow.instruction;
-      const selectedText = chapterEditor.chapter.body.slice(
-        command.selection.startOffset,
-        command.selection.endOffset
-      );
-
-      setAiWritingWorkflow(aiWritingWorkflowBridge.beginGenerate(instruction));
-      void aiWritingWorkflowBridge
-        .generateSelectionPreview({
-          instruction,
-          command,
-          selectedText
-        })
-        .then((nextAiWritingWorkflow) => {
-          setAiWritingWorkflow(nextAiWritingWorkflow);
-          const diffPreview = nextAiWritingWorkflow.diffPreview;
-          if (diffPreview === undefined) {
-            return;
-          }
-
-          setChapterEditor((current) =>
-            current === undefined
-              ? current
-              : {
-                  ...current,
-                  diffPreview,
-                  ...(nextAiWritingWorkflow.selectionReview === undefined
-                    ? {}
-                    : { selectionReview: nextAiWritingWorkflow.selectionReview })
-                }
-          );
-        });
-    },
-    [aiWritingWorkflow, aiWritingWorkflowBridge, chapterEditor, chapterSelection]
-  );
-
-  const handleApplyAiSuggestion = useCallback(() => {
-    if (aiWritingWorkflowBridge === undefined) {
-      return;
-    }
-
-    void aiWritingWorkflowBridge.applySuggestion().then((nextChapterEditor) => {
-      setChapterEditor(nextChapterEditor);
-      setAiWritingWorkflow(aiWritingWorkflowBridge.getProps());
-    });
-  }, [aiWritingWorkflowBridge]);
-
-  const handleRejectSelectionReview = useCallback(() => {
-    if (aiWritingWorkflowBridge === undefined) {
-      return;
-    }
-
-    const nextAiWritingWorkflow = aiWritingWorkflowBridge.rejectSelectionPreview();
-    setAiWritingWorkflow(nextAiWritingWorkflow);
-    setChapterEditor((current) => {
-      if (current === undefined) {
-        return current;
-      }
-      const { selectionReview, ...withoutSelectionReview } = current;
-      void selectionReview;
-      return nextAiWritingWorkflow.selectionReview === undefined
-        ? withoutSelectionReview
-        : {
-            ...withoutSelectionReview,
-            selectionReview: nextAiWritingWorkflow.selectionReview
-          };
-    });
-  }, [aiWritingWorkflowBridge]);
-
-  const handleUndoSelectionReview = useCallback(() => {
-    if (aiWritingWorkflowBridge === undefined) {
-      return;
-    }
-
-    const nextAiWritingWorkflow = aiWritingWorkflowBridge.undoSelectionPreviewRejection();
-    setAiWritingWorkflow(nextAiWritingWorkflow);
-    setChapterEditor((current) => {
-      if (current === undefined) {
-        return current;
-      }
-      const { selectionReview, ...withoutSelectionReview } = current;
-      void selectionReview;
-      return nextAiWritingWorkflow.selectionReview === undefined
-        ? withoutSelectionReview
-        : {
-            ...withoutSelectionReview,
-            selectionReview: nextAiWritingWorkflow.selectionReview
-          };
-    });
-  }, [aiWritingWorkflowBridge]);
-
-  const handleCancelAiStreaming = useCallback(() => {
-    if (aiWritingWorkflowBridge === undefined) {
-      return;
-    }
-
-    setAiWritingWorkflow(aiWritingWorkflowBridge.cancelStreaming());
-  }, [aiWritingWorkflowBridge]);
-
-  const handleAiModelSelect = useCallback(
-    (modelName: string) => {
-      if (aiWritingWorkflowBridge === undefined) {
-        return;
-      }
-
-      void aiWritingWorkflowBridge
-        .selectDiscoveredModel(modelName)
-        .then((nextAiWritingWorkflow) => {
-          setAiWritingWorkflow(nextAiWritingWorkflow);
-          if (settingsBridge !== undefined) {
-            void settingsBridge.load().then(setSettings);
-          }
-        });
-    },
-    [aiWritingWorkflowBridge, settingsBridge]
-  );
+  const {
+    handleAiInstructionChange,
+    handleGenerateAiSuggestion,
+    handleSelectionAiPreview,
+    handleApplyAiSuggestion,
+    handleRejectSelectionReview,
+    handleUndoSelectionReview,
+    handleCancelAiStreaming,
+    handleAiModelSelect,
+    handleAiReasoningEffortSelect
+  } = useAiWritingWorkflowActions({
+    aiWritingWorkflow,
+    aiWritingWorkflowBridge,
+    chapterEditor,
+    chapterSelection,
+    settingsBridge,
+    setAiWritingWorkflow,
+    setChapterEditor,
+    setSettings
+  });
 
   const handleStoryBibleKindSelect = useCallback(
     (kind: StoryBibleEditorKind) => {
@@ -1013,6 +854,7 @@ export function App() {
       onGenerateAiSuggestion={handleGenerateAiSuggestion}
       onApplyAiSuggestion={handleApplyAiSuggestion}
       onAiModelSelect={handleAiModelSelect}
+      onAiReasoningEffortSelect={handleAiReasoningEffortSelect}
       onRejectSelectionReview={handleRejectSelectionReview}
       onUndoSelectionReview={handleUndoSelectionReview}
       onCancelAiStreaming={handleCancelAiStreaming}

@@ -1,5 +1,5 @@
 import { buildContextBundle, type ContextBundleTrace } from "@novel-studio/context-engine";
-import type { LlmModelProfile, LlmUsage } from "@novel-studio/llm-adapter";
+import type { LlmModelProfile, LlmParameters, LlmUsage } from "@novel-studio/llm-adapter";
 import {
   completeWorkflowStep,
   evaluateNextWorkflowAction,
@@ -169,7 +169,10 @@ export async function* streamChapterSuggestionForSession(
     currentBody: chapterState.chapter.body,
     contextTrace: contextBundle.value.trace,
     modelProfile: runtimeProfile.value.modelProfile,
-    parameters: runtimeProfile.value.parameters,
+    parameters: withRequestedReasoningEffort(
+      runtimeProfile.value.parameters,
+      request.reasoningEffort
+    ),
     conversationMessages: input.conversationMessages,
     mode: "streaming",
     ...(request.abortSignal === undefined ? {} : { abortSignal: request.abortSignal })
@@ -648,6 +651,13 @@ async function resolveModelRuntimeProfile(
       maxTokens: 1200
     }
   });
+}
+
+function withRequestedReasoningEffort(
+  parameters: LlmParameters,
+  reasoningEffort: LlmParameters["reasoningEffort"] | undefined
+): LlmParameters {
+  return reasoningEffort === undefined ? parameters : { ...parameters, reasoningEffort };
 }
 
 function invalidWorkflowAction<T>(kind: string): Result<T, UnifiedError> {

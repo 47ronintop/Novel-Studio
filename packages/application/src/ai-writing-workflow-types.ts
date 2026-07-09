@@ -5,6 +5,7 @@ import type {
   LlmModelProfile,
   LlmParameters,
   LlmProviderId,
+  LlmReasoningEffort,
   LlmUsage,
   LlmUsageStatus
 } from "@novel-studio/llm-adapter";
@@ -20,6 +21,7 @@ import type { ModelRuntimeProfile } from "./model-settings-session.js";
 
 export interface AiWritingSuggestionRequest {
   readonly instruction: string;
+  readonly reasoningEffort?: LlmReasoningEffort;
 }
 
 export interface AiWritingSuggestionStreamRequest extends AiWritingSuggestionRequest {

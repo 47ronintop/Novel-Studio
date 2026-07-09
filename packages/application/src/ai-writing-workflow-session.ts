@@ -1,11 +1,6 @@
 ﻿import { buildContextBundle, type ContextBundleTrace } from "@novel-studio/context-engine";
 import { runAgent, type AgentConfig } from "@novel-studio/agent-engine";
-import type {
-  LlmModelProfile,
-  LlmParameters,
-  LlmProviderWarning,
-  LlmUsage
-} from "@novel-studio/llm-adapter";
+import type { LlmModelProfile, LlmProviderWarning, LlmUsage } from "@novel-studio/llm-adapter";
 import {
   completeWorkflowStep,
   confirmWorkflowStep,
@@ -27,7 +22,8 @@ import {
 import type { ModelRuntimeProfile } from "./model-settings-session.js";
 import {
   createChapterSuggestionLlmRequest,
-  createSelectionPreviewLlmRequest
+  createSelectionPreviewLlmRequest,
+  withRequestedReasoningEffort
 } from "./ai-writing-llm-requests.js";
 import { warningRuntimeNotice } from "./ai-writing-runtime-notices.js";
 import { reviewAiWritingStyle } from "./ai-writing-style-rules.js";
@@ -218,7 +214,10 @@ export function createAgentBackedAiWritingWorkflowSession(
           currentBody: chapterState.chapter.body,
           contextTrace: contextBundle.value.trace,
           modelProfile: runtimeProfile.value.modelProfile,
-          parameters: runtimeProfile.value.parameters,
+          parameters: withRequestedReasoningEffort(
+            runtimeProfile.value.parameters,
+            request.reasoningEffort
+          ),
           conversationMessages
         }),
         llmAdapter: options.llmAdapter,
@@ -846,11 +845,6 @@ const defaultModelProfile: LlmModelProfile = {
   modelName: "mock-writer"
 };
 
-const defaultParameters: LlmParameters = {
-  temperature: 0.7,
-  maxTokens: 1200
-};
-
 async function resolveModelRuntimeProfile(
   options: AiWritingWorkflowSessionOptions
 ): Promise<Result<ModelRuntimeProfile, UnifiedError>> {
@@ -860,7 +854,7 @@ async function resolveModelRuntimeProfile(
 
   return ok({
     modelProfile: options.modelProfile ?? defaultModelProfile,
-    parameters: options.parameters ?? defaultParameters
+    parameters: options.parameters ?? { temperature: 0.7, maxTokens: 1200 }
   });
 }
 
@@ -951,7 +945,11 @@ function validateSelectionRange(
   return ok(selection);
 }
 
-function replaceSelection(body: string, selection: AiWritingSelectionRange, proposedText: string): string {
+function replaceSelection(
+  body: string,
+  selection: AiWritingSelectionRange,
+  proposedText: string
+): string {
   return `${body.slice(0, selection.startOffset)}${proposedText}${body.slice(selection.endOffset)}`;
 }
 

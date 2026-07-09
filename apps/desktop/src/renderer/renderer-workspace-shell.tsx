@@ -41,6 +41,9 @@ export interface RendererWorkspaceShellProps {
   readonly onGenerateAiSuggestion: AiWritingWorkflowProps["onGenerateSuggestion"];
   readonly onApplyAiSuggestion: AiWritingWorkflowProps["onApplySuggestion"];
   readonly onAiModelSelect: NonNullable<AiWritingWorkflowProps["onModelSelect"]>;
+  readonly onAiReasoningEffortSelect: NonNullable<
+    AiWritingWorkflowProps["onReasoningEffortSelect"]
+  >;
   readonly onRejectSelectionReview: NonNullable<AiWritingWorkflowProps["onRejectSelectionReview"]>;
   readonly onUndoSelectionReview: NonNullable<AiWritingWorkflowProps["onUndoSelectionReview"]>;
   readonly onCancelAiStreaming: AiWritingWorkflowProps["onCancelStreaming"];
@@ -131,6 +134,7 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
               onGenerateSuggestion: props.onGenerateAiSuggestion,
               onApplySuggestion: props.onApplyAiSuggestion,
               onModelSelect: props.onAiModelSelect,
+              onReasoningEffortSelect: props.onAiReasoningEffortSelect,
               onRejectSelectionReview: props.onRejectSelectionReview,
               onUndoSelectionReview: props.onUndoSelectionReview,
               onRetrySuggestion: props.onGenerateAiSuggestion,

@@ -131,7 +131,9 @@ export function AiWritingAssistantPanel({
                 fallbackReason={workflow.modelDiscovery?.fallbackReason}
                 modelPicker={modelPicker}
                 onModelSelect={workflow.onModelSelect}
+                onReasoningEffortSelect={workflow.onReasoningEffortSelect}
                 reasoningControl={reasoningControl}
+                selectedReasoningEffort={workflow.selectedReasoningEffort}
               />
             )}
             {workflow.status === "suggestion-ready" ? (
@@ -191,12 +193,16 @@ function AiModelControls({
   fallbackReason,
   modelPicker,
   onModelSelect,
-  reasoningControl
+  onReasoningEffortSelect,
+  reasoningControl,
+  selectedReasoningEffort
 }: {
   readonly fallbackReason: string | undefined;
   readonly modelPicker: AiModelPickerState;
   readonly onModelSelect: ((modelName: string) => void) | undefined;
+  readonly onReasoningEffortSelect: AiWritingWorkflowProps["onReasoningEffortSelect"] | undefined;
   readonly reasoningControl: ReturnType<typeof selectedReasoningControl>;
+  readonly selectedReasoningEffort: AiWritingWorkflowProps["selectedReasoningEffort"];
 }) {
   const currentDescription =
     fallbackReason ??
@@ -205,7 +211,9 @@ function AiModelControls({
       : `${modelPicker.current.provider} endpoint model.`);
   const otherModels = modelPicker.models.filter((model) => model.id !== modelPicker.current.id);
   const reasoningValue =
-    reasoningControl?.status === "available" ? reasoningControl.defaultValue : undefined;
+    reasoningControl?.status === "available"
+      ? (selectedReasoningEffort ?? reasoningControl.defaultValue)
+      : undefined;
 
   return (
     <div className="ns-ai-model-controls" aria-label="AI model controls">
@@ -223,70 +231,74 @@ function AiModelControls({
           )}
           <ChevronDown aria-hidden="true" size={13} />
         </summary>
-        <div
-          className="ns-ai-model-popover"
-          data-placement="top"
-          role="group"
-          aria-label="AI model picker"
-        >
-          <div className="ns-ai-current-model">
-            <Check aria-hidden="true" size={14} />
-            <div>
-              <strong>{modelPicker.current.displayName}</strong>
-              <span>{currentDescription}</span>
+        <div className="ns-ai-model-popover-layer">
+          <div
+            className="ns-ai-model-popover"
+            data-placement="top"
+            role="group"
+            aria-label="AI model picker"
+          >
+            <div className="ns-ai-current-model">
+              <Check aria-hidden="true" size={14} />
+              <div>
+                <strong>{modelPicker.current.displayName}</strong>
+                <span>{currentDescription}</span>
+              </div>
             </div>
-          </div>
-          {reasoningControl?.status === "available" ? (
-            <details className="ns-ai-effort-picker">
-              <summary aria-label="Reasoning effort">
-                <span>
-                  推理强度
-                  <small>{reasoningControl.providerParamName}</small>
-                </span>
-                <strong>{reasoningControl.defaultValue}</strong>
+            {reasoningControl?.status === "available" && reasoningValue !== undefined ? (
+              <details className="ns-ai-effort-picker">
+                <summary aria-label="Reasoning effort">
+                  <span>
+                    推理强度
+                    <small>{reasoningControl.providerParamName}</small>
+                  </span>
+                  <strong>{reasoningValue}</strong>
+                </summary>
+                <div className="ns-ai-effort-options">
+                  {reasoningControl.allowedValues.map((value) => (
+                    <button
+                      aria-label={`Set reasoning effort ${value}`}
+                      aria-pressed={value === reasoningValue}
+                      className="ns-ai-menu-option"
+                      key={value}
+                      onClick={() => onReasoningEffortSelect?.(value)}
+                      type="button"
+                    >
+                      {value === reasoningValue ? (
+                        <Check aria-hidden="true" size={13} />
+                      ) : (
+                        <span aria-hidden="true" className="ns-ai-menu-option-spacer" />
+                      )}
+                      {value}
+                    </button>
+                  ))}
+                </div>
+              </details>
+            ) : null}
+            <details className="ns-ai-more-models" open={otherModels.length > 0}>
+              <summary>
+                <span>更多模型</span>
+                <strong>{otherModels.length}</strong>
               </summary>
-              <div className="ns-ai-effort-options">
-                {reasoningControl.allowedValues.map((value) => (
-                  <button
-                    aria-pressed={value === reasoningControl.defaultValue}
-                    className="ns-ai-menu-option"
-                    key={value}
-                    type="button"
-                  >
-                    {value === reasoningControl.defaultValue ? (
-                      <Check aria-hidden="true" size={13} />
-                    ) : (
+              {otherModels.length > 0 ? (
+                <div className="ns-ai-model-list">
+                  {otherModels.map((model) => (
+                    <button
+                      className="ns-ai-menu-option"
+                      key={model.id}
+                      onClick={() => onModelSelect?.(model.id)}
+                      type="button"
+                    >
                       <span aria-hidden="true" className="ns-ai-menu-option-spacer" />
-                    )}
-                    {value}
-                  </button>
-                ))}
-              </div>
+                      <span>{model.displayName}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="ns-ai-model-empty">当前端点没有返回可选模型。</p>
+              )}
             </details>
-          ) : null}
-          <details className="ns-ai-more-models" open={otherModels.length > 0}>
-            <summary>
-              <span>更多模型</span>
-              <strong>{otherModels.length}</strong>
-            </summary>
-            {otherModels.length > 0 ? (
-              <div className="ns-ai-model-list">
-                {otherModels.map((model) => (
-                  <button
-                    className="ns-ai-menu-option"
-                    key={model.id}
-                    onClick={() => onModelSelect?.(model.id)}
-                    type="button"
-                  >
-                    <span aria-hidden="true" className="ns-ai-menu-option-spacer" />
-                    <span>{model.displayName}</span>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <p className="ns-ai-model-empty">当前端点没有返回可选模型。</p>
-            )}
-          </details>
+          </div>
         </div>
       </details>
     </div>

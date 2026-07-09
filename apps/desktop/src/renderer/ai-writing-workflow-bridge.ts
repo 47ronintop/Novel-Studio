@@ -46,6 +46,9 @@ export interface AiWritingWorkflowBridge {
   applySuggestion(): Promise<ChapterEditorProps>;
   loadModelDiscovery(): Promise<AiWritingWorkflowProps>;
   selectDiscoveredModel(modelName: string): Promise<AiWritingWorkflowProps>;
+  selectReasoningEffort(
+    reasoningEffort: NonNullable<AiWritingWorkflowProps["selectedReasoningEffort"]>
+  ): AiWritingWorkflowProps;
 }
 
 export interface AiSelectionPreviewBridgeInput {
@@ -63,6 +66,7 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
   let currentStreamToken = 0;
   let currentModelProfile: ModelProfile | undefined;
   let modelDiscovery: ModelDiscoverySnapshot | undefined;
+  let selectedReasoningEffort: AiWritingWorkflowProps["selectedReasoningEffort"];
   let props: AiWritingWorkflowProps = createProps({
     status: "idle",
     instruction: ""
@@ -88,7 +92,8 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
     props = createProps({
       ...props,
       ...(modelDiscovery === undefined ? {} : { modelDiscovery }),
-      selectedModelName: profile.modelName
+      selectedModelName: profile.modelName,
+      ...selectedReasoningEffortProps(modelDiscovery, profile.modelName, selectedReasoningEffort)
     });
     return props;
   }
@@ -146,7 +151,12 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
 
       try {
         for await (const result of api.ai.streamChapterSuggestion(
-          { instruction },
+          {
+            instruction,
+            ...(selectedReasoningEffort === undefined
+              ? {}
+              : { reasoningEffort: selectedReasoningEffort })
+          },
           { signal: controller.signal }
         )) {
           if (streamToken !== currentStreamToken || controller.signal.aborted) {
@@ -255,7 +265,12 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
       return props;
     },
     async generateSuggestion(instruction) {
-      const generated = await api.ai.generateChapterSuggestion({ instruction });
+      const generated = await api.ai.generateChapterSuggestion({
+        instruction,
+        ...(selectedReasoningEffort === undefined
+          ? {}
+          : { reasoningEffort: selectedReasoningEffort })
+      });
       if (!generated.ok) {
         currentSuggestionId = undefined;
         currentSelectionPreviewId = undefined;
@@ -430,10 +445,20 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
       }
       currentModelProfile =
         saved.value.profiles.find((entry) => entry.id === nextProfile.id) ?? nextProfile;
+      selectedReasoningEffort = defaultReasoningEffortForModel(modelDiscovery, modelName);
       props = createProps({
         ...props,
         ...(modelDiscovery === undefined ? {} : { modelDiscovery }),
-        selectedModelName: modelName
+        selectedModelName: modelName,
+        ...selectedReasoningEffortProps(modelDiscovery, modelName, selectedReasoningEffort)
+      });
+      return props;
+    },
+    selectReasoningEffort(reasoningEffort) {
+      selectedReasoningEffort = reasoningEffort;
+      props = createProps({
+        ...props,
+        selectedReasoningEffort
       });
       return props;
     }
@@ -523,6 +548,7 @@ function createProps(
     | "onInstructionChange"
     | "onGenerateSuggestion"
     | "onApplySuggestion"
+    | "onReasoningEffortSelect"
     | "onRejectSelectionReview"
     | "onUndoSelectionReview"
     | "onRetrySuggestion"
@@ -534,11 +560,48 @@ function createProps(
     onInstructionChange: () => undefined,
     onGenerateSuggestion: () => undefined,
     onApplySuggestion: () => undefined,
+    onReasoningEffortSelect: () => undefined,
     onRejectSelectionReview: () => undefined,
     onUndoSelectionReview: () => undefined,
     onRetrySuggestion: () => undefined,
     onCancelStreaming: () => undefined
   };
+}
+
+function selectedReasoningEffortProps(
+  discovery: ModelDiscoverySnapshot | undefined,
+  modelName: string,
+  selected: AiWritingWorkflowProps["selectedReasoningEffort"]
+): Pick<AiWritingWorkflowProps, "selectedReasoningEffort"> {
+  const defaultValue = defaultReasoningEffortForModel(discovery, modelName);
+  if (defaultValue === undefined) {
+    return {};
+  }
+  if (selected !== undefined && reasoningEffortAllowed(discovery, modelName, selected)) {
+    return { selectedReasoningEffort: selected };
+  }
+  return { selectedReasoningEffort: defaultValue };
+}
+
+function defaultReasoningEffortForModel(
+  discovery: ModelDiscoverySnapshot | undefined,
+  modelName: string
+): AiWritingWorkflowProps["selectedReasoningEffort"] {
+  const control =
+    discovery?.models.find((model) => model.id === modelName)?.reasoningStrength ??
+    discovery?.reasoningStrength;
+  return control?.status === "available" ? control.defaultValue : undefined;
+}
+
+function reasoningEffortAllowed(
+  discovery: ModelDiscoverySnapshot | undefined,
+  modelName: string,
+  value: NonNullable<AiWritingWorkflowProps["selectedReasoningEffort"]>
+): boolean {
+  const control =
+    discovery?.models.find((model) => model.id === modelName)?.reasoningStrength ??
+    discovery?.reasoningStrength;
+  return control?.status === "available" && control.allowedValues.includes(value);
 }
 
 function traceLabel(input: Pick<AiWritingSuggestion, "contextTrace">): string {

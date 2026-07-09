@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, test } from "vitest";
 
 import { createDesktopApplication } from "@novel-studio/application";
@@ -196,6 +197,7 @@ describe("AI writing workflow UI", () => {
     expect(html).not.toContain('aria-label="AI model selector"');
     expect(html).toContain('aria-label="Reasoning effort"');
     expect(html).toContain("reasoning_effort");
+    expect(html).toContain('class="ns-ai-model-popover-layer"');
     expect(html).toContain("24 tokens · estimated");
     expect(html).toContain("USD 0.000000 · estimated");
     expect(html).toContain("构建上下文");
@@ -357,6 +359,57 @@ describe("AI writing workflow UI", () => {
     expect(html).toContain("流式输出中");
   });
 
+  test("calls reasoning effort selection from the model controls", () => {
+    const calls: string[] = [];
+    const application = createDesktopApplication();
+    const tree = (
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "ai" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        aiWritingWorkflow={{
+          status: "idle",
+          instruction: "Continue the scene.",
+          modelDiscovery: {
+            profileId: "model_default",
+            provider: "openai-compatible",
+            status: "loaded",
+            models: [
+              {
+                id: "gpt-5",
+                displayName: "gpt-5",
+                provider: "openai-compatible",
+                reasoningStrength: {
+                  status: "available",
+                  providerParamName: "reasoning_effort",
+                  allowedValues: ["low", "medium", "high"],
+                  defaultValue: "medium"
+                }
+              }
+            ],
+            reasoningStrength: {
+              status: "hidden",
+              reason: "Select a whitelisted reasoning model before exposing reasoning controls."
+            }
+          },
+          selectedModelName: "gpt-5",
+          selectedReasoningEffort: "medium",
+          onInstructionChange: () => undefined,
+          onGenerateSuggestion: () => undefined,
+          onApplySuggestion: () => undefined,
+          onModelSelect: () => undefined,
+          onReasoningEffortSelect: (value) => calls.push(value),
+          onRetrySuggestion: () => undefined,
+          onCancelStreaming: () => undefined
+        }}
+      />
+    );
+
+    findElementByAriaLabel(tree, "Set reasoning effort high")?.props.onClick?.();
+
+    expect(calls).toEqual(["high"]);
+  });
+
   test("renders persisted chat messages from the active AI session", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
@@ -410,3 +463,54 @@ describe("AI writing workflow UI", () => {
     expect(html).toContain("2026-07-05 00:01");
   });
 });
+
+function findElementByAriaLabel(
+  node: ReactNode,
+  ariaLabel: string
+): ReactElement<UiTestElementProps> | undefined {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findElementByAriaLabel(child, ariaLabel);
+      if (found !== undefined) {
+        return found;
+      }
+    }
+    return undefined;
+  }
+
+  if (!isValidElement(node)) {
+    return undefined;
+  }
+
+  const element = node as ReactElement<UiTestElementProps>;
+  if (element.props["aria-label"] === ariaLabel) {
+    return element;
+  }
+
+  if (typeof element.type === "function") {
+    const renderComponent = element.type as (props: UiTestElementProps) => ReactNode;
+    const found = findElementByAriaLabel(renderComponent(element.props), ariaLabel);
+    if (found !== undefined) {
+      return found;
+    }
+  }
+
+  const children = element.props.children as ReactNode;
+  if (Array.isArray(children)) {
+    for (const child of children) {
+      const found = findElementByAriaLabel(child, ariaLabel);
+      if (found !== undefined) {
+        return found;
+      }
+    }
+    return undefined;
+  }
+
+  return findElementByAriaLabel(children, ariaLabel);
+}
+
+interface UiTestElementProps {
+  readonly [key: string]: unknown;
+  readonly children?: ReactNode;
+  readonly onClick?: () => void;
+}

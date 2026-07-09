@@ -966,8 +966,24 @@ function toAiWritingSuggestionRequest(value: unknown): AiWritingSuggestionReques
   }
 
   return {
-    instruction: value.instruction
+    instruction: value.instruction,
+    ...(isLlmReasoningEffort(value.reasoningEffort)
+      ? { reasoningEffort: value.reasoningEffort }
+      : {})
   };
+}
+
+function isLlmReasoningEffort(
+  value: unknown
+): value is NonNullable<AiWritingSuggestionRequest["reasoningEffort"]> {
+  return (
+    value === "none" ||
+    value === "minimal" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh"
+  );
 }
 
 function toAiWritingSelectionPreviewRequest(value: unknown): AiWritingSelectionPreviewRequest {

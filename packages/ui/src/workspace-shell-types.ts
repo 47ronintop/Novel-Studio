@@ -4,6 +4,7 @@ import type {
   ApplicationCommandId,
   DesktopShellState,
   ModelDiscoverySnapshot,
+  ModelReasoningStrengthValue,
   ProjectSearchResultItem,
   ProjectWorkspaceHealth
 } from "@novel-studio/application";
@@ -164,10 +165,12 @@ export interface AiWritingWorkflowProps {
   readonly styleReview?: AiWritingStyleReviewProps;
   readonly modelDiscovery?: ModelDiscoverySnapshot;
   readonly selectedModelName?: string;
+  readonly selectedReasoningEffort?: ModelReasoningStrengthValue;
   readonly onInstructionChange: (instruction: string) => void;
   readonly onGenerateSuggestion: () => void;
   readonly onApplySuggestion: () => void;
   readonly onModelSelect?: (modelName: string) => void;
+  readonly onReasoningEffortSelect?: (value: ModelReasoningStrengthValue) => void;
   readonly onRejectSelectionReview?: () => void;
   readonly onUndoSelectionReview?: () => void;
   readonly onRetrySuggestion: () => void;

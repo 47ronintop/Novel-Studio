@@ -258,6 +258,21 @@ describe("AI writing workflow bridge", () => {
     ]);
   });
 
+  test("tracks selected reasoning effort and sends it with streaming requests", async () => {
+    const calls: string[] = [];
+    const api = createApi(calls);
+    const bridge = createAiWritingWorkflowBridge(api);
+
+    await bridge.loadModelDiscovery();
+    await bridge.selectDiscoveredModel("gpt-5");
+    const selected = bridge.selectReasoningEffort("high");
+    bridge.beginStreamingGenerate("Continue with reasoning.");
+    await bridge.generateStreamingSuggestion("Continue with reasoning.", () => undefined);
+
+    expect(selected.selectedReasoningEffort).toBe("high");
+    expect(calls).toContain("ai.stream:Continue with reasoning.:high");
+  });
+
   test("generates a preview-only suggestion and applies it through the preload API", async () => {
     const calls: string[] = [];
     const bridge = createAiWritingWorkflowBridge(createApi(calls));
@@ -739,6 +754,16 @@ function createApi(calls: string[]): NovelStudioApi {
       generateChapterSuggestion: async (request) => {
         calls.push(`ai.generate:${request.instruction}`);
         return ok(suggestion);
+      },
+      streamChapterSuggestion: async function* (request) {
+        calls.push(`ai.stream:${request.instruction}:${request.reasoningEffort ?? "none"}`);
+        yield ok({ type: "delta", value: '{"proposedBody":"' });
+        yield ok({ type: "delta", value: 'Opening line.\\nAI continuation draft.\\n"' });
+        yield ok({
+          type: "delta",
+          value: ',"summary":"Generated a local mock continuation for review."}'
+        });
+        yield ok({ type: "suggestion", suggestion });
       },
       generateSelectionPreview: async (request) => {
         calls.push(

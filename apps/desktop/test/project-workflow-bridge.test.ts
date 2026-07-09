@@ -283,8 +283,62 @@ describe("project workflow bridge", () => {
     expect(calls).toEqual([
       "project.chooseOpenDirectory",
       "project.open:D:/Novel/Dialog Open",
+      "project.readDirectory:D:/Novel/Dialog Open",
       "project.chooseCreateDirectory",
       "project.create:prj_dialog:Dialog Create"
+    ]);
+  });
+
+  test("loads the local file tree immediately after opening a valid project", async () => {
+    const calls: string[] = [];
+    const fileTree = [
+      {
+        id: "file:project.json",
+        name: "project.json",
+        kind: "file" as const,
+        path: "project.json"
+      },
+      {
+        id: "folder:chapters",
+        name: "chapters",
+        kind: "directory" as const,
+        path: "chapters",
+        children: [
+          {
+            id: "file:chapters/ch_opening.md",
+            name: "ch_opening.md",
+            kind: "file" as const,
+            path: "chapters/ch_opening.md"
+          }
+        ]
+      }
+    ];
+    const api = createApi({
+      record: calls,
+      getChapters: () => [
+        {
+          id: "ch_opening",
+          title: "Opening",
+          order: 1,
+          status: "draft",
+          updatedAt: "2026-07-04T00:00:00.000Z"
+        }
+      ],
+      setChapters: () => undefined,
+      chooseOpenProjectRoot: "D:/Novel/Valid",
+      fileTree
+    });
+    const bridge = createProjectWorkflowBridge(api);
+
+    const opened = await bridge.openProject();
+
+    expect(opened.fileTree?.map((item) => item.name)).toEqual(["project.json", "chapters"]);
+    expect(opened.chapters.map((chapter) => chapter.id)).toEqual(["ch_opening"]);
+    expect(opened.canInitializeProject).toBeUndefined();
+    expect(calls).toEqual([
+      "project.chooseOpenDirectory",
+      "project.open:D:/Novel/Valid",
+      "project.readDirectory:D:/Novel/Valid"
     ]);
   });
 
@@ -415,7 +469,9 @@ function createApi(options: {
   readonly chooseOpenProjectRoot?: string;
   readonly chooseCreateProjectRoot?: string;
   readonly openErrorMessage?: string;
-  readonly fileTree?: NonNullable<ReturnType<typeof createProjectWorkflowBridge>["getProps"]>["fileTree"];
+  readonly fileTree?: NonNullable<
+    ReturnType<typeof createProjectWorkflowBridge>["getProps"]
+  >["fileTree"];
   readonly recovery?: ProjectWorkspaceSnapshot["recovery"];
 }): NovelStudioApi {
   let currentProjectRoot = emptySnapshot.projectRoot;
@@ -532,11 +588,13 @@ function createApi(options: {
       },
       renameChapter: async (input) => {
         options.record.push(`project.renameChapter:${input.chapterId}:${input.title}`);
-        const nextChapters = options.getChapters().map((chapter) =>
-          chapter.id === input.chapterId
-            ? { ...chapter, title: input.title, updatedAt: "2026-07-04T00:00:00.000Z" }
-            : chapter
-        );
+        const nextChapters = options
+          .getChapters()
+          .map((chapter) =>
+            chapter.id === input.chapterId
+              ? { ...chapter, title: input.title, updatedAt: "2026-07-04T00:00:00.000Z" }
+              : chapter
+          );
         options.setChapters(nextChapters);
         return ok({
           ...emptySnapshot,
@@ -549,7 +607,9 @@ function createApi(options: {
         options.record.push(
           `project.duplicateChapter:${input.sourceChapterId}:${input.chapterId}:${input.title}`
         );
-        const source = options.getChapters().find((chapter) => chapter.id === input.sourceChapterId);
+        const source = options
+          .getChapters()
+          .find((chapter) => chapter.id === input.sourceChapterId);
         const nextChapters = [
           ...options.getChapters(),
           {
