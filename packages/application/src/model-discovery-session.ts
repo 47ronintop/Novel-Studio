@@ -177,7 +177,13 @@ function reasoningEffortSpecForOpenAiModel(
       defaultValue: "medium"
     };
   }
-  if (/^gpt-5\.[1-9]\d*/.test(normalizedModelId)) {
+  if (/^gpt-5\.(?:[2-9]\d*|1\d+)(?:-|$)/.test(normalizedModelId)) {
+    return {
+      allowedValues: ["none", "low", "medium", "high", "xhigh"],
+      defaultValue: "medium"
+    };
+  }
+  if (/^gpt-5\.1(?:-|$)/.test(normalizedModelId)) {
     return {
       allowedValues: ["none", "low", "medium", "high"],
       defaultValue: "none"

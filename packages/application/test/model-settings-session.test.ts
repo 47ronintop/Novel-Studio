@@ -93,6 +93,20 @@ describe("model settings session", () => {
       allowedValues: ["none", "low", "medium", "high"],
       defaultValue: "none"
     });
+    expect(reasoningStrengthForModel("openai", "gpt-5.4", "https://api.openai.com/v1")).toEqual({
+      status: "available",
+      providerParamName: "reasoning_effort",
+      allowedValues: ["none", "low", "medium", "high", "xhigh"],
+      defaultValue: "medium"
+    });
+    expect(
+      reasoningStrengthForModel("openai", "gpt-5.4-mini", "https://api.openai.com/v1")
+    ).toEqual({
+      status: "available",
+      providerParamName: "reasoning_effort",
+      allowedValues: ["none", "low", "medium", "high", "xhigh"],
+      defaultValue: "medium"
+    });
     expect(reasoningStrengthForModel("openai", "gpt-5.5", "https://api.openai.com/v1")).toEqual({
       status: "available",
       providerParamName: "reasoning_effort",
