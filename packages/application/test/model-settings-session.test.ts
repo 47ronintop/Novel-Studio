@@ -65,16 +65,18 @@ const secondaryProfile = {
 } satisfies ModelProfile;
 
 describe("model settings session", () => {
-  test("hides reasoning strength for third-party OpenAI-compatible base URLs by default", () => {
+  test("shows reasoning strength for matching OpenAI-compatible model names", () => {
     const result = reasoningStrengthForModel(
       "openai-compatible",
       "gpt-5.5",
       "https://api.hostcentral.cc/v1"
     );
 
-    expect(result).toMatchObject({
-      status: "hidden",
-      reason: expect.stringContaining("custom OpenAI-compatible endpoint")
+    expect(result).toEqual({
+      status: "available",
+      providerParamName: "reasoning_effort",
+      allowedValues: ["none", "low", "medium", "high", "xhigh"],
+      defaultValue: "medium"
     });
   });
 
@@ -85,25 +87,19 @@ describe("model settings session", () => {
       allowedValues: ["minimal", "low", "medium", "high"],
       defaultValue: "medium"
     });
-    expect(
-      reasoningStrengthForModel("openai", "gpt-5.1", "https://api.openai.com/v1")
-    ).toEqual({
+    expect(reasoningStrengthForModel("openai", "gpt-5.1", "https://api.openai.com/v1")).toEqual({
       status: "available",
       providerParamName: "reasoning_effort",
       allowedValues: ["none", "low", "medium", "high"],
       defaultValue: "none"
     });
-    expect(
-      reasoningStrengthForModel("openai", "gpt-5.5", "https://api.openai.com/v1")
-    ).toEqual({
+    expect(reasoningStrengthForModel("openai", "gpt-5.5", "https://api.openai.com/v1")).toEqual({
       status: "available",
       providerParamName: "reasoning_effort",
       allowedValues: ["none", "low", "medium", "high", "xhigh"],
       defaultValue: "medium"
     });
-    expect(
-      reasoningStrengthForModel("openai", "gpt-5-pro", "https://api.openai.com/v1")
-    ).toEqual({
+    expect(reasoningStrengthForModel("openai", "gpt-5-pro", "https://api.openai.com/v1")).toEqual({
       status: "available",
       providerParamName: "reasoning_effort",
       allowedValues: ["high"],
@@ -326,6 +322,62 @@ describe("model settings session", () => {
     expect(result.value.fallbackReason).toContain("Provider rejected");
     expect(JSON.stringify(result.value)).not.toContain("sk-secret");
     expect(JSON.stringify(result.value)).not.toContain("secret://model_default/api_key");
+  });
+
+  test("keeps reasoning strength available in fallback discovery for known OpenAI-compatible models", async () => {
+    const discoveryPort: ModelDiscoveryPort = {
+      async discoverModels() {
+        return {
+          ok: false,
+          error: createUnifiedError({
+            code: "MODEL_DISCOVERY_UPSTREAM_FAILED",
+            category: "ModelProviderError",
+            message: "Provider does not implement /models.",
+            recoverability: "user-action",
+            suggestedAction: "Enter the model name manually.",
+            traceId: "test-model-discovery"
+          })
+        };
+      }
+    };
+    const [defaultProfile] = settings.models.profiles;
+    expect(defaultProfile).toBeDefined();
+    if (defaultProfile === undefined) {
+      return;
+    }
+    const session = createModelSettingsSession({
+      settingsPort: staticSettingsPort({
+        ...settings,
+        models: {
+          defaultProfileId: "model_default",
+          profiles: [
+            {
+              ...defaultProfile,
+              baseUrl: "https://api.hostcentral.cc/v1",
+              modelName: "gpt-5.5"
+            }
+          ]
+        }
+      }),
+      discoveryPort
+    });
+
+    const result = await session.discoverModelOptions("model_default");
+
+    expect(isOk(result)).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.value).toMatchObject({
+      status: "fallback",
+      models: [],
+      reasoningStrength: {
+        status: "available",
+        providerParamName: "reasoning_effort",
+        allowedValues: ["none", "low", "medium", "high", "xhigh"],
+        defaultValue: "medium"
+      }
+    });
   });
 
   test("rejects unsupported providers and non-secret key references before writing settings", async () => {

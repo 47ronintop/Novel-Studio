@@ -370,7 +370,42 @@ describe("AI writing workflow bridge", () => {
     expect(calls).toEqual(["ai.stream:start", "ai.stream:aborted:true"]);
   });
 
-  test("renders failed state when the streaming iterator throws before yielding an error result", async () => {
+  test("falls back to non-streaming generation when streaming fails before any delta", async () => {
+    const calls: string[] = [];
+    const api = createApi(calls);
+    const updates: string[] = [];
+    api.ai.streamChapterSuggestion = async function* () {
+      calls.push("ai.stream:start");
+      yield err(
+        createUnifiedError({
+          code: "AI_STREAM_FAILED",
+          category: "LLMAdapterError",
+          message: "Provider streaming response timed out before returning an SSE chunk.",
+          recoverability: "retryable",
+          suggestedAction: "Retry with non-streaming.",
+          traceId: "ai-writing-workflow"
+        })
+      );
+    };
+    const bridge = createAiWritingWorkflowBridge(api);
+
+    bridge.beginStreamingGenerate("Continue with fallback.");
+    const finalProps = await bridge.generateStreamingSuggestion(
+      "Continue with fallback.",
+      (nextProps) => updates.push(`${nextProps.status}:${nextProps.runtimeNotice ?? ""}`)
+    );
+
+    expect(finalProps.status).toBe("suggestion-ready");
+    expect(finalProps.summary).toBe("Generated a local mock continuation for review.");
+    expect(finalProps.runtimeNotice).toBe("流式输出未返回内容，已自动改用非流式请求完成本次生成。");
+    expect(updates).toEqual([
+      "generating:流式输出未返回内容，正在改用非流式请求。",
+      "suggestion-ready:流式输出未返回内容，已自动改用非流式请求完成本次生成。"
+    ]);
+    expect(calls).toEqual(["ai.stream:start", "ai.generate:Continue with fallback."]);
+  });
+
+  test("falls back when the streaming iterator throws before yielding a delta", async () => {
     const calls: string[] = [];
     const api = createApi(calls);
     const updates: string[] = [];
@@ -389,16 +424,14 @@ describe("AI writing workflow bridge", () => {
       }
     );
 
-    expect(finalProps.status).toBe("failed");
-    expect(finalProps.failure).toMatchObject({
-      code: "AI_STREAM_FAILED",
-      message: "Provider socket closed before the first SSE chunk."
-    });
-    expect(updates).toEqual(["failed:Provider socket closed before the first SSE chunk."]);
-    expect(calls).toEqual(["ai.stream:start"]);
+    expect(finalProps.status).toBe("suggestion-ready");
+    expect(finalProps.summary).toBe("Generated a local mock continuation for review.");
+    expect(finalProps.runtimeNotice).toBe("流式输出未返回内容，已自动改用非流式请求完成本次生成。");
+    expect(updates).toEqual(["generating:", "suggestion-ready:"]);
+    expect(calls).toEqual(["ai.stream:start", "ai.generate:Continue with streaming."]);
   });
 
-  test("renders failed state when streaming returns a normalized provider error result", async () => {
+  test("falls back when streaming returns a normalized provider error before yielding a delta", async () => {
     const calls: string[] = [];
     const api = createApi(calls);
     const updates: string[] = [];
@@ -431,14 +464,11 @@ describe("AI writing workflow bridge", () => {
       }
     );
 
-    expect(finalProps.status).toBe("failed");
-    expect(finalProps.failure).toMatchObject({
-      code: "AI_STREAM_FAILED",
-      message: "Provider returned a non-SSE streaming response.",
-      suggestedAction: "Check the model provider response and retry."
-    });
-    expect(updates).toEqual(["failed:Provider returned a non-SSE streaming response."]);
-    expect(calls).toEqual(["ai.stream:start"]);
+    expect(finalProps.status).toBe("suggestion-ready");
+    expect(finalProps.summary).toBe("Generated a local mock continuation for review.");
+    expect(finalProps.runtimeNotice).toBe("流式输出未返回内容，已自动改用非流式请求完成本次生成。");
+    expect(updates).toEqual(["generating:", "suggestion-ready:"]);
+    expect(calls).toEqual(["ai.stream:start", "ai.generate:Continue with streaming."]);
   });
 
   test("fails instead of staying streaming when the stream closes without a final suggestion", async () => {

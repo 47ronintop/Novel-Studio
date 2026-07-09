@@ -57,6 +57,9 @@ export interface AiSelectionPreviewBridgeInput {
   readonly selectedText: string;
 }
 
+const STREAM_FALLBACK_IN_PROGRESS_NOTICE = "流式输出未返回内容，正在改用非流式请求。";
+const STREAM_FALLBACK_COMPLETED_NOTICE = "流式输出未返回内容，已自动改用非流式请求完成本次生成。";
+
 export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWorkflowBridge {
   let currentSuggestionId: string | undefined;
   let currentSelectionPreviewId: string | undefined;
@@ -95,6 +98,55 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
       selectedModelName: profile.modelName,
       ...selectedReasoningEffortProps(modelDiscovery, profile.modelName, selectedReasoningEffort)
     });
+    return props;
+  }
+
+  async function fallbackToNonStreamingAfterStreamFailure(
+    instruction: string,
+    onUpdate: (props: AiWritingWorkflowProps) => void
+  ): Promise<AiWritingWorkflowProps> {
+    const { streamPreview: _streamPreview, ...propsWithoutStreamPreview } = props;
+    void _streamPreview;
+    props = createProps({
+      ...propsWithoutStreamPreview,
+      status: "generating",
+      instruction,
+      runtimeNotice: STREAM_FALLBACK_IN_PROGRESS_NOTICE
+    });
+    onUpdate(props);
+
+    const generated = await api.ai.generateChapterSuggestion({
+      instruction,
+      ...(selectedReasoningEffort === undefined ? {} : { reasoningEffort: selectedReasoningEffort })
+    });
+    if (!generated.ok) {
+      currentSuggestionId = undefined;
+      currentSelectionPreviewId = undefined;
+      currentSelectionPreview = undefined;
+      const history = await loadLatestHistory(api);
+      props = createProps({
+        ...props,
+        status: "failed",
+        instruction,
+        failure: toFailureProps(generated.error),
+        retryPolicy: toRetryPolicyProps(undefined),
+        ...(history === undefined ? {} : { history })
+      });
+      onUpdate(props);
+      return props;
+    }
+
+    const suggestion = generated.value;
+    currentSuggestionId = suggestion.suggestionId;
+    currentSelectionPreviewId = undefined;
+    currentSelectionPreview = undefined;
+    rejectedSelectionPreview = undefined;
+    const history = await loadHistory(api, suggestion.workflowRunId);
+    props = createProps({
+      ...toProps(suggestion, instruction, history),
+      runtimeNotice: STREAM_FALLBACK_COMPLETED_NOTICE
+    });
+    onUpdate(props);
     return props;
   }
 
@@ -148,6 +200,7 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
       currentStreamController = controller;
       currentStreamToken += 1;
       const streamToken = currentStreamToken;
+      let receivedDelta = false;
 
       try {
         for await (const result of api.ai.streamChapterSuggestion(
@@ -164,6 +217,9 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
           }
 
           if (!result.ok) {
+            if (!receivedDelta) {
+              return fallbackToNonStreamingAfterStreamFailure(instruction, onUpdate);
+            }
             currentSuggestionId = undefined;
             currentSelectionPreviewId = undefined;
             currentSelectionPreview = undefined;
@@ -181,6 +237,7 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
           }
 
           if (result.value.type === "delta") {
+            receivedDelta = true;
             props = createProps({
               ...props,
               status: "streaming",
@@ -214,6 +271,9 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
         }
 
         if (streamToken === currentStreamToken && !controller.signal.aborted) {
+          if (!receivedDelta) {
+            return fallbackToNonStreamingAfterStreamFailure(instruction, onUpdate);
+          }
           currentSuggestionId = undefined;
           currentSelectionPreviewId = undefined;
           currentSelectionPreview = undefined;
@@ -241,6 +301,9 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
       } catch (error) {
         if (streamToken !== currentStreamToken || controller.signal.aborted) {
           return props;
+        }
+        if (!receivedDelta) {
+          return fallbackToNonStreamingAfterStreamFailure(instruction, onUpdate);
         }
         currentSuggestionId = undefined;
         currentSelectionPreviewId = undefined;

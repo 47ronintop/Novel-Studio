@@ -2,13 +2,7 @@ import type { JsonObject, Result, UnifiedError } from "@novel-studio/shared";
 import type { ModelProfile } from "./model-settings-session.js";
 
 export type ModelDiscoveryStatus = "loaded" | "fallback";
-export type ModelReasoningStrengthValue =
-  | "none"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh";
+export type ModelReasoningStrengthValue = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export interface ModelReasoningStrengthAvailable extends JsonObject {
   readonly status: "available";
@@ -23,8 +17,7 @@ export interface ModelReasoningStrengthHidden extends JsonObject {
 }
 
 export type ModelReasoningStrengthControl =
-  | ModelReasoningStrengthAvailable
-  | ModelReasoningStrengthHidden;
+  ModelReasoningStrengthAvailable | ModelReasoningStrengthHidden;
 
 export interface ModelDiscoveryOption extends JsonObject {
   readonly id: string;
@@ -53,8 +46,11 @@ export interface ModelDiscoveryPort {
   discoverModels(profile: ModelProfile): Promise<Result<ModelDiscoverySnapshot, UnifiedError>>;
 }
 
+type ModelDiscoveryFallbackProfile = Pick<ModelProfile, "id" | "provider"> &
+  Partial<Pick<ModelProfile, "modelName" | "baseUrl" | "reasoningEffortEnabled">>;
+
 export function createModelDiscoveryFallback(
-  profile: Pick<ModelProfile, "id" | "provider">,
+  profile: ModelDiscoveryFallbackProfile,
   fallbackReason: string
 ): ModelDiscoverySnapshot {
   return {
@@ -63,7 +59,15 @@ export function createModelDiscoveryFallback(
     status: "fallback",
     models: [],
     fallbackReason: redactDiscoveryText(fallbackReason),
-    reasoningStrength: hiddenReasoningStrength()
+    reasoningStrength:
+      profile.modelName === undefined
+        ? hiddenReasoningStrength()
+        : reasoningStrengthForModel(
+            profile.provider,
+            profile.modelName,
+            profile.baseUrl,
+            profile.reasoningEffortEnabled
+          )
   };
 }
 
@@ -110,14 +114,6 @@ export function reasoningStrengthForModel(
     return hiddenReasoningStrength();
   }
 
-  if (!isOfficialOpenAiEndpoint(provider, baseUrl) && !reasoningEffortEnabled) {
-    return {
-      status: "hidden",
-      reason:
-        "Reasoning strength is hidden for custom OpenAI-compatible endpoints until this provider is explicitly marked as supporting reasoning_effort."
-    };
-  }
-
   const spec = reasoningEffortSpecForOpenAiModel(normalized);
   if (spec !== undefined) {
     return {
@@ -125,6 +121,14 @@ export function reasoningStrengthForModel(
       providerParamName: "reasoning_effort",
       allowedValues: spec.allowedValues,
       defaultValue: spec.defaultValue
+    };
+  }
+
+  if (!isOfficialOpenAiEndpoint(provider, baseUrl) && !reasoningEffortEnabled) {
+    return {
+      status: "hidden",
+      reason:
+        "Reasoning strength is hidden for custom OpenAI-compatible endpoints until this provider is explicitly marked as supporting reasoning_effort."
     };
   }
 
