@@ -358,6 +358,60 @@ describe("M14 AI writing workflow IPC", () => {
     ).resolves.toEqual(ok(undefined));
     expect(abortSignal?.aborted).toBe(true);
   });
+
+  test("normalizes thrown AI stream iterator errors and removes the failed stream", async () => {
+    const application = createFakeApplication();
+    application.streamActiveChapterSuggestion = () =>
+      (async function* () {
+        const error = new Error("Provider returned a non-SSE streaming response.") as Error & {
+          status: number;
+          body: { readonly bodyPreview: string };
+        };
+        error.status = 502;
+        error.body = { bodyPreview: "<html>Provider console</html>" };
+        throw error;
+        yield ok({ type: "delta", value: "" });
+      })();
+    const handlers = createApplicationIpcHandlers(application);
+
+    const started = await handlers["application:ai:start-chapter-suggestion-stream"]({
+      instruction: "Continue."
+    });
+
+    expect(started).toMatchObject({ ok: true, value: { streamId: expect.any(String) } });
+    if (!isOkStreamStart(started)) {
+      throw new Error("Expected the stream to start.");
+    }
+
+    await expect(
+      handlers["application:ai:next-chapter-suggestion-stream"](started.value.streamId)
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "AI_STREAM_FAILED",
+        category: "LLMAdapterError",
+        message: "Provider returned a non-SSE streaming response.",
+        recoverability: "retryable",
+        suggestedAction: "Check the model provider response and retry.",
+        traceId: "desktop-ipc-handlers",
+        redactedDetail: {
+          status: 502,
+          body: {
+            bodyPreview: "<html>Provider console</html>"
+          }
+        }
+      }
+    });
+
+    await expect(
+      handlers["application:ai:next-chapter-suggestion-stream"](started.value.streamId)
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "AI_STREAM_NOT_FOUND"
+      }
+    });
+  });
 });
 
 function createFakeApplication(): DesktopApplication {

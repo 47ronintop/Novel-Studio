@@ -383,6 +383,49 @@ describe("AI writing workflow bridge", () => {
     expect(calls).toEqual(["ai.stream:start"]);
   });
 
+  test("renders failed state when streaming returns a normalized provider error result", async () => {
+    const calls: string[] = [];
+    const api = createApi(calls);
+    const updates: string[] = [];
+    api.ai.streamChapterSuggestion = async function* () {
+      calls.push("ai.stream:start");
+      yield err(
+        createUnifiedError({
+          code: "AI_STREAM_FAILED",
+          category: "LLMAdapterError",
+          message: "Provider returned a non-SSE streaming response.",
+          recoverability: "retryable",
+          suggestedAction: "Check the model provider response and retry.",
+          traceId: "desktop-ipc-handlers",
+          redactedDetail: {
+            status: 502,
+            body: {
+              bodyPreview: "<html>Provider console</html>"
+            }
+          }
+        })
+      );
+    };
+    const bridge = createAiWritingWorkflowBridge(api);
+
+    bridge.beginStreamingGenerate("Continue with streaming.");
+    const finalProps = await bridge.generateStreamingSuggestion(
+      "Continue with streaming.",
+      (nextProps) => {
+        updates.push(`${nextProps.status}:${nextProps.failure?.message ?? ""}`);
+      }
+    );
+
+    expect(finalProps.status).toBe("failed");
+    expect(finalProps.failure).toMatchObject({
+      code: "AI_STREAM_FAILED",
+      message: "Provider returned a non-SSE streaming response.",
+      suggestedAction: "Check the model provider response and retry."
+    });
+    expect(updates).toEqual(["failed:Provider returned a non-SSE streaming response."]);
+    expect(calls).toEqual(["ai.stream:start"]);
+  });
+
   test("fails instead of staying streaming when the stream closes without a final suggestion", async () => {
     const calls: string[] = [];
     const api = createApi(calls);
@@ -419,16 +462,14 @@ describe("AI writing workflow bridge", () => {
       calls.push("ai.stream:start");
       yield ok({
         type: "notice",
-        message:
-          "该模型/端点不支持推理强度调节，已自动忽略 reasoning_effort 并重试。"
+        message: "该模型/端点不支持推理强度调节，已自动忽略 reasoning_effort 并重试。"
       });
       yield ok({ type: "delta", value: "Opening line.\nAI continuation.\n" });
       yield ok({
         type: "suggestion",
         suggestion: {
           ...suggestion,
-          runtimeNotice:
-            "该模型/端点不支持推理强度调节，已自动忽略 reasoning_effort 并重试。"
+          runtimeNotice: "该模型/端点不支持推理强度调节，已自动忽略 reasoning_effort 并重试。"
         }
       });
     };

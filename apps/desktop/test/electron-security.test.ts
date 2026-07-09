@@ -42,6 +42,7 @@ describe("Electron security baseline", () => {
       "application:project:choose-open-directory",
       "application:project:choose-create-directory",
       "application:project:open",
+      "application:project:read-directory",
       "application:project:create",
       "application:project:list-chapters",
       "application:project:create-chapter",

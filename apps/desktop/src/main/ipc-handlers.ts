@@ -176,7 +176,13 @@ export function createApplicationIpcHandlers(
         return streamNotFound();
       }
 
-      const next = await stream.iterator.next();
+      let next: IteratorResult<Result<AiWritingSuggestionStreamEvent, UnifiedError>>;
+      try {
+        next = await stream.iterator.next();
+      } catch (error) {
+        activeAiSuggestionStreams.delete(id);
+        return thrownAiStreamError(error);
+      }
       if (next.done === true) {
         activeAiSuggestionStreams.delete(id);
         return ok({ done: true });
@@ -397,6 +403,50 @@ function streamNotFound<T>(): Result<T, UnifiedError> {
       traceId: "desktop-ipc-handlers"
     })
   );
+}
+
+function thrownAiStreamError<T>(error: unknown): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "AI_STREAM_FAILED",
+      category: "LLMAdapterError",
+      message: readErrorMessage(error, "AI streaming failed."),
+      recoverability: "retryable",
+      suggestedAction: "Check the model provider response and retry.",
+      traceId: "desktop-ipc-handlers",
+      redactedDetail: readThrownStreamErrorDetail(error)
+    })
+  );
+}
+
+function readErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.length > 0) {
+    return error.message;
+  }
+  if (isRecord(error) && typeof error.message === "string" && error.message.length > 0) {
+    return error.message;
+  }
+
+  return fallback;
+}
+
+function readThrownStreamErrorDetail(error: unknown): JsonObject {
+  if (!isRecord(error)) {
+    return {};
+  }
+
+  const detail: JsonObject = {};
+  if (typeof error.status === "number") {
+    detail.status = error.status;
+  }
+  if (isJsonValue(error.body)) {
+    detail.body = error.body;
+  }
+  if (isJsonObject(error.headers)) {
+    detail.headers = error.headers;
+  }
+
+  return detail;
 }
 
 const DIRECTORY_READ_MAX_DEPTH = 4;
