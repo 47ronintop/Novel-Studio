@@ -114,11 +114,18 @@ describe("M8 Settings and Studio UI", () => {
     expect(appearanceHtml).toContain("插件");
     expect(appearanceHtml).toContain("高级");
     expect(appearanceHtml).toContain('aria-label="外观设置"');
-    expect(appearanceHtml).toContain("深色");
-    expect(appearanceHtml).toContain("紧凑");
-    expect(appearanceHtml).not.toContain("编辑器: 字体");
-    expect(appearanceHtml).not.toContain("16px");
-    expect(appearanceHtml).not.toContain("1.8");
+    expect(appearanceHtml).toContain("外观: 主题策略");
+    expect(appearanceHtml).toContain('aria-label="外观主题"');
+    expect(appearanceHtml).toContain("外观: 界面密度");
+    expect(appearanceHtml).toContain('aria-label="外观界面密度"');
+    expect(appearanceHtml).toContain("外观: 编辑器字体");
+    expect(appearanceHtml).toContain("外观: 编辑器字号");
+    expect(appearanceHtml).toContain("外观: 编辑器行高");
+    expect(appearanceHtml).toContain('aria-label="编辑器外观预览"');
+    expect(appearanceHtml).toContain("serif");
+    expect(appearanceHtml).toContain("16px");
+    expect(appearanceHtml).toContain("1.8");
+    expect(appearanceHtml).not.toContain("新建模型");
     expect(appearanceHtml).not.toContain('aria-label="模型配置"');
 
     expect(writingHtml).toContain('aria-label="写作设置"');
@@ -129,6 +136,78 @@ describe("M8 Settings and Studio UI", () => {
     expect(writingHtml).toContain("项目语气");
     expect(writingHtml).toContain("显而易见");
     expect(writingHtml).not.toMatch(/检测规避|过检测/);
+  });
+
+  test("scopes the new model action to model settings", () => {
+    const modelsHtml = renderToStaticMarkup(
+      <ModelSettingsPanel {...createModelSettingsPanelProps()} activeSection="models" />
+    );
+    const editorHtml = renderToStaticMarkup(
+      <ModelSettingsPanel {...createModelSettingsPanelProps()} activeSection="editor" />
+    );
+
+    expect(modelsHtml).toContain("新建模型");
+    expect(editorHtml).not.toContain("新建模型");
+  });
+
+  test("updates appearance controls through settings callbacks", async () => {
+    const appearanceCalls: string[] = [];
+    const editorCalls: string[] = [];
+    const host = document.createElement("div");
+    document.body.append(host);
+    let root: Root | undefined;
+
+    await act(async () => {
+      root = createRoot(host);
+      root.render(
+        <ModelSettingsPanel
+          {...createModelSettingsPanelProps()}
+          activeSection="appearance"
+          appearancePreferences={{
+            theme: "dark",
+            density: "compact",
+            editor: {
+              fontFamily: "mono",
+              fontSize: 13,
+              lineHeight: 1.7
+            }
+          }}
+          editorPreferences={{
+            fontFamily: "mono",
+            fontSize: 13,
+            lineHeight: 1.7
+          }}
+          onAppearancePreferencesChange={(preferences) =>
+            appearanceCalls.push(`${preferences.theme}:${preferences.density}`)
+          }
+          onEditorPreferencesChange={(preferences) => editorCalls.push(preferences.fontFamily)}
+        />
+      );
+    });
+
+    await act(async () => {
+      host
+        .querySelector<HTMLButtonElement>('button[aria-label="跟随系统主题"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      host
+        .querySelector<HTMLButtonElement>('button[aria-label="舒适界面密度"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      const fontSelect = host.querySelector<HTMLSelectElement>(
+        'select[aria-label="外观编辑器字体"]'
+      );
+      if (fontSelect !== null) {
+        fontSelect.value = "sans";
+        fontSelect.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    });
+
+    expect(appearanceCalls).toEqual(["system:compact", "dark:comfortable"]);
+    expect(editorCalls).toEqual(["sans"]);
+
+    await act(async () => {
+      root?.unmount();
+    });
+    host.remove();
   });
 
   test("renders model profile settings without plaintext secrets", () => {

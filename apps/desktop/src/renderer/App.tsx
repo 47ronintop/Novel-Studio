@@ -12,6 +12,7 @@ import type {
   CommandPaletteFeedback,
   ConfigStudioPanelProps,
   EditorPreferences,
+  ModelSettingsAppearancePreferences,
   ModelSettingsDraft,
   SettingsPanelSection,
   StoryBibleEditorDraft,
@@ -96,6 +97,12 @@ export function App() {
   const [editorPreferences, setEditorPreferences] = useState<EditorPreferences>(
     DEFAULT_EDITOR_PREFERENCES
   );
+  const [appearancePreferences, setAppearancePreferences] = useState<
+    Omit<ModelSettingsAppearancePreferences, "editor">
+  >({
+    theme: "dark",
+    density: "compact"
+  });
 
   useRendererAppEffects({
     api,
@@ -110,6 +117,7 @@ export function App() {
     setCommands,
     setOnboardingDismissed,
     setEditorPreferences,
+    setAppearancePreferences,
     setChapterEditor,
     setStoryBible,
     setStoryBibleEditor,
@@ -892,11 +900,14 @@ export function App() {
           ...settings,
           editorPreferences,
           appearancePreferences: {
-            ...(settings.appearancePreferences ?? {
-              theme: "dark" as const,
-              density: "compact" as const
-            }),
+            ...appearancePreferences,
             editor: editorPreferences
+          },
+          onAppearancePreferencesChange: (
+            preferences: Omit<ModelSettingsAppearancePreferences, "editor">
+          ) => {
+            setAppearancePreferences(preferences);
+            persistUserPreferences({ appearance: preferences });
           },
           onEditorPreferencesChange: (preferences: EditorPreferences) => {
             setEditorPreferences(preferences);

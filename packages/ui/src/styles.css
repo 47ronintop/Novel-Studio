@@ -1335,6 +1335,74 @@ textarea:focus-visible,
   white-space: nowrap;
 }
 
+.model-settings-segmented {
+  align-items: center;
+  background: color-mix(in oklch, var(--ns-surface-raised) 72%, var(--ns-surface));
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+}
+
+.model-settings-segmented button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--ns-muted);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 12px;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 9px;
+}
+
+.model-settings-segmented button:hover {
+  color: var(--ns-ink);
+}
+
+.model-settings-segmented button[aria-pressed="true"] {
+  background: var(--ns-surface);
+  border-color: color-mix(in oklch, var(--ns-primary) 38%, var(--ns-border));
+  color: var(--ns-ink);
+}
+
+.model-settings-segmented svg {
+  color: var(--ns-primary-strong);
+}
+
+.model-appearance-preview {
+  border: 1px solid var(--ns-border);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  max-width: 720px;
+  padding: 12px;
+}
+
+.model-appearance-preview-header {
+  align-items: center;
+  color: var(--ns-muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 8px;
+}
+
+.model-appearance-preview-header span {
+  background: color-mix(in oklch, var(--ns-surface-raised) 76%, transparent);
+  border: 1px solid var(--ns-border);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.model-appearance-preview p {
+  color: var(--ns-ink);
+  margin: 0;
+}
+
 .model-settings-input-with-action {
   position: relative;
 }

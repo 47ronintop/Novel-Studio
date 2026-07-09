@@ -1,4 +1,5 @@
 import {
+  Check,
   CheckCircle,
   Eye,
   FilePlus,
@@ -169,6 +170,9 @@ export interface ModelSettingsPanelProps {
   readonly onMakeDefault?: (profileId: string) => void;
   readonly onDiscoverModelOptions?: (profileId: string) => void;
   readonly onEditorPreferencesChange?: (preferences: EditorPreferences) => void;
+  readonly onAppearancePreferencesChange?:
+    | ((preferences: Omit<ModelSettingsAppearancePreferences, "editor">) => void)
+    | undefined;
   readonly onSectionSelect?: (section: SettingsPanelSection) => void;
 }
 
@@ -195,6 +199,7 @@ export function ModelSettingsPanel({
   onMakeDefault,
   onDiscoverModelOptions,
   onEditorPreferencesChange,
+  onAppearancePreferencesChange,
   onSectionSelect
 }: ModelSettingsPanelProps) {
   const effectiveSection: SettingsPanelActiveSection = activeSection ?? "overview";
@@ -219,10 +224,12 @@ export function ModelSettingsPanel({
           <h1>设置</h1>
           <p>管理项目级模型配置、连接测试、自动保存策略和隐私边界。</p>
         </div>
-        <button className="ns-icon-text-button" onClick={onNewProfile} type="button">
-          <FilePlus aria-hidden="true" size={14} />
-          新建模型
-        </button>
+        {effectiveSection === "overview" || effectiveSection === "models" ? (
+          <button className="ns-icon-text-button" onClick={onNewProfile} type="button">
+            <FilePlus aria-hidden="true" size={14} />
+            新建模型
+          </button>
+        ) : null}
       </header>
 
       <div className="model-settings-grid">
@@ -276,7 +283,17 @@ export function ModelSettingsPanel({
             ) : null}
 
             {effectiveSection === "appearance" ? (
-              <AppearanceSettingsSection preferences={appearancePreferences} />
+              <AppearanceSettingsSection
+                onAppearancePreferencesChange={onAppearancePreferencesChange}
+                onEditorPreferencesChange={onEditorPreferencesChange}
+                preferences={{
+                  ...(appearancePreferences ?? {
+                    theme: "dark" as const,
+                    density: "compact" as const
+                  }),
+                  editor: resolvedEditorPreferences
+                }}
+              />
             ) : null}
 
             {effectiveSection === "overview" || effectiveSection === "plugins" ? (
@@ -772,13 +789,30 @@ function EditorSettingsSection({
 }
 
 function AppearanceSettingsSection({
+  onAppearancePreferencesChange,
+  onEditorPreferencesChange,
   preferences
 }: {
-  readonly preferences: ModelSettingsAppearancePreferences | undefined;
+  readonly onAppearancePreferencesChange: ModelSettingsPanelProps["onAppearancePreferencesChange"];
+  readonly onEditorPreferencesChange: ModelSettingsPanelProps["onEditorPreferencesChange"];
+  readonly preferences: ModelSettingsAppearancePreferences;
 }) {
-  const resolved = preferences ?? {
-    theme: "dark" as const,
-    density: "compact" as const
+  const editor = preferences.editor ?? {
+    fontFamily: "mono" as const,
+    fontSize: 13,
+    lineHeight: 1.7
+  };
+  const updateAppearance = (next: Partial<Omit<ModelSettingsAppearancePreferences, "editor">>) => {
+    onAppearancePreferencesChange?.({
+      theme: next.theme ?? preferences.theme,
+      density: next.density ?? preferences.density
+    });
+  };
+  const updateEditor = (next: Partial<EditorPreferences>) => {
+    onEditorPreferencesChange?.({
+      ...editor,
+      ...next
+    });
   };
 
   return (
@@ -786,19 +820,112 @@ function AppearanceSettingsSection({
       <div className="model-settings-section-header">
         <div>
           <h2>外观设置</h2>
-          <p>管理主题和界面密度。编辑器排版请在编辑器分类中调整。</p>
+          <p>调整工作台主题策略、界面密度和编辑器阅读外观。</p>
         </div>
       </div>
-      <dl className="settings-summary-grid">
-        <div>
-          <dt>主题</dt>
-          <dd>{themeLabel(resolved.theme)}</dd>
-        </div>
-        <div>
-          <dt>密度</dt>
-          <dd>{densityLabel(resolved.density)}</dd>
-        </div>
-      </dl>
+      <div className="model-profile-form-grid" data-field-layout="stacked">
+        <ModelField
+          category="外观"
+          label="主题策略"
+          note="控制工作台使用固定深色主题，或跟随系统主题策略。"
+        >
+          <div className="model-settings-segmented" aria-label="外观主题">
+            {(["dark", "system"] as const).map((theme) => (
+              <button
+                aria-label={theme === "system" ? "跟随系统主题" : "深色主题"}
+                aria-pressed={preferences.theme === theme}
+                key={theme}
+                onClick={() => updateAppearance({ theme })}
+                type="button"
+              >
+                {preferences.theme === theme ? <Check aria-hidden="true" size={13} /> : null}
+                <span>{themeLabel(theme)}</span>
+              </button>
+            ))}
+          </div>
+        </ModelField>
+        <ModelField
+          category="外观"
+          label="界面密度"
+          note="紧凑适合长时间写作和较小窗口；舒适会增加列表、表单和设置项间距。"
+        >
+          <div className="model-settings-segmented" aria-label="外观界面密度">
+            {(["compact", "comfortable"] as const).map((density) => (
+              <button
+                aria-label={`${densityLabel(density)}界面密度`}
+                aria-pressed={preferences.density === density}
+                key={density}
+                onClick={() => updateAppearance({ density })}
+                type="button"
+              >
+                {preferences.density === density ? <Check aria-hidden="true" size={13} /> : null}
+                <span>{densityLabel(density)}</span>
+              </button>
+            ))}
+          </div>
+        </ModelField>
+        <ModelField category="外观" label="编辑器字体" note="控制章节正文的字体族。">
+          <select
+            aria-label="外观编辑器字体"
+            className="model-settings-select"
+            onChange={(event) =>
+              updateEditor({ fontFamily: event.currentTarget.value as EditorPreferences["fontFamily"] })
+            }
+            value={editor.fontFamily}
+          >
+            <option value="mono">Mono</option>
+            <option value="serif">Serif</option>
+            <option value="sans">Sans</option>
+          </select>
+        </ModelField>
+        <ModelField category="外观" label="编辑器字号" note="控制章节正文的基础字号。">
+          <input
+            aria-label="外观编辑器字号"
+            className="ns-search-input"
+            inputMode="numeric"
+            min={12}
+            max={20}
+            onChange={(event) => updateEditor({ fontSize: Number(event.currentTarget.value) })}
+            type="number"
+            value={editor.fontSize}
+          />
+        </ModelField>
+        <ModelField category="外观" label="编辑器行高" note="控制章节正文的行间距。">
+          <select
+            aria-label="外观编辑器行高"
+            className="model-settings-select"
+            onChange={(event) => updateEditor({ lineHeight: Number(event.currentTarget.value) })}
+            value={editor.lineHeight}
+          >
+            <option value={1.5}>1.5</option>
+            <option value={1.7}>1.7</option>
+            <option value={1.8}>1.8</option>
+            <option value={2}>2.0</option>
+          </select>
+        </ModelField>
+        <section className="model-appearance-preview" aria-label="编辑器外观预览">
+          <div className="model-appearance-preview-header">
+            <span>{themeLabel(preferences.theme)}</span>
+            <span>{densityLabel(preferences.density)}</span>
+            <span>{editor.fontSize}px</span>
+            <span>{editor.lineHeight}</span>
+          </div>
+          <p
+            style={{
+              fontFamily:
+                editor.fontFamily === "serif"
+                  ? '"Noto Serif SC", "Source Han Serif SC", Georgia, serif'
+                  : editor.fontFamily === "sans"
+                    ? 'Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif'
+                    : '"Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace',
+              fontSize: `${editor.fontSize}px`,
+              lineHeight: editor.lineHeight
+            }}
+          >
+            林照月把灯调暗，章节列表停在左侧，正文区域保持稳定的阅读节奏。
+          </p>
+        </section>
+      </div>
     </section>
   );
 }
