@@ -26,6 +26,7 @@ declare global {
 }
 
 const DEFAULT_NAVIGATOR_EXPANDED_SECTION_IDS = [
+  "novel-studio",
   "chapters",
   "characters",
   "world",

@@ -75,7 +75,7 @@ export interface WorkspaceNavigatorProps {
 export function WorkspaceNavigator({
   activeActivity,
   sections,
-  expandedSectionIds = sections.map((section) => section.id),
+  expandedSectionIds = ["novel-studio", ...sections.map((section) => section.id)],
   searchQuery = "",
   projectWorkflow,
   fileTree,
@@ -92,8 +92,7 @@ export function WorkspaceNavigator({
 }: WorkspaceNavigatorProps) {
   const normalizedQuery = searchQuery.trim().toLocaleLowerCase();
   const expanded = new Set(expandedSectionIds);
-  const novelStudioExpanded =
-    expanded.has("novel-studio") || sections.some((section) => expanded.has(section.id));
+  const novelStudioExpanded = expanded.has("novel-studio");
 
   return (
     <nav

@@ -278,6 +278,11 @@ describe("M8 Settings and Studio UI", () => {
     const tree = (
       <ModelSettingsPanel
         {...createModelSettingsPanelProps()}
+        connectionStatus={{
+          profileId: "model_default",
+          status: "failed",
+          detail: "Provider returned a non-SSE streaming response."
+        }}
         onDiscoverModelOptions={(profileId) => discoverCalls.push(profileId)}
         onTestConnection={(profileId) => testConnectionCalls.push(profileId)}
       />
@@ -290,7 +295,11 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).toContain('aria-label="显示或隐藏 API Key"');
     expect(html).toContain('type="password"');
     expect(html).toContain('aria-label="完整 URL"');
-    expect(html).toContain('aria-label="管理与测速"');
+    expect(html).toContain('aria-label="测试连接"');
+    expect(html).not.toContain("管理与测速");
+    expect(html).toContain('class="model-settings-inline-status"');
+    expect(html).toContain('data-status="failed"');
+    expect(html).toContain("Provider returned a non-SSE streaming response.");
     expect(html).toContain('aria-label="获取模型列表"');
     expect(html).toContain('class="model-settings-item-description"');
     expect(html).toContain("请填写兼容 OpenAI 格式的服务端点地址");
@@ -309,12 +318,17 @@ describe("M8 Settings and Studio UI", () => {
         .querySelector<HTMLButtonElement>('button[aria-label="获取模型列表"]')
         ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       host
-        .querySelector<HTMLButtonElement>('button[aria-label="管理与测速"]')
+        .querySelector<HTMLButtonElement>(
+          '.model-settings-field-actions button[aria-label="测试连接"]'
+        )
         ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
 
     expect(discoverCalls).toEqual(["model_default"]);
     expect(testConnectionCalls).toEqual(["model_default"]);
+    expect(
+      host.querySelector<HTMLButtonElement>('.model-profile-form-actions button[type="button"]')
+    ).toBeNull();
 
     await act(async () => {
       root?.unmount();

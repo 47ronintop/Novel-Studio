@@ -1291,6 +1291,40 @@ textarea:focus-visible,
   color: var(--ns-primary-strong);
 }
 
+.model-settings-inline-status {
+  align-items: center;
+  color: var(--ns-muted);
+  display: inline-flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 6px;
+  min-width: 0;
+}
+
+.model-settings-inline-status strong {
+  color: var(--ns-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.model-settings-inline-status small {
+  color: var(--ns-muted);
+  max-width: min(360px, 54vw);
+  overflow-wrap: anywhere;
+}
+
+.model-settings-inline-status[data-status="success"] strong {
+  color: var(--ns-success);
+}
+
+.model-settings-inline-status[data-status="failed"] strong {
+  color: var(--ns-danger);
+}
+
+.model-settings-inline-status[data-status="testing"] strong {
+  color: var(--ns-info);
+}
+
 .model-settings-switch {
   align-items: center;
   color: var(--ns-muted);
@@ -2095,7 +2129,7 @@ textarea:focus-visible,
   min-height: 28px;
   padding: 0;
   position: relative;
-  z-index: 3;
+  z-index: 12;
 }
 
 .ns-ai-model-picker {
@@ -2123,18 +2157,50 @@ textarea:focus-visible,
   border-radius: 5px;
   color: var(--ns-ink);
   font-size: 12px;
-  gap: 4px;
+  gap: 7px;
   line-height: 1;
-  max-width: 220px;
-  min-height: 24px;
-  padding: 0 7px;
+  max-width: min(280px, calc(100vw - 96px));
+  min-height: 28px;
+  padding: 3px 7px;
 }
 
-.ns-ai-model-trigger span {
+.ns-ai-model-trigger-item {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ns-ai-model-trigger-item small {
+  color: var(--ns-muted);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.ns-ai-model-trigger-item strong {
+  color: var(--ns-ink);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.1;
+  max-width: 138px;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ns-ai-model-trigger > svg {
+  flex: 0 0 auto;
+  transition: transform 150ms ease;
+}
+
+.ns-ai-model-picker[open] > .ns-ai-model-trigger > svg {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ns-ai-model-trigger > svg {
+    transition: none;
+  }
 }
 
 .ns-ai-model-trigger:hover,
@@ -2148,13 +2214,18 @@ textarea:focus-visible,
   border: 1px solid color-mix(in srgb, var(--ns-border) 85%, var(--ns-muted));
   border-radius: 6px;
   box-shadow: 0 8px 14px rgba(0, 0, 0, 0.34);
+  bottom: calc(100% + 6px);
   display: grid;
   gap: 4px;
-  left: 0;
+  left: auto;
+  max-height: min(360px, calc(100vh - 160px));
+  max-width: calc(100vw - 48px);
   min-width: min(300px, calc(100vw - 48px));
+  overflow: auto;
   padding: 5px;
   position: absolute;
-  top: calc(100% + 4px);
+  right: 0;
+  top: auto;
   z-index: 20;
 }
 

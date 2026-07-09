@@ -204,15 +204,31 @@ function AiModelControls({
       ? "当前配置的手动模型。"
       : `${modelPicker.current.provider} endpoint model.`);
   const otherModels = modelPicker.models.filter((model) => model.id !== modelPicker.current.id);
+  const reasoningValue =
+    reasoningControl?.status === "available" ? reasoningControl.defaultValue : undefined;
 
   return (
     <div className="ns-ai-model-controls" aria-label="AI model controls">
       <details className="ns-ai-model-picker">
         <summary aria-label="Open AI model picker" className="ns-ai-model-trigger">
-          <span>{modelPicker.current.displayName}</span>
+          <span className="ns-ai-model-trigger-item">
+            <small>模型</small>
+            <strong>{modelPicker.current.displayName}</strong>
+          </span>
+          {reasoningValue === undefined ? null : (
+            <span className="ns-ai-model-trigger-item">
+              <small>推理</small>
+              <strong>{reasoningValue}</strong>
+            </span>
+          )}
           <ChevronDown aria-hidden="true" size={13} />
         </summary>
-        <div className="ns-ai-model-popover" role="group" aria-label="AI model picker">
+        <div
+          className="ns-ai-model-popover"
+          data-placement="top"
+          role="group"
+          aria-label="AI model picker"
+        >
           <div className="ns-ai-current-model">
             <Check aria-hidden="true" size={14} />
             <div>

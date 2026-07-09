@@ -188,7 +188,11 @@ describe("AI writing workflow UI", () => {
     expect(html).toContain("Default Model / example-model");
     expect(html).toContain('aria-label="AI model controls"');
     expect(html).toContain('class="ns-ai-model-trigger"');
+    expect(html).toContain('class="ns-ai-model-trigger-item"');
+    expect(html).toContain('data-placement="top"');
     expect(html).toContain("gpt-5");
+    expect(html).toContain("模型");
+    expect(html).toContain("推理");
     expect(html).not.toContain('aria-label="AI model selector"');
     expect(html).toContain('aria-label="Reasoning effort"');
     expect(html).toContain("reasoning_effort");
@@ -280,6 +284,7 @@ describe("AI writing workflow UI", () => {
     expect(toolbarIndex).toBeLessThan(composerEndIndex);
     expect(modelIndex).toBeGreaterThan(toolbarIndex);
     expect(modelIndex).toBeLessThan(sendIndex);
+    expect(html).toContain('data-placement="top"');
     expect(sendIndex).toBeGreaterThan(toolbarIndex);
     expect(sendIndex).toBeLessThan(composerEndIndex);
     expect(legacyActionsIndex).toBe(-1);
@@ -319,6 +324,8 @@ describe("AI writing workflow UI", () => {
 
     expect(html).toContain('aria-label="AI model controls"');
     expect(html).toContain('class="ns-ai-model-trigger"');
+    expect(html).toContain('class="ns-ai-model-trigger-item"');
+    expect(html).toContain('data-placement="top"');
     expect(html).toContain("manual-proxy-model");
     expect(html).toContain("fetch failed");
     expect(html).toContain("更多模型");

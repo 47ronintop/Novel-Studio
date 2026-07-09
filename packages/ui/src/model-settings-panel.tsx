@@ -332,6 +332,8 @@ function ModelProfileSettingsSection({
 }) {
   const activeProfileId = selectedProfileId ?? draft.id;
   const canRunProfileAction = activeProfileId.trim().length > 0;
+  const activeConnectionStatus =
+    connectionStatus?.profileId === activeProfileId ? connectionStatus : undefined;
 
   return (
     <section className="model-settings-section" aria-label="模型配置">
@@ -472,14 +474,16 @@ function ModelProfileSettingsSection({
                     <span>完整 URL</span>
                   </label>
                   <button
-                    aria-label="管理与测速"
-                    className="model-settings-link-button"
+                    aria-label="测试连接"
+                    className="model-settings-field-button"
                     disabled={!canRunProfileAction}
                     onClick={() => onTestConnection?.(activeProfileId)}
                     type="button"
                   >
-                    管理与测速
+                    <PlugZap aria-hidden="true" size={13} />
+                    测试连接
                   </button>
+                  <ModelConnectionInlineStatus connectionStatus={activeConnectionStatus} />
                 </>
               }
               label="API 请求地址"
@@ -598,15 +602,6 @@ function ModelProfileSettingsSection({
             </details>
           </div>
           <div className="model-profile-form-actions">
-            <button
-              className="ns-icon-text-button"
-              disabled={!canRunProfileAction}
-              onClick={() => onTestConnection?.(activeProfileId)}
-              type="button"
-            >
-              <PlugZap aria-hidden="true" size={14} />
-              测试连接
-            </button>
             <button className="ns-icon-text-button" disabled={!canSave} type="submit">
               <Save aria-hidden="true" size={14} />
               {saveStatus === "saving" ? "保存中" : "保存模型配置"}
@@ -615,6 +610,27 @@ function ModelProfileSettingsSection({
         </form>
       </div>
     </section>
+  );
+}
+
+function ModelConnectionInlineStatus({
+  connectionStatus
+}: {
+  readonly connectionStatus: ModelConnectionStatus | undefined;
+}) {
+  if (connectionStatus === undefined || connectionStatus.status === "idle") {
+    return null;
+  }
+
+  return (
+    <span
+      className="model-settings-inline-status"
+      data-status={connectionStatus.status}
+      role={connectionStatus.status === "failed" ? "alert" : "status"}
+    >
+      <strong>{statusLabel(connectionStatus.status)}</strong>
+      {connectionStatus.detail === undefined ? null : <small>{connectionStatus.detail}</small>}
+    </span>
   );
 }
 

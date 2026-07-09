@@ -16,7 +16,7 @@ describe("WorkspaceNavigator", () => {
       <WorkspaceNavigator
         {...createNavigatorProps({
           searchQuery: "开篇",
-          expandedSectionIds: ["chapters", "characters", "prompts"]
+          expandedSectionIds: ["novel-studio", "chapters", "characters", "prompts"]
         })}
       />
     );
@@ -69,7 +69,7 @@ describe("WorkspaceNavigator", () => {
               path: "project.json"
             }
           ],
-          expandedSectionIds: ["files", "folder:docs", "chapters"]
+          expandedSectionIds: ["files", "folder:docs", "novel-studio", "chapters"]
         })}
       />
     );
@@ -95,7 +95,7 @@ describe("WorkspaceNavigator", () => {
     };
     const tree = WorkspaceNavigator(
       createNavigatorProps({
-        expandedSectionIds: ["chapters", "characters"],
+        expandedSectionIds: ["novel-studio", "chapters", "characters"],
         onSearchQueryChange: (query) => calls.push(`search:${query}`),
         onExpandedSectionIdsChange: (sectionIds) => calls.push(`expanded:${sectionIds.join(",")}`),
         onRenameChapter: (chapterId, title) => calls.push(`rename:${chapterId}:${title}`),
@@ -114,11 +114,38 @@ describe("WorkspaceNavigator", () => {
 
     expect(calls).toEqual([
       "search:角色",
-      "expanded:chapters",
+      "expanded:novel-studio,chapters",
       "rename:ch_opening:改名后的开篇",
       "duplicate:ch_opening",
       "delete:ch_opening"
     ]);
+  });
+
+  test("lets the Novel Studio parent collapse even when child groups remain expanded", () => {
+    const collapsedHtml = renderToStaticMarkup(
+      <WorkspaceNavigator
+        {...createNavigatorProps({
+          expandedSectionIds: ["chapters", "characters", "prompts"]
+        })}
+      />
+    );
+
+    expect(collapsedHtml).toContain('data-navigator-group="novel-studio"');
+    expect(collapsedHtml).toContain('data-expanded="false"');
+    expect(collapsedHtml).not.toContain('aria-label="章节 分组"');
+    expect(collapsedHtml).not.toContain('aria-label="人物 分组"');
+
+    const calls: string[] = [];
+    const expandedTree = WorkspaceNavigator(
+      createNavigatorProps({
+        expandedSectionIds: ["novel-studio", "chapters", "characters"],
+        onExpandedSectionIdsChange: (sectionIds) => calls.push(sectionIds.join(","))
+      })
+    );
+
+    findElementByAriaLabel(expandedTree, "Toggle Novel Studio asset groups")?.props.onClick?.();
+
+    expect(calls).toEqual(["chapters,characters"]);
   });
 });
 
@@ -132,7 +159,7 @@ function createNavigatorProps(
       { id: "characters", title: "人物", itemCount: 1 },
       { id: "prompts", title: "提示词", itemCount: 1 }
     ],
-    expandedSectionIds: ["chapters", "characters", "prompts"],
+    expandedSectionIds: ["novel-studio", "chapters", "characters", "prompts"],
     searchQuery: "",
     fileTree: undefined,
     projectWorkflow: {
