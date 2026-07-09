@@ -7,11 +7,18 @@ import type { ChapterSummary } from "@novel-studio/shared";
 import type { CSSProperties } from "react";
 import type { ChapterEditorProps } from "./chapter-editor.js";
 import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
+import {
+  calculateWritingMetrics,
+  DEFAULT_EDITOR_PREFERENCES,
+  editorFontFamilyValue,
+  EditorToolbar
+} from "./editor-toolbar.js";
 import type { ModelSettingsPanelProps } from "./model-settings-panel.js";
 import {
   Bot,
   Boxes,
   Clock3,
+  FileText,
   FilePlus,
   FolderTree,
   BookOpen,
@@ -19,6 +26,7 @@ import {
   PanelBottom,
   PanelRight,
   Search,
+  Save,
   Settings,
   X
 } from "lucide-react";
@@ -39,6 +47,7 @@ import { WorkspaceNavigator } from "./workspace-navigator.js";
 import type {
   AiWritingWorkflowProps,
   OnboardingProps,
+  PlainFileEditorProps,
   ProjectSearchProps,
   ProjectWorkflowProps,
   StoryBibleEditorProps,
@@ -84,6 +93,7 @@ export function WorkspaceShell({
   studio,
   storyBible,
   storyBibleEditor,
+  fileEditor,
   onboarding,
   onCommandPaletteOpen,
   onCommandPaletteQueryChange,
@@ -226,6 +236,7 @@ export function WorkspaceShell({
           {shellState.activeActivity === "workspace" || shellState.activeActivity === "ai" ? (
             <WorkspaceEditorSurface
               chapterEditor={chapterEditor}
+              fileEditor={fileEditor}
               onboarding={onboarding}
               projectWorkflow={projectWorkflow}
               splitView={workspaceLayout.splitView}
@@ -497,11 +508,13 @@ function BottomPanelContent({
 
 function WorkspaceEditorSurface({
   chapterEditor,
+  fileEditor,
   onboarding,
   projectWorkflow,
   splitView
 }: {
   readonly chapterEditor: ChapterEditorProps | undefined;
+  readonly fileEditor: PlainFileEditorProps | undefined;
   readonly onboarding: OnboardingProps | undefined;
   readonly projectWorkflow: ProjectWorkflowProps | undefined;
   readonly splitView: boolean;
@@ -519,7 +532,17 @@ function WorkspaceEditorSurface({
   return (
     <>
       <div className="ns-tabs" role="tablist" aria-label="章节标签">
-        {visibleTabs.length === 0 ? (
+        {fileEditor !== undefined ? (
+          <span
+            aria-selected="true"
+            className="ns-tab ns-tab-static"
+            data-dirty={fileEditor.dirty}
+            data-focus-order="3"
+            role="tab"
+          >
+            {fileEditor.fileName}
+          </span>
+        ) : visibleTabs.length === 0 ? (
           <span
             aria-selected="true"
             className="ns-tab ns-tab-static"
@@ -566,7 +589,9 @@ function WorkspaceEditorSurface({
         <section className="ns-editor-surface" aria-label="章节编辑器表面">
           <OnboardingQuickStart onboarding={onboarding} />
           <AutosaveRecoveryNotice projectWorkflow={projectWorkflow} />
-          {chapterEditor ? (
+          {fileEditor ? (
+            <PlainFileEditor editor={fileEditor} />
+          ) : chapterEditor ? (
             <ChapterEditor {...chapterEditor} />
           ) : (
             <section className="ns-empty-editor" aria-label="空章节工作区">
@@ -600,6 +625,73 @@ function WorkspaceEditorSurface({
         ) : null}
       </div>
     </>
+  );
+}
+
+function PlainFileEditor({ editor }: { readonly editor: PlainFileEditorProps }) {
+  const findReplaceOpen = false;
+  const editorPreferences = editor.editorPreferences ?? DEFAULT_EDITOR_PREFERENCES;
+  const metrics = calculateWritingMetrics(editor.content);
+  const editorStyle = {
+    "--ns-editor-font-family": editorFontFamilyValue(editorPreferences.fontFamily),
+    "--ns-editor-font-size": `${editorPreferences.fontSize}px`,
+    "--ns-editor-line-height": String(editorPreferences.lineHeight)
+  } as CSSProperties;
+
+  return (
+    <section className="ns-editor-layout ns-file-editor-layout" aria-label="普通文件编辑器">
+      <header className="ns-editor-header">
+        <div className="ns-editor-header-main">
+          <FileText aria-hidden="true" size={15} />
+          <div>
+            <h2 className="ns-editor-title">{editor.fileName}</h2>
+            <p className="ns-editor-subtitle">
+              <span>{editor.path}</span>
+              <span>{editor.dirty ? "未保存" : "已保存"}</span>
+            </p>
+          </div>
+        </div>
+        <button
+          aria-label="保存普通文件"
+          className="ns-editor-save"
+          disabled={!editor.dirty || editor.saveStatus === "Saving"}
+          onClick={editor.onSave}
+          type="button"
+        >
+          <Save aria-hidden="true" size={15} />
+          保存
+        </button>
+      </header>
+      <EditorToolbar
+        findReplaceOpen={false}
+        metrics={metrics}
+        preferences={editorPreferences}
+        {...(editor.onEditorPreferencesChange === undefined
+          ? {}
+          : { onPreferencesChange: editor.onEditorPreferencesChange })}
+        {...(editor.onFocusModeToggle === undefined ? {} : { onFocusModeToggle: editor.onFocusModeToggle })}
+      />
+      {findReplaceOpen ? (
+        <div className="ns-editor-find-replace" aria-label="普通文件查找">
+          <span className="ns-editor-find-count">普通文件模式</span>
+        </div>
+      ) : null}
+      {editor.feedback === undefined ? null : (
+        <p className="ns-project-feedback" data-kind={editor.feedback.kind} role="status">
+          {editor.feedback.message}
+        </p>
+      )}
+      <div className="ns-editor-body ns-file-editor-body" style={editorStyle}>
+        <textarea
+          aria-label="普通文件正文"
+          className="ns-editor-textarea"
+          onChange={(event) => editor.onContentChange?.(event.currentTarget.value)}
+          readOnly={editor.onContentChange === undefined}
+          spellCheck={true}
+          value={editor.content}
+        />
+      </div>
+    </section>
   );
 }
 

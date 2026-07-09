@@ -3,6 +3,7 @@ import type {
   ChapterEditorProps,
   ConfigStudioPanelProps,
   ModelSettingsPanelProps,
+  PlainFileEditorProps,
   ProjectWorkflowProps,
   StoryBibleEditorProps,
   StoryBibleSummaryProps
@@ -24,6 +25,7 @@ export interface ProjectWorkflowActionInputs {
   readonly storyBibleBridge: StoryBibleBridge | undefined;
   readonly studioBridge: StudioBridge | undefined;
   readonly setChapterEditor: Dispatch<SetStateAction<ChapterEditorProps | undefined>>;
+  readonly setFileEditor?: Dispatch<SetStateAction<PlainFileEditorProps | undefined>> | undefined;
   readonly setProjectWorkflow: Dispatch<SetStateAction<ProjectWorkflowProps | undefined>>;
   readonly setSettings: Dispatch<SetStateAction<ModelSettingsPanelProps | undefined>>;
   readonly setShellState: Dispatch<SetStateAction<DesktopShellState>>;
@@ -40,6 +42,7 @@ export function useProjectWorkflowActions({
   storyBibleBridge,
   studioBridge,
   setChapterEditor,
+  setFileEditor,
   setProjectWorkflow,
   setSettings,
   setShellState,
@@ -54,6 +57,7 @@ export function useProjectWorkflowActions({
         setShellState(await api.getShellState());
       }
       if (chapterBridge !== undefined && nextWorkflow.activeChapterId !== undefined) {
+        setFileEditor?.(undefined);
         setChapterEditor(undefined);
         setChapterEditor(await chapterBridge.load());
       }
@@ -73,6 +77,7 @@ export function useProjectWorkflowActions({
       chapterBridge,
       settingsBridge,
       setChapterEditor,
+      setFileEditor,
       setProjectWorkflow,
       setSettings,
       setShellState,
@@ -107,6 +112,15 @@ export function useProjectWorkflowActions({
 
     setProjectWorkflow({ ...projectWorkflowBridge.getProps(), status: "creating" });
     void projectWorkflowBridge.createProject().then(refreshProjectWorkflow);
+  }, [projectWorkflowBridge, refreshProjectWorkflow, setProjectWorkflow]);
+
+  const handleInitializeProject = useCallback(() => {
+    if (projectWorkflowBridge === undefined) {
+      return;
+    }
+
+    setProjectWorkflow({ ...projectWorkflowBridge.getProps(), status: "creating" });
+    void projectWorkflowBridge.initializeProject().then(refreshProjectWorkflow);
   }, [projectWorkflowBridge, refreshProjectWorkflow, setProjectWorkflow]);
 
   const handleCreateExampleProject = useCallback(() => {
@@ -195,6 +209,7 @@ export function useProjectWorkflowActions({
     handleProjectRootChange,
     handleOpenProject,
     handleCreateProject,
+    handleInitializeProject,
     handleCreateExampleProject,
     handleCreateChapter,
     handleRenameChapter,

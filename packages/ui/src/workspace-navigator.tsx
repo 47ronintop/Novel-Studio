@@ -158,6 +158,7 @@ export function WorkspaceNavigator({
                       expandedSectionIds,
                       expanded,
                       onExpandedSectionIdsChange,
+                      onOpenFile: projectWorkflow?.onOpenFile,
                       query: normalizedQuery,
                       depth: 0
                     })
@@ -274,6 +275,19 @@ function ProjectWorkflowControls({
         value={projectWorkflow.projectRootInput}
       />
       <div className="ns-project-actions">
+        {projectWorkflow.canInitializeProject === true ? (
+          <button
+            aria-label="初始化为 Novel Studio 项目"
+            className="ns-icon-text-button"
+            disabled={isProjectWorkflowBusy(projectWorkflow)}
+            onClick={projectWorkflow.onInitializeProject}
+            title="初始化为 Novel Studio 项目"
+            type="button"
+          >
+            <ListTree aria-hidden="true" size={14} />
+            初始化为 Novel Studio 项目
+          </button>
+        ) : null}
         <button
           aria-label="打开项目"
           className="ns-icon-text-button"
@@ -468,6 +482,7 @@ function renderFileTreeItem(
     readonly expandedSectionIds: readonly string[];
     readonly expanded: ReadonlySet<string>;
     readonly onExpandedSectionIdsChange?: ((sectionIds: readonly string[]) => void) | undefined;
+    readonly onOpenFile?: ((path: string) => void) | undefined;
     readonly query: string;
     readonly depth: number;
   }
@@ -494,7 +509,9 @@ function renderFileTreeItem(
           onClick={() => {
             if (isDirectory) {
               input.onExpandedSectionIdsChange?.(toggleSection(input.expandedSectionIds, item.id));
+              return;
             }
+            input.onOpenFile?.(item.path);
           }}
           type="button"
         >

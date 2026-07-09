@@ -64,6 +64,28 @@ describe("M12 project workflow repository support", () => {
     ).toContain("审稿当前章节");
   });
 
+  test("does not overwrite existing files when initializing a folder as a project", async () => {
+    const projectRoot = await createTempRoot();
+    await writeFile(join(projectRoot, "project.json"), '{"user":"draft"}\n', "utf8");
+    const repository = new ProjectFileRepository({
+      projectRoot,
+      now: () => "2026-07-04T00:00:00.000Z"
+    });
+
+    const created = await repository.createProject({
+      projectId: "prj_existing_folder",
+      title: "Existing Folder",
+      language: "zh-CN"
+    });
+
+    expect(isErr(created)).toBe(true);
+    if (!created.ok) {
+      expect(created.error.code).toBe("PROJECT_CREATE_CONFLICT");
+      expect(created.error.redactedDetail).toEqual({ relativePath: "project.json" });
+    }
+    expect(await readFile(join(projectRoot, "project.json"), "utf8")).toBe('{"user":"draft"}\n');
+  });
+
   test("creates, lists, and reads chapters in project order", async () => {
     const projectRoot = await createTempRoot();
     const projectRepository = new ProjectFileRepository({

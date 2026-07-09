@@ -69,6 +69,7 @@ export type {
   AiWorkflowBranchChoiceProps,
   OnboardingProps,
   OnboardingStepProps,
+  PlainFileEditorProps,
   ProjectSearchProps,
   ProjectSearchStatus,
   ProjectWorkflowRecoveryDraftPreviewProps,

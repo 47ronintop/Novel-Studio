@@ -95,6 +95,17 @@ export interface NovelStudioApi {
       sessionId: string
     ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   };
+  file: {
+    readText(
+      projectRoot: string,
+      path: string
+    ): Promise<Result<ProjectTextFileReadResult, UnifiedError>>;
+    writeText(
+      projectRoot: string,
+      path: string,
+      content: string
+    ): Promise<Result<ProjectTextFileWriteResult, UnifiedError>>;
+  };
   ai: {
     generateChapterSuggestion(
       request: AiWritingSuggestionRequest
@@ -189,4 +200,13 @@ export interface ProjectDirectoryTreeItem {
   readonly kind: "directory" | "file";
   readonly path: string;
   readonly children?: ProjectDirectoryTreeItem[];
+}
+
+export interface ProjectTextFileReadResult {
+  readonly path: string;
+  readonly content: string;
+}
+
+export interface ProjectTextFileWriteResult {
+  readonly path: string;
 }

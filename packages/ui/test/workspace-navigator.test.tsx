@@ -87,6 +87,77 @@ describe("WorkspaceNavigator", () => {
     expect(html).toContain('aria-label="Novel Studio asset groups"');
   });
 
+  test("opens file rows and keeps folder rows as expand/collapse controls", () => {
+    const calls: string[] = [];
+    const baseProjectWorkflow = createNavigatorProps().projectWorkflow;
+    if (baseProjectWorkflow === undefined) {
+      throw new Error("Expected default project workflow props.");
+    }
+    const tree = WorkspaceNavigator(
+      createNavigatorProps({
+        fileTree: [
+          {
+            id: "folder:docs",
+            name: "docs",
+            kind: "directory",
+            path: "docs",
+            children: [
+              {
+                id: "file:docs/INDEX.md",
+                name: "INDEX.md",
+                kind: "file",
+                path: "docs/INDEX.md"
+              }
+            ]
+          }
+        ],
+        expandedSectionIds: ["files", "folder:docs", "novel-studio"],
+        onExpandedSectionIdsChange: (sectionIds) => calls.push(`expanded:${sectionIds.join(",")}`),
+        projectWorkflow: {
+          ...baseProjectWorkflow,
+          onOpenFile: (path) => calls.push(`open:${path}`)
+        }
+      })
+    );
+
+    findElementByAriaLabel(tree, "Toggle folder docs")?.props.onClick?.();
+    findElementByAriaLabel(tree, "Open file INDEX.md")?.props.onClick?.();
+
+    expect(calls).toEqual([
+      "expanded:files,novel-studio",
+      "open:docs/INDEX.md"
+    ]);
+  });
+
+  test("renders an initialize action for ordinary folders", () => {
+    const calls: string[] = [];
+    const baseProjectWorkflow = createNavigatorProps().projectWorkflow;
+    if (baseProjectWorkflow === undefined) {
+      throw new Error("Expected default project workflow props.");
+    }
+    const tree = WorkspaceNavigator(
+      createNavigatorProps({
+        projectWorkflow: {
+          ...baseProjectWorkflow,
+          fileTree: [
+            {
+              id: "file:notes.md",
+              name: "notes.md",
+              kind: "file",
+              path: "notes.md"
+            }
+          ],
+          canInitializeProject: true,
+          onInitializeProject: () => calls.push("initialize")
+        }
+      })
+    );
+
+    findElementByAriaLabel(tree, "初始化为 Novel Studio 项目")?.props.onClick?.();
+
+    expect(calls).toEqual(["initialize"]);
+  });
+
   test("wires section collapse, search, chapter actions, and guarded delete", () => {
     const calls: string[] = [];
     (globalThis as { window?: unknown }).window = {
@@ -262,6 +333,14 @@ function findElementByAriaLabel(
   const element = node as ReactElement<NavigatorTestElementProps>;
   if (element.props["aria-label"] === ariaLabel) {
     return element;
+  }
+
+  if (typeof element.type === "function") {
+    const renderComponent = element.type as (props: NavigatorTestElementProps) => ReactNode;
+    const found = findElementByAriaLabel(renderComponent(element.props), ariaLabel);
+    if (found !== undefined) {
+      return found;
+    }
   }
 
   const children = element.props.children as ReactNode;

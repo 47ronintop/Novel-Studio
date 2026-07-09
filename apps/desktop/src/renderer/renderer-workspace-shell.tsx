@@ -13,6 +13,7 @@ import type {
   ModelSettingsPanelProps,
   ProjectSearchProps,
   ProjectWorkflowProps,
+  PlainFileEditorProps,
   StoryBibleEditorProps,
   StoryBibleSummaryProps,
   WorkspaceShellProps
@@ -26,6 +27,7 @@ export interface RendererWorkspaceShellProps {
   readonly settings: ModelSettingsPanelProps | undefined;
   readonly studio: ConfigStudioPanelProps | undefined;
   readonly chapterEditor: ChapterEditorProps | undefined;
+  readonly fileEditor: PlainFileEditorProps | undefined;
   readonly onboarding: WorkspaceShellProps["onboarding"];
   readonly storyBible: StoryBibleSummaryProps | undefined;
   readonly storyBibleEditor: StoryBibleEditorProps | undefined;
@@ -45,7 +47,9 @@ export interface RendererWorkspaceShellProps {
   readonly onProjectRootChange: ProjectWorkflowProps["onProjectRootChange"];
   readonly onOpenProject: ProjectWorkflowProps["onOpenProject"];
   readonly onCreateProject: ProjectWorkflowProps["onCreateProject"];
+  readonly onInitializeProject: NonNullable<ProjectWorkflowProps["onInitializeProject"]>;
   readonly onCreateChapter: ProjectWorkflowProps["onCreateChapter"];
+  readonly onOpenFile: NonNullable<ProjectWorkflowProps["onOpenFile"]>;
   readonly onRenameChapter: NonNullable<ProjectWorkflowProps["onRenameChapter"]>;
   readonly onDuplicateChapter: NonNullable<ProjectWorkflowProps["onDuplicateChapter"]>;
   readonly onDeleteChapter: NonNullable<ProjectWorkflowProps["onDeleteChapter"]>;
@@ -141,7 +145,9 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
               onProjectRootChange: props.onProjectRootChange,
               onOpenProject: props.onOpenProject,
               onCreateProject: props.onCreateProject,
+              onInitializeProject: props.onInitializeProject,
               onCreateChapter: props.onCreateChapter,
+              onOpenFile: props.onOpenFile,
               onRenameChapter: props.onRenameChapter,
               onDuplicateChapter: props.onDuplicateChapter,
               onDeleteChapter: props.onDeleteChapter,
@@ -204,6 +210,7 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
             } satisfies ConfigStudioPanelProps
           })}
       {...(props.chapterEditor === undefined ? {} : { chapterEditor: props.chapterEditor })}
+      {...(props.fileEditor === undefined ? {} : { fileEditor: props.fileEditor })}
       {...(props.onboarding === undefined ? {} : { onboarding: props.onboarding })}
       {...(props.storyBible === undefined ? {} : { storyBible: props.storyBible })}
       {...(props.storyBibleEditor === undefined

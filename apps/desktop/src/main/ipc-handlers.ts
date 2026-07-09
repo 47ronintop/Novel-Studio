@@ -1,8 +1,9 @@
 import { createDesktopApplication } from "@novel-studio/application";
-import { readdir } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { readFile, readdir, stat } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import type { ApplicationIpcChannel, DesktopApplication } from "@novel-studio/application";
 import { ok, type JsonObject, type JsonValue } from "@novel-studio/shared";
+import { writeTextAtomically } from "@novel-studio/repository";
 import type {
   AiWritingSuggestionStreamEvent,
   ConfigAssetRestoreInput,
@@ -85,6 +86,24 @@ export function createApplicationIpcHandlers(
       }
 
       return readProjectDirectory(projectRoot);
+    },
+    "application:file:read-text": (projectRoot: unknown, path: unknown) => {
+      if (typeof projectRoot !== "string" || typeof path !== "string") {
+        return readProjectTextFile("", "");
+      }
+
+      return readProjectTextFile(projectRoot, path);
+    },
+    "application:file:write-text": (projectRoot: unknown, path: unknown, content: unknown) => {
+      if (
+        typeof projectRoot !== "string" ||
+        typeof path !== "string" ||
+        typeof content !== "string"
+      ) {
+        return writeProjectTextFile("", "", "");
+      }
+
+      return writeProjectTextFile(projectRoot, path, content);
     },
     "application:project:create": (input: unknown) => {
       const createInput = toCreateProjectInput(input);
@@ -451,6 +470,7 @@ function readThrownStreamErrorDetail(error: unknown): JsonObject {
 
 const DIRECTORY_READ_MAX_DEPTH = 4;
 const DIRECTORY_READ_MAX_ITEMS = 300;
+const TEXT_FILE_READ_MAX_BYTES = 5 * 1024 * 1024;
 const SKIPPED_DIRECTORY_NAMES = new Set([".git", "node_modules", "dist", "release"]);
 
 async function readProjectDirectory(
@@ -545,6 +565,151 @@ async function readDirectoryChildren(
   }
 
   return items;
+}
+
+async function readProjectTextFile(
+  projectRoot: string,
+  filePath: string
+): Promise<Result<{ readonly path: string; readonly content: string }, UnifiedError>> {
+  const resolved = resolveProjectFilePath(projectRoot, filePath);
+  if (!resolved.ok) {
+    return resolved;
+  }
+
+  try {
+    const fileStats = await stat(resolved.value.absolutePath);
+    if (!fileStats.isFile()) {
+      return fileOperationFailed({
+        code: "FILE_READ_FAILED",
+        message: "Text file could not be read.",
+        suggestedAction: "Choose a text file inside the opened folder.",
+        reason: "Target path is not a file."
+      });
+    }
+    if (fileStats.size > TEXT_FILE_READ_MAX_BYTES) {
+      return fileOperationFailed({
+        code: "FILE_TOO_LARGE",
+        message: "Text file is too large to open in the editor.",
+        suggestedAction: "Open a smaller text file.",
+        reason: `File size ${fileStats.size} exceeds ${TEXT_FILE_READ_MAX_BYTES} bytes.`
+      });
+    }
+
+    return ok({
+      path: resolved.value.relativePath,
+      content: await readFile(resolved.value.absolutePath, "utf8")
+    });
+  } catch (error) {
+    return fileOperationFailed({
+      code: "FILE_READ_FAILED",
+      message: "Text file could not be read.",
+      suggestedAction: "Choose a readable text file inside the opened folder.",
+      reason: error instanceof Error ? error.message : "Unknown file read error"
+    });
+  }
+}
+
+async function writeProjectTextFile(
+  projectRoot: string,
+  filePath: string,
+  content: string
+): Promise<Result<{ readonly path: string }, UnifiedError>> {
+  const resolved = resolveProjectFilePath(projectRoot, filePath);
+  if (!resolved.ok) {
+    return resolved;
+  }
+
+  try {
+    const fileStats = await stat(resolved.value.absolutePath);
+    if (!fileStats.isFile()) {
+      return fileOperationFailed({
+        code: "FILE_WRITE_FAILED",
+        message: "Text file could not be written.",
+        suggestedAction: "Choose a text file inside the opened folder.",
+        reason: "Target path is not a file."
+      });
+    }
+  } catch (error) {
+    return fileOperationFailed({
+      code: "FILE_WRITE_FAILED",
+      message: "Text file could not be written.",
+      suggestedAction: "Choose an existing writable text file inside the opened folder.",
+      reason: error instanceof Error ? error.message : "Unknown file stat error"
+    });
+  }
+
+  const written = await writeTextAtomically({
+    targetPath: resolved.value.absolutePath,
+    content,
+    traceId: "project-text-file"
+  });
+  if (!written.ok) {
+    return written;
+  }
+
+  return ok({ path: resolved.value.relativePath });
+}
+
+function resolveProjectFilePath(
+  projectRoot: string,
+  filePath: string
+): Result<{ readonly absolutePath: string; readonly relativePath: string }, UnifiedError> {
+  const trimmedRoot = projectRoot.trim();
+  const trimmedPath = filePath.trim();
+  if (trimmedRoot.length === 0 || trimmedPath.length === 0 || isAbsolute(trimmedPath)) {
+    return filePathOutsideProject(filePath);
+  }
+
+  const root = resolve(trimmedRoot);
+  const absolutePath = resolve(root, trimmedPath);
+  const relativePath = relative(root, absolutePath).replace(/\\/g, "/");
+  if (
+    relativePath.length === 0 ||
+    relativePath === ".." ||
+    relativePath.startsWith("../") ||
+    isAbsolute(relativePath)
+  ) {
+    return filePathOutsideProject(filePath);
+  }
+
+  return ok({ absolutePath, relativePath });
+}
+
+function filePathOutsideProject<T>(filePath: string): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "FILE_PATH_OUTSIDE_PROJECT",
+      category: "StorageError",
+      message: "File path is outside the opened folder.",
+      recoverability: "user-action",
+      suggestedAction: "Choose a file from the opened folder tree.",
+      traceId: "project-text-file",
+      redactedDetail: {
+        path: filePath
+      }
+    })
+  );
+}
+
+function fileOperationFailed<T>(input: {
+  readonly code: string;
+  readonly message: string;
+  readonly suggestedAction: string;
+  readonly reason: string;
+}): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: input.code,
+      category: "StorageError",
+      message: input.message,
+      recoverability: "user-action",
+      suggestedAction: input.suggestedAction,
+      traceId: "project-text-file",
+      redactedDetail: {
+        reason: input.reason
+      }
+    })
+  );
 }
 
 function toStoryBibleAsset(value: unknown): StoryBibleAsset | undefined {

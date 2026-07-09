@@ -13,6 +13,7 @@ export interface ProjectWorkflowBridge {
   setProjectRootInput(projectRoot: string): ProjectWorkflowProps;
   openProject(): Promise<ProjectWorkflowProps>;
   createProject(): Promise<ProjectWorkflowProps>;
+  initializeProject(): Promise<ProjectWorkflowProps>;
   createExampleProject(): Promise<ProjectWorkflowProps>;
   createChapter(): Promise<ProjectWorkflowProps>;
   renameChapter(chapterId: string, title: string): Promise<ProjectWorkflowProps>;
@@ -46,6 +47,7 @@ export function createProjectWorkflowBridge(
   let status: ProjectWorkflowProps["status"] = "idle";
   let feedback: ProjectWorkflowProps["feedback"] | undefined;
   let fileTree: ProjectWorkflowProps["fileTree"] | undefined;
+  let canInitializeProject = false;
   let openChapterTabIds: string[] = [];
   let recoveryReview: NonNullable<ProjectWorkflowProps["recovery"]>["review"] | undefined;
 
@@ -73,6 +75,7 @@ export function createProjectWorkflowBridge(
           if (directory.ok) {
             snapshot = undefined;
             fileTree = directory.value;
+            canInitializeProject = true;
             projectRootInput = selectedProjectRoot;
             openChapterTabIds = [];
             feedback = {
@@ -88,6 +91,7 @@ export function createProjectWorkflowBridge(
 
         snapshot = opened.value;
         fileTree = undefined;
+        canInitializeProject = false;
         projectRootInput = snapshot.projectRoot;
         openChapterTabIds =
           snapshot.activeChapterId === undefined ? [] : [snapshot.activeChapterId];
@@ -117,9 +121,45 @@ export function createProjectWorkflowBridge(
 
         snapshot = created.value;
         fileTree = undefined;
+        canInitializeProject = false;
         projectRootInput = snapshot.projectRoot;
         openChapterTabIds =
           snapshot.activeChapterId === undefined ? [] : [snapshot.activeChapterId];
+      });
+    },
+    async initializeProject() {
+      return runProjectOperation("creating", async () => {
+        const selectedProjectRoot = projectRootInput.trim();
+        if (selectedProjectRoot.length === 0) {
+          feedback = {
+            kind: "error",
+            message: "请先打开或输入一个本地文件夹。"
+          };
+          return;
+        }
+
+        const existingFileTree = fileTree;
+        const created = await api.project.create({
+          projectRoot: selectedProjectRoot,
+          projectId: createProjectId(),
+          title: projectTitleFromRoot(selectedProjectRoot),
+          language: "zh-CN"
+        });
+        if (!created.ok) {
+          feedback = { kind: "error", message: created.error.message };
+          return;
+        }
+
+        snapshot = created.value;
+        fileTree = existingFileTree;
+        canInitializeProject = false;
+        projectRootInput = snapshot.projectRoot;
+        openChapterTabIds =
+          snapshot.activeChapterId === undefined ? [] : [snapshot.activeChapterId];
+        feedback = {
+          kind: "info",
+          message: "已初始化为 Novel Studio 项目。普通文件仍保留在文件视图中。"
+        };
       });
     },
     async createExampleProject() {
@@ -153,6 +193,8 @@ export function createProjectWorkflowBridge(
         if (!createdChapter.ok) {
           feedback = { kind: "error", message: createdChapter.error.message };
           snapshot = created.value;
+          fileTree = undefined;
+          canInitializeProject = false;
           projectRootInput = snapshot.projectRoot;
           openChapterTabIds =
             snapshot.activeChapterId === undefined ? [] : [snapshot.activeChapterId];
@@ -161,6 +203,7 @@ export function createProjectWorkflowBridge(
 
         snapshot = createdChapter.value;
         fileTree = undefined;
+        canInitializeProject = false;
         projectRootInput = snapshot.projectRoot;
         openChapterTabIds =
           snapshot.activeChapterId === undefined ? [] : [snapshot.activeChapterId];
@@ -348,6 +391,7 @@ export function createProjectWorkflowBridge(
       ...(feedback === undefined ? {} : { feedback }),
       chapters: snapshot?.chapters ?? [],
       ...(fileTree === undefined ? {} : { fileTree }),
+      ...(canInitializeProject ? { canInitializeProject: true } : {}),
       openChapterTabIds,
       dirtyChapterIds: snapshot?.recovery.availableItems.map((item) => item.chapterId) ?? [],
       ...(recovery === undefined ? {} : { recovery }),
@@ -358,7 +402,9 @@ export function createProjectWorkflowBridge(
       onProjectRootChange: () => undefined,
       onOpenProject: () => undefined,
       onCreateProject: () => undefined,
+      onInitializeProject: () => undefined,
       onCreateChapter: () => undefined,
+      onOpenFile: () => undefined,
       onRenameChapter: () => undefined,
       onDuplicateChapter: () => undefined,
       onDeleteChapter: () => undefined,

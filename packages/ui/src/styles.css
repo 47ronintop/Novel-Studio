@@ -1744,6 +1744,10 @@ textarea:focus-visible,
   overflow: hidden;
 }
 
+.ns-file-editor-body {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .ns-editor-body[data-large-document="true"] {
   border-color: color-mix(in oklch, var(--ns-warning) 55%, var(--ns-border));
 }
@@ -1769,6 +1773,10 @@ textarea:focus-visible,
   resize: none;
   tab-size: 2;
   width: 100%;
+}
+
+.ns-file-editor-body .ns-editor-textarea {
+  grid-column: 1;
 }
 
 .ns-editor-body[data-runtime-id="codemirror"] {

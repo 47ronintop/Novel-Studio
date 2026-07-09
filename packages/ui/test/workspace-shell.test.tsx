@@ -76,6 +76,35 @@ describe("WorkspaceShell", () => {
     expect(html).not.toContain('aria-disabled="true"');
   });
 
+  test("renders an ordinary file editor without chapter-only panels", () => {
+    const application = createDesktopApplication();
+    const calls: string[] = [];
+    const tree = WorkspaceShell({
+      shellState: application.getShellState(),
+      commands: application.listCommands(),
+      commandPaletteOpen: false,
+      fileEditor: {
+        path: "notes/scene.md",
+        fileName: "scene.md",
+        content: "Scene one\n",
+        dirty: true,
+        saveStatus: "Unsaved",
+        onContentChange: (content) => calls.push(`content:${content}`),
+        onSave: () => calls.push("save")
+      }
+    });
+
+    findElementByAriaLabel(tree, "保存普通文件")?.props.onClick?.();
+    const html = renderToStaticMarkup(tree);
+
+    expect(calls).toEqual(["save"]);
+    expect(html).toContain('aria-label="普通文件编辑器"');
+    expect(html).toContain("notes/scene.md");
+    expect(html).toContain("Scene one");
+    expect(html).not.toContain('aria-label="鐗堟湰鍘嗗彶"');
+    expect(html).not.toContain("Selection review");
+  });
+
   test("switches bottom panel tabs and renders the active panel content", () => {
     const application = createDesktopApplication();
     const selectedTabs: string[] = [];

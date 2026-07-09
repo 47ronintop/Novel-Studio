@@ -1,4 +1,4 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { access, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { err, ok, type JsonObject, type Result, type UnifiedError } from "@novel-studio/shared";
 import type {
@@ -189,6 +189,26 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
 
     try {
       await mkdir(this.options.projectRoot, { recursive: true });
+      const conflict = await findExistingProjectCreateTarget(this.options.projectRoot, [
+        "project.json",
+        "settings.json",
+        join("plugins", "plugins.json"),
+        ...defaultConfigAssets.map((asset) => asset.relativePath)
+      ]);
+      if (conflict !== undefined) {
+        return err(
+          storageError({
+            code: "PROJECT_CREATE_CONFLICT",
+            message: "Project could not be initialized because a project file already exists.",
+            suggestedAction:
+              "Choose a folder without Novel Studio project files, or open the existing project instead.",
+            traceId: this.traceId,
+            redactedDetail: {
+              relativePath: conflict
+            }
+          })
+        );
+      }
       await Promise.all(
         [
           "chapters",
@@ -322,6 +342,22 @@ async function writeJsonFile(
     content: `${JSON.stringify(content, null, 2)}\n`,
     traceId
   });
+}
+
+async function findExistingProjectCreateTarget(
+  projectRoot: string,
+  relativePaths: readonly string[]
+): Promise<string | undefined> {
+  for (const relativePath of relativePaths) {
+    try {
+      await access(join(projectRoot, relativePath));
+      return relativePath.replace(/\\/g, "/");
+    } catch {
+      // Missing targets are safe; the create flow will write them below.
+    }
+  }
+
+  return undefined;
 }
 
 function createDefaultConfigAssets(now: string): readonly {

@@ -28,6 +28,8 @@ import type {
   PluginSettingsSnapshot,
   ProjectDirectorySelection,
   ProjectDirectoryTreeItem,
+  ProjectTextFileReadResult,
+  ProjectTextFileWriteResult,
   ProjectRecoveryApplyResult,
   ProjectRecoveryDraftPreview,
   ProjectSearchIndex,
@@ -130,6 +132,21 @@ const api: NovelStudioApi = {
       invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
         "application:project:discard-recovery-draft",
         sessionId
+      )
+  },
+  file: {
+    readText: (projectRoot: string, path: string) =>
+      invokeTyped<Result<ProjectTextFileReadResult, UnifiedError>>(
+        "application:file:read-text",
+        projectRoot,
+        path
+      ),
+    writeText: (projectRoot: string, path: string, content: string) =>
+      invokeTyped<Result<ProjectTextFileWriteResult, UnifiedError>>(
+        "application:file:write-text",
+        projectRoot,
+        path,
+        content
       )
   },
   ai: {

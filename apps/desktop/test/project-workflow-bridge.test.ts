@@ -355,6 +355,7 @@ describe("project workflow bridge", () => {
 
     expect(opened.projectRootInput).toBe("D:/Draft Folder");
     expect(opened.fileTree?.map((item) => item.name)).toEqual(["INDEX.md", "notes"]);
+    expect(opened.canInitializeProject).toBe(true);
     expect(opened.feedback).toEqual({
       kind: "info",
       message: "已作为普通文件夹打开。可浏览文件，初始化后启用 Novel Studio 项目功能。"
@@ -363,6 +364,46 @@ describe("project workflow bridge", () => {
       "project.chooseOpenDirectory",
       "project.open:D:/Draft Folder",
       "project.readDirectory:D:/Draft Folder"
+    ]);
+  });
+
+  test("initializes the currently opened ordinary folder as a Novel Studio project", async () => {
+    const calls: string[] = [];
+    const fileTree = [
+      {
+        id: "file:notes.md",
+        name: "notes.md",
+        kind: "file" as const,
+        path: "notes.md"
+      }
+    ];
+    const api = createApi({
+      record: calls,
+      getChapters: () => [],
+      setChapters: () => undefined,
+      chooseOpenProjectRoot: "D:/Draft Folder",
+      openErrorMessage: "project.json could not be read.",
+      fileTree
+    });
+    const bridge = createProjectWorkflowBridge(api, {
+      createProjectId: () => "prj_initialized"
+    });
+
+    await bridge.openProject();
+    const initialized = await bridge.initializeProject();
+
+    expect(initialized.projectRootInput).toBe("D:/Draft Folder");
+    expect(initialized.fileTree?.map((item) => item.name)).toEqual(["notes.md"]);
+    expect(initialized.canInitializeProject).toBeUndefined();
+    expect(initialized.feedback).toEqual({
+      kind: "info",
+      message: "已初始化为 Novel Studio 项目。普通文件仍保留在文件视图中。"
+    });
+    expect(calls).toEqual([
+      "project.chooseOpenDirectory",
+      "project.open:D:/Draft Folder",
+      "project.readDirectory:D:/Draft Folder",
+      "project.create:prj_initialized:Draft Folder"
     ]);
   });
 });

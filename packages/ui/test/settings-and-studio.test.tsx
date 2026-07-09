@@ -58,11 +58,14 @@ describe("M8 Settings and Studio UI", () => {
 
     const search = host.querySelector<HTMLInputElement>('input[aria-label="搜索设置"]');
     expect(search).not.toBeNull();
+    if (search === null) {
+      throw new Error("Expected settings search input to render.");
+    }
 
     await act(async () => {
       const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
       valueSetter?.call(search, "API Key");
-      search!.dispatchEvent(new Event("input", { bubbles: true }));
+      search.dispatchEvent(new Event("input", { bubbles: true }));
     });
 
     expect(host.textContent).toContain("模型: API Key");

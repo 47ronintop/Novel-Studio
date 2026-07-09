@@ -11,6 +11,7 @@ import type { ChapterSummary } from "@novel-studio/shared";
 import type { ChapterEditorProps } from "./chapter-editor.js";
 import type { CommandPaletteFeedback } from "./command-palette.js";
 import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
+import type { EditorPreferences } from "./editor-toolbar.js";
 import type { ModelSettingsPanelProps } from "./model-settings-panel.js";
 
 export interface WorkspaceShellProps {
@@ -21,6 +22,7 @@ export interface WorkspaceShellProps {
   readonly commandPaletteQuery?: string | undefined;
   readonly commandPaletteSelectedCommandId?: ApplicationCommandId | undefined;
   readonly chapterEditor?: ChapterEditorProps;
+  readonly fileEditor?: PlainFileEditorProps;
   readonly projectWorkflow?: ProjectWorkflowProps;
   readonly aiWritingWorkflow?: AiWritingWorkflowProps;
   readonly search?: ProjectSearchProps;
@@ -49,6 +51,7 @@ export interface ProjectWorkflowProps {
   readonly status?: ProjectWorkflowStatus;
   readonly feedback?: ProjectWorkflowFeedback;
   readonly fileTree?: readonly ProjectFileTreeItemProps[];
+  readonly canInitializeProject?: boolean;
   readonly chapters: readonly ChapterSummary[];
   readonly activeChapterId?: string;
   readonly openChapterTabIds?: readonly string[];
@@ -58,7 +61,9 @@ export interface ProjectWorkflowProps {
   readonly onProjectRootChange: (projectRoot: string) => void;
   readonly onOpenProject: () => void;
   readonly onCreateProject: () => void;
+  readonly onInitializeProject?: (() => void) | undefined;
   readonly onCreateChapter: () => void;
+  readonly onOpenFile?: ((path: string) => void) | undefined;
   readonly onRenameChapter?: (chapterId: string, title: string) => void;
   readonly onDuplicateChapter?: (chapterId: string) => void;
   readonly onDeleteChapter?: (chapterId: string) => void;
@@ -67,6 +72,20 @@ export interface ProjectWorkflowProps {
   readonly onPreviewRecoveryDraft?: (sessionId: string) => void;
   readonly onApplyRecoveryDraft?: (sessionId: string) => void;
   readonly onDiscardRecoveryDraft?: (sessionId: string) => void;
+}
+
+export interface PlainFileEditorProps {
+  readonly path: string;
+  readonly fileName: string;
+  readonly content: string;
+  readonly dirty: boolean;
+  readonly saveStatus: "Saved" | "Saving" | "Unsaved";
+  readonly feedback?: ProjectWorkflowFeedback | undefined;
+  readonly editorPreferences?: EditorPreferences | undefined;
+  readonly onContentChange?: ((content: string) => void) | undefined;
+  readonly onSave?: (() => void) | undefined;
+  readonly onEditorPreferencesChange?: ((preferences: EditorPreferences) => void) | undefined;
+  readonly onFocusModeToggle?: (() => void) | undefined;
 }
 
 export interface ProjectFileTreeItemProps {

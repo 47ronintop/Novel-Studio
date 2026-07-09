@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -111,6 +111,8 @@ describe("M12 project workflow IPC", () => {
 
     await api.project.open("D:/Novel/M12");
     await api.project.readDirectory("D:/Novel/M12");
+    await api.file.readText("D:/Novel/M12", "notes/scene.md");
+    await api.file.writeText("D:/Novel/M12", "notes/scene.md", "Scene\n");
     await api.project.create({
       projectRoot: "D:/Novel/M12",
       projectId: "prj_m12",
@@ -129,6 +131,8 @@ describe("M12 project workflow IPC", () => {
     expect(calls).toEqual([
       "application:project:open:1",
       "application:project:read-directory:1",
+      "application:file:read-text:2",
+      "application:file:write-text:3",
       "application:project:create:1",
       "application:project:create-chapter:1",
       "application:project:select-chapter:1",
@@ -209,6 +213,44 @@ describe("M12 project workflow IPC", () => {
       );
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("reads and writes ordinary text files only inside the selected folder", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-files-"));
+    const outsideRoot = await mkdtemp(join(tmpdir(), "novel-studio-outside-"));
+    try {
+      await mkdir(join(projectRoot, "notes"));
+      await writeFile(join(projectRoot, "notes", "scene.md"), "Scene one\n", "utf8");
+      await writeFile(join(outsideRoot, "secret.md"), "Secret\n", "utf8");
+
+      const handlers = createApplicationIpcHandlers(createFakeApplication());
+      const readResult = await handlers["application:file:read-text"](
+        projectRoot,
+        "notes/scene.md"
+      );
+      const writeResult = await handlers["application:file:write-text"](
+        projectRoot,
+        "notes/scene.md",
+        "Scene two\n"
+      );
+      const traversalRead = await handlers["application:file:read-text"](
+        projectRoot,
+        "../secret.md"
+      );
+
+      expect(readResult).toEqual(ok({ path: "notes/scene.md", content: "Scene one\n" }));
+      expect(writeResult).toEqual(ok({ path: "notes/scene.md" }));
+      expect(await readFile(join(projectRoot, "notes", "scene.md"), "utf8")).toBe("Scene two\n");
+      expect(traversalRead).toMatchObject({
+        ok: false,
+        error: {
+          code: "FILE_PATH_OUTSIDE_PROJECT"
+        }
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+      await rm(outsideRoot, { recursive: true, force: true });
     }
   });
 });

@@ -6,6 +6,8 @@ export const APPLICATION_IPC_CHANNELS = [
   "application:project:choose-create-directory",
   "application:project:open",
   "application:project:read-directory",
+  "application:file:read-text",
+  "application:file:write-text",
   "application:project:create",
   "application:project:list-chapters",
   "application:project:create-chapter",

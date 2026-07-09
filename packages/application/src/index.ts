@@ -15,7 +15,9 @@ export type {
   AiWritingSuggestionStreamOptions,
   NovelStudioApi,
   ProjectDirectorySelection,
-  ProjectDirectoryTreeItem
+  ProjectDirectoryTreeItem,
+  ProjectTextFileReadResult,
+  ProjectTextFileWriteResult
 } from "./novel-studio-api.js";
 export type {
   ChapterEditorSaveStatus,

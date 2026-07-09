@@ -27,6 +27,8 @@ import type {
   ProjectRecoveryDraftPreview,
   ProjectDirectorySelection,
   ProjectDirectoryTreeItem,
+  ProjectTextFileReadResult,
+  ProjectTextFileWriteResult,
   ProjectSearchIndex,
   ProjectSearchQuery,
   ProjectSearchResults,
@@ -152,6 +154,23 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           ipc,
           "application:project:discard-recovery-draft",
           sessionId
+        )
+    },
+    file: {
+      readText: (projectRoot: string, path: string) =>
+        invokeTyped<Result<ProjectTextFileReadResult, UnifiedError>>(
+          ipc,
+          "application:file:read-text",
+          projectRoot,
+          path
+        ),
+      writeText: (projectRoot: string, path: string, content: string) =>
+        invokeTyped<Result<ProjectTextFileWriteResult, UnifiedError>>(
+          ipc,
+          "application:file:write-text",
+          projectRoot,
+          path,
+          content
         )
     },
     ai: {
