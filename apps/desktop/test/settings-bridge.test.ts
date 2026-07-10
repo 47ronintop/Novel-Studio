@@ -183,9 +183,13 @@ describe("M22 settings bridge", () => {
     const bridge = createSettingsBridge(createApi(calls));
     await bridge.load();
 
-    const switched = bridge.selectSection("appearance");
+    expect(bridge.getProps().activeSection).toBe("models");
 
-    expect(switched.activeSection).toBe("appearance");
+    const appearance = bridge.selectSection("appearance");
+    const plugins = bridge.selectSection("plugins");
+
+    expect(appearance.activeSection).toBe("appearance");
+    expect(plugins.activeSection).toBe("plugins");
     expect(calls.filter((call) => call === "settings.listModelProfiles")).toHaveLength(1);
   });
 

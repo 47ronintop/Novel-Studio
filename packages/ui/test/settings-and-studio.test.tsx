@@ -13,11 +13,39 @@ import { ConfigStudioPanel, ModelSettingsPanel } from "../src/index.js";
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("M8 Settings and Studio UI", () => {
-  test("renders VSCode settings structure with editor preferences in settings", () => {
+  test("renders only functional model appearance and plugin settings", () => {
     const html = renderToStaticMarkup(
       <ModelSettingsPanel
         {...createModelSettingsPanelProps()}
-        activeSection="editor"
+        activeSection="appearance"
+        appearancePreferences={{ theme: "dark", accentColor: "teal" }}
+        editorPreferences={{ fontFamily: "serif", fontSize: 16, lineHeight: 1.8 }}
+      />
+    );
+    const modelHtml = renderToStaticMarkup(
+      <ModelSettingsPanel {...createModelSettingsPanelProps()} activeSection="models" />
+    );
+
+    expect(html).toContain("模型");
+    expect(html).toContain("外观");
+    expect(html).toContain("插件");
+    expect(html).toContain('aria-label="浅色主题"');
+    expect(html).toContain('aria-label="强调色 蓝色"');
+    expect(html).not.toContain(">写作</button>");
+    expect(html).not.toContain(">编辑器</button>");
+    expect(html).not.toContain(">高级</button>");
+    expect(html).not.toContain("界面密度");
+    expect(html).not.toContain("编辑器外观预览");
+    expect(html).not.toContain("自动保存与历史");
+    expect(html).not.toContain("隐私与安全");
+    expect(modelHtml).not.toContain('aria-label="完整 URL"');
+  });
+
+  test("renders VSCode settings structure with editor preferences in appearance", () => {
+    const html = renderToStaticMarkup(
+      <ModelSettingsPanel
+        {...createModelSettingsPanelProps()}
+        activeSection="appearance"
         appearancePreferences={{
           theme: "dark",
           accentColor: "teal",
@@ -36,12 +64,12 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).toContain('class="model-settings-section"');
     expect(html).toContain("model-settings-item");
     expect(html).not.toContain("model-settings-card");
-    expect(html).toContain("编辑器: 字体");
-    expect(html).toContain("编辑器: 字号");
-    expect(html).toContain("编辑器: 行高");
-    expect(html).toContain('aria-label="编辑器字体"');
-    expect(html).toContain('aria-label="编辑器字号"');
-    expect(html).toContain('aria-label="编辑器行高"');
+    expect(html).toContain("外观: 编辑器字体");
+    expect(html).toContain("外观: 编辑器字号");
+    expect(html).toContain("外观: 编辑器行高");
+    expect(html).toContain('aria-label="外观编辑器字体"');
+    expect(html).toContain('aria-label="外观编辑器字号"');
+    expect(html).toContain('aria-label="外观编辑器行高"');
   });
 
   test("filters settings by search query", async () => {
@@ -77,7 +105,7 @@ describe("M8 Settings and Studio UI", () => {
     host.remove();
   });
 
-  test("renders VSCode-like settings tabs with scoped writing and appearance panels", () => {
+  test("renders VSCode-like settings tabs with one active functional panel", () => {
     const appearanceHtml = renderToStaticMarkup(
       <ModelSettingsPanel
         {...createModelSettingsPanelProps()}
@@ -93,29 +121,19 @@ describe("M8 Settings and Studio UI", () => {
         }}
       />
     );
-    const writingHtml = renderToStaticMarkup(
+    const pluginHtml = renderToStaticMarkup(
       <ModelSettingsPanel
         {...createModelSettingsPanelProps()}
-        activeSection="writing"
-        writingPreferences={{
-          autosaveEnabled: true,
-          historyPolicy: "manual-and-interval",
-          styleRules: {
-            enabled: true,
-            strength: "standard",
-            customCautionTerms: ["显而易见", "不可否认"]
-          }
-        }}
+        activeSection="plugins"
+        plugins={{ status: "loaded", entries: [] }}
       />
     );
 
     expect(appearanceHtml).toContain('aria-label="设置分类"');
     expect(appearanceHtml).toContain('aria-current="page"');
     expect(appearanceHtml).toContain("模型");
-    expect(appearanceHtml).toContain("写作");
     expect(appearanceHtml).toContain("外观");
     expect(appearanceHtml).toContain("插件");
-    expect(appearanceHtml).toContain("高级");
     expect(appearanceHtml).toContain('aria-label="外观设置"');
     expect(appearanceHtml).toContain("外观: 主题策略");
     expect(appearanceHtml).toContain('aria-label="外观主题"');
@@ -130,33 +148,24 @@ describe("M8 Settings and Studio UI", () => {
     expect(appearanceHtml).toContain("外观: 编辑器字体");
     expect(appearanceHtml).toContain("外观: 编辑器字号");
     expect(appearanceHtml).toContain("外观: 编辑器行高");
-    expect(appearanceHtml).toContain('aria-label="编辑器外观预览"');
     expect(appearanceHtml).toContain("serif");
-    expect(appearanceHtml).toContain("16px");
-    expect(appearanceHtml).toContain("1.8");
     expect(appearanceHtml).not.toContain("新建模型");
     expect(appearanceHtml).not.toContain('aria-label="模型配置"');
-
-    expect(writingHtml).toContain('aria-label="写作设置"');
-    expect(writingHtml).toContain("自动保存已启用");
-    expect(writingHtml).toContain("manual-and-interval");
-    expect(writingHtml).toContain("文风规则已启用");
-    expect(writingHtml).toContain("写作质量");
-    expect(writingHtml).toContain("项目语气");
-    expect(writingHtml).toContain("显而易见");
-    expect(writingHtml).not.toMatch(/检测规避|过检测/);
+    expect(pluginHtml).toContain('aria-label="插件管理"');
+    expect(pluginHtml).not.toContain('aria-label="模型配置"');
+    expect(pluginHtml).not.toContain('aria-label="外观设置"');
   });
 
   test("scopes the new model action to model settings", () => {
     const modelsHtml = renderToStaticMarkup(
       <ModelSettingsPanel {...createModelSettingsPanelProps()} activeSection="models" />
     );
-    const editorHtml = renderToStaticMarkup(
-      <ModelSettingsPanel {...createModelSettingsPanelProps()} activeSection="editor" />
+    const appearanceHtml = renderToStaticMarkup(
+      <ModelSettingsPanel {...createModelSettingsPanelProps()} activeSection="appearance" />
     );
 
     expect(modelsHtml).toContain("新建模型");
-    expect(editorHtml).not.toContain("新建模型");
+    expect(appearanceHtml).not.toContain("新建模型");
   });
 
   test("updates appearance controls through settings callbacks", async () => {
@@ -237,7 +246,7 @@ describe("M8 Settings and Studio UI", () => {
   });
 
   test("renders model profile settings without plaintext secrets", () => {
-    const html = renderToStaticMarkup(
+    const tree = (
       <ModelSettingsPanel
         defaultProfileId="model_default"
         selectedProfileId="model_default"
@@ -346,17 +355,16 @@ describe("M8 Settings and Studio UI", () => {
         onMakeDefault={() => undefined}
       />
     );
+    const html = renderToStaticMarkup(tree);
+    const pluginHtml = renderToStaticMarkup(
+      <ModelSettingsPanel {...tree.props} activeSection="plugins" />
+    );
 
     expect(html).toContain("Default Model");
-    expect(html).toContain("Timeline Tools");
-    expect(html).toContain("1.2.3");
-    expect(html).toContain("timeline.rail");
-    expect(html).toContain("timeline.open-map");
-    expect(html).toContain('aria-label="Disable plugin Timeline Tools"');
     expect(html).toContain("设置");
     expect(html).toContain("模型配置");
-    expect(html).toContain("隐私与安全");
-    expect(html).toContain("自动保存与历史");
+    expect(html).not.toContain("隐私与安全");
+    expect(html).not.toContain("自动保存与历史");
     expect(html).toContain("openai-compatible");
     expect(html).toContain('aria-label="Discovered model name"');
     expect(html).toContain('value="gpt-5"');
@@ -369,12 +377,19 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).toContain("lm-studio");
     expect(html).toContain("vllm");
     expect(html).toContain("已保存密钥引用");
+    expect(html).toContain("settings.json 只保留 secret:// 引用");
     expect(html).toContain("保存模型配置");
     expect(html).toContain("新建模型");
     expect(html).toContain('aria-label="测试连接 Default Model"');
     expect(html).not.toContain("secret://model_default/api_key");
     expect(html).not.toMatch(/sk-[A-Za-z0-9_-]+/);
     expect(html).not.toMatch(/filesystem|node:|fs\./i);
+    expect(pluginHtml).toContain("Timeline Tools");
+    expect(pluginHtml).toContain("1.2.3");
+    expect(pluginHtml).toContain("timeline.rail");
+    expect(pluginHtml).toContain("timeline.open-map");
+    expect(pluginHtml).toContain('aria-label="Disable plugin Timeline Tools"');
+    expect(pluginHtml).not.toContain('aria-label="模型配置"');
   });
 
   test("lays out model fields as separated rows with field-level actions", async () => {
@@ -399,7 +414,7 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).toContain("模型: API Key");
     expect(html).toContain('aria-label="显示或隐藏 API Key"');
     expect(html).toContain('type="password"');
-    expect(html).toContain('aria-label="完整 URL"');
+    expect(html).not.toContain('aria-label="完整 URL"');
     expect(html).toContain('aria-label="测试连接"');
     expect(html).not.toContain("管理与测速");
     expect(html).toContain('class="model-settings-inline-status"');

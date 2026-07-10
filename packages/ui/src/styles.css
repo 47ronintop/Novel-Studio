@@ -896,8 +896,7 @@ textarea:focus-visible,
 
 .model-settings-header,
 .model-settings-section-header,
-.model-profile-form-actions,
-.model-security-note {
+.model-profile-form-actions {
   align-items: center;
   display: flex;
 }
@@ -918,8 +917,7 @@ textarea:focus-visible,
 
 .model-settings-header p,
 .model-settings-section p,
-.model-settings-section-header p,
-.model-security-note p {
+.model-settings-section-header p {
   color: var(--ns-muted);
   line-height: 1.55;
   margin: 0;
@@ -1007,33 +1005,6 @@ textarea:focus-visible,
   gap: 12px;
   min-width: 0;
   padding: 0 0 8px;
-}
-
-.settings-summary-grid {
-  display: grid;
-  gap: 8px;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  margin: 0;
-}
-
-.settings-summary-grid div {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-  padding: 3px 0 8px;
-}
-
-.settings-summary-grid dt {
-  color: var(--ns-muted);
-  font-size: 12px;
-}
-
-.settings-summary-grid dd {
-  color: var(--ns-ink);
-  font-size: 13px;
-  margin: 0;
-  min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 .model-settings-section-header {
@@ -1357,16 +1328,6 @@ textarea:focus-visible,
   color: var(--ns-info);
 }
 
-.model-settings-switch {
-  align-items: center;
-  color: var(--ns-muted);
-  display: inline-flex;
-  font-size: 12px;
-  gap: 6px;
-  min-height: 28px;
-  white-space: nowrap;
-}
-
 .model-settings-segmented {
   align-items: center;
   background: color-mix(in oklch, var(--ns-surface-raised) 72%, var(--ns-surface));
@@ -1451,36 +1412,6 @@ textarea:focus-visible,
   background: oklch(0.7 0.13 75);
 }
 
-.model-appearance-preview {
-  border: 1px solid var(--ns-border);
-  border-radius: 8px;
-  display: grid;
-  gap: 10px;
-  max-width: 720px;
-  padding: 12px;
-}
-
-.model-appearance-preview-header {
-  align-items: center;
-  color: var(--ns-muted);
-  display: flex;
-  flex-wrap: wrap;
-  font-size: 12px;
-  gap: 8px;
-}
-
-.model-appearance-preview-header span {
-  background: color-mix(in oklch, var(--ns-surface-raised) 76%, transparent);
-  border: 1px solid var(--ns-border);
-  border-radius: 999px;
-  padding: 2px 8px;
-}
-
-.model-appearance-preview p {
-  color: var(--ns-ink);
-  margin: 0;
-}
-
 .model-settings-input-with-action {
   position: relative;
 }
@@ -1536,11 +1467,6 @@ textarea:focus-visible,
 
 .model-profile-form-actions {
   justify-content: flex-end;
-}
-
-.model-security-note {
-  align-items: flex-start;
-  gap: 8px;
 }
 
 .ns-search-meta {

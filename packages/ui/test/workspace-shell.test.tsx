@@ -554,6 +554,7 @@ describe("WorkspaceShell", () => {
     const application = createDesktopApplication();
     const refreshCalls: string[] = [];
     const settings = {
+      activeSection: "plugins",
       defaultProfileId: "model_default",
       selectedProfileId: "model_default",
       profiles: [
@@ -651,10 +652,7 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("novel.timeline-tools");
     expect(html).toContain("plugins/novel.timeline-tools/plugin.json");
     expect(html).toContain("asset:read · timeline");
-    const pluginSection = html.slice(
-      html.indexOf('aria-label="插件管理"'),
-      html.indexOf('aria-label="隐私与安全"')
-    );
+    const pluginSection = html.slice(html.indexOf('aria-label="插件管理"'));
     expect(pluginSection).not.toContain("secret://");
   });
 

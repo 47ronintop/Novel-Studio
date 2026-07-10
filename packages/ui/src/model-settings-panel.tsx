@@ -7,7 +7,6 @@ import {
   Power,
   RefreshCw,
   Save,
-  Shield,
   Star
 } from "lucide-react";
 import { createContext, useContext, useState, type MouseEvent, type ReactNode } from "react";
@@ -132,23 +131,12 @@ export interface ModelSettingsAppearancePreferences extends UserAppearancePrefer
   readonly editor?: EditorPreferences;
 }
 
-export interface ModelSettingsWritingPreferences {
-  readonly autosaveEnabled: boolean;
-  readonly historyPolicy: string;
-  readonly styleRules: {
-    readonly enabled: boolean;
-    readonly strength: "light" | "standard" | "strict";
-    readonly customCautionTerms: readonly string[];
-  };
-}
-
 export interface ModelSettingsPanelProps {
   readonly activeSection?: SettingsPanelSection;
   readonly appearanceFeedback?:
     | { readonly kind: "info" | "error"; readonly message: string }
     | undefined;
   readonly appearancePreferences?: ModelSettingsAppearancePreferences;
-  readonly writingPreferences?: ModelSettingsWritingPreferences;
   readonly editorPreferences?: EditorPreferences;
   readonly defaultProfileId: string;
   readonly selectedProfileId?: string;
@@ -178,7 +166,6 @@ export function ModelSettingsPanel({
   activeSection,
   appearanceFeedback,
   appearancePreferences,
-  writingPreferences,
   editorPreferences,
   defaultProfileId,
   selectedProfileId,
@@ -201,7 +188,7 @@ export function ModelSettingsPanel({
   onAppearancePreferencesChange,
   onSectionSelect
 }: ModelSettingsPanelProps) {
-  const effectiveSection: SettingsPanelActiveSection = activeSection ?? "overview";
+  const effectiveSection: SettingsPanelActiveSection = activeSection ?? "models";
   const [settingsSearchQuery, setSettingsSearchQuery] = useState("");
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
   const resolvedEditorPreferences = editorPreferences ??
@@ -221,9 +208,9 @@ export function ModelSettingsPanel({
       <header className="model-settings-header">
         <div>
           <h1>设置</h1>
-          <p>管理项目级模型配置、连接测试、自动保存策略和隐私边界。</p>
+          <p>管理模型、外观与插件配置。</p>
         </div>
-        {effectiveSection === "overview" || effectiveSection === "models" ? (
+        {effectiveSection === "models" ? (
           <button className="ns-icon-text-button" onClick={onNewProfile} type="button">
             <FilePlus aria-hidden="true" size={14} />
             新建模型
@@ -246,7 +233,7 @@ export function ModelSettingsPanel({
             />
           </label>
           <SettingsSearchQueryContext.Provider value={settingsSearchQuery}>
-            {effectiveSection === "overview" || effectiveSection === "models" ? (
+            {effectiveSection === "models" ? (
               <ModelProfileSettingsSection
                 canSave={canSave}
                 connectionStatus={connectionStatus}
@@ -268,19 +255,6 @@ export function ModelSettingsPanel({
               />
             ) : null}
 
-            {effectiveSection === "overview" ? <LegacyWritingSummarySection /> : null}
-
-            {effectiveSection === "overview" || effectiveSection === "editor" ? (
-              <EditorSettingsSection
-                onPreferencesChange={onEditorPreferencesChange}
-                preferences={resolvedEditorPreferences}
-              />
-            ) : null}
-
-            {effectiveSection === "writing" ? (
-              <WritingSettingsSection preferences={writingPreferences} />
-            ) : null}
-
             {effectiveSection === "appearance" ? (
               <AppearanceSettingsSection
                 appearanceFeedback={appearanceFeedback}
@@ -296,12 +270,8 @@ export function ModelSettingsPanel({
               />
             ) : null}
 
-            {effectiveSection === "overview" || effectiveSection === "plugins" ? (
+            {effectiveSection === "plugins" ? (
               <PluginSettingsSection plugins={plugins} />
-            ) : null}
-
-            {effectiveSection === "overview" || effectiveSection === "advanced" ? (
-              <AdvancedSettingsSection />
             ) : null}
           </SettingsSearchQueryContext.Provider>
         </div>
@@ -486,10 +456,6 @@ function ModelProfileSettingsSection({
             <ModelField
               actions={
                 <>
-                  <label className="model-settings-switch">
-                    <input aria-label="完整 URL" defaultChecked type="checkbox" />
-                    <span>完整 URL</span>
-                  </label>
                   <button
                     aria-label="测试连接"
                     className="model-settings-field-button"
@@ -515,7 +481,7 @@ function ModelProfileSettingsSection({
             </ModelField>
             <ModelField
               label="API Key"
-              note="真实密钥只会写入桌面端安全存储；留空会沿用已保存密钥。"
+              note="粘贴真实 API Key；保存后写入桌面端安全存储，settings.json 只保留 secret:// 引用。留空会继续使用已保存密钥。"
             >
               <div className="model-settings-input-with-action">
                 <input
@@ -561,7 +527,6 @@ function ModelProfileSettingsSection({
                 <ModelField label="Profile ID" note="当前模型配置在项目中的稳定标识。">
                   <input
                     aria-label="模型 Profile ID"
-                    aria-description="粘贴真实 API Key，保存后会加密存储；留空则沿用已保存 API Key。"
                     className="ns-search-input"
                     onChange={(event) => onDraftChange?.({ id: event.currentTarget.value })}
                     value={draft.id}
@@ -648,143 +613,6 @@ function ModelConnectionInlineStatus({
       <strong>{statusLabel(connectionStatus.status)}</strong>
       {connectionStatus.detail === undefined ? null : <small>{connectionStatus.detail}</small>}
     </span>
-  );
-}
-
-function LegacyWritingSummarySection() {
-  return (
-    <section className="model-settings-section" aria-label="自动保存与历史">
-      <h2>自动保存与历史</h2>
-      <p>
-        当前版本沿用项目 settings.json 中的 autosave/history
-        策略。后续可在这里补齐间隔、快照策略和恢复草稿提示。
-      </p>
-    </section>
-  );
-}
-
-function WritingSettingsSection({
-  preferences
-}: {
-  readonly preferences: ModelSettingsWritingPreferences | undefined;
-}) {
-  const resolved = preferences ?? {
-    autosaveEnabled: false,
-    historyPolicy: "manual",
-    styleRules: {
-      enabled: false,
-      strength: "standard" as const,
-      customCautionTerms: []
-    }
-  };
-
-  return (
-    <section className="model-settings-section" aria-label="写作设置">
-      <div className="model-settings-section-header">
-        <div>
-          <h2>写作设置</h2>
-          <p>调整默认保存行为、历史策略和项目级文风规则。</p>
-        </div>
-      </div>
-      <dl className="settings-summary-grid">
-        <div>
-          <dt>自动保存</dt>
-          <dd>{resolved.autosaveEnabled ? "自动保存已启用" : "自动保存未启用"}</dd>
-        </div>
-        <div>
-          <dt>历史策略</dt>
-          <dd>{resolved.historyPolicy}</dd>
-        </div>
-        <div>
-          <dt>写作质量</dt>
-          <dd>
-            {resolved.styleRules.enabled ? "文风规则已启用" : "文风规则未启用"} ·{" "}
-            {resolved.styleRules.strength}
-          </dd>
-        </div>
-        <div>
-          <dt>项目语气</dt>
-          <dd>
-            {resolved.styleRules.customCautionTerms.length === 0
-              ? "未配置慎用表达"
-              : resolved.styleRules.customCautionTerms.join("、")}
-          </dd>
-        </div>
-      </dl>
-    </section>
-  );
-}
-
-function EditorSettingsSection({
-  onPreferencesChange,
-  preferences
-}: {
-  readonly onPreferencesChange: ((preferences: EditorPreferences) => void) | undefined;
-  readonly preferences: EditorPreferences;
-}) {
-  return (
-    <section className="model-settings-section" aria-label="编辑器设置">
-      <div className="model-settings-section-header">
-        <div>
-          <h2>编辑器设置</h2>
-          <p>调整章节编辑器的字体、字号和行高。</p>
-        </div>
-      </div>
-      <div className="model-profile-form-grid" data-field-layout="stacked">
-        <ModelField category="编辑器" label="字体" note="控制章节正文编辑器使用的字体族。">
-          <select
-            aria-label="编辑器字体"
-            className="model-settings-select"
-            onChange={(event) =>
-              onPreferencesChange?.({
-                ...preferences,
-                fontFamily: event.currentTarget.value as EditorPreferences["fontFamily"]
-              })
-            }
-            value={preferences.fontFamily}
-          >
-            <option value="mono">Mono</option>
-            <option value="serif">Serif</option>
-            <option value="sans">Sans</option>
-          </select>
-        </ModelField>
-        <ModelField category="编辑器" label="字号" note="控制章节正文编辑区的基础字号。">
-          <input
-            aria-label="编辑器字号"
-            className="ns-search-input"
-            inputMode="numeric"
-            min={11}
-            max={22}
-            onChange={(event) =>
-              onPreferencesChange?.({
-                ...preferences,
-                fontSize: Number(event.currentTarget.value)
-              })
-            }
-            type="number"
-            value={preferences.fontSize}
-          />
-        </ModelField>
-        <ModelField category="编辑器" label="行高" note="控制章节正文编辑区的行间距。">
-          <select
-            aria-label="编辑器行高"
-            className="model-settings-select"
-            onChange={(event) =>
-              onPreferencesChange?.({
-                ...preferences,
-                lineHeight: Number(event.currentTarget.value)
-              })
-            }
-            value={preferences.lineHeight}
-          >
-            <option value={1.5}>1.5</option>
-            <option value={1.7}>1.7</option>
-            <option value={1.8}>1.8</option>
-            <option value={2}>2.0</option>
-          </select>
-        </ModelField>
-      </div>
-    </section>
   );
 }
 
@@ -915,43 +743,6 @@ function AppearanceSettingsSection({
             <option value={2}>2.0</option>
           </select>
         </ModelField>
-        <section className="model-appearance-preview" aria-label="编辑器外观预览">
-          <div className="model-appearance-preview-header">
-            <span>{themeLabel(preferences.theme)}</span>
-            <span>{accentLabel(preferences.accentColor)}</span>
-            <span>{editor.fontSize}px</span>
-            <span>{editor.lineHeight}</span>
-          </div>
-          <p
-            style={{
-              fontFamily:
-                editor.fontFamily === "serif"
-                  ? '"Noto Serif SC", "Source Han Serif SC", Georgia, serif'
-                  : editor.fontFamily === "sans"
-                    ? 'Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif'
-                    : '"Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace',
-              fontSize: `${editor.fontSize}px`,
-              lineHeight: editor.lineHeight
-            }}
-          >
-            林照月把灯调暗，章节列表停在左侧，正文区域保持稳定的阅读节奏。
-          </p>
-        </section>
-      </div>
-    </section>
-  );
-}
-
-function AdvancedSettingsSection() {
-  return (
-    <section className="model-settings-section" aria-label="隐私与安全">
-      <h2>隐私与安全</h2>
-      <div className="model-security-note">
-        <Shield aria-hidden="true" size={16} />
-        <p>
-          API Key 不会以明文写入 settings.json，也不会显示在列表、错误或日志中。这里仅接受 secret://
-          引用，真实密钥由桌面端安全存储能力管理。
-        </p>
       </div>
     </section>
   );

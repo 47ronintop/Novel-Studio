@@ -47,7 +47,6 @@ export type {
   ModelSettingsPanelProps,
   ModelSettingsProfile,
   ModelSettingsSaveStatus,
-  ModelSettingsWritingPreferences,
   PluginSettingsEntry,
   PluginSettingsPanelProps,
   PluginSettingsPermissionGrant,
