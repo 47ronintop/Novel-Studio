@@ -79,6 +79,7 @@ const defaultWorkspaceLayout: DesktopShellState["workspaceLayout"] = {
 };
 
 export function WorkspaceShell({
+  appearancePreferences,
   shellState,
   commands,
   commandPaletteOpen,
@@ -107,6 +108,10 @@ export function WorkspaceShell({
   onNavigatorSearchQueryChange,
   onNavigatorExpandedSectionIdsChange
 }: WorkspaceShellProps) {
+  const appearance = appearancePreferences ?? {
+    theme: "dark" as const,
+    accentColor: "teal" as const
+  };
   const focusMode = shellState.focusMode === true;
   const activeBottomPanelTab =
     shellState.bottomPanelTabs.includes(shellState.activeBottomPanelTab) === true
@@ -122,7 +127,12 @@ export function WorkspaceShell({
   } as CSSProperties;
 
   return (
-    <div className="ns-shell" data-focus-mode={focusMode} data-theme="dark">
+    <div
+      className="ns-shell"
+      data-accent={appearance.accentColor}
+      data-focus-mode={focusMode}
+      data-theme={appearance.theme}
+    >
       <header className="ns-titlebar">
         <div className="ns-project-status">
           <span className="ns-project-title">{shellState.projectTitle}</span>

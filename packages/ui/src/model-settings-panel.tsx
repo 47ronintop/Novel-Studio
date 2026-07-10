@@ -144,6 +144,9 @@ export interface ModelSettingsWritingPreferences {
 
 export interface ModelSettingsPanelProps {
   readonly activeSection?: SettingsPanelSection;
+  readonly appearanceFeedback?:
+    | { readonly kind: "info" | "error"; readonly message: string }
+    | undefined;
   readonly appearancePreferences?: ModelSettingsAppearancePreferences;
   readonly writingPreferences?: ModelSettingsWritingPreferences;
   readonly editorPreferences?: EditorPreferences;
@@ -173,6 +176,7 @@ export interface ModelSettingsPanelProps {
 
 export function ModelSettingsPanel({
   activeSection,
+  appearanceFeedback,
   appearancePreferences,
   writingPreferences,
   editorPreferences,
@@ -279,6 +283,7 @@ export function ModelSettingsPanel({
 
             {effectiveSection === "appearance" ? (
               <AppearanceSettingsSection
+                appearanceFeedback={appearanceFeedback}
                 onAppearancePreferencesChange={onAppearancePreferencesChange}
                 onEditorPreferencesChange={onEditorPreferencesChange}
                 preferences={{
@@ -784,10 +789,12 @@ function EditorSettingsSection({
 }
 
 function AppearanceSettingsSection({
+  appearanceFeedback,
   onAppearancePreferencesChange,
   onEditorPreferencesChange,
   preferences
 }: {
+  readonly appearanceFeedback: ModelSettingsPanelProps["appearanceFeedback"];
   readonly onAppearancePreferencesChange: ModelSettingsPanelProps["onAppearancePreferencesChange"];
   readonly onEditorPreferencesChange: ModelSettingsPanelProps["onEditorPreferencesChange"];
   readonly preferences: ModelSettingsAppearancePreferences;
@@ -817,6 +824,15 @@ function AppearanceSettingsSection({
           <h2>外观设置</h2>
           <p>调整工作台主题策略、强调色和编辑器阅读外观。</p>
         </div>
+        {appearanceFeedback === undefined ? null : (
+          <p
+            className="ns-project-feedback"
+            data-kind={appearanceFeedback.kind}
+            role={appearanceFeedback.kind === "error" ? "alert" : "status"}
+          >
+            {appearanceFeedback.message}
+          </p>
+        )}
       </div>
       <div className="model-profile-form-grid" data-field-layout="stacked">
         <ModelField

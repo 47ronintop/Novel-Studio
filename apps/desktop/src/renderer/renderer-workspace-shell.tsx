@@ -5,6 +5,7 @@ import type {
   DesktopShellState,
   ProjectSearchResultItem
 } from "@novel-studio/application";
+import type { UserAppearancePreferences } from "@novel-studio/shared";
 import type {
   AiWritingWorkflowProps,
   ChapterEditorProps,
@@ -21,6 +22,7 @@ import type {
 import { WorkspaceShell } from "@novel-studio/ui";
 
 export interface RendererWorkspaceShellProps {
+  readonly appearancePreferences?: UserAppearancePreferences | undefined;
   readonly aiWritingWorkflow: AiWritingWorkflowProps | undefined;
   readonly projectWorkflow: ProjectWorkflowProps | undefined;
   readonly projectSearch: ProjectSearchProps | undefined;
@@ -125,6 +127,7 @@ export interface RendererWorkspaceShellProps {
 export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
   return (
     <WorkspaceShell
+      appearancePreferences={props.appearancePreferences}
       {...(props.aiWritingWorkflow === undefined
         ? {}
         : {

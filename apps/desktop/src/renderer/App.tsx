@@ -36,6 +36,7 @@ import {
   createChapterEditorRuntime,
   createOnboardingProps,
   getNovelStudioApi,
+  persistAppearancePreferences,
   rendererCommands,
   rendererShellState,
   shellPreferencesFromState
@@ -107,6 +108,9 @@ export function App() {
     theme: "dark",
     accentColor: "teal"
   });
+  const [appearanceFeedback, setAppearanceFeedback] = useState<
+    { readonly kind: "info" | "error"; readonly message: string } | undefined
+  >();
 
   useRendererAppEffects({
     api,
@@ -573,6 +577,15 @@ export function App() {
     [settingsBridge]
   );
 
+  const handleAppearancePreferencesChange = useCallback(
+    (preferences: UserAppearancePreferences) => {
+      setAppearancePreferences(preferences);
+      setAppearanceFeedback(undefined);
+      void persistAppearancePreferences(api?.preferences, preferences).then(setAppearanceFeedback);
+    },
+    [api]
+  );
+
   const handleSettingsDraftChange = useCallback(
     (draft: Partial<ModelSettingsDraft>) => {
       if (settingsBridge === undefined) {
@@ -796,17 +809,13 @@ export function App() {
       ? undefined
       : {
           ...settings,
+          appearanceFeedback,
           editorPreferences,
           appearancePreferences: {
             ...appearancePreferences,
             editor: editorPreferences
           },
-          onAppearancePreferencesChange: (
-            preferences: UserAppearancePreferences
-          ) => {
-            setAppearancePreferences(preferences);
-            persistUserPreferences({ appearance: preferences });
-          },
+          onAppearancePreferencesChange: handleAppearancePreferencesChange,
           onEditorPreferencesChange: (preferences: EditorPreferences) => {
             setEditorPreferences(preferences);
             persistUserPreferences({ editor: preferences });
@@ -832,6 +841,7 @@ export function App() {
 
   return (
     <RendererWorkspaceShell
+      appearancePreferences={appearancePreferences}
       aiWritingWorkflow={aiWritingWorkflow}
       projectWorkflow={projectWorkflow}
       projectSearch={projectSearch}

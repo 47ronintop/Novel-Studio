@@ -1,10 +1,13 @@
 import { describe, expect, test } from "vitest";
 
+import { createDefaultUserPreferences } from "@novel-studio/application";
+import { createUnifiedError, err, ok } from "@novel-studio/shared";
 import type { ChapterEditorProps } from "@novel-studio/ui";
 
 import {
   createChapterEditorRuntime,
-  createChapterEditorSelectionCommand
+  createChapterEditorSelectionCommand,
+  persistAppearancePreferences
 } from "../src/renderer/app-shell-support.js";
 
 const chapterEditor = {
@@ -27,6 +30,61 @@ const chapterEditor = {
 } satisfies ChapterEditorProps;
 
 describe("renderer app shell editor runtime support", () => {
+  test("returns no feedback when appearance preferences persist", async () => {
+    const feedback = await persistAppearancePreferences(
+      {
+        load: async () => ok(createDefaultUserPreferences()),
+        save: async () => ok(createDefaultUserPreferences())
+      },
+      { theme: "light", accentColor: "blue" }
+    );
+
+    expect(feedback).toBeUndefined();
+  });
+
+  test("returns explicit feedback when appearance preferences cannot be persisted", async () => {
+    const storageError = createUnifiedError({
+      code: "PREFERENCES_WRITE_FAILED",
+      category: "StorageError",
+      message: "write failed",
+      recoverability: "retryable",
+      suggestedAction: "Retry saving preferences.",
+      traceId: "trace_preferences_write"
+    });
+    await expect(
+      persistAppearancePreferences(
+        {
+          load: async () => ok(createDefaultUserPreferences()),
+          save: async () => err(storageError)
+        },
+        { theme: "system", accentColor: "amber" }
+      )
+    ).resolves.toEqual({
+      kind: "error",
+      message: "外观已在本次会话生效，但未能保存到本地。"
+    });
+    await expect(
+      persistAppearancePreferences(
+        {
+          load: async () => ok(createDefaultUserPreferences()),
+          save: async () => {
+            throw new Error("ipc unavailable");
+          }
+        },
+        { theme: "dark", accentColor: "teal" }
+      )
+    ).resolves.toEqual({
+      kind: "error",
+      message: "外观已在本次会话生效，但未能保存到本地。"
+    });
+    await expect(
+      persistAppearancePreferences(undefined, { theme: "dark", accentColor: "teal" })
+    ).resolves.toEqual({
+      kind: "error",
+      message: "外观已在本次会话生效，但无法写入用户偏好。"
+    });
+  });
+
   test("defaults the interactive chapter runtime to CodeMirror", () => {
     expect(
       createChapterEditorRuntime(chapterEditor, {

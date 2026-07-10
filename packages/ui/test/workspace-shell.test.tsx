@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -12,6 +14,35 @@ import type { ModelSettingsPanelProps } from "../src/index.js";
 import { WorkspaceShell } from "../src/index.js";
 
 describe("WorkspaceShell", () => {
+  test("applies persisted theme and accent preferences to the workbench root", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        appearancePreferences={{ theme: "light", accentColor: "amber" }}
+        shellState={application.getShellState()}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+      />
+    );
+
+    expect(html).toContain('data-theme="light"');
+    expect(html).toContain('data-accent="amber"');
+  });
+
+  test("defines workbench theme and accent token scopes without changing semantic colors", () => {
+    const css = readFileSync(join(process.cwd(), "packages", "ui", "src", "styles.css"), "utf8");
+
+    expect(css).toContain('.ns-shell[data-theme="light"]');
+    expect(css).toContain('.ns-shell[data-theme="system"]');
+    expect(css).toContain('.ns-shell[data-accent="blue"]');
+    expect(css).toContain('.ns-shell[data-accent="amber"]');
+
+    const accentScopes = [...css.matchAll(/\.ns-shell\[data-accent="(?:blue|amber)"\]\s*\{([^}]*)\}/g)]
+      .map((match) => match[1])
+      .join("\n");
+    expect(accentScopes).not.toMatch(/--ns-(?:danger|warning|success|info)/);
+  });
+
   test("renders the VS Code style application shell regions", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(

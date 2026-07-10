@@ -8,7 +8,7 @@ import type {
   ProjectSearchResultItem,
   ProjectWorkspaceHealth
 } from "@novel-studio/application";
-import type { ChapterSummary } from "@novel-studio/shared";
+import type { ChapterSummary, UserAppearancePreferences } from "@novel-studio/shared";
 import type { ChapterEditorProps } from "./chapter-editor.js";
 import type { CommandPaletteFeedback } from "./command-palette.js";
 import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
@@ -16,6 +16,7 @@ import type { EditorPreferences } from "./editor-toolbar.js";
 import type { ModelSettingsPanelProps } from "./model-settings-panel.js";
 
 export interface WorkspaceShellProps {
+  readonly appearancePreferences?: UserAppearancePreferences | undefined;
   readonly shellState: DesktopShellState;
   readonly commands: readonly ApplicationCommand[];
   readonly commandPaletteOpen: boolean;

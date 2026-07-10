@@ -4,6 +4,7 @@
   NovelStudioApi,
   UserPreferencesSaveInput
 } from "@novel-studio/application";
+import type { UserAppearancePreferences } from "@novel-studio/shared";
 import type {
   ChapterEditorProps,
   ChapterEditorRuntimeProps,
@@ -148,6 +149,33 @@ export function getNovelStudioApi(): NovelStudioApi | undefined {
   }
 
   return window.novelStudio;
+}
+
+export async function persistAppearancePreferences(
+  preferencesApi: NovelStudioApi["preferences"] | undefined,
+  preferences: UserAppearancePreferences
+): Promise<{ readonly kind: "error"; readonly message: string } | undefined> {
+  if (preferencesApi === undefined) {
+    return {
+      kind: "error",
+      message: "外观已在本次会话生效，但无法写入用户偏好。"
+    };
+  }
+
+  try {
+    const result = await preferencesApi.save({ appearance: preferences });
+    return result.ok
+      ? undefined
+      : {
+          kind: "error",
+          message: "外观已在本次会话生效，但未能保存到本地。"
+        };
+  } catch {
+    return {
+      kind: "error",
+      message: "外观已在本次会话生效，但未能保存到本地。"
+    };
+  }
 }
 
 export function createOnboardingProps(input: {

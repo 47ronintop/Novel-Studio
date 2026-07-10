@@ -219,6 +219,23 @@ describe("M8 Settings and Studio UI", () => {
     host.remove();
   });
 
+  test("announces appearance persistence failures next to appearance controls", () => {
+    const html = renderToStaticMarkup(
+      <ModelSettingsPanel
+        {...createModelSettingsPanelProps()}
+        activeSection="appearance"
+        appearanceFeedback={{
+          kind: "error",
+          message: "外观已在本次会话生效，但未能保存到本地。"
+        }}
+        appearancePreferences={{ theme: "light", accentColor: "blue" }}
+      />
+    );
+
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("外观已在本次会话生效，但未能保存到本地。");
+  });
+
   test("renders model profile settings without plaintext secrets", () => {
     const html = renderToStaticMarkup(
       <ModelSettingsPanel
