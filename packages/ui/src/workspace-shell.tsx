@@ -8,16 +8,13 @@ import type { CSSProperties } from "react";
 import type { ChapterEditorProps } from "./chapter-editor.js";
 import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
 import {
-  calculateWritingMetrics,
   DEFAULT_EDITOR_PREFERENCES,
-  editorFontFamilyValue,
-  EditorToolbar
+  editorFontFamilyValue
 } from "./editor-toolbar.js";
 import {
   Bot,
   Boxes,
   Clock3,
-  FileText,
   FilePlus,
   FolderTree,
   BookOpen,
@@ -25,14 +22,17 @@ import {
   PanelBottom,
   PanelRight,
   Search,
-  Save,
-  Settings,
-  X
+  Settings
 } from "lucide-react";
 
 import { ChapterEditor } from "./chapter-editor.js";
 import { CommandPalette } from "./command-palette.js";
 import { ConfigStudioPanel } from "./config-studio-panel.js";
+import {
+  chapterDocumentLabel,
+  EditorDocumentBar,
+  type EditorDocumentTab
+} from "./editor-document-bar.js";
 import { SettingsWorkspace } from "./settings-workspace.js";
 import { AiWritingAssistantPanel, statusLabel } from "./workspace-shell-ai.js";
 import { createPanelResizeHandler } from "./workspace-shell-layout.js";
@@ -541,69 +541,52 @@ function WorkspaceEditorSurface({
   const activeChapterId =
     projectWorkflow?.activeChapterId ?? chapterEditor?.chapter.frontmatter.id ?? undefined;
   const chapterTabs = projectWorkflow?.chapters ?? [];
-  const openChapterTabIds =
-    projectWorkflow?.openChapterTabIds ?? chapterTabs.map((chapter) => chapter.id);
+  const openChapterTabIds = projectWorkflow?.openChapterTabIds ?? [];
   const visibleTabs = openChapterTabIds
     .map((chapterId) => chapterTabs.find((chapter) => chapter.id === chapterId))
     .filter((chapter): chapter is ChapterSummary => chapter !== undefined);
   const dirtyChapterIds = new Set(projectWorkflow?.dirtyChapterIds ?? []);
+  const chapterDocumentTabs: readonly EditorDocumentTab[] = visibleTabs.map((chapter) => ({
+    id: `chapter:${chapter.id}`,
+    label: chapterDocumentLabel(chapter.title),
+    active: fileEditor === undefined && chapter.id === activeChapterId,
+    dirty: dirtyChapterIds.has(chapter.id),
+    onSelect: () => projectWorkflow?.onSelectChapter(chapter.id),
+    ...(projectWorkflow?.onCloseChapterTab === undefined
+      ? {}
+      : { onClose: () => projectWorkflow.onCloseChapterTab?.(chapter.id) })
+  }));
+  const documentTabs: readonly EditorDocumentTab[] =
+    fileEditor === undefined
+      ? chapterDocumentTabs
+      : [
+          ...chapterDocumentTabs,
+          {
+            id: `file:${fileEditor.path}`,
+            label: fileEditor.fileName,
+            active: true,
+            dirty: fileEditor.dirty,
+            ...(fileEditor.onClose === undefined ? {} : { onClose: fileEditor.onClose })
+          }
+        ];
+  const activeDirty = fileEditor?.dirty ?? chapterEditor?.dirty ?? false;
+  const activeSaving =
+    fileEditor?.saveStatus === "Saving" || chapterEditor?.saveStatus === "Saving";
+  const activeSave = fileEditor?.onSave ?? chapterEditor?.onSave;
+  const activeFocusModeToggle =
+    fileEditor?.onFocusModeToggle ?? chapterEditor?.onFocusModeToggle;
 
   return (
-    <>
-      <div className="ns-tabs" role="tablist" aria-label="章节标签">
-        {fileEditor !== undefined ? (
-          <span
-            aria-selected="true"
-            className="ns-tab ns-tab-static"
-            data-dirty={fileEditor.dirty}
-            data-focus-order="3"
-            role="tab"
-          >
-            {fileEditor.fileName}
-          </span>
-        ) : visibleTabs.length === 0 ? (
-          <span
-            aria-selected="true"
-            className="ns-tab ns-tab-static"
-            data-focus-order="3"
-            role="tab"
-          >
-            {chapterEditor?.chapter.frontmatter.title ?? "未命名章节"}
-          </span>
-        ) : (
-          visibleTabs.map((chapter, index) => (
-            <div
-              aria-selected={chapter.id === activeChapterId}
-              className="ns-tab"
-              data-dirty={dirtyChapterIds.has(chapter.id)}
-              data-focus-order={index === 0 ? "3" : undefined}
-              key={chapter.id}
-              role="tab"
-            >
-              <button
-                aria-label={`切换章节标签：${chapter.title}`}
-                className="ns-tab-select"
-                onClick={() => projectWorkflow?.onSelectChapter(chapter.id)}
-                type="button"
-              >
-                <span>{chapter.title}</span>
-                {dirtyChapterIds.has(chapter.id) ? <span aria-label="未保存">●</span> : null}
-              </button>
-              {visibleTabs.length <= 1 ? null : (
-                <button
-                  aria-label={`关闭章节标签：${chapter.title}`}
-                  className="ns-tab-close"
-                  onClick={() => projectWorkflow?.onCloseChapterTab?.(chapter.id)}
-                  title={`关闭章节标签：${chapter.title}`}
-                  type="button"
-                >
-                  <X aria-hidden="true" size={13} />
-                </button>
-              )}
-            </div>
-          ))
-        )}
-      </div>
+    <div className="ns-editor-workspace">
+      <EditorDocumentBar
+        dirty={activeDirty}
+        saving={activeSaving}
+        tabs={documentTabs}
+        {...(activeSave === undefined ? {} : { onSave: activeSave })}
+        {...(activeFocusModeToggle === undefined
+          ? {}
+          : { onFocusModeToggle: activeFocusModeToggle })}
+      />
       <div className="ns-editor-panes" data-editor-layout="ide" data-split-view={splitView}>
         <section className="ns-editor-surface" aria-label="章节编辑器表面">
           <OnboardingQuickStart onboarding={onboarding} />
@@ -643,14 +626,12 @@ function WorkspaceEditorSurface({
           </aside>
         ) : null}
       </div>
-    </>
+    </div>
   );
 }
 
 function PlainFileEditor({ editor }: { readonly editor: PlainFileEditorProps }) {
-  const findReplaceOpen = false;
   const editorPreferences = editor.editorPreferences ?? DEFAULT_EDITOR_PREFERENCES;
-  const metrics = calculateWritingMetrics(editor.content);
   const editorStyle = {
     "--ns-editor-font-family": editorFontFamilyValue(editorPreferences.fontFamily),
     "--ns-editor-font-size": `${editorPreferences.fontSize}px`,
@@ -659,42 +640,6 @@ function PlainFileEditor({ editor }: { readonly editor: PlainFileEditorProps }) 
 
   return (
     <section className="ns-editor-layout ns-file-editor-layout" aria-label="普通文件编辑器">
-      <header className="ns-editor-header">
-        <div className="ns-editor-header-main">
-          <FileText aria-hidden="true" size={15} />
-          <div>
-            <h2 className="ns-editor-title">{editor.fileName}</h2>
-            <p className="ns-editor-subtitle">
-              <span>{editor.path}</span>
-              <span>{editor.dirty ? "未保存" : "已保存"}</span>
-            </p>
-          </div>
-        </div>
-        <button
-          aria-label="保存普通文件"
-          className="ns-editor-save"
-          disabled={!editor.dirty || editor.saveStatus === "Saving"}
-          onClick={editor.onSave}
-          type="button"
-        >
-          <Save aria-hidden="true" size={15} />
-          保存
-        </button>
-      </header>
-      <EditorToolbar
-        findReplaceOpen={false}
-        metrics={metrics}
-        preferences={editorPreferences}
-        {...(editor.onEditorPreferencesChange === undefined
-          ? {}
-          : { onPreferencesChange: editor.onEditorPreferencesChange })}
-        {...(editor.onFocusModeToggle === undefined ? {} : { onFocusModeToggle: editor.onFocusModeToggle })}
-      />
-      {findReplaceOpen ? (
-        <div className="ns-editor-find-replace" aria-label="普通文件查找">
-          <span className="ns-editor-find-count">普通文件模式</span>
-        </div>
-      ) : null}
       {editor.feedback === undefined ? null : (
         <p className="ns-project-feedback" data-kind={editor.feedback.kind} role="status">
           {editor.feedback.message}

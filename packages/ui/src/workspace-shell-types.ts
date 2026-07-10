@@ -87,6 +87,7 @@ export interface PlainFileEditorProps {
   readonly editorPreferences?: EditorPreferences | undefined;
   readonly onContentChange?: ((content: string) => void) | undefined;
   readonly onSave?: (() => void) | undefined;
+  readonly onClose?: (() => void) | undefined;
   readonly onEditorPreferencesChange?: ((preferences: EditorPreferences) => void) | undefined;
   readonly onFocusModeToggle?: (() => void) | undefined;
 }

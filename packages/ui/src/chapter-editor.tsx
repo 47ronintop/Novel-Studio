@@ -1,14 +1,12 @@
 import type { ChapterDocument } from "@novel-studio/shared";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, type ViewUpdate } from "@codemirror/view";
-import { Eye, History, RotateCcw, Save, SquarePen } from "lucide-react";
+import { Eye, History, RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { EditorFindReplace } from "./editor-find-replace.js";
 import {
-  calculateWritingMetrics,
   DEFAULT_EDITOR_PREFERENCES,
   editorFontFamilyValue,
-  EditorToolbar,
   type EditorPreferences
 } from "./editor-toolbar.js";
 
@@ -93,7 +91,6 @@ export interface TextareaSelectionSource {
 
 export function ChapterEditor({
   chapter,
-  saveStatus,
   dirty,
   versionHistory,
   diffPreview,
@@ -102,9 +99,6 @@ export function ChapterEditor({
   editorPreferences = DEFAULT_EDITOR_PREFERENCES,
   onBodyChange,
   onSelectionChange,
-  onEditorPreferencesChange,
-  onFocusModeToggle,
-  onSave,
   onSelectionReviewAccept,
   onSelectionReviewReject,
   onSelectionReviewUndo,
@@ -112,11 +106,9 @@ export function ChapterEditor({
   onVersionPreview,
   onVersionRestore
 }: ChapterEditorProps) {
-  const editorStateLabel = dirty ? "已修改" : "未修改";
   const [findReplaceOpen, setFindReplaceOpen] = useState(false);
   const documentLines = useMemo(() => chapter.body.split("\n"), [chapter.body]);
   const metrics = useMemo(() => calculateDocumentMetrics(chapter.body), [chapter.body]);
-  const writingMetrics = useMemo(() => calculateWritingMetrics(chapter.body), [chapter.body]);
   const largeDocument = metrics.lineCount > LARGE_DOCUMENT_LINE_THRESHOLD;
   const gutterLines = largeDocument
     ? documentLines.slice(0, MAX_RENDERED_GUTTER_LINES)
@@ -133,38 +125,6 @@ export function ChapterEditor({
 
   return (
     <section className="ns-editor-layout" aria-label="章节编辑器">
-      <header className="ns-editor-header">
-        <div className="ns-editor-header-main">
-          <SquarePen aria-hidden="true" size={15} />
-          <div>
-            <h2 className="ns-editor-title">{chapter.frontmatter.title}</h2>
-            <p className="ns-editor-subtitle">
-              <span>{editorStateLabel}</span>
-              <span>{saveStatusLabel(saveStatus)}</span>
-            </p>
-          </div>
-        </div>
-        <div
-          className="ns-editor-metrics"
-          aria-label="Editor document metrics"
-          data-large-document={largeDocument}
-        >
-          <span>{metrics.lineCount} 行</span>
-          <span>{metrics.characterCount} 字符</span>
-          {largeDocument ? <span>Large document mode</span> : null}
-        </div>
-        <button
-          aria-label="保存章节"
-          className="ns-editor-save"
-          disabled={!dirty || saveStatus === "Saving"}
-          onClick={onSave}
-          type="button"
-        >
-          <Save aria-hidden="true" size={15} />
-          保存
-        </button>
-      </header>
-
       {runtime === undefined ? null : (
         <ChapterEditorRuntime
           runtime={runtime}
@@ -172,16 +132,6 @@ export function ChapterEditor({
         />
       )}
 
-      <EditorToolbar
-        findReplaceOpen={findReplaceOpen}
-        metrics={writingMetrics}
-        preferences={editorPreferences}
-        onFindReplaceToggle={() => setFindReplaceOpen((current) => !current)}
-        {...(onEditorPreferencesChange === undefined
-          ? {}
-          : { onPreferencesChange: onEditorPreferencesChange })}
-        {...(onFocusModeToggle === undefined ? {} : { onFocusModeToggle })}
-      />
       <EditorFindReplace
         body={chapter.body}
         open={findReplaceOpen}
@@ -596,19 +546,6 @@ function summarizeDiff(diffPreview: ChapterEditorDiffPreview): {
     deleteCount: diffPreview.changes.filter((change) => change.kind === "delete").length,
     replaceCount: diffPreview.changes.filter((change) => change.kind === "replace").length
   };
-}
-
-function saveStatusLabel(status: ChapterEditorProps["saveStatus"]): string {
-  switch (status) {
-    case "Saved":
-      return "已保存";
-    case "Saving":
-      return "保存中";
-    case "Unsaved":
-      return "未保存";
-    case "Recovery available":
-      return "有可恢复内容";
-  }
 }
 
 function runtimeAdapterLabel(label: string): string {

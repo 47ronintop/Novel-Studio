@@ -161,7 +161,7 @@ describe("WorkspaceShell", () => {
 
     expect(html).toContain('aria-label="打开命令面板"');
     expect(html).toContain('title="打开命令面板"');
-    expect(html).toContain('aria-label="章节标签"');
+    expect(html).toContain('aria-label="打开的文档"');
     expect(html).not.toContain("标签切换会在后续里程碑补齐");
     expect(html).not.toContain('aria-disabled="true"');
   });
@@ -180,17 +180,22 @@ describe("WorkspaceShell", () => {
         dirty: true,
         saveStatus: "Unsaved",
         onContentChange: (content) => calls.push(`content:${content}`),
-        onSave: () => calls.push("save")
+        onSave: () => calls.push("save"),
+        onClose: () => calls.push("close")
       }
     });
 
-    findElementByAriaLabel(tree, "保存普通文件")?.props.onClick?.();
+    findElementByAriaLabel(tree, "保存当前文档")?.props.onClick?.();
+    findElementByAriaLabel(tree, "关闭文档：scene.md")?.props.onClick?.();
     const html = renderToStaticMarkup(tree);
 
-    expect(calls).toEqual(["save"]);
+    expect(calls).toEqual(["save", "close"]);
     expect(html).toContain('aria-label="普通文件编辑器"');
-    expect(html).toContain("notes/scene.md");
+    expect(html).toContain('aria-label="scene.md"');
+    expect(html).not.toContain("notes/scene.md");
     expect(html).toContain("Scene one");
+    expect(html).not.toContain('class="ns-editor-header"');
+    expect(html).not.toContain('aria-label="编辑器工具栏"');
     expect(html).not.toContain('aria-label="鐗堟湰鍘嗗彶"');
     expect(html).not.toContain("Selection review");
   });
@@ -505,8 +510,8 @@ describe("WorkspaceShell", () => {
       />
     );
 
-    expect(html).toContain("第一章");
-    expect(html).toContain("已修改");
+    expect(html).toContain('aria-label="章节编辑器"');
+    expect(html).toContain('data-dirty="true"');
     expect(html).toContain("版本历史");
     expect(html).toContain("AI suggestion");
   });
@@ -778,6 +783,7 @@ describe("WorkspaceShell", () => {
             updatedAt: "2026-07-04T00:00:00.000Z"
           }
         ],
+        openChapterTabIds: ["ch_opening", "ch_second"],
         activeChapterId: "ch_opening",
         onProjectRootChange: () => undefined,
         onOpenProject: () => undefined,
@@ -786,7 +792,7 @@ describe("WorkspaceShell", () => {
         onSelectChapter: (chapterId) => selectedChapters.push(chapterId)
       }
     });
-    const secondTab = findElementByAriaLabel(tree, "切换章节标签：第二章");
+    const secondTab = findElementByAriaLabel(tree, "第二章.md");
 
     expect(secondTab).toBeDefined();
     expect(secondTab?.props.disabled).toBeUndefined();
@@ -794,7 +800,7 @@ describe("WorkspaceShell", () => {
     expect(selectedChapters).toEqual(["ch_second"]);
 
     const html = renderToStaticMarkup(tree);
-    expect(html).toContain('aria-label="章节标签"');
+    expect(html).toContain('aria-label="文档标签"');
     expect(html).toContain('aria-selected="true"');
     expect(html).not.toContain("标签切换会在后续里程碑补齐");
   });
@@ -912,7 +918,7 @@ describe("WorkspaceShell", () => {
         onCloseChapterTab: (chapterId) => closedTabs.push(chapterId)
       }
     });
-    const closeSecond = findElementByAriaLabel(tree, "关闭章节标签：第二章");
+    const closeSecond = findElementByAriaLabel(tree, "关闭文档：第二章.md");
 
     expect(closeSecond).toBeDefined();
     closeSecond?.props.onClick?.();
@@ -922,9 +928,66 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("开篇");
     expect(html).toContain("第二章");
     expect(html).toContain('data-dirty="true"');
-    expect(html).toContain('aria-label="关闭章节标签：第二章"');
-    expect(html).not.toContain('aria-label="切换章节标签：第三章"');
-    expect(html).not.toContain('aria-label="关闭章节标签：第三章"');
+    expect(html).toContain('aria-label="关闭文档：第二章.md"');
+    expect(html).not.toContain('aria-label="切换文档：第三章.md"');
+    expect(html).not.toContain('aria-label="关闭文档：第三章.md"');
+  });
+
+  test("renders only explicitly opened chapter documents with markdown labels", () => {
+    const application = createDesktopApplication();
+    const projectWorkflow = {
+      projectRootInput: "D:/Novel/M37",
+      chapters: [
+        {
+          id: "ch_opening",
+          title: "开篇",
+          order: 1,
+          status: "draft" as const,
+          updatedAt: "2026-07-04T00:00:00.000Z"
+        },
+        {
+          id: "ch_second",
+          title: "第二章",
+          order: 2,
+          status: "draft" as const,
+          updatedAt: "2026-07-04T00:00:00.000Z"
+        },
+        {
+          id: "ch_third",
+          title: "第三章",
+          order: 3,
+          status: "draft" as const,
+          updatedAt: "2026-07-04T00:00:00.000Z"
+        }
+      ],
+      activeChapterId: "ch_opening",
+      onProjectRootChange: () => undefined,
+      onOpenProject: () => undefined,
+      onCreateProject: () => undefined,
+      onCreateChapter: () => undefined,
+      onSelectChapter: () => undefined
+    };
+    const explicitHtml = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={application.getShellState()}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        projectWorkflow={{ ...projectWorkflow, openChapterTabIds: ["ch_opening"] }}
+      />
+    );
+    const implicitHtml = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={application.getShellState()}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        projectWorkflow={projectWorkflow}
+      />
+    );
+
+    expect(explicitHtml).toContain("开篇.md");
+    expect(explicitHtml).not.toContain("第二章.md");
+    expect(explicitHtml).not.toContain("第三章.md");
+    expect(implicitHtml).not.toContain('class="ns-document-tab"');
   });
 
   test("renders an autosave recovery notice from project workflow recovery state", () => {

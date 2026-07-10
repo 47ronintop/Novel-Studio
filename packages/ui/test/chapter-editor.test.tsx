@@ -46,8 +46,9 @@ describe("ChapterEditor", () => {
       />
     );
 
-    expect(html).toContain("未保存");
-    expect(html).toContain("已修改");
+    expect(html).toContain('data-dirty="true"');
+    expect(html).not.toContain("未保存");
+    expect(html).not.toContain("已修改");
     expect(html).toContain("版本历史");
     expect(html).toContain("AI suggestion");
     expect(html).not.toMatch(/fs|filesystem|node:/i);
@@ -82,7 +83,7 @@ describe("ChapterEditor", () => {
       />
     );
 
-    expect(html).toContain('aria-label="保存章节"');
+    expect(html).not.toContain('aria-label="保存章节"');
     expect(html).toContain('aria-label="预览版本 Manual save"');
     expect(html).toContain('aria-label="恢复版本 Manual save"');
     expect(html).toContain("仅预览");
@@ -120,15 +121,12 @@ describe("ChapterEditor", () => {
       />
     );
 
-    expect(html).toContain("260 行");
-    expect(html).toContain("2231 字符");
-    expect(html).toContain("Large document mode");
     expect(html).toContain("Diff summary: 1 insert / 1 delete / 1 replace");
     expect(html).toContain('data-large-document="true"');
     expect(html.match(/ns-editor-line-number/g)?.length).toBe(120);
   });
 
-  test("renders editor toolbar metrics, find-replace entry, and editor style preferences", () => {
+  test("keeps editor chrome out of the document body while applying style preferences", () => {
     const html = renderToStaticMarkup(
       <ChapterEditor
         chapter={{
@@ -148,11 +146,10 @@ describe("ChapterEditor", () => {
       />
     );
 
-    expect(html).toContain('aria-label="编辑器工具栏"');
-    expect(html).toContain("9 字");
-    expect(html).toContain("约 1 分钟阅读");
-    expect(html).toContain('aria-label="打开查找替换"');
-    expect(html).toContain('aria-label="切换专注模式"');
+    expect(html).not.toContain('class="ns-editor-header"');
+    expect(html).not.toContain('aria-label="Editor document metrics"');
+    expect(html).not.toContain('aria-label="编辑器工具栏"');
+    expect(html).not.toContain('aria-label="保存章节"');
     expect(html).toContain("--ns-editor-font-size:16px");
     expect(html).toContain("--ns-editor-line-height:1.8");
   });

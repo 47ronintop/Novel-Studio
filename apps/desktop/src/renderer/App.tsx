@@ -394,6 +394,16 @@ export function App() {
             setFileEditor(decorateFileEditor(saved));
           });
         },
+        onClose: () => {
+          plainFileBridge?.clear();
+          setFileEditor(undefined);
+          if (
+            chapterBridge !== undefined &&
+            projectWorkflowBridge?.getProps().activeChapterId !== undefined
+          ) {
+            void chapterBridge.load().then(setChapterEditor);
+          }
+        },
         onEditorPreferencesChange: (preferences: EditorPreferences) => {
           setEditorPreferences(preferences);
           persistUserPreferences({ editor: preferences });
@@ -401,7 +411,14 @@ export function App() {
         onFocusModeToggle: () => handleCommandExecute("workspace.toggle-focus-mode")
       };
     },
-    [editorPreferences, handleCommandExecute, persistUserPreferences, plainFileBridge]
+    [
+      chapterBridge,
+      editorPreferences,
+      handleCommandExecute,
+      persistUserPreferences,
+      plainFileBridge,
+      projectWorkflowBridge
+    ]
   );
 
   const handleOpenFile = useCallback(

@@ -22,7 +22,6 @@ export type { EditorTextRange } from "./editor-find-replace.js";
 export {
   calculateWritingMetrics,
   DEFAULT_EDITOR_PREFERENCES,
-  EditorToolbar,
   editorFontFamilyValue
 } from "./editor-toolbar.js";
 export type { EditorFontFamily, EditorPreferences, WritingMetrics } from "./editor-toolbar.js";
@@ -38,6 +37,11 @@ export type {
   ConfigValidationStatus
 } from "./config-studio-panel.js";
 export { ModelSettingsPanel } from "./model-settings-panel.js";
+export { EditorDocumentBar, chapterDocumentLabel } from "./editor-document-bar.js";
+export type {
+  EditorDocumentBarProps,
+  EditorDocumentTab
+} from "./editor-document-bar.js";
 export { SettingsWorkspace } from "./settings-workspace.js";
 export type { SettingsWorkspaceProps } from "./settings-workspace.js";
 export type { SettingsPanelSection } from "./settings-panel-tabs.js";
