@@ -13,7 +13,6 @@ import {
   editorFontFamilyValue,
   EditorToolbar
 } from "./editor-toolbar.js";
-import type { ModelSettingsPanelProps } from "./model-settings-panel.js";
 import {
   Bot,
   Boxes,
@@ -34,7 +33,7 @@ import {
 import { ChapterEditor } from "./chapter-editor.js";
 import { CommandPalette } from "./command-palette.js";
 import { ConfigStudioPanel } from "./config-studio-panel.js";
-import { ModelSettingsPanel } from "./model-settings-panel.js";
+import { SettingsWorkspace } from "./settings-workspace.js";
 import { AiWritingAssistantPanel, statusLabel } from "./workspace-shell-ai.js";
 import { createPanelResizeHandler } from "./workspace-shell-layout.js";
 import {
@@ -104,6 +103,7 @@ export function WorkspaceShell({
   onSearchResultOpen,
   onTimelineEntryOpen,
   onActivitySelect,
+  onSettingsClose,
   navigatorSearchQuery,
   onNavigatorSearchQueryChange,
   onNavigatorExpandedSectionIdsChange
@@ -113,6 +113,7 @@ export function WorkspaceShell({
     accentColor: "teal" as const
   };
   const focusMode = shellState.focusMode === true;
+  const settingsMode = shellState.activeActivity === "settings";
   const activeBottomPanelTab =
     shellState.bottomPanelTabs.includes(shellState.activeBottomPanelTab) === true
       ? shellState.activeBottomPanelTab
@@ -131,6 +132,7 @@ export function WorkspaceShell({
       className="ns-shell"
       data-accent={appearance.accentColor}
       data-focus-mode={focusMode}
+      data-settings-mode={settingsMode}
       data-theme={appearance.theme}
     >
       <header className="ns-titlebar">
@@ -148,7 +150,8 @@ export function WorkspaceShell({
         >
           命令面板 <kbd>Ctrl/Cmd+K</kbd>
         </button>
-        <div className="ns-layout-controls" aria-label="布局控制">
+        {settingsMode ? null : (
+          <div className="ns-layout-controls" aria-label="布局控制">
           <button
             aria-label="切换底部面板"
             className="ns-icon-button"
@@ -176,15 +179,20 @@ export function WorkspaceShell({
           >
             <Maximize2 aria-hidden="true" size={14} />
           </button>
-        </div>
+          </div>
+        )}
       </header>
 
-      <div
-        className="ns-workspace-grid"
-        data-focus-mode={focusMode}
-        data-split-view={workspaceLayout.splitView}
-        style={workspaceGridStyle}
-      >
+      {settingsMode ? (
+        <SettingsWorkspace onClose={onSettingsClose} settings={settings} />
+      ) : (
+        <>
+          <div
+            className="ns-workspace-grid"
+            data-focus-mode={focusMode}
+            data-split-view={workspaceLayout.splitView}
+            style={workspaceGridStyle}
+          >
         <aside
           className="ns-activity-bar"
           data-focus-hidden={focusMode}
@@ -256,7 +264,6 @@ export function WorkspaceShell({
               activityId={shellState.activeActivity}
               aiWritingWorkflow={aiWritingWorkflow}
               search={search}
-              settings={settings}
               studio={studio}
               storyBibleEditor={storyBibleEditor}
               onSearchResultOpen={onSearchResultOpen}
@@ -369,13 +376,15 @@ export function WorkspaceShell({
             search={search}
           />
         </section>
-      </div>
+          </div>
 
-      <StatusBar
-        aiWritingWorkflow={aiWritingWorkflow}
-        chapterEditor={chapterEditor}
-        shellState={shellState}
-      />
+          <StatusBar
+            aiWritingWorkflow={aiWritingWorkflow}
+            chapterEditor={chapterEditor}
+            shellState={shellState}
+          />
+        </>
+      )}
 
       <CommandPalette
         commands={commands}
@@ -709,7 +718,6 @@ function ActivityEmptyState({
   activityId,
   aiWritingWorkflow,
   search,
-  settings,
   studio,
   storyBibleEditor,
   onSearchResultOpen,
@@ -718,7 +726,6 @@ function ActivityEmptyState({
   readonly activityId: ActivityId;
   readonly aiWritingWorkflow: AiWritingWorkflowProps | undefined;
   readonly search: ProjectSearchProps | undefined;
-  readonly settings: ModelSettingsPanelProps | undefined;
   readonly studio: ConfigStudioPanelProps | undefined;
   readonly storyBibleEditor: StoryBibleEditorProps | undefined;
   readonly onSearchResultOpen: ((result: ProjectSearchResultItem) => void) | undefined;
@@ -730,10 +737,6 @@ function ActivityEmptyState({
 
   if (activityId === "storyBible" && storyBibleEditor !== undefined) {
     return <StoryBibleEditorView editor={storyBibleEditor} />;
-  }
-
-  if (activityId === "settings" && settings !== undefined) {
-    return <ModelSettingsPanel {...settings} />;
   }
 
   if (activityId === "studio" && studio !== undefined) {

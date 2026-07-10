@@ -1,4 +1,5 @@
 ﻿import type {
+  ActivityId,
   ApplicationCommand,
   DesktopShellState,
   NovelStudioApi,
@@ -176,6 +177,25 @@ export async function persistAppearancePreferences(
       message: "外观已在本次会话生效，但未能保存到本地。"
     };
   }
+}
+
+export function resolveActivityTransition(
+  currentActivity: ActivityId,
+  lastNonSettingsActivity: ActivityId,
+  nextActivity: ActivityId
+): { readonly activeActivity: ActivityId; readonly lastNonSettingsActivity: ActivityId } {
+  if (nextActivity === "settings") {
+    return {
+      activeActivity: nextActivity,
+      lastNonSettingsActivity:
+        currentActivity === "settings" ? lastNonSettingsActivity : currentActivity
+    };
+  }
+
+  return {
+    activeActivity: nextActivity,
+    lastNonSettingsActivity: nextActivity
+  };
 }
 
 export function createOnboardingProps(input: {

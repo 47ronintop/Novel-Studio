@@ -42,6 +42,7 @@ export interface WorkspaceShellProps {
   readonly onSearchResultOpen?: ((result: ProjectSearchResultItem) => void) | undefined;
   readonly onTimelineEntryOpen?: ((entryId: string) => void) | undefined;
   readonly onActivitySelect?: (activityId: ActivityId) => void;
+  readonly onSettingsClose?: (() => void) | undefined;
   readonly navigatorSearchQuery?: string | undefined;
   readonly onNavigatorSearchQueryChange?: ((query: string) => void) | undefined;
   readonly onNavigatorExpandedSectionIdsChange?:

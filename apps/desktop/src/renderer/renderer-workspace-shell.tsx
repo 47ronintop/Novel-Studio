@@ -115,6 +115,7 @@ export interface RendererWorkspaceShellProps {
   readonly onSearchResultOpen: (result: ProjectSearchResultItem) => void;
   readonly onTimelineEntryOpen: (entryId: string) => void;
   readonly onActivitySelect: (activityId: ActivityId) => void;
+  readonly onSettingsClose: NonNullable<WorkspaceShellProps["onSettingsClose"]>;
   readonly navigatorSearchQuery: string;
   readonly onNavigatorSearchQueryChange: NonNullable<
     WorkspaceShellProps["onNavigatorSearchQueryChange"]
@@ -246,6 +247,7 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
       onSearchResultOpen={props.onSearchResultOpen}
       onTimelineEntryOpen={props.onTimelineEntryOpen}
       onActivitySelect={props.onActivitySelect}
+      onSettingsClose={props.onSettingsClose}
       navigatorSearchQuery={props.navigatorSearchQuery}
       onNavigatorSearchQueryChange={props.onNavigatorSearchQueryChange}
       onNavigatorExpandedSectionIdsChange={props.onNavigatorExpandedSectionIdsChange}

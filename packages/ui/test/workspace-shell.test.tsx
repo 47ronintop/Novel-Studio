@@ -14,6 +14,65 @@ import type { ModelSettingsPanelProps } from "../src/index.js";
 import { WorkspaceShell } from "../src/index.js";
 
 describe("WorkspaceShell", () => {
+  test("renders settings as a workspace-level view without editor chrome", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "settings" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        settings={createSettingsProps()}
+        onSettingsClose={() => undefined}
+      />
+    );
+
+    expect(html).toContain('data-region="settings-workspace"');
+    expect(html).toContain('aria-label="关闭设置"');
+    expect(html).toContain('aria-label="打开命令面板"');
+    expect(html).not.toContain('data-region="activity-bar"');
+    expect(html).not.toContain('data-region="editor-area"');
+    expect(html).not.toContain('data-region="ai-panel"');
+    expect(html).not.toContain('data-region="bottom-panel"');
+    expect(html).not.toContain('data-region="status-bar"');
+    expect(html).not.toContain('aria-label="切换 Split View"');
+  });
+
+  test("closes the settings workspace from its close button and Escape", async () => {
+    const application = createDesktopApplication();
+    const calls: string[] = [];
+    const host = document.createElement("div");
+    document.body.append(host);
+    let root: Root | undefined;
+
+    await act(async () => {
+      root = createRoot(host);
+      root.render(
+        <WorkspaceShell
+          shellState={{ ...application.getShellState(), activeActivity: "settings" }}
+          commands={application.listCommands()}
+          commandPaletteOpen={false}
+          settings={createSettingsProps()}
+          onSettingsClose={() => calls.push("close")}
+        />
+      );
+    });
+
+    await act(async () => {
+      host
+        .querySelector<HTMLButtonElement>('button[aria-label="关闭设置"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(calls).toEqual(["close"]);
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(calls).toEqual(["close", "close"]);
+
+    await act(async () => root?.unmount());
+    host.remove();
+  });
+
   test("applies persisted theme and accent preferences to the workbench root", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
@@ -1288,6 +1347,28 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("版本历史");
   });
 });
+
+function createSettingsProps(): ModelSettingsPanelProps {
+  return {
+    activeSection: "models",
+    defaultProfileId: "",
+    profiles: [],
+    draft: {
+      id: "model_default",
+      provider: "openai-compatible",
+      displayName: "Default Model",
+      baseUrl: "",
+      modelName: "example-model",
+      apiKeyRefInput: "",
+      temperature: "0.7",
+      maxTokens: "4096",
+      topP: "1",
+      reasoningEffortEnabled: false,
+      timeoutMs: "60000"
+    },
+    saveStatus: "idle"
+  };
+}
 
 interface InspectableElementProps {
   readonly children?: ReactNode;

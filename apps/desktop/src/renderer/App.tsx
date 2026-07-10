@@ -21,7 +21,7 @@ import type {
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
 import { DEFAULT_EDITOR_PREFERENCES } from "@novel-studio/ui";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import { createAiWritingWorkflowBridge } from "./ai-writing-workflow-bridge.js";
 import { createChapterEditorBridge } from "./chapter-editor-bridge.js";
@@ -39,6 +39,7 @@ import {
   persistAppearancePreferences,
   rendererCommands,
   rendererShellState,
+  resolveActivityTransition,
   shellPreferencesFromState
 } from "./app-shell-support.js";
 import { useRendererAppEffects } from "./renderer-app-effects.js";
@@ -111,6 +112,7 @@ export function App() {
   const [appearanceFeedback, setAppearanceFeedback] = useState<
     { readonly kind: "info" | "error"; readonly message: string } | undefined
   >();
+  const lastNonSettingsActivityRef = useRef<ActivityId>("workspace");
 
   useRendererAppEffects({
     api,
@@ -254,12 +256,18 @@ export function App() {
     [api]
   );
 
-  const handleActivitySelect = useCallback(
+  const applyActivity = useCallback(
     (activityId: ActivityId) => {
       setShellState((current) => {
+        const transition = resolveActivityTransition(
+          current.activeActivity,
+          lastNonSettingsActivityRef.current,
+          activityId
+        );
+        lastNonSettingsActivityRef.current = transition.lastNonSettingsActivity;
         const next = {
           ...current,
-          activeActivity: activityId
+          activeActivity: transition.activeActivity
         };
         persistUserPreferences({ shell: shellPreferencesFromState(next) });
         return next;
@@ -267,6 +275,11 @@ export function App() {
     },
     [persistUserPreferences]
   );
+
+  const handleActivitySelect = applyActivity;
+  const handleSettingsClose = useCallback(() => {
+    applyActivity(lastNonSettingsActivityRef.current);
+  }, [applyActivity]);
 
   const handleBottomPanelTabSelect = useCallback(
     (tab: string) => {
@@ -334,7 +347,18 @@ export function App() {
           return;
         }
 
-        setShellState(result.value);
+        setShellState((current) => {
+          const transition = resolveActivityTransition(
+            current.activeActivity,
+            lastNonSettingsActivityRef.current,
+            result.value.activeActivity
+          );
+          lastNonSettingsActivityRef.current = transition.lastNonSettingsActivity;
+          return {
+            ...result.value,
+            activeActivity: transition.activeActivity
+          };
+        });
         persistUserPreferences({ shell: shellPreferencesFromState(result.value) });
         setCommandPaletteFeedback(undefined);
         setCommandPaletteQuery("");
@@ -916,6 +940,7 @@ export function App() {
       onSearchResultOpen={handleSearchResultOpen}
       onTimelineEntryOpen={handleTimelineEntryOpen}
       onActivitySelect={handleActivitySelect}
+      onSettingsClose={handleSettingsClose}
       navigatorSearchQuery={navigatorSearchQuery}
       onNavigatorSearchQueryChange={setNavigatorSearchQuery}
       onNavigatorExpandedSectionIdsChange={handleNavigatorExpandedSectionIdsChange}

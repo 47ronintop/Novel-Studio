@@ -38,6 +38,8 @@ export type {
   ConfigValidationStatus
 } from "./config-studio-panel.js";
 export { ModelSettingsPanel } from "./model-settings-panel.js";
+export { SettingsWorkspace } from "./settings-workspace.js";
+export type { SettingsWorkspaceProps } from "./settings-workspace.js";
 export type { SettingsPanelSection } from "./settings-panel-tabs.js";
 export type {
   ModelConnectionStatus,

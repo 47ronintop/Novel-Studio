@@ -7,7 +7,8 @@ import type { ChapterEditorProps } from "@novel-studio/ui";
 import {
   createChapterEditorRuntime,
   createChapterEditorSelectionCommand,
-  persistAppearancePreferences
+  persistAppearancePreferences,
+  resolveActivityTransition
 } from "../src/renderer/app-shell-support.js";
 
 const chapterEditor = {
@@ -30,6 +31,21 @@ const chapterEditor = {
 } satisfies ChapterEditorProps;
 
 describe("renderer app shell editor runtime support", () => {
+  test("restores the last non-settings activity after settings closes", () => {
+    expect(resolveActivityTransition("search", "workspace", "settings")).toEqual({
+      activeActivity: "settings",
+      lastNonSettingsActivity: "search"
+    });
+    expect(resolveActivityTransition("settings", "search", "settings")).toEqual({
+      activeActivity: "settings",
+      lastNonSettingsActivity: "search"
+    });
+    expect(resolveActivityTransition("settings", "search", "timeline")).toEqual({
+      activeActivity: "timeline",
+      lastNonSettingsActivity: "timeline"
+    });
+  });
+
   test("returns no feedback when appearance preferences persist", async () => {
     const feedback = await persistAppearancePreferences(
       {

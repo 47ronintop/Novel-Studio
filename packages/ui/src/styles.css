@@ -93,6 +93,42 @@ textarea:focus-visible,
   overflow: hidden;
 }
 
+.ns-shell[data-settings-mode="true"] {
+  grid-template-rows: 38px minmax(0, 1fr);
+}
+
+.ns-settings-workspace {
+  background: var(--ns-bg);
+  min-height: 0;
+  overflow: auto;
+  position: relative;
+}
+
+.ns-settings-close {
+  float: right;
+  position: sticky;
+  right: 16px;
+  top: 12px;
+  z-index: 2;
+}
+
+.ns-settings-unavailable {
+  display: grid;
+  gap: 8px;
+  margin: 18px auto;
+  max-width: 720px;
+  padding: 24px;
+}
+
+.ns-settings-unavailable h1,
+.ns-settings-unavailable p {
+  margin: 0;
+}
+
+.ns-settings-unavailable p {
+  color: var(--ns-muted);
+}
+
 .ns-titlebar {
   align-items: center;
   background: var(--ns-surface);
@@ -3700,6 +3736,38 @@ textarea:focus-visible,
 
   .config-studio-versions {
     display: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .model-settings-panel {
+    margin-top: 12px;
+    padding-inline: 12px;
+  }
+
+  .model-settings-grid {
+    gap: 12px;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .model-settings-nav {
+    border-bottom: 1px solid var(--ns-border);
+    border-right: 0;
+    overflow-x: auto;
+  }
+
+  .model-settings-nav-heading {
+    display: none;
+  }
+
+  .model-settings-category-list {
+    display: flex;
+    min-width: max-content;
+  }
+
+  .model-settings-category-item {
+    min-height: 34px;
+    padding-inline: 12px;
   }
 }
 
