@@ -20,7 +20,7 @@ describe("M8 Settings and Studio UI", () => {
         activeSection="editor"
         appearancePreferences={{
           theme: "dark",
-          density: "compact",
+          accentColor: "teal",
           editor: {
             fontFamily: "serif",
             fontSize: 16,
@@ -84,7 +84,7 @@ describe("M8 Settings and Studio UI", () => {
         activeSection="appearance"
         appearancePreferences={{
           theme: "dark",
-          density: "compact",
+          accentColor: "teal",
           editor: {
             fontFamily: "serif",
             fontSize: 16,
@@ -119,8 +119,14 @@ describe("M8 Settings and Studio UI", () => {
     expect(appearanceHtml).toContain('aria-label="外观设置"');
     expect(appearanceHtml).toContain("外观: 主题策略");
     expect(appearanceHtml).toContain('aria-label="外观主题"');
-    expect(appearanceHtml).toContain("外观: 界面密度");
-    expect(appearanceHtml).toContain('aria-label="外观界面密度"');
+    expect(appearanceHtml).toContain('aria-label="深色主题"');
+    expect(appearanceHtml).toContain('aria-label="浅色主题"');
+    expect(appearanceHtml).toContain('aria-label="跟随系统主题"');
+    expect(appearanceHtml).toContain("外观: 强调色");
+    expect(appearanceHtml).toContain('aria-label="外观强调色"');
+    expect(appearanceHtml).toContain('data-accent="teal"');
+    expect(appearanceHtml).toContain('data-accent="blue"');
+    expect(appearanceHtml).toContain('data-accent="amber"');
     expect(appearanceHtml).toContain("外观: 编辑器字体");
     expect(appearanceHtml).toContain("外观: 编辑器字号");
     expect(appearanceHtml).toContain("外观: 编辑器行高");
@@ -168,7 +174,7 @@ describe("M8 Settings and Studio UI", () => {
           activeSection="appearance"
           appearancePreferences={{
             theme: "dark",
-            density: "compact",
+            accentColor: "teal",
             editor: {
               fontFamily: "mono",
               fontSize: 13,
@@ -181,7 +187,7 @@ describe("M8 Settings and Studio UI", () => {
             lineHeight: 1.7
           }}
           onAppearancePreferencesChange={(preferences) =>
-            appearanceCalls.push(`${preferences.theme}:${preferences.density}`)
+            appearanceCalls.push(`${preferences.theme}:${preferences.accentColor}`)
           }
           onEditorPreferencesChange={(preferences) => editorCalls.push(preferences.fontFamily)}
         />
@@ -190,10 +196,10 @@ describe("M8 Settings and Studio UI", () => {
 
     await act(async () => {
       host
-        .querySelector<HTMLButtonElement>('button[aria-label="跟随系统主题"]')
+        .querySelector<HTMLButtonElement>('button[aria-label="浅色主题"]')
         ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       host
-        .querySelector<HTMLButtonElement>('button[aria-label="舒适界面密度"]')
+        .querySelector<HTMLButtonElement>('button[aria-label="强调色 蓝色"]')
         ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       const fontSelect = host.querySelector<HTMLSelectElement>(
         'select[aria-label="外观编辑器字体"]'
@@ -204,7 +210,7 @@ describe("M8 Settings and Studio UI", () => {
       }
     });
 
-    expect(appearanceCalls).toEqual(["system:compact", "dark:comfortable"]);
+    expect(appearanceCalls).toEqual(["light:teal", "dark:blue"]);
     expect(editorCalls).toEqual(["sans"]);
 
     await act(async () => {

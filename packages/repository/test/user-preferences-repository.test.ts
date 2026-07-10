@@ -36,8 +36,8 @@ describe("UserPreferencesFileRepository", () => {
         lineHeight: 1.8
       },
       appearance: {
-        theme: "dark",
-        density: "comfortable"
+        theme: "light",
+        accentColor: "amber"
       },
       shell: {
         navigatorCollapsed: true,
@@ -59,6 +59,8 @@ describe("UserPreferencesFileRepository", () => {
 
     expect(written.ok).toBe(true);
     expect(readBack).toEqual(written);
+    expect(raw).toContain('"accentColor": "amber"');
+    expect(raw).not.toContain('"density"');
     expect(raw).not.toContain("apiKey");
     expect(raw).not.toContain("正文");
   });

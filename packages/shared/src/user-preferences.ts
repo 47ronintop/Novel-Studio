@@ -18,9 +18,12 @@ export interface UserEditorPreferences {
   readonly lineHeight: number;
 }
 
+export type UserThemePreference = "dark" | "light" | "system";
+export type UserAccentColorPreference = "teal" | "blue" | "amber";
+
 export interface UserAppearancePreferences {
-  readonly theme: "dark" | "system";
-  readonly density: "compact" | "comfortable";
+  readonly theme: UserThemePreference;
+  readonly accentColor: UserAccentColorPreference;
 }
 
 export interface UserShellPreferences {

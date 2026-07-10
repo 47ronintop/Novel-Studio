@@ -27,6 +27,10 @@ export interface UserPreferencesSessionOptions {
   readonly preferencesPort: UserPreferencesPort;
 }
 
+type AppearancePreferenceInput = Partial<UserAppearancePreferences> & {
+  readonly density?: unknown;
+};
+
 export function createUserPreferencesSession(
   options: UserPreferencesSessionOptions
 ): UserPreferencesSession {
@@ -104,7 +108,7 @@ export function createDefaultUserPreferences(): UserPreferencesSnapshot {
     },
     appearance: {
       theme: "dark",
-      density: "compact"
+      accentColor: "teal"
     },
     shell: {
       navigatorCollapsed: false,
@@ -128,7 +132,7 @@ function normalizeUserPreferences(preferences: UserPreferencesSnapshot): UserPre
     ...preferences,
     editor: normalizeEditorPreferences(preferences.editor ?? createDefaultUserPreferences().editor),
     appearance: normalizeAppearancePreferences(
-      preferences.appearance ?? createDefaultUserPreferences().appearance
+      preferences.appearance as AppearancePreferenceInput
     ),
     shell: {
       ...preferences.shell,
@@ -158,11 +162,17 @@ function normalizeUserPreferences(preferences: UserPreferencesSnapshot): UserPre
 }
 
 function normalizeAppearancePreferences(
-  preferences: UserAppearancePreferences
+  preferences: AppearancePreferenceInput
 ): UserAppearancePreferences {
   return {
-    theme: preferences.theme === "system" ? "system" : "dark",
-    density: preferences.density === "comfortable" ? "comfortable" : "compact"
+    theme:
+      preferences.theme === "light" || preferences.theme === "system"
+        ? preferences.theme
+        : "dark",
+    accentColor:
+      preferences.accentColor === "blue" || preferences.accentColor === "amber"
+        ? preferences.accentColor
+        : "teal"
   };
 }
 

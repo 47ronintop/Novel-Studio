@@ -29,7 +29,7 @@ describe("UserPreferencesSession", () => {
         },
         appearance: {
           theme: "dark",
-          density: "compact"
+          accentColor: "teal"
         },
         shell: {
           navigatorCollapsed: false,
@@ -91,8 +91,8 @@ describe("UserPreferencesSession", () => {
         lineHeight: 1.8
       },
       appearance: {
-        theme: "dark",
-        density: "comfortable"
+        theme: "light",
+        accentColor: "blue"
       }
     });
     const loaded = await session.load();
@@ -110,10 +110,58 @@ describe("UserPreferencesSession", () => {
         lineHeight: 1.8
       });
       expect(loaded.value.appearance).toEqual({
-        theme: "dark",
-        density: "comfortable"
+        theme: "light",
+        accentColor: "blue"
       });
     }
+  });
+
+  test("normalizes legacy density preferences without changing editor or shell values", async () => {
+    const persisted: UserPreferencesSnapshot = {
+      schemaVersion: "1.0",
+      onboarding: { dismissed: true },
+      editor: {
+        fontFamily: "sans",
+        fontSize: 18,
+        lineHeight: 1.5
+      },
+      appearance: {
+        theme: "system",
+        density: "comfortable"
+      } as unknown as UserPreferencesSnapshot["appearance"],
+      shell: {
+        navigatorCollapsed: true,
+        navigatorExpandedSectionIds: ["characters", "timeline"],
+        inspectorCollapsed: false,
+        bottomPanelVisible: true,
+        activeBottomPanelTab: "搜索",
+        focusMode: true,
+        workspaceLayout: {
+          splitView: true,
+          navigatorWidth: 300,
+          inspectorWidth: 280,
+          bottomPanelHeight: 220
+        }
+      }
+    };
+    const session = createUserPreferencesSession({
+      preferencesPort: {
+        readUserPreferences: async () => ok(persisted),
+        writeUserPreferences: async (preferences) => ok(preferences)
+      }
+    });
+
+    const loaded = await session.load();
+
+    expect(loaded).toEqual(
+      ok({
+        ...persisted,
+        appearance: {
+          theme: "system",
+          accentColor: "teal"
+        }
+      })
+    );
   });
 
   test("migrates the legacy expanded default layout to the calmer writing default", async () => {
@@ -130,7 +178,7 @@ describe("UserPreferencesSession", () => {
             },
             appearance: {
               theme: "dark",
-              density: "compact"
+              accentColor: "teal"
             },
             shell: {
               navigatorCollapsed: false,

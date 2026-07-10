@@ -6,13 +6,13 @@ import type {
   ProjectSearchResultItem,
   UserPreferencesSaveInput
 } from "@novel-studio/application";
+import type { UserAppearancePreferences } from "@novel-studio/shared";
 import type {
   ChapterEditorSelection,
   ChapterEditorProps,
   CommandPaletteFeedback,
   ConfigStudioPanelProps,
   EditorPreferences,
-  ModelSettingsAppearancePreferences,
   ModelSettingsDraft,
   PlainFileEditorProps,
   SettingsPanelSection,
@@ -103,11 +103,9 @@ export function App() {
   const [editorPreferences, setEditorPreferences] = useState<EditorPreferences>(
     DEFAULT_EDITOR_PREFERENCES
   );
-  const [appearancePreferences, setAppearancePreferences] = useState<
-    Omit<ModelSettingsAppearancePreferences, "editor">
-  >({
+  const [appearancePreferences, setAppearancePreferences] = useState<UserAppearancePreferences>({
     theme: "dark",
-    density: "compact"
+    accentColor: "teal"
   });
 
   useRendererAppEffects({
@@ -804,7 +802,7 @@ export function App() {
             editor: editorPreferences
           },
           onAppearancePreferencesChange: (
-            preferences: Omit<ModelSettingsAppearancePreferences, "editor">
+            preferences: UserAppearancePreferences
           ) => {
             setAppearancePreferences(preferences);
             persistUserPreferences({ appearance: preferences });

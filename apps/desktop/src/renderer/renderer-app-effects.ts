@@ -3,11 +3,11 @@ import type {
   DesktopShellState,
   NovelStudioApi
 } from "@novel-studio/application";
+import type { UserAppearancePreferences } from "@novel-studio/shared";
 import type {
   AiWritingWorkflowProps,
   ChapterEditorProps,
   EditorPreferences,
-  ModelSettingsAppearancePreferences,
   StoryBibleEditorProps,
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
@@ -34,9 +34,7 @@ export interface RendererAppEffectsInput {
   readonly setCommands: Dispatch<SetStateAction<readonly ApplicationCommand[]>>;
   readonly setOnboardingDismissed: Dispatch<SetStateAction<boolean>>;
   readonly setEditorPreferences: Dispatch<SetStateAction<EditorPreferences>>;
-  readonly setAppearancePreferences: Dispatch<
-    SetStateAction<Omit<ModelSettingsAppearancePreferences, "editor">>
-  >;
+  readonly setAppearancePreferences: Dispatch<SetStateAction<UserAppearancePreferences>>;
   readonly setChapterEditor: Dispatch<SetStateAction<ChapterEditorProps | undefined>>;
   readonly setAiWritingWorkflow: Dispatch<SetStateAction<AiWritingWorkflowProps | undefined>>;
   readonly setStoryBible: Dispatch<SetStateAction<StoryBibleSummaryProps | undefined>>;

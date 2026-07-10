@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { createContext, useContext, useState, type MouseEvent, type ReactNode } from "react";
 import type { ModelDiscoverySnapshot } from "@novel-studio/application";
+import type { UserAppearancePreferences } from "@novel-studio/shared";
 import type { EditorPreferences } from "./editor-toolbar.js";
 import {
   SettingsPanelTabs,
@@ -127,14 +128,8 @@ export interface PluginSettingsPanelProps {
   readonly onSetEnabled?: (pluginId: string, enabled: boolean) => void;
 }
 
-export interface ModelSettingsAppearancePreferences {
-  readonly theme: "dark" | "system";
-  readonly density: "compact" | "comfortable";
-  readonly editor?: {
-    readonly fontFamily: "mono" | "serif" | "sans";
-    readonly fontSize: number;
-    readonly lineHeight: number;
-  };
+export interface ModelSettingsAppearancePreferences extends UserAppearancePreferences {
+  readonly editor?: EditorPreferences;
 }
 
 export interface ModelSettingsWritingPreferences {
@@ -289,7 +284,7 @@ export function ModelSettingsPanel({
                 preferences={{
                   ...(appearancePreferences ?? {
                     theme: "dark" as const,
-                    density: "compact" as const
+                    accentColor: "teal" as const
                   }),
                   editor: resolvedEditorPreferences
                 }}
@@ -805,7 +800,7 @@ function AppearanceSettingsSection({
   const updateAppearance = (next: Partial<Omit<ModelSettingsAppearancePreferences, "editor">>) => {
     onAppearancePreferencesChange?.({
       theme: next.theme ?? preferences.theme,
-      density: next.density ?? preferences.density
+      accentColor: next.accentColor ?? preferences.accentColor
     });
   };
   const updateEditor = (next: Partial<EditorPreferences>) => {
@@ -820,19 +815,19 @@ function AppearanceSettingsSection({
       <div className="model-settings-section-header">
         <div>
           <h2>外观设置</h2>
-          <p>调整工作台主题策略、界面密度和编辑器阅读外观。</p>
+          <p>调整工作台主题策略、强调色和编辑器阅读外观。</p>
         </div>
       </div>
       <div className="model-profile-form-grid" data-field-layout="stacked">
         <ModelField
           category="外观"
           label="主题策略"
-          note="控制工作台使用固定深色主题，或跟随系统主题策略。"
+          note="控制工作台使用固定深色、浅色主题，或跟随系统主题策略。"
         >
           <div className="model-settings-segmented" aria-label="外观主题">
-            {(["dark", "system"] as const).map((theme) => (
+            {(["dark", "light", "system"] as const).map((theme) => (
               <button
-                aria-label={theme === "system" ? "跟随系统主题" : "深色主题"}
+                aria-label={`${themeLabel(theme)}主题`}
                 aria-pressed={preferences.theme === theme}
                 key={theme}
                 onClick={() => updateAppearance({ theme })}
@@ -846,20 +841,21 @@ function AppearanceSettingsSection({
         </ModelField>
         <ModelField
           category="外观"
-          label="界面密度"
-          note="紧凑适合长时间写作和较小窗口；舒适会增加列表、表单和设置项间距。"
+          label="强调色"
+          note="选择工作台中选中项、焦点和主要操作使用的强调色。"
         >
-          <div className="model-settings-segmented" aria-label="外观界面密度">
-            {(["compact", "comfortable"] as const).map((density) => (
+          <div className="model-settings-swatches" aria-label="外观强调色">
+            {(["teal", "blue", "amber"] as const).map((accentColor) => (
               <button
-                aria-label={`${densityLabel(density)}界面密度`}
-                aria-pressed={preferences.density === density}
-                key={density}
-                onClick={() => updateAppearance({ density })}
+                aria-label={`强调色 ${accentLabel(accentColor)}`}
+                aria-pressed={preferences.accentColor === accentColor}
+                data-accent={accentColor}
+                key={accentColor}
+                onClick={() => updateAppearance({ accentColor })}
                 type="button"
               >
-                {preferences.density === density ? <Check aria-hidden="true" size={13} /> : null}
-                <span>{densityLabel(density)}</span>
+                <span aria-hidden="true" className="model-settings-swatch" />
+                <span>{accentLabel(accentColor)}</span>
               </button>
             ))}
           </div>
@@ -906,7 +902,7 @@ function AppearanceSettingsSection({
         <section className="model-appearance-preview" aria-label="编辑器外观预览">
           <div className="model-appearance-preview-header">
             <span>{themeLabel(preferences.theme)}</span>
-            <span>{densityLabel(preferences.density)}</span>
+            <span>{accentLabel(preferences.accentColor)}</span>
             <span>{editor.fontSize}px</span>
             <span>{editor.lineHeight}</span>
           </div>
@@ -1153,9 +1149,17 @@ function statusLabel(status: ModelConnectionStatusValue): string {
 }
 
 function themeLabel(theme: ModelSettingsAppearancePreferences["theme"]): string {
-  return theme === "system" ? "跟随系统" : "深色";
+  if (theme === "system") {
+    return "跟随系统";
+  }
+
+  return theme === "light" ? "浅色" : "深色";
 }
 
-function densityLabel(density: ModelSettingsAppearancePreferences["density"]): string {
-  return density === "comfortable" ? "舒适" : "紧凑";
+function accentLabel(accentColor: ModelSettingsAppearancePreferences["accentColor"]): string {
+  if (accentColor === "blue") {
+    return "蓝色";
+  }
+
+  return accentColor === "amber" ? "琥珀色" : "青绿色";
 }
