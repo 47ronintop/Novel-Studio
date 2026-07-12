@@ -38,6 +38,7 @@ export interface ChapterEditorRuntimeProps {
   readonly adapterLabel: string;
   readonly documentMode: string;
   readonly activeRangeLabel: string;
+  readonly cursorPositionLabel: string;
   readonly selectionSummaryLabel?: string;
   readonly selectionAiPreviewCommand?: {
     readonly commandId: string;
@@ -105,7 +106,6 @@ export function ChapterEditor({
   onSelectionReviewAccept,
   onSelectionReviewReject,
   onSelectionReviewUndo,
-  onSelectionAiPreview,
   onVersionPreview,
   onVersionRestore
 }: ChapterEditorProps) {
@@ -161,10 +161,7 @@ export function ChapterEditor({
   return (
     <section className="ns-editor-layout" aria-label="章节编辑器">
       {runtime === undefined ? null : (
-        <ChapterEditorRuntime
-          runtime={runtime}
-          {...(onSelectionAiPreview === undefined ? {} : { onSelectionAiPreview })}
-        />
+        <ChapterEditorRuntime runtime={runtime} />
       )}
 
       <EditorFindReplace
@@ -329,56 +326,18 @@ export function ChapterEditor({
   );
 }
 
-function ChapterEditorRuntime({
-  runtime,
-  onSelectionAiPreview
-}: {
-  readonly runtime: ChapterEditorRuntimeProps;
-  readonly onSelectionAiPreview?: (commandId: string) => void;
-}) {
-  const selectionAiPreviewCommand = runtime.selectionAiPreviewCommand;
+function ChapterEditorRuntime({ runtime }: { readonly runtime: ChapterEditorRuntimeProps }) {
+  if (runtime.warnings.length === 0) {
+    return null;
+  }
 
   return (
     <section className="ns-editor-runtime" aria-label="Editor Runtime">
-      <div className="ns-editor-runtime-main">
-        <span>{runtimeAdapterLabel(runtime.adapterLabel)}</span>
-        <span>{documentModeLabel(runtime.documentMode)}</span>
-        <span>{activeRangeLabel(runtime.activeRangeLabel)}</span>
-        {runtime.selectionSummaryLabel === undefined ? null : (
-          <span>{runtime.selectionSummaryLabel}</span>
-        )}
-        {runtime.visualDiffSummaryLabel === undefined ? null : (
-          <span>{runtime.visualDiffSummaryLabel}</span>
-        )}
-        {runtime.localDiffReviewLabel === undefined ? null : (
-          <span>{runtime.localDiffReviewLabel}</span>
-        )}
-        {runtime.migrationGateLabel === undefined ? null : (
-          <span>{runtime.migrationGateLabel}</span>
-        )}
-        {selectionAiPreviewCommand === undefined ? null : (
-          <button
-            aria-label={selectionAiPreviewCommand.label}
-            disabled={
-              selectionAiPreviewCommand.disabledReason !== undefined ||
-              onSelectionAiPreview === undefined
-            }
-            onClick={() => onSelectionAiPreview?.(selectionAiPreviewCommand.commandId)}
-            type="button"
-          >
-            {selectionAiPreviewCommand.label}
-          </button>
-        )}
-        <span>{autosaveLabel(runtime.autosaveLabel)}</span>
-        <span>{shortcutProfileLabel(runtime.shortcutProfileLabel)}</span>
-      </div>
-      {runtime.warnings.length === 0 ? null : (
-        <ul className="ns-editor-runtime-warnings" aria-label="Editor Runtime warnings">
-          {runtime.warnings.map((warning) => (
-            <li key={warning}>{warning}</li>
-          ))}
-        </ul>
-      )}
+      <ul className="ns-editor-runtime-warnings" aria-label="Editor Runtime warnings">
+        {runtime.warnings.map((warning) => (
+          <li key={warning}>{warning}</li>
+        ))}
+      </ul>
     </section>
   );
 }
@@ -461,33 +420,6 @@ function summarizeDiff(diffPreview: ChapterEditorDiffPreview): {
     deleteCount: diffPreview.changes.filter((change) => change.kind === "delete").length,
     replaceCount: diffPreview.changes.filter((change) => change.kind === "replace").length
   };
-}
-
-function runtimeAdapterLabel(label: string): string {
-  return label === "Textarea Runtime" ? "基础编辑器" : label;
-}
-
-function documentModeLabel(label: string): string {
-  return label === "Markdown" ? "Markdown" : label;
-}
-
-function activeRangeLabel(label: string): string {
-  const match = /^Lines ([0-9]+)-([0-9]+)$/.exec(label);
-  return match === null ? label : `第 ${match[1]}-${match[2]} 行`;
-}
-
-function autosaveLabel(label: string): string {
-  if (label === "Autosave armed") {
-    return "自动保存已启用";
-  }
-  if (label === "Recovery draft available") {
-    return "有可恢复草稿";
-  }
-  return label;
-}
-
-function shortcutProfileLabel(label: string): string {
-  return label === "Default shortcuts" ? "默认快捷键" : label;
 }
 
 function diffKindLabel(kind: ChapterEditorDiffChange["kind"]): string {

@@ -30,6 +30,7 @@ describe("M52/M53 editor runtime and workflow UX", () => {
           adapterLabel: "Textarea Runtime",
           documentMode: "Markdown",
           activeRangeLabel: "Lines 1-1",
+          cursorPositionLabel: "行 1，列 1",
           autosaveLabel: "Autosave armed",
           shortcutProfileLabel: "Default shortcuts",
           warnings: ["Large document optimizations inactive"]
@@ -38,12 +39,9 @@ describe("M52/M53 editor runtime and workflow UX", () => {
     );
 
     expect(html).toContain('aria-label="Editor Runtime"');
-    expect(html).toContain("基础编辑器");
-    expect(html).toContain("Markdown");
-    expect(html).toContain("第 1-1 行");
-    expect(html).toContain("自动保存已启用");
-    expect(html).toContain("默认快捷键");
     expect(html).toContain("Large document optimizations inactive");
+    expect(html).not.toContain("Textarea Runtime");
+    expect(html).not.toContain("Markdown");
     expect(html).not.toMatch(/filesystem|node:fs|projectRoot/i);
   });
 

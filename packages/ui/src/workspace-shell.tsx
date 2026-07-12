@@ -15,6 +15,7 @@ import type { ChapterEditorProps } from "./chapter-editor.js";
 import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
 import {
   DEFAULT_EDITOR_PREFERENCES,
+  calculateWritingMetrics,
   editorFontFamilyValue
 } from "./editor-toolbar.js";
 import {
@@ -85,7 +86,11 @@ const defaultWorkspaceLayout: DesktopShellState["workspaceLayout"] = {
   bottomPanelHeight: 220
 };
 
-export function WorkspaceShell({
+export function WorkspaceShell(props: WorkspaceShellProps) {
+  return <WorkspaceShellContent {...props} />;
+}
+
+function WorkspaceShellContent({
   appearancePreferences,
   shellState,
   commands,
@@ -116,12 +121,17 @@ export function WorkspaceShell({
   onNavigatorSearchQueryChange,
   onNavigatorExpandedSectionIdsChange
 }: WorkspaceShellProps) {
+  const [fileSelection, setFileSelection] = useState({ anchor: 0, head: 0 });
   const appearance = appearancePreferences ?? {
     theme: "dark" as const,
     accentColor: "teal" as const
   };
   const focusMode = shellState.focusMode === true;
   const settingsMode = shellState.activeActivity === "settings";
+  const editorActivity =
+    shellState.activeActivity === "workspace" || shellState.activeActivity === "ai";
+  const hasActiveDocument =
+    editorActivity && (fileEditor !== undefined || chapterEditor !== undefined);
   const activeBottomPanelTab =
     shellState.bottomPanelTabs.includes(shellState.activeBottomPanelTab) === true
       ? shellState.activeBottomPanelTab
@@ -135,11 +145,16 @@ export function WorkspaceShell({
       !focusMode && shellState.bottomPanelVisible ? `${workspaceLayout.bottomPanelHeight}px` : "0px"
   } as CSSProperties;
 
+  useEffect(() => {
+    setFileSelection({ anchor: 0, head: 0 });
+  }, [fileEditor?.path]);
+
   return (
     <div
       className="ns-shell"
       data-accent={appearance.accentColor}
       data-focus-mode={focusMode}
+      data-has-active-document={hasActiveDocument}
       data-settings-mode={settingsMode}
       data-theme={appearance.theme}
     >
@@ -266,6 +281,7 @@ export function WorkspaceShell({
               onboarding={onboarding}
               projectWorkflow={projectWorkflow}
               splitView={workspaceLayout.splitView}
+              onFileSelectionChange={setFileSelection}
             />
           ) : (
             <ActivityEmptyState
@@ -387,9 +403,9 @@ export function WorkspaceShell({
           </div>
 
           <StatusBar
-            aiWritingWorkflow={aiWritingWorkflow}
-            chapterEditor={chapterEditor}
-            shellState={shellState}
+            chapterEditor={editorActivity ? chapterEditor : undefined}
+            fileEditor={editorActivity ? fileEditor : undefined}
+            fileSelection={fileSelection}
           />
         </>
       )}
@@ -409,26 +425,69 @@ export function WorkspaceShell({
 }
 
 function StatusBar({
-  aiWritingWorkflow,
   chapterEditor,
-  shellState
+  fileEditor,
+  fileSelection
 }: {
-  readonly aiWritingWorkflow: AiWritingWorkflowProps | undefined;
   readonly chapterEditor: ChapterEditorProps | undefined;
-  readonly shellState: DesktopShellState;
+  readonly fileEditor: PlainFileEditorProps | undefined;
+  readonly fileSelection: { readonly anchor: number; readonly head: number };
 }) {
-  const chapterLabel = chapterEditor?.chapter.frontmatter.title ?? "未命名章节";
-  const aiStatus =
-    aiWritingWorkflow === undefined ? "AI 未加载" : `AI ${statusLabel(aiWritingWorkflow.status)}`;
+  const body = fileEditor?.content ?? chapterEditor?.chapter.body;
+  if (body === undefined) {
+    return null;
+  }
+
+  const metrics = calculateWritingMetrics(body);
+  const saveStatus = fileEditor?.saveStatus ?? chapterEditor?.saveStatus ?? "Saved";
+  const cursorPositionLabel =
+    fileEditor === undefined
+      ? (chapterEditor?.runtime?.cursorPositionLabel ??
+        formatDocumentCursorLabel(body, { anchor: 0, head: 0 }))
+      : formatDocumentCursorLabel(body, fileSelection);
+  const documentMode = chapterEditor?.runtime?.documentMode ?? "Markdown";
 
   return (
     <footer aria-label="状态栏" className="ns-status-bar" data-region="status-bar">
-      <span>{saveStatusLabel(shellState.saveStatus)}</span>
-      <span>{chapterLabel}</span>
-      <span>Markdown</span>
-      <span>{aiStatus}</span>
+      <div className="ns-status-bar-left">
+        <span>{documentSaveStatusLabel(saveStatus)}</span>
+      </div>
+      <div className="ns-status-bar-right">
+        <span>{metrics.wordCountLabel}</span>
+        <span data-status-reading-time>{metrics.readingTimeLabel}</span>
+        <span>{cursorPositionLabel}</span>
+        <span>{documentMode}</span>
+      </div>
     </footer>
   );
+}
+
+export function formatDocumentCursorLabel(
+  body: string,
+  selection: { readonly anchor: number; readonly head: number }
+): string {
+  if (selection.anchor !== selection.head) {
+    return `已选择 ${Math.abs(selection.head - selection.anchor)} 字`;
+  }
+
+  const offset = Math.max(0, Math.min(selection.head, body.length));
+  const lines = body.slice(0, offset).split("\n");
+  return `行 ${lines.length}，列 ${(lines.at(-1)?.length ?? 0) + 1}`;
+}
+
+function documentSaveStatusLabel(
+  status: PlainFileEditorProps["saveStatus"] | ChapterEditorProps["saveStatus"]
+): string {
+  switch (status) {
+    case "Saved":
+      return "已保存";
+    case "Saving":
+      return "保存中";
+    case "Unsaved":
+      return "未保存";
+    case "Recovery available":
+      return "有可恢复内容";
+  }
 }
 
 function BottomPanelContent({
@@ -538,13 +597,17 @@ function WorkspaceEditorSurface({
   fileEditor,
   onboarding,
   projectWorkflow,
-  splitView
+  splitView,
+  onFileSelectionChange
 }: {
   readonly chapterEditor: ChapterEditorProps | undefined;
   readonly fileEditor: PlainFileEditorProps | undefined;
   readonly onboarding: OnboardingProps | undefined;
   readonly projectWorkflow: ProjectWorkflowProps | undefined;
   readonly splitView: boolean;
+  readonly onFileSelectionChange: (
+    selection: { readonly anchor: number; readonly head: number }
+  ) => void;
 }) {
   const [findMode, setFindMode] = useState<EditorFindMode>("closed");
   const activeChapterId =
@@ -614,6 +677,18 @@ function WorkspaceEditorSurface({
   const activeSave = fileEditor?.onSave ?? chapterEditor?.onSave;
   const activeFocusModeToggle =
     fileEditor?.onFocusModeToggle ?? chapterEditor?.onFocusModeToggle;
+  const selectionAiPreviewCommand = chapterEditor?.runtime?.selectionAiPreviewCommand;
+  const selectionAction =
+    fileEditor === undefined &&
+    selectionAiPreviewCommand !== undefined &&
+    selectionAiPreviewCommand.disabledReason === undefined &&
+    chapterEditor?.onSelectionAiPreview !== undefined
+      ? {
+          label: selectionAiPreviewCommand.label,
+          onInvoke: () =>
+            chapterEditor.onSelectionAiPreview?.(selectionAiPreviewCommand.commandId)
+        }
+      : undefined;
 
   useEffect(() => {
     setFindMode("closed");
@@ -626,6 +701,7 @@ function WorkspaceEditorSurface({
         saving={activeSaving}
         tabs={documentTabs}
         onFind={() => setFindMode("find")}
+        {...(selectionAction === undefined ? {} : { selectionAction })}
         {...(activeSave === undefined ? {} : { onSave: activeSave })}
         {...(activeFocusModeToggle === undefined
           ? {}
@@ -636,7 +712,12 @@ function WorkspaceEditorSurface({
           <OnboardingQuickStart onboarding={onboarding} />
           <AutosaveRecoveryNotice projectWorkflow={projectWorkflow} />
           {fileEditor ? (
-            <PlainFileEditor editor={fileEditor} findMode={findMode} onFindModeChange={setFindMode} />
+            <PlainFileEditor
+              editor={fileEditor}
+              findMode={findMode}
+              onFindModeChange={setFindMode}
+              onSelectionChange={onFileSelectionChange}
+            />
           ) : chapterEditor ? (
             <ChapterEditor
               {...chapterEditor}
@@ -681,11 +762,15 @@ function WorkspaceEditorSurface({
 function PlainFileEditor({
   editor,
   findMode,
-  onFindModeChange
+  onFindModeChange,
+  onSelectionChange
 }: {
   readonly editor: PlainFileEditorProps;
   readonly findMode: EditorFindMode;
   readonly onFindModeChange: (mode: EditorFindMode) => void;
+  readonly onSelectionChange: (
+    selection: { readonly anchor: number; readonly head: number }
+  ) => void;
 }) {
   const editorFocusRef = useRef<() => void>(() => undefined);
   const editorSelectionRef = useRef<
@@ -740,6 +825,7 @@ function PlainFileEditor({
           onEditorFocusRegister={registerEditorFocus}
           onEditorSelectionRegister={registerEditorSelection}
           onFindModeChange={onFindModeChange}
+          onSelectionChange={onSelectionChange}
           {...(editor.onContentChange === undefined
             ? {}
             : { onBodyChange: editor.onContentChange })}

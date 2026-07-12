@@ -133,17 +133,98 @@ describe("WorkspaceShell", () => {
     expect(html).toContain('data-region="navigator"');
     expect(html).toContain('data-region="editor-area"');
     expect(html).toContain('data-region="ai-panel"');
-    expect(html).toContain('data-region="status-bar"');
+    expect(html).not.toContain('data-region="status-bar"');
     expect(html).toContain('aria-label="活动栏"');
     expect(html).toContain('aria-label="项目导航"');
     expect(html).toContain('aria-label="编辑区"');
     expect(html).toContain('aria-label="AI 对话面板"');
-    expect(html).toContain('aria-label="状态栏"');
+    expect(html).not.toContain('aria-label="状态栏"');
     expect(html).toContain('aria-label="Navigator resize handle"');
     expect(html).toContain('aria-label="AI panel resize handle"');
     expect(html).toContain('aria-label="章节 分组"');
     expect(html).toContain('aria-label="AI 写作工作流"');
-    expect(html).toContain("Markdown");
+    expect(html).not.toContain("Markdown");
+  });
+
+  test("renders compact status for the active chapter only", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), saveStatus: "Unsaved" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        chapterEditor={{
+          chapter: {
+            frontmatter: {
+              schemaVersion: "1.0",
+              id: "ch_status",
+              type: "chapter",
+              title: "Status Chapter",
+              order: 1,
+              status: "draft",
+              createdAt: "2026-07-07T00:00:00.000Z",
+              updatedAt: "2026-07-07T00:00:00.000Z"
+            },
+            body: "她走进雨里。\nA quiet room waits."
+          },
+          saveStatus: "Saved",
+          dirty: false,
+          versionHistory: [],
+          runtime: {
+            runtimeId: "codemirror",
+            adapterLabel: "CodeMirror 6 Runtime",
+            documentMode: "Markdown",
+            activeRangeLabel: "Lines 1-2",
+            cursorPositionLabel: "行 2，列 3",
+            autosaveLabel: "Autosave armed",
+            shortcutProfileLabel: "Default shortcuts",
+            warnings: []
+          }
+        }}
+      />
+    );
+    const statusBar = html.slice(html.indexOf('data-region="status-bar"'));
+
+    expect(statusBar).toContain("已保存");
+    expect(statusBar).toContain("9 字");
+    expect(statusBar).toContain("约 1 分钟阅读");
+    expect(statusBar).toContain("行 2，列 3");
+    expect(statusBar).toContain("Markdown");
+    expect(statusBar).not.toContain("Status Chapter");
+    expect(statusBar).not.toContain("AI");
+    expect(statusBar).not.toContain("CodeMirror");
+    expect(statusBar).not.toContain("Default shortcuts");
+  });
+
+  test("hides document status outside editor activities", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "search" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        chapterEditor={{
+          chapter: {
+            frontmatter: {
+              schemaVersion: "1.0",
+              id: "ch_hidden_status",
+              type: "chapter",
+              title: "Hidden Status",
+              order: 1,
+              status: "draft",
+              createdAt: "2026-07-07T00:00:00.000Z",
+              updatedAt: "2026-07-07T00:00:00.000Z"
+            },
+            body: "Hidden while searching"
+          },
+          saveStatus: "Saved",
+          dirty: false,
+          versionHistory: []
+        }}
+      />
+    );
+
+    expect(html).not.toContain('data-region="status-bar"');
   });
 
   test("keeps duplicate save/context metadata out of the AI panel and uses an IDE editor surface", () => {
@@ -268,10 +349,76 @@ describe("WorkspaceShell", () => {
       });
       expect(host.querySelector('[aria-label="查找替换"]')).toBeNull();
       expect(document.activeElement).toBe(content);
+
+      await act(async () => {
+        host
+          .querySelector<HTMLButtonElement>('[aria-label="查找当前文档"]')
+          ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      const query = host.querySelector<HTMLInputElement>('[aria-label="查找内容"]');
+      await act(async () => {
+        const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+        valueSetter?.call(query, "Moon");
+        query?.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => {
+        host
+          .querySelector<HTMLButtonElement>('[aria-label="下一处"]')
+          ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      expect(host.querySelector('[data-region="status-bar"]')?.textContent).toContain(
+        "已选择 4 字"
+      );
     } finally {
       await act(async () => root.unmount());
       host.remove();
     }
+  });
+
+  test("moves an available selection AI command into the document bar", () => {
+    const application = createDesktopApplication();
+    const commands: string[] = [];
+    const tree = WorkspaceShell({
+      shellState: application.getShellState(),
+      commands: application.listCommands(),
+      commandPaletteOpen: false,
+      chapterEditor: {
+        chapter: {
+          frontmatter: {
+            schemaVersion: "1.0",
+            id: "ch_selection",
+            type: "chapter",
+            title: "Selection",
+            order: 1,
+            status: "draft",
+            createdAt: "2026-07-07T00:00:00.000Z",
+            updatedAt: "2026-07-07T00:00:00.000Z"
+          },
+          body: "Selection body"
+        },
+        saveStatus: "Unsaved",
+        dirty: true,
+        versionHistory: [],
+        runtime: {
+          runtimeId: "codemirror",
+          adapterLabel: "CodeMirror 6 Runtime",
+          documentMode: "Markdown",
+          activeRangeLabel: "Selection 0-9",
+          cursorPositionLabel: "已选择 9 字",
+          selectionAiPreviewCommand: {
+            commandId: "editor.ai.preview-selection",
+            label: "Preview selection rewrite"
+          },
+          autosaveLabel: "Autosave armed",
+          shortcutProfileLabel: "Default shortcuts",
+          warnings: []
+        },
+        onSelectionAiPreview: (commandId) => commands.push(commandId)
+      }
+    });
+
+    findElementByAriaLabel(tree, "Preview selection rewrite")?.props.onClick?.();
+    expect(commands).toEqual(["editor.ai.preview-selection"]);
   });
 
   test("switches bottom panel tabs and renders the active panel content", () => {

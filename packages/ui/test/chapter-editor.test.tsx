@@ -174,6 +174,7 @@ describe("ChapterEditor", () => {
           adapterLabel: "Textarea Runtime",
           documentMode: "Markdown",
           activeRangeLabel: "Lines 1-1",
+          cursorPositionLabel: "行 1，列 1",
           selectionAiPreviewCommand: {
             commandId: "editor.ai.preview-selection",
             label: "Preview selection rewrite"
@@ -190,17 +191,10 @@ describe("ChapterEditor", () => {
     );
 
     expect(html).toContain('aria-label="Editor Runtime"');
-    expect(html).toContain("基础编辑器");
-    expect(html).toContain("Markdown");
-    expect(html).toContain("第 1-1 行");
-    expect(html).toContain('aria-label="Preview selection rewrite"');
-    expect(html).toContain("Preview selection rewrite");
-    expect(html).toContain("Visual diff preview: 2 changes");
-    expect(html).toContain("Local diff review: 2 changes, rollback textarea");
-    expect(html).toContain("CodeMirror default blocked: opt-in disabled");
-    expect(html).toContain("自动保存已启用");
-    expect(html).toContain("默认快捷键");
     expect(html).toContain("Large document optimizations inactive");
+    expect(html).not.toContain("Textarea Runtime");
+    expect(html).not.toContain("Markdown");
+    expect(html).not.toContain("Default shortcuts");
     expect(html).not.toMatch(/filesystem|node:fs|projectRoot/i);
   });
 
@@ -216,6 +210,7 @@ describe("ChapterEditor", () => {
           adapterLabel: "CodeMirror 6 Runtime",
           documentMode: "Markdown",
           activeRangeLabel: "Lines 1-1",
+          cursorPositionLabel: "行 1，列 1",
           autosaveLabel: "Autosave armed",
           shortcutProfileLabel: "Default shortcuts",
           warnings: []
@@ -224,7 +219,7 @@ describe("ChapterEditor", () => {
     );
 
     expect(html).toContain('data-runtime-id="codemirror"');
-    expect(html).toContain("CodeMirror 6 Runtime");
+    expect(html).not.toContain("CodeMirror 6 Runtime");
     expect(html).not.toMatch(/filesystem|node:fs|projectRoot/i);
   });
 
@@ -246,6 +241,7 @@ describe("ChapterEditor", () => {
               adapterLabel: "CodeMirror 6 Runtime",
               documentMode: "Markdown",
               activeRangeLabel: "Lines 1-1",
+              cursorPositionLabel: "行 1，列 1",
               autosaveLabel: "Autosave armed",
               shortcutProfileLabel: "Default shortcuts",
               warnings: []
@@ -286,6 +282,7 @@ describe("ChapterEditor", () => {
               adapterLabel: "Textarea Runtime",
               documentMode: "Markdown",
               activeRangeLabel: "Lines 1-1",
+              cursorPositionLabel: "行 1，列 1",
               autosaveLabel: "Autosave armed",
               shortcutProfileLabel: "Default shortcuts",
               warnings: []
@@ -342,6 +339,7 @@ describe("ChapterEditor", () => {
               adapterLabel: "CodeMirror 6 Runtime",
               documentMode: "Markdown",
               activeRangeLabel: "Lines 1-1",
+              cursorPositionLabel: "行 1，列 1",
               autosaveLabel: "Autosave armed",
               shortcutProfileLabel: "Default shortcuts",
               warnings: []

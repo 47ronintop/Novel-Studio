@@ -37,6 +37,7 @@ describe("textarea editor runtime adapter", () => {
       adapterLabel: "Textarea Runtime",
       documentMode: "Markdown",
       activeRangeLabel: "Lines 1-2",
+      cursorPositionLabel: "行 1，列 1",
       autosaveLabel: "Autosave armed",
       shortcutProfileLabel: "Default shortcuts",
       warnings: []
@@ -82,6 +83,23 @@ describe("textarea editor runtime adapter", () => {
       activeRangeLabel: "Selection 0-7",
       autosaveLabel: "Autosave armed",
       warnings: ["Large document optimizations active"]
+    });
+  });
+
+  test("derives real cursor position and selection length labels", () => {
+    const handle = createTextareaEditorRuntimeAdapter().mount({
+      body: "First\nSecond line",
+      saveStatus: "Saved"
+    });
+
+    handle.updateSelection({ anchor: 8, head: 8 });
+    expect(buildChapterEditorRuntimeProps(handle.getSnapshot())).toMatchObject({
+      cursorPositionLabel: "行 2，列 3"
+    });
+
+    handle.updateSelection({ anchor: 0, head: 5 });
+    expect(buildChapterEditorRuntimeProps(handle.getSnapshot())).toMatchObject({
+      cursorPositionLabel: "已选择 5 字"
     });
   });
 

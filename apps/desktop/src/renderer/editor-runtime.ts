@@ -565,6 +565,7 @@ export function buildChapterEditorRuntimeProps(
     adapterLabel: snapshot.adapterLabel,
     documentMode: snapshot.documentMode,
     activeRangeLabel: formatActiveRange(snapshot),
+    cursorPositionLabel: formatCursorPosition(snapshot),
     ...(snapshot.selectionSummary === undefined
       ? {}
       : { selectionSummaryLabel: formatSelectionSummary(snapshot.selectionSummary) }),
@@ -588,6 +589,17 @@ export function buildChapterEditorRuntimeProps(
     shortcutProfileLabel: "Default shortcuts",
     warnings: snapshot.warnings
   };
+}
+
+function formatCursorPosition(snapshot: EditorRuntimeSnapshot): string {
+  const selection = snapshot.selection;
+  if (selection !== undefined && selection.anchor !== selection.head) {
+    return `已选择 ${Math.abs(selection.head - selection.anchor)} 字`;
+  }
+
+  const offset = Math.max(0, Math.min(selection?.head ?? 0, snapshot.body.length));
+  const lines = snapshot.body.slice(0, offset).split("\n");
+  return `行 ${lines.length}，列 ${(lines.at(-1)?.length ?? 0) + 1}`;
 }
 
 export function createEditorSelectionCommand(

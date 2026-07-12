@@ -97,6 +97,10 @@ textarea:focus-visible,
   grid-template-rows: 38px minmax(0, 1fr);
 }
 
+.ns-shell[data-has-active-document="false"] {
+  grid-template-rows: 38px minmax(0, 1fr) 0;
+}
+
 .ns-settings-workspace {
   background: var(--ns-bg);
   min-height: 0;
@@ -1663,7 +1667,6 @@ textarea:focus-visible,
   padding: 8px 10px;
 }
 
-.ns-editor-runtime-main,
 .ns-editor-runtime-warnings {
   align-items: center;
   display: flex;
@@ -1673,7 +1676,6 @@ textarea:focus-visible,
   padding: 0;
 }
 
-.ns-editor-runtime-main span,
 .ns-editor-runtime-warnings li {
   border: 1px solid var(--ns-border);
   border-radius: 999px;
@@ -3482,18 +3484,37 @@ textarea:focus-visible,
   border-top: 1px solid var(--ns-border);
   color: var(--ns-muted);
   display: flex;
-  font-size: 12px;
-  gap: 14px;
+  font-size: 11px;
+  gap: 10px;
+  min-height: 24px;
   min-width: 0;
   overflow: hidden;
   padding: 0 10px;
   white-space: nowrap;
 }
 
+.ns-status-bar-left,
+.ns-status-bar-right {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ns-status-bar-right {
+  margin-left: auto;
+}
+
 .ns-status-bar span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+@media (max-width: 620px) {
+  .ns-status-bar [data-status-reading-time] {
+    display: none;
+  }
 }
 
 .ns-bottom-panel {
