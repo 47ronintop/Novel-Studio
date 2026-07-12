@@ -1,27 +1,41 @@
-import { ChevronDown, ChevronUp, CaseSensitive, Replace, ReplaceAll } from "lucide-react";
-import { useMemo, useState } from "react";
+import {
+  CaseSensitive,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  Replace,
+  ReplaceAll,
+  X
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export interface EditorTextRange {
   readonly startOffset: number;
   readonly endOffset: number;
 }
 
+export type EditorFindMode = "closed" | "find" | "replace";
+
 export interface EditorFindReplaceProps {
   readonly body: string;
-  readonly open: boolean;
-  readonly onBodyChange?: (nextBody: string) => void;
-  readonly onSelectionChange?: (selection: {
-    readonly anchor: number;
-    readonly head: number;
-  }) => void;
+  readonly mode: EditorFindMode;
+  readonly onBodyChange?: ((nextBody: string) => void) | undefined;
+  readonly onModeChange?: ((mode: EditorFindMode) => void) | undefined;
+  readonly onRequestEditorFocus?: (() => void) | undefined;
+  readonly onSelectionChange?:
+    | ((selection: { readonly anchor: number; readonly head: number }) => void)
+    | undefined;
 }
 
 export function EditorFindReplace({
   body,
-  open,
+  mode,
   onBodyChange,
+  onModeChange,
+  onRequestEditorFocus,
   onSelectionChange
 }: EditorFindReplaceProps) {
+  const queryInputRef = useRef<HTMLInputElement | null>(null);
   const [query, setQuery] = useState("");
   const [replacement, setReplacement] = useState("");
   const [caseSensitive, setCaseSensitive] = useState(false);
@@ -30,19 +44,33 @@ export function EditorFindReplace({
     () => findEditorMatches({ body, query, caseSensitive }),
     [body, caseSensitive, query]
   );
-  const activeMatch = matches[activeMatchIndex] ?? matches[0];
+  const normalizedActiveMatchIndex =
+    matches.length === 0 ? 0 : Math.min(activeMatchIndex, matches.length - 1);
+  const activeMatch = matches[normalizedActiveMatchIndex];
   const replaceDisabled = onBodyChange === undefined || activeMatch === undefined;
 
-  if (!open) {
+  useEffect(() => {
+    if (mode !== "closed") {
+      queryInputRef.current?.focus();
+    }
+  }, [mode]);
+
+  if (mode === "closed") {
     return null;
   }
+
+  const close = () => {
+    onModeChange?.("closed");
+    onRequestEditorFocus?.();
+  };
 
   const navigate = (direction: -1 | 1) => {
     if (matches.length === 0) {
       return;
     }
 
-    const nextIndex = (activeMatchIndex + direction + matches.length) % matches.length;
+    const nextIndex =
+      (normalizedActiveMatchIndex + direction + matches.length) % matches.length;
     const nextMatch = matches[nextIndex];
     setActiveMatchIndex(nextIndex);
     if (nextMatch !== undefined) {
@@ -56,7 +84,7 @@ export function EditorFindReplace({
       query,
       replacement,
       caseSensitive,
-      activeMatchIndex
+      activeMatchIndex: normalizedActiveMatchIndex
     });
     if (!result.replaced) {
       return;
@@ -74,79 +102,118 @@ export function EditorFindReplace({
   };
 
   return (
-    <section className="ns-editor-find-replace" aria-label="查找替换">
-      <input
-        aria-label="查找内容"
-        onChange={(event) => {
-          setQuery(event.currentTarget.value);
-          setActiveMatchIndex(0);
-        }}
-        placeholder="Find"
-        type="search"
-        value={query}
-      />
-      <input
-        aria-label="替换为"
-        onChange={(event) => setReplacement(event.currentTarget.value)}
-        placeholder="Replace"
-        type="text"
-        value={replacement}
-      />
-      <button
-        aria-label="上一处"
-        className="ns-icon-button"
-        disabled={matches.length === 0}
-        onClick={() => navigate(-1)}
-        title="上一处"
-        type="button"
-      >
-        <ChevronUp aria-hidden="true" size={14} />
-      </button>
-      <button
-        aria-label="下一处"
-        className="ns-icon-button"
-        disabled={matches.length === 0}
-        onClick={() => navigate(1)}
-        title="下一处"
-        type="button"
-      >
-        <ChevronDown aria-hidden="true" size={14} />
-      </button>
-      <label className="ns-editor-case-toggle" title="区分大小写">
+    <section
+      className="ns-editor-find-replace"
+      aria-label="查找替换"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          close();
+        }
+      }}
+    >
+      <div className="ns-editor-find-row">
+        <button
+          aria-label={mode === "replace" ? "隐藏替换" : "显示替换"}
+          className="ns-icon-button"
+          onClick={() => onModeChange?.(mode === "replace" ? "find" : "replace")}
+          title={mode === "replace" ? "隐藏替换" : "显示替换"}
+          type="button"
+        >
+          {mode === "replace" ? (
+            <ChevronDown aria-hidden="true" size={14} />
+          ) : (
+            <ChevronRight aria-hidden="true" size={14} />
+          )}
+        </button>
         <input
-          aria-label="区分大小写"
-          checked={caseSensitive}
+          aria-label="查找内容"
           onChange={(event) => {
-            setCaseSensitive(event.currentTarget.checked);
+            setQuery(event.currentTarget.value);
             setActiveMatchIndex(0);
           }}
-          type="checkbox"
+          placeholder="查找"
+          ref={queryInputRef}
+          type="search"
+          value={query}
         />
-        <CaseSensitive aria-hidden="true" size={14} />
-      </label>
-      <button
-        aria-label="替换当前"
-        className="ns-icon-button"
-        disabled={replaceDisabled}
-        onClick={replaceCurrent}
-        title="替换当前"
-        type="button"
-      >
-        <Replace aria-hidden="true" size={14} />
-      </button>
-      <button
-        aria-label="全部替换"
-        className="ns-icon-button"
-        disabled={onBodyChange === undefined || matches.length === 0}
-        onClick={replaceAll}
-        title="全部替换"
-        type="button"
-      >
-        <ReplaceAll aria-hidden="true" size={14} />
-      </button>
-      <span className="ns-editor-find-count" aria-label="查找结果数量">
-        {matches.length === 0 ? "0/0" : `${activeMatchIndex + 1}/${matches.length}`}
-      </span>
+        <span className="ns-editor-find-count" aria-label="查找结果数量">
+          {matches.length === 0 ? "0/0" : `${normalizedActiveMatchIndex + 1}/${matches.length}`}
+        </span>
+        <button
+          aria-label="上一处"
+          className="ns-icon-button"
+          disabled={matches.length === 0}
+          onClick={() => navigate(-1)}
+          title="上一处"
+          type="button"
+        >
+          <ChevronUp aria-hidden="true" size={14} />
+        </button>
+        <button
+          aria-label="下一处"
+          className="ns-icon-button"
+          disabled={matches.length === 0}
+          onClick={() => navigate(1)}
+          title="下一处"
+          type="button"
+        >
+          <ChevronDown aria-hidden="true" size={14} />
+        </button>
+        <button
+          aria-label="区分大小写"
+          aria-pressed={caseSensitive}
+          className="ns-icon-button"
+          onClick={() => {
+            setCaseSensitive((current) => !current);
+            setActiveMatchIndex(0);
+          }}
+          title="区分大小写"
+          type="button"
+        >
+          <CaseSensitive aria-hidden="true" size={14} />
+        </button>
+        <button
+          aria-label="关闭查找替换"
+          className="ns-icon-button"
+          onClick={close}
+          title="关闭查找替换"
+          type="button"
+        >
+          <X aria-hidden="true" size={14} />
+        </button>
+      </div>
+      {mode === "replace" ? (
+        <div className="ns-editor-replace-row">
+          <input
+            aria-label="替换为"
+            onChange={(event) => setReplacement(event.currentTarget.value)}
+            placeholder="替换"
+            type="text"
+            value={replacement}
+          />
+          <button
+            aria-label="替换当前"
+            className="ns-icon-button"
+            disabled={replaceDisabled}
+            onClick={replaceCurrent}
+            title="替换当前"
+            type="button"
+          >
+            <Replace aria-hidden="true" size={14} />
+          </button>
+          <button
+            aria-label="全部替换"
+            className="ns-icon-button"
+            disabled={onBodyChange === undefined || matches.length === 0}
+            onClick={replaceAll}
+            title="全部替换"
+            type="button"
+          >
+            <ReplaceAll aria-hidden="true" size={14} />
+          </button>
+        </div>
+      ) : null}
     </section>
   );
 }

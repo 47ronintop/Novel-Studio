@@ -4,7 +4,13 @@ import type {
   ProjectSearchResultItem
 } from "@novel-studio/application";
 import type { ChapterSummary } from "@novel-studio/shared";
-import type { CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties
+} from "react";
 import type { ChapterEditorProps } from "./chapter-editor.js";
 import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
 import {
@@ -26,6 +32,7 @@ import {
 } from "lucide-react";
 
 import { ChapterEditor } from "./chapter-editor.js";
+import { CodeMirrorDocumentEditor } from "./codemirror-document-editor.js";
 import { CommandPalette } from "./command-palette.js";
 import { ConfigStudioPanel } from "./config-studio-panel.js";
 import {
@@ -33,6 +40,7 @@ import {
   EditorDocumentBar,
   type EditorDocumentTab
 } from "./editor-document-bar.js";
+import { EditorFindReplace, type EditorFindMode } from "./editor-find-replace.js";
 import { SettingsWorkspace } from "./settings-workspace.js";
 import { AiWritingAssistantPanel, statusLabel } from "./workspace-shell-ai.js";
 import { createPanelResizeHandler } from "./workspace-shell-layout.js";
@@ -538,6 +546,7 @@ function WorkspaceEditorSurface({
   readonly projectWorkflow: ProjectWorkflowProps | undefined;
   readonly splitView: boolean;
 }) {
+  const [findMode, setFindMode] = useState<EditorFindMode>("closed");
   const activeChapterId =
     projectWorkflow?.activeChapterId ?? chapterEditor?.chapter.frontmatter.id ?? undefined;
   const chapterTabs = projectWorkflow?.chapters ?? [];
@@ -551,10 +560,18 @@ function WorkspaceEditorSurface({
     label: chapterDocumentLabel(chapter.title),
     active: fileEditor === undefined && chapter.id === activeChapterId,
     dirty: dirtyChapterIds.has(chapter.id),
-    onSelect: () => projectWorkflow?.onSelectChapter(chapter.id),
+    onSelect: () => {
+      setFindMode("closed");
+      projectWorkflow?.onSelectChapter(chapter.id);
+    },
     ...(projectWorkflow?.onCloseChapterTab === undefined
       ? {}
-      : { onClose: () => projectWorkflow.onCloseChapterTab?.(chapter.id) })
+      : {
+          onClose: () => {
+            setFindMode("closed");
+            projectWorkflow.onCloseChapterTab?.(chapter.id);
+          }
+        })
   }));
   const documentTabs: readonly EditorDocumentTab[] =
     fileEditor === undefined
@@ -566,7 +583,14 @@ function WorkspaceEditorSurface({
             label: fileEditor.fileName,
             active: true,
             dirty: fileEditor.dirty,
-            ...(fileEditor.onClose === undefined ? {} : { onClose: fileEditor.onClose })
+            ...(fileEditor.onClose === undefined
+              ? {}
+              : {
+                  onClose: () => {
+                    setFindMode("closed");
+                    fileEditor.onClose?.();
+                  }
+                })
           }
         ];
   const activeDirty = fileEditor?.dirty ?? chapterEditor?.dirty ?? false;
@@ -576,12 +600,17 @@ function WorkspaceEditorSurface({
   const activeFocusModeToggle =
     fileEditor?.onFocusModeToggle ?? chapterEditor?.onFocusModeToggle;
 
+  useEffect(() => {
+    setFindMode("closed");
+  }, [activeChapterId, fileEditor?.path]);
+
   return (
     <div className="ns-editor-workspace">
       <EditorDocumentBar
         dirty={activeDirty}
         saving={activeSaving}
         tabs={documentTabs}
+        onFind={() => setFindMode("find")}
         {...(activeSave === undefined ? {} : { onSave: activeSave })}
         {...(activeFocusModeToggle === undefined
           ? {}
@@ -592,9 +621,13 @@ function WorkspaceEditorSurface({
           <OnboardingQuickStart onboarding={onboarding} />
           <AutosaveRecoveryNotice projectWorkflow={projectWorkflow} />
           {fileEditor ? (
-            <PlainFileEditor editor={fileEditor} />
+            <PlainFileEditor editor={fileEditor} findMode={findMode} onFindModeChange={setFindMode} />
           ) : chapterEditor ? (
-            <ChapterEditor {...chapterEditor} />
+            <ChapterEditor
+              {...chapterEditor}
+              findMode={findMode}
+              onFindModeChange={setFindMode}
+            />
           ) : (
             <section className="ns-empty-editor" aria-label="空章节工作区">
               <div>
@@ -630,8 +663,35 @@ function WorkspaceEditorSurface({
   );
 }
 
-function PlainFileEditor({ editor }: { readonly editor: PlainFileEditorProps }) {
+function PlainFileEditor({
+  editor,
+  findMode,
+  onFindModeChange
+}: {
+  readonly editor: PlainFileEditorProps;
+  readonly findMode: EditorFindMode;
+  readonly onFindModeChange: (mode: EditorFindMode) => void;
+}) {
+  const editorFocusRef = useRef<() => void>(() => undefined);
+  const editorSelectionRef = useRef<
+    (selection: { readonly anchor: number; readonly head: number }) => void
+  >(() => undefined);
   const editorPreferences = editor.editorPreferences ?? DEFAULT_EDITOR_PREFERENCES;
+  const registerEditorFocus = useCallback((focus: () => void) => {
+    editorFocusRef.current = focus;
+  }, []);
+  const registerEditorSelection = useCallback(
+    (select: (selection: { readonly anchor: number; readonly head: number }) => void) => {
+      editorSelectionRef.current = select;
+    },
+    []
+  );
+  const requestEditorFocus = useCallback(() => editorFocusRef.current(), []);
+  const requestEditorSelection = useCallback(
+    (selection: { readonly anchor: number; readonly head: number }) =>
+      editorSelectionRef.current(selection),
+    []
+  );
   const editorStyle = {
     "--ns-editor-font-family": editorFontFamilyValue(editorPreferences.fontFamily),
     "--ns-editor-font-size": `${editorPreferences.fontSize}px`,
@@ -645,14 +705,29 @@ function PlainFileEditor({ editor }: { readonly editor: PlainFileEditorProps }) 
           {editor.feedback.message}
         </p>
       )}
-      <div className="ns-editor-body ns-file-editor-body" style={editorStyle}>
-        <textarea
-          aria-label="普通文件正文"
-          className="ns-editor-textarea"
-          onChange={(event) => editor.onContentChange?.(event.currentTarget.value)}
+      <EditorFindReplace
+        body={editor.content}
+        mode={findMode}
+        onModeChange={onFindModeChange}
+        onRequestEditorFocus={requestEditorFocus}
+        onSelectionChange={requestEditorSelection}
+        {...(editor.onContentChange === undefined ? {} : { onBodyChange: editor.onContentChange })}
+      />
+      <div
+        className="ns-editor-body ns-file-editor-body"
+        data-runtime-id="codemirror"
+        style={editorStyle}
+      >
+        <CodeMirrorDocumentEditor
+          ariaLabel="普通文件正文"
+          body={editor.content}
           readOnly={editor.onContentChange === undefined}
-          spellCheck={true}
-          value={editor.content}
+          onEditorFocusRegister={registerEditorFocus}
+          onEditorSelectionRegister={registerEditorSelection}
+          onFindModeChange={onFindModeChange}
+          {...(editor.onContentChange === undefined
+            ? {}
+            : { onBodyChange: editor.onContentChange })}
         />
       </div>
     </section>

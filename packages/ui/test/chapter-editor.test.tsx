@@ -4,7 +4,15 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 
-import { ChapterEditor, readTextareaSelection } from "../src/chapter-editor.js";
+import { ChapterEditor } from "../src/chapter-editor.js";
+import {
+  CodeMirrorDocumentEditor,
+  type CodeMirrorDocumentSelection
+} from "../src/codemirror-document-editor.js";
+
+(globalThis as typeof globalThis & {
+  IS_REACT_ACT_ENVIRONMENT?: boolean;
+}).IS_REACT_ACT_ENVIRONMENT = true;
 
 const chapter = {
   frontmatter: {
@@ -123,6 +131,7 @@ describe("ChapterEditor", () => {
 
     expect(html).toContain("Diff summary: 1 insert / 1 delete / 1 replace");
     expect(html).toContain('data-large-document="true"');
+    expect(html).toContain('data-runtime-id="textarea"');
     expect(html.match(/ns-editor-line-number/g)?.length).toBe(120);
   });
 
@@ -256,10 +265,11 @@ describe("ChapterEditor", () => {
     }
   });
 
-  test("keeps the textarea editor surface for the fallback runtime", async () => {
+  test("keeps the textarea fallback with find shortcuts and focus restoration", async () => {
     const container = document.createElement("div");
     document.body.append(container);
     const root = createRoot(container);
+    const modes: string[] = [];
 
     try {
       await act(async () => {
@@ -268,6 +278,8 @@ describe("ChapterEditor", () => {
             chapter={chapter}
             saveStatus="Unsaved"
             dirty={true}
+            findMode="find"
+            onFindModeChange={(mode) => modes.push(mode)}
             versionHistory={[]}
             runtime={{
               runtimeId: "textarea",
@@ -283,8 +295,24 @@ describe("ChapterEditor", () => {
         );
       });
 
-      expect(container.querySelector("textarea")).not.toBeNull();
+      const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+      expect(textarea).not.toBeNull();
       expect(container.querySelector(".cm-editor")).toBeNull();
+
+      await act(async () => {
+        textarea?.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true })
+        );
+        textarea?.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "h", ctrlKey: true, bubbles: true })
+        );
+        container
+          .querySelector<HTMLButtonElement>('[aria-label="关闭查找替换"]')
+          ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(modes).toEqual(["find", "replace", "closed"]);
+      expect(document.activeElement).toBe(textarea);
     } finally {
       await act(async () => {
         root.unmount();
@@ -293,16 +321,88 @@ describe("ChapterEditor", () => {
     }
   });
 
-  test("extracts textarea selection offsets for renderer runtime wiring", () => {
-    expect(
-      readTextareaSelection({
-        selectionStart: 2,
-        selectionEnd: 9
-      })
-    ).toEqual({
-      anchor: 2,
-      head: 9
-    });
+  test("requests find and replace modes from CodeMirror shortcuts", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const modes: string[] = [];
+
+    try {
+      await act(async () => {
+        root.render(
+          <ChapterEditor
+            chapter={chapter}
+            saveStatus="Unsaved"
+            dirty={true}
+            findMode="closed"
+            onFindModeChange={(mode) => modes.push(mode)}
+            versionHistory={[]}
+            runtime={{
+              runtimeId: "codemirror",
+              adapterLabel: "CodeMirror 6 Runtime",
+              documentMode: "Markdown",
+              activeRangeLabel: "Lines 1-1",
+              autosaveLabel: "Autosave armed",
+              shortcutProfileLabel: "Default shortcuts",
+              warnings: []
+            }}
+            onBodyChange={() => undefined}
+          />
+        );
+      });
+
+      const content = container.querySelector<HTMLElement>(".cm-content");
+      await act(async () => {
+        content?.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true })
+        );
+        content?.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "h", ctrlKey: true, bubbles: true })
+        );
+      });
+
+      expect(modes).toEqual(["find", "replace"]);
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
+  });
+
+  test("registers a CodeMirror selection controller that updates the real editor selection", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const selections: CodeMirrorDocumentSelection[] = [];
+    let selectRange: ((selection: CodeMirrorDocumentSelection) => void) | undefined;
+
+    try {
+      await act(async () => {
+        root.render(
+          <CodeMirrorDocumentEditor
+            ariaLabel="Selection test editor"
+            body="Moon over moon."
+            readOnly={false}
+            onBodyChange={() => undefined}
+            onEditorFocusRegister={() => undefined}
+            onEditorSelectionRegister={(select) => {
+              selectRange = select;
+            }}
+            onFindModeChange={() => undefined}
+            onSelectionChange={(selection) => selections.push(selection)}
+          />
+        );
+      });
+
+      await act(async () => {
+        selectRange?.({ anchor: 10, head: 14 });
+      });
+
+      expect(selectRange).toBeDefined();
+      expect(selections.at(-1)).toEqual({ anchor: 10, head: 14 });
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
   });
 
   test("renders selection review compare, reject, accept, and undo controls", () => {

@@ -1,9 +1,14 @@
 import type { ChapterDocument } from "@novel-studio/shared";
-import { Compartment, EditorState } from "@codemirror/state";
-import { EditorView, keymap, lineNumbers, type ViewUpdate } from "@codemirror/view";
 import { Eye, History, RotateCcw } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { EditorFindReplace } from "./editor-find-replace.js";
+import { useCallback, useMemo, useRef, type CSSProperties } from "react";
+import {
+  CodeMirrorDocumentEditor,
+  type CodeMirrorDocumentSelection
+} from "./codemirror-document-editor.js";
+import {
+  EditorFindReplace,
+  type EditorFindMode
+} from "./editor-find-replace.js";
 import {
   DEFAULT_EDITOR_PREFERENCES,
   editorFontFamilyValue,
@@ -12,7 +17,6 @@ import {
 
 const LARGE_DOCUMENT_LINE_THRESHOLD = 200;
 const MAX_RENDERED_GUTTER_LINES = 120;
-
 export interface ChapterEditorVersionEntry {
   readonly versionId: string;
   readonly label: string;
@@ -57,7 +61,9 @@ export interface ChapterEditorProps {
   readonly selectionReview?: ChapterEditorSelectionReview;
   readonly runtime?: ChapterEditorRuntimeProps;
   readonly editorPreferences?: EditorPreferences;
+  readonly findMode?: EditorFindMode | undefined;
   readonly onBodyChange?: (nextBody: string) => void;
+  readonly onFindModeChange?: ((mode: EditorFindMode) => void) | undefined;
   readonly onSelectionChange?: (selection: ChapterEditorSelection) => void;
   readonly onEditorPreferencesChange?: (preferences: EditorPreferences) => void;
   readonly onFocusModeToggle?: () => void;
@@ -84,11 +90,6 @@ export interface ChapterEditorSelection {
   readonly head: number;
 }
 
-export interface TextareaSelectionSource {
-  readonly selectionStart: number;
-  readonly selectionEnd: number;
-}
-
 export function ChapterEditor({
   chapter,
   dirty,
@@ -97,7 +98,9 @@ export function ChapterEditor({
   selectionReview,
   runtime,
   editorPreferences = DEFAULT_EDITOR_PREFERENCES,
+  findMode = "closed",
   onBodyChange,
+  onFindModeChange,
   onSelectionChange,
   onSelectionReviewAccept,
   onSelectionReviewReject,
@@ -106,7 +109,10 @@ export function ChapterEditor({
   onVersionPreview,
   onVersionRestore
 }: ChapterEditorProps) {
-  const [findReplaceOpen, setFindReplaceOpen] = useState(false);
+  const editorFocusRef = useRef<() => void>(() => undefined);
+  const editorSelectionRef = useRef<(selection: CodeMirrorDocumentSelection) => void>(
+    () => undefined
+  );
   const documentLines = useMemo(() => chapter.body.split("\n"), [chapter.body]);
   const metrics = useMemo(() => calculateDocumentMetrics(chapter.body), [chapter.body]);
   const largeDocument = metrics.lineCount > LARGE_DOCUMENT_LINE_THRESHOLD;
@@ -114,9 +120,38 @@ export function ChapterEditor({
     ? documentLines.slice(0, MAX_RENDERED_GUTTER_LINES)
     : documentLines;
   const diffSummary = diffPreview === undefined ? undefined : summarizeDiff(diffPreview);
-  const handleSelectionChange = (source: TextareaSelectionSource) => {
-    onSelectionChange?.(readTextareaSelection(source));
-  };
+  const registerEditorFocus = useCallback((focus: () => void) => {
+    editorFocusRef.current = focus;
+  }, []);
+  const registerEditorSelection = useCallback(
+    (select: (selection: CodeMirrorDocumentSelection) => void) => {
+      editorSelectionRef.current = select;
+    },
+    []
+  );
+  const registerTextarea = useCallback(
+    (textarea: HTMLTextAreaElement | null) => {
+      if (textarea === null) {
+        editorFocusRef.current = () => undefined;
+        editorSelectionRef.current = () => undefined;
+        return;
+      }
+
+      editorFocusRef.current = () => textarea.focus();
+      editorSelectionRef.current = (selection) => {
+        textarea.focus();
+        textarea.setSelectionRange(selection.anchor, selection.head);
+        onSelectionChange?.(selection);
+      };
+    },
+    [onSelectionChange]
+  );
+  const requestEditorFocus = useCallback(() => editorFocusRef.current(), []);
+  const requestEditorSelection = useCallback(
+    (selection: CodeMirrorDocumentSelection) => editorSelectionRef.current(selection),
+    []
+  );
+  const runtimeId = runtime?.runtimeId ?? "textarea";
   const editorStyle = {
     "--ns-editor-font-family": editorFontFamilyValue(editorPreferences.fontFamily),
     "--ns-editor-font-size": `${editorPreferences.fontSize}px`,
@@ -134,23 +169,28 @@ export function ChapterEditor({
 
       <EditorFindReplace
         body={chapter.body}
-        open={findReplaceOpen}
+        mode={findMode}
+        onModeChange={onFindModeChange}
+        onRequestEditorFocus={requestEditorFocus}
+        onSelectionChange={requestEditorSelection}
         {...(onBodyChange === undefined ? {} : { onBodyChange })}
-        {...(onSelectionChange === undefined ? {} : { onSelectionChange })}
       />
 
       <div
         className="ns-editor-body"
         data-dirty={dirty}
         data-large-document={largeDocument}
+        data-runtime-id={runtimeId}
         style={editorStyle}
-        {...(runtime?.runtimeId === undefined ? {} : { "data-runtime-id": runtime.runtimeId })}
       >
-        {runtime?.runtimeId === "codemirror" ? (
-          <CodeMirrorChapterEditor
+        {runtimeId === "codemirror" ? (
+          <CodeMirrorDocumentEditor
+            ariaLabel="章节正文"
             body={chapter.body}
             readOnly={onBodyChange === undefined}
-            onFindReplaceOpen={() => setFindReplaceOpen(true)}
+            onEditorFocusRegister={registerEditorFocus}
+            onEditorSelectionRegister={registerEditorSelection}
+            onFindModeChange={(mode) => onFindModeChange?.(mode)}
             {...(onBodyChange === undefined ? {} : { onBodyChange })}
             {...(onSelectionChange === undefined ? {} : { onSelectionChange })}
           />
@@ -159,27 +199,40 @@ export function ChapterEditor({
             <textarea
               aria-label="章节正文"
               className="ns-editor-textarea"
-              onChange={(event) => {
-                onBodyChange?.(event.currentTarget.value);
-              }}
+              onChange={(event) => onBodyChange?.(event.currentTarget.value)}
               onKeyDown={(event) => {
-                if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "h") {
+                if (!(event.ctrlKey || event.metaKey)) {
+                  return;
+                }
+
+                const key = event.key.toLocaleLowerCase();
+                if (key === "f" || key === "h") {
                   event.preventDefault();
-                  setFindReplaceOpen(true);
+                  onFindModeChange?.(key === "f" ? "find" : "replace");
                 }
               }}
               onKeyUp={(event) => {
-                handleSelectionChange(event.currentTarget);
+                onSelectionChange?.({
+                  anchor: event.currentTarget.selectionStart,
+                  head: event.currentTarget.selectionEnd
+                });
               }}
               onMouseUp={(event) => {
-                handleSelectionChange(event.currentTarget);
+                onSelectionChange?.({
+                  anchor: event.currentTarget.selectionStart,
+                  head: event.currentTarget.selectionEnd
+                });
               }}
               onSelect={(event) => {
-                handleSelectionChange(event.currentTarget);
+                onSelectionChange?.({
+                  anchor: event.currentTarget.selectionStart,
+                  head: event.currentTarget.selectionEnd
+                });
               }}
               readOnly={onBodyChange === undefined}
-              value={chapter.body}
+              ref={registerTextarea}
               spellCheck={true}
+              value={chapter.body}
             />
             <div className="ns-editor-gutter" aria-hidden="true">
               {gutterLines.map((line, index) => (
@@ -273,144 +326,6 @@ export function ChapterEditor({
         )}
       </div>
     </section>
-  );
-}
-
-export function readTextareaSelection(source: TextareaSelectionSource): ChapterEditorSelection {
-  return {
-    anchor: source.selectionStart,
-    head: source.selectionEnd
-  };
-}
-
-function CodeMirrorChapterEditor({
-  body,
-  readOnly,
-  onBodyChange,
-  onFindReplaceOpen,
-  onSelectionChange
-}: {
-  readonly body: string;
-  readonly readOnly: boolean;
-  readonly onBodyChange?: (nextBody: string) => void;
-  readonly onFindReplaceOpen: () => void;
-  readonly onSelectionChange?: (selection: ChapterEditorSelection) => void;
-}) {
-  const mountRef = useRef<HTMLDivElement | null>(null);
-  const viewRef = useRef<EditorView | null>(null);
-  const readOnlyCompartmentRef = useRef(new Compartment());
-  const suppressBodyChangeRef = useRef(false);
-  const callbacksRef = useRef({
-    onBodyChange,
-    onFindReplaceOpen,
-    onSelectionChange
-  });
-
-  useEffect(() => {
-    callbacksRef.current = {
-      onBodyChange,
-      onFindReplaceOpen,
-      onSelectionChange
-    };
-  }, [onBodyChange, onFindReplaceOpen, onSelectionChange]);
-
-  useEffect(() => {
-    const parent = mountRef.current;
-    if (parent === null) {
-      return undefined;
-    }
-
-    const updateListener = EditorView.updateListener.of((update: ViewUpdate) => {
-      if (update.docChanged && !suppressBodyChangeRef.current) {
-        callbacksRef.current.onBodyChange?.(update.state.doc.toString());
-      }
-
-      if (update.selectionSet) {
-        const selection = update.state.selection.main;
-        callbacksRef.current.onSelectionChange?.({
-          anchor: selection.anchor,
-          head: selection.head
-        });
-      }
-    });
-    const findReplaceKeymap = keymap.of([
-      {
-        key: "Mod-h",
-        preventDefault: true,
-        run() {
-          callbacksRef.current.onFindReplaceOpen();
-          return true;
-        }
-      }
-    ]);
-    const state = EditorState.create({
-      doc: body,
-      extensions: [
-        lineNumbers(),
-        readOnlyCompartmentRef.current.of([
-          EditorState.readOnly.of(readOnly),
-          EditorView.editable.of(!readOnly)
-        ]),
-        EditorView.lineWrapping,
-        findReplaceKeymap,
-        updateListener
-      ]
-    });
-    const view = new EditorView({
-      parent,
-      state
-    });
-    viewRef.current = view;
-
-    return () => {
-      view.destroy();
-      viewRef.current = null;
-    };
-  }, []);
-
-  useEffect(() => {
-    const view = viewRef.current;
-    if (view === null) {
-      return;
-    }
-
-    view.dispatch({
-      effects: readOnlyCompartmentRef.current.reconfigure([
-        EditorState.readOnly.of(readOnly),
-        EditorView.editable.of(!readOnly)
-      ])
-    });
-  }, [readOnly]);
-
-  useEffect(() => {
-    const view = viewRef.current;
-    if (view === null) {
-      return;
-    }
-
-    const currentBody = view.state.doc.toString();
-    if (currentBody === body) {
-      return;
-    }
-
-    suppressBodyChangeRef.current = true;
-    view.dispatch({
-      changes: {
-        from: 0,
-        to: view.state.doc.length,
-        insert: body
-      }
-    });
-    suppressBodyChangeRef.current = false;
-  }, [body]);
-
-  return (
-    <div
-      aria-label="章节正文"
-      className="ns-editor-codemirror"
-      data-readonly={readOnly}
-      ref={mountRef}
-    />
   );
 }
 

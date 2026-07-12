@@ -4,14 +4,17 @@ import { join } from "node:path";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { isValidElement } from "react";
-import type { ReactElement, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { describe, expect, test } from "vitest";
 
 import { createDesktopApplication } from "@novel-studio/application";
 import type { ApplicationCommandId } from "@novel-studio/application";
 import type { ModelSettingsPanelProps } from "../src/index.js";
 import { WorkspaceShell } from "../src/index.js";
+
+(globalThis as typeof globalThis & {
+  IS_REACT_ACT_ENVIRONMENT?: boolean;
+}).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("WorkspaceShell", () => {
   test("renders settings as a workspace-level view without editor chrome", () => {
@@ -100,6 +103,20 @@ describe("WorkspaceShell", () => {
       .map((match) => match[1])
       .join("\n");
     expect(accentScopes).not.toMatch(/--ns-(?:danger|warning|success|info)/);
+  });
+
+  test("positions find replace as a responsive editor overlay", () => {
+    const css = readFileSync(join(process.cwd(), "packages", "ui", "src", "styles.css"), "utf8");
+
+    expect(css).toMatch(
+      /\.ns-editor-surface,\s*\.ns-editor-layout\s*\{[^}]*position:\s*relative/s
+    );
+    expect(css).toMatch(
+      /\.ns-editor-find-replace\s*\{[^}]*display:\s*grid[^}]*position:\s*absolute[^}]*right:\s*8px[^}]*top:\s*8px[^}]*width:\s*420px[^}]*z-index:\s*30/s
+    );
+    expect(css).toMatch(
+      /@media\s*\(max-width:\s*520px\)[\s\S]*?\.ns-editor-find-replace\s*\{[^}]*left:\s*8px[^}]*right:\s*8px[^}]*width:\s*auto/s
+    );
   });
 
   test("renders the VS Code style application shell regions", () => {
@@ -193,11 +210,68 @@ describe("WorkspaceShell", () => {
     expect(html).toContain('aria-label="普通文件编辑器"');
     expect(html).toContain('aria-label="scene.md"');
     expect(html).not.toContain("notes/scene.md");
-    expect(html).toContain("Scene one");
+    expect(html).toContain('aria-label="普通文件正文"');
+    expect(html).toContain('data-runtime-id="codemirror"');
     expect(html).not.toContain('class="ns-editor-header"');
     expect(html).not.toContain('aria-label="编辑器工具栏"');
     expect(html).not.toContain('aria-label="鐗堟湰鍘嗗彶"');
     expect(html).not.toContain("Selection review");
+  });
+
+  test("opens shared find and replace for an ordinary file and restores focus", async () => {
+    const application = createDesktopApplication();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+
+    try {
+      await act(async () => {
+        root.render(
+          <WorkspaceShell
+            shellState={application.getShellState()}
+            commands={application.listCommands()}
+            commandPaletteOpen={false}
+            fileEditor={{
+              path: "notes/scene.md",
+              fileName: "scene.md",
+              content: "Moon over moon.",
+              dirty: false,
+              saveStatus: "Saved",
+              onContentChange: () => undefined
+            }}
+          />
+        );
+      });
+
+      await act(async () => {
+        host
+          .querySelector<HTMLButtonElement>('[aria-label="查找当前文档"]')
+          ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      expect(host.querySelector('[aria-label="查找替换"]')).not.toBeNull();
+      expect(host.querySelector('[aria-label="替换为"]')).toBeNull();
+
+      const content = host.querySelector<HTMLElement>(".cm-content");
+      expect(content?.textContent).toBe("Moon over moon.");
+      expect(host.querySelector(".ns-file-editor-body textarea")).toBeNull();
+      await act(async () => {
+        content?.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "h", ctrlKey: true, bubbles: true })
+        );
+      });
+      expect(host.querySelector('[aria-label="替换为"]')).not.toBeNull();
+
+      await act(async () => {
+        host
+          .querySelector<HTMLElement>('[aria-label="查找替换"]')
+          ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      });
+      expect(host.querySelector('[aria-label="查找替换"]')).toBeNull();
+      expect(document.activeElement).toBe(content);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
   });
 
   test("switches bottom panel tabs and renders the active panel content", () => {
@@ -736,7 +810,7 @@ describe("WorkspaceShell", () => {
           proposedText: "The opening line tightened.",
           rangeLabel: "0-13",
           compareLabel: "Opening line. -> The opening line tightened.",
-          canUndo: false
+          canUndo: true
         },
         onInstructionChange: () => undefined,
         onGenerateSuggestion: () => undefined,
@@ -1434,41 +1508,41 @@ function createSettingsProps(): ModelSettingsPanelProps {
 }
 
 interface InspectableElementProps {
-  readonly children?: ReactNode;
   readonly disabled?: boolean;
   readonly onClick?: () => void;
-  readonly "aria-label"?: string;
 }
 
 function findElementByAriaLabel(
   node: ReactNode,
   ariaLabel: string
-): ReactElement<InspectableElementProps> | undefined {
-  if (Array.isArray(node)) {
-    for (const child of node) {
-      const match = findElementByAriaLabel(child, ariaLabel);
-      if (match !== undefined) {
-        return match;
+): { readonly props: InspectableElementProps } | undefined {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+
+  act(() => {
+    root.render(node);
+  });
+
+  const element = Array.from(host.querySelectorAll<HTMLElement>("[aria-label]")).find(
+    (candidate) => candidate.getAttribute("aria-label") === ariaLabel
+  );
+  if (element === undefined) {
+    act(() => root.unmount());
+    host.remove();
+    return undefined;
+  }
+
+  return {
+    props: {
+      ...(element instanceof HTMLButtonElement && element.disabled ? { disabled: true } : {}),
+      onClick: () => {
+        act(() => {
+          element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        });
+        act(() => root.unmount());
+        host.remove();
       }
     }
-    return undefined;
-  }
-
-  if (!isValidElement<InspectableElementProps>(node)) {
-    return undefined;
-  }
-
-  if (node.props["aria-label"] === ariaLabel) {
-    return node;
-  }
-
-  if (typeof node.type === "function") {
-    const renderComponent = node.type as (props: InspectableElementProps) => ReactNode;
-    const match = findElementByAriaLabel(renderComponent(node.props), ariaLabel);
-    if (match !== undefined) {
-      return match;
-    }
-  }
-
-  return findElementByAriaLabel(node.props.children, ariaLabel);
+  };
 }
