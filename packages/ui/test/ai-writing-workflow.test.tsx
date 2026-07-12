@@ -1,9 +1,15 @@
+// @vitest-environment jsdom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, test } from "vitest";
 
 import { createDesktopApplication } from "@novel-studio/application";
 import { WorkspaceShell } from "../src/index.js";
+
+(globalThis as typeof globalThis & {
+  IS_REACT_ACT_ENVIRONMENT?: boolean;
+}).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("AI writing workflow UI", () => {
   test("renders workflow controls and suggestion trace", () => {
@@ -359,11 +365,15 @@ describe("AI writing workflow UI", () => {
     expect(html).toContain("流式输出中");
   });
 
-  test("calls reasoning effort selection from the model controls", () => {
+  test("calls reasoning effort selection from the model controls", async () => {
     const calls: string[] = [];
     const application = createDesktopApplication();
-    const tree = (
-      <WorkspaceShell
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+
+    await act(async () => {
+      root.render(<WorkspaceShell
         shellState={{ ...application.getShellState(), activeActivity: "ai" }}
         commands={application.listCommands()}
         commandPaletteOpen={false}
@@ -402,12 +412,18 @@ describe("AI writing workflow UI", () => {
           onRetrySuggestion: () => undefined,
           onCancelStreaming: () => undefined
         }}
-      />
-    );
+      />);
+    });
 
-    findElementByAriaLabel(tree, "Set reasoning effort high")?.props.onClick?.();
+    await act(async () => {
+      host
+        .querySelector<HTMLButtonElement>('[aria-label="Set reasoning effort high"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
 
     expect(calls).toEqual(["high"]);
+    await act(async () => root.unmount());
+    host.remove();
   });
 
   test("renders persisted chat messages from the active AI session", () => {
@@ -463,54 +479,3 @@ describe("AI writing workflow UI", () => {
     expect(html).toContain("2026-07-05 00:01");
   });
 });
-
-function findElementByAriaLabel(
-  node: ReactNode,
-  ariaLabel: string
-): ReactElement<UiTestElementProps> | undefined {
-  if (Array.isArray(node)) {
-    for (const child of node) {
-      const found = findElementByAriaLabel(child, ariaLabel);
-      if (found !== undefined) {
-        return found;
-      }
-    }
-    return undefined;
-  }
-
-  if (!isValidElement(node)) {
-    return undefined;
-  }
-
-  const element = node as ReactElement<UiTestElementProps>;
-  if (element.props["aria-label"] === ariaLabel) {
-    return element;
-  }
-
-  if (typeof element.type === "function") {
-    const renderComponent = element.type as (props: UiTestElementProps) => ReactNode;
-    const found = findElementByAriaLabel(renderComponent(element.props), ariaLabel);
-    if (found !== undefined) {
-      return found;
-    }
-  }
-
-  const children = element.props.children as ReactNode;
-  if (Array.isArray(children)) {
-    for (const child of children) {
-      const found = findElementByAriaLabel(child, ariaLabel);
-      if (found !== undefined) {
-        return found;
-      }
-    }
-    return undefined;
-  }
-
-  return findElementByAriaLabel(children, ariaLabel);
-}
-
-interface UiTestElementProps {
-  readonly [key: string]: unknown;
-  readonly children?: ReactNode;
-  readonly onClick?: () => void;
-}

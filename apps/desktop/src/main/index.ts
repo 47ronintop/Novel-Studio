@@ -68,7 +68,7 @@ export function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1440,
     height: 960,
-    minWidth: 900,
+    minWidth: 720,
     minHeight: 640,
     title: "Novel Studio",
     webPreferences: createSecureWebPreferences(preloadPath)

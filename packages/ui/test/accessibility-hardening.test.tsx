@@ -29,6 +29,12 @@ describe("M9 accessibility hardening", () => {
         shellState={application.getShellState()}
         commands={application.listCommands()}
         commandPaletteOpen={false}
+        chapterEditor={{
+          chapter,
+          saveStatus: "Saved",
+          dirty: false,
+          versionHistory: []
+        }}
       />
     );
 

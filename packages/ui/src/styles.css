@@ -3068,7 +3068,7 @@ textarea:focus-visible,
   padding: 18px;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 760px) {
   .model-settings-panel {
     padding-inline: 14px;
   }
@@ -3770,7 +3770,7 @@ textarea:focus-visible,
   }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 760px) {
   .model-settings-panel {
     margin-top: 12px;
     padding-inline: 12px;
