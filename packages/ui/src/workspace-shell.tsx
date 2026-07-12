@@ -551,15 +551,30 @@ function WorkspaceEditorSurface({
     projectWorkflow?.activeChapterId ?? chapterEditor?.chapter.frontmatter.id ?? undefined;
   const chapterTabs = projectWorkflow?.chapters ?? [];
   const openChapterTabIds = projectWorkflow?.openChapterTabIds ?? [];
-  const visibleTabs = openChapterTabIds
+  const explicitVisibleTabs = openChapterTabIds
     .map((chapterId) => chapterTabs.find((chapter) => chapter.id === chapterId))
     .filter((chapter): chapter is ChapterSummary => chapter !== undefined);
+  const runtimeChapter = chapterEditor?.chapter.frontmatter;
+  const visibleTabs =
+    explicitVisibleTabs.length === 0 && openChapterTabIds.length === 0 && runtimeChapter !== undefined
+      ? [
+          {
+            id: runtimeChapter.id,
+            title: runtimeChapter.title,
+            order: runtimeChapter.order,
+            status: runtimeChapter.status,
+            updatedAt: runtimeChapter.updatedAt
+          }
+        ]
+      : explicitVisibleTabs;
   const dirtyChapterIds = new Set(projectWorkflow?.dirtyChapterIds ?? []);
   const chapterDocumentTabs: readonly EditorDocumentTab[] = visibleTabs.map((chapter) => ({
     id: `chapter:${chapter.id}`,
     label: chapterDocumentLabel(chapter.title),
     active: fileEditor === undefined && chapter.id === activeChapterId,
-    dirty: dirtyChapterIds.has(chapter.id),
+    dirty:
+      dirtyChapterIds.has(chapter.id) ||
+      (chapterEditor?.chapter.frontmatter.id === chapter.id && chapterEditor.dirty),
     onSelect: () => {
       setFindMode("closed");
       projectWorkflow?.onSelectChapter(chapter.id);

@@ -1064,6 +1064,49 @@ describe("WorkspaceShell", () => {
     expect(implicitHtml).not.toContain('class="ns-document-tab"');
   });
 
+  test("renders the runtime-loaded chapter while workflow tab metadata is initializing", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={application.getShellState()}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        projectWorkflow={{
+          projectRootInput: "D:/Novel/Startup",
+          chapters: [],
+          openChapterTabIds: [],
+          activeChapterId: "ch_first",
+          onProjectRootChange: () => undefined,
+          onOpenProject: () => undefined,
+          onCreateProject: () => undefined,
+          onCreateChapter: () => undefined,
+          onSelectChapter: () => undefined
+        }}
+        chapterEditor={{
+          chapter: {
+            frontmatter: {
+              schemaVersion: "1.0",
+              id: "ch_first",
+              type: "chapter",
+              title: "第一章",
+              order: 1,
+              status: "draft",
+              createdAt: "2026-07-04T00:00:00.000Z",
+              updatedAt: "2026-07-04T00:00:00.000Z"
+            },
+            body: "这是第一章的正文。"
+          },
+          saveStatus: "Saved",
+          dirty: false,
+          versionHistory: []
+        }}
+      />
+    );
+
+    expect(html).toContain('aria-label="第一章.md"');
+    expect(html.match(/class="ns-document-tab"/g)).toHaveLength(1);
+  });
+
   test("renders an autosave recovery notice from project workflow recovery state", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(

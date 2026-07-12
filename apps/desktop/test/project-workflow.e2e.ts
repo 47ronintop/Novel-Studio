@@ -1,4 +1,4 @@
-import { expect, test, _electron as electron } from "@playwright/test";
+import { expect, test, _electron as electron, type Page } from "@playwright/test";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,15 @@ import { fileURLToPath } from "node:url";
 
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const electronMain = join(repositoryRoot, "apps", "desktop", "dist", "main", "index.js");
+
+function chapterBody(page: Page) {
+  return page.getByLabel("章节正文").locator(".cm-content");
+}
+
+async function replaceChapterBody(page: Page, body: string): Promise<void> {
+  const editor = chapterBody(page);
+  await editor.fill(body);
+}
 
 test("creates a project, creates a chapter, edits it, and saves through Electron", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-e2e-"));
@@ -15,7 +24,8 @@ test("creates a project, creates a chapter, edits it, and saves through Electron
     args: [electronMain],
     env: {
       ...process.env,
-      NOVEL_STUDIO_PROJECT_ROOT: defaultProjectRoot
+      NOVEL_STUDIO_PROJECT_ROOT: defaultProjectRoot,
+      NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
     }
   });
 
@@ -26,7 +36,7 @@ test("creates a project, creates a chapter, edits it, and saves through Electron
 
     await page.getByLabel("项目路径").fill(join(tempRoot, "Missing Project"));
     await page.getByRole("button", { name: "打开项目" }).click();
-    await expect(page.getByText("project.json could not be read.")).toBeVisible();
+    await expect(page.getByText(/已作为普通文件夹打开/)).toBeVisible();
 
     await page.getByLabel("项目路径").fill(projectRoot);
     await page.getByRole("button", { name: "创建项目" }).click();
@@ -37,13 +47,13 @@ test("creates a project, creates a chapter, edits it, and saves through Electron
     await page.getByRole("button", { name: "新建章节" }).click();
     await expect(projectNavigator.getByRole("button", { name: /未命名章节 1/ })).toBeVisible();
 
-    const body = page.getByLabel("章节正文");
-    await expect(body).toBeVisible();
-    await body.fill("E2E opening line.");
+    await expect(chapterBody(page)).toBeVisible();
+    await replaceChapterBody(page, "E2E opening line.");
 
-    await expect(page.getByText("未保存").first()).toBeVisible();
-    await page.getByRole("button", { name: "保存章节" }).click();
-    await expect(page.getByText("已保存").first()).toBeVisible();
+    const saveButton = page.getByRole("button", { name: "保存当前文档" });
+    await expect(saveButton).toBeEnabled();
+    await saveButton.click();
+    await expect(saveButton).toBeDisabled();
 
     const chapterFiles = (await readdir(join(projectRoot, "chapters"))).filter((entry) =>
       entry.endsWith(".md")
@@ -70,7 +80,8 @@ test("starts public install users in a ready default project without quick start
     args: [electronMain],
     env: {
       ...process.env,
-      NOVEL_STUDIO_PROJECT_ROOT: defaultProjectRoot
+      NOVEL_STUDIO_PROJECT_ROOT: defaultProjectRoot,
+      NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
     }
   });
 
@@ -83,8 +94,14 @@ test("starts public install users in a ready default project without quick start
     await expect(projectNavigator.getByRole("button", { name: "创建项目" })).toBeVisible();
     await expect(projectNavigator.getByRole("button", { name: "新建章节" })).toBeVisible();
     await expect(page.getByText("未命名长篇项目")).toBeVisible();
-    await expect(page.getByRole("tab", { name: "第一章" })).toBeVisible();
-    await expect(page.getByLabel("章节正文")).toHaveValue(/这是第一章的正文/);
+    await expect(page.getByRole("tab", { name: "第一章.md" })).toBeVisible();
+    await expect(chapterBody(page)).toContainText(/这是第一章的正文/);
+
+    await page.getByRole("button", { name: "查找当前文档" }).click();
+    const findOverlay = page.getByRole("region", { name: "查找替换", exact: true });
+    await expect(findOverlay).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(findOverlay).toHaveCount(0);
 
     const chapterFiles = (await readdir(join(defaultProjectRoot, "chapters"))).filter((entry) =>
       entry.endsWith(".md")
@@ -143,7 +160,8 @@ test("reviews and applies an autosave recovery draft from disk", async () => {
     args: [electronMain],
     env: {
       ...process.env,
-      NOVEL_STUDIO_PROJECT_ROOT: defaultProjectRoot
+      NOVEL_STUDIO_PROJECT_ROOT: defaultProjectRoot,
+      NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
     }
   });
 
@@ -154,10 +172,11 @@ test("reviews and applies an autosave recovery draft from disk", async () => {
     await page.getByRole("button", { name: "创建项目" }).click();
     await page.getByRole("button", { name: "新建章节" }).click();
 
-    const body = page.getByLabel("章节正文");
-    await body.fill("Persisted baseline.");
-    await page.getByRole("button", { name: "保存章节" }).click();
-    await expect(page.getByText("已保存").first()).toBeVisible();
+    await replaceChapterBody(page, "Persisted baseline.");
+    const saveButton = page.getByRole("button", { name: "保存当前文档" });
+    await expect(saveButton).toBeEnabled();
+    await saveButton.click();
+    await expect(saveButton).toBeDisabled();
   } finally {
     await firstApp.close();
   }
@@ -207,7 +226,8 @@ test("reviews and applies an autosave recovery draft from disk", async () => {
     args: [electronMain],
     env: {
       ...process.env,
-      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Second Default Project")
+      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Second Default Project"),
+      NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "Second User Data")
     }
   });
 
@@ -221,9 +241,11 @@ test("reviews and applies an autosave recovery draft from disk", async () => {
     await page.getByRole("button", { name: /预览恢复草稿/ }).click();
     await expect(page.getByLabel("恢复草稿预览")).toContainText("Recovered draft from autosave.");
     await page.getByRole("button", { name: /应用恢复草稿/ }).click();
-    await expect(page.getByLabel("章节正文")).toHaveValue(recoveredBody);
-    await page.getByRole("button", { name: "保存章节" }).click();
-    await expect(page.getByText("已保存").first()).toBeVisible();
+    await expect(chapterBody(page)).toContainText(recoveredBody.trim());
+    const saveButton = page.getByRole("button", { name: "保存当前文档" });
+    await expect(saveButton).toBeEnabled();
+    await saveButton.click();
+    await expect(saveButton).toBeDisabled();
 
     const savedChapter = await readFile(chapterPath, "utf8");
     expect(savedChapter).toContain("Recovered draft from autosave.");
@@ -243,7 +265,8 @@ test("switches visible beta activity views from the left activity bar", async ()
     args: [electronMain],
     env: {
       ...process.env,
-      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Default Project")
+      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Default Project"),
+      NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
     }
   });
 
@@ -260,7 +283,7 @@ test("switches visible beta activity views from the left activity bar", async ()
     await activityBar.getByRole("button", { name: "设置" }).click();
     await expect(page.getByRole("heading", { name: "设置" })).toBeVisible();
 
-    await activityBar.getByRole("button", { name: "工作区" }).click();
+    await page.getByRole("button", { name: "关闭设置" }).click();
     await expect(page.getByLabel("编辑区")).toBeVisible();
   } finally {
     await electronApp.close();
