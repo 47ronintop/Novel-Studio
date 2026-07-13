@@ -27,6 +27,7 @@ export type {
 } from "./plan-artifact.js";
 export type {
   AgentContextMode,
+  DecideAgentPlanCommand,
   AgentOperationMode,
   AgentProviderCapabilitySnapshot,
   AgentRunCommandResult,
@@ -39,6 +40,9 @@ export type {
   AgentRunStatus,
   AgentWritePolicy,
   RecordAgentRunEventInput,
+  RefreshAgentContextCommand,
+  ResumeAgentRunCommand,
+  RetryAgentRunStepCommand,
   StartAgentRunCommand,
   StopAgentRunCommand
 } from "./agent-run-types.js";

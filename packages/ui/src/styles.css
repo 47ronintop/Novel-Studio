@@ -2325,6 +2325,311 @@ textarea:focus-visible,
   }
 }
 
+.ns-visually-hidden {
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  width: 1px;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.ns-agent-run {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px 12px;
+}
+
+.ns-agent-run-header,
+.ns-agent-mode-controls,
+.ns-agent-inline-actions,
+.ns-agent-run-actions,
+.ns-plan-review header,
+.ns-plan-review footer {
+  align-items: center;
+  display: flex;
+}
+
+.ns-agent-run-header,
+.ns-plan-review header {
+  justify-content: space-between;
+}
+
+.ns-agent-mode-controls,
+.ns-agent-inline-actions,
+.ns-agent-run-actions {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ns-agent-segmented {
+  background: var(--ns-bg);
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  display: inline-flex;
+  padding: 2px;
+}
+
+.ns-agent-segmented button {
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--ns-muted);
+  cursor: pointer;
+  font-size: 12px;
+  min-height: 24px;
+  padding: 0 8px;
+}
+
+.ns-agent-segmented button[aria-pressed="true"] {
+  background: var(--ns-surface-raised);
+  color: var(--ns-ink);
+}
+
+.ns-agent-status {
+  color: var(--ns-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.ns-agent-runtime-label,
+.ns-agent-context-notice {
+  color: var(--ns-muted);
+  font-size: 11px;
+  margin: 0;
+}
+
+.ns-agent-context-notice {
+  border-left: 2px solid var(--ns-warning);
+  padding-left: 8px;
+}
+
+.ns-agent-assistant-text {
+  line-height: 1.55;
+  margin: 0;
+  max-width: 65ch;
+  white-space: pre-wrap;
+}
+
+.ns-agent-timeline ol {
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ns-agent-timeline li {
+  align-items: flex-start;
+  color: var(--ns-muted);
+  display: grid;
+  gap: 7px;
+  grid-template-columns: 16px minmax(0, 1fr);
+  min-height: 28px;
+  padding: 4px 2px;
+}
+
+.ns-agent-timeline li[data-status="running"] {
+  color: var(--ns-ink);
+}
+
+.ns-agent-timeline li[data-status="failed"] {
+  color: var(--ns-danger);
+}
+
+.ns-agent-timeline li > svg {
+  margin-top: 3px;
+}
+
+.ns-agent-timeline details,
+.ns-agent-timeline summary {
+  min-width: 0;
+}
+
+.ns-agent-timeline summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  list-style: none;
+}
+
+.ns-agent-timeline summary::-webkit-details-marker {
+  display: none;
+}
+
+.ns-agent-timeline summary span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ns-agent-timeline small,
+.ns-agent-timeline p {
+  color: var(--ns-muted);
+  font-size: 11px;
+}
+
+.ns-agent-timeline p {
+  margin: 5px 0 0;
+}
+
+.ns-agent-timeline-group {
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0 0 0 2px;
+}
+
+.ns-agent-timeline-group li {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  min-height: 24px;
+  padding: 2px 0;
+}
+
+.ns-agent-timeline-group span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ns-agent-spin {
+  animation: ns-agent-spin 0.8s linear infinite;
+}
+
+.ns-agent-question,
+.ns-agent-context-refresh,
+.ns-plan-review {
+  background: color-mix(in srgb, var(--ns-surface-raised) 48%, transparent);
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+}
+
+.ns-agent-question p,
+.ns-agent-context-refresh p,
+.ns-plan-review h3 {
+  margin: 0;
+}
+
+.ns-agent-question p,
+.ns-plan-review span {
+  color: var(--ns-muted);
+  font-size: 12px;
+}
+
+.ns-agent-question fieldset {
+  border: 0;
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+}
+
+.ns-agent-question legend {
+  color: var(--ns-muted);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.ns-agent-question label {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+}
+
+.ns-agent-question > input,
+.ns-agent-composer textarea {
+  background: var(--ns-bg);
+  border: 1px solid var(--ns-border);
+  border-radius: 5px;
+  color: var(--ns-ink);
+  min-width: 0;
+  padding: 8px;
+}
+
+.ns-plan-review header div,
+.ns-plan-review li {
+  display: grid;
+  gap: 3px;
+}
+
+.ns-plan-review h3 {
+  font-size: 14px;
+  letter-spacing: 0;
+}
+
+.ns-plan-review ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.ns-plan-blockers {
+  color: var(--ns-warning);
+  display: grid;
+  gap: 4px;
+}
+
+.ns-plan-review footer {
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.ns-agent-plan-approve,
+.ns-agent-answer {
+  min-width: auto;
+}
+
+.ns-agent-context-refresh button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--ns-border);
+  border-radius: 5px;
+  color: var(--ns-ink);
+  display: inline-flex;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 8px;
+}
+
+.ns-agent-composer {
+  align-items: flex-end;
+  display: grid;
+  gap: 7px;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  margin-top: auto;
+}
+
+.ns-agent-composer textarea {
+  min-height: 76px;
+  resize: vertical;
+}
+
+@keyframes ns-agent-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ns-agent-spin {
+    animation: none;
+  }
+}
+
 .ns-ai-model-trigger:hover,
 .ns-ai-model-picker[open] > .ns-ai-model-trigger {
   background: color-mix(in srgb, var(--ns-surface-raised) 76%, transparent);

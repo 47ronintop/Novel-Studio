@@ -1,5 +1,10 @@
 import type {
   ActivityId,
+  AgentContextMode,
+  AgentOperationMode,
+  AgentRunEvent,
+  AgentRunStatus,
+  PlanArtifact,
   ApplicationCommand,
   ApplicationCommandId,
   DesktopShellState,
@@ -50,6 +55,7 @@ export interface WorkspaceShellProps {
 }
 
 export interface ProjectWorkflowProps {
+  readonly projectId?: string;
   readonly projectRootInput: string;
   readonly status?: ProjectWorkflowStatus;
   readonly feedback?: ProjectWorkflowFeedback;
@@ -169,6 +175,7 @@ export interface AiWritingWorkflowProps {
   readonly modelDiscovery?: ModelDiscoverySnapshot;
   readonly selectedModelName?: string;
   readonly selectedReasoningEffort?: ModelReasoningStrengthValue;
+  readonly agentRun?: AgentRunPanelProps;
   readonly onInstructionChange: (instruction: string) => void;
   readonly onGenerateSuggestion: () => void;
   readonly onApplySuggestion: () => void;
@@ -178,6 +185,39 @@ export interface AiWritingWorkflowProps {
   readonly onUndoSelectionReview?: () => void;
   readonly onRetrySuggestion: () => void;
   readonly onCancelStreaming: () => void;
+}
+
+export interface AgentRunPanelProps {
+  readonly projectId: string;
+  readonly runId?: string;
+  readonly operationMode: AgentOperationMode;
+  readonly contextMode: AgentContextMode;
+  readonly status: AgentRunStatus | "idle";
+  readonly userRequest: string;
+  readonly assistantText: string;
+  readonly events: readonly AgentRunEvent[];
+  readonly pendingUserInput?: AgentRunPendingUserInputProps;
+  readonly planArtifact?: PlanArtifact;
+  readonly errorMessage?: string;
+  readonly providerLabel?: string;
+  readonly contextSourceNotice?: string;
+  readonly onOperationModeChange: (mode: AgentOperationMode) => void;
+  readonly onContextModeChange: (mode: AgentContextMode) => void;
+  readonly onSend: (request: string) => void;
+  readonly onStop: () => void;
+  readonly onAnswerUserInput: (answer: string) => void;
+  readonly onResume: () => void;
+  readonly onRetryStep: () => void;
+  readonly onRefreshContext: (decision: "refresh" | "exclude" | "cancel") => void;
+  readonly onDecidePlan: (decision: "approve" | "reject") => void;
+}
+
+export interface AgentRunPendingUserInputProps {
+  readonly questionId: string;
+  readonly prompt: string;
+  readonly reason: string;
+  readonly options: readonly { readonly id: string; readonly label: string }[];
+  readonly allowFreeText: boolean;
 }
 
 export interface AiWritingConversationMessageProps {

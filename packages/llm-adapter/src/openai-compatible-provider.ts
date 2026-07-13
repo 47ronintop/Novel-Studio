@@ -91,9 +91,10 @@ async function* streamChatCompletion(
   try {
     const transportRequest = await createTransportRequest(request, options, true);
     let emittedEvent = false;
+    const toolCallIdsByIndex = new Map<number, string>();
     try {
       for await (const chunk of streamTransport(transportRequest)) {
-        for (const event of parseStreamChunk(chunk)) {
+        for (const event of parseStreamChunk(chunk, toolCallIdsByIndex)) {
           emittedEvent = true;
           yield event;
         }
@@ -103,7 +104,7 @@ async function* streamChatCompletion(
       if (!emittedEvent && shouldRetryWithoutReasoningEffort(error, transportRequest)) {
         yield reasoningEffortIgnoredWarning();
         for await (const chunk of streamTransport(omitReasoningEffort(transportRequest))) {
-          for (const event of parseStreamChunk(chunk)) {
+        for (const event of parseStreamChunk(chunk, toolCallIdsByIndex)) {
             yield event;
           }
         }
@@ -163,6 +164,9 @@ function createTransportRequest(
   }
   if (request.parameters.reasoningEffort !== undefined) {
     body.reasoning_effort = request.parameters.reasoningEffort;
+  }
+  if (request.tools !== undefined && request.tools.length > 0) {
+    body.tools = request.tools as unknown as JsonObject;
   }
 
   const transportRequest = {
@@ -268,7 +272,20 @@ function omitReasoningEffort(
 function toOpenAiCompatibleMessage(message: LlmMessage): JsonObject {
   return {
     role: message.role,
-    content: message.content
+    content: message.content,
+    ...(message.toolCallId === undefined ? {} : { tool_call_id: message.toolCallId }),
+    ...(message.toolCalls === undefined
+      ? {}
+      : {
+          tool_calls: message.toolCalls.map((toolCall) => ({
+            id: toolCall.id,
+            type: "function",
+            function: {
+              name: toolCall.name,
+              arguments: toolCall.arguments
+            }
+          }))
+        })
   };
 }
 
@@ -298,7 +315,10 @@ function parseChatCompletion(payload: unknown): LlmProviderCompletion {
   };
 }
 
-function parseStreamChunk(payload: unknown): readonly LlmProviderStreamEvent[] {
+function parseStreamChunk(
+  payload: unknown,
+  toolCallIdsByIndex: Map<number, string> = new Map()
+): readonly LlmProviderStreamEvent[] {
   const root = requireRecord(payload);
   const choices = root.choices;
   if (!Array.isArray(choices)) {
@@ -326,6 +346,40 @@ function parseStreamChunk(payload: unknown): readonly LlmProviderStreamEvent[] {
         value: content
       });
     }
+
+    const toolCalls = delta.tool_calls;
+    if (toolCalls !== undefined) {
+      if (!Array.isArray(toolCalls)) {
+        throw malformedResponse(root);
+      }
+      for (const toolCall of toolCalls) {
+        if (!isRecord(toolCall)) throw malformedResponse(root);
+        const index = typeof toolCall.index === "number" ? toolCall.index : 0;
+        const providedToolCallId = typeof toolCall.id === "string" ? toolCall.id : undefined;
+        if (providedToolCallId !== undefined) toolCallIdsByIndex.set(index, providedToolCallId);
+        const toolCallId = providedToolCallId ?? toolCallIdsByIndex.get(index);
+        const functionValue = toolCall.function;
+        if (!isRecord(functionValue)) throw malformedResponse(root);
+        const name = functionValue.name;
+        const argumentsDelta = functionValue.arguments;
+        if (toolCallId === undefined && typeof argumentsDelta !== "string") {
+          throw malformedResponse(root);
+        }
+        events.push({
+          type: "tool_call_delta",
+          toolCallId: toolCallId ?? `tool_call_index_${String(index)}`,
+          ...(typeof name === "string" ? { name } : {}),
+          ...(typeof argumentsDelta === "string" ? { argumentsDelta } : {})
+        });
+      }
+    }
+  }
+
+  const finishReason = choices
+    .map((choice) => (isRecord(choice) ? choice.finish_reason : undefined))
+    .find((value) => value !== undefined);
+  if (finishReason === "tool_calls" || finishReason === "stop") {
+    events.push({ type: "round_completed", finishReason });
   }
 
   if (root.usage !== undefined) {

@@ -80,11 +80,15 @@ describe("AgentRunFileRepository", () => {
     expect(typeof repository["writePlanArtifact"]).toBe("function");
     expect(typeof repository["listSnapshots"]).toBe("function");
     expect(typeof repository["readCommandReceipt"]).toBe("function");
+    expect(typeof repository["writeRetryCheckpoint"]).toBe("function");
+    expect(typeof repository["readRetryCheckpoint"]).toBe("function");
     if (
       typeof repository["writeContextSnapshot"] !== "function" ||
       typeof repository["writePlanArtifact"] !== "function" ||
       typeof repository["listSnapshots"] !== "function" ||
-      typeof repository["readCommandReceipt"] !== "function"
+      typeof repository["readCommandReceipt"] !== "function" ||
+      typeof repository["writeRetryCheckpoint"] !== "function" ||
+      typeof repository["readRetryCheckpoint"] !== "function"
     )
       return;
 
@@ -120,6 +124,15 @@ describe("AgentRunFileRepository", () => {
       ok: true,
       value: snapshot
     });
+    const retryCheckpoint = {
+      schemaVersion: "1.0",
+      runId: "run_02",
+      available: true,
+      toolCallId: "call_02",
+      toolName: "read_project_text",
+      argumentsText: '{"path":"notes/outline.md"}'
+    };
+    await repository["writeRetryCheckpoint"]?.("run_02", retryCheckpoint);
 
     expect(await repository["listSnapshots"]?.("project_01")).toEqual({
       ok: true,
@@ -128,6 +141,10 @@ describe("AgentRunFileRepository", () => {
     expect(await repository["readCommandReceipt"]?.("run_02", "answer_02")).toMatchObject({
       ok: true,
       value: { ok: true }
+    });
+    expect(await repository["readRetryCheckpoint"]?.("run_02")).toEqual({
+      ok: true,
+      value: retryCheckpoint
     });
     expect(
       JSON.parse(

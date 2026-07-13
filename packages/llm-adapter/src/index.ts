@@ -32,12 +32,15 @@ export type {
   LlmResponse,
   LlmStreamDeltaEvent,
   LlmStreamDoneEvent,
+  LlmStreamRoundCompletedEvent,
   LlmStreamEvent,
   LlmStreamResult,
   LlmStreamStartEvent,
+  LlmStreamToolCallDeltaEvent,
   LlmStreamUsageEvent,
   LlmTextContent,
   LlmTokenPricing,
+  LlmToolDefinition,
   LlmUsage,
   LlmUsageStatus
 } from "./types.js";

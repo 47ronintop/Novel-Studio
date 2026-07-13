@@ -21,7 +21,7 @@ import type {
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
 import { DEFAULT_EDITOR_PREFERENCES } from "@novel-studio/ui";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { createAiWritingWorkflowBridge } from "./ai-writing-workflow-bridge.js";
 import { createChapterEditorBridge } from "./chapter-editor-bridge.js";
@@ -32,6 +32,7 @@ import { createStoryBibleBridge } from "./story-bible-bridge.js";
 import { createSettingsBridge } from "./settings-bridge.js";
 import { createStudioBridge } from "./studio-bridge.js";
 import { createPlainFileEditorBridge } from "./plain-file-editor-bridge.js";
+import { createAgentRunBridge } from "./agent-run-bridge.js";
 import {
   createChapterEditorRuntime,
   createOnboardingProps,
@@ -70,6 +71,9 @@ export function App() {
   const [aiWritingWorkflowBridge] = useState(() =>
     api === undefined ? undefined : createAiWritingWorkflowBridge(api)
   );
+  const [agentRunBridge] = useState(() =>
+    api === undefined ? undefined : createAgentRunBridge(api)
+  );
   const [studioBridge] = useState(() => (api === undefined ? undefined : createStudioBridge(api)));
   const [commandExecutionBridge] = useState(() =>
     api === undefined ? undefined : createCommandExecutionBridge(api)
@@ -91,6 +95,7 @@ export function App() {
   const [aiWritingWorkflow, setAiWritingWorkflow] = useState(() =>
     aiWritingWorkflowBridge?.getProps()
   );
+  const [agentRun, setAgentRun] = useState(() => agentRunBridge?.getProps());
   const [studio, setStudio] = useState(() => studioBridge?.getProps());
   const [shortcutState, setShortcutState] = useState({ commandPaletteOpen: false });
   const [commandPaletteFeedback, setCommandPaletteFeedback] = useState<
@@ -113,6 +118,41 @@ export function App() {
     { readonly kind: "info" | "error"; readonly message: string } | undefined
   >();
   const lastNonSettingsActivityRef = useRef<ActivityId>("workspace");
+
+  useLayoutEffect(() => {
+    if (agentRunBridge === undefined) {
+      return;
+    }
+
+    const activeChapterId =
+      projectWorkflow?.activeChapterId ?? chapterEditor?.chapter.frontmatter.id;
+    const next = agentRunBridge.syncContext({
+      projectId: projectWorkflow?.projectId ?? "prj_minimal_chapter",
+      ...(activeChapterId === undefined ? {} : { activeChapterId }),
+      ...(chapterEditor === undefined ? {} : { chapterEditor }),
+      ...(settings === undefined ? {} : { settings })
+    });
+    setAgentRun(next);
+  }, [agentRunBridge, chapterEditor, projectWorkflow, settings]);
+
+  useEffect(() => {
+    if (agentRunBridge === undefined) {
+      return;
+    }
+
+    return agentRunBridge.subscribe(() => {
+      setAgentRun(agentRunBridge.getProps());
+    });
+  }, [agentRunBridge]);
+
+  useEffect(() => {
+    if (agentRunBridge === undefined) {
+      return;
+    }
+
+    const projectId = projectWorkflow?.projectId ?? "prj_minimal_chapter";
+    void agentRunBridge.load(projectId).then(setAgentRun);
+  }, [agentRunBridge, projectWorkflow?.projectId]);
 
   useRendererAppEffects({
     api,
@@ -880,10 +920,18 @@ export function App() {
     }
   });
 
+  const workspaceAiWritingWorkflow =
+    aiWritingWorkflow === undefined
+      ? undefined
+      : {
+          ...aiWritingWorkflow,
+          ...(agentRun === undefined ? {} : { agentRun })
+        };
+
   return (
     <RendererWorkspaceShell
       appearancePreferences={appearancePreferences}
-      aiWritingWorkflow={aiWritingWorkflow}
+      aiWritingWorkflow={workspaceAiWritingWorkflow}
       projectWorkflow={projectWorkflow}
       projectSearch={projectSearch}
       settings={interactiveSettings}

@@ -21,6 +21,21 @@ export type LlmMessageRole = "system" | "developer" | "user" | "assistant" | "to
 export interface LlmMessage {
   readonly role: LlmMessageRole;
   readonly content: string;
+  readonly toolCallId?: string;
+  readonly toolCalls?: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly arguments: string;
+  }[];
+}
+
+export interface LlmToolDefinition {
+  readonly type: "function";
+  readonly function: {
+    readonly name: string;
+    readonly description?: string;
+    readonly parameters?: JsonObject;
+  };
 }
 
 export interface LlmModelProfile {
@@ -59,6 +74,7 @@ export interface LlmRequest {
   readonly parameters: LlmParameters;
   readonly abortSignal?: AbortSignal;
   readonly responseFormat?: JsonValue;
+  readonly tools?: readonly LlmToolDefinition[];
 }
 
 export interface LlmTextContent {
@@ -153,11 +169,25 @@ export interface LlmStreamDoneEvent {
   readonly createdAt: string;
 }
 
+export interface LlmStreamToolCallDeltaEvent {
+  readonly type: "tool_call_delta";
+  readonly toolCallId: string;
+  readonly name?: string;
+  readonly argumentsDelta?: string;
+}
+
+export interface LlmStreamRoundCompletedEvent {
+  readonly type: "round_completed";
+  readonly finishReason: "tool_calls" | "stop";
+}
+
 export type LlmStreamEvent =
   | LlmStreamStartEvent
   | LlmStreamDeltaEvent
   | LlmStreamUsageEvent
   | LlmStreamDoneEvent
+  | LlmStreamToolCallDeltaEvent
+  | LlmStreamRoundCompletedEvent
   | LlmProviderWarning;
 
 export type LlmStreamResult = Result<LlmStreamEvent, UnifiedError>;
@@ -168,7 +198,12 @@ export interface LlmProviderCompletion {
   readonly warnings?: readonly LlmProviderWarning[];
 }
 
-export type LlmProviderStreamEvent = LlmStreamDeltaEvent | LlmStreamUsageEvent | LlmProviderWarning;
+export type LlmProviderStreamEvent =
+  | LlmStreamDeltaEvent
+  | LlmStreamUsageEvent
+  | LlmStreamToolCallDeltaEvent
+  | LlmStreamRoundCompletedEvent
+  | LlmProviderWarning;
 
 export interface LlmProvider {
   readonly id: LlmProviderId;

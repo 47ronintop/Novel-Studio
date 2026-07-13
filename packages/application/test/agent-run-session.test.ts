@@ -234,6 +234,45 @@ describe("AgentRunSession", () => {
     expect(publishedTypes).not.toContain("run_completed");
   });
 
+  test("returns the persisted stop receipt after application reload", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+
+    const repository = durableMemoryRepository();
+    const create = createSession as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      stopAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    const firstSession = create({
+      coordinatorOptions: { createRunId: () => "run_stop_reload" },
+      repository,
+      modelDriver: { streamRound: blockedModelRound },
+      readToolExecutor: { async execute() { return { ok: true, value: { summary: "unused", data: {} } }; } }
+    });
+    await firstSession.startAgentRun(startCommand());
+    const running = (await firstSession.readAgentRun("run_stop_reload")) as {
+      value: { snapshot: { runRevision: number } };
+    };
+    const command = {
+      projectId: "project-01",
+      runId: "run_stop_reload",
+      commandId: "stop-reload-01",
+      expectedRunRevision: running.value.snapshot.runRevision
+    };
+    const first = await firstSession.stopAgentRun(command);
+    const reloadedSession = create({
+      repository,
+      modelDriver: { streamRound: () => unexpectedModelRound("Stopped run must not resume.") },
+      readToolExecutor: { async execute() { return { ok: true, value: { summary: "unused", data: {} } }; } }
+    });
+
+    expect(await reloadedSession.stopAgentRun(command)).toEqual(first);
+  });
+
   test("pauses before the next model round when a critical context source becomes stale", async () => {
     const createSession = (applicationExports as unknown as Record<string, unknown>)[
       "createAgentRunSession"
@@ -502,6 +541,82 @@ describe("AgentRunSession", () => {
     release();
   });
 
+  test("returns the persisted start receipt after reload without creating a second run", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+
+    const repository = durableMemoryRepository();
+    const command = startCommand();
+    const firstSession = (createSession as (options: Record<string, unknown>) => unknown)({
+      coordinatorOptions: { createRunId: () => "run_start_reload" },
+      repository,
+      modelDriver: { streamRound: blockedModelRound },
+      readToolExecutor: { async execute() { return { ok: true, value: { summary: "unused", data: {} } }; } }
+    }) as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+    };
+    const first = await firstSession.startAgentRun(command);
+    let secondModelStarts = 0;
+    const reloadedSession = (createSession as (options: Record<string, unknown>) => unknown)({
+      coordinatorOptions: { createRunId: () => "run_start_duplicate" },
+      repository,
+      modelDriver: {
+        async *streamRound() {
+          secondModelStarts += 1;
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      readToolExecutor: { async execute() { return { ok: true, value: { summary: "unused", data: {} } }; } }
+    }) as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      listAgentRuns(projectId: string): Promise<Record<string, unknown>>;
+    };
+
+    expect(await reloadedSession.startAgentRun(command)).toEqual(first);
+    expect(secondModelStarts).toBe(0);
+    expect(await reloadedSession.listAgentRuns("project-01")).toMatchObject({
+      value: [expect.objectContaining({ runId: "run_start_reload" })]
+    });
+  });
+
+  test("blocks a different start command when an active run was persisted before reload", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+
+    const repository = durableMemoryRepository();
+    const firstSession = (createSession as (options: Record<string, unknown>) => unknown)({
+      coordinatorOptions: { createRunId: () => "run_active_reload" },
+      repository,
+      modelDriver: { streamRound: blockedModelRound },
+      readToolExecutor: { async execute() { return { ok: true, value: { summary: "unused", data: {} } }; } }
+    }) as { startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>> };
+    await firstSession.startAgentRun(startCommand());
+
+    let secondModelStarts = 0;
+    const reloadedSession = (createSession as (options: Record<string, unknown>) => unknown)({
+      coordinatorOptions: { createRunId: () => "run_must_not_start" },
+      repository,
+      modelDriver: {
+        async *streamRound() {
+          secondModelStarts += 1;
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      readToolExecutor: { async execute() { return { ok: true, value: { summary: "unused", data: {} } }; } }
+    }) as { startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>> };
+
+    expect(
+      await reloadedSession.startAgentRun({ ...startCommand(), commandId: "start-after-reload" })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_RUN_ALREADY_ACTIVE" } });
+    expect(secondModelStarts).toBe(0);
+  });
+
   test("restores a durable question in a new session and resumes the same run after an answer", async () => {
     const createSession = (applicationExports as unknown as Record<string, unknown>)[
       "createAgentRunSession"
@@ -571,14 +686,15 @@ describe("AgentRunSession", () => {
     });
     const revision = (restored as { value: { snapshot: { runRevision: number } } }).value.snapshot
       .runRevision;
-    await restoredSession.answerUserInput({
+    const answerCommand = {
       projectId: "project-01",
       runId: "run_durable_pause",
       commandId: "durable-answer",
       expectedRunRevision: revision,
       questionId: "question_durable",
       answer: "保留揭示时机。"
-    });
+    };
+    const firstAnswer = await restoredSession.answerUserInput(answerCommand);
     await vi.waitFor(async () => {
       expect(await restoredSession.readAgentRun("run_durable_pause")).toMatchObject({
         value: { snapshot: { status: "completed" } }
@@ -590,6 +706,12 @@ describe("AgentRunSession", () => {
     expect(resumedMessages).toContainEqual(
       expect.objectContaining({ role: "user", content: "保留揭示时机。" })
     );
+    const duplicateSession = create({
+      repository,
+      modelDriver: { streamRound: () => unexpectedModelRound("Duplicate answer must not resume.") },
+      readToolExecutor: { async execute() { return { ok: true, value: { summary: "unused", data: {} } }; } }
+    });
+    expect(await duplicateSession.answerUserInput(answerCommand)).toEqual(firstAnswer);
   });
 
   test("lists durable run snapshots for the selected project", async () => {
@@ -780,6 +902,734 @@ describe("AgentRunSession", () => {
     });
     expect(executions).toBe(2);
   });
+
+  test("resumes a persisted active run after application reload", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+
+    const snapshot = {
+      schemaVersion: "1.0",
+      runId: "run_reload_resume",
+      projectId: "project-01",
+      operationMode: "execution",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      userRequest: "恢复运行",
+      status: "executing_model",
+      runRevision: 1,
+      lastSequence: 1,
+      startedAt: "2026-07-13T00:00:00.000Z",
+      updatedAt: "2026-07-13T00:00:00.000Z",
+      limits: { maxModelRounds: 20, maxToolCalls: 50, maxConsecutiveToolFailures: 3 },
+      providerCapabilitySnapshot: startCommand().providerCapabilitySnapshot,
+      pendingUserInputId: null,
+      contextSnapshotId: null,
+      sourcePlanId: null,
+      sourcePlanRevision: null
+    };
+    const events = [
+      {
+        schemaVersion: "1.0",
+        runId: snapshot.runId,
+        projectId: snapshot.projectId,
+        sequence: 1,
+        runRevision: 1,
+        type: "run_started",
+        createdAt: snapshot.startedAt
+      }
+    ];
+    const session = (createSession as (options: Record<string, unknown>) => unknown)({
+      repository: {
+        ...memoryRepository(),
+        async readSnapshot() {
+          return { ok: true, value: snapshot };
+        },
+        async readEvents() {
+          return { ok: true, value: events };
+        }
+      },
+      modelDriver: {
+        async *streamRound() {
+          yield toolCall("resume_finish", "finish", { summary: "恢复完成" });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      readToolExecutor: { async execute() { return { ok: true, value: { summary: "ok", data: {} } }; } }
+    }) as {
+      resumeAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+
+    const resumed = await session.resumeAgentRun({
+      projectId: snapshot.projectId,
+      runId: snapshot.runId,
+      commandId: "resume-01",
+      expectedRunRevision: snapshot.runRevision
+    });
+    expect(resumed).toMatchObject({ ok: true, value: { runId: snapshot.runId } });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun(snapshot.runId)).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+  });
+
+  test("approves a ready plan by creating a linked execution run", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+
+    let runs = 0;
+    const session = (createSession as (options: Record<string, unknown>) => unknown)({
+      coordinatorOptions: { createRunId: () => `run_plan_${++runs}` },
+      repository: memoryRepository(),
+      modelDriver: {
+        async *streamRound(input: { readonly snapshot: Record<string, unknown> }) {
+          if (input.snapshot["sourcePlanId"] === "plan-01") {
+            yield toolCall("execution_finish", "finish", { summary: "执行完成" });
+          } else {
+            yield toolCall("finish_plan", "finish_plan", {
+              planId: "plan-01",
+              goal: "生成计划",
+              successCriteria: ["完成"],
+              nonGoals: ["不写文件"],
+              facts: ["已读取"],
+              assumptions: [],
+              openQuestions: [],
+              targetRefs: [{ refId: "chapter:chapter-03", intent: "检查" }],
+              steps: [{ stepId: "step-01", title: "检查", verification: "重新读取" }],
+              risks: [],
+              verification: ["读取章节"],
+              sourceRefs: ["chapter:chapter-03"]
+            });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      readToolExecutor: { async execute() { return { ok: true, value: { summary: "ok", data: {} } }; } }
+    }) as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      decidePlan(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+
+    const started = await session.startAgentRun({ ...startCommand(), operationMode: "planning" });
+    const planningRunId = String((started as { value: { runId: string } }).value.runId);
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun(planningRunId)).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "plan_ready" } }
+      });
+    });
+    const planning = (await session.readAgentRun(planningRunId)) as {
+      value: { snapshot: Record<string, unknown> };
+    };
+    const rejectedPolicy = await session.decidePlan({
+      projectId: "project-01",
+      runId: planningRunId,
+      commandId: "plan-auto-policy-01",
+      expectedRunRevision: planning.value.snapshot["runRevision"],
+      planId: "plan-01",
+      planRevision: 1,
+      decision: "approve",
+      executionWritePolicy: "user_preapproved_run"
+    });
+    expect(rejectedPolicy).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_WRITE_POLICY_NOT_AVAILABLE" }
+    });
+    expect(await session.readAgentRun(planningRunId)).toMatchObject({
+      value: { snapshot: { status: "plan_ready" } }
+    });
+    const decided = await session.decidePlan({
+      projectId: "project-01",
+      runId: planningRunId,
+      commandId: "plan-approve-01",
+      expectedRunRevision: planning.value.snapshot["runRevision"],
+      planId: "plan-01",
+      planRevision: 1,
+      decision: "approve",
+      executionWritePolicy: "write_before_confirmation"
+    });
+    expect(decided).toMatchObject({
+      ok: true,
+      value: { sourcePlanId: "plan-01", sourcePlanRevision: 1, operationMode: "execution" }
+    });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun(planningRunId)).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+  });
+
+  test("retries one failed tool step and deduplicates the retry command", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+
+    let rounds = 0;
+    let executions = 0;
+    const never = new Promise<void>(() => undefined);
+    const session = (createSession as (options: Record<string, unknown>) => unknown)({
+      coordinatorOptions: { createRunId: () => "run_retry_step" },
+      repository: memoryRepository(),
+      modelDriver: {
+        async *streamRound() {
+          rounds += 1;
+          if (rounds === 1) {
+            yield toolCall("retry_read", "read_project_text", { path: "notes/retry.md" });
+          } else if (rounds === 2) {
+            await never;
+            return;
+          } else {
+            yield toolCall(`retry_finish_${rounds}`, "finish", { summary: "重试完成" });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      readToolExecutor: {
+        async execute() {
+          executions += 1;
+          return executions === 1
+            ? {
+                ok: false,
+                error: {
+                  errorId: "retry-error",
+                  code: "AGENT_READ_FAILED",
+                  category: "StorageError",
+                  message: "read failed",
+                  recoverability: "retryable",
+                  suggestedAction: "retry",
+                  traceId: "test",
+                  timestamp: "2026-07-13T00:00:00.000Z"
+                }
+              }
+            : { ok: true, value: { summary: "read succeeded", data: {} } };
+        }
+      }
+    }) as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      retryStep(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+
+    await session.startAgentRun(startCommand());
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_retry_step")).toMatchObject({
+        value: { events: expect.arrayContaining([expect.objectContaining({ type: "tool_failed" })]) }
+      });
+    });
+    const failed = (await session.readAgentRun("run_retry_step")) as {
+      value: { snapshot: { runRevision: number } };
+    };
+    const command = {
+      projectId: "project-01",
+      runId: "run_retry_step",
+      commandId: "retry-command-01",
+      expectedRunRevision: failed.value.snapshot.runRevision
+    };
+    const first = await session.retryStep(command);
+    const duplicate = await session.retryStep(command);
+
+    expect(first).toEqual(duplicate);
+    expect(executions).toBe(2);
+    const read = await session.readAgentRun("run_retry_step");
+    expect(read).toMatchObject({
+      value: {
+        events: expect.arrayContaining([
+          expect.objectContaining({ type: "tool_retry_requested" }),
+          expect.objectContaining({ type: "tool_completed" })
+        ])
+      }
+    });
+    expect(
+      (read as { value: { events: { type: string }[] } }).value.events.filter(
+        (event) => event.type === "tool_retry_requested"
+      )
+    ).toHaveLength(1);
+  });
+
+  test("restores the failed tool checkpoint so retry remains available after reload", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+
+    const repository = durableMemoryRepository();
+    const never = new Promise<void>(() => undefined);
+    let firstRounds = 0;
+    const firstSession = (createSession as (options: Record<string, unknown>) => unknown)({
+      coordinatorOptions: { createRunId: () => "run_retry_reload" },
+      repository,
+      modelDriver: {
+        async *streamRound() {
+          firstRounds += 1;
+          if (firstRounds === 1) {
+            yield toolCall("reload_read", "read_project_text", { path: "notes/reload.md" });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          await never;
+        }
+      },
+      readToolExecutor: {
+        async execute() {
+          return {
+            ok: false,
+            error: {
+              errorId: "reload-error",
+              code: "AGENT_READ_FAILED",
+              category: "StorageError",
+              message: "read failed",
+              recoverability: "retryable",
+              suggestedAction: "retry",
+              traceId: "test",
+              timestamp: "2026-07-13T00:00:00.000Z"
+            }
+          };
+        }
+      }
+    }) as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    await firstSession.startAgentRun(startCommand());
+    await vi.waitFor(async () => {
+      expect(await firstSession.readAgentRun("run_retry_reload")).toMatchObject({
+        value: { events: expect.arrayContaining([expect.objectContaining({ type: "tool_failed" })]) }
+      });
+    });
+
+    let executions = 0;
+    const reloadedSession = (createSession as (options: Record<string, unknown>) => unknown)({
+      repository,
+      modelDriver: {
+        async *streamRound() {
+          yield toolCall("reload_finish", "finish", { summary: "完成" });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      readToolExecutor: {
+        async execute() {
+          executions += 1;
+          return { ok: true, value: { summary: "read succeeded", data: {} } };
+        }
+      }
+    }) as {
+      retryStep(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    const reloaded = (await reloadedSession.readAgentRun("run_retry_reload")) as {
+      value: { snapshot: { runRevision: number } };
+    };
+    const retried = await reloadedSession.retryStep({
+      projectId: "project-01",
+      runId: "run_retry_reload",
+      commandId: "retry-after-reload",
+      expectedRunRevision: reloaded.value.snapshot.runRevision
+    });
+
+    expect(retried).toMatchObject({ ok: true });
+    expect(executions).toBe(1);
+  });
+
+  test("refreshes stale context through an explicit command", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+
+    const sourceContent = "before";
+    const session = (createSession as (options: Record<string, unknown>) => unknown)({
+      coordinatorOptions: { createRunId: () => "run_context_command" },
+      repository: memoryRepository(),
+      contextSourceReader: {
+        async readCurrentSources() {
+          return { ok: true, value: [{ refId: "file:notes.txt", content: "after" }] };
+        }
+      },
+      modelDriver: {
+        async *streamRound(input: { readonly messages: readonly Record<string, unknown>[] }) {
+          if (input.messages.some((message) => message["role"] === "tool")) {
+            yield toolCall("context_finish", "finish", { summary: "刷新后完成" });
+          } else {
+            yield toolCall("context_read", "read_project_text", { path: "notes.txt" });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      readToolExecutor: {
+        async execute() {
+          const content = sourceContent;
+          return {
+            ok: true,
+            value: {
+              summary: "已读取 notes.txt",
+              data: { content },
+              source: {
+                refId: "file:notes.txt",
+                sourceKind: "disk_file",
+                relativePath: "notes.txt",
+                content,
+                dirty: false
+              }
+            }
+          };
+        }
+      }
+    }) as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      refreshContext(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    const started = await session.startAgentRun({ ...startCommand(), operationMode: "planning" });
+    const runId = String((started as { value: { runId: string } }).value.runId);
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun(runId)).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "awaiting_context_refresh" } }
+      });
+    });
+    const stale = (await session.readAgentRun(runId)) as {
+      value: { snapshot: Record<string, unknown> };
+    };
+    const refreshed = await session.refreshContext({
+      projectId: "project-01",
+      runId,
+      commandId: "context-refresh-01",
+      expectedRunRevision: stale.value.snapshot["runRevision"],
+      decision: "refresh"
+    });
+    expect(refreshed).toMatchObject({ ok: true, value: { runId } });
+  });
+
+  test("excludes stale refs, informs the next model round, and deduplicates the command", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+
+    let rounds = 0;
+    let sawExclusion = false;
+    const persistedContexts: Record<string, unknown>[] = [];
+    const session = (createSession as (options: Record<string, unknown>) => unknown)({
+      coordinatorOptions: { createRunId: () => "run_context_exclude" },
+      repository: {
+        ...memoryRepository(),
+        async writeContextSnapshot(snapshot: Record<string, unknown>) {
+          persistedContexts.push(snapshot);
+          return { ok: true, value: snapshot };
+        }
+      },
+      modelDriver: {
+        async *streamRound(input: { readonly messages: readonly Record<string, unknown>[] }) {
+          rounds += 1;
+          if (rounds === 1) {
+            yield toolCall("exclude_read", "read_project_text", { path: "notes/outline.md" });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          sawExclusion = input.messages.some(
+            (message) =>
+              message["role"] === "system" &&
+              typeof message["content"] === "string" &&
+              message["content"].includes('"kind":"context_excluded"')
+          );
+          yield toolCall("exclude_finish", "finish_plan", {
+            planId: "plan-exclude",
+            goal: "排除过期上下文后完成只读规划。",
+            successCriteria: ["模型收到排除决定"],
+            nonGoals: ["不写入文件"],
+            facts: ["notes/outline.md 已被排除"],
+            assumptions: [],
+            openQuestions: [],
+            targetRefs: [],
+            steps: [
+              {
+                stepId: "step-exclude",
+                title: "完成只读规划",
+                verification: "确认排除决定已记录"
+              }
+            ],
+            risks: [],
+            verification: ["检查 Context Snapshot"],
+            sourceRefs: []
+          });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      readToolExecutor: {
+        async execute() {
+          return {
+            ok: true,
+            value: {
+              summary: "已读取 notes/outline.md",
+              data: { content: "original" },
+              source: {
+                refId: "file:notes/outline.md",
+                sourceKind: "disk_file",
+                relativePath: "notes/outline.md",
+                content: "original",
+                dirty: false
+              }
+            }
+          };
+        }
+      },
+      contextSourceReader: {
+        async readCurrentSources(input: { readonly sources: readonly Record<string, unknown>[] }) {
+          return {
+            ok: true,
+            value:
+              input.sources.length === 0
+                ? []
+                : [{ refId: "file:notes/outline.md", content: "changed" }]
+          };
+        }
+      }
+    }) as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      refreshContext(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+
+    await session.startAgentRun({ ...startCommand(), operationMode: "planning" });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_context_exclude")).toMatchObject({
+        value: { snapshot: { status: "awaiting_context_refresh" } }
+      });
+    });
+    const stale = (await session.readAgentRun("run_context_exclude")) as {
+      value: { snapshot: { runRevision: number } };
+    };
+    const command = {
+      projectId: "project-01",
+      runId: "run_context_exclude",
+      commandId: "context-exclude-01",
+      expectedRunRevision: stale.value.snapshot.runRevision,
+      decision: "exclude" as const,
+      sourceRefs: ["file:notes/outline.md"]
+    };
+    const first = await session.refreshContext(command);
+    const duplicate = await session.refreshContext(command);
+
+    expect(duplicate).toEqual(first);
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_context_exclude")).toMatchObject({
+        value: { snapshot: { status: "plan_ready" } }
+      });
+    });
+    expect(sawExclusion).toBe(true);
+    expect(
+      persistedContexts.some((snapshot) =>
+        (JSON.stringify(snapshot["excludedSources"]) ?? "").includes("file:notes/outline.md")
+      )
+    ).toBe(true);
+  });
+
+  test("cancels from stale context and does not resume after a duplicate command", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+
+    let rounds = 0;
+    const publishedTypes: string[] = [];
+    const session = (createSession as (options: Record<string, unknown>) => unknown)({
+      coordinatorOptions: { createRunId: () => "run_context_cancel" },
+      repository: memoryRepository(),
+      modelDriver: {
+        async *streamRound() {
+          rounds += 1;
+          if (rounds === 1) {
+            yield toolCall("cancel_read", "read_project_text", { path: "notes/outline.md" });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          yield toolCall("cancel_finish", "finish", { summary: "不应恢复" });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      readToolExecutor: {
+        async execute() {
+          return {
+            ok: true,
+            value: {
+              summary: "已读取 notes/outline.md",
+              data: { content: "original" },
+              source: {
+                refId: "file:notes/outline.md",
+                sourceKind: "disk_file",
+                relativePath: "notes/outline.md",
+                content: "original",
+                dirty: false
+              }
+            }
+          };
+        }
+      },
+      contextSourceReader: {
+        async readCurrentSources() {
+          return { ok: true, value: [{ refId: "file:notes/outline.md", content: "changed" }] };
+        }
+      }
+    }) as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      refreshContext(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+      subscribe(listener: (event: Record<string, unknown>) => void): () => void;
+    };
+    session.subscribe((event) => publishedTypes.push(String(event["type"])));
+
+    await session.startAgentRun({ ...startCommand(), operationMode: "planning" });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_context_cancel")).toMatchObject({
+        value: { snapshot: { status: "awaiting_context_refresh" } }
+      });
+    });
+    const stale = (await session.readAgentRun("run_context_cancel")) as {
+      value: { snapshot: { runRevision: number } };
+    };
+    const command = {
+      projectId: "project-01",
+      runId: "run_context_cancel",
+      commandId: "context-cancel-01",
+      expectedRunRevision: stale.value.snapshot.runRevision,
+      decision: "cancel" as const,
+      sourceRefs: ["file:notes/outline.md"]
+    };
+    const first = await session.refreshContext(command);
+    const duplicate = await session.refreshContext(command);
+
+    expect(duplicate).toEqual(first);
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_context_cancel")).toMatchObject({
+        value: { snapshot: { status: "cancelled" } }
+      });
+    });
+    expect(rounds).toBe(1);
+    expect(publishedTypes.filter((type) => type === "run_cancelled")).toHaveLength(1);
+    expect(publishedTypes).not.toContain("context_refresh_cancelled");
+  });
+
+  test("refreshes an existing dirty editor source from renderer content without expanding refs", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+
+    let currentBody = "dirty before";
+    let rounds = 0;
+    const observedSources: Record<string, unknown>[][] = [];
+    const session = (createSession as (options: Record<string, unknown>) => unknown)({
+      coordinatorOptions: { createRunId: () => "run_dirty_refresh" },
+      repository: memoryRepository(),
+      contextSourceReader: {
+        async readCurrentSources(input: { readonly sources: Record<string, unknown>[] }) {
+          observedSources.push(input.sources);
+          return {
+            ok: true,
+            value: input.sources.map((source) => ({
+              refId: String(source["refId"]),
+              content: currentBody
+            }))
+          };
+        }
+      },
+      modelDriver: {
+        async *streamRound() {
+          rounds += 1;
+          if (rounds === 1) {
+            yield toolCall("dirty_read", "read_project_text", { path: "notes/context.md" });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          yield toolCall("dirty_finish", "finish", { summary: "完成" });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      readToolExecutor: {
+        async execute() {
+          currentBody = "dirty after";
+          return { ok: true, value: { summary: "read", data: {} } };
+        }
+      }
+    }) as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      refreshContext(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+
+    await session.startAgentRun({
+      ...startCommand(),
+      operationMode: "planning",
+      initialContextSources: [
+        {
+          refId: "chapter:chapter-01",
+          sourceKind: "editor_buffer",
+          relativePath: "chapters/chapter-01.md",
+          content: "dirty before",
+          dirty: true
+        }
+      ]
+    });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_dirty_refresh")).toMatchObject({
+        value: { snapshot: { status: "awaiting_context_refresh" } }
+      });
+    });
+    const stale = (await session.readAgentRun("run_dirty_refresh")) as {
+      value: { snapshot: { runRevision: number } };
+    };
+    const refreshed = await session.refreshContext({
+      projectId: "project-01",
+      runId: "run_dirty_refresh",
+      commandId: "dirty-refresh-01",
+      expectedRunRevision: stale.value.snapshot.runRevision,
+      decision: "refresh",
+      sourceRefs: ["chapter:chapter-01", "file:outside-scope.md"],
+      currentSources: [
+        {
+          refId: "chapter:chapter-01",
+          sourceKind: "editor_buffer",
+          relativePath: "chapters/chapter-01.md",
+          content: "dirty after",
+          dirty: true
+        },
+        {
+          refId: "file:outside-scope.md",
+          sourceKind: "disk_file",
+          relativePath: "outside-scope.md",
+          content: "must not be added",
+          dirty: false
+        }
+      ]
+    });
+
+    expect(refreshed).toMatchObject({ ok: true });
+    expect(observedSources.at(-1)).toEqual([
+      expect.objectContaining({
+        refId: "chapter:chapter-01",
+        sourceKind: "editor_buffer",
+        content: "dirty after",
+        dirty: true
+      })
+    ]);
+  });
 });
 
 function toolCall(toolCallId: string, name: string, argumentsValue: Record<string, unknown>) {
@@ -789,6 +1639,16 @@ function toolCall(toolCallId: string, name: string, argumentsValue: Record<strin
     name,
     argumentsDelta: JSON.stringify(argumentsValue)
   };
+}
+
+async function* blockedModelRound() {
+  await new Promise<void>(() => undefined);
+  yield { type: "round_completed" as const, finishReason: "stop" as const };
+}
+
+async function* unexpectedModelRound(message: string) {
+  if (message.length > 0) throw new Error(message);
+  yield { type: "round_completed" as const, finishReason: "stop" as const };
 }
 
 function startCommand(): Record<string, unknown> {
@@ -841,6 +1701,8 @@ function memoryRepository() {
 function durableMemoryRepository() {
   const snapshots = new Map<string, Record<string, unknown>>();
   const events = new Map<string, Record<string, unknown>[]>();
+  const retryCheckpoints = new Map<string, Record<string, unknown>>();
+  const commandReceipts = new Map<string, Record<string, unknown>>();
   return {
     async writeSnapshot(snapshot: Record<string, unknown>) {
       snapshots.set(String(snapshot["runId"]), structuredClone(snapshot));
@@ -851,14 +1713,25 @@ function durableMemoryRepository() {
       events.set(runId, [...(events.get(runId) ?? []), structuredClone(event)]);
       return { ok: true, value: event };
     },
-    async writeCommandReceipt() {
-      return { ok: true, value: {} };
+    async writeCommandReceipt(runId: string, commandId: string, receipt: Record<string, unknown>) {
+      commandReceipts.set(`${runId}:${commandId}`, structuredClone(receipt));
+      return { ok: true, value: receipt };
+    },
+    async readCommandReceipt(runId: string, commandId: string) {
+      return { ok: true, value: commandReceipts.get(`${runId}:${commandId}`) };
     },
     async readSnapshot(runId: string) {
       return { ok: true, value: snapshots.get(runId) };
     },
     async readEvents(runId: string) {
       return { ok: true, value: events.get(runId) ?? [] };
+    },
+    async writeRetryCheckpoint(runId: string, checkpoint: Record<string, unknown>) {
+      retryCheckpoints.set(runId, structuredClone(checkpoint));
+      return { ok: true, value: checkpoint };
+    },
+    async readRetryCheckpoint(runId: string) {
+      return { ok: true, value: retryCheckpoints.get(runId) };
     },
     async listSnapshots(projectId: string) {
       return {

@@ -9,6 +9,10 @@ import type {
 } from "@novel-studio/application";
 import type {
   AgentRunEvent,
+  DecideAgentPlanCommand,
+  RefreshAgentContextCommand,
+  ResumeAgentRunCommand,
+  RetryAgentRunStepCommand,
   StartAgentRunCommand,
   StopAgentRunCommand
 } from "@novel-studio/agent-engine";
@@ -351,6 +355,30 @@ export function createApplicationIpcHandlers(
         ? Promise.resolve(agentRunUnavailable())
         : options.agentRunSession.answerUserInput(parsed);
     },
+    "application:agent-run:resume": (command: unknown) => {
+      const parsed = toResumeAgentRunCommand(command);
+      return parsed === undefined || options.agentRunSession === undefined
+        ? Promise.resolve(agentRunUnavailable())
+        : options.agentRunSession.resumeAgentRun(parsed);
+    },
+    "application:agent-run:retry-step": (command: unknown) => {
+      const parsed = toRetryAgentRunStepCommand(command);
+      return parsed === undefined || options.agentRunSession === undefined
+        ? Promise.resolve(agentRunUnavailable())
+        : options.agentRunSession.retryStep(parsed);
+    },
+    "application:agent-run:decide-plan": (command: unknown) => {
+      const parsed = toDecideAgentPlanCommand(command);
+      return parsed === undefined || options.agentRunSession === undefined
+        ? Promise.resolve(agentRunUnavailable())
+        : options.agentRunSession.decidePlan(parsed);
+    },
+    "application:agent-run:refresh-context": (command: unknown) => {
+      const parsed = toRefreshAgentContextCommand(command);
+      return parsed === undefined || options.agentRunSession === undefined
+        ? Promise.resolve(agentRunUnavailable())
+        : options.agentRunSession.refreshContext(parsed);
+    },
     "application:agent-run:read": (runId: unknown) =>
       typeof runId !== "string" || options.agentRunSession === undefined
         ? Promise.resolve(agentRunUnavailable())
@@ -513,6 +541,22 @@ function toStopAgentRunCommand(value: unknown): StopAgentRunCommand | undefined 
 
 function toAnswerAgentUserInputCommand(value: unknown): AnswerAgentUserInputCommand | undefined {
   return isRecord(value) ? (value as unknown as AnswerAgentUserInputCommand) : undefined;
+}
+
+function toResumeAgentRunCommand(value: unknown): ResumeAgentRunCommand | undefined {
+  return isRecord(value) ? (value as unknown as ResumeAgentRunCommand) : undefined;
+}
+
+function toRetryAgentRunStepCommand(value: unknown): RetryAgentRunStepCommand | undefined {
+  return isRecord(value) ? (value as unknown as RetryAgentRunStepCommand) : undefined;
+}
+
+function toDecideAgentPlanCommand(value: unknown): DecideAgentPlanCommand | undefined {
+  return isRecord(value) ? (value as unknown as DecideAgentPlanCommand) : undefined;
+}
+
+function toRefreshAgentContextCommand(value: unknown): RefreshAgentContextCommand | undefined {
+  return isRecord(value) ? (value as unknown as RefreshAgentContextCommand) : undefined;
 }
 
 function agentRunUnavailable(): Result<never, UnifiedError> {

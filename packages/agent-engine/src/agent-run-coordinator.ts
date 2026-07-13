@@ -70,8 +70,8 @@ export function createAgentRunCoordinator(
         providerCapabilitySnapshot: command.providerCapabilitySnapshot,
         pendingUserInputId: null,
         contextSnapshotId: null,
-        sourcePlanId: null,
-        sourcePlanRevision: null
+        sourcePlanId: command.sourcePlanId ?? null,
+        sourcePlanRevision: command.sourcePlanRevision ?? null
       };
       runs.set(runId, snapshot);
       activeRunByProject.set(command.projectId, runId);

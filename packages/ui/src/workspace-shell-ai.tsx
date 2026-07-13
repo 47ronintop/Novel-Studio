@@ -12,6 +12,7 @@ import type {
   AiWritingWorkflowProps,
   AiWritingWorkflowStatus
 } from "./workspace-shell-types.js";
+import { AgentRunPanel } from "./agent-run-panel.js";
 
 export function AiWritingAssistantPanel({
   workflow,
@@ -29,11 +30,21 @@ export function AiWritingAssistantPanel({
   const modelPicker = aiModelPickerState(workflow);
 
   return (
-    <section className="ns-ai-workflow" aria-label="AI 写作工作流" data-compact={compact}>
-      <div className="ns-editor-panel-header">
-        <span>{compact ? "AI 助手" : "对话式写作助手"}</span>
-        <span className="ns-muted">{statusLabel(workflow.status)}</span>
-      </div>
+    <>
+      {workflow.agentRun === undefined || compact ? null : (
+        <section className="ns-ai-workflow" aria-label="Agent 工作流面板">
+          <div className="ns-editor-panel-header">
+            <span>Agentic Writing Loop</span>
+            <span className="ns-muted">只读 Stage 1</span>
+          </div>
+          <AgentRunPanel {...workflow.agentRun} />
+        </section>
+      )}
+      <section className="ns-ai-workflow" aria-label="AI 写作工作流" data-compact={compact}>
+        <div className="ns-editor-panel-header">
+          <span>{compact ? "AI 助手" : "对话式写作助手"}</span>
+          <span className="ns-muted">{statusLabel(workflow.status)}</span>
+        </div>
       {compact ? null : (
         <p className="ns-ai-context">
           输入你想让 AI 做的事，例如“续写当前场景”“让对白更自然”或“检查人物动机”。AI
@@ -185,7 +196,8 @@ export function AiWritingAssistantPanel({
           </div>
         </div>
       </section>
-    </section>
+      </section>
+    </>
   );
 }
 

@@ -168,6 +168,7 @@ export interface DesktopApplication {
   listWorkflowRuns(): Promise<Result<WorkflowRunSummary[], UnifiedError>>;
   readWorkflowRun(workflowRunId: string): Promise<Result<WorkflowRunRecord, UnifiedError>>;
   loadActiveChapter(): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
+  readActiveChapterState(): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
   editActiveChapter(nextBody: string): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
   saveActiveChapter(): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
   listActiveChapterVersions(): Promise<Result<readonly ChapterVersionSummary[], UnifiedError>>;
@@ -536,6 +537,13 @@ export function createDesktopApplication(
       }
 
       return createChapterSnapshot(activeChapterEditorSession, loaded.value);
+    },
+    async readActiveChapterState() {
+      const activeChapterEditorSession = getActiveChapterEditorSession();
+      const state = activeChapterEditorSession?.getState();
+      return activeChapterEditorSession === undefined || state === undefined
+        ? chapterEditorUnavailable()
+        : createChapterSnapshot(activeChapterEditorSession, state);
     },
     async editActiveChapter(nextBody: string) {
       const activeChapterEditorSession = getActiveChapterEditorSession();

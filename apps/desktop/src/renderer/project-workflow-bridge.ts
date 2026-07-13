@@ -387,6 +387,7 @@ export function createProjectWorkflowBridge(
           };
 
     return {
+      ...(snapshot?.project.projectId === undefined ? {} : { projectId: snapshot.project.projectId }),
       projectRootInput,
       ...(status === undefined ? {} : { status }),
       ...(feedback === undefined ? {} : { feedback }),

@@ -49,6 +49,10 @@ import type {
   AgentRunCommandResult,
   AgentRunEvent,
   AgentRunSnapshot,
+  DecideAgentPlanCommand,
+  RefreshAgentContextCommand,
+  ResumeAgentRunCommand,
+  RetryAgentRunStepCommand,
   StartAgentRunCommand,
   StopAgentRunCommand
 } from "@novel-studio/agent-engine";
@@ -248,6 +252,14 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
         invokeTyped<AgentRunCommandResult>(ipc, "application:agent-run:stop", command),
       answerUserInput: (command: AnswerAgentUserInputCommand) =>
         invokeTyped<AgentRunCommandResult>(ipc, "application:agent-run:answer-user-input", command),
+      resume: (command: ResumeAgentRunCommand) =>
+        invokeTyped<AgentRunCommandResult>(ipc, "application:agent-run:resume", command),
+      retryStep: (command: RetryAgentRunStepCommand) =>
+        invokeTyped<AgentRunCommandResult>(ipc, "application:agent-run:retry-step", command),
+      decidePlan: (command: DecideAgentPlanCommand) =>
+        invokeTyped<AgentRunCommandResult>(ipc, "application:agent-run:decide-plan", command),
+      refreshContext: (command: RefreshAgentContextCommand) =>
+        invokeTyped<AgentRunCommandResult>(ipc, "application:agent-run:refresh-context", command),
       read: (runId: string) =>
         invokeTyped<Result<AgentRunReadResult, UnifiedError>>(
           ipc,

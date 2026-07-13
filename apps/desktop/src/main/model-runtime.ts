@@ -2,21 +2,27 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import type {
+  AgentRunModelDriver,
   ChapterEditorSession,
+  CreateLlmAgentRunModelDriverOptions,
   ModelDiscoveryPort,
   ModelConnectionTester,
   ModelProfile
 } from "@novel-studio/application";
 import {
+  createLlmAgentRunModelDriver,
   createModelDiscoveryFallback,
   createModelDiscoverySnapshot
 } from "@novel-studio/application";
 import {
   createOpenAiCompatibleProvider,
+  createLlmAdapter,
   createProviderRouter,
   LlmProviderFailure,
   OpenAiCompatibleHttpError,
   type LlmProvider,
+  type LlmModelProfile,
+  type LlmParameters,
   type OpenAiCompatibleTransport,
   type OpenAiCompatibleTransportRequest
 } from "@novel-studio/llm-adapter";
@@ -60,6 +66,10 @@ export interface DesktopModelRuntime {
   readonly createAiProvider: (input: {
     readonly chapterEditorSession: ChapterEditorSession;
   }) => LlmProvider;
+  readonly createAgentModelDriver: (input: {
+    readonly modelProfile: LlmModelProfile;
+    readonly parameters?: LlmParameters;
+  }) => AgentRunModelDriver;
 }
 
 export interface DesktopModelRuntimeOptions {
@@ -199,7 +209,7 @@ export function createDesktopModelRuntime(
   const streamTransport = (request: OpenAiCompatibleTransportRequest) =>
     streamOpenAiCompatibleJson(fetchImpl, request);
 
-  return {
+  const runtime: DesktopModelRuntime = {
     modelConnectionTester: {
       async testConnection(profile) {
         const secret = await readProfileSecret(secretStore, profile);
@@ -370,8 +380,20 @@ export function createDesktopModelRuntime(
           yield* verifiedProvider.stream(request);
         }
       };
+    },
+    createAgentModelDriver(input) {
+      const provider = runtime.createAiProvider({
+        chapterEditorSession: {} as ChapterEditorSession
+      });
+      return createLlmAgentRunModelDriver({
+        adapter: createLlmAdapter({ provider }),
+        modelProfile: input.modelProfile,
+        ...(input.parameters === undefined ? {} : { parameters: input.parameters })
+      } satisfies CreateLlmAgentRunModelDriverOptions);
     }
   };
+
+  return runtime;
 }
 
 async function* streamOpenAiCompatibleJson(

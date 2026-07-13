@@ -13,6 +13,10 @@ import type {
   AgentRunCommandResult,
   AgentRunEvent,
   AgentRunSnapshot,
+  DecideAgentPlanCommand,
+  RefreshAgentContextCommand,
+  ResumeAgentRunCommand,
+  RetryAgentRunStepCommand,
   StartAgentRunCommand,
   StopAgentRunCommand
 } from "@novel-studio/agent-engine";
@@ -151,6 +155,10 @@ export interface NovelStudioApi {
     start(command: StartAgentRunCommand): Promise<AgentRunCommandResult>;
     stop(command: StopAgentRunCommand): Promise<AgentRunCommandResult>;
     answerUserInput(command: AnswerAgentUserInputCommand): Promise<AgentRunCommandResult>;
+    resume(command: ResumeAgentRunCommand): Promise<AgentRunCommandResult>;
+    retryStep(command: RetryAgentRunStepCommand): Promise<AgentRunCommandResult>;
+    decidePlan(command: DecideAgentPlanCommand): Promise<AgentRunCommandResult>;
+    refreshContext(command: RefreshAgentContextCommand): Promise<AgentRunCommandResult>;
     read(runId: string): Promise<Result<AgentRunReadResult, UnifiedError>>;
     list(projectId: string): Promise<Result<readonly AgentRunSnapshot[], UnifiedError>>;
     onEvent(listener: (event: AgentRunEvent) => void): () => void;

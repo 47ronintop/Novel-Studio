@@ -12,6 +12,7 @@ import { createApplicationMenuTemplate } from "./menu.js";
 import { createDesktopModelRuntime, createEncryptedFileModelSecretStore } from "./model-runtime.js";
 import { createSecureWebPreferences } from "./security.js";
 import type { DesktopApplication } from "@novel-studio/application";
+import type { LlmModelProfile, LlmProviderId } from "@novel-studio/llm-adapter";
 
 const currentDirectory = fileURLToPath(new URL(".", import.meta.url));
 let activeDesktopApplication: DesktopApplication | undefined;
@@ -40,7 +41,39 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
   const agentRunSession = createDesktopAgentRunSession({
     projectRoot,
     projectId: "prj_minimal_chapter",
-    activeChapterId: DEFAULT_FIXTURE_CHAPTER_ID
+    activeChapterId: DEFAULT_FIXTURE_CHAPTER_ID,
+    createAgentModelDriver: modelRuntime.createAgentModelDriver,
+    readEditorBuffer: async (refId) => {
+      const chapterId = refId.startsWith("chapter:") ? refId.slice("chapter:".length) : undefined;
+      if (chapterId === undefined || activeDesktopApplication === undefined) return undefined;
+      const activeChapter = await activeDesktopApplication.readActiveChapterState();
+      return activeChapter.ok && activeChapter.value.state.chapter.frontmatter.id === chapterId
+        ? activeChapter.value.state.chapter.body
+        : undefined;
+    },
+    resolveModelProfile: async (profileId) => {
+      const profiles = await activeDesktopApplication?.listModelProfiles();
+      if (profiles === undefined || !profiles.ok) return undefined;
+      const profile = profiles.value.profiles.find((entry) => entry.id === profileId);
+      if (profile === undefined) return undefined;
+      const modelProfile: LlmModelProfile = {
+        id: profile.id,
+        provider: profile.provider as LlmProviderId,
+        displayName: profile.displayName,
+        modelName: profile.modelName,
+        ...(profile.baseUrl === undefined ? {} : { baseUrl: profile.baseUrl }),
+        ...(profile.apiKeyRef.length === 0 ? {} : { apiKeyRef: profile.apiKeyRef }),
+        timeoutMs: profile.timeoutMs
+      };
+      return {
+        modelProfile,
+        parameters: {
+          temperature: profile.temperature,
+          maxTokens: profile.maxTokens,
+          ...(profile.topP === undefined ? {} : { topP: profile.topP })
+        }
+      };
+    }
   });
   const handlers = createApplicationIpcHandlers(activeDesktopApplication, {
     chooseOpenProjectDirectory: () => chooseProjectDirectory("Open Novel Studio project"),

@@ -1,4 +1,5 @@
 import type { JsonObject, UnifiedError } from "@novel-studio/shared";
+import type { AgentContextSourceInput } from "./context-snapshot.js";
 
 export type AgentOperationMode = "planning" | "execution";
 export type AgentContextMode = "writing" | "general_file";
@@ -73,10 +74,17 @@ export type AgentRunEventType =
   | "tool_started"
   | "tool_completed"
   | "tool_failed"
+  | "tool_retry_requested"
   | "user_input_requested"
   | "user_input_resolved"
   | "context_stale"
+  | "context_refreshed"
+  | "context_excluded"
+  | "context_refresh_cancelled"
+  | "run_resumed"
   | "plan_ready"
+  | "plan_decision_resolved"
+  | "plan_execution_started"
   | "run_completed"
   | "run_cancelled"
   | "run_failed"
@@ -107,6 +115,9 @@ export interface StartAgentRunCommand {
   readonly userRequest: string;
   readonly providerCapabilitySnapshot: AgentProviderCapabilitySnapshot;
   readonly limits?: Partial<AgentRunLimits>;
+  readonly initialContextSources?: readonly AgentContextSourceInput[];
+  readonly sourcePlanId?: string;
+  readonly sourcePlanRevision?: number;
 }
 
 export interface StopAgentRunCommand {
@@ -114,6 +125,41 @@ export interface StopAgentRunCommand {
   readonly projectId: string;
   readonly commandId: string;
   readonly expectedRunRevision: number;
+}
+
+export interface ResumeAgentRunCommand {
+  readonly runId: string;
+  readonly projectId: string;
+  readonly commandId: string;
+  readonly expectedRunRevision: number;
+}
+
+export interface RetryAgentRunStepCommand {
+  readonly runId: string;
+  readonly projectId: string;
+  readonly commandId: string;
+  readonly expectedRunRevision: number;
+}
+
+export interface DecideAgentPlanCommand {
+  readonly runId: string;
+  readonly projectId: string;
+  readonly commandId: string;
+  readonly expectedRunRevision: number;
+  readonly planId: string;
+  readonly planRevision: number;
+  readonly decision: "approve" | "reject";
+  readonly executionWritePolicy?: AgentWritePolicy;
+}
+
+export interface RefreshAgentContextCommand {
+  readonly runId: string;
+  readonly projectId: string;
+  readonly commandId: string;
+  readonly expectedRunRevision: number;
+  readonly decision: "refresh" | "exclude" | "cancel";
+  readonly sourceRefs?: readonly string[];
+  readonly currentSources?: readonly AgentContextSourceInput[];
 }
 
 export type AgentRunCommandResult =

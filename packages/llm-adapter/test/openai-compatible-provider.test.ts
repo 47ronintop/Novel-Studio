@@ -318,6 +318,69 @@ describe("OpenAI-compatible provider", () => {
     ]);
   });
 
+  test("preserves streamed tool-call deltas as tool events instead of text", async () => {
+    const provider = createOpenAiCompatibleProvider({
+      transport: async () => readFixture("openai-compatible-chat-success.json"),
+      streamTransport: async function* () {
+        yield {
+          choices: [
+            {
+              delta: {
+                content: "I will inspect the chapter.",
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_01",
+                    type: "function",
+                    function: { name: "read_chapter", arguments: "{\"chapter" }
+                  }
+                ]
+              }
+            }
+          ]
+        };
+        yield {
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    function: { arguments: "Id\":\"chapter-03\"}" }
+                  }
+                ]
+              },
+              finish_reason: "tool_calls"
+            }
+          ]
+        };
+      }
+    });
+    const adapter = createLlmAdapter({ provider });
+
+    const events = await collectStream(adapter.stream({ ...request, mode: "streaming" }));
+
+    expect(events).toEqual([
+      expect.objectContaining({ ok: true, value: expect.objectContaining({ type: "start" }) }),
+      { ok: true, value: { type: "delta", value: "I will inspect the chapter." } },
+      {
+        ok: true,
+        value: {
+          type: "tool_call_delta",
+          toolCallId: "call_01",
+          name: "read_chapter",
+          argumentsDelta: "{\"chapter"
+        }
+      },
+      {
+        ok: true,
+        value: { type: "tool_call_delta", toolCallId: "call_01", argumentsDelta: "Id\":\"chapter-03\"}" }
+      },
+      { ok: true, value: { type: "round_completed", finishReason: "tool_calls" } },
+      expect.objectContaining({ ok: true, value: expect.objectContaining({ type: "done" }) })
+    ]);
+  });
+
   test("normalizes malformed OpenAI-compatible streaming chunks", async () => {
     const provider = createOpenAiCompatibleProvider({
       transport: async () => readFixture("openai-compatible-chat-success.json"),

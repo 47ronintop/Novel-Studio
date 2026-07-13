@@ -120,6 +120,21 @@ export class AgentRunFileRepository {
     return this.readJson(this.runPath(runId, join("command-receipts", `${commandId}.json`)));
   }
 
+  public writeRetryCheckpoint(
+    runId: string,
+    checkpoint: JsonObject
+  ): Promise<Result<JsonObject, UnifiedError>> {
+    return readRunId(checkpoint) !== runId
+      ? Promise.resolve(this.invalidRecord("AGENT_RETRY_CHECKPOINT_INVALID"))
+      : this.writeJson(this.runPath(runId, "retry-checkpoint.json"), checkpoint);
+  }
+
+  public readRetryCheckpoint(
+    runId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    return this.readJson(this.runPath(runId, "retry-checkpoint.json"));
+  }
+
   public async listSnapshots(projectId?: string): Promise<Result<JsonObject[], UnifiedError>> {
     const root = join(this.options.projectRoot, "history", "agent-runs");
     try {

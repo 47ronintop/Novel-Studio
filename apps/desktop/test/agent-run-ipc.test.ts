@@ -23,6 +23,22 @@ describe("Agent Run IPC", () => {
         calls.push(`answer:${String(command["commandId"])}`);
         return { ok: true, value: snapshot("planning_model", 3, 3) };
       },
+      async resumeAgentRun(command: Record<string, unknown>) {
+        calls.push(`resume:${String(command["commandId"])}`);
+        return { ok: true, value: snapshot("planning_model", 4, 4) };
+      },
+      async retryStep(command: Record<string, unknown>) {
+        calls.push(`retry:${String(command["commandId"])}`);
+        return { ok: true, value: snapshot("planning_model", 5, 5) };
+      },
+      async decidePlan(command: Record<string, unknown>) {
+        calls.push(`plan:${String(command["commandId"])}`);
+        return { ok: true, value: snapshot("executing_model", 6, 6) };
+      },
+      async refreshContext(command: Record<string, unknown>) {
+        calls.push(`context:${String(command["commandId"])}`);
+        return { ok: true, value: snapshot("planning_model", 7, 7) };
+      },
       async readAgentRun(runId: string) {
         calls.push(`read:${runId}`);
         return { ok: true, value: { snapshot: snapshot("planning_model", 3, 3), events: [] } };
@@ -68,12 +84,20 @@ describe("Agent Run IPC", () => {
     expect(typeof handlers["application:agent-run:start"]).toBe("function");
     expect(typeof handlers["application:agent-run:stop"]).toBe("function");
     expect(typeof handlers["application:agent-run:answer-user-input"]).toBe("function");
+    expect(typeof handlers["application:agent-run:resume"]).toBe("function");
+    expect(typeof handlers["application:agent-run:retry-step"]).toBe("function");
+    expect(typeof handlers["application:agent-run:decide-plan"]).toBe("function");
+    expect(typeof handlers["application:agent-run:refresh-context"]).toBe("function");
     expect(typeof handlers["application:agent-run:read"]).toBe("function");
     expect(typeof handlers["application:agent-run:list"]).toBe("function");
     if (
       handlers["application:agent-run:start"] === undefined ||
       handlers["application:agent-run:stop"] === undefined ||
       handlers["application:agent-run:answer-user-input"] === undefined ||
+      handlers["application:agent-run:resume"] === undefined ||
+      handlers["application:agent-run:retry-step"] === undefined ||
+      handlers["application:agent-run:decide-plan"] === undefined ||
+      handlers["application:agent-run:refresh-context"] === undefined ||
       handlers["application:agent-run:read"] === undefined ||
       handlers["application:agent-run:list"] === undefined
     )
@@ -87,6 +111,34 @@ describe("Agent Run IPC", () => {
       expectedRunRevision: 2,
       questionId: "question-01",
       answer: "保留"
+    });
+    await handlers["application:agent-run:resume"]({
+      projectId: "project-01",
+      runId: "run-ipc",
+      commandId: "resume-01",
+      expectedRunRevision: 3
+    });
+    await handlers["application:agent-run:retry-step"]({
+      projectId: "project-01",
+      runId: "run-ipc",
+      commandId: "retry-01",
+      expectedRunRevision: 4
+    });
+    await handlers["application:agent-run:decide-plan"]({
+      projectId: "project-01",
+      runId: "run-ipc",
+      commandId: "plan-01",
+      expectedRunRevision: 5,
+      planId: "plan-01",
+      planRevision: 1,
+      decision: "approve"
+    });
+    await handlers["application:agent-run:refresh-context"]({
+      projectId: "project-01",
+      runId: "run-ipc",
+      commandId: "context-01",
+      expectedRunRevision: 6,
+      decision: "refresh"
     });
     await handlers["application:agent-run:read"]("run-ipc");
     await handlers["application:agent-run:list"]("project-01");
@@ -113,6 +165,10 @@ describe("Agent Run IPC", () => {
     expect(calls).toEqual([
       "start:start-01",
       "answer:answer-01",
+      "resume:resume-01",
+      "retry:retry-01",
+      "plan:plan-01",
+      "context:context-01",
       "read:run-ipc",
       "list:project-01",
       "stop:stop-01"
@@ -142,6 +198,10 @@ describe("Agent Run IPC", () => {
     expect(typeof agentRuns["start"]).toBe("function");
     expect(typeof agentRuns["stop"]).toBe("function");
     expect(typeof agentRuns["answerUserInput"]).toBe("function");
+    expect(typeof agentRuns["resume"]).toBe("function");
+    expect(typeof agentRuns["retryStep"]).toBe("function");
+    expect(typeof agentRuns["decidePlan"]).toBe("function");
+    expect(typeof agentRuns["refreshContext"]).toBe("function");
     expect(typeof agentRuns["read"]).toBe("function");
     expect(typeof agentRuns["list"]).toBe("function");
     expect(typeof agentRuns["onEvent"]).toBe("function");
@@ -165,12 +225,20 @@ describe("Agent Run IPC", () => {
     await agentRuns["start"]?.({});
     await agentRuns["stop"]?.({});
     await agentRuns["answerUserInput"]?.({});
+    await agentRuns["resume"]?.({});
+    await agentRuns["retryStep"]?.({});
+    await agentRuns["decidePlan"]?.({});
+    await agentRuns["refreshContext"]?.({});
     await agentRuns["read"]?.("run-ipc");
     await agentRuns["list"]?.("project-01");
     expect(invoked).toEqual([
       "application:agent-run:start",
       "application:agent-run:stop",
       "application:agent-run:answer-user-input",
+      "application:agent-run:resume",
+      "application:agent-run:retry-step",
+      "application:agent-run:decide-plan",
+      "application:agent-run:refresh-context",
       "application:agent-run:read",
       "application:agent-run:list"
     ]);

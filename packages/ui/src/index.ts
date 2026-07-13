@@ -59,6 +59,9 @@ export type {
   PluginSettingsStatus
 } from "./model-settings-panel.js";
 export { WorkspaceShell } from "./workspace-shell.js";
+export { AgentRunPanel } from "./agent-run-panel.js";
+export { AgentRunTimeline } from "./agent-run-timeline.js";
+export { PlanArtifactReview } from "./plan-artifact-review.js";
 export { WorkspaceNavigator } from "./workspace-navigator.js";
 export type { WorkspaceNavigatorProps } from "./workspace-navigator.js";
 export type {
@@ -71,6 +74,8 @@ export type {
   AiWorkflowRunHistoryProps,
   AiWritingWorkflowProps,
   AiWritingWorkflowStatus,
+  AgentRunPanelProps,
+  AgentRunPendingUserInputProps,
   AiWorkflowBranchChoiceProps,
   OnboardingProps,
   OnboardingStepProps,

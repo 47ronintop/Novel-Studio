@@ -6,6 +6,7 @@ import {
   type AgentRunModelDriver,
   type AgentRunSession
 } from "@novel-studio/application";
+import type { LlmModelProfile, LlmParameters } from "@novel-studio/llm-adapter";
 import type { AgentToolName } from "@novel-studio/agent-engine";
 import { createUnifiedError, err, ok, type JsonObject } from "@novel-studio/shared";
 import {
@@ -21,6 +22,14 @@ export interface DesktopAgentRunSessionOptions {
   readonly createRunId?: () => string;
   readonly now?: () => string;
   readonly modelDriver?: AgentRunModelDriver;
+  readonly resolveModelProfile?: (
+    profileId: string
+  ) => Promise<{ readonly modelProfile: LlmModelProfile; readonly parameters?: LlmParameters } | undefined>;
+  readonly createAgentModelDriver?: (input: {
+    readonly modelProfile: LlmModelProfile;
+    readonly parameters?: LlmParameters;
+  }) => AgentRunModelDriver;
+  readonly readEditorBuffer?: (refId: string) => Promise<string | undefined>;
 }
 
 export function createDesktopAgentRunSession(
@@ -40,14 +49,33 @@ export function createDesktopAgentRunSession(
   });
   const readToolExecutor = createDesktopReadToolExecutor(projectReads, storyBible);
 
+  const scriptedDriver = createDesktopScriptedAgentDriver(options.activeChapterId);
+  const modelDriver =
+    options.modelDriver ??
+    (options.resolveModelProfile === undefined || options.createAgentModelDriver === undefined
+      ? scriptedDriver
+      : createDesktopAdaptiveAgentDriver({
+          scriptedDriver,
+          resolveModelProfile: options.resolveModelProfile,
+          createAgentModelDriver: options.createAgentModelDriver
+        }));
+
   return createAgentRunSession({
     repository,
-    modelDriver: options.modelDriver ?? createDesktopScriptedAgentDriver(options.activeChapterId),
+    modelDriver,
     readToolExecutor,
     contextSourceReader: {
       async readCurrentSources(input) {
         const current: { refId: string; content: string }[] = [];
         for (const source of input.sources) {
+          if (source.sourceKind === "editor_buffer") {
+            const editorContent = await options.readEditorBuffer?.(source.refId);
+            current.push({
+              refId: source.refId,
+              content: editorContent ?? source.content
+            });
+            continue;
+          }
           if (source.relativePath !== undefined) {
             const read = await projectReads.readText(source.relativePath);
             if (!read.ok) return read;
@@ -69,6 +97,31 @@ export function createDesktopAgentRunSession(
       ...(options.now === undefined ? {} : { now: options.now })
     }
   });
+}
+
+function createDesktopAdaptiveAgentDriver(input: {
+  readonly scriptedDriver: AgentRunModelDriver;
+  readonly resolveModelProfile: NonNullable<DesktopAgentRunSessionOptions["resolveModelProfile"]>;
+  readonly createAgentModelDriver: NonNullable<
+    DesktopAgentRunSessionOptions["createAgentModelDriver"]
+  >;
+}): AgentRunModelDriver {
+  return {
+    async *streamRound(roundInput) {
+      if (roundInput.snapshot.providerCapabilitySnapshot.provider === "demo") {
+        yield* input.scriptedDriver.streamRound(roundInput);
+        return;
+      }
+      const profile = await input.resolveModelProfile(
+        roundInput.snapshot.providerCapabilitySnapshot.profileId
+      );
+      if (profile === undefined) {
+        throw new Error("The selected Agent model profile is unavailable.");
+      }
+      const driver = input.createAgentModelDriver(profile);
+      yield* driver.streamRound(roundInput);
+    }
+  };
 }
 
 function createDesktopReadToolExecutor(

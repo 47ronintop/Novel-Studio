@@ -298,6 +298,7 @@ export type {
 } from "./ai-writing-workflow-types.js";
 export { createAgentBackedAiWritingWorkflowSession } from "./ai-writing-workflow-session.js";
 export { createAgentRunSession } from "./agent-run-session.js";
+export { createLlmAgentRunModelDriver } from "./agent-run-model-driver.js";
 export type {
   AgentModelMessage,
   AgentModelMessageRole,
@@ -315,3 +316,14 @@ export type {
   AnswerAgentUserInputCommand,
   CreateAgentRunSessionOptions
 } from "./agent-run-session.js";
+export type { CreateLlmAgentRunModelDriverOptions } from "./agent-run-model-driver.js";
+export type {
+  AgentRunEvent,
+  AgentRunSnapshot,
+  AgentRunStatus,
+  AgentContextMode,
+  AgentOperationMode,
+  AgentWritePolicy,
+  PlanArtifact,
+  PlanOpenQuestion
+} from "@novel-studio/agent-engine";
