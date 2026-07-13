@@ -39,6 +39,18 @@ describe("Agent Run IPC", () => {
         calls.push(`context:${String(command["commandId"])}`);
         return { ok: true, value: snapshot("planning_model", 7, 7) };
       },
+      async decideChangeSet(command: Record<string, unknown>) {
+        calls.push(
+          `change-set:${String(command["commandId"])}:${String(command["revision"])}:${String(
+            command["checksum"]
+          )}`
+        );
+        return { ok: true, value: snapshot("applying_changes", 8, 8) };
+      },
+      async undoRun(command: Record<string, unknown>) {
+        calls.push(`undo:${String(command["commandId"])}`);
+        return { ok: true, value: snapshot("completed", 9, 9) };
+      },
       async readAgentRun(runId: string) {
         calls.push(`read:${runId}`);
         return { ok: true, value: { snapshot: snapshot("planning_model", 3, 3), events: [] } };
@@ -88,6 +100,8 @@ describe("Agent Run IPC", () => {
     expect(typeof handlers["application:agent-run:retry-step"]).toBe("function");
     expect(typeof handlers["application:agent-run:decide-plan"]).toBe("function");
     expect(typeof handlers["application:agent-run:refresh-context"]).toBe("function");
+    expect(typeof handlers["application:agent-run:decide-change-set"]).toBe("function");
+    expect(typeof handlers["application:agent-run:undo"]).toBe("function");
     expect(typeof handlers["application:agent-run:read"]).toBe("function");
     expect(typeof handlers["application:agent-run:list"]).toBe("function");
     if (
@@ -98,6 +112,8 @@ describe("Agent Run IPC", () => {
       handlers["application:agent-run:retry-step"] === undefined ||
       handlers["application:agent-run:decide-plan"] === undefined ||
       handlers["application:agent-run:refresh-context"] === undefined ||
+      handlers["application:agent-run:decide-change-set"] === undefined ||
+      handlers["application:agent-run:undo"] === undefined ||
       handlers["application:agent-run:read"] === undefined ||
       handlers["application:agent-run:list"] === undefined
     )
@@ -140,6 +156,30 @@ describe("Agent Run IPC", () => {
       expectedRunRevision: 6,
       decision: "refresh"
     });
+    const decideCommand = {
+      projectId: "project-01",
+      runId: "run-ipc",
+      commandId: "change-set-01",
+      expectedRunRevision: 7,
+      changeSetId: "cs-01",
+      revision: 4,
+      checksum: "checksum-r4",
+      decision: "apply_selected"
+    };
+    const firstDecision = await handlers["application:agent-run:decide-change-set"](
+      structuredClone(decideCommand)
+    );
+    const duplicateDecision = await handlers["application:agent-run:decide-change-set"](
+      structuredClone(decideCommand)
+    );
+    expect(() => structuredClone(firstDecision)).not.toThrow();
+    expect(duplicateDecision).toEqual(firstDecision);
+    await handlers["application:agent-run:undo"]({
+      projectId: "project-01",
+      runId: "run-ipc",
+      commandId: "undo-01",
+      expectedRunRevision: 9
+    });
     await handlers["application:agent-run:read"]("run-ipc");
     await handlers["application:agent-run:list"]("project-01");
     await handlers["application:agent-run:stop"]({
@@ -169,6 +209,9 @@ describe("Agent Run IPC", () => {
       "retry:retry-01",
       "plan:plan-01",
       "context:context-01",
+      "change-set:change-set-01:4:checksum-r4",
+      "change-set:change-set-01:4:checksum-r4",
+      "undo:undo-01",
       "read:run-ipc",
       "list:project-01",
       "stop:stop-01"
@@ -202,6 +245,8 @@ describe("Agent Run IPC", () => {
     expect(typeof agentRuns["retryStep"]).toBe("function");
     expect(typeof agentRuns["decidePlan"]).toBe("function");
     expect(typeof agentRuns["refreshContext"]).toBe("function");
+    expect(typeof agentRuns["decideChangeSet"]).toBe("function");
+    expect(typeof agentRuns["undoRun"]).toBe("function");
     expect(typeof agentRuns["read"]).toBe("function");
     expect(typeof agentRuns["list"]).toBe("function");
     expect(typeof agentRuns["onEvent"]).toBe("function");
@@ -229,6 +274,8 @@ describe("Agent Run IPC", () => {
     await agentRuns["retryStep"]?.({});
     await agentRuns["decidePlan"]?.({});
     await agentRuns["refreshContext"]?.({});
+    await agentRuns["decideChangeSet"]?.({});
+    await agentRuns["undoRun"]?.({});
     await agentRuns["read"]?.("run-ipc");
     await agentRuns["list"]?.("project-01");
     expect(invoked).toEqual([
@@ -239,9 +286,42 @@ describe("Agent Run IPC", () => {
       "application:agent-run:retry-step",
       "application:agent-run:decide-plan",
       "application:agent-run:refresh-context",
+      "application:agent-run:decide-change-set",
+      "application:agent-run:undo",
       "application:agent-run:read",
       "application:agent-run:list"
     ]);
+  });
+
+  test("rejects malformed Change Set decisions before the session boundary", async () => {
+    let called = false;
+    const handlers = createApplicationIpcHandlers(
+      {} as DesktopApplication,
+      {
+        agentRunSession: {
+          decideChangeSet: async () => {
+            called = true;
+            return { ok: true, value: snapshot("applying_changes", 8, 8) };
+          },
+          subscribe: () => () => undefined
+        }
+      } as never
+    ) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+
+    const result = await handlers["application:agent-run:decide-change-set"]?.({
+      projectId: "project-01",
+      runId: "run-ipc",
+      commandId: "change-set-invalid",
+      expectedRunRevision: 7,
+      changeSetId: "cs-01",
+      revision: 4,
+      checksum: "checksum-r4",
+      decision: "write_candidate_body",
+      candidateText: "must never cross IPC"
+    });
+
+    expect(called).toBe(false);
+    expect(result).toMatchObject({ ok: false });
   });
 });
 

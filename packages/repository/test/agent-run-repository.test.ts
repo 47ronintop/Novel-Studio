@@ -77,6 +77,7 @@ describe("AgentRunFileRepository", () => {
       }) => Record<string, (...args: unknown[]) => Promise<unknown>>
     )({ projectRoot });
     expect(typeof repository["writeContextSnapshot"]).toBe("function");
+    expect(typeof repository["readContextSnapshot"]).toBe("function");
     expect(typeof repository["writePlanArtifact"]).toBe("function");
     expect(typeof repository["listSnapshots"]).toBe("function");
     expect(typeof repository["readCommandReceipt"]).toBe("function");
@@ -84,6 +85,7 @@ describe("AgentRunFileRepository", () => {
     expect(typeof repository["readRetryCheckpoint"]).toBe("function");
     if (
       typeof repository["writeContextSnapshot"] !== "function" ||
+      typeof repository["readContextSnapshot"] !== "function" ||
       typeof repository["writePlanArtifact"] !== "function" ||
       typeof repository["listSnapshots"] !== "function" ||
       typeof repository["readCommandReceipt"] !== "function" ||
@@ -146,6 +148,10 @@ describe("AgentRunFileRepository", () => {
       ok: true,
       value: retryCheckpoint
     });
+    expect(await repository["readContextSnapshot"]?.("run_02", "context_02")).toEqual({
+      ok: true,
+      value: contextSnapshot
+    });
     expect(
       JSON.parse(
         await readFile(
@@ -170,4 +176,85 @@ describe("AgentRunFileRepository", () => {
       )
     ).toEqual(plan);
   });
+
+  test("persists immutable Change Set revisions and restores the latest checkpoint revision", async () => {
+    const Repository = (repositoryExports as unknown as Record<string, unknown>)[
+      "AgentRunFileRepository"
+    ];
+    expect(typeof Repository).toBe("function");
+    if (typeof Repository !== "function") return;
+
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-change-set-store-"));
+    roots.push(projectRoot);
+    const repository = new (
+      Repository as new (options: {
+        projectRoot: string;
+      }) => Record<string, (...args: unknown[]) => Promise<unknown>>
+    )({ projectRoot });
+    expect(typeof repository["writeChangeSet"]).toBe("function");
+    expect(typeof repository["readChangeSet"]).toBe("function");
+    expect(typeof repository["readLatestChangeSet"]).toBe("function");
+    if (
+      typeof repository["writeChangeSet"] !== "function" ||
+      typeof repository["readChangeSet"] !== "function" ||
+      typeof repository["readLatestChangeSet"] !== "function"
+    )
+      return;
+
+    const revisionOne = changeSetRecord(1, "a".repeat(64));
+    const revisionTwo = changeSetRecord(2, "b".repeat(64));
+    await repository["writeChangeSet"]?.(revisionOne);
+    await repository["writeChangeSet"]?.(revisionTwo);
+    expect(
+      await repository["writeChangeSet"]?.({ ...revisionOne, checksum: "f".repeat(64) })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_CHANGE_SET_REVISION_CONFLICT" } });
+
+    expect(await repository["readChangeSet"]?.("changes_01", 1)).toEqual({
+      ok: true,
+      value: revisionOne
+    });
+    expect(await repository["readChangeSet"]?.("changes_01")).toEqual({
+      ok: true,
+      value: revisionTwo
+    });
+    expect(
+      await repository["readLatestChangeSet"]?.({
+        runId: "run_03",
+        projectId: "project_01",
+        checkpointId: "checkpoint_01"
+      })
+    ).toEqual({ ok: true, value: revisionTwo });
+    expect(
+      JSON.parse(
+        await readFile(
+          join(
+            projectRoot,
+            "history",
+            "change-sets",
+            "changes_01",
+            "revisions",
+            "1.json"
+          ),
+          "utf8"
+        )
+      )
+    ).toEqual(revisionOne);
+  });
 });
+
+function changeSetRecord(revision: number, checksum: string): Record<string, unknown> {
+  return {
+    schemaVersion: "1.0",
+    changeSetId: "changes_01",
+    revision,
+    runId: "run_03",
+    projectId: "project_01",
+    checkpointId: "checkpoint_01",
+    contextSnapshotId: "context_01",
+    status: "awaiting_approval",
+    checksum,
+    approvalToken: checksum,
+    createdAt: `2026-07-13T00:0${revision}:00.000Z`,
+    files: []
+  };
+}

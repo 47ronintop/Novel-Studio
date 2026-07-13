@@ -51,6 +51,7 @@ import {
 } from "./workspace-shell-story-search.js";
 import { AutosaveRecoveryNotice, OnboardingQuickStart } from "./workspace-shell-project-assist.js";
 import { WorkspaceNavigator } from "./workspace-navigator.js";
+import { DiffReview } from "./diff-review.js";
 import { WorkspaceStatusBar } from "./workspace-status-bar.js";
 import type {
   AiWritingWorkflowProps,
@@ -274,7 +275,11 @@ function WorkspaceShellContent({
         />
 
         <main aria-label="编辑区" className="ns-editor-area" data-region="editor-area">
-          {shellState.activeActivity === "workspace" || shellState.activeActivity === "ai" ? (
+          {aiWritingWorkflow?.agentRun?.changeSetReview !== undefined &&
+          aiWritingWorkflow.agentRun.changeSetReview.open !== false &&
+          (shellState.activeActivity === "workspace" || shellState.activeActivity === "ai") ? (
+            <DiffReview review={aiWritingWorkflow.agentRun.changeSetReview} />
+          ) : shellState.activeActivity === "workspace" || shellState.activeActivity === "ai" ? (
             <WorkspaceEditorSurface
               chapterEditor={chapterEditor}
               fileEditor={fileEditor}

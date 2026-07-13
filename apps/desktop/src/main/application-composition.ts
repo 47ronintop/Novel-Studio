@@ -52,6 +52,7 @@ export interface ProjectDesktopApplicationOptions {
   readonly modelConnectionTester?: ModelConnectionTester;
   readonly modelDiscoveryPort?: ModelDiscoveryPort;
   readonly createAiProvider?: (input: DesktopAiProviderFactoryInput) => LlmProvider;
+  readonly projectLockOwnerId?: string;
 }
 
 export interface BootstrappedDefaultDesktopApplicationOptions {
@@ -62,6 +63,7 @@ export interface BootstrappedDefaultDesktopApplicationOptions {
   readonly modelConnectionTester?: ModelConnectionTester;
   readonly modelDiscoveryPort?: ModelDiscoveryPort;
   readonly createAiProvider?: (input: DesktopAiProviderFactoryInput) => LlmProvider;
+  readonly projectLockOwnerId?: string;
 }
 
 export interface DesktopAiProviderFactoryInput {
@@ -71,7 +73,7 @@ export interface DesktopAiProviderFactoryInput {
 export function createProjectDesktopApplication(
   options: ProjectDesktopApplicationOptions
 ): DesktopApplication {
-  const lockOwnerId = createProjectLockOwnerId();
+  const lockOwnerId = options.projectLockOwnerId ?? createProjectLockOwnerId();
   const chapterRepository = new ChapterFileRepository({
     projectRoot: options.projectRoot,
     traceId: "trace_desktop_chapter_repository"
@@ -344,7 +346,10 @@ export async function createBootstrappedDefaultDesktopApplication(
       : { modelDiscoveryPort: options.modelDiscoveryPort }),
     ...(options.createAiProvider === undefined
       ? {}
-      : { createAiProvider: options.createAiProvider })
+      : { createAiProvider: options.createAiProvider }),
+    ...(options.projectLockOwnerId === undefined
+      ? {}
+      : { projectLockOwnerId: options.projectLockOwnerId })
   });
   const opened = await application.openProject(options.projectRoot);
   if (!opened.ok) {
@@ -354,7 +359,7 @@ export async function createBootstrappedDefaultDesktopApplication(
   return application;
 }
 
-function createProjectLockOwnerId(): string {
+export function createProjectLockOwnerId(): string {
   return `desktop_${process.pid}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 

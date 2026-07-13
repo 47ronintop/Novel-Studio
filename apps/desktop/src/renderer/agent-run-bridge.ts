@@ -4,6 +4,8 @@ import type {
   AgentRunCommandResult,
   AgentRunEvent,
   AgentRunSnapshot,
+  ChangeSet,
+  DecideChangeSetCommand,
   DecideAgentPlanCommand,
   RefreshAgentContextCommand,
   ResumeAgentRunCommand,
@@ -14,14 +16,18 @@ import type {
 import type { NovelStudioApi } from "@novel-studio/application";
 import type {
   AgentRunPanelProps,
+  ChangeSetReviewModel,
+  ChangeSetSelection,
   ChapterEditorProps,
-  ModelSettingsPanelProps
+  ModelSettingsPanelProps,
+  PlainFileEditorProps
 } from "@novel-studio/ui";
 
 export interface AgentRunBridgeContext {
   readonly projectId: string;
   readonly activeChapterId?: string;
   readonly chapterEditor?: ChapterEditorProps;
+  readonly fileEditor?: PlainFileEditorProps;
   readonly settings?: ModelSettingsPanelProps;
 }
 
@@ -36,6 +42,10 @@ export interface AgentRunBridge {
   retryStep(): Promise<AgentRunPanelProps>;
   refreshContext(decision: "refresh" | "exclude" | "cancel"): Promise<AgentRunPanelProps>;
   decidePlan(decision: "approve" | "reject"): Promise<AgentRunPanelProps>;
+  updateChangeSetSelection(selection: ChangeSetSelection): Promise<AgentRunPanelProps>;
+  applyChangeSet(): Promise<AgentRunPanelProps>;
+  rejectChangeSet(): Promise<AgentRunPanelProps>;
+  undoRun(): Promise<AgentRunPanelProps>;
   subscribe(listener: () => void): () => void;
 }
 
@@ -48,6 +58,9 @@ interface BridgeState {
   readonly assistantText: string;
   readonly pendingUserInput: AgentRunPanelProps["pendingUserInput"] | undefined;
   readonly planArtifact: AgentRunPanelProps["planArtifact"] | undefined;
+  readonly changeSet: ChangeSet | undefined;
+  readonly reviewOpen: boolean;
+  readonly selectionPending: boolean;
   readonly errorMessage: string | undefined;
 }
 
@@ -62,9 +75,15 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     assistantText: "",
     pendingUserInput: undefined,
     planArtifact: undefined,
+    changeSet: undefined,
+    reviewOpen: false,
+    selectionPending: false,
     errorMessage: undefined
   };
   const listeners = new Set<() => void>();
+  let approvalInFlight: Promise<AgentRunPanelProps> | undefined;
+  let selectionInFlight: Promise<AgentRunPanelProps> | undefined;
+  let undoInFlight: Promise<AgentRunPanelProps> | undefined;
 
   api.agentRuns.onEvent((event) => {
     if (context?.projectId !== event.projectId) return;
@@ -102,6 +121,14 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           : state.planArtifact
     };
     notify();
+    if (
+      event.type === "change_set_ready" ||
+      event.type === "approval_resolved" ||
+      event.type === "write_applied" ||
+      event.type === "write_failed"
+    ) {
+      void hydrate(event.runId).then(notify);
+    }
   });
 
   async function sendRun(request: string): Promise<AgentRunPanelProps> {
@@ -227,13 +254,110 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     return toProps();
   }
 
+  function updateChangeSetSelection(
+    selection: ChangeSetSelection
+  ): Promise<AgentRunPanelProps> {
+    if (selectionInFlight !== undefined) return selectionInFlight;
+    const snapshot = requireSnapshot();
+    const changeSet = state.changeSet;
+    if (snapshot === undefined || changeSet === undefined) return Promise.resolve(toProps());
+    state = { ...state, selectionPending: true };
+    notify();
+    const command: DecideChangeSetCommand = {
+      runId: snapshot.runId,
+      projectId: snapshot.projectId,
+      commandId: createCommandId("change-set-selection"),
+      expectedRunRevision: snapshot.runRevision,
+      changeSetId: changeSet.changeSetId,
+      revision: changeSet.revision,
+      checksum: changeSet.checksum,
+      decision: "update_selection",
+      files: selection.files
+    };
+    const request = (async () => {
+      try {
+        await applyCommandResult(
+          await api.agentRuns.decideChangeSet(command)
+        );
+      } finally {
+        state = { ...state, selectionPending: false };
+        selectionInFlight = undefined;
+        notify();
+      }
+      return toProps();
+    })();
+    selectionInFlight = request;
+    return request;
+  }
+
+  function decideChangeSet(
+    decision: "apply_selected" | "reject_all"
+  ): Promise<AgentRunPanelProps> {
+    if (approvalInFlight !== undefined) return approvalInFlight;
+    const snapshot = requireSnapshot();
+    const changeSet = state.changeSet;
+    if (snapshot === undefined || changeSet === undefined) return Promise.resolve(toProps());
+    const command: DecideChangeSetCommand = {
+      runId: snapshot.runId,
+      projectId: snapshot.projectId,
+      commandId: createCommandId("change-set-decision"),
+      expectedRunRevision: snapshot.runRevision,
+      changeSetId: changeSet.changeSetId,
+      revision: changeSet.revision,
+      checksum: changeSet.checksum,
+      decision
+    };
+    const request = (async () => {
+      try {
+        await applyCommandResult(await api.agentRuns.decideChangeSet(command));
+      } finally {
+        approvalInFlight = undefined;
+        notify();
+      }
+      return toProps();
+    })();
+    approvalInFlight = request;
+    notify();
+    return request;
+  }
+
+  function undoAgentRun(): Promise<AgentRunPanelProps> {
+    if (undoInFlight !== undefined) return undoInFlight;
+    const snapshot = requireSnapshot();
+    if (snapshot === undefined) return Promise.resolve(toProps());
+    const request = (async () => {
+      try {
+        await applyCommandResult(
+          await api.agentRuns.undoRun({
+            runId: snapshot.runId,
+            projectId: snapshot.projectId,
+            commandId: createCommandId("undo-run"),
+            expectedRunRevision: snapshot.runRevision
+          })
+        );
+      } finally {
+        undoInFlight = undefined;
+        notify();
+      }
+      return toProps();
+    })();
+    undoInFlight = request;
+    notify();
+    return request;
+  }
+
   async function applyCommandResult(result: AgentRunCommandResult): Promise<void> {
     if (!result.ok) {
+      const errorMessage = result.error.message;
       state = {
         ...state,
-        errorMessage: result.error.message,
+        errorMessage,
         ...(result.latestSnapshot === undefined ? {} : { snapshot: result.latestSnapshot })
       };
+      if (result.latestSnapshot !== undefined) {
+        await hydrate(result.latestSnapshot.runId);
+        state = { ...state, errorMessage };
+      }
       notify();
       return;
     }
@@ -255,6 +379,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       return;
     }
     const read = result.value;
+    const nextChangeSet = read.changeSet;
     state = {
       ...state,
       snapshot: read.snapshot,
@@ -266,7 +391,14 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         .map((event) => stringDetail(event.detail, "delta") ?? "")
         .join(""),
       pendingUserInput: read.pendingUserInput,
-      planArtifact: read.planArtifact
+      planArtifact: read.planArtifact,
+      changeSet: nextChangeSet,
+      reviewOpen:
+        nextChangeSet === undefined
+          ? false
+          : state.changeSet?.changeSetId !== nextChangeSet.changeSetId
+            ? true
+            : state.reviewOpen
     };
   }
 
@@ -290,6 +422,46 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       events: state.events,
       ...(state.pendingUserInput === undefined ? {} : { pendingUserInput: state.pendingUserInput }),
       ...(state.planArtifact === undefined ? {} : { planArtifact: state.planArtifact }),
+      ...(state.changeSet === undefined
+        ? {}
+        : {
+            changeSetReview: {
+              changeSet: toChangeSetReviewModel(state.changeSet),
+              runRevision: state.snapshot?.runRevision ?? 0,
+              applying:
+                state.snapshot?.status === "applying_changes" ||
+                approvalInFlight !== undefined ||
+                undoInFlight !== undefined,
+              stale:
+                state.changeSet.status === "stale" ||
+                state.snapshot?.status === "awaiting_context_refresh",
+              selectionPending: state.selectionPending,
+              baseHashConflictPaths: conflictPaths(state.events, state.changeSet),
+              dirtyTargetPaths: dirtyTargetPaths(context, state.changeSet),
+              open: state.reviewOpen,
+              onOpen: () => {
+                state = { ...state, reviewOpen: true };
+                notify();
+              },
+              onSelectionChange: (selection: ChangeSetSelection) => {
+                void updateChangeSetSelection(selection);
+              },
+              onApply: () => {
+                void decideChangeSet("apply_selected");
+              },
+              onReject: () => {
+                void decideChangeSet("reject_all");
+              },
+              onReturn: () => {
+                state = { ...state, reviewOpen: false };
+                notify();
+              },
+              canUndoRun: canUndoAppliedRun(state),
+              onUndoRun: () => {
+                void undoAgentRun();
+              }
+            }
+          }),
       ...(state.errorMessage === undefined ? {} : { errorMessage: state.errorMessage }),
       ...providerLabel(state.snapshot, context?.settings),
       ...(context?.chapterEditor?.dirty === true
@@ -330,6 +502,9 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           assistantText: "",
           pendingUserInput: undefined,
           planArtifact: undefined,
+          changeSet: undefined,
+          reviewOpen: false,
+          selectionPending: false,
           errorMessage: undefined
         };
       }
@@ -344,9 +519,16 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         state = { ...state, errorMessage: listed.error.message };
         return toProps();
       }
-      const latest = [...listed.value]
-        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-        .find((run) => run.status !== "completed" && run.status !== "cancelled");
+      const sorted = [...listed.value].sort((left, right) =>
+        right.updatedAt.localeCompare(left.updatedAt)
+      );
+      const latest =
+        sorted.find((run) => !isTerminalRunStatus(run.status)) ??
+        sorted.find(
+          (run) =>
+            isTerminalRunStatus(run.status) &&
+            (typeof run.pendingChangeSetId === "string" || typeof run.versionGroupId === "string")
+        );
       if (latest !== undefined) await hydrate(latest.runId);
       notify();
       return toProps();
@@ -386,6 +568,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       notify();
       return next;
     },
+    updateChangeSetSelection,
+    applyChangeSet: () => decideChangeSet("apply_selected"),
+    rejectChangeSet: () => decideChangeSet("reject_all"),
+    undoRun: undoAgentRun,
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -393,6 +579,20 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   };
 
   return bridge;
+}
+
+function canUndoAppliedRun(state: BridgeState): boolean {
+  return (
+    state.changeSet?.status === "applied" &&
+    state.snapshot !== undefined &&
+    isTerminalRunStatus(state.snapshot.status) &&
+    typeof state.snapshot.versionGroupId === "string" &&
+    !state.events.some((event) => event.type === "run_undone")
+  );
+}
+
+function isTerminalRunStatus(status: AgentRunSnapshot["status"]): boolean {
+  return ["completed", "cancelled", "failed", "limit_reached"].includes(status);
 }
 
 function contextSources(context: AgentRunBridgeContext | undefined): AgentContextSourceInput[] {
@@ -462,6 +662,11 @@ function eventStatus(eventType: AgentRunEvent["type"]): AgentRunSnapshot["status
       return "plan_ready";
     case "plan_execution_started":
       return "executing_model";
+    case "change_set_ready":
+      return "awaiting_write_approval";
+    case "write_started":
+    case "run_undo_started":
+      return "applying_changes";
     case "run_completed":
       return "completed";
     case "run_cancelled":
@@ -477,6 +682,11 @@ function eventStatus(eventType: AgentRunEvent["type"]): AgentRunSnapshot["status
     case "context_excluded":
     case "context_refresh_cancelled":
     case "plan_decision_resolved":
+    case "approval_resolved":
+    case "write_applied":
+    case "write_failed":
+    case "run_undone":
+    case "run_undo_failed":
     case "tool_started":
     case "tool_completed":
     case "tool_failed":
@@ -485,6 +695,97 @@ function eventStatus(eventType: AgentRunEvent["type"]): AgentRunSnapshot["status
     case "assistant_text_completed":
       return undefined;
   }
+}
+
+function toChangeSetReviewModel(changeSet: ChangeSet): ChangeSetReviewModel {
+  return {
+    changeSetId: changeSet.changeSetId,
+    revision: changeSet.revision,
+    checksum: changeSet.checksum,
+    status: changeSet.status,
+    files: changeSet.files.map((file) => ({
+      relativePath: file.relativePath,
+      assetType: file.assetType,
+      baseChecksum: file.baseChecksum,
+      candidateChecksum: file.candidateChecksum,
+      selected: file.selected,
+      validation: {
+        valid: file.validation.valid,
+        issues: Object.values(file.validation)
+          .filter(
+            (check): check is { readonly status: "invalid"; readonly message?: string } =>
+              typeof check === "object" && check !== null && check.status === "invalid"
+          )
+          .map((check) => check.message ?? "校验失败")
+      },
+      hunks: file.hunks.map((hunk) => ({
+        hunkId: hunk.hunkId,
+        label: rangeLabel(hunk.range.unit, hunk.range.start, hunk.range.end),
+        baseText: hunk.baseContent,
+        candidateText: hunk.replacement,
+        baseRange: { start: hunk.range.start, end: hunk.range.end },
+        candidateRange: { start: hunk.range.start, end: hunk.range.end },
+        selected: hunk.selected,
+        additions: diffUnitCount(hunk.replacement),
+        deletions: diffUnitCount(hunk.baseContent)
+      }))
+    }))
+  };
+}
+
+function rangeLabel(unit: string, start: number, end: number): string {
+  const unitLabel = unit === "paragraph" ? "段" : unit === "line" ? "行" : "字符";
+  return start === end ? `第 ${start} ${unitLabel}` : `${unitLabel} ${start}-${end}`;
+}
+
+function diffUnitCount(content: string): number {
+  return content.length === 0 ? 0 : content.split(/\r?\n/u).length;
+}
+
+function conflictPaths(events: readonly AgentRunEvent[], changeSet: ChangeSet): string[] {
+  const targetPaths = new Set(changeSet.files.map((file) => file.relativePath));
+  for (const event of [...events].reverse()) {
+    const raw = event.detail?.["baseHashConflictPaths"];
+    if (Array.isArray(raw)) return raw.filter((value): value is string => typeof value === "string");
+    if (
+      typeof event.detail?.["code"] === "string" &&
+      event.detail["code"].includes("BASE_CONFLICT") &&
+      typeof event.detail["relativePath"] === "string"
+    ) {
+      return targetPaths.has(event.detail["relativePath"])
+        ? [event.detail["relativePath"]]
+        : [];
+    }
+    if (event.type === "context_stale" && Array.isArray(event.detail?.["staleRefs"])) {
+      const staleTargetPaths = event.detail["staleRefs"]
+        .flatMap(contextRefPath)
+        .filter((relativePath) => targetPaths.has(relativePath));
+      if (staleTargetPaths.length > 0) return [...new Set(staleTargetPaths)];
+    }
+    if (event.type === "change_set_ready") return [];
+  }
+  return [];
+}
+
+function contextRefPath(refId: unknown): string[] {
+  if (typeof refId !== "string") return [];
+  if (refId.startsWith("chapter:")) return [`chapters/${refId.slice("chapter:".length)}.md`];
+  if (refId.startsWith("file:")) return [refId.slice("file:".length)];
+  return [];
+}
+
+function dirtyTargetPaths(
+  context: AgentRunBridgeContext | undefined,
+  changeSet: ChangeSet
+): string[] {
+  const paths = new Set<string>();
+  if (context?.chapterEditor?.dirty === true && context.activeChapterId !== undefined) {
+    paths.add(`chapters/${context.activeChapterId}.md`);
+  }
+  if (context?.fileEditor?.dirty === true) paths.add(context.fileEditor.path);
+  return changeSet.files
+    .map((file) => file.relativePath)
+    .filter((relativePath) => paths.has(relativePath));
 }
 
 function pendingInputFromDetail(

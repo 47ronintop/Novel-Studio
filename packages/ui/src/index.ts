@@ -61,6 +61,17 @@ export type {
 export { WorkspaceShell } from "./workspace-shell.js";
 export { AgentRunPanel } from "./agent-run-panel.js";
 export { AgentRunTimeline } from "./agent-run-timeline.js";
+export { ChangeSetReview } from "./change-set-review.js";
+export type {
+  ChangeSetFileSelection,
+  ChangeSetReviewFile,
+  ChangeSetReviewHunk,
+  ChangeSetReviewModel,
+  ChangeSetReviewProps,
+  ChangeSetReviewValidation,
+  ChangeSetSelection
+} from "./change-set-review.js";
+export { DiffReview } from "./diff-review.js";
 export { PlanArtifactReview } from "./plan-artifact-review.js";
 export { WorkspaceNavigator } from "./workspace-navigator.js";
 export type { WorkspaceNavigatorProps } from "./workspace-navigator.js";

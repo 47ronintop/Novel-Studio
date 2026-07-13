@@ -228,6 +228,14 @@ function statusLabel(status: AgentRunPanelProps["status"]): string {
       return "执行中";
     case "executing_read_tool":
       return "读取中";
+    case "staging_changes":
+      return "正在准备更改";
+    case "awaiting_write_approval":
+      return "更改待确认";
+    case "applying_changes":
+      return "正在应用更改";
+    case "stopping_after_transaction":
+      return "写入完成后停止";
     case "awaiting_user_input":
       return "等待回答";
     case "awaiting_context_refresh":

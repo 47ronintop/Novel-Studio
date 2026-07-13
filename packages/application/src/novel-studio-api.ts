@@ -13,12 +13,14 @@ import type {
   AgentRunCommandResult,
   AgentRunEvent,
   AgentRunSnapshot,
+  DecideChangeSetCommand,
   DecideAgentPlanCommand,
   RefreshAgentContextCommand,
   ResumeAgentRunCommand,
   RetryAgentRunStepCommand,
   StartAgentRunCommand,
-  StopAgentRunCommand
+  StopAgentRunCommand,
+  UndoRunCommand
 } from "@novel-studio/agent-engine";
 
 import type { ApplicationCommand } from "./command-registry.js";
@@ -159,6 +161,8 @@ export interface NovelStudioApi {
     retryStep(command: RetryAgentRunStepCommand): Promise<AgentRunCommandResult>;
     decidePlan(command: DecideAgentPlanCommand): Promise<AgentRunCommandResult>;
     refreshContext(command: RefreshAgentContextCommand): Promise<AgentRunCommandResult>;
+    decideChangeSet(command: DecideChangeSetCommand): Promise<AgentRunCommandResult>;
+    undoRun(command: UndoRunCommand): Promise<AgentRunCommandResult>;
     read(runId: string): Promise<Result<AgentRunReadResult, UnifiedError>>;
     list(projectId: string): Promise<Result<readonly AgentRunSnapshot[], UnifiedError>>;
     onEvent(listener: (event: AgentRunEvent) => void): () => void;

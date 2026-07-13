@@ -24,8 +24,14 @@ describe("AgentProjectReadRepository", () => {
     roots.push(projectRoot, outsideRoot);
     await mkdir(join(projectRoot, "notes"), { recursive: true });
     await mkdir(join(projectRoot, "history"), { recursive: true });
+    await mkdir(join(projectRoot, ".novel-studio"), { recursive: true });
     await writeFile(join(projectRoot, "notes", "outline.md"), "Outline text", "utf8");
     await writeFile(join(projectRoot, "history", "private.md"), "internal", "utf8");
+    await writeFile(
+      join(projectRoot, ".novel-studio", "project-lock.json"),
+      "{}",
+      "utf8"
+    );
     await writeFile(join(outsideRoot, "secret.md"), "outside secret", "utf8");
     await symlink(outsideRoot, join(projectRoot, "notes", "linked"), "junction");
 
@@ -48,6 +54,7 @@ describe("AgentProjectReadRepository", () => {
       "../outside.md",
       "C:/outside.md",
       "history/private.md",
+      ".novel-studio/project-lock.json",
       "notes/linked/secret.md"
     ]) {
       expect(await repository.readText(path)).toMatchObject({
@@ -60,6 +67,7 @@ describe("AgentProjectReadRepository", () => {
       value: [expect.objectContaining({ relativePath: "notes", kind: "directory" })]
     });
     expect(JSON.stringify(await repository.listEntries())).not.toContain("history");
+    expect(JSON.stringify(await repository.listEntries())).not.toContain(".novel-studio");
     expect(JSON.stringify(await repository.listEntries("notes"))).not.toContain("linked");
   });
 });

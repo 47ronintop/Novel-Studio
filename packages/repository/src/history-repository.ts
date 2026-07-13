@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { readdir, readFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { readdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 import type {
@@ -8,7 +8,12 @@ import type {
   ChapterVersionSnapshotInput,
   ChapterVersionSummary
 } from "@novel-studio/shared";
-import { writeTextAtomically } from "./atomic-write.js";
+import {
+  createProjectPathGuard,
+  verifyProjectStoragePath,
+  writeTextAtomically,
+  type ProjectPathGuard
+} from "./atomic-write.js";
 import { validationError } from "./errors.js";
 import type {
   HistoryRepositoryPort,
@@ -30,16 +35,23 @@ export class HistoryRepository implements HistoryRepositoryPort, ChapterHistoryR
   private readonly traceId: string;
   private readonly now: () => string;
   private readonly createVersionId: () => string;
+  private readonly pathGuard: ProjectPathGuard;
 
   public constructor(private readonly options: HistoryRepositoryOptions) {
     this.traceId = options.traceId ?? "trace_repository_history";
     this.now = options.now ?? (() => new Date().toISOString());
-    this.createVersionId = options.createVersionId ?? (() => `ver_${Date.now()}`);
+    this.createVersionId =
+      options.createVersionId ?? (() => `ver_${randomUUID().replaceAll("-", "")}`);
+    this.pathGuard = createProjectPathGuard(options.projectRoot);
   }
 
   public async snapshotTextAsset(
     input: SnapshotTextAssetInput
   ): Promise<Result<VersionRecord, UnifiedError>> {
+    const assetValidation = validateHistoryAssetId(input.assetType, input.assetId);
+    if (!assetValidation.ok) {
+      return assetValidation;
+    }
     const versionId = this.createVersionId();
     const record: VersionRecord = {
       schemaVersion: "1.0",
@@ -59,6 +71,10 @@ export class HistoryRepository implements HistoryRepositoryPort, ChapterHistoryR
     if (input.parentVersionId !== undefined) {
       record.parentVersionId = input.parentVersionId;
     }
+    if (input.runId !== undefined) record.runId = input.runId;
+    if (input.checkpointId !== undefined) record.checkpointId = input.checkpointId;
+    if (input.writeId !== undefined) record.writeId = input.writeId;
+    if (input.relativePath !== undefined) record.targetRelativePath = input.relativePath;
 
     const validation = await validateWithSchema("version-record", record);
     if (!validation.valid) {
@@ -80,13 +96,15 @@ export class HistoryRepository implements HistoryRepositoryPort, ChapterHistoryR
       );
     }
 
+    const snapshotPath = join(
+      this.options.projectRoot,
+      this.snapshotRelativePath(input.assetType, input.assetId, versionId)
+    );
     const snapshotWrite = await writeTextAtomically({
-      targetPath: join(
-        this.options.projectRoot,
-        this.snapshotRelativePath(input.assetType, input.assetId, versionId)
-      ),
+      targetPath: snapshotPath,
       content: input.content,
-      traceId: this.traceId
+      traceId: this.traceId,
+      pathGuard: this.pathGuard
     });
     if (!snapshotWrite.ok) {
       return snapshotWrite;
@@ -97,13 +115,26 @@ export class HistoryRepository implements HistoryRepositoryPort, ChapterHistoryR
         this.options.projectRoot,
         "history",
         `${this.assetHistoryDirectory(input.assetType)}-records`,
-        input.assetId,
+        this.historyAssetKey(input.assetType, input.assetId),
         `${versionId}.json`
       ),
       content: `${JSON.stringify(record, null, 2)}\n`,
-      traceId: this.traceId
+      traceId: this.traceId,
+      pathGuard: this.pathGuard
     });
     if (!recordWrite.ok) {
+      const cleanupPath = await verifyProjectStoragePath(
+        this.pathGuard,
+        snapshotPath,
+        this.traceId
+      );
+      if (cleanupPath.ok) {
+        try {
+          await rm(snapshotPath, { force: true });
+        } catch {
+          // Preserve the record failure; an unlisted snapshot is never treated as a valid version.
+        }
+      }
       return recordWrite;
     }
 
@@ -128,7 +159,7 @@ export class HistoryRepository implements HistoryRepositoryPort, ChapterHistoryR
 
     return ok({
       versionId: snapshotResult.value.versionId,
-      reason: snapshotResult.value.reason,
+      reason: input.reason,
       createdBy: snapshotResult.value.createdBy,
       createdAt: snapshotResult.value.createdAt,
       parentVersionId: snapshotResult.value.parentVersionId ?? null
@@ -186,7 +217,8 @@ export class HistoryRepository implements HistoryRepositoryPort, ChapterHistoryR
     const write = await writeTextAtomically({
       targetPath: this.workflowRunPath(record.workflowRunId),
       content: `${JSON.stringify(record, null, 2)}\n`,
-      traceId: this.traceId
+      traceId: this.traceId,
+      pathGuard: this.pathGuard
     });
     if (!write.ok) {
       return write;
@@ -197,6 +229,12 @@ export class HistoryRepository implements HistoryRepositoryPort, ChapterHistoryR
 
   public async listWorkflowRuns(): Promise<Result<WorkflowRunSummary[], UnifiedError>> {
     const runsDir = this.workflowRunsDirectory();
+    const pathValidation = await verifyProjectStoragePath(
+      this.pathGuard,
+      runsDir,
+      this.traceId
+    );
+    if (!pathValidation.ok) return pathValidation;
 
     try {
       const entries = await readdir(runsDir, { withFileTypes: true });
@@ -268,18 +306,26 @@ export class HistoryRepository implements HistoryRepositoryPort, ChapterHistoryR
     assetType: "chapter";
     assetId: string;
   }): Promise<Result<readonly ChapterVersionSummary[], UnifiedError>> {
+    const assetValidation = validateHistoryAssetId(input.assetType, input.assetId);
+    if (!assetValidation.ok) return assetValidation;
     const historyDir = join(
       this.options.projectRoot,
       "history",
       `${input.assetType}s`,
-      input.assetId
+      this.historyAssetKey(input.assetType, input.assetId)
     );
     const recordDir = join(
       this.options.projectRoot,
       "history",
       `${input.assetType}s-records`,
-      input.assetId
+      this.historyAssetKey(input.assetType, input.assetId)
     );
+    const pathValidation = await verifyProjectStoragePath(
+      this.pathGuard,
+      recordDir,
+      this.traceId
+    );
+    if (!pathValidation.ok) return pathValidation;
 
     try {
       const entries = await readdir(recordDir, { withFileTypes: true });
@@ -291,7 +337,7 @@ export class HistoryRepository implements HistoryRepositoryPort, ChapterHistoryR
             const record = JSON.parse(await readFile(recordPath, "utf8")) as VersionRecord;
             return {
               versionId: record.versionId,
-              reason: record.reason,
+              reason: record.reason as ChapterVersionSummary["reason"],
               createdBy: record.createdBy,
               createdAt: record.createdAt,
               parentVersionId: record.parentVersionId ?? null
@@ -330,17 +376,24 @@ export class HistoryRepository implements HistoryRepositoryPort, ChapterHistoryR
   }
 
   public async readTextAssetSnapshot(input: {
-    assetType: "chapter";
+    assetType: "chapter" | "text";
     assetId: string;
     versionId: string;
   }): Promise<Result<ChapterVersionContent, UnifiedError>> {
+    const assetValidation = validateHistoryAssetId(input.assetType, input.assetId);
+    if (!assetValidation.ok) return assetValidation;
+    const versionValidation = validateVersionId(input.versionId);
+    if (!versionValidation.ok) return versionValidation;
     const snapshotPath = join(
       this.options.projectRoot,
-      "history",
-      `${input.assetType}s`,
-      input.assetId,
-      `${input.versionId}.md`
+      this.snapshotRelativePath(input.assetType, input.assetId, input.versionId)
     );
+    const pathValidation = await verifyProjectStoragePath(
+      this.pathGuard,
+      snapshotPath,
+      this.traceId
+    );
+    if (!pathValidation.ok) return pathValidation;
 
     try {
       const content = await readFile(snapshotPath, "utf8");
@@ -366,13 +419,20 @@ export class HistoryRepository implements HistoryRepositoryPort, ChapterHistoryR
   }
 
   private snapshotRelativePath(assetType: string, assetId: string, versionId: string): string {
-    const extension = assetType === "chapter" ? "md" : "json";
+    const extension = assetType === "chapter" ? "md" : assetType === "text" ? "txt" : "json";
     return join(
       "history",
       this.assetHistoryDirectory(assetType),
-      assetId,
+      this.historyAssetKey(assetType, assetId),
       `${versionId}.${extension}`
     );
+  }
+
+  private historyAssetKey(assetType: string, assetId: string): string {
+    if (assetType !== "text") {
+      return assetId;
+    }
+    return `asset_${createHash("sha256").update(assetId, "utf8").digest("hex")}`;
   }
 
   private assetHistoryDirectory(assetType: string): string {
@@ -398,6 +458,31 @@ export class HistoryRepository implements HistoryRepositoryPort, ChapterHistoryR
   }
 }
 
+function validateHistoryAssetId(assetType: string, assetId: string): Result<void, UnifiedError> {
+  if (assetType === "text") {
+    const segments = assetId.split("/");
+    if (
+      assetId.length > 0 &&
+      !assetId.includes("\\") &&
+      !assetId.includes(":") &&
+      segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..")
+    ) {
+      return ok(undefined);
+    }
+  } else if (/^[A-Za-z0-9_-]+$/.test(assetId)) {
+    return ok(undefined);
+  }
+
+  return err(
+    validationError({
+      code: "VERSION_ASSET_ID_INVALID",
+      message: "Version asset id is not safe for history storage.",
+      suggestedAction: "Use a stable asset id or canonical project-relative text path.",
+      traceId: "trace_repository_history"
+    })
+  );
+}
+
 function isNodeMissingFileError(error: unknown): error is NodeJS.ErrnoException {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
@@ -417,6 +502,18 @@ function validateWorkflowRunId(workflowRunId: string): Result<void, UnifiedError
       redactedDetail: {
         workflowRunId
       }
+    })
+  );
+}
+
+function validateVersionId(versionId: string): Result<void, UnifiedError> {
+  if (/^ver_[A-Za-z0-9_-]+$/u.test(versionId)) return ok(undefined);
+  return err(
+    validationError({
+      code: "VERSION_ID_INVALID",
+      message: "Version id is not a safe history file name.",
+      suggestedAction: "Select a version recorded in project history.",
+      traceId: "trace_repository_history"
     })
   );
 }

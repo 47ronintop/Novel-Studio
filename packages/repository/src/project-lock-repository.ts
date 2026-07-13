@@ -3,6 +3,11 @@ import { dirname, join } from "node:path";
 import { err, ok, type JsonObject, type Result, type UnifiedError } from "@novel-studio/shared";
 
 import { storageError } from "./errors.js";
+import {
+  createProjectPathGuard,
+  verifyProjectStoragePath,
+  type ProjectPathGuard
+} from "./atomic-write.js";
 
 export interface ProjectLockRecord extends JsonObject {
   schemaVersion: "1.0";
@@ -22,10 +27,12 @@ export interface ProjectLockFileRepositoryOptions {
 export class ProjectLockFileRepository {
   private readonly lockPath: string;
   private readonly traceId: string;
+  private readonly pathGuard: ProjectPathGuard;
 
   public constructor(private readonly options: ProjectLockFileRepositoryOptions) {
     this.lockPath = join(options.projectRoot, ".novel-studio", "project-lock.json");
     this.traceId = options.traceId ?? "trace_project_lock";
+    this.pathGuard = createProjectPathGuard(options.projectRoot);
   }
 
   public async acquireProjectLock(): Promise<Result<ProjectLockRecord, UnifiedError>> {
@@ -37,7 +44,19 @@ export class ProjectLockFileRepository {
     };
 
     try {
+      const initialPathCheck = await verifyProjectStoragePath(
+        this.pathGuard,
+        this.lockPath,
+        this.traceId
+      );
+      if (!initialPathCheck.ok) return initialPathCheck;
       await mkdir(dirname(this.lockPath), { recursive: true });
+      const finalPathCheck = await verifyProjectStoragePath(
+        this.pathGuard,
+        this.lockPath,
+        this.traceId
+      );
+      if (!finalPathCheck.ok) return finalPathCheck;
       await writeFile(this.lockPath, `${JSON.stringify(record, null, 2)}\n`, {
         encoding: "utf8",
         flag: "wx"
@@ -83,6 +102,12 @@ export class ProjectLockFileRepository {
     }
 
     try {
+      const pathValidation = await verifyProjectStoragePath(
+        this.pathGuard,
+        this.lockPath,
+        this.traceId
+      );
+      if (!pathValidation.ok) return pathValidation;
       await rm(this.lockPath, { force: true });
       return ok(undefined);
     } catch (error) {
@@ -98,6 +123,32 @@ export class ProjectLockFileRepository {
         })
       );
     }
+  }
+
+  public async verifyProjectLockOwnership(): Promise<Result<void, UnifiedError>> {
+    const existing = await this.readLockRecord();
+    if (!existing.ok) {
+      return existing;
+    }
+    if (
+      existing.value.ownerId !== this.options.ownerId ||
+      existing.value.projectRoot !== this.options.projectRoot
+    ) {
+      return err(
+        storageError({
+          code: "PROJECT_LOCK_OWNER_MISMATCH",
+          message: "Project lock is not owned by this application window.",
+          suggestedAction: "Reopen the project before applying Agent changes.",
+          traceId: this.traceId,
+          redactedDetail: {
+            ownerId: existing.value.ownerId,
+            acquiredAt: existing.value.acquiredAt
+          }
+        })
+      );
+    }
+
+    return ok(undefined);
   }
 
   private async lockConflict(): Promise<Result<ProjectLockRecord, UnifiedError>> {
@@ -142,6 +193,12 @@ export class ProjectLockFileRepository {
 
   private async readLockRecord(): Promise<Result<ProjectLockRecord, UnifiedError>> {
     try {
+      const pathValidation = await verifyProjectStoragePath(
+        this.pathGuard,
+        this.lockPath,
+        this.traceId
+      );
+      if (!pathValidation.ok) return pathValidation;
       const parsed = JSON.parse(
         await readFile(this.lockPath, "utf8")
       ) as Partial<ProjectLockRecord>;

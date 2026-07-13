@@ -4,15 +4,17 @@ import { fileURLToPath } from "node:url";
 
 import {
   createBootstrappedDefaultDesktopApplication,
+  createProjectLockOwnerId,
   DEFAULT_FIXTURE_CHAPTER_ID
 } from "./application-composition.js";
 import { createDesktopAgentRunSession } from "./agent-run-runtime.js";
-import { createApplicationIpcHandlers } from "./ipc-handlers.js";
+import { createAgentWriteSaveCoordinator, createApplicationIpcHandlers } from "./ipc-handlers.js";
 import { createApplicationMenuTemplate } from "./menu.js";
 import { createDesktopModelRuntime, createEncryptedFileModelSecretStore } from "./model-runtime.js";
 import { createSecureWebPreferences } from "./security.js";
 import type { DesktopApplication } from "@novel-studio/application";
 import type { LlmModelProfile, LlmProviderId } from "@novel-studio/llm-adapter";
+import { createUnifiedError } from "@novel-studio/shared";
 
 const currentDirectory = fileURLToPath(new URL(".", import.meta.url));
 let activeDesktopApplication: DesktopApplication | undefined;
@@ -31,17 +33,27 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     userDataRoot,
     secretStore: modelSecretStore
   });
+  const projectLockOwnerId = createProjectLockOwnerId();
+  const agentWriteSaveCoordinator = createAgentWriteSaveCoordinator();
   activeDesktopApplication = await createBootstrappedDefaultDesktopApplication({
     projectRoot,
     userDataRoot,
+    projectLockOwnerId,
     modelConnectionTester: modelRuntime.modelConnectionTester,
     modelDiscoveryPort: modelRuntime.modelDiscoveryPort,
     createAiProvider: modelRuntime.createAiProvider
   });
+  const failAgentWriteAt = readPositiveInteger(
+    process.env["NOVEL_STUDIO_TEST_AGENT_WRITE_FAIL_AT"]
+  );
   const agentRunSession = createDesktopAgentRunSession({
     projectRoot,
     projectId: "prj_minimal_chapter",
     activeChapterId: DEFAULT_FIXTURE_CHAPTER_ID,
+    projectLockOwnerId,
+    pauseAutosave: agentWriteSaveCoordinator.pauseAutosave,
+    resumeAutosave: agentWriteSaveCoordinator.resumeAutosave,
+    ...(failAgentWriteAt === undefined ? {} : { failAgentWriteAt }),
     createAgentModelDriver: modelRuntime.createAgentModelDriver,
     readEditorBuffer: async (refId) => {
       const chapterId = refId.startsWith("chapter:") ? refId.slice("chapter:".length) : undefined;
@@ -50,6 +62,21 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
       return activeChapter.ok && activeChapter.value.state.chapter.frontmatter.id === chapterId
         ? activeChapter.value.state.chapter.body
         : undefined;
+    },
+    readEditorState: async (relativePath) => {
+      const match = /^chapters\/([A-Za-z0-9_-]+)\.md$/.exec(relativePath);
+      if (match?.[1] === undefined || activeDesktopApplication === undefined) return undefined;
+      const activeChapter = await activeDesktopApplication.readActiveChapterState();
+      if (!activeChapter.ok || activeChapter.value.state.chapter.frontmatter.id !== match[1]) {
+        return undefined;
+      }
+      return {
+        dirty: activeChapter.value.state.dirty,
+        content: activeChapter.value.state.chapter.body
+      };
+    },
+    syncSavedEditor: async (relativePath) => {
+      await syncSavedEditorForPath(activeDesktopApplication, relativePath);
     },
     resolveModelProfile: async (profileId) => {
       const profiles = await activeDesktopApplication?.listModelProfiles();
@@ -87,6 +114,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
       }
     },
     agentRunSession,
+    agentWriteSaveCoordinator,
     publishAgentRunEvent: (event) => {
       for (const window of BrowserWindow.getAllWindows()) {
         if (!window.isDestroyed()) {
@@ -98,6 +126,35 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
 
   for (const [channel, handler] of Object.entries(handlers)) {
     ipcMain.handle(channel, (_event, ...args: readonly unknown[]) => handler(...args));
+  }
+}
+
+function readPositiveInteger(value: string | undefined): number | undefined {
+  if (value === undefined || !/^[1-9][0-9]*$/.test(value)) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+export async function syncSavedEditorForPath(
+  application: Pick<DesktopApplication, "readActiveChapterState" | "loadActiveChapter"> | undefined,
+  relativePath: string
+): Promise<void> {
+  const match = /^chapters\/([A-Za-z0-9_-]+)\.md$/.exec(relativePath);
+  if (application === undefined || match?.[1] === undefined) return;
+
+  const activeChapter = await application.readActiveChapterState();
+  if (activeChapter.ok && activeChapter.value.state.chapter.frontmatter.id === match[1]) {
+    if (activeChapter.value.state.dirty) {
+      throw createUnifiedError({
+        code: "AGENT_WRITE_EDITOR_SYNC_DIRTY",
+        category: "UserError",
+        message: "The active editor changed while Agent changes were being applied.",
+        recoverability: "user-action",
+        suggestedAction: "Review the preserved editor buffer and transaction recovery status.",
+        traceId: "desktop-agent-editor-sync"
+      });
+    }
+    await application.loadActiveChapter();
   }
 }
 

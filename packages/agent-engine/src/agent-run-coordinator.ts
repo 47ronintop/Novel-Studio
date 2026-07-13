@@ -152,6 +152,37 @@ export function createAgentRunCoordinator(
       });
       return { ok: true, value: next };
     },
+    recordTerminalAuditEvent(input) {
+      const snapshot = runs.get(input.runId);
+      if (snapshot === undefined) {
+        return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
+      }
+      if (!isTerminal(snapshot.status)) {
+        return failure(
+          "AGENT_RUN_NOT_TERMINAL",
+          "Terminal audit events require an Agent run that has already ended."
+        );
+      }
+      if (!isTerminalAuditEventType(input.type)) {
+        return failure(
+          "AGENT_RUN_AUDIT_EVENT_INVALID",
+          "The event is not allowed after an Agent run has ended."
+        );
+      }
+      const timestamp = now();
+      const next: AgentRunSnapshot = {
+        ...snapshot,
+        runRevision: snapshot.runRevision + 1,
+        lastSequence: snapshot.lastSequence + 1,
+        updatedAt: timestamp
+      };
+      runs.set(next.runId, next);
+      events.get(next.runId)?.push({
+        ...toEvent(next, input.type, timestamp),
+        ...(input.detail === undefined ? {} : { detail: input.detail })
+      });
+      return { ok: true, value: next };
+    },
     restoreRun(snapshot, restoredEvents) {
       const existing = runs.get(snapshot.runId);
       if (existing !== undefined) return { ok: true, value: existing };
@@ -227,6 +258,10 @@ function isTerminal(status: AgentRunSnapshot["status"]): boolean {
     status === "failed" ||
     status === "limit_reached"
   );
+}
+
+function isTerminalAuditEventType(type: AgentRunEvent["type"]): boolean {
+  return type === "run_undo_started" || type === "run_undone" || type === "run_undo_failed";
 }
 
 let runSequence = 0;

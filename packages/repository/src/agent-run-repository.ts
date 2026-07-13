@@ -37,6 +37,18 @@ export class AgentRunFileRepository {
     );
   }
 
+  public readContextSnapshot(
+    runId: string,
+    contextSnapshotId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    if (!isSafeId(contextSnapshotId)) {
+      return Promise.resolve(this.invalidRecord("AGENT_CONTEXT_SNAPSHOT_INVALID"));
+    }
+    return this.readJson(
+      this.runPath(runId, join("context-snapshots", `${contextSnapshotId}.json`))
+    );
+  }
+
   public writePlanArtifact(plan: JsonObject): Promise<Result<JsonObject, UnifiedError>> {
     const planId = readSafeString(plan, "planId");
     const revision = plan["revision"];
@@ -54,6 +66,77 @@ export class AgentRunFileRepository {
       ),
       plan
     );
+  }
+
+  public async writeChangeSet(changeSet: JsonObject): Promise<Result<JsonObject, UnifiedError>> {
+    const changeSetId = readSafeString(changeSet, "changeSetId");
+    const revision = changeSet["revision"];
+    if (
+      changeSetId === undefined ||
+      readRunId(changeSet) === undefined ||
+      !Number.isSafeInteger(revision) ||
+      Number(revision) < 1
+    ) {
+      return this.invalidRecord("AGENT_CHANGE_SET_INVALID");
+    }
+    const existing = await this.readChangeSet(changeSetId, Number(revision));
+    if (!existing.ok) return existing;
+    if (existing.value !== undefined) {
+      return JSON.stringify(existing.value) === JSON.stringify(changeSet)
+        ? ok(existing.value)
+        : this.invalidRecord("AGENT_CHANGE_SET_REVISION_CONFLICT");
+    }
+    return this.writeJson(this.changeSetPath(changeSetId, Number(revision)), changeSet);
+  }
+
+  public async readChangeSet(
+    changeSetId: string,
+    revision?: number
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    if (!isSafeId(changeSetId) || (revision !== undefined && (!Number.isSafeInteger(revision) || revision < 1))) {
+      return this.invalidRecord("AGENT_CHANGE_SET_INVALID");
+    }
+    const resolvedRevision = revision ?? (await this.latestChangeSetRevision(changeSetId));
+    if (resolvedRevision === undefined) return ok(undefined);
+    const read = await this.readJson(this.changeSetPath(changeSetId, resolvedRevision));
+    if (!read.ok || read.value === undefined) return read;
+    return read.value["changeSetId"] === changeSetId && read.value["revision"] === resolvedRevision
+      ? read
+      : this.invalidRecord("AGENT_CHANGE_SET_INVALID");
+  }
+
+  public async readLatestChangeSet(input: {
+    readonly runId: string;
+    readonly projectId: string;
+    readonly checkpointId: string;
+  }): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    if (![input.runId, input.projectId, input.checkpointId].every(isSafeId)) {
+      return this.invalidRecord("AGENT_CHANGE_SET_INVALID");
+    }
+    const root = join(this.options.projectRoot, "history", "change-sets");
+    try {
+      const entries = await readdir(root, { withFileTypes: true });
+      const candidates: JsonObject[] = [];
+      for (const entry of entries) {
+        if (!entry.isDirectory() || !isSafeId(entry.name)) continue;
+        const changeSet = await this.readChangeSet(entry.name);
+        if (!changeSet.ok) return changeSet;
+        if (
+          changeSet.value !== undefined &&
+          changeSet.value["runId"] === input.runId &&
+          changeSet.value["projectId"] === input.projectId &&
+          changeSet.value["checkpointId"] === input.checkpointId
+        ) {
+          candidates.push(changeSet.value);
+        }
+      }
+      candidates.sort((left, right) => Number(right["revision"]) - Number(left["revision"]));
+      return ok(candidates[0]);
+    } catch (error) {
+      return isMissingFileError(error)
+        ? ok(undefined)
+        : err(this.storageFailure("AGENT_RUN_READ_FAILED", error));
+    }
   }
 
   public async appendEvent(event: JsonObject): Promise<Result<JsonObject, UnifiedError>> {
@@ -167,6 +250,32 @@ export class AgentRunFileRepository {
       throw new Error("Agent run ID is invalid.");
     }
     return join(this.options.projectRoot, "history", "agent-runs", runId, suffix);
+  }
+
+  private changeSetPath(changeSetId: string, revision: number): string {
+    return join(
+      this.options.projectRoot,
+      "history",
+      "change-sets",
+      changeSetId,
+      "revisions",
+      `${String(revision)}.json`
+    );
+  }
+
+  private async latestChangeSetRevision(changeSetId: string): Promise<number | undefined> {
+    try {
+      const entries = await readdir(
+        join(this.options.projectRoot, "history", "change-sets", changeSetId, "revisions")
+      );
+      return entries
+        .map((entry) => (/^[1-9][0-9]*\.json$/.test(entry) ? Number(entry.slice(0, -5)) : 0))
+        .sort((left, right) => right - left)
+        .find((revision) => revision > 0);
+    } catch (error) {
+      if (isMissingFileError(error)) return undefined;
+      throw error;
+    }
   }
 
   private async writeJson(

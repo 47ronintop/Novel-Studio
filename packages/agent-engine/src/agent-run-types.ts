@@ -1,4 +1,5 @@
 import type { JsonObject, UnifiedError } from "@novel-studio/shared";
+import type { ChangeSetFileSelection } from "./change-set.js";
 import type { AgentContextSourceInput } from "./context-snapshot.js";
 
 export type AgentOperationMode = "planning" | "execution";
@@ -9,6 +10,10 @@ export type AgentRunStatus =
   | "planning_model"
   | "executing_model"
   | "executing_read_tool"
+  | "staging_changes"
+  | "awaiting_write_approval"
+  | "applying_changes"
+  | "stopping_after_transaction"
   | "awaiting_user_input"
   | "awaiting_context_refresh"
   | "plan_ready"
@@ -54,6 +59,10 @@ export interface AgentRunSnapshot {
   readonly contextSnapshotId: string | null;
   readonly sourcePlanId: string | null;
   readonly sourcePlanRevision: number | null;
+  readonly pendingChangeSetId?: string | null;
+  readonly pendingChangeSetRevision?: number | null;
+  readonly pendingChangeSetChecksum?: string | null;
+  readonly versionGroupId?: string | null;
 }
 
 export interface AgentRunEvent {
@@ -85,6 +94,14 @@ export type AgentRunEventType =
   | "plan_ready"
   | "plan_decision_resolved"
   | "plan_execution_started"
+  | "change_set_ready"
+  | "approval_resolved"
+  | "write_started"
+  | "write_applied"
+  | "write_failed"
+  | "run_undo_started"
+  | "run_undone"
+  | "run_undo_failed"
   | "run_completed"
   | "run_cancelled"
   | "run_failed"
@@ -95,6 +112,10 @@ export interface AgentRunSnapshotPatch {
   readonly contextSnapshotId?: string | null;
   readonly sourcePlanId?: string | null;
   readonly sourcePlanRevision?: number | null;
+  readonly pendingChangeSetId?: string | null;
+  readonly pendingChangeSetRevision?: number | null;
+  readonly pendingChangeSetChecksum?: string | null;
+  readonly versionGroupId?: string | null;
 }
 
 export interface RecordAgentRunEventInput {
@@ -103,6 +124,17 @@ export interface RecordAgentRunEventInput {
   readonly type: AgentRunEventType;
   readonly detail?: JsonObject;
   readonly snapshotPatch?: AgentRunSnapshotPatch;
+}
+
+export type TerminalAgentRunAuditEventType =
+  | "run_undo_started"
+  | "run_undone"
+  | "run_undo_failed";
+
+export interface RecordTerminalAgentRunAuditEventInput {
+  readonly runId: string;
+  readonly type: TerminalAgentRunAuditEventType;
+  readonly detail?: JsonObject;
 }
 
 export interface StartAgentRunCommand {
@@ -162,6 +194,37 @@ export interface RefreshAgentContextCommand {
   readonly currentSources?: readonly AgentContextSourceInput[];
 }
 
+interface DecideChangeSetCommandBase {
+  readonly runId: string;
+  readonly projectId: string;
+  readonly commandId: string;
+  readonly expectedRunRevision: number;
+  readonly changeSetId: string;
+  readonly revision: number;
+  readonly checksum: string;
+}
+
+export type DecideChangeSetCommand = DecideChangeSetCommandBase &
+  (
+    | {
+        readonly decision: "update_selection";
+        readonly files: readonly ChangeSetFileSelection[];
+      }
+    | {
+        readonly decision: "apply_selected" | "reject_all";
+        readonly files?: never;
+      }
+  );
+
+export interface UndoAgentRunCommand {
+  readonly runId: string;
+  readonly projectId: string;
+  readonly commandId: string;
+  readonly expectedRunRevision: number;
+}
+
+export type UndoRunCommand = UndoAgentRunCommand;
+
 export type AgentRunCommandResult =
   | { readonly ok: true; readonly value: AgentRunSnapshot }
   | {
@@ -174,6 +237,7 @@ export interface AgentRunCoordinator {
   startRun(command: StartAgentRunCommand): AgentRunCommandResult;
   stopRun(command: StopAgentRunCommand): AgentRunCommandResult;
   recordRunEvent(input: RecordAgentRunEventInput): AgentRunCommandResult;
+  recordTerminalAuditEvent(input: RecordTerminalAgentRunAuditEventInput): AgentRunCommandResult;
   restoreRun(snapshot: AgentRunSnapshot, events: readonly AgentRunEvent[]): AgentRunCommandResult;
   readSnapshot(runId: string): AgentRunSnapshot | undefined;
   readEvents(runId: string): readonly AgentRunEvent[];

@@ -16,6 +16,7 @@ import type {
 import type { ChapterSummary, UserAppearancePreferences } from "@novel-studio/shared";
 import type { ChapterEditorProps } from "./chapter-editor.js";
 import type { CommandPaletteFeedback } from "./command-palette.js";
+import type { ChangeSetReviewProps } from "./change-set-review.js";
 import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
 import type { EditorPreferences } from "./editor-toolbar.js";
 import type { ModelSettingsPanelProps } from "./model-settings-panel.js";
@@ -201,6 +202,7 @@ export interface AgentRunPanelProps {
   readonly errorMessage?: string;
   readonly providerLabel?: string;
   readonly contextSourceNotice?: string;
+  readonly changeSetReview?: ChangeSetReviewProps;
   readonly onOperationModeChange: (mode: AgentOperationMode) => void;
   readonly onContextModeChange: (mode: AgentContextMode) => void;
   readonly onSend: (request: string) => void;

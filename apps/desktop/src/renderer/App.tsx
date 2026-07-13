@@ -130,10 +130,11 @@ export function App() {
       projectId: projectWorkflow?.projectId ?? "prj_minimal_chapter",
       ...(activeChapterId === undefined ? {} : { activeChapterId }),
       ...(chapterEditor === undefined ? {} : { chapterEditor }),
+      ...(fileEditor === undefined ? {} : { fileEditor }),
       ...(settings === undefined ? {} : { settings })
     });
     setAgentRun(next);
-  }, [agentRunBridge, chapterEditor, projectWorkflow, settings]);
+  }, [agentRunBridge, chapterEditor, fileEditor, projectWorkflow, settings]);
 
   useEffect(() => {
     if (agentRunBridge === undefined) {

@@ -118,4 +118,93 @@ describe("Agent Run Coordinator", () => {
       { sequence: 3, type: "run_cancelled" }
     ]);
   });
+
+  test("appends undo audit events after termination without changing the terminal status", () => {
+    const factory = (engineExports as unknown as Record<string, unknown>)[
+      "createAgentRunCoordinator"
+    ];
+    expect(typeof factory).toBe("function");
+    if (typeof factory !== "function") return;
+
+    const coordinator = factory({
+      now: () => "2026-07-13T00:00:00.000Z",
+      createRunId: () => "run_terminal_audit"
+    }) as {
+      startRun(input: Record<string, unknown>): { readonly ok: boolean };
+      recordRunEvent(input: Record<string, unknown>): unknown;
+      recordTerminalAuditEvent?: (input: Record<string, unknown>) => unknown;
+      readEvents(runId: string): readonly Record<string, unknown>[];
+    };
+    const started = coordinator.startRun({
+      projectId: "project_01",
+      commandId: "command_start_terminal_audit",
+      expectedRunRevision: 0,
+      operationMode: "execution",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      userRequest: "Apply and audit an undo.",
+      providerCapabilitySnapshot: {
+        profileId: "model_01",
+        provider: "openai-compatible",
+        modelName: "tool-model",
+        streaming: true,
+        toolCalling: true,
+        structuredArguments: true,
+        contextWindow: 32_000,
+        requiredContextTokens: 8_000
+      }
+    });
+    expect(started).toMatchObject({ ok: true });
+    expect(
+      coordinator.recordRunEvent({
+        runId: "run_terminal_audit",
+        status: "completed",
+        type: "run_completed"
+      })
+    ).toMatchObject({
+      ok: true,
+      value: { status: "completed", runRevision: 2, lastSequence: 2 }
+    });
+
+    expect(typeof coordinator.recordTerminalAuditEvent).toBe("function");
+    if (coordinator.recordTerminalAuditEvent === undefined) return;
+    expect(
+      coordinator.recordTerminalAuditEvent({
+        runId: "run_terminal_audit",
+        type: "run_undo_started",
+        detail: { commandId: "command_undo_terminal_audit" }
+      })
+    ).toMatchObject({
+      ok: true,
+      value: { status: "completed", runRevision: 3, lastSequence: 3 }
+    });
+    expect(
+      coordinator.recordTerminalAuditEvent({
+        runId: "run_terminal_audit",
+        type: "run_undone",
+        detail: { versionGroupId: "version_group_undo" }
+      })
+    ).toMatchObject({
+      ok: true,
+      value: { status: "completed", runRevision: 4, lastSequence: 4 }
+    });
+    expect(
+      coordinator.recordRunEvent({
+        runId: "run_terminal_audit",
+        status: "completed",
+        type: "assistant_text_completed"
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_RUN_ALREADY_TERMINAL" } });
+    expect(coordinator.readEvents("run_terminal_audit")).toMatchObject([
+      { sequence: 1, type: "run_started" },
+      { sequence: 2, type: "run_completed" },
+      { sequence: 3, type: "run_undo_started" },
+      { sequence: 4, type: "run_undone" }
+    ]);
+    expect(
+      coordinator
+        .readEvents("run_terminal_audit")
+        .filter((event) => event["type"] === "run_completed")
+    ).toHaveLength(1);
+  });
 });

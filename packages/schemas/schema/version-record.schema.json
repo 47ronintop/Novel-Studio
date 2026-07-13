@@ -16,7 +16,10 @@
   "properties": {
     "schemaVersion": { "const": "1.0" },
     "versionId": { "type": "string", "pattern": "^ver_[A-Za-z0-9_-]+$" },
-    "assetType": { "type": "string", "enum": ["chapter", "prompt", "agent", "workflow"] },
+    "assetType": {
+      "type": "string",
+      "enum": ["chapter", "text", "prompt", "agent", "workflow"]
+    },
     "assetId": { "type": "string" },
     "reason": {
       "type": "string",
@@ -25,6 +28,8 @@
         "autosave-snapshot",
         "interval-snapshot",
         "before-ai-apply",
+        "before-agent-write",
+        "before-agent-session-undo",
         "before-rollback",
         "migration"
       ]

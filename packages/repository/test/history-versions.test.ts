@@ -1,6 +1,7 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { isErr, isOk } from "@novel-studio/shared";
@@ -65,5 +66,94 @@ describe("HistoryRepository version browsing", () => {
     }
 
     expect(preview.value.content).toBe("first body\n");
+  });
+
+  test("rejects a version id that escapes the bound project root", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-history-project-"));
+    const outsideRoot = await mkdtemp(join(tmpdir(), "novel-studio-history-outside-"));
+    tempRoots.push(projectRoot, outsideRoot);
+    await writeFile(join(outsideRoot, "secret.md"), "outside secret", "utf8");
+    const history = new HistoryRepository({ projectRoot });
+
+    const result = await history.readChapterVersion(
+      "ch_01",
+      `../../../../${basename(outsideRoot)}/secret`
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "VERSION_ID_INVALID" }
+    });
+  });
+
+  test("rejects a history junction that leaves the bound project root", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-history-project-"));
+    const outsideRoot = await mkdtemp(join(tmpdir(), "novel-studio-history-outside-"));
+    tempRoots.push(projectRoot, outsideRoot);
+    await symlink(outsideRoot, join(projectRoot, "history"), "junction");
+    const history = new HistoryRepository({ projectRoot });
+
+    const result = await history.snapshotTextAsset({
+      assetType: "text",
+      assetId: "notes/one.md",
+      reason: "before-agent-write",
+      content: "before"
+    });
+
+    expect(result.ok).toBe(false);
+    expect(await readdir(outsideRoot)).toEqual([]);
+  });
+
+  test("rejects project-root retargeting after the repository is bound", async () => {
+    const rootA = await mkdtemp(join(tmpdir(), "novel-studio-history-root-a-"));
+    const rootB = await mkdtemp(join(tmpdir(), "novel-studio-history-root-b-"));
+    const linkParent = await mkdtemp(join(tmpdir(), "novel-studio-history-link-"));
+    tempRoots.push(rootA, rootB, linkParent);
+    const projectRoot = join(linkParent, "project");
+    await symlink(rootA, projectRoot, "junction");
+    const history = new HistoryRepository({ projectRoot });
+    const first = await history.snapshotTextAsset({
+      assetType: "text",
+      assetId: "notes/one.md",
+      reason: "before-agent-write",
+      content: "first"
+    });
+    expect(first.ok).toBe(true);
+    await rm(projectRoot, { force: true, recursive: true });
+    await symlink(rootB, projectRoot, "junction");
+
+    const result = await history.snapshotTextAsset({
+      assetType: "text",
+      assetId: "notes/two.md",
+      reason: "before-agent-write",
+      content: "second"
+    });
+
+    expect(result.ok).toBe(false);
+    expect(await readdir(rootB)).toEqual([]);
+  });
+
+  test("removes a snapshot body when its version record cannot be persisted", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-history-project-"));
+    tempRoots.push(projectRoot);
+    const assetId = "notes/one.md";
+    const assetKey = `asset_${createHash("sha256").update(assetId, "utf8").digest("hex")}`;
+    const blockedRecordParent = join(projectRoot, "history", "texts-records", assetKey);
+    await mkdir(join(projectRoot, "history", "texts-records"), { recursive: true });
+    await writeFile(blockedRecordParent, "not a directory", "utf8");
+    const history = new HistoryRepository({
+      projectRoot,
+      createVersionId: () => "ver_orphan_test"
+    });
+
+    const result = await history.snapshotTextAsset({
+      assetType: "text",
+      assetId,
+      reason: "before-agent-write",
+      content: "before"
+    });
+
+    expect(result.ok).toBe(false);
+    expect(await readdir(join(projectRoot, "history", "texts", assetKey))).toEqual([]);
   });
 });

@@ -24,7 +24,15 @@ export interface AgentProjectReadRepositoryOptions {
 }
 
 const allowedExtensions = new Set([".md", ".txt", ".json", ".yaml", ".yml", ".toml"]);
-const blockedRoots = new Set([".git", "node_modules", "history", "dist", "build", ".cache"]);
+const blockedRoots = new Set([
+  ".git",
+  ".novel-studio",
+  "node_modules",
+  "history",
+  "dist",
+  "build",
+  ".cache"
+]);
 const deviceName = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
 
 export class AgentProjectReadRepository {

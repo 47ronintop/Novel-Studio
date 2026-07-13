@@ -298,6 +298,8 @@ export type {
 } from "./ai-writing-workflow-types.js";
 export { createAgentBackedAiWritingWorkflowSession } from "./ai-writing-workflow-session.js";
 export { createAgentRunSession } from "./agent-run-session.js";
+export { createChangeSetSession } from "./change-set-session.js";
+export { createVersionGroupSession } from "./version-group-session.js";
 export { createLlmAgentRunModelDriver } from "./agent-run-model-driver.js";
 export type {
   AgentModelMessage,
@@ -311,11 +313,30 @@ export type {
   AgentRunPersistencePort,
   AgentRunReadResult,
   AgentRunSession,
+  AgentVersionGroupExecutor,
   AgentUserInputOption,
   AgentUserInputRequest,
   AnswerAgentUserInputCommand,
   CreateAgentRunSessionOptions
 } from "./agent-run-session.js";
+export type {
+  ChangeSetCandidateValidationPortInput,
+  ChangeSetProposalTarget,
+  ChangeSetSession,
+  ChangeSetSessionPort,
+  CreateChangeSetSessionOptions,
+  ProposeChapterWriteInput,
+  ProposeFileWriteInput,
+  SelectChangeSetSessionRevisionInput
+} from "./change-set-session.js";
+export type {
+  CreateVersionGroupSessionOptions,
+  VersionGroupSession,
+  VersionGroupSessionHooks,
+  VersionGroupSessionTransactionPort,
+  VersionGroupTransactionApplyFile,
+  VersionGroupTransactionApplyInput
+} from "./version-group-session.js";
 export type { CreateLlmAgentRunModelDriverOptions } from "./agent-run-model-driver.js";
 export type {
   AgentRunEvent,

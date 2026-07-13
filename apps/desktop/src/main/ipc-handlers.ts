@@ -9,12 +9,14 @@ import type {
 } from "@novel-studio/application";
 import type {
   AgentRunEvent,
+  DecideChangeSetCommand,
   DecideAgentPlanCommand,
   RefreshAgentContextCommand,
   ResumeAgentRunCommand,
   RetryAgentRunStepCommand,
   StartAgentRunCommand,
-  StopAgentRunCommand
+  StopAgentRunCommand,
+  UndoRunCommand
 } from "@novel-studio/agent-engine";
 import { ok, type JsonObject, type JsonValue } from "@novel-studio/shared";
 import { writeTextAtomically } from "@novel-studio/repository";
@@ -58,6 +60,84 @@ export interface ApplicationIpcHandlerOptions {
   readonly publishAiSuggestionStreamEvent?: (event: AiWritingSuggestionStreamPushEvent) => void;
   readonly agentRunSession?: AgentRunSession;
   readonly publishAgentRunEvent?: (event: AgentRunEvent) => void;
+  readonly agentWriteSaveCoordinator?: AgentWriteSaveCoordinator;
+}
+
+export interface AgentWriteSaveCoordinator {
+  pauseAutosave(relativePaths: readonly string[]): Promise<void>;
+  resumeAutosave(relativePaths: readonly string[]): Promise<void>;
+  beginSave(
+    relativePath: string
+  ): { readonly ok: false } | { readonly ok: true; readonly release: () => void };
+}
+
+interface SavePathState {
+  pauseCount: number;
+  activeSaveCount: number;
+  readonly drainWaiters: Set<() => void>;
+}
+
+export function createAgentWriteSaveCoordinator(): AgentWriteSaveCoordinator {
+  const stateByPath = new Map<string, SavePathState>();
+  const getState = (relativePath: string): SavePathState => {
+    const current = stateByPath.get(relativePath);
+    if (current !== undefined) return current;
+    const created: SavePathState = {
+      pauseCount: 0,
+      activeSaveCount: 0,
+      drainWaiters: new Set()
+    };
+    stateByPath.set(relativePath, created);
+    return created;
+  };
+
+  return {
+    async pauseAutosave(relativePaths) {
+      const uniquePaths = [...new Set(relativePaths)];
+      const states = uniquePaths.map((relativePath) => {
+        const state = getState(relativePath);
+        state.pauseCount += 1;
+        return state;
+      });
+      await Promise.all(
+        states.map(
+          (state) =>
+            state.activeSaveCount === 0 ||
+            new Promise<void>((resolve) => state.drainWaiters.add(resolve))
+        )
+      );
+    },
+    async resumeAutosave(relativePaths) {
+      for (const relativePath of new Set(relativePaths)) {
+        const state = stateByPath.get(relativePath);
+        if (state === undefined) continue;
+        state.pauseCount = Math.max(0, state.pauseCount - 1);
+        if (state.pauseCount === 0 && state.activeSaveCount === 0) {
+          stateByPath.delete(relativePath);
+        }
+      }
+    },
+    beginSave(relativePath) {
+      const state = getState(relativePath);
+      if (state.pauseCount > 0) return { ok: false };
+      state.activeSaveCount += 1;
+      let released = false;
+      return {
+        ok: true,
+        release() {
+          if (released) return;
+          released = true;
+          state.activeSaveCount -= 1;
+          if (state.activeSaveCount === 0) {
+            const waiters = [...state.drainWaiters];
+            state.drainWaiters.clear();
+            for (const resolve of waiters) resolve();
+            if (state.pauseCount === 0) stateByPath.delete(relativePath);
+          }
+        }
+      };
+    }
+  };
 }
 
 interface ActiveAiSuggestionStream {
@@ -379,6 +459,18 @@ export function createApplicationIpcHandlers(
         ? Promise.resolve(agentRunUnavailable())
         : options.agentRunSession.refreshContext(parsed);
     },
+    "application:agent-run:decide-change-set": (command: unknown) => {
+      const parsed = toDecideChangeSetCommand(command);
+      return parsed === undefined || options.agentRunSession === undefined
+        ? Promise.resolve(invalidAgentRunCommand())
+        : options.agentRunSession.decideChangeSet(parsed);
+    },
+    "application:agent-run:undo": (command: unknown) => {
+      const parsed = toUndoAgentRunCommand(command);
+      return parsed === undefined || options.agentRunSession === undefined
+        ? Promise.resolve(invalidAgentRunCommand())
+        : options.agentRunSession.undoRun(parsed);
+    },
     "application:agent-run:read": (runId: unknown) =>
       typeof runId !== "string" || options.agentRunSession === undefined
         ? Promise.resolve(agentRunUnavailable())
@@ -395,7 +487,8 @@ export function createApplicationIpcHandlers(
 
       return application.editActiveChapter(nextBody);
     },
-    "application:chapter:save": () => application.saveActiveChapter(),
+    "application:chapter:save": () =>
+      saveActiveChapterWithCoordinator(application, options.agentWriteSaveCoordinator),
     "application:chapter:list-versions": () => application.listActiveChapterVersions(),
     "application:chapter:preview-version": (versionId: unknown) => {
       if (typeof versionId !== "string") {
@@ -559,6 +652,118 @@ function toRefreshAgentContextCommand(value: unknown): RefreshAgentContextComman
   return isRecord(value) ? (value as unknown as RefreshAgentContextCommand) : undefined;
 }
 
+function toDecideChangeSetCommand(value: unknown): DecideChangeSetCommand | undefined {
+  if (!isRecord(value)) return undefined;
+  const decision = value["decision"];
+  const allowedKeys = new Set([
+    "runId",
+    "projectId",
+    "commandId",
+    "expectedRunRevision",
+    "changeSetId",
+    "revision",
+    "checksum",
+    "decision",
+    "files"
+  ]);
+  if (Object.keys(value).some((key) => !allowedKeys.has(key))) return undefined;
+  if (
+    !isNonEmptyString(value["runId"]) ||
+    !isNonEmptyString(value["projectId"]) ||
+    !isNonEmptyString(value["commandId"]) ||
+    !isNonNegativeInteger(value["expectedRunRevision"]) ||
+    !isNonEmptyString(value["changeSetId"]) ||
+    !isPositiveInteger(value["revision"]) ||
+    !isNonEmptyString(value["checksum"]) ||
+    (decision !== "update_selection" && decision !== "apply_selected" && decision !== "reject_all")
+  ) {
+    return undefined;
+  }
+  if (decision !== "update_selection" && value["files"] !== undefined) return undefined;
+  const files =
+    decision === "update_selection" ? toChangeSetFileSelections(value["files"]) : undefined;
+  if (decision === "update_selection" && files === undefined) return undefined;
+  const base = {
+    runId: value["runId"],
+    projectId: value["projectId"],
+    commandId: value["commandId"],
+    expectedRunRevision: value["expectedRunRevision"],
+    changeSetId: value["changeSetId"],
+    revision: value["revision"],
+    checksum: value["checksum"]
+  };
+  return decision === "update_selection"
+    ? { ...base, decision, files: files ?? [] }
+    : { ...base, decision };
+}
+
+function toChangeSetFileSelections(value: unknown) {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const selections: Array<{
+    readonly relativePath: string;
+    readonly selected: boolean;
+    readonly selectedHunkIds?: readonly string[];
+  }> = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) return undefined;
+    if (
+      Object.keys(entry).some(
+        (key) => !["relativePath", "selected", "selectedHunkIds"].includes(key)
+      )
+    ) {
+      return undefined;
+    }
+    const selectedHunkIds = entry["selectedHunkIds"];
+    if (
+      !isNonEmptyString(entry["relativePath"]) ||
+      typeof entry["selected"] !== "boolean" ||
+      (selectedHunkIds !== undefined &&
+        (!Array.isArray(selectedHunkIds) || !selectedHunkIds.every(isNonEmptyString)))
+    ) {
+      return undefined;
+    }
+    selections.push({
+      relativePath: entry["relativePath"],
+      selected: entry["selected"],
+      ...(selectedHunkIds === undefined ? {} : { selectedHunkIds })
+    });
+  }
+  return selections;
+}
+
+function toUndoAgentRunCommand(value: unknown): UndoRunCommand | undefined {
+  if (!isRecord(value)) return undefined;
+  if (
+    Object.keys(value).some(
+      (key) => !["runId", "projectId", "commandId", "expectedRunRevision"].includes(key)
+    ) ||
+    !isNonEmptyString(value["runId"]) ||
+    !isNonEmptyString(value["projectId"]) ||
+    !isNonEmptyString(value["commandId"]) ||
+    !isNonNegativeInteger(value["expectedRunRevision"])
+  ) {
+    return undefined;
+  }
+  return {
+    runId: value["runId"],
+    projectId: value["projectId"],
+    commandId: value["commandId"],
+    expectedRunRevision: value["expectedRunRevision"]
+  };
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return isNonNegativeInteger(value) && value > 0;
+}
+
 function agentRunUnavailable(): Result<never, UnifiedError> {
   return err(
     createUnifiedError({
@@ -567,6 +772,19 @@ function agentRunUnavailable(): Result<never, UnifiedError> {
       message: "The Agent Run service is unavailable.",
       recoverability: "user-action",
       suggestedAction: "Open a project and retry the Agent run.",
+      traceId: "desktop-ipc-handlers"
+    })
+  );
+}
+
+function invalidAgentRunCommand(): Result<never, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "AGENT_RUN_IPC_INVALID_COMMAND",
+      category: "ValidationError",
+      message: "The Agent Run command payload is invalid.",
+      recoverability: "user-action",
+      suggestedAction: "Refresh the Agent Run and retry the command.",
       traceId: "desktop-ipc-handlers"
     })
   );
@@ -692,6 +910,36 @@ function streamNotFound<T>(): Result<T, UnifiedError> {
       message: "The AI stream is no longer active.",
       recoverability: "user-action",
       suggestedAction: "Start a new AI writing stream.",
+      traceId: "desktop-ipc-handlers"
+    })
+  );
+}
+
+async function saveActiveChapterWithCoordinator(
+  application: DesktopApplication,
+  coordinator: AgentWriteSaveCoordinator | undefined
+): Promise<unknown> {
+  if (coordinator === undefined) return application.saveActiveChapter();
+  const activeChapter = await application.readActiveChapterState();
+  if (!activeChapter.ok) return activeChapter;
+  const chapterId = activeChapter.value.state.chapter.frontmatter.id;
+  const permit = coordinator.beginSave(`chapters/${chapterId}.md`);
+  if (!permit.ok) return chapterSavePausedForAgentWrite();
+  try {
+    return await application.saveActiveChapter();
+  } finally {
+    permit.release();
+  }
+}
+
+function chapterSavePausedForAgentWrite<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "CHAPTER_SAVE_PAUSED_FOR_AGENT_WRITE",
+      category: "UserError",
+      message: "Chapter saving is temporarily paused while Agent changes are applied.",
+      recoverability: "user-action",
+      suggestedAction: "Wait for the Agent transaction to finish, then save again.",
       traceId: "desktop-ipc-handlers"
     })
   );

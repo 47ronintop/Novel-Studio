@@ -1,18 +1,40 @@
 import {
   createAgentRunSession,
+  createChangeSetSession,
+  createVersionGroupSession,
   type AgentModelRoundInput,
   type AgentModelStreamEvent,
   type AgentReadToolExecutor,
   type AgentRunModelDriver,
-  type AgentRunSession
+  type AgentRunSession,
+  type AgentVersionGroupExecutor,
+  type VersionGroupSessionTransactionPort,
+  type VersionGroupTransactionApplyInput
 } from "@novel-studio/application";
 import type { LlmModelProfile, LlmParameters } from "@novel-studio/llm-adapter";
-import type { AgentToolName } from "@novel-studio/agent-engine";
-import { createUnifiedError, err, ok, type JsonObject } from "@novel-studio/shared";
+import type { AgentToolName, ChangeSet, VersionGroup } from "@novel-studio/agent-engine";
 import {
+  createUnifiedError,
+  err,
+  ok,
+  type JsonObject,
+  type Result,
+  type UnifiedError
+} from "@novel-studio/shared";
+import {
+  AgentWriteTransaction,
   AgentProjectReadRepository,
   AgentRunFileRepository,
-  StoryBibleFileRepository
+  ChapterFileRepository,
+  HistoryRepository,
+  ProjectLockFileRepository,
+  RecoveryRepository,
+  StoryBibleFileRepository,
+  validateWithSchema,
+  writeTextAtomically,
+  type AgentTransactionJournal,
+  type AgentWriteReplaceInput,
+  type AgentWriteTransactionInput
 } from "@novel-studio/repository";
 
 export interface DesktopAgentRunSessionOptions {
@@ -24,12 +46,28 @@ export interface DesktopAgentRunSessionOptions {
   readonly modelDriver?: AgentRunModelDriver;
   readonly resolveModelProfile?: (
     profileId: string
-  ) => Promise<{ readonly modelProfile: LlmModelProfile; readonly parameters?: LlmParameters } | undefined>;
+  ) => Promise<
+    { readonly modelProfile: LlmModelProfile; readonly parameters?: LlmParameters } | undefined
+  >;
   readonly createAgentModelDriver?: (input: {
     readonly modelProfile: LlmModelProfile;
     readonly parameters?: LlmParameters;
   }) => AgentRunModelDriver;
   readonly readEditorBuffer?: (refId: string) => Promise<string | undefined>;
+  readonly readEditorState?: (relativePath: string) => Promise<
+    | {
+        readonly dirty: boolean;
+        readonly content: string;
+      }
+    | undefined
+  >;
+  readonly pauseAutosave?: (relativePaths: readonly string[]) => Promise<void>;
+  readonly resumeAutosave?: (relativePaths: readonly string[]) => Promise<void>;
+  readonly preserveDirtyBuffers?: (relativePaths: readonly string[]) => Promise<void>;
+  readonly syncSavedEditor?: (relativePath: string) => Promise<void>;
+  readonly surfaceTransactionRecoveryReview?: (group: VersionGroup) => Promise<void>;
+  readonly projectLockOwnerId?: string;
+  readonly failAgentWriteAt?: number;
 }
 
 export function createDesktopAgentRunSession(
@@ -47,7 +85,51 @@ export function createDesktopAgentRunSession(
     projectRoot: options.projectRoot,
     traceId: "desktop-agent-run-store"
   });
-  const readToolExecutor = createDesktopReadToolExecutor(projectReads, storyBible);
+  const chapterRepository = new ChapterFileRepository({
+    projectRoot: options.projectRoot,
+    traceId: "desktop-agent-chapter"
+  });
+  const readToolExecutor = createDesktopReadToolExecutor(
+    projectReads,
+    chapterRepository,
+    storyBible
+  );
+  const changeSetSession = createDesktopChangeSetSession({
+    projectId: options.projectId,
+    projectReads,
+    chapterRepository,
+    repository,
+    ...(options.readEditorState === undefined ? {} : { readEditorState: options.readEditorState })
+  });
+  const versionGroupServices =
+    options.projectLockOwnerId === undefined
+      ? undefined
+      : createDesktopVersionGroupServices({
+          projectRoot: options.projectRoot,
+          projectId: options.projectId,
+          projectLockOwnerId: options.projectLockOwnerId,
+          projectReads,
+          chapterRepository,
+          ...(options.readEditorState === undefined
+            ? {}
+            : { readEditorState: options.readEditorState }),
+          ...(options.pauseAutosave === undefined ? {} : { pauseAutosave: options.pauseAutosave }),
+          ...(options.resumeAutosave === undefined
+            ? {}
+            : { resumeAutosave: options.resumeAutosave }),
+          ...(options.preserveDirtyBuffers === undefined
+            ? {}
+            : { preserveDirtyBuffers: options.preserveDirtyBuffers }),
+          ...(options.syncSavedEditor === undefined
+            ? {}
+            : { syncSavedEditor: options.syncSavedEditor }),
+          ...(options.surfaceTransactionRecoveryReview === undefined
+            ? {}
+            : { surfaceTransactionRecoveryReview: options.surfaceTransactionRecoveryReview }),
+          ...(options.failAgentWriteAt === undefined
+            ? {}
+            : { failAgentWriteAt: options.failAgentWriteAt })
+        });
 
   const scriptedDriver = createDesktopScriptedAgentDriver(options.activeChapterId);
   const modelDriver =
@@ -60,10 +142,14 @@ export function createDesktopAgentRunSession(
           createAgentModelDriver: options.createAgentModelDriver
         }));
 
-  return createAgentRunSession({
+  const session = createAgentRunSession({
     repository,
     modelDriver,
     readToolExecutor,
+    changeSetSession,
+    ...(versionGroupServices === undefined
+      ? {}
+      : { versionGroupExecutor: versionGroupServices.executor }),
     contextSourceReader: {
       async readCurrentSources(input) {
         const current: { refId: string; content: string }[] = [];
@@ -77,6 +163,15 @@ export function createDesktopAgentRunSession(
             continue;
           }
           if (source.relativePath !== undefined) {
+            if (source.refId.startsWith("chapter:")) {
+              const chapter = await chapterRepository.readChapter(
+                source.refId.slice("chapter:".length)
+              );
+              if (chapter.ok && !source.content.startsWith("---")) {
+                current.push({ refId: source.refId, content: chapter.value.body });
+                continue;
+              }
+            }
             const read = await projectReads.readText(source.relativePath);
             if (!read.ok) return read;
             current.push({ refId: source.refId, content: read.value.content });
@@ -96,6 +191,473 @@ export function createDesktopAgentRunSession(
       ...(options.createRunId === undefined ? {} : { createRunId: options.createRunId }),
       ...(options.now === undefined ? {} : { now: options.now })
     }
+  });
+  void versionGroupServices?.recoverOnStartup();
+  return session;
+}
+
+function createDesktopChangeSetSession(input: {
+  readonly projectId: string;
+  readonly projectReads: AgentProjectReadRepository;
+  readonly chapterRepository: ChapterFileRepository;
+  readonly repository: AgentRunFileRepository;
+  readonly readEditorState?: DesktopAgentRunSessionOptions["readEditorState"];
+}) {
+  return createChangeSetSession({
+    port: {
+      async readChapterTarget({ projectId, chapterId }) {
+        if (projectId !== input.projectId) return err(runtimeError("CHANGE_SET_PROJECT_MISMATCH"));
+        const chapter = await input.chapterRepository.readChapter(chapterId);
+        if (!chapter.ok) return chapter;
+        const relativePath = `chapters/${chapterId}.md`;
+        const editor = await input.readEditorState?.(relativePath);
+        return ok({
+          relativePath,
+          assetType: "chapter" as const,
+          assetId: chapterId,
+          content: chapter.value.body,
+          checksum: checksumText(chapter.value.body),
+          dirty: editor?.dirty ?? false,
+          supported: true
+        });
+      },
+      async readFileTarget({ projectId, relativePath }) {
+        if (projectId !== input.projectId) return err(runtimeError("CHANGE_SET_PROJECT_MISMATCH"));
+        const read = await input.projectReads.readText(relativePath);
+        if (!read.ok) return read;
+        const editor = await input.readEditorState?.(relativePath);
+        return ok({
+          relativePath: read.value.relativePath,
+          assetType: "text" as const,
+          content: read.value.content,
+          checksum: read.value.checksum,
+          dirty: editor?.dirty ?? false,
+          supported: true
+        });
+      },
+      async validateCandidate(candidate) {
+        if (candidate.assetType === "chapter") {
+          if (candidate.assetId === undefined) {
+            return err(runtimeError("CHANGE_SET_CHAPTER_ID_MISSING"));
+          }
+          const chapter = await input.chapterRepository.readChapter(candidate.assetId);
+          if (!chapter.ok) return chapter;
+          return ok({
+            schema: { status: "valid" as const },
+            asset: { status: "valid" as const }
+          });
+        }
+        const schemaName = schemaNameForProjectText(candidate.relativePath);
+        if (schemaName !== undefined) {
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(candidate.candidateContent);
+          } catch {
+            return ok({});
+          }
+          const validation = await validateWithSchema(schemaName, parsed);
+          return ok({
+            schema: validation.valid
+              ? { status: "valid" as const }
+              : {
+                  status: "invalid" as const,
+                  message: `Candidate does not match the ${schemaName} schema at ${validation.issues
+                    .slice(0, 3)
+                    .map((issue) => issue.instancePath || "/")
+                    .join(", ")}.`
+                }
+          });
+        }
+        return ok({});
+      },
+      async persistChangeSet(changeSet) {
+        const persisted = await input.repository.writeChangeSet(asJsonObject(changeSet));
+        return persisted.ok ? ok(changeSet) : persisted;
+      },
+      async readChangeSet(changeSetId, revision) {
+        const read = await input.repository.readChangeSet(changeSetId, revision);
+        return read.ok ? ok(read.value as unknown as ChangeSet | undefined) : read;
+      },
+      async readLatestChangeSet(binding) {
+        const read = await input.repository.readLatestChangeSet(binding);
+        return read.ok ? ok(read.value as unknown as ChangeSet | undefined) : read;
+      }
+    }
+  });
+}
+
+function schemaNameForProjectText(relativePath: string): string | undefined {
+  const fixedPaths: Readonly<Record<string, string>> = {
+    "project.json": "project",
+    "settings.json": "settings",
+    "plugins/plugins.json": "plugin-registry",
+    "outline/outline.json": "story-asset",
+    "timeline/events.json": "story-asset"
+  };
+  const fixed = fixedPaths[relativePath];
+  if (fixed !== undefined) return fixed;
+  if (/^(characters|world)\/[^/]+\.json$/u.test(relativePath)) return "story-asset";
+  if (/^memories\/(long-term|style|summary)\/[^/]+\.json$/u.test(relativePath)) {
+    return "memory";
+  }
+  if (/^prompts\/[^/]+\.json$/u.test(relativePath)) return "prompt-template";
+  if (/^agents\/[^/]+\.json$/u.test(relativePath)) return "agent-config";
+  if (/^workflow\/[^/]+\.json$/u.test(relativePath)) return "workflow-definition";
+  if (/^plugins\/[^/]+\/plugin\.json$/u.test(relativePath)) return "plugin-manifest";
+  return undefined;
+}
+
+function createDesktopVersionGroupServices(input: {
+  readonly projectRoot: string;
+  readonly projectId: string;
+  readonly projectLockOwnerId: string;
+  readonly projectReads: AgentProjectReadRepository;
+  readonly chapterRepository: ChapterFileRepository;
+  readonly readEditorState?: DesktopAgentRunSessionOptions["readEditorState"];
+  readonly pauseAutosave?: DesktopAgentRunSessionOptions["pauseAutosave"];
+  readonly resumeAutosave?: DesktopAgentRunSessionOptions["resumeAutosave"];
+  readonly preserveDirtyBuffers?: DesktopAgentRunSessionOptions["preserveDirtyBuffers"];
+  readonly syncSavedEditor?: DesktopAgentRunSessionOptions["syncSavedEditor"];
+  readonly surfaceTransactionRecoveryReview?: DesktopAgentRunSessionOptions["surfaceTransactionRecoveryReview"];
+  readonly failAgentWriteAt?: number;
+}): {
+  readonly executor: AgentVersionGroupExecutor;
+  readonly recoverOnStartup: () => Promise<Result<readonly VersionGroup[], UnifiedError>>;
+} {
+  const recoveryRepository = new RecoveryRepository({
+    projectRoot: input.projectRoot,
+    traceId: "desktop-agent-recovery"
+  });
+  const transaction = new AgentWriteTransaction({
+    projectRoot: input.projectRoot,
+    projectLock: new ProjectLockFileRepository({
+      projectRoot: input.projectRoot,
+      ownerId: input.projectLockOwnerId,
+      traceId: "desktop-agent-project-lock"
+    }),
+    historyRepository: new HistoryRepository({
+      projectRoot: input.projectRoot,
+      traceId: "desktop-agent-history"
+    }),
+    recoveryRepository,
+    ...(input.failAgentWriteAt === undefined
+      ? {}
+      : {
+          replaceFile: createFailureInjectingReplaceFile(input.failAgentWriteAt)
+        }),
+    traceId: "desktop-agent-write"
+  });
+  const transactionPort: VersionGroupSessionTransactionPort = {
+    listIncompleteTransactionPaths: () => transaction.listIncompleteTransactionPaths(),
+    async apply(changeSetInput) {
+      const prepared = await prepareTransactionInput(changeSetInput, input);
+      return prepared.ok ? transaction.apply(prepared.value) : prepared;
+    },
+    recoverIncompleteTransactions: () => transaction.recoverIncompleteTransactions(),
+    undoVersionGroup: (undoInput) => transaction.undoVersionGroup(undoInput),
+    undoWrite: (undoInput) => transaction.undoWrite(undoInput),
+    undoRun: (undoInput) => transaction.undoRun(undoInput)
+  };
+  const versionGroupSession = createVersionGroupSession({
+    transaction: transactionPort,
+    hooks: {
+      async pauseAutosave(relativePaths) {
+        await input.pauseAutosave?.(relativePaths);
+      },
+      async resumeAutosave(relativePaths) {
+        await input.resumeAutosave?.(relativePaths);
+      },
+      async syncSavedEditor(editor) {
+        await input.syncSavedEditor?.(editor.relativePath);
+      },
+      async preserveDirtyBuffers(relativePaths) {
+        await input.preserveDirtyBuffers?.(relativePaths);
+      },
+      async markRecoveryClean(relativePaths) {
+        await markRecoveryRecordsClean(
+          recoveryRepository,
+          input.chapterRepository,
+          input.projectId,
+          relativePaths
+        );
+      },
+      async surfaceTransactionRecoveryReview(group) {
+        await input.surfaceTransactionRecoveryReview?.(group);
+      },
+      async reportPostCommitSyncFailure({ group }) {
+        await input.surfaceTransactionRecoveryReview?.(group);
+      }
+    }
+  });
+  let recoveryResult: Promise<Result<readonly VersionGroup[], UnifiedError>> | undefined;
+  const recover = () => (recoveryResult ??= versionGroupSession.recoverOnStartup());
+
+  return {
+    executor: {
+      async apply({ changeSet, approval }) {
+        const recovered = await recover();
+        if (!recovered.ok) return recovered;
+        const dirty = await dirtySelectedPaths(changeSet, input.readEditorState);
+        if (dirty.length > 0) {
+          return err(
+            runtimeError("AGENT_WRITE_DIRTY_EDITOR", {
+              dirtyTargetPaths: dirty
+            })
+          );
+        }
+        const applied = await versionGroupSession.applyApproved({ changeSet, approval });
+        if (!applied.ok) return applied;
+        return applied.value.transactionStatus === "applied"
+          ? ok(asJsonObject(applied.value))
+          : err(versionGroupFailure(applied.value));
+      },
+      async undoRun({ runId }) {
+        const recovered = await recover();
+        if (!recovered.ok) return recovered;
+        const journals = await recoveryRepository.listAgentTransactionJournals();
+        if (!journals.ok) return journals;
+        const relativePaths = [
+          ...new Set(
+            journals.value
+              .filter((journal) => journal.kind === "apply" && journal.runId === runId)
+              .flatMap((journal) => journal.entries.map((entry) => entry.relativePath))
+          )
+        ];
+        const undone = await versionGroupSession.undoRun({ runId, relativePaths });
+        if (!undone.ok) return undone;
+        return undone.value.transactionStatus === "applied"
+          ? ok(asJsonObject(undone.value))
+          : err(versionGroupFailure(undone.value));
+      },
+      async recoverRun({ runId }) {
+        const recovered = await recover();
+        if (!recovered.ok) return recovered;
+        const listed = await recoveryRepository.listAgentTransactionJournals();
+        if (!listed.ok) return listed;
+        const latest = listed.value
+          .filter((journal) => journal.kind === "apply" && journal.runId === runId)
+          .sort((left, right) => right.runSequence - left.runSequence)[0];
+        if (latest === undefined) return ok({ status: "none" as const });
+        const status =
+          latest.transactionStatus === "applied"
+            ? ("applied" as const)
+            : latest.transactionStatus === "partial_failure"
+              ? ("partial_failure" as const)
+              : ("rolled_back" as const);
+        return ok({ status, versionGroup: recoveredVersionGroup(latest, status) });
+      }
+    },
+    recoverOnStartup: recover
+  };
+}
+
+function recoveredVersionGroup(
+  journal: AgentTransactionJournal,
+  transactionStatus: "applied" | "rolled_back" | "partial_failure"
+): JsonObject {
+  return asJsonObject({
+    schemaVersion: "1.0",
+    versionGroupId: journal.versionGroupId,
+    runId: journal.runId,
+    checkpointId: journal.checkpointId,
+    changeSetId: journal.changeSetId,
+    changeSetRevision: journal.changeSetRevision,
+    changeSetChecksum: journal.changeSetChecksum,
+    transactionStatus,
+    writes: journal.entries.map((entry) => ({
+      writeId: entry.writeId,
+      relativePath: entry.relativePath,
+      assetType: entry.assetType,
+      beforeChecksum: entry.beforeChecksum,
+      afterChecksum: entry.candidateChecksum,
+      beforeVersionId: entry.beforeVersionId,
+      status: entry.status,
+      ...(entry.errorCode === undefined ? {} : { errorCode: entry.errorCode })
+    }))
+  });
+}
+
+async function prepareTransactionInput(
+  input: VersionGroupTransactionApplyInput,
+  services: {
+    readonly projectReads: AgentProjectReadRepository;
+    readonly chapterRepository: ChapterFileRepository;
+  }
+): Promise<Result<AgentWriteTransactionInput, UnifiedError>> {
+  const files: AgentWriteTransactionInput["files"][number][] = [];
+  for (const file of input.files) {
+    if (file.assetType === "text") {
+      files.push(file);
+      continue;
+    }
+    if (file.assetId === undefined) {
+      return err(runtimeError("AGENT_WRITE_CHAPTER_ID_MISSING"));
+    }
+    const chapter = await services.chapterRepository.readChapter(file.assetId);
+    if (!chapter.ok) return chapter;
+    if (
+      chapter.value.body !== file.baseContent ||
+      checksumText(chapter.value.body) !== file.baseChecksum
+    ) {
+      return err(
+        runtimeError("AGENT_WRITE_BASE_CONFLICT", {
+          relativePath: file.relativePath,
+          baseHashConflictPaths: [file.relativePath]
+        })
+      );
+    }
+    const raw = await services.projectReads.readText(file.relativePath);
+    if (!raw.ok) return raw;
+    const candidateContent = replaceChapterBody(raw.value.content, file.candidateContent);
+    if (!candidateContent.ok) return candidateContent;
+    files.push({
+      relativePath: file.relativePath,
+      assetType: "chapter",
+      assetId: file.assetId,
+      baseChecksum: raw.value.checksum,
+      candidateChecksum: checksumText(candidateContent.value),
+      baseContent: raw.value.content,
+      candidateContent: candidateContent.value,
+      historyBaseContent: file.baseContent,
+      historyCandidateContent: file.candidateContent
+    });
+  }
+  return ok({
+    runId: input.runId,
+    checkpointId: input.checkpointId,
+    changeSetId: input.changeSetId,
+    revision: input.revision,
+    checksum: input.checksum,
+    approvalSource: input.approvalSource,
+    approvalToken: input.approvalToken,
+    files
+  });
+}
+
+function replaceChapterBody(
+  fileContent: string,
+  candidateBody: string
+): Result<string, UnifiedError> {
+  const frontmatter = /^(---\r?\n[\s\S]*?\r?\n---\r?\n(?:\r?\n)?)/.exec(fileContent)?.[1];
+  return frontmatter === undefined
+    ? err(runtimeError("AGENT_WRITE_CHAPTER_INVALID"))
+    : ok(`${frontmatter}${candidateBody}`);
+}
+
+async function dirtySelectedPaths(
+  changeSet: ChangeSet,
+  readEditorState: DesktopAgentRunSessionOptions["readEditorState"]
+): Promise<string[]> {
+  if (readEditorState === undefined) return [];
+  const dirty: string[] = [];
+  for (const file of changeSet.files.filter((candidate) => candidate.selected)) {
+    if ((await readEditorState(file.relativePath))?.dirty === true) {
+      dirty.push(file.relativePath);
+    }
+  }
+  return dirty;
+}
+
+async function markRecoveryRecordsClean(
+  recoveryRepository: RecoveryRepository,
+  chapterRepository: ChapterFileRepository,
+  projectId: string,
+  relativePaths: readonly string[]
+): Promise<void> {
+  const chapterIds = new Set(
+    relativePaths.flatMap((relativePath) => {
+      const match = /^chapters\/([A-Za-z0-9_-]+)\.md$/.exec(relativePath);
+      return match?.[1] === undefined ? [] : [match[1]];
+    })
+  );
+  if (chapterIds.size === 0) return;
+  const records = await recoveryRepository.listRecoveryRecords();
+  if (!records.ok) return;
+  for (const record of records.value) {
+    if (
+      record.projectId !== projectId ||
+      record.assetType !== "chapter" ||
+      !chapterIds.has(record.openAssetId)
+    ) {
+      continue;
+    }
+    const chapter = await chapterRepository.readChapter(record.openAssetId);
+    if (!chapter.ok) continue;
+    await recoveryRepository.writeRecoveryRecord({
+      ...record,
+      dirty: false,
+      draftContentRef: { strategy: "inline", content: chapter.value.body },
+      updatedAt: new Date().toISOString()
+    });
+  }
+}
+
+function versionGroupFailure(group: VersionGroup): UnifiedError {
+  const partial = group.transactionStatus === "partial_failure";
+  const baseHashConflictPaths = group.writes
+    .filter((write) => write.errorCode?.includes("BASE_CONFLICT") === true)
+    .map((write) => write.relativePath);
+  return runtimeError(
+    partial
+      ? "AGENT_VERSION_GROUP_PARTIAL_FAILURE"
+      : group.failureKind === "undo_conflict"
+        ? "AGENT_VERSION_GROUP_UNDO_CONFLICT"
+        : "AGENT_VERSION_GROUP_WRITE_ROLLED_BACK",
+    {
+      versionGroupId: group.versionGroupId,
+      transactionStatus: group.transactionStatus,
+      failureKind: group.failureKind ?? "write_failure",
+      baseHashConflictPaths,
+      writes: group.writes.map((write) => ({
+        relativePath: write.relativePath,
+        status: write.status,
+        ...(write.errorCode === undefined ? {} : { errorCode: write.errorCode })
+      }))
+    }
+  );
+}
+
+function createFailureInjectingReplaceFile(failAt: number) {
+  let applyCount = 0;
+  return async (input: AgentWriteReplaceInput): Promise<Result<void, UnifiedError>> => {
+    if (input.phase === "apply") {
+      applyCount += 1;
+      if (applyCount === failAt) {
+        return err(
+          runtimeError("AGENT_WRITE_INJECTED_FAILURE", {
+            relativePath: input.relativePath,
+            failAt
+          })
+        );
+      }
+    }
+    return writeTextAtomically({
+      targetPath: input.targetPath,
+      content: input.content,
+      traceId: "desktop-agent-write",
+      beforeReplace: input.verifyImmediatelyBeforeReplace
+    });
+  };
+}
+
+function checksumText(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+function runtimeError(code: string, redactedDetail?: JsonObject): UnifiedError {
+  return createUnifiedError({
+    code,
+    category: code.includes("WRITE") ? "StorageError" : "ValidationError",
+    message:
+      code === "AGENT_VERSION_GROUP_PARTIAL_FAILURE"
+        ? "Agent writing partially failed and requires transaction recovery review."
+        : code === "AGENT_VERSION_GROUP_WRITE_ROLLED_BACK"
+          ? "Agent writing failed and applied files were rolled back."
+          : "The Agent write request could not be completed safely.",
+    recoverability: "user-action",
+    suggestedAction: "Review the Change Set, current files, and transaction recovery status.",
+    traceId: "desktop-agent-run-runtime",
+    ...(redactedDetail === undefined ? {} : { redactedDetail })
   });
 }
 
@@ -126,6 +688,7 @@ function createDesktopAdaptiveAgentDriver(input: {
 
 function createDesktopReadToolExecutor(
   projectReads: AgentProjectReadRepository,
+  chapterRepository: ChapterFileRepository,
   storyBible: StoryBibleFileRepository
 ): AgentReadToolExecutor {
   return {
@@ -144,20 +707,23 @@ function createDesktopReadToolExecutor(
         const chapterId = readRequiredId(input.arguments, "chapterId");
         if (chapterId === undefined) return invalidToolArguments(input.name);
         const relativePath = `chapters/${chapterId}.md`;
-        const read = await projectReads.readText(relativePath);
-        return read.ok
+        const chapter = await chapterRepository.readChapter(chapterId);
+        return chapter.ok
           ? ok({
               summary: `已读取章节 ${chapterId}`,
-              data: { content: read.value.content, checksum: read.value.checksum },
+              data: {
+                content: chapter.value.body,
+                checksum: checksumText(chapter.value.body)
+              },
               source: {
                 refId: `chapter:${chapterId}`,
                 sourceKind: "disk_file",
                 relativePath,
-                content: read.value.content,
+                content: chapter.value.body,
                 dirty: false
               }
             })
-          : read;
+          : chapter;
       }
       if (input.name === "read_project_text") {
         const relativePath = readOptionalString(input.arguments, "path");
@@ -303,3 +869,4 @@ function readRequiredId(value: JsonObject, key: string): string | undefined {
 function asJsonObject(value: object): JsonObject {
   return value as unknown as JsonObject;
 }
+import { createHash } from "node:crypto";

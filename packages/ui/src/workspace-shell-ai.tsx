@@ -13,6 +13,7 @@ import type {
   AiWritingWorkflowStatus
 } from "./workspace-shell-types.js";
 import { AgentRunPanel } from "./agent-run-panel.js";
+import { ChangeSetReview } from "./change-set-review.js";
 
 export function AiWritingAssistantPanel({
   workflow,
@@ -35,9 +36,14 @@ export function AiWritingAssistantPanel({
         <section className="ns-ai-workflow" aria-label="Agent 工作流面板">
           <div className="ns-editor-panel-header">
             <span>Agentic Writing Loop</span>
-            <span className="ns-muted">只读 Stage 1</span>
+            <span className="ns-muted">
+              {workflow.agentRun.changeSetReview === undefined ? "Agent Run" : "待写入审批"}
+            </span>
           </div>
           <AgentRunPanel {...workflow.agentRun} />
+          {workflow.agentRun.changeSetReview === undefined ? null : (
+            <ChangeSetReview review={workflow.agentRun.changeSetReview} />
+          )}
         </section>
       )}
       <section className="ns-ai-workflow" aria-label="AI 写作工作流" data-compact={compact}>

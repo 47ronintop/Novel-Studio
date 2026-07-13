@@ -376,9 +376,11 @@ describe("Agent Engine", () => {
     const dependencies = packageJson.dependencies ?? {};
 
     expect(dependencies).toEqual({
+      "@iarna/toml": "^2.2.5",
       "@novel-studio/context-engine": "0.1.0",
       "@novel-studio/llm-adapter": "0.1.0",
-      "@novel-studio/shared": "0.1.0"
+      "@novel-studio/shared": "0.1.0",
+      "js-yaml": "^4.3.0"
     });
     expect(Object.keys(dependencies)).not.toContain("@novel-studio/repository");
     expect(Object.keys(dependencies)).not.toContain("@novel-studio/ui");

@@ -10,11 +10,13 @@ describe("AgentRunModelDriver", () => {
     expect(typeof createDriver).toBe("function");
     if (typeof createDriver !== "function") return;
 
+    let providerRequest: Record<string, unknown> | undefined;
     const driver = (createDriver as (options: Record<string, unknown>) => {
       streamRound(input: Record<string, unknown>): AsyncIterable<Record<string, unknown>>;
     })({
       adapter: {
-        async *stream() {
+        async *stream(request: Record<string, unknown>) {
+          providerRequest = request;
           yield { ok: true, value: { type: "start", requestId: "r", provider: "openai-compatible", modelName: "m", createdAt: "now" } };
           yield { ok: true, value: { type: "delta", value: "plain text" } };
           yield { ok: true, value: { type: "tool_call_delta", toolCallId: "call-1", name: "read_chapter", argumentsDelta: "{\"chapter" } };
@@ -36,7 +38,17 @@ describe("AgentRunModelDriver", () => {
         userRequest: "read"
       },
       messages: [{ role: "user", content: "read" }],
-      tools: [{ name: "read_chapter" }],
+      tools: [
+        {
+          name: "read_chapter",
+          inputSchema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["chapterId"],
+            properties: { chapterId: { type: "string" } }
+          }
+        }
+      ],
       signal: new AbortController().signal
     })) {
       events.push(event);
@@ -47,6 +59,20 @@ describe("AgentRunModelDriver", () => {
       { type: "tool_call_delta", toolCallId: "call-1", name: "read_chapter", argumentsDelta: "{\"chapter" },
       { type: "tool_call_delta", toolCallId: "call-1", argumentsDelta: "Id\":\"chapter-03\"}" },
       { type: "round_completed", finishReason: "tool_calls" }
+    ]);
+    expect(providerRequest?.["tools"]).toEqual([
+      {
+        type: "function",
+        function: {
+          name: "read_chapter",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            required: ["chapterId"],
+            properties: { chapterId: { type: "string" } }
+          }
+        }
+      }
     ]);
   });
 });

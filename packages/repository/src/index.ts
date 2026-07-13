@@ -1,5 +1,10 @@
 export type { AtomicWriteFileSystem, AtomicWriteInput } from "./atomic-write.js";
 export { writeTextAtomically } from "./atomic-write.js";
+export { AgentWriteTransaction } from "./agent-write-transaction.js";
+export type {
+  AgentWriteReplaceInput,
+  AgentWriteTransactionOptions
+} from "./agent-write-transaction.js";
 export { CacheRepository } from "./cache-repository.js";
 export { ChapterFileRepository } from "./chapter-repository.js";
 export { ConfigAssetRepository } from "./config-asset-repository.js";
@@ -19,6 +24,17 @@ export type {
 } from "./agent-project-read-repository.js";
 export type {
   AssetType,
+  AgentTransactionJournal,
+  AgentTransactionJournalEntry,
+  AgentTransactionJournalEntryStatus,
+  AgentTransactionJournalKind,
+  AgentTransactionJournalStatus,
+  AgentWriteAssetType,
+  AgentWriteHistoryPort,
+  AgentWriteProjectLockPort,
+  AgentWriteRecoveryPort,
+  AgentWriteTransactionFile,
+  AgentWriteTransactionInput,
   CacheRepositoryPort,
   CreatedBy,
   HistoryRepositoryPort,
@@ -33,6 +49,14 @@ export type {
   SnapshotReason,
   SnapshotTextAssetInput,
   VersionRecord,
+  VersionGroupBaselineRecord,
+  VersionGroupFailureKind,
+  VersionGroupRecord,
+  VersionGroupTransactionStatus,
+  VersionGroupUndoMetadataRecord,
+  VersionGroupUndoStatus,
+  VersionGroupWriteRecord,
+  VersionGroupWriteStatus,
   WorkflowRunContextSummary,
   WorkflowRunCostSummary,
   WorkflowRunErrorSummary,
@@ -87,6 +111,7 @@ export type {
   StoryBibleSnapshot
 } from "./story-bible-repository.js";
 export { SearchIndexFileRepository } from "./search-index-repository.js";
+export { validateWithSchema } from "./schema-validation.js";
 export { UserPreferencesFileRepository } from "./user-preferences-repository.js";
 export type { UserPreferencesFileRepositoryOptions } from "./user-preferences-repository.js";
 export type {

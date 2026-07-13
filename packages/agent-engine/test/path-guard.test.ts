@@ -24,6 +24,7 @@ describe("Agent project path guard", () => {
       "chapters/file.md:secret",
       "CON.txt",
       "history/agent-runs/run.json",
+      ".novel-studio/project-lock.json",
       ".git/config",
       "node_modules/pkg/index.js",
       "images/cover.png"

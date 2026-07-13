@@ -35,7 +35,7 @@ export function createLlmAgentRunModelDriver(
         type: "function",
         function: {
           name: tool.name,
-          parameters: { type: "object", additionalProperties: true }
+          parameters: tool.inputSchema
         }
       }));
       const requestId = `agent_${input.runId}_${input.snapshot.runRevision}`;
