@@ -1,7 +1,17 @@
 import { createDesktopApplication } from "@novel-studio/application";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import type { ApplicationIpcChannel, DesktopApplication } from "@novel-studio/application";
+import type {
+  AgentRunSession,
+  AnswerAgentUserInputCommand,
+  ApplicationIpcChannel,
+  DesktopApplication
+} from "@novel-studio/application";
+import type {
+  AgentRunEvent,
+  StartAgentRunCommand,
+  StopAgentRunCommand
+} from "@novel-studio/agent-engine";
 import { ok, type JsonObject, type JsonValue } from "@novel-studio/shared";
 import { writeTextAtomically } from "@novel-studio/repository";
 import type {
@@ -12,6 +22,8 @@ import type {
   CreateProjectInput,
   AiWritingSelectionPreviewRequest,
   AiWritingSuggestionRequest,
+  AiWritingSuggestionStreamPushEvent,
+  AiWritingSuggestionStreamStartRequest,
   ModelProfile,
   MemoryRecord,
   ProjectSearchQuery,
@@ -39,9 +51,17 @@ export interface ApplicationIpcHandlerOptions {
   readonly chooseOpenProjectDirectory?: () => Promise<string | undefined>;
   readonly chooseCreateProjectDirectory?: () => Promise<string | undefined>;
   readonly modelSecretStore?: ModelSecretStore;
+  readonly publishAiSuggestionStreamEvent?: (event: AiWritingSuggestionStreamPushEvent) => void;
+  readonly agentRunSession?: AgentRunSession;
+  readonly publishAgentRunEvent?: (event: AgentRunEvent) => void;
 }
 
 interface ActiveAiSuggestionStream {
+  readonly abortController: AbortController;
+  readonly iterator: AsyncIterator<Result<AiWritingSuggestionStreamEvent, UnifiedError>>;
+}
+
+interface ActiveAiSuggestionPushStream {
   readonly abortController: AbortController;
   readonly iterator: AsyncIterator<Result<AiWritingSuggestionStreamEvent, UnifiedError>>;
 }
@@ -51,7 +71,15 @@ export function createApplicationIpcHandlers(
   options: ApplicationIpcHandlerOptions = {}
 ): ApplicationIpcHandlers {
   const activeAiSuggestionStreams = new Map<string, ActiveAiSuggestionStream>();
+  const activeAiSuggestionPushStreams = new Map<string, ActiveAiSuggestionPushStream>();
   let nextAiSuggestionStreamId = 0;
+  options.agentRunSession?.subscribe((event) => {
+    try {
+      options.publishAgentRunEvent?.(structuredClone(event));
+    } catch {
+      // AgentRunSession owns contract failure handling; never forward a non-cloneable payload.
+    }
+  });
 
   return {
     "application:get-shell-state": () => Promise.resolve(application.getShellState()),
@@ -228,6 +256,56 @@ export function createApplicationIpcHandlers(
       activeAiSuggestionStreams.delete(id);
       return Promise.resolve(ok(undefined));
     },
+    "application:ai:start-chapter-suggestion-push-stream": (request: unknown) => {
+      const parsed = toAiWritingSuggestionStreamStartRequest(request);
+      if (parsed === undefined) {
+        return Promise.resolve(
+          err(
+            createUnifiedError({
+              code: "AI_STREAM_REQUEST_INVALID",
+              category: "ValidationError",
+              message: "The AI stream request is invalid.",
+              recoverability: "user-action",
+              suggestedAction: "Start the AI writing stream again.",
+              traceId: "desktop-ipc-handlers"
+            })
+          )
+        );
+      }
+
+      if (activeAiSuggestionPushStreams.has(parsed.streamId)) {
+        return Promise.resolve(ok({ streamId: parsed.streamId }));
+      }
+
+      const abortController = new AbortController();
+      const { streamId, ...normalizedRequest } = parsed;
+      const suggestionStream = application.streamActiveChapterSuggestion({
+        ...normalizedRequest,
+        abortSignal: abortController.signal
+      });
+      const iterator = suggestionStream[Symbol.asyncIterator]();
+      activeAiSuggestionPushStreams.set(streamId, { abortController, iterator });
+      void pumpAiSuggestionPushStream(
+        streamId,
+        iterator,
+        abortController,
+        options.publishAiSuggestionStreamEvent,
+        () => activeAiSuggestionPushStreams.delete(streamId)
+      );
+      return Promise.resolve(ok({ streamId }));
+    },
+    "application:ai:cancel-chapter-suggestion-push-stream": (streamId: unknown) => {
+      const id = readStreamId(streamId);
+      const stream = id === undefined ? undefined : activeAiSuggestionPushStreams.get(id);
+      if (id === undefined || stream === undefined) {
+        return Promise.resolve(ok(undefined));
+      }
+
+      stream.abortController.abort();
+      void stream.iterator.return?.();
+      activeAiSuggestionPushStreams.delete(id);
+      return Promise.resolve(ok(undefined));
+    },
     "application:ai:generate-selection-preview": (request: unknown) => {
       return application.generateActiveSelectionPreview(
         toAiWritingSelectionPreviewRequest(request)
@@ -255,6 +333,32 @@ export function createApplicationIpcHandlers(
 
       return application.readWorkflowRun(workflowRunId);
     },
+    "application:agent-run:start": (command: unknown) => {
+      const parsed = toStartAgentRunCommand(command);
+      return parsed === undefined || options.agentRunSession === undefined
+        ? Promise.resolve(agentRunUnavailable())
+        : options.agentRunSession.startAgentRun(parsed);
+    },
+    "application:agent-run:stop": (command: unknown) => {
+      const parsed = toStopAgentRunCommand(command);
+      return parsed === undefined || options.agentRunSession === undefined
+        ? Promise.resolve(agentRunUnavailable())
+        : options.agentRunSession.stopAgentRun(parsed);
+    },
+    "application:agent-run:answer-user-input": (command: unknown) => {
+      const parsed = toAnswerAgentUserInputCommand(command);
+      return parsed === undefined || options.agentRunSession === undefined
+        ? Promise.resolve(agentRunUnavailable())
+        : options.agentRunSession.answerUserInput(parsed);
+    },
+    "application:agent-run:read": (runId: unknown) =>
+      typeof runId !== "string" || options.agentRunSession === undefined
+        ? Promise.resolve(agentRunUnavailable())
+        : options.agentRunSession.readAgentRun(runId),
+    "application:agent-run:list": (projectId: unknown) =>
+      typeof projectId !== "string" || options.agentRunSession === undefined
+        ? Promise.resolve(agentRunUnavailable())
+        : options.agentRunSession.listAgentRuns(projectId),
     "application:chapter:load": () => application.loadActiveChapter(),
     "application:chapter:edit": (nextBody: unknown) => {
       if (typeof nextBody !== "string") {
@@ -399,12 +503,137 @@ export function createApplicationIpcHandlers(
   };
 }
 
+function toStartAgentRunCommand(value: unknown): StartAgentRunCommand | undefined {
+  return isRecord(value) ? (value as unknown as StartAgentRunCommand) : undefined;
+}
+
+function toStopAgentRunCommand(value: unknown): StopAgentRunCommand | undefined {
+  return isRecord(value) ? (value as unknown as StopAgentRunCommand) : undefined;
+}
+
+function toAnswerAgentUserInputCommand(value: unknown): AnswerAgentUserInputCommand | undefined {
+  return isRecord(value) ? (value as unknown as AnswerAgentUserInputCommand) : undefined;
+}
+
+function agentRunUnavailable(): Result<never, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "AGENT_RUN_IPC_UNAVAILABLE",
+      category: "AgentError",
+      message: "The Agent Run service is unavailable.",
+      recoverability: "user-action",
+      suggestedAction: "Open a project and retry the Agent run.",
+      traceId: "desktop-ipc-handlers"
+    })
+  );
+}
+
 function toUserPreferencesSaveInput(value: unknown): UserPreferencesSaveInput {
   if (!isRecord(value)) {
     return {};
   }
 
   return value as UserPreferencesSaveInput;
+}
+
+async function pumpAiSuggestionPushStream(
+  streamId: string,
+  iterator: AsyncIterator<Result<AiWritingSuggestionStreamEvent, UnifiedError>>,
+  abortController: AbortController,
+  publish: ((event: AiWritingSuggestionStreamPushEvent) => void) | undefined,
+  onDone: () => void
+): Promise<void> {
+  let sequence = 0;
+  try {
+    while (true) {
+      const next = await iterator.next();
+      if (next.done === true) {
+        break;
+      }
+      sequence += 1;
+      if (next.value.ok) {
+        const event: AiWritingSuggestionStreamPushEvent = {
+          streamId,
+          sequence,
+          type: "event",
+          event: next.value.value
+        };
+        if (!publishCloneSafeAiSuggestionEvent(event, publish)) {
+          publishCloneSafeAiSuggestionEvent(
+            {
+              streamId,
+              sequence,
+              type: "error",
+              error: createUnifiedError({
+                code: "AI_STREAM_PAYLOAD_NOT_CLONEABLE",
+                category: "ValidationError",
+                message: "The AI stream produced an invalid IPC payload.",
+                recoverability: "retryable",
+                suggestedAction: "Retry the request and inspect the stream contract diagnostics.",
+                traceId: "desktop-ipc-handlers"
+              })
+            },
+            publish
+          );
+          break;
+        }
+      } else {
+        publishCloneSafeAiSuggestionEvent(
+          {
+            streamId,
+            sequence,
+            type: "error",
+            error: next.value.error
+          },
+          publish
+        );
+        break;
+      }
+      if (abortController.signal.aborted) {
+        break;
+      }
+    }
+  } catch (error) {
+    sequence += 1;
+    const failure = thrownAiStreamError(error);
+    publishCloneSafeAiSuggestionEvent(
+      {
+        streamId,
+        sequence,
+        type: "error",
+        error: failure.ok
+          ? createUnifiedError({
+              code: "AI_STREAM_FAILED",
+              category: "LLMAdapterError",
+              message: "AI streaming failed.",
+              recoverability: "retryable",
+              suggestedAction: "Check the model provider response and retry.",
+              traceId: "desktop-ipc-handlers"
+            })
+          : failure.error
+      },
+      publish
+    );
+  } finally {
+    sequence += 1;
+    publishCloneSafeAiSuggestionEvent({ streamId, sequence, type: "completed" }, publish);
+    onDone();
+  }
+}
+
+function publishCloneSafeAiSuggestionEvent(
+  event: AiWritingSuggestionStreamPushEvent,
+  publish: ((event: AiWritingSuggestionStreamPushEvent) => void) | undefined
+): boolean {
+  if (publish === undefined) {
+    return true;
+  }
+  try {
+    publish(structuredClone(event));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function readStreamId(value: unknown): string | undefined {
@@ -970,6 +1199,22 @@ function toAiWritingSuggestionRequest(value: unknown): AiWritingSuggestionReques
     ...(isLlmReasoningEffort(value.reasoningEffort)
       ? { reasoningEffort: value.reasoningEffort }
       : {})
+  };
+}
+
+function toAiWritingSuggestionStreamStartRequest(
+  value: unknown
+): AiWritingSuggestionStreamStartRequest | undefined {
+  if (!isRecord(value) || typeof value.streamId !== "string" || value.streamId.length === 0) {
+    return undefined;
+  }
+  const request = toAiWritingSuggestionRequest(value);
+  if (request.instruction.length === 0) {
+    return undefined;
+  }
+  return {
+    streamId: value.streamId,
+    ...request
   };
 }
 

@@ -2,7 +2,11 @@ import { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage } from "electron
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createBootstrappedDefaultDesktopApplication } from "./application-composition.js";
+import {
+  createBootstrappedDefaultDesktopApplication,
+  DEFAULT_FIXTURE_CHAPTER_ID
+} from "./application-composition.js";
+import { createDesktopAgentRunSession } from "./agent-run-runtime.js";
 import { createApplicationIpcHandlers } from "./ipc-handlers.js";
 import { createApplicationMenuTemplate } from "./menu.js";
 import { createDesktopModelRuntime, createEncryptedFileModelSecretStore } from "./model-runtime.js";
@@ -33,10 +37,30 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     modelDiscoveryPort: modelRuntime.modelDiscoveryPort,
     createAiProvider: modelRuntime.createAiProvider
   });
+  const agentRunSession = createDesktopAgentRunSession({
+    projectRoot,
+    projectId: "prj_minimal_chapter",
+    activeChapterId: DEFAULT_FIXTURE_CHAPTER_ID
+  });
   const handlers = createApplicationIpcHandlers(activeDesktopApplication, {
     chooseOpenProjectDirectory: () => chooseProjectDirectory("Open Novel Studio project"),
     chooseCreateProjectDirectory: () => chooseProjectDirectory("Create Novel Studio project"),
-    modelSecretStore
+    modelSecretStore,
+    publishAiSuggestionStreamEvent: (event) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed()) {
+          window.webContents.send("application:ai:chapter-suggestion-push-event", event);
+        }
+      }
+    },
+    agentRunSession,
+    publishAgentRunEvent: (event) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed()) {
+          window.webContents.send("application:agent-run:event", event);
+        }
+      }
+    }
   });
 
   for (const [channel, handler] of Object.entries(handlers)) {

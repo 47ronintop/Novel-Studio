@@ -164,6 +164,50 @@ describe("UserPreferencesSession", () => {
     );
   });
 
+  test("fills appearance defaults when the entire legacy appearance field is missing", async () => {
+    const persisted = {
+      schemaVersion: "1.0",
+      onboarding: { dismissed: true },
+      editor: {
+        fontFamily: "mono",
+        fontSize: 13,
+        lineHeight: 1.7
+      },
+      shell: {
+        navigatorCollapsed: false,
+        navigatorExpandedSectionIds: ["chapters"],
+        inspectorCollapsed: true,
+        bottomPanelVisible: false,
+        activeBottomPanelTab: "工作流运行",
+        focusMode: false,
+        workspaceLayout: {
+          splitView: false,
+          navigatorWidth: 260,
+          inspectorWidth: 320,
+          bottomPanelHeight: 180
+        }
+      }
+    } as unknown as UserPreferencesSnapshot;
+    const session = createUserPreferencesSession({
+      preferencesPort: {
+        readUserPreferences: async () => ok(persisted),
+        writeUserPreferences: async (preferences) => ok(preferences)
+      }
+    });
+
+    const loaded = await session.load();
+
+    expect(loaded).toMatchObject({
+      ok: true,
+      value: {
+        appearance: {
+          theme: "dark",
+          accentColor: "teal"
+        }
+      }
+    });
+  });
+
   test("migrates the legacy expanded default layout to the calmer writing default", async () => {
     const session = createUserPreferencesSession({
       preferencesPort: {

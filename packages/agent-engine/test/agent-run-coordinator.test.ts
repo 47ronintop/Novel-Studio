@@ -1,0 +1,121 @@
+import { describe, expect, test } from "vitest";
+
+import * as engineExports from "../src/index.js";
+
+describe("Agent Run Coordinator", () => {
+  test("enforces revisions, command idempotency, one active run, and one terminal event", () => {
+    const factory = (engineExports as unknown as Record<string, unknown>)[
+      "createAgentRunCoordinator"
+    ];
+    expect(typeof factory).toBe("function");
+    if (typeof factory !== "function") {
+      return;
+    }
+
+    const coordinator = factory({
+      now: () => "2026-07-13T00:00:00.000Z",
+      createRunId: () => "run_01"
+    }) as {
+      startRun(input: Record<string, unknown>): unknown;
+      stopRun(input: Record<string, unknown>): unknown;
+      recordRunEvent(input: Record<string, unknown>): unknown;
+      readEvents(runId: string): readonly Record<string, unknown>[];
+    };
+    const startCommand = {
+      projectId: "project_01",
+      commandId: "command_start_01",
+      expectedRunRevision: 0,
+      operationMode: "planning",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      userRequest: "Plan a continuity revision.",
+      providerCapabilitySnapshot: {
+        profileId: "model_01",
+        provider: "openai-compatible",
+        modelName: "tool-model",
+        streaming: true,
+        toolCalling: true,
+        structuredArguments: true,
+        contextWindow: 32_000,
+        requiredContextTokens: 8_000
+      }
+    };
+
+    const started = coordinator.startRun(startCommand);
+    expect(started).toMatchObject({
+      ok: true,
+      value: {
+        runId: "run_01",
+        projectId: "project_01",
+        status: "planning_model",
+        runRevision: 1,
+        lastSequence: 1,
+        limits: {
+          maxModelRounds: 20,
+          maxToolCalls: 50,
+          maxConsecutiveToolFailures: 3
+        }
+      }
+    });
+    expect(coordinator.startRun(startCommand)).toEqual(started);
+
+    expect(
+      coordinator.recordRunEvent({
+        runId: "run_01",
+        status: "executing_read_tool",
+        type: "tool_started",
+        detail: { toolCallId: "tool_01", toolName: "read_chapter", summary: "Read chapter 3" }
+      })
+    ).toMatchObject({
+      ok: true,
+      value: { status: "executing_read_tool", runRevision: 2, lastSequence: 2 }
+    });
+
+    expect(
+      coordinator.startRun({
+        ...startCommand,
+        commandId: "command_start_02"
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUN_ALREADY_ACTIVE" }
+    });
+
+    expect(
+      coordinator.stopRun({
+        runId: "run_01",
+        projectId: "project_01",
+        commandId: "command_stop_stale",
+        expectedRunRevision: 0
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUN_REVISION_CONFLICT" },
+      latestSnapshot: { runRevision: 2 }
+    });
+
+    const stopped = coordinator.stopRun({
+      runId: "run_01",
+      projectId: "project_01",
+      commandId: "command_stop_01",
+      expectedRunRevision: 2
+    });
+    expect(stopped).toMatchObject({
+      ok: true,
+      value: { status: "cancelled", runRevision: 3, lastSequence: 3 }
+    });
+    expect(
+      coordinator.stopRun({
+        runId: "run_01",
+        projectId: "project_01",
+        commandId: "command_stop_01",
+        expectedRunRevision: 2
+      })
+    ).toEqual(stopped);
+    expect(coordinator.readEvents("run_01")).toMatchObject([
+      { sequence: 1, type: "run_started" },
+      { sequence: 2, type: "tool_started" },
+      { sequence: 3, type: "run_cancelled" }
+    ]);
+  });
+});

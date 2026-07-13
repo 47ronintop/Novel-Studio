@@ -24,11 +24,18 @@ export const APPLICATION_IPC_CHANNELS = [
   "application:ai:start-chapter-suggestion-stream",
   "application:ai:next-chapter-suggestion-stream",
   "application:ai:cancel-chapter-suggestion-stream",
+  "application:ai:start-chapter-suggestion-push-stream",
+  "application:ai:cancel-chapter-suggestion-push-stream",
   "application:ai:generate-selection-preview",
   "application:ai:apply-selection-preview",
   "application:ai:apply-chapter-suggestion",
   "application:ai:list-workflow-runs",
   "application:ai:read-workflow-run",
+  "application:agent-run:start",
+  "application:agent-run:stop",
+  "application:agent-run:answer-user-input",
+  "application:agent-run:read",
+  "application:agent-run:list",
   "application:chapter:load",
   "application:chapter:edit",
   "application:chapter:save",
@@ -56,6 +63,13 @@ export const APPLICATION_IPC_CHANNELS = [
 ] as const;
 
 export type ApplicationIpcChannel = (typeof APPLICATION_IPC_CHANNELS)[number];
+
+export const APPLICATION_IPC_EVENT_CHANNELS = [
+  "application:ai:chapter-suggestion-push-event",
+  "application:agent-run:event"
+] as const;
+
+export type ApplicationIpcEventChannel = (typeof APPLICATION_IPC_EVENT_CHANNELS)[number];
 
 export function isApplicationIpcChannel(channel: string): channel is ApplicationIpcChannel {
   return APPLICATION_IPC_CHANNELS.includes(channel as ApplicationIpcChannel);

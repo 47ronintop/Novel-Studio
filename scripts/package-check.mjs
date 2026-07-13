@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -9,6 +10,7 @@ const failures = [];
 await checkPackageScripts();
 await checkPackagingEnvironment();
 await checkBuildArtifacts();
+await checkBuildManifest();
 await checkElectronBuilderConfig();
 
 if (failures.length > 0) {
@@ -87,6 +89,44 @@ async function checkBuildArtifacts() {
     const rendererHtml = await readFile(rendererHtmlPath, "utf8");
     if (!/assets\/index-[A-Za-z0-9_-]+\.js/.test(rendererHtml)) {
       failures.push("Renderer HTML must point to a bundled JavaScript asset.");
+    }
+  }
+}
+
+async function checkBuildManifest() {
+  const manifestPath = join(root, "apps", "desktop", "dist", "build-manifest.json");
+  if (!(await fileExists(manifestPath))) {
+    failures.push("Missing Electron build consistency manifest.");
+    return;
+  }
+
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  if (manifest.schemaVersion !== "1.0" || typeof manifest.sourceRevision !== "string") {
+    failures.push("Electron build consistency manifest is invalid.");
+    return;
+  }
+
+  for (const name of ["main", "preload", "renderer"]) {
+    const artifact = manifest.artifacts?.[name];
+    if (
+      artifact === undefined ||
+      typeof artifact.path !== "string" ||
+      typeof artifact.sha256 !== "string" ||
+      artifact.sourceRevision !== manifest.sourceRevision
+    ) {
+      failures.push(`Electron build manifest entry is invalid: ${name}`);
+      continue;
+    }
+    const artifactPath = join(root, artifact.path);
+    if (!(await fileExists(artifactPath))) {
+      failures.push(`Electron build manifest artifact is missing: ${artifact.path}`);
+      continue;
+    }
+    const digest = createHash("sha256")
+      .update(await readFile(artifactPath))
+      .digest("hex");
+    if (digest !== artifact.sha256) {
+      failures.push(`Electron build artifact hash mismatch: ${artifact.path}`);
     }
   }
 }

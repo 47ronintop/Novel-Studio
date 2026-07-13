@@ -292,7 +292,15 @@ describe("M95 real provider runtime", () => {
 
     const events = await collectProviderStream(provider.stream(streamingRequest()));
 
-    expect(events).toEqual([{ type: "delta", value: "当前是演示模式，未配置真实Key。" }]);
+    expect(events).toEqual([
+      {
+        type: "delta",
+        value: JSON.stringify({
+          proposedBody: "Opening line.\nAI continuation draft.\n",
+          summary: "Generated a local mock continuation for review."
+        })
+      }
+    ]);
     expect(calls).toEqual([]);
   });
 

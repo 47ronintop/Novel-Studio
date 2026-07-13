@@ -9,6 +9,13 @@ import type {
   Result,
   UnifiedError
 } from "@novel-studio/shared";
+import type {
+  AgentRunCommandResult,
+  AgentRunEvent,
+  AgentRunSnapshot,
+  StartAgentRunCommand,
+  StopAgentRunCommand
+} from "@novel-studio/agent-engine";
 
 import type { ApplicationCommand } from "./command-registry.js";
 import type {
@@ -17,6 +24,9 @@ import type {
   AiWritingSelectionPreviewRequest,
   AiWritingSuggestionRequest,
   AiWritingSuggestionStreamEvent,
+  AiWritingSuggestionStreamHandle,
+  AiWritingSuggestionStreamPushEvent,
+  AiWritingSuggestionStreamStartRequest,
   WorkflowRunRecord,
   WorkflowRunSummary
 } from "./ai-writing-workflow-session.js";
@@ -62,6 +72,7 @@ import type {
   UserPreferencesSaveInput,
   UserPreferencesSnapshot
 } from "./user-preferences-session.js";
+import type { AgentRunReadResult, AnswerAgentUserInputCommand } from "./agent-run-session.js";
 
 export interface NovelStudioApi {
   getShellState(): Promise<DesktopShellState>;
@@ -79,11 +90,15 @@ export interface NovelStudioApi {
     createChapter(
       input: CreateChapterInput
     ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
-    renameChapter(input: RenameChapterInput): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+    renameChapter(
+      input: RenameChapterInput
+    ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
     duplicateChapter(
       input: DuplicateChapterInput
     ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
-    deleteChapter(input: DeleteChapterInput): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+    deleteChapter(
+      input: DeleteChapterInput
+    ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
     selectChapter(chapterId: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
     previewRecoveryDraft(
       sessionId: string
@@ -110,7 +125,15 @@ export interface NovelStudioApi {
     generateChapterSuggestion(
       request: AiWritingSuggestionRequest
     ): Promise<Result<AiWritingSuggestion, UnifiedError>>;
-    streamChapterSuggestion(
+    startChapterSuggestionStream(
+      request: AiWritingSuggestionStreamStartRequest
+    ): Promise<Result<AiWritingSuggestionStreamHandle, UnifiedError>>;
+    onChapterSuggestionStreamEvent(
+      listener: (event: AiWritingSuggestionStreamPushEvent) => void
+    ): () => void;
+    cancelChapterSuggestionStream(streamId: string): Promise<Result<void, UnifiedError>>;
+    /** @deprecated Use the clone-safe push stream methods. */
+    streamChapterSuggestion?(
       request: AiWritingSuggestionRequest,
       options?: AiWritingSuggestionStreamOptions
     ): AsyncIterable<Result<AiWritingSuggestionStreamEvent, UnifiedError>>;
@@ -123,6 +146,14 @@ export interface NovelStudioApi {
     ): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
     listWorkflowRuns(): Promise<Result<WorkflowRunSummary[], UnifiedError>>;
     readWorkflowRun(workflowRunId: string): Promise<Result<WorkflowRunRecord, UnifiedError>>;
+  };
+  agentRuns: {
+    start(command: StartAgentRunCommand): Promise<AgentRunCommandResult>;
+    stop(command: StopAgentRunCommand): Promise<AgentRunCommandResult>;
+    answerUserInput(command: AnswerAgentUserInputCommand): Promise<AgentRunCommandResult>;
+    read(runId: string): Promise<Result<AgentRunReadResult, UnifiedError>>;
+    list(projectId: string): Promise<Result<readonly AgentRunSnapshot[], UnifiedError>>;
+    onEvent(listener: (event: AgentRunEvent) => void): () => void;
   };
   search: {
     rebuildIndex(): Promise<Result<ProjectSearchIndex, UnifiedError>>;

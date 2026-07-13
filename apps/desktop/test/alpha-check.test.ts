@@ -10,7 +10,9 @@ describe("M9 alpha checklist", () => {
       readonly scripts: Record<string, string>;
     };
 
-    expect(packageJson.scripts.build).toBe("npm run build:types && npm run build:renderer");
+    expect(packageJson.scripts.build).toBe(
+      "npm run build:types && npm run build:renderer && node scripts/write-build-manifest.mjs"
+    );
     expect(packageJson.scripts["build:types"]).toBe("tsc -b");
     expect(packageJson.scripts["build:renderer"]).toBe(
       "vite build --config apps/desktop/vite.config.ts"

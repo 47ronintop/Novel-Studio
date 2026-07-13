@@ -9,6 +9,14 @@ export type {
   WriteConfigAssetInput
 } from "./config-asset-repository.js";
 export { HistoryRepository } from "./history-repository.js";
+export { AgentRunFileRepository } from "./agent-run-repository.js";
+export type { AgentRunFileRepositoryOptions } from "./agent-run-repository.js";
+export { AgentProjectReadRepository } from "./agent-project-read-repository.js";
+export type {
+  AgentProjectEntry,
+  AgentProjectReadRepositoryOptions,
+  AgentProjectTextReadResult
+} from "./agent-project-read-repository.js";
 export type {
   AssetType,
   CacheRepositoryPort,

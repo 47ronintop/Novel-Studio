@@ -296,6 +296,51 @@ describe("AI writing workflow bridge", () => {
     expect(finalProps.selectedReasoningEffort).toBe("high");
   });
 
+  test("keeps the suggestion terminal state when push completion follows suggestion", async () => {
+    const api = createApi([]);
+    const delayedHistory = createDeferred<Result<WorkflowRunSummary[], UnifiedError>>();
+    let historyCalls = 0;
+    api.ai.listWorkflowRuns = async () => {
+      historyCalls += 1;
+      return historyCalls === 1 ? delayedHistory.promise : ok([]);
+    };
+    let listener:
+      | ((event: import("@novel-studio/application").AiWritingSuggestionStreamPushEvent) => void)
+      | undefined;
+    api.ai.onChapterSuggestionStreamEvent = (nextListener) => {
+      listener = nextListener;
+      return () => undefined;
+    };
+    api.ai.startChapterSuggestionStream = async (request) => {
+      queueMicrotask(() => {
+        listener?.({
+          streamId: request.streamId,
+          sequence: 1,
+          type: "event",
+          event: { type: "suggestion", suggestion }
+        });
+        listener?.({
+          streamId: request.streamId,
+          sequence: 2,
+          type: "completed"
+        });
+        setTimeout(() => delayedHistory.resolve(ok([workflowRunSummary()])), 0);
+      });
+      return ok({ streamId: request.streamId });
+    };
+    api.ai.cancelChapterSuggestionStream = async () => ok(undefined);
+    const bridge = createAiWritingWorkflowBridge(api);
+
+    bridge.beginStreamingGenerate("Continue with push streaming.");
+    const finalProps = await bridge.generateStreamingSuggestion(
+      "Continue with push streaming.",
+      () => undefined
+    );
+
+    expect(finalProps.status).toBe("suggestion-ready");
+    expect(finalProps.summary).toBe(suggestion.summary);
+  });
+
   test("generates a preview-only suggestion and applies it through the preload API", async () => {
     const calls: string[] = [];
     const bridge = createAiWritingWorkflowBridge(createApi(calls));

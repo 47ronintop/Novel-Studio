@@ -3,6 +3,7 @@ import type {
   AiWritingWorkflowObservability,
   AiWritingSelectionPreview,
   AiWritingSuggestion,
+  AiWritingSuggestionStreamPushEvent,
   ChapterEditorSnapshot,
   ModelDiscoverySnapshot,
   ModelProfile,
@@ -63,6 +64,10 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
   let currentSelectionPreview: AiWritingSelectionPreview | undefined;
   let rejectedSelectionPreview: AiWritingSelectionPreview | undefined;
   let currentStreamController: AbortController | undefined;
+  let currentStreamId: string | undefined;
+  let currentStreamUnsubscribe: (() => void) | undefined;
+  let currentStreamResolve: ((props: AiWritingWorkflowProps) => void) | undefined;
+  let currentStreamEventQueue: Promise<void> = Promise.resolve();
   let currentStreamToken = 0;
   let currentModelProfile: ModelProfile | undefined;
   let modelDiscovery: ModelDiscoverySnapshot | undefined;
@@ -71,6 +76,177 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
     status: "idle",
     instruction: ""
   });
+
+  async function handleStreamPush(
+    push: AiWritingSuggestionStreamPushEvent,
+    instruction: string,
+    onUpdate: (props: AiWritingWorkflowProps) => void,
+    resolve: (props: AiWritingWorkflowProps) => void
+  ): Promise<void> {
+    if (push.type === "event") {
+      const event = push.event;
+      if (event.type === "delta") {
+        props = createProps({
+          ...props,
+          status: "streaming",
+          instruction,
+          streamPreview: `${props.streamPreview ?? ""}${event.value}`
+        });
+        onUpdate(props);
+        return;
+      }
+      if (event.type === "notice") {
+        props = createProps({
+          ...props,
+          status: "streaming",
+          instruction,
+          runtimeNotice: event.message
+        });
+        onUpdate(props);
+        return;
+      }
+      const suggestion = event.suggestion;
+      currentSuggestionId = suggestion.suggestionId;
+      currentSelectionPreviewId = undefined;
+      currentSelectionPreview = undefined;
+      rejectedSelectionPreview = undefined;
+      const history = await loadHistory(api, suggestion.workflowRunId);
+      props = withModelControls(toProps(suggestion, instruction, history));
+      onUpdate(props);
+      resolve(props);
+      return;
+    }
+
+    if (push.type === "error") {
+      currentSuggestionId = undefined;
+      currentSelectionPreviewId = undefined;
+      currentSelectionPreview = undefined;
+      const history = await loadLatestHistory(api);
+      props = createProps({
+        ...props,
+        status: "failed",
+        instruction,
+        failure: toFailureProps(push.error),
+        retryPolicy: toRetryPolicyProps(undefined),
+        ...(history === undefined ? {} : { history })
+      });
+      onUpdate(props);
+      resolve(props);
+      return;
+    }
+
+    if (currentSuggestionId !== undefined && props.status === "suggestion-ready") {
+      resolve(props);
+      return;
+    }
+
+    const history = await loadLatestHistory(api);
+    props = createProps({
+      ...props,
+      status: "failed",
+      instruction,
+      failure: toFailureProps(
+        createUnifiedError({
+          code: "AI_STREAM_ENDED_WITHOUT_SUGGESTION",
+          category: "LLMAdapterError",
+          message: "AI streaming ended before returning a final suggestion.",
+          recoverability: "retryable",
+          suggestedAction: "Retry the request or disable streaming for this provider.",
+          traceId: "ai-writing-workflow"
+        })
+      ),
+      retryPolicy: toRetryPolicyProps(undefined),
+      ...(history === undefined ? {} : { history })
+    });
+    onUpdate(props);
+    resolve(props);
+  }
+
+  async function generateLegacyStreamingSuggestion(
+    instruction: string,
+    onUpdate: (props: AiWritingWorkflowProps) => void,
+    controller: AbortController,
+    streamToken: number
+  ): Promise<AiWritingWorkflowProps> {
+    const legacyStream = api.ai.streamChapterSuggestion;
+    if (legacyStream === undefined) {
+      throw new Error("AI stream API is unavailable.");
+    }
+    for await (const result of legacyStream(
+      {
+        instruction,
+        ...(selectedReasoningEffort === undefined
+          ? {}
+          : { reasoningEffort: selectedReasoningEffort })
+      },
+      { signal: controller.signal }
+    )) {
+      if (streamToken !== currentStreamToken || controller.signal.aborted) {
+        return props;
+      }
+      if (!result.ok) {
+        const history = await loadLatestHistory(api);
+        props = createProps({
+          ...props,
+          status: "failed",
+          instruction,
+          failure: toFailureProps(result.error),
+          retryPolicy: toRetryPolicyProps(undefined),
+          ...(history === undefined ? {} : { history })
+        });
+        onUpdate(props);
+        return props;
+      }
+      if (result.value.type === "delta") {
+        props = createProps({
+          ...props,
+          status: "streaming",
+          instruction,
+          streamPreview: `${props.streamPreview ?? ""}${result.value.value}`
+        });
+        onUpdate(props);
+      } else if (result.value.type === "notice") {
+        props = createProps({
+          ...props,
+          status: "streaming",
+          instruction,
+          runtimeNotice: result.value.message
+        });
+        onUpdate(props);
+      } else {
+        const suggestion = result.value.suggestion;
+        currentSuggestionId = suggestion.suggestionId;
+        const history = await loadHistory(api, suggestion.workflowRunId);
+        props = withModelControls(toProps(suggestion, instruction, history));
+        onUpdate(props);
+        return props;
+      }
+    }
+    if (controller.signal.aborted || streamToken !== currentStreamToken) {
+      props = createProps({ ...props, status: "cancelled" });
+      return props;
+    }
+    const history = await loadLatestHistory(api);
+    props = createProps({
+      ...props,
+      status: "failed",
+      instruction,
+      failure: toFailureProps(
+        createUnifiedError({
+          code: "AI_STREAM_ENDED_WITHOUT_SUGGESTION",
+          category: "LLMAdapterError",
+          message: "AI streaming ended before returning a final suggestion.",
+          recoverability: "retryable",
+          suggestedAction: "Retry the request or disable streaming for this provider.",
+          traceId: "ai-writing-workflow"
+        })
+      ),
+      retryPolicy: toRetryPolicyProps(undefined),
+      ...(history === undefined ? {} : { history })
+    });
+    onUpdate(props);
+    return props;
+  }
 
   async function loadModelDiscoveryState(): Promise<AiWritingWorkflowProps> {
     const listed = await api.settings.listModelProfiles();
@@ -135,6 +311,15 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
     cancelStreaming() {
       currentStreamController?.abort();
       currentStreamController = undefined;
+      const streamId = currentStreamId;
+      currentStreamId = undefined;
+      currentStreamUnsubscribe?.();
+      currentStreamUnsubscribe = undefined;
+      currentStreamResolve?.(createProps({ ...props, status: "cancelled" }));
+      currentStreamResolve = undefined;
+      if (streamId !== undefined) {
+        void api.ai.cancelChapterSuggestionStream(streamId);
+      }
       currentStreamToken += 1;
       props = createProps({
         ...props,
@@ -144,100 +329,74 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
     },
     async generateStreamingSuggestion(instruction, onUpdate) {
       currentStreamController?.abort();
+      if (currentStreamId !== undefined) {
+        void api.ai.cancelChapterSuggestionStream(currentStreamId);
+      }
+      currentStreamUnsubscribe?.();
       const controller = new AbortController();
       currentStreamController = controller;
       currentStreamToken += 1;
       const streamToken = currentStreamToken;
+      const streamId = createRendererStreamId();
+      currentStreamId = streamId;
+      currentSuggestionId = undefined;
+      currentStreamEventQueue = Promise.resolve();
 
       try {
-        for await (const result of api.ai.streamChapterSuggestion(
-          {
+        if (
+          api.ai.startChapterSuggestionStream === undefined ||
+          api.ai.onChapterSuggestionStreamEvent === undefined
+        ) {
+          currentStreamId = undefined;
+          return await generateLegacyStreamingSuggestion(
             instruction,
-            ...(selectedReasoningEffort === undefined
-              ? {}
-              : { reasoningEffort: selectedReasoningEffort })
-          },
-          { signal: controller.signal }
-        )) {
-          if (streamToken !== currentStreamToken || controller.signal.aborted) {
-            return props;
-          }
-
-          if (!result.ok) {
-            currentSuggestionId = undefined;
-            currentSelectionPreviewId = undefined;
-            currentSelectionPreview = undefined;
-            const history = await loadLatestHistory(api);
-            props = createProps({
-              ...props,
-              status: "failed",
-              instruction,
-              failure: toFailureProps(result.error),
-              retryPolicy: toRetryPolicyProps(undefined),
-              ...(history === undefined ? {} : { history })
-            });
-            onUpdate(props);
-            return props;
-          }
-
-          if (result.value.type === "delta") {
-            props = createProps({
-              ...props,
-              status: "streaming",
-              instruction,
-              streamPreview: `${props.streamPreview ?? ""}${result.value.value}`
-            });
-            onUpdate(props);
-          }
-
-          if (result.value.type === "notice") {
-            props = createProps({
-              ...props,
-              status: "streaming",
-              instruction,
-              runtimeNotice: result.value.message
-            });
-            onUpdate(props);
-          }
-
-          if (result.value.type === "suggestion") {
-            const suggestion = result.value.suggestion;
-            currentSuggestionId = suggestion.suggestionId;
-            currentSelectionPreviewId = undefined;
-            currentSelectionPreview = undefined;
-            rejectedSelectionPreview = undefined;
-            const history = await loadHistory(api, suggestion.workflowRunId);
-            props = withModelControls(toProps(suggestion, instruction, history));
-            onUpdate(props);
-            return props;
-          }
+            onUpdate,
+            controller,
+            streamToken
+          );
         }
-
-        if (streamToken === currentStreamToken && !controller.signal.aborted) {
-          currentSuggestionId = undefined;
-          currentSelectionPreviewId = undefined;
-          currentSelectionPreview = undefined;
-          const history = await loadLatestHistory(api);
+        const finished = new Promise<AiWritingWorkflowProps>((resolve) => {
+          currentStreamResolve = resolve;
+          currentStreamUnsubscribe = api.ai.onChapterSuggestionStreamEvent((push) => {
+            if (push.streamId !== streamId || streamToken !== currentStreamToken) {
+              return;
+            }
+            currentStreamEventQueue = currentStreamEventQueue
+              .then(() => handleStreamPush(push, instruction, onUpdate, resolve))
+              .catch((error) => {
+                props = createProps({
+                  ...props,
+                  status: "failed",
+                  instruction,
+                  failure: toFailureProps(streamingErrorToUnifiedError(error)),
+                  retryPolicy: toRetryPolicyProps(undefined)
+                });
+                onUpdate(props);
+                resolve(props);
+              });
+          });
+        });
+        const started = await api.ai.startChapterSuggestionStream({
+          streamId,
+          instruction,
+          ...(selectedReasoningEffort === undefined
+            ? {}
+            : { reasoningEffort: selectedReasoningEffort })
+        });
+        if (!started.ok) {
+          currentStreamUnsubscribe?.();
+          currentStreamUnsubscribe = undefined;
           props = createProps({
             ...props,
             status: "failed",
             instruction,
-            failure: toFailureProps(
-              createUnifiedError({
-                code: "AI_STREAM_ENDED_WITHOUT_SUGGESTION",
-                category: "LLMAdapterError",
-                message: "AI streaming ended before returning a final suggestion.",
-                recoverability: "retryable",
-                suggestedAction: "Retry the request or disable streaming for this provider.",
-                traceId: "ai-writing-workflow"
-              })
-            ),
-            retryPolicy: toRetryPolicyProps(undefined),
-            ...(history === undefined ? {} : { history })
+            failure: toFailureProps(started.error),
+            retryPolicy: toRetryPolicyProps(undefined)
           });
           onUpdate(props);
           return props;
         }
+        return await finished;
       } catch (error) {
         if (streamToken !== currentStreamToken || controller.signal.aborted) {
           return props;
@@ -259,6 +418,10 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
       } finally {
         if (streamToken === currentStreamToken) {
           currentStreamController = undefined;
+          currentStreamId = undefined;
+          currentStreamUnsubscribe?.();
+          currentStreamUnsubscribe = undefined;
+          currentStreamResolve = undefined;
         }
       }
 
@@ -745,6 +908,13 @@ function streamingErrorToUnifiedError(error: unknown): UnifiedError {
     traceId: "ai-writing-stream"
   });
 }
+
+function createRendererStreamId(): string {
+  rendererStreamSequence += 1;
+  return `renderer_ai_stream_${Date.now()}_${rendererStreamSequence}`;
+}
+
+let rendererStreamSequence = 0;
 
 function toRetryPolicyProps(
   retryPolicy: WorkflowRunRecord["retryPolicy"] | undefined

@@ -796,7 +796,15 @@ function createDemoModeProvider(chapterEditorSession: ChapterEditorSession): Llm
       };
     },
     async *stream() {
-      yield { type: "delta", value: "当前是演示模式，未配置真实Key。" };
+      const currentBody = chapterEditorSession.getState()?.chapter.body ?? "";
+      const separator = currentBody.endsWith("\n") || currentBody.length === 0 ? "" : "\n";
+      yield {
+        type: "delta",
+        value: JSON.stringify({
+          proposedBody: `${currentBody}${separator}AI continuation draft.\n`,
+          summary: "Generated a local mock continuation for review."
+        })
+      };
     }
   };
 }

@@ -1,14 +1,14 @@
 import type {
   ApplicationCommand,
   ApplicationIpcChannel,
+  ApplicationIpcEventChannel,
   AiWritingSuggestion,
   AiWritingSelectionPreview,
   AiWritingSelectionPreviewRequest,
   AiWritingSuggestionRequest,
-  AiWritingSuggestionStreamEvent,
   AiWritingSuggestionStreamHandle,
-  AiWritingSuggestionStreamNext,
-  AiWritingSuggestionStreamOptions,
+  AiWritingSuggestionStreamPushEvent,
+  AiWritingSuggestionStreamStartRequest,
   ChapterEditorSnapshot,
   ChapterSuggestionDiffPreview,
   ConfigAssetRestoreInput,
@@ -46,6 +46,14 @@ import type {
   WorkflowRunSummary
 } from "@novel-studio/application";
 import type {
+  AgentRunCommandResult,
+  AgentRunEvent,
+  AgentRunSnapshot,
+  StartAgentRunCommand,
+  StopAgentRunCommand
+} from "@novel-studio/agent-engine";
+import type { AgentRunReadResult, AnswerAgentUserInputCommand } from "@novel-studio/application";
+import type {
   ChapterSummary,
   CreateChapterInput,
   DeleteChapterInput,
@@ -59,6 +67,7 @@ import type {
 
 export interface IpcInvoker {
   invoke(channel: ApplicationIpcChannel, ...args: readonly unknown[]): Promise<unknown>;
+  on?(channel: ApplicationIpcEventChannel, listener: (payload: unknown) => void): () => void;
 }
 
 export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
@@ -180,10 +189,28 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           "application:ai:generate-chapter-suggestion",
           request
         ),
-      streamChapterSuggestion: (
-        request: AiWritingSuggestionRequest,
-        options?: AiWritingSuggestionStreamOptions
-      ) => streamChapterSuggestionViaIpc(ipc, request, options),
+      startChapterSuggestionStream: (request: AiWritingSuggestionStreamStartRequest) =>
+        invokeTyped<Result<AiWritingSuggestionStreamHandle, UnifiedError>>(
+          ipc,
+          "application:ai:start-chapter-suggestion-push-stream",
+          request
+        ),
+      onChapterSuggestionStreamEvent: (listener) => {
+        if (ipc.on === undefined) {
+          return () => undefined;
+        }
+        return ipc.on("application:ai:chapter-suggestion-push-event", (payload) => {
+          if (isAiWritingSuggestionStreamPushEvent(payload)) {
+            listener(payload);
+          }
+        });
+      },
+      cancelChapterSuggestionStream: (streamId: string) =>
+        invokeTyped<Result<void, UnifiedError>>(
+          ipc,
+          "application:ai:cancel-chapter-suggestion-push-stream",
+          streamId
+        ),
       generateSelectionPreview: (request: AiWritingSelectionPreviewRequest) =>
         invokeTyped<Result<AiWritingSelectionPreview, UnifiedError>>(
           ipc,
@@ -213,6 +240,32 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           "application:ai:read-workflow-run",
           workflowRunId
         )
+    },
+    agentRuns: {
+      start: (command: StartAgentRunCommand) =>
+        invokeTyped<AgentRunCommandResult>(ipc, "application:agent-run:start", command),
+      stop: (command: StopAgentRunCommand) =>
+        invokeTyped<AgentRunCommandResult>(ipc, "application:agent-run:stop", command),
+      answerUserInput: (command: AnswerAgentUserInputCommand) =>
+        invokeTyped<AgentRunCommandResult>(ipc, "application:agent-run:answer-user-input", command),
+      read: (runId: string) =>
+        invokeTyped<Result<AgentRunReadResult, UnifiedError>>(
+          ipc,
+          "application:agent-run:read",
+          runId
+        ),
+      list: (projectId: string) =>
+        invokeTyped<Result<readonly AgentRunSnapshot[], UnifiedError>>(
+          ipc,
+          "application:agent-run:list",
+          projectId
+        ),
+      onEvent: (listener: (event: AgentRunEvent) => void) => {
+        if (ipc.on === undefined) return () => undefined;
+        return ipc.on("application:agent-run:event", (payload) => {
+          if (isAgentRunEvent(payload)) listener(payload);
+        });
+      }
     },
     search: {
       rebuildIndex: () =>
@@ -373,86 +426,34 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
   };
 }
 
-function streamChapterSuggestionViaIpc(
-  ipc: IpcInvoker,
-  request: AiWritingSuggestionRequest,
-  options: AiWritingSuggestionStreamOptions | undefined
-): AsyncIterable<Result<AiWritingSuggestionStreamEvent, UnifiedError>> {
-  return {
-    async *[Symbol.asyncIterator]() {
-      let streamId: string | undefined;
-      let finished = false;
-      let cancelPromise: Promise<unknown> | undefined;
-      const cancel = () => {
-        if (streamId === undefined || cancelPromise !== undefined) {
-          return;
-        }
-        cancelPromise = invokeTyped<Result<void, UnifiedError>>(
-          ipc,
-          "application:ai:cancel-chapter-suggestion-stream",
-          streamId
-        ).catch(() => undefined);
-      };
-      const signal = options?.signal;
-      const onAbort = () => {
-        cancel();
-      };
-
-      if (signal?.aborted === true) {
-        return;
-      }
-      signal?.addEventListener("abort", onAbort, { once: true });
-
-      try {
-        const started = await invokeTyped<Result<AiWritingSuggestionStreamHandle, UnifiedError>>(
-          ipc,
-          "application:ai:start-chapter-suggestion-stream",
-          request
-        );
-        if (!started.ok) {
-          yield { ok: false, error: started.error };
-          return;
-        }
-        streamId = started.value.streamId;
-        if (isAbortSignalAborted(signal)) {
-          cancel();
-          return;
-        }
-
-        while (true) {
-          const next = await invokeTyped<Result<AiWritingSuggestionStreamNext, UnifiedError>>(
-            ipc,
-            "application:ai:next-chapter-suggestion-stream",
-            streamId
-          );
-          if (isAbortSignalAborted(signal)) {
-            cancel();
-            return;
-          }
-          if (!next.ok) {
-            yield { ok: false, error: next.error };
-            return;
-          }
-          if (next.value.done) {
-            finished = true;
-            return;
-          }
-
-          yield { ok: true, value: next.value.event };
-        }
-      } finally {
-        signal?.removeEventListener("abort", onAbort);
-        if (!finished) {
-          cancel();
-          await cancelPromise;
-        }
-      }
-    }
-  };
+function isAiWritingSuggestionStreamPushEvent(
+  value: unknown
+): value is AiWritingSuggestionStreamPushEvent {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const event = value as Record<string, unknown>;
+  return (
+    typeof event["streamId"] === "string" &&
+    typeof event["sequence"] === "number" &&
+    (event["type"] === "event" || event["type"] === "error" || event["type"] === "completed")
+  );
 }
 
-function isAbortSignalAborted(signal: AbortSignal | undefined): boolean {
-  return signal?.aborted === true;
+function isAgentRunEvent(value: unknown): value is AgentRunEvent {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const event = value as Record<string, unknown>;
+  return (
+    event["schemaVersion"] === "1.0" &&
+    typeof event["runId"] === "string" &&
+    typeof event["projectId"] === "string" &&
+    typeof event["sequence"] === "number" &&
+    Number.isInteger(event["sequence"]) &&
+    typeof event["runRevision"] === "number" &&
+    Number.isInteger(event["runRevision"]) &&
+    typeof event["type"] === "string" &&
+    typeof event["createdAt"] === "string"
+  );
 }
 
 async function invokeTyped<T>(

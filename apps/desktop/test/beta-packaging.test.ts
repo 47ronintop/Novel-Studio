@@ -16,7 +16,9 @@ describe("M10 beta packaging", () => {
     expect(packageJson.scripts["build:renderer"]).toBe(
       "vite build --config apps/desktop/vite.config.ts"
     );
-    expect(packageJson.scripts.build).toBe("npm run build:types && npm run build:renderer");
+    expect(packageJson.scripts.build).toBe(
+      "npm run build:types && npm run build:renderer && node scripts/write-build-manifest.mjs"
+    );
     expect(packageJson.scripts["package:check"]).toBe(
       "npm run build && node scripts/package-check.mjs"
     );

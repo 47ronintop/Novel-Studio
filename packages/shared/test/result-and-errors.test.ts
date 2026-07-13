@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, test } from "vitest";
 import { createUnifiedError } from "../src/errors.js";
 import { err, isErr, isOk, ok, unwrapOr } from "../src/result.js";
@@ -19,6 +21,12 @@ describe("Result helpers", () => {
 });
 
 describe("Unified Error", () => {
+  test("keeps the shared error factory safe for browser renderer bundles", () => {
+    const source = readFileSync(new URL("../src/errors.ts", import.meta.url), "utf8");
+
+    expect(source).not.toContain("node:crypto");
+  });
+
   test("creates the stable error shape required by the schema contract", () => {
     const error = createUnifiedError({
       code: "PROJECT_FILE_INVALID",

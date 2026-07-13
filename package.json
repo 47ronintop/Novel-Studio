@@ -9,7 +9,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build:types && npm run build:renderer",
+    "build": "npm run build:types && npm run build:renderer && node scripts/write-build-manifest.mjs",
     "build:types": "tsc -b",
     "build:renderer": "vite build --config apps/desktop/vite.config.ts",
     "typecheck": "tsc -b",

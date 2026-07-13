@@ -61,11 +61,18 @@ describe("Electron security baseline", () => {
       "application:ai:start-chapter-suggestion-stream",
       "application:ai:next-chapter-suggestion-stream",
       "application:ai:cancel-chapter-suggestion-stream",
+      "application:ai:start-chapter-suggestion-push-stream",
+      "application:ai:cancel-chapter-suggestion-push-stream",
       "application:ai:generate-selection-preview",
       "application:ai:apply-selection-preview",
       "application:ai:apply-chapter-suggestion",
       "application:ai:list-workflow-runs",
       "application:ai:read-workflow-run",
+      "application:agent-run:start",
+      "application:agent-run:stop",
+      "application:agent-run:answer-user-input",
+      "application:agent-run:read",
+      "application:agent-run:list",
       "application:chapter:load",
       "application:chapter:edit",
       "application:chapter:save",
@@ -129,6 +136,11 @@ describe("Electron security baseline", () => {
     await api.project.discardRecoveryDraft("session_recovery");
     await api.chapter.load();
     await api.ai.generateChapterSuggestion({ instruction: "Continue." });
+    await api.ai.startChapterSuggestionStream({
+      streamId: "stream_security_01",
+      instruction: "Continue."
+    });
+    await api.ai.cancelChapterSuggestionStream("stream_security_01");
     await api.ai.generateSelectionPreview({
       instruction: "Rewrite selection.",
       selection: {
@@ -217,6 +229,8 @@ describe("Electron security baseline", () => {
       "application:project:discard-recovery-draft",
       "application:chapter:load",
       "application:ai:generate-chapter-suggestion",
+      "application:ai:start-chapter-suggestion-push-stream",
+      "application:ai:cancel-chapter-suggestion-push-stream",
       "application:ai:generate-selection-preview",
       "application:ai:apply-selection-preview",
       "application:ai:apply-chapter-suggestion",

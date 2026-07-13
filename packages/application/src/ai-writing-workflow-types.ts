@@ -28,6 +28,10 @@ export interface AiWritingSuggestionStreamRequest extends AiWritingSuggestionReq
   readonly abortSignal?: AbortSignal;
 }
 
+export interface AiWritingSuggestionStreamStartRequest extends AiWritingSuggestionRequest {
+  readonly streamId: string;
+}
+
 export interface AiWritingConversationMessage {
   readonly messageId: string;
   readonly role: "user" | "assistant";
@@ -79,6 +83,25 @@ export type AiWritingSuggestionStreamEvent =
 export interface AiWritingSuggestionStreamHandle {
   readonly streamId: string;
 }
+
+export type AiWritingSuggestionStreamPushEvent =
+  | {
+      readonly streamId: string;
+      readonly sequence: number;
+      readonly type: "event";
+      readonly event: AiWritingSuggestionStreamEvent;
+    }
+  | {
+      readonly streamId: string;
+      readonly sequence: number;
+      readonly type: "error";
+      readonly error: UnifiedError;
+    }
+  | {
+      readonly streamId: string;
+      readonly sequence: number;
+      readonly type: "completed";
+    };
 
 export type AiWritingSuggestionStreamNext =
   | {

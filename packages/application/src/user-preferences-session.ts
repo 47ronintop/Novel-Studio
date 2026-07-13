@@ -131,9 +131,7 @@ function normalizeUserPreferences(preferences: UserPreferencesSnapshot): UserPre
   const normalized: UserPreferencesSnapshot = {
     ...preferences,
     editor: normalizeEditorPreferences(preferences.editor ?? createDefaultUserPreferences().editor),
-    appearance: normalizeAppearancePreferences(
-      preferences.appearance as AppearancePreferenceInput
-    ),
+    appearance: normalizeAppearancePreferences(preferences.appearance as AppearancePreferenceInput),
     shell: {
       ...preferences.shell,
       navigatorExpandedSectionIds: normalizeNavigatorExpandedSectionIds(
@@ -162,15 +160,15 @@ function normalizeUserPreferences(preferences: UserPreferencesSnapshot): UserPre
 }
 
 function normalizeAppearancePreferences(
-  preferences: AppearancePreferenceInput
+  preferences: AppearancePreferenceInput | undefined
 ): UserAppearancePreferences {
   return {
     theme:
-      preferences.theme === "light" || preferences.theme === "system"
+      preferences?.theme === "light" || preferences?.theme === "system"
         ? preferences.theme
         : "dark",
     accentColor:
-      preferences.accentColor === "blue" || preferences.accentColor === "amber"
+      preferences?.accentColor === "blue" || preferences?.accentColor === "amber"
         ? preferences.accentColor
         : "teal"
   };

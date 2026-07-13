@@ -2,14 +2,15 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   ApplicationCommand,
   ApplicationIpcChannel,
+  AgentRunReadResult,
+  AnswerAgentUserInputCommand,
   AiWritingSelectionPreview,
   AiWritingSelectionPreviewRequest,
   AiWritingSuggestion,
   AiWritingSuggestionRequest,
-  AiWritingSuggestionStreamEvent,
   AiWritingSuggestionStreamHandle,
-  AiWritingSuggestionStreamNext,
-  AiWritingSuggestionStreamOptions,
+  AiWritingSuggestionStreamPushEvent,
+  AiWritingSuggestionStreamStartRequest,
   ChapterEditorSnapshot,
   ChapterSuggestionDiffPreview,
   ConfigAssetRestoreInput,
@@ -46,6 +47,13 @@ import type {
   WorkflowRunRecord,
   WorkflowRunSummary
 } from "@novel-studio/application";
+import type {
+  AgentRunCommandResult,
+  AgentRunEvent,
+  AgentRunSnapshot,
+  StartAgentRunCommand,
+  StopAgentRunCommand
+} from "@novel-studio/agent-engine";
 import type {
   ChapterSummary,
   ChapterVersionContent,
@@ -155,10 +163,26 @@ const api: NovelStudioApi = {
         "application:ai:generate-chapter-suggestion",
         request
       ),
-    streamChapterSuggestion: (
-      request: AiWritingSuggestionRequest,
-      options?: AiWritingSuggestionStreamOptions
-    ) => streamChapterSuggestionViaIpc(request, options),
+    startChapterSuggestionStream: (request: AiWritingSuggestionStreamStartRequest) =>
+      invokeTyped<Result<AiWritingSuggestionStreamHandle, UnifiedError>>(
+        "application:ai:start-chapter-suggestion-push-stream",
+        request
+      ),
+    onChapterSuggestionStreamEvent: (listener) => {
+      const wrapped = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+        if (isAiWritingSuggestionStreamPushEvent(payload)) {
+          listener(payload);
+        }
+      };
+      ipcRenderer.on("application:ai:chapter-suggestion-push-event", wrapped);
+      return () =>
+        ipcRenderer.removeListener("application:ai:chapter-suggestion-push-event", wrapped);
+    },
+    cancelChapterSuggestionStream: (streamId: string) =>
+      invokeTyped<Result<void, UnifiedError>>(
+        "application:ai:cancel-chapter-suggestion-push-stream",
+        streamId
+      ),
     generateSelectionPreview: (request: AiWritingSelectionPreviewRequest) =>
       invokeTyped<Result<AiWritingSelectionPreview, UnifiedError>>(
         "application:ai:generate-selection-preview",
@@ -181,6 +205,28 @@ const api: NovelStudioApi = {
         "application:ai:read-workflow-run",
         workflowRunId
       )
+  },
+  agentRuns: {
+    start: (command: StartAgentRunCommand) =>
+      invokeTyped<AgentRunCommandResult>("application:agent-run:start", command),
+    stop: (command: StopAgentRunCommand) =>
+      invokeTyped<AgentRunCommandResult>("application:agent-run:stop", command),
+    answerUserInput: (command: AnswerAgentUserInputCommand) =>
+      invokeTyped<AgentRunCommandResult>("application:agent-run:answer-user-input", command),
+    read: (runId: string) =>
+      invokeTyped<Result<AgentRunReadResult, UnifiedError>>("application:agent-run:read", runId),
+    list: (projectId: string) =>
+      invokeTyped<Result<readonly AgentRunSnapshot[], UnifiedError>>(
+        "application:agent-run:list",
+        projectId
+      ),
+    onEvent: (listener: (event: AgentRunEvent) => void) => {
+      const wrapped = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+        if (isAgentRunEvent(payload)) listener(payload);
+      };
+      ipcRenderer.on("application:agent-run:event", wrapped);
+      return () => ipcRenderer.removeListener("application:agent-run:event", wrapped);
+    }
   },
   search: {
     rebuildIndex: () =>
@@ -312,82 +358,34 @@ const api: NovelStudioApi = {
 
 contextBridge.exposeInMainWorld("novelStudio", api);
 
-function streamChapterSuggestionViaIpc(
-  request: AiWritingSuggestionRequest,
-  options: AiWritingSuggestionStreamOptions | undefined
-): AsyncIterable<Result<AiWritingSuggestionStreamEvent, UnifiedError>> {
-  return {
-    async *[Symbol.asyncIterator]() {
-      let streamId: string | undefined;
-      let finished = false;
-      let cancelPromise: Promise<unknown> | undefined;
-      const cancel = () => {
-        if (streamId === undefined || cancelPromise !== undefined) {
-          return;
-        }
-        cancelPromise = invokeTyped<Result<void, UnifiedError>>(
-          "application:ai:cancel-chapter-suggestion-stream",
-          streamId
-        ).catch(() => undefined);
-      };
-      const signal = options?.signal;
-      const onAbort = () => {
-        cancel();
-      };
-
-      if (signal?.aborted === true) {
-        return;
-      }
-      signal?.addEventListener("abort", onAbort, { once: true });
-
-      try {
-        const started = await invokeTyped<Result<AiWritingSuggestionStreamHandle, UnifiedError>>(
-          "application:ai:start-chapter-suggestion-stream",
-          request
-        );
-        if (!started.ok) {
-          yield { ok: false, error: started.error };
-          return;
-        }
-        streamId = started.value.streamId;
-        if (isAbortSignalAborted(signal)) {
-          cancel();
-          return;
-        }
-
-        while (true) {
-          const next = await invokeTyped<Result<AiWritingSuggestionStreamNext, UnifiedError>>(
-            "application:ai:next-chapter-suggestion-stream",
-            streamId
-          );
-          if (isAbortSignalAborted(signal)) {
-            cancel();
-            return;
-          }
-          if (!next.ok) {
-            yield { ok: false, error: next.error };
-            return;
-          }
-          if (next.value.done) {
-            finished = true;
-            return;
-          }
-
-          yield { ok: true, value: next.value.event };
-        }
-      } finally {
-        signal?.removeEventListener("abort", onAbort);
-        if (!finished) {
-          cancel();
-          await cancelPromise;
-        }
-      }
-    }
-  };
+function isAiWritingSuggestionStreamPushEvent(
+  value: unknown
+): value is AiWritingSuggestionStreamPushEvent {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const event = value as Record<string, unknown>;
+  return (
+    typeof event["streamId"] === "string" &&
+    typeof event["sequence"] === "number" &&
+    (event["type"] === "event" || event["type"] === "error" || event["type"] === "completed")
+  );
 }
 
-function isAbortSignalAborted(signal: AbortSignal | undefined): boolean {
-  return signal?.aborted === true;
+function isAgentRunEvent(value: unknown): value is AgentRunEvent {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const event = value as Record<string, unknown>;
+  return (
+    event["schemaVersion"] === "1.0" &&
+    typeof event["runId"] === "string" &&
+    typeof event["projectId"] === "string" &&
+    typeof event["sequence"] === "number" &&
+    Number.isInteger(event["sequence"]) &&
+    typeof event["runRevision"] === "number" &&
+    Number.isInteger(event["runRevision"]) &&
+    typeof event["type"] === "string" &&
+    typeof event["createdAt"] === "string"
+  );
 }
 
 async function invokeTyped<T>(

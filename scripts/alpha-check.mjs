@@ -40,8 +40,11 @@ async function checkRequiredFiles() {
 
 async function checkPackageScripts() {
   const packageJson = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
-  if (packageJson.scripts?.build !== "npm run build:types && npm run build:renderer") {
-    failures.push("Root package.json must expose build script as the M10 type and renderer build.");
+  if (
+    packageJson.scripts?.build !==
+    "npm run build:types && npm run build:renderer && node scripts/write-build-manifest.mjs"
+  ) {
+    failures.push("Root package.json must expose one consistent Electron build pipeline.");
   }
   if (packageJson.scripts?.["build:types"] !== "tsc -b") {
     failures.push("Root package.json must expose build:types script.");

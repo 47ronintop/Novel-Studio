@@ -9,8 +9,18 @@ export {
   findApplicationCommand,
   isSafeCommand
 } from "./command-registry.js";
-export type { ApplicationIpcChannel } from "./ipc-contract.js";
-export { APPLICATION_IPC_CHANNELS, isApplicationIpcChannel } from "./ipc-contract.js";
+export type { ApplicationIpcChannel, ApplicationIpcEventChannel } from "./ipc-contract.js";
+export {
+  APPLICATION_IPC_CHANNELS,
+  APPLICATION_IPC_EVENT_CHANNELS,
+  isApplicationIpcChannel
+} from "./ipc-contract.js";
+export {
+  preflightAgentModelCapabilities,
+  type AgentModelCapabilityDeclaration,
+  type AgentModelCapabilityPreflightInput,
+  type AgentModelCapabilitySnapshot
+} from "./agent-model-capabilities.js";
 export type {
   AiWritingSuggestionStreamOptions,
   NovelStudioApi,
@@ -268,7 +278,9 @@ export type {
   AiWritingSuggestionStreamEvent,
   AiWritingSuggestionStreamHandle,
   AiWritingSuggestionStreamNext,
+  AiWritingSuggestionStreamPushEvent,
   AiWritingSuggestionStreamRequest,
+  AiWritingSuggestionStreamStartRequest,
   AiWritingWorkflowObservability,
   AiWritingWorkflowSession,
   AiWritingWorkflowSessionOptions,
@@ -285,3 +297,21 @@ export type {
   WorkflowRunUsageSummary
 } from "./ai-writing-workflow-types.js";
 export { createAgentBackedAiWritingWorkflowSession } from "./ai-writing-workflow-session.js";
+export { createAgentRunSession } from "./agent-run-session.js";
+export type {
+  AgentModelMessage,
+  AgentModelMessageRole,
+  AgentModelRoundInput,
+  AgentModelStreamEvent,
+  AgentContextSourceReader,
+  AgentReadToolExecutor,
+  AgentReadToolResult,
+  AgentRunModelDriver,
+  AgentRunPersistencePort,
+  AgentRunReadResult,
+  AgentRunSession,
+  AgentUserInputOption,
+  AgentUserInputRequest,
+  AnswerAgentUserInputCommand,
+  CreateAgentRunSessionOptions
+} from "./agent-run-session.js";

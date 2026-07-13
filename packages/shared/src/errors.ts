@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 
@@ -47,7 +45,7 @@ export interface UnifiedErrorInput {
 export function createUnifiedError(input: UnifiedErrorInput): UnifiedError {
   const baseError: UnifiedError = {
     schemaVersion: "1.0",
-    errorId: input.errorId ?? `err_${randomUUID().replaceAll("-", "")}`,
+    errorId: input.errorId ?? createBrowserSafeErrorId(),
     code: input.code,
     category: input.category,
     message: input.message,
@@ -65,4 +63,16 @@ export function createUnifiedError(input: UnifiedErrorInput): UnifiedError {
     ...baseError,
     redactedDetail: input.redactedDetail
   };
+}
+
+let fallbackErrorSequence = 0;
+
+function createBrowserSafeErrorId(): string {
+  const cryptoApi = globalThis.crypto;
+  if (cryptoApi !== undefined && typeof cryptoApi.randomUUID === "function") {
+    return `err_${cryptoApi.randomUUID().replaceAll("-", "")}`;
+  }
+
+  fallbackErrorSequence += 1;
+  return `err_${Date.now().toString(36)}_${fallbackErrorSequence.toString(36)}`;
 }
