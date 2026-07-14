@@ -61,7 +61,7 @@ export type {
 export { WorkspaceShell } from "./workspace-shell.js";
 export { AgentRunPanel } from "./agent-run-panel.js";
 export { AgentRunTimeline } from "./agent-run-timeline.js";
-export { ChangeSetReview } from "./change-set-review.js";
+export { ChangeSetReview, RollbackReview } from "./change-set-review.js";
 export type {
   ChangeSetFileSelection,
   ChangeSetReviewFile,
@@ -70,6 +70,11 @@ export type {
   ChangeSetReviewProps,
   ChangeSetReviewValidation,
   ChangeSetSelection
+  ,RollbackReviewDecision,
+  RollbackReviewFile,
+  RollbackReviewFileStatus,
+  RollbackReviewModel,
+  RollbackReviewProps
 } from "./change-set-review.js";
 export { DiffReview } from "./diff-review.js";
 export { PlanArtifactReview } from "./plan-artifact-review.js";

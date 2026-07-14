@@ -64,7 +64,10 @@ export interface DesktopAgentRunSessionOptions {
   readonly pauseAutosave?: (relativePaths: readonly string[]) => Promise<void>;
   readonly resumeAutosave?: (relativePaths: readonly string[]) => Promise<void>;
   readonly preserveDirtyBuffers?: (relativePaths: readonly string[]) => Promise<void>;
-  readonly syncSavedEditor?: (relativePath: string) => Promise<void>;
+  readonly syncSavedEditor?: (
+    relativePath: string,
+    options?: { readonly expectedDirtyChecksum?: string }
+  ) => Promise<void>;
   readonly surfaceTransactionRecoveryReview?: (group: VersionGroup) => Promise<void>;
   readonly projectLockOwnerId?: string;
   readonly failAgentWriteAt?: number;
@@ -368,8 +371,15 @@ function createDesktopVersionGroupServices(input: {
         await input.resumeAutosave?.(relativePaths);
       },
       async syncSavedEditor(editor) {
-        await input.syncSavedEditor?.(editor.relativePath);
+        await input.syncSavedEditor?.(editor.relativePath, {
+          ...(editor.expectedDirtyChecksum === undefined
+            ? {}
+            : { expectedDirtyChecksum: editor.expectedDirtyChecksum })
+        });
       },
+      ...(input.readEditorState === undefined
+        ? {}
+        : { readEditorState: input.readEditorState }),
       async preserveDirtyBuffers(relativePaths) {
         await input.preserveDirtyBuffers?.(relativePaths);
       },
@@ -411,7 +421,7 @@ function createDesktopVersionGroupServices(input: {
           ? ok(asJsonObject(applied.value))
           : err(versionGroupFailure(applied.value));
       },
-      async undoRun({ runId }) {
+      async undoRun({ runId, commandId, action, reviewId, decisions, retryFailedOnly }) {
         const recovered = await recover();
         if (!recovered.ok) return recovered;
         const journals = await recoveryRepository.listAgentTransactionJournals();
@@ -423,11 +433,29 @@ function createDesktopVersionGroupServices(input: {
               .flatMap((journal) => journal.entries.map((entry) => entry.relativePath))
           )
         ];
-        const undone = await versionGroupSession.undoRun({ runId, relativePaths });
+        const undone = await versionGroupSession.undoRun({
+          runId,
+          relativePaths,
+          commandId,
+          ...(action === "resolve" && reviewId !== undefined
+            ? {
+                reviewId,
+                ...(decisions === undefined ? {} : { decisions }),
+                ...(retryFailedOnly === true ? { retryFailedOnly: true } : {})
+              }
+            : {})
+        });
         if (!undone.ok) return undone;
-        return undone.value.transactionStatus === "applied"
+        return undone.value.transactionStatus === "applied" ||
+          undone.value.transactionStatus === "awaiting_review" ||
+          undone.value.transactionStatus === "partial_failure"
           ? ok(asJsonObject(undone.value))
           : err(versionGroupFailure(undone.value));
+      },
+      async readRollbackReview({ runId }) {
+        const review = await recoveryRepository.readRollbackReview(runId);
+        if (!review.ok) return review;
+        return ok(review.value === undefined ? undefined : asJsonObject(review.value));
       },
       async recoverRun({ runId }) {
         const recovered = await recover();
@@ -463,6 +491,10 @@ function recoveredVersionGroup(
     changeSetId: journal.changeSetId,
     changeSetRevision: journal.changeSetRevision,
     changeSetChecksum: journal.changeSetChecksum,
+    ...(journal.writePolicy === undefined ? {} : { writePolicy: journal.writePolicy }),
+    ...(journal.approvalSource === undefined
+      ? {}
+      : { approvalSource: journal.approvalSource }),
     transactionStatus,
     writes: journal.entries.map((entry) => ({
       writeId: entry.writeId,
@@ -528,6 +560,7 @@ async function prepareTransactionInput(
     changeSetId: input.changeSetId,
     revision: input.revision,
     checksum: input.checksum,
+    writePolicy: input.writePolicy,
     approvalSource: input.approvalSource,
     approvalToken: input.approvalToken,
     files

@@ -1,0 +1,370 @@
+import { expect, test, _electron as electron, type Page } from "@playwright/test";
+import { createHash } from "node:crypto";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
+const electronMain = join(repositoryRoot, "apps", "desktop", "dist", "main", "index.js");
+const fixtureRoot = join(repositoryRoot, "fixtures", "projects", "minimal-chapter");
+const firstChapterId = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D0";
+const secondChapterId = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D1";
+const firstBody = "Original chapter body.\n";
+const secondBody = "Second original body.\n";
+
+test("auto-applies two versioned Change Sets and reviews a conflicting run undo", async () => {
+  test.setTimeout(120_000);
+  const scenario = await launchScenario();
+  const firstRelativePath = `chapters/${firstChapterId}.md`;
+  const secondRelativePath = `chapters/${secondChapterId}.md`;
+  const firstPath = join(scenario.projectRoot, firstRelativePath);
+  const secondPath = join(scenario.projectRoot, secondRelativePath);
+  const firstBaseline = await readFile(firstPath, "utf8");
+  const secondBaseline = await readFile(secondPath, "utf8");
+
+  try {
+    await startAutonomousExecution(scenario.page);
+
+    await expect
+      .poll(() => readLatestAgentRun(scenario.page), { timeout: 30_000 })
+      .toMatchObject({
+        ok: true,
+        value: {
+          snapshot: { status: "completed", writePolicy: "user_preapproved_run" },
+          changeSet: { status: "applied", writePolicy: "user_preapproved_run" }
+        }
+      });
+
+    await expect
+      .poll(async () => readFile(firstPath, "utf8"), { timeout: 30_000 })
+      .toContain("Autonomous first chapter body.");
+    await expect
+      .poll(async () => readFile(secondPath, "utf8"), { timeout: 30_000 })
+      .toContain("Autonomous second original body.");
+    await expect(scenario.page.getByText(/本次运行自动写入已授权/)).toHaveCount(2);
+    const completedRun = await readLatestAgentRun(scenario.page);
+    expect(
+      agentRunEventTypes(completedRun).filter((type) => type === "write_applied")
+    ).toHaveLength(2);
+    await expect(
+      scenario.page
+        .getByLabel("Agent 运行时间线")
+        .locator("ol")
+        .getByText(/^版本点 /)
+    ).toHaveCount(2);
+
+    const applyJournals = (await readTransactionJournals(scenario.projectRoot)).filter(
+      (journal) => journal.kind === "apply"
+    );
+    expect(applyJournals).toHaveLength(2);
+    expect(applyJournals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          writePolicy: "user_preapproved_run",
+          approvalSource: "user_preapproved_run",
+          transactionStatus: "applied"
+        }),
+        expect.objectContaining({
+          writePolicy: "user_preapproved_run",
+          approvalSource: "user_preapproved_run",
+          transactionStatus: "applied"
+        })
+      ])
+    );
+    expect(await readHistoryRecords(scenario.projectRoot, "before-agent-write")).toHaveLength(2);
+
+    const userEdited = (await readFile(firstPath, "utf8")).replace(
+      "Autonomous first chapter body.",
+      "User edit after Agent write."
+    );
+    await writeFile(firstPath, userEdited, "utf8");
+    const undo = scenario.page
+      .getByLabel("Agentic Writing Loop")
+      .getByRole("button", { name: "撤销本次运行" });
+    await expect(undo).toBeEnabled();
+    await undo.click();
+
+    await expect.poll(async () => readFile(secondPath, "utf8")).toBe(secondBaseline);
+    await expect.poll(async () => readFile(firstPath, "utf8")).toBe(userEdited);
+    const review = scenario.page.getByLabel("运行撤销冲突审阅");
+    await expect(review).toBeVisible();
+    const conflictFile = review
+      .locator(".ns-rollback-review-file")
+      .filter({ hasText: firstRelativePath });
+    await expect(conflictFile.getByText("当前内容", { exact: true })).toBeVisible();
+    await expect(conflictFile.getByText("AI 最后写入", { exact: true })).toBeVisible();
+    await expect(conflictFile.getByText("运行前基线", { exact: true })).toBeVisible();
+    await conflictFile.getByRole("radio", { name: "保留当前" }).check();
+    await review.getByRole("button", { name: "应用所选恢复" }).click();
+
+    const timeline = scenario.page.getByLabel("Agent 运行时间线").locator("ol");
+    const undoCompleted = timeline.getByText("撤销审阅已完成", { exact: true });
+    await expect(undoCompleted).toBeVisible();
+    await undoCompleted.click();
+    await expect(timeline.getByText("保留 1 个文件的当前内容", { exact: true })).toBeVisible();
+    expect(await readFile(firstPath, "utf8")).toBe(userEdited);
+    expect(await readFile(secondPath, "utf8")).toBe(secondBaseline);
+    expect(
+      await readHistoryRecords(scenario.projectRoot, "before-agent-session-undo")
+    ).toHaveLength(1);
+
+    const rollbackReview = await readJsonRecord(
+      join(scenario.projectRoot, "history", "rollback-reviews", `${applyJournals[0]?.runId}.json`)
+    );
+    expect(rollbackReview).toMatchObject({
+      status: "completed",
+      files: expect.arrayContaining([
+        expect.objectContaining({ relativePath: firstRelativePath, status: "kept" }),
+        expect.objectContaining({ relativePath: secondRelativePath, status: "completed" })
+      ])
+    });
+    expect(firstBaseline).not.toBe(userEdited);
+  } finally {
+    await scenario.close();
+  }
+});
+
+async function launchScenario(): Promise<{
+  readonly page: Page;
+  readonly projectRoot: string;
+  close(): Promise<void>;
+}> {
+  const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-autonomy-e2e-"));
+  const projectRoot = join(tempRoot, "Project");
+  await prepareProject(projectRoot);
+  let round = 0;
+  const server = createServer(async (request, response) => {
+    const body = await readJsonBody(request);
+    if (request.method === "GET" && request.url === "/v1/models") {
+      json(response, { data: [{ id: "local-agent", context_window: 128000 }] });
+      return;
+    }
+    if (request.method !== "POST" || body["stream"] !== true) {
+      json(response, { choices: [{ message: { role: "assistant", content: "ok" } }] });
+      return;
+    }
+    round += 1;
+    if (round === 1) {
+      sendToolCall(response, {
+        id: "autonomy-first",
+        name: "propose_chapter_write",
+        arguments: {
+          chapterId: firstChapterId,
+          baseHash: sha256(firstBody),
+          range: { unit: "character", start: 0, end: 8 },
+          replacement: "Autonomous first"
+        }
+      });
+      return;
+    }
+    if (round === 2) {
+      sendToolCall(response, {
+        id: "autonomy-second",
+        name: "propose_chapter_write",
+        arguments: {
+          chapterId: secondChapterId,
+          baseHash: sha256(secondBody),
+          range: { unit: "character", start: 0, end: 6 },
+          replacement: "Autonomous second"
+        }
+      });
+      return;
+    }
+    sendToolCall(response, {
+      id: "autonomy-finish",
+      name: "finish",
+      arguments: { summary: "Two autonomous writes completed." }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("Expected server address.");
+  const electronApp = await electron.launch({
+    args: [electronMain],
+    env: electronEnv({
+      NOVEL_STUDIO_PROJECT_ROOT: projectRoot,
+      NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
+    })
+  });
+  const page = await electronApp.firstWindow();
+  await configureLocalModel(page, `http://127.0.0.1:${address.port}/v1`);
+  return {
+    page,
+    projectRoot,
+    async close() {
+      await electronApp.close();
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error === undefined ? resolve() : reject(error)))
+      );
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  };
+}
+
+async function startAutonomousExecution(page: Page): Promise<void> {
+  await page.getByLabel("活动栏").getByRole("button", { name: "AI 工作流" }).click();
+  await page.getByLabel("运行模式").getByRole("button", { name: "执行" }).click();
+  const policy = page.getByLabel("本次执行写入策略");
+  await policy.getByRole("radio", { name: "本次运行自动写入" }).check();
+  await expect(policy).toContainText("每次实际写入都会创建版本点并可撤销");
+  await policy.getByRole("checkbox", { name: /我理解本次执行可自动修改项目文件/ }).check();
+  await page.getByLabel("Agent 请求").fill("连续修改两章并完成运行");
+  await page.getByLabel("启动 Agent 运行").click();
+  await resolveContextRefreshIfVisible(page);
+}
+
+async function resolveContextRefreshIfVisible(page: Page): Promise<void> {
+  const refresh = page.getByLabel("上下文刷新");
+  const visible = await refresh
+    .waitFor({ state: "visible", timeout: 3_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (visible) await refresh.getByRole("button", { name: "从目标排除" }).click();
+}
+
+async function configureLocalModel(page: Page, baseUrl: string): Promise<void> {
+  await page.getByLabel("活动栏").getByRole("button", { name: "设置" }).click();
+  await page.getByLabel("模型 Base URL").fill(baseUrl);
+  await page.getByLabel("模型名称").fill("local-agent");
+  await page.getByLabel("密钥引用").fill("local-autonomy-e2e-key");
+  await page.getByRole("button", { name: "保存模型配置" }).click();
+  await expect(page.getByText("模型配置已保存。", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "测试连接", exact: true }).click();
+  await expect(page.locator(".ns-project-feedback")).toContainText(
+    "Connected to openai-compatible/local-agent"
+  );
+  await page.getByRole("button", { name: "关闭设置" }).click();
+}
+
+async function prepareProject(projectRoot: string): Promise<void> {
+  const chapters = join(projectRoot, "chapters");
+  await mkdir(chapters, { recursive: true });
+  await copyFile(join(fixtureRoot, "project.json"), join(projectRoot, "project.json"));
+  await copyFile(join(fixtureRoot, "settings.json"), join(projectRoot, "settings.json"));
+  await writeFile(
+    join(chapters, `${firstChapterId}.md`),
+    chapterFile(firstChapterId, "First", 1, firstBody),
+    "utf8"
+  );
+  await writeFile(
+    join(chapters, `${secondChapterId}.md`),
+    chapterFile(secondChapterId, "Second", 2, secondBody),
+    "utf8"
+  );
+}
+
+function chapterFile(id: string, title: string, order: number, body: string): string {
+  return `---\nschemaVersion: "1.0"\nid: "${id}"\ntype: "chapter"\ntitle: "${title}"\norder: ${order}\nstatus: "draft"\ncreatedAt: "2026-07-03T00:00:00.000Z"\nupdatedAt: "2026-07-03T00:00:00.000Z"\n---\n\n${body}`;
+}
+
+async function readTransactionJournals(projectRoot: string): Promise<Record<string, unknown>[]> {
+  return readJsonRecords(join(projectRoot, "history", "agent-transactions"));
+}
+
+async function readLatestAgentRun(page: Page): Promise<unknown> {
+  return page.evaluate(async () => {
+    const listed = await window.novelStudio?.agentRuns.list("prj_minimal_chapter");
+    const latest = listed?.ok ? listed.value[0] : undefined;
+    return latest === undefined ? listed : await window.novelStudio?.agentRuns.read(latest.runId);
+  });
+}
+
+function agentRunEventTypes(readResult: unknown): string[] {
+  if (!isRecord(readResult) || !isRecord(readResult["value"])) return [];
+  const events = readResult["value"]["events"];
+  return Array.isArray(events)
+    ? events.flatMap((event) =>
+        isRecord(event) && typeof event["type"] === "string" ? [event["type"]] : []
+      )
+    : [];
+}
+
+async function readHistoryRecords(
+  projectRoot: string,
+  reason: string
+): Promise<Record<string, unknown>[]> {
+  const records = await readJsonRecords(join(projectRoot, "history", "chapters-records"));
+  return records.filter((record) => record["reason"] === reason);
+}
+
+async function readJsonRecords(root: string): Promise<Record<string, unknown>[]> {
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
+  const records: Record<string, unknown>[] = [];
+  for (const entry of entries) {
+    const path = join(root, entry.name);
+    if (entry.isDirectory()) records.push(...(await readJsonRecords(path)));
+    else if (entry.isFile() && entry.name.endsWith(".json")) {
+      records.push(await readJsonRecord(path));
+    }
+  }
+  return records;
+}
+
+async function readJsonRecord(path: string): Promise<Record<string, unknown>> {
+  const parsed = JSON.parse(await readFile(path, "utf8")) as unknown;
+  if (!isRecord(parsed)) throw new Error(`Expected JSON object at ${path}.`);
+  return parsed;
+}
+
+async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request)
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  const raw = Buffer.concat(chunks).toString("utf8");
+  const parsed = raw.length === 0 ? {} : (JSON.parse(raw) as unknown);
+  return isRecord(parsed) ? parsed : {};
+}
+
+function sendToolCall(
+  response: ServerResponse,
+  call: { readonly id: string; readonly name: string; readonly arguments: unknown }
+): void {
+  response.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-cache",
+    connection: "keep-alive"
+  });
+  response.write(
+    `data: ${JSON.stringify({
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              {
+                index: 0,
+                id: `call_${call.id}`,
+                type: "function",
+                function: { name: call.name, arguments: JSON.stringify(call.arguments) }
+              }
+            ]
+          }
+        }
+      ]
+    })}\n\n`
+  );
+  response.write(
+    `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n\n`
+  );
+  response.end("data: [DONE]\n\n");
+}
+
+function json(response: ServerResponse, payload: Record<string, unknown>): void {
+  response.writeHead(200, { "content-type": "application/json" });
+  response.end(JSON.stringify(payload));
+}
+
+function sha256(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function electronEnv(overrides: Record<string, string>): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env["ELECTRON_RUN_AS_NODE"];
+  return { ...env, ...overrides };
+}

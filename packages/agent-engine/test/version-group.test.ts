@@ -32,6 +32,8 @@ describe("Version Group", () => {
       changeSetId: "changes_01",
       changeSetRevision: 2,
       changeSetChecksum: "c".repeat(64),
+      writePolicy: "user_preapproved_run",
+      approvalSource: "user_preapproved_run",
       createdAt: "2026-07-13T01:00:00.000Z",
       writes,
       baselineByPath: {
@@ -44,6 +46,8 @@ describe("Version Group", () => {
     });
 
     expect(group.transactionStatus).toBe("applied");
+    expect(group.writePolicy).toBe("user_preapproved_run");
+    expect(group.approvalSource).toBe("user_preapproved_run");
     expect(group.undoStatus).toBe("available");
     expect(group.undoMetadata).toEqual({
       runId: "run_01",
@@ -64,6 +68,7 @@ describe("Version Group", () => {
       changeSetId: "changes_01",
       changeSetRevision: 1,
       changeSetChecksum: "c".repeat(64),
+      writePolicy: "write_before_confirmation",
       createdAt: "2026-07-13T01:00:00.000Z",
       transactionStatus: "partial_failure",
       failureKind: "partial_failure",
@@ -101,6 +106,7 @@ describe("Transaction Journal", () => {
       changeSetId: "changes_01",
       changeSetRevision: 1,
       changeSetChecksum: "c".repeat(64),
+      writePolicy: "write_before_confirmation",
       approvalSource: "human_confirmation",
       approvalToken: checksumChangeSetText(`changes_01:1:${"c".repeat(64)}`),
       createdAt: "2026-07-13T01:00:00.000Z",
@@ -124,6 +130,7 @@ describe("Transaction Journal", () => {
     });
 
     expect(journal.entries[0]?.status).toBe("pending");
+    expect(journal.writePolicy).toBe("write_before_confirmation");
     expect(journal.approvalSource).toBe("human_confirmation");
     expect(applied.entries[0]).toMatchObject({
       status: "applied",
@@ -132,5 +139,27 @@ describe("Transaction Journal", () => {
     });
     expect(applied.transactionStatus).toBe("applying");
     expect(Object.isFrozen(applied.entries)).toBe(true);
+  });
+
+  test("retains a preapproved-run source in an apply journal", () => {
+    const journal = createTransactionJournal({
+      transactionId: "tx_auto",
+      versionGroupId: "vg_auto",
+      kind: "apply",
+      runId: "run_auto",
+      runSequence: 1,
+      checkpointId: "checkpoint_auto",
+      changeSetId: "changes_auto",
+      changeSetRevision: 1,
+      changeSetChecksum: "d".repeat(64),
+      writePolicy: "user_preapproved_run",
+      approvalSource: "user_preapproved_run",
+      approvalToken: checksumChangeSetText(`changes_auto:1:${"d".repeat(64)}`),
+      createdAt: "2026-07-13T01:00:00.000Z",
+      entries: []
+    });
+
+    expect(journal.writePolicy).toBe("user_preapproved_run");
+    expect(journal.approvalSource).toBe("user_preapproved_run");
   });
 });

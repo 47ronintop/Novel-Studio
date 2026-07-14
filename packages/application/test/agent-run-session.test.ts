@@ -748,7 +748,7 @@ describe("AgentRunSession", () => {
     });
   });
 
-  test("rejects per-run autonomous writes while Stage 1 is read-only", async () => {
+  test("requires explicit acknowledgement before a per-run automatic write policy", async () => {
     const createSession = (applicationExports as unknown as Record<string, unknown>)[
       "createAgentRunSession"
     ];
@@ -781,7 +781,7 @@ describe("AgentRunSession", () => {
       })
     ).toMatchObject({
       ok: false,
-      error: { code: "AGENT_WRITE_POLICY_NOT_AVAILABLE" }
+      error: { code: "AGENT_WRITE_POLICY_ACK_REQUIRED" }
     });
     expect(modelStarted).toBe(false);
   });
@@ -1030,6 +1030,20 @@ describe("AgentRunSession", () => {
     const planning = (await session.readAgentRun(planningRunId)) as {
       value: { snapshot: Record<string, unknown> };
     };
+    const rejectedContext = await session.decidePlan({
+      projectId: "project-01",
+      runId: planningRunId,
+      commandId: "plan-invalid-context-01",
+      expectedRunRevision: planning.value.snapshot["runRevision"],
+      planId: "plan-01",
+      planRevision: 1,
+      decision: "approve",
+      executionContextMode: "unsupported"
+    });
+    expect(rejectedContext).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONTEXT_MODE_INVALID" }
+    });
     const rejectedPolicy = await session.decidePlan({
       projectId: "project-01",
       runId: planningRunId,
@@ -1042,7 +1056,7 @@ describe("AgentRunSession", () => {
     });
     expect(rejectedPolicy).toMatchObject({
       ok: false,
-      error: { code: "AGENT_WRITE_POLICY_NOT_AVAILABLE" }
+      error: { code: "AGENT_WRITE_POLICY_ACK_REQUIRED" }
     });
     expect(await session.readAgentRun(planningRunId)).toMatchObject({
       value: { snapshot: { status: "plan_ready" } }
@@ -1055,11 +1069,19 @@ describe("AgentRunSession", () => {
       planId: "plan-01",
       planRevision: 1,
       decision: "approve",
-      executionWritePolicy: "write_before_confirmation"
+      executionContextMode: "general_file",
+      executionWritePolicy: "user_preapproved_run",
+      executionWritePolicyAcknowledged: true
     });
     expect(decided).toMatchObject({
       ok: true,
-      value: { sourcePlanId: "plan-01", sourcePlanRevision: 1, operationMode: "execution" }
+      value: {
+        sourcePlanId: "plan-01",
+        sourcePlanRevision: 1,
+        operationMode: "execution",
+        contextMode: "general_file",
+        writePolicy: "user_preapproved_run"
+      }
     });
     await vi.waitFor(async () => {
       expect(await session.readAgentRun(planningRunId)).toMatchObject({

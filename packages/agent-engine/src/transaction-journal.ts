@@ -1,3 +1,4 @@
+import type { AgentWritePolicy } from "./agent-run-types.js";
 import type { VersionGroupAssetType } from "./version-group.js";
 
 export type TransactionJournalKind = "apply" | "version_group_undo" | "run_undo";
@@ -30,7 +31,8 @@ export interface TransactionJournal {
   readonly changeSetId: string;
   readonly changeSetRevision: number;
   readonly changeSetChecksum: string;
-  readonly approvalSource?: "human_confirmation";
+  readonly writePolicy?: AgentWritePolicy;
+  readonly approvalSource?: "human_confirmation" | "user_preapproved_run";
   readonly approvalToken?: string;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -41,17 +43,25 @@ export interface TransactionJournal {
 
 type TransactionJournalCreateBase = Omit<
   TransactionJournal,
-  "schemaVersion" | "updatedAt" | "transactionStatus" | "kind" | "approvalSource" | "approvalToken"
+  | "schemaVersion"
+  | "updatedAt"
+  | "transactionStatus"
+  | "kind"
+  | "writePolicy"
+  | "approvalSource"
+  | "approvalToken"
 >;
 
 export type CreateTransactionJournalInput =
   | (TransactionJournalCreateBase & {
       readonly kind: "apply";
-      readonly approvalSource: "human_confirmation";
+      readonly writePolicy: AgentWritePolicy;
+      readonly approvalSource: "human_confirmation" | "user_preapproved_run";
       readonly approvalToken: string;
     })
   | (TransactionJournalCreateBase & {
       readonly kind: Exclude<TransactionJournalKind, "apply">;
+      readonly writePolicy?: never;
       readonly approvalSource?: never;
       readonly approvalToken?: never;
     });

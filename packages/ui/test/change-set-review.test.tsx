@@ -84,6 +84,41 @@ describe("Change Set summary", () => {
     expect(html).toContain("已写入");
     expect(html).not.toContain("尚未写入");
   });
+
+  test("prioritizes rollback review with three-way content decisions statuses and retry", () => {
+    const application = createDesktopApplication();
+    const workflow = createReviewWorkflow();
+    const agentRunWithoutChangeSetReview = { ...workflow.agentRun };
+    delete agentRunWithoutChangeSetReview.changeSetReview;
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        aiWritingWorkflow={{
+          ...workflow,
+          agentRun: {
+            ...agentRunWithoutChangeSetReview,
+            rollbackReview: rollbackReviewFixture()
+          }
+        } as AiWritingWorkflowProps}
+        chapterEditor={chapterEditor}
+        commandPaletteOpen={false}
+        commands={application.listCommands()}
+        shellState={application.getShellState()}
+      />
+    );
+
+    expect(html).toContain('aria-label="运行撤销冲突审阅"');
+    expect(html).toContain("当前内容");
+    expect(html).toContain("AI 最后写入");
+    expect(html).toContain("运行前基线");
+    expect(html).toContain("保留当前");
+    expect(html).toContain("恢复运行前");
+    expect(html).toContain("冲突");
+    expect(html).toContain("失败");
+    expect(html).toContain("已恢复");
+    expect(html).toContain("已保留");
+    expect(html).toContain("应用所选恢复");
+    expect(html).toContain("仅重试失败项");
+  });
 });
 
 interface ReviewOverrides {
@@ -194,3 +229,50 @@ const chapterEditor = {
   saveStatus: "Saved",
   versionHistory: []
 } as const;
+
+function rollbackReviewFixture() {
+  return {
+    review: {
+      schemaVersion: "1.0" as const,
+      reviewId: "rollback-review-01",
+      runId: "run-01",
+      status: "partial_failure" as const,
+      sourceVersionGroupIds: ["versions-01"],
+      createdAt: "2026-07-13T00:00:00.000Z",
+      updatedAt: "2026-07-13T00:01:00.000Z",
+      processedCommandIds: [],
+      files: [
+        rollbackFile("notes/conflict.md", "conflict", "当前冲突"),
+        rollbackFile("notes/failed.md", "failed", "当前失败"),
+        rollbackFile("notes/completed.md", "completed", "运行前内容"),
+        rollbackFile("notes/kept.md", "kept", "保留内容")
+      ]
+    },
+    applying: false,
+    decisions: {},
+    onDecisionChange: () => undefined,
+    onApply: () => undefined,
+    onRetryFailed: () => undefined,
+    onReturn: () => undefined
+  };
+}
+
+function rollbackFile(relativePath: string, status: string, current: string) {
+  return {
+    relativePath,
+    assetType: "text",
+    baselineContent: "运行前内容",
+    baselineChecksum: "a".repeat(64),
+    baselineVersionId: "ver-before",
+    runLastWriteContent: "AI 写入内容",
+    runLastWriteChecksum: "b".repeat(64),
+    reviewedCurrentContent: current,
+    reviewedCurrentChecksum: "c".repeat(64),
+    diff: {
+      currentToLastWrite: "current -> ai",
+      currentToBaseline: "current -> baseline",
+      lastWriteToBaseline: "ai -> baseline"
+    },
+    status
+  };
+}

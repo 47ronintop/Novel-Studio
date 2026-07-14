@@ -40,6 +40,12 @@ import {
   type UnifiedError
 } from "@novel-studio/shared";
 import type { ChangeSetSession } from "./change-set-session.js";
+import {
+  authorizeAgentRunApproval,
+  authorizeAgentRunProposal,
+  revokeAgentRunApprovalAuthorization,
+  revokeAgentRunProposalAuthorization
+} from "./agent-write-authorization.js";
 
 export type AgentModelMessageRole = "system" | "user" | "assistant" | "tool";
 
@@ -119,9 +125,7 @@ export interface AgentRunPersistencePort {
     runId: string,
     checkpoint: JsonObject
   ): Promise<Result<JsonObject, UnifiedError>>;
-  readRetryCheckpoint?(
-    runId: string
-  ): Promise<Result<JsonObject | undefined, UnifiedError>>;
+  readRetryCheckpoint?(runId: string): Promise<Result<JsonObject | undefined, UnifiedError>>;
   listSnapshots?(projectId: string): Promise<Result<JsonObject[], UnifiedError>>;
   writeContextSnapshot?(snapshot: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
   readContextSnapshot?(
@@ -159,6 +163,7 @@ export interface AgentRunReadResult {
   readonly pendingUserInput?: AgentUserInputRequest;
   readonly planArtifact?: PlanArtifact;
   readonly changeSet?: ChangeSet;
+  readonly rollbackReview?: JsonObject;
 }
 
 export interface AgentVersionGroupExecutor {
@@ -169,11 +174,20 @@ export interface AgentVersionGroupExecutor {
   undoRun(input: {
     readonly runId: string;
     readonly projectId: string;
+    readonly commandId: string;
+    readonly action: "request" | "resolve";
+    readonly reviewId?: string;
+    readonly decisions?: readonly {
+      readonly relativePath: string;
+      readonly decision: "keep_current" | "restore_baseline";
+    }[];
+    readonly retryFailedOnly?: true;
   }): Promise<Result<JsonObject, UnifiedError>>;
-  recoverRun?(input: {
+  readRollbackReview?(input: {
     readonly runId: string;
     readonly projectId: string;
-  }): Promise<
+  }): Promise<Result<JsonObject | undefined, UnifiedError>>;
+  recoverRun?(input: { readonly runId: string; readonly projectId: string }): Promise<
     Result<
       | { readonly status: "none" }
       | {
@@ -224,6 +238,7 @@ interface RunRuntime {
   planArtifact?: PlanArtifact;
   changeSet?: ChangeSet;
   versionGroup?: JsonObject;
+  rollbackReview?: JsonObject;
   stopRequested: boolean;
   modelRounds: number;
   currentCheckpointId?: string;
@@ -252,6 +267,26 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
   const commandReceipts = new Map<string, AgentRunCommandResult>();
   const inFlightCommands = new Map<string, Promise<AgentRunCommandResult>>();
   const knownRunIdsByProject = new Map<string, Set<string>>();
+  const internalAutoApprovalCommands = new WeakSet<DecideChangeSetCommand>();
+
+  function authorizeProposalIfPreapproved(input: { readonly writePolicy?: string }): boolean {
+    if (input.writePolicy !== "user_preapproved_run") return false;
+    authorizeAgentRunProposal(input);
+    return true;
+  }
+
+  async function applyVersionGroupWithAuthorization(
+    executor: AgentVersionGroupExecutor,
+    input: { readonly changeSet: ChangeSet; readonly approval: ChangeSetApproval }
+  ): Promise<Result<JsonObject, UnifiedError>> {
+    const authorized = input.approval.approvalSource === "user_preapproved_run";
+    if (authorized) authorizeAgentRunApproval(input.approval);
+    try {
+      return await executor.apply(input);
+    } finally {
+      if (authorized) revokeAgentRunApprovalAuthorization(input.approval);
+    }
+  }
 
   function rememberRun(snapshot: AgentRunSnapshot): void {
     const runIds = knownRunIdsByProject.get(snapshot.projectId) ?? new Set<string>();
@@ -346,18 +381,16 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     return undefined;
   }
 
-  async function hydratePersistedActiveRun(projectId: string): Promise<AgentRunCommandResult | undefined> {
+  async function hydratePersistedActiveRun(
+    projectId: string
+  ): Promise<AgentRunCommandResult | undefined> {
     if (options.repository.listSnapshots === undefined) return undefined;
     const listed = await options.repository.listSnapshots(projectId);
     if (!listed.ok) return { ok: false, error: listed.error };
     for (const stored of listed.value) {
       const runId = stored["runId"];
       const status = stored["status"];
-      if (
-        typeof runId !== "string" ||
-        typeof status !== "string" ||
-        isTerminalStatus(status)
-      ) {
+      if (typeof runId !== "string" || typeof status !== "string" || isTerminalStatus(status)) {
         continue;
       }
       const hydrated = await hydrateRun(runId);
@@ -367,10 +400,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     return undefined;
   }
 
-  async function persistRetryCheckpoint(
-    runId: string,
-    call?: AssembledToolCall
-  ): Promise<void> {
+  async function persistRetryCheckpoint(runId: string, call?: AssembledToolCall): Promise<void> {
     if (options.repository.writeRetryCheckpoint === undefined) return;
     const checkpoint: JsonObject =
       call === undefined
@@ -418,16 +448,17 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     if (snapshotResult.value === undefined) {
       return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
     }
-    const snapshot = snapshotResult.value as unknown as AgentRunSnapshot;
+    const persistedSnapshot = snapshotResult.value as unknown as AgentRunSnapshot;
     const events = eventsResult.value as unknown as AgentRunEvent[];
+    const restored = coordinator.restoreRun(persistedSnapshot, events);
+    if (!restored.ok) return restored;
+    const snapshot = restored.value;
     const contextSnapshotResult =
       snapshot.contextSnapshotId === null || options.repository.readContextSnapshot === undefined
         ? ok(undefined)
         : await options.repository.readContextSnapshot(runId, snapshot.contextSnapshotId);
     if (!contextSnapshotResult.ok) return { ok: false, error: contextSnapshotResult.error };
     const restoredContextSnapshot = parseContextSnapshot(contextSnapshotResult.value, snapshot);
-    const restored = coordinator.restoreRun(snapshot, events);
-    if (!restored.ok) return restored;
     rememberRun(snapshot);
 
     const pendingEvent = [...events]
@@ -442,9 +473,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         ? parseUserInputRequest(pendingEvent.detail)
         : undefined;
     const planEvent = [...events].reverse().find((event) => event.type === "plan_ready");
-    const changeSetEvent = [...events]
-      .reverse()
-      .find((event) => event.type === "change_set_ready");
+    const changeSetEvent = [...events].reverse().find((event) => event.type === "change_set_ready");
     const restoredChangeSet = isJsonObject(changeSetEvent?.detail?.["changeSet"])
       ? (changeSetEvent?.detail?.["changeSet"] as unknown as ChangeSet)
       : undefined;
@@ -485,6 +514,16 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       }
     }
     const restoredRetryCall = parseRetryCheckpoint(retryCheckpointResult.value);
+    const reviewEvent = [...events]
+      .reverse()
+      .find((event) => event.type === "run_undo_review_required");
+    const eventRollbackReview = readObject(reviewEvent?.detail, "rollbackReview");
+    const durableRollbackReview = await options.versionGroupExecutor?.readRollbackReview?.({
+      runId: snapshot.runId,
+      projectId: snapshot.projectId
+    });
+    const restoredRollbackReview =
+      durableRollbackReview?.ok === true ? durableRollbackReview.value : eventRollbackReview;
     const runtime: RunRuntime = {
       messages,
       seenToolCallIds: new Set(
@@ -495,15 +534,16 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       controller: new AbortController(),
       generation: 1,
       driving: false,
-      contextSources: restoredContextSnapshot?.sources.map((source) => ({
-        refId: source.refId,
-        sourceKind: source.sourceKind,
-        ...(source.relativePath === undefined ? {} : { relativePath: source.relativePath }),
-        ...(source.assetId === undefined ? {} : { assetId: source.assetId }),
-        content: "",
-        dirty: source.dirty,
-        ...(source.range === undefined ? {} : { range: source.range })
-      })) ?? [],
+      contextSources:
+        restoredContextSnapshot?.sources.map((source) => ({
+          refId: source.refId,
+          sourceKind: source.sourceKind,
+          ...(source.relativePath === undefined ? {} : { relativePath: source.relativePath }),
+          ...(source.assetId === undefined ? {} : { assetId: source.assetId }),
+          content: "",
+          dirty: source.dirty,
+          ...(source.range === undefined ? {} : { range: source.range })
+        })) ?? [],
       ...(restoredContextSnapshot === undefined
         ? {}
         : { contextSnapshot: restoredContextSnapshot }),
@@ -516,10 +556,14 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       ...(planEvent?.detail === undefined
         ? {}
         : { planArtifact: planEvent.detail as unknown as PlanArtifact }),
-      ...(restoredFinalChangeSet === undefined ? {} : { changeSet: restoredFinalChangeSet })
+      ...(restoredFinalChangeSet === undefined ? {} : { changeSet: restoredFinalChangeSet }),
+      ...(restoredRollbackReview === undefined ? {} : { rollbackReview: restoredRollbackReview })
     };
     runtimes.set(runId, runtime);
-    if (snapshot.status === "applying_changes" || snapshot.status === "stopping_after_transaction") {
+    if (
+      snapshot.status === "applying_changes" ||
+      snapshot.status === "stopping_after_transaction"
+    ) {
       return reconcileHydratedWrite(snapshot, runtime);
     }
     return restored;
@@ -793,7 +837,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       }
       if (stagedProposal && runtime.changeSet !== undefined) {
         const changeSet = runtime.changeSet;
-        await recordEvent(runId, {
+        const ready = await recordEvent(runId, {
           runId,
           status: "awaiting_write_approval",
           type: "change_set_ready",
@@ -809,6 +853,24 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
             changeSet: asJsonObject(changeSet)
           }
         });
+        if (ready.ok && snapshot.writePolicy === "user_preapproved_run") {
+          const autoApprovalCommand: DecideChangeSetCommand = {
+            runId,
+            projectId: snapshot.projectId,
+            commandId: `auto_approve_${changeSet.changeSetId}_${changeSet.revision}`,
+            expectedRunRevision: ready.value.runRevision,
+            changeSetId: changeSet.changeSetId,
+            revision: changeSet.revision,
+            checksum: changeSet.checksum,
+            decision: "apply_selected"
+          };
+          internalAutoApprovalCommands.add(autoApprovalCommand);
+          const applied = await session.decideChangeSet(autoApprovalCommand);
+          if (applied.ok && applied.value.status === "executing_model") {
+            runtime.driving = false;
+            setTimeout(() => scheduleDrive(runId), 0);
+          }
+        }
         return;
       }
       if (isCurrent(runId, generation)) scheduleNextRound(runId, runtime);
@@ -1082,20 +1144,29 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         checkpointId:
           runtime.currentCheckpointId ?? `checkpoint_${runId}_r${snapshot.runRevision + 1}`,
         contextSnapshotId,
+        writePolicy: snapshot.writePolicy,
         range,
         baseHash,
         replacement
       };
-      const proposed =
-        descriptor.name === "propose_chapter_write"
-          ? await options.changeSetSession.proposeChapterWrite({
-              ...binding,
-              chapterId: chapterId ?? ""
-            })
-          : await options.changeSetSession.proposeFileWrite({
-              ...binding,
-              path: targetPath ?? ""
-            });
+      let proposed: Awaited<ReturnType<ChangeSetSession["proposeFileWrite"]>>;
+      if (descriptor.name === "propose_chapter_write") {
+        const proposalInput = { ...binding, chapterId: chapterId ?? "" };
+        const authorized = authorizeProposalIfPreapproved(proposalInput);
+        try {
+          proposed = await options.changeSetSession.proposeChapterWrite(proposalInput);
+        } finally {
+          if (authorized) revokeAgentRunProposalAuthorization(proposalInput);
+        }
+      } else {
+        const proposalInput = { ...binding, path: targetPath ?? "" };
+        const authorized = authorizeProposalIfPreapproved(proposalInput);
+        try {
+          proposed = await options.changeSetSession.proposeFileWrite(proposalInput);
+        } finally {
+          if (authorized) revokeAgentRunProposalAuthorization(proposalInput);
+        }
+      }
       if (!proposed.ok) {
         return (await toolFailure(
           runtime,
@@ -1117,7 +1188,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           changeSetId: proposed.value.changeSetId,
           revision: proposed.value.revision,
           checksum: proposed.value.checksum,
-          status: "awaiting_human_approval"
+          status: "awaiting_approval"
         })
       });
       await recordEvent(runId, {
@@ -1241,7 +1312,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     );
   }
 
-  return {
+  const session: AgentRunSession = {
     async startAgentRun(command) {
       const receiptKey = `${command.projectId}:${command.commandId}`;
       const prior = await priorStartCommandReceipt(command.projectId, command.commandId);
@@ -1250,14 +1321,6 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         const result = failure(
           "AGENT_MODEL_CAPABILITY_UNSUPPORTED",
           "The selected provider/model cannot start an Agent run."
-        );
-        commandReceipts.set(receiptKey, result);
-        return result;
-      }
-      if (command.writePolicy !== "write_before_confirmation") {
-        const result = failure(
-          "AGENT_WRITE_POLICY_NOT_AVAILABLE",
-          "Autonomous writes are not available in the read-only Agent Run stage."
         );
         commandReceipts.set(receiptKey, result);
         return result;
@@ -1282,9 +1345,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
                 refId: source.refId,
                 sourceKind: source.sourceKind,
                 dirty: source.dirty,
-                ...(source.relativePath === undefined
-                  ? {}
-                  : { relativePath: source.relativePath })
+                ...(source.relativePath === undefined ? {} : { relativePath: source.relativePath })
               },
               data: source.content
             })
@@ -1398,10 +1459,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         snapshot.status !== "awaiting_user_input" ||
         runtime.pendingUserInput?.questionId !== command.questionId
       ) {
-        return failure(
-          "AGENT_USER_INPUT_NOT_PENDING",
-          "The question is no longer pending."
-        );
+        return failure("AGENT_USER_INPUT_NOT_PENDING", "The question is no longer pending.");
       }
 
       runtime.messages.push({ role: "user", content: command.answer });
@@ -1439,7 +1497,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       const snapshot = coordinator.readSnapshot(command.runId);
       const invalid = validateRunCommand(snapshot, command);
       if (invalid !== undefined) return invalid;
-      if (snapshot === undefined) return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
+      if (snapshot === undefined)
+        return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
       if (snapshot.status === "awaiting_user_input") {
         return failure("AGENT_USER_INPUT_PENDING", "Answer or stop the pending question first.");
       }
@@ -1462,7 +1521,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         return failure("AGENT_RUN_ALREADY_TERMINAL", "The Agent run has already ended.");
       }
       const runtime = runtimes.get(command.runId);
-      if (runtime === undefined) return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
+      if (runtime === undefined)
+        return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
       runtime.controller.abort();
       runtime.controller = new AbortController();
       runtime.generation += 1;
@@ -1556,19 +1616,41 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       }
       if (
         command.decision === "approve" &&
-        (command.executionWritePolicy ?? "write_before_confirmation") !==
-          "write_before_confirmation"
+        command.executionContextMode !== undefined &&
+        command.executionContextMode !== "writing" &&
+        command.executionContextMode !== "general_file"
       ) {
         return failure(
-          "AGENT_WRITE_POLICY_NOT_AVAILABLE",
-          "Autonomous writes are not available in the read-only Agent Run stage."
+          "AGENT_CONTEXT_MODE_INVALID",
+          "The execution context mode is not supported."
+        );
+      }
+      if (
+        command.decision === "approve" &&
+        command.executionWritePolicy === "user_preapproved_run" &&
+        command.executionWritePolicyAcknowledged !== true
+      ) {
+        return failure(
+          "AGENT_WRITE_POLICY_ACK_REQUIRED",
+          "Automatic writes require an explicit acknowledgement for this execution run."
         );
       }
       const decided = await recordEvent(command.runId, {
         runId: command.runId,
         status: "plan_ready",
         type: "plan_decision_resolved",
-        detail: { planId: plan.planId, planRevision: plan.revision, decision: command.decision }
+        detail: {
+          planId: plan.planId,
+          planRevision: plan.revision,
+          decision: command.decision,
+          ...(command.decision === "approve"
+            ? {
+                executionContextMode: command.executionContextMode ?? snapshot.contextMode,
+                executionWritePolicy:
+                  command.executionWritePolicy ?? "write_before_confirmation"
+              }
+            : {})
+        }
       });
       if (!decided.ok) return decided;
       runtime.planArtifact = Object.freeze({
@@ -1594,8 +1676,11 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         commandId: `${command.commandId}_execution`,
         expectedRunRevision: 0,
         operationMode: "execution",
-        contextMode: snapshot.contextMode,
-        writePolicy: "write_before_confirmation",
+        contextMode: command.executionContextMode ?? snapshot.contextMode,
+        writePolicy: command.executionWritePolicy ?? "write_before_confirmation",
+        ...(command.executionWritePolicyAcknowledged === true
+          ? { writePolicyAcknowledged: true }
+          : {}),
         userRequest: `Execute approved plan ${plan.planId} revision ${plan.revision}: ${plan.goal}`,
         providerCapabilitySnapshot: snapshot.providerCapabilitySnapshot,
         limits: snapshot.limits,
@@ -1673,7 +1758,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         .reverse()
         .find((event) => event.type === "context_stale");
       const staleRefs = Array.isArray(staleEvent?.detail?.["staleRefs"])
-        ? staleEvent.detail["staleRefs"].filter((value): value is string => typeof value === "string")
+        ? staleEvent.detail["staleRefs"].filter(
+            (value): value is string => typeof value === "string"
+          )
         : [];
       const selectedRefs = new Set(command.sourceRefs ?? staleRefs);
       const refreshSources = mergeCurrentContextSources(
@@ -1720,7 +1807,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         });
       }
       runtime.contextSources.splice(0, runtime.contextSources.length, ...nextSources);
-      const baseContextId = options.createContextSnapshotId?.(command.runId) ?? `context_${command.runId}`;
+      const baseContextId =
+        options.createContextSnapshotId?.(command.runId) ?? `context_${command.runId}`;
       const contextSnapshotId = `${baseContextId}_r${snapshot.runRevision + 1}`;
       runtime.contextSnapshot = createAgentContextSnapshot({
         contextSnapshotId,
@@ -1755,333 +1843,372 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       return refreshedReceipt;
     },
     async decideChangeSet(command) {
+      const approvalSource: ChangeSetApproval["approvalSource"] =
+        internalAutoApprovalCommands.delete(command)
+          ? "user_preapproved_run"
+          : "human_confirmation";
       return runCommandOnce(command, async () => {
-      const prior = await priorCommandReceipt(command.runId, command.projectId, command.commandId);
-      if (prior !== undefined) return prior;
-      const hydrated = await hydrateRun(command.runId);
-      if (!hydrated.ok) return hydrated;
-      const snapshot = coordinator.readSnapshot(command.runId);
-      const invalid = validateRunCommand(snapshot, command);
-      if (invalid !== undefined) return invalid;
-      const runtime = runtimes.get(command.runId);
-      if (
-        snapshot === undefined ||
-        runtime === undefined ||
-        runtime.changeSet === undefined ||
-        options.changeSetSession === undefined
-      ) {
-        return failure("CHANGE_SET_NOT_FOUND", "The pending Change Set does not exist.");
-      }
-      const changeSet = runtime.changeSet;
-      if (
-        snapshot.status !== "awaiting_write_approval" ||
-        changeSet.changeSetId !== command.changeSetId ||
-        changeSet.revision !== command.revision ||
-        changeSet.checksum !== command.checksum
-      ) {
-        return {
-          ok: false,
-          error: applicationError(
-            "CHANGE_SET_BINDING_MISMATCH",
-            "The approval does not match the displayed Change Set revision."
-          ),
-          latestSnapshot: snapshot
-        };
-      }
-      if (
-        command.decision !== "reject_all" &&
-        snapshot.contextSnapshotId !== null &&
-        runtime.contextSnapshot === undefined
-      ) {
-        const result: AgentRunCommandResult = {
-          ok: false,
-          error: applicationError(
-            "AGENT_CONTEXT_SNAPSHOT_UNAVAILABLE",
-            "The Change Set context snapshot could not be restored for approval."
-          ),
-          latestSnapshot: snapshot
-        };
-        return persistCommandReceipt(
+        const prior = await priorCommandReceipt(
           command.runId,
           command.projectId,
-          command.commandId,
-          result
+          command.commandId
         );
-      }
-      if (
-        command.decision !== "reject_all" &&
-        runtime.contextSnapshot !== undefined &&
-        options.contextSourceReader !== undefined
-      ) {
-        const current = await options.contextSourceReader.readCurrentSources({
-          runId: command.runId,
-          sources: runtime.contextSources
-        });
-        if (!current.ok) {
-          const result = { ok: false as const, error: current.error, latestSnapshot: snapshot };
-          return persistCommandReceipt(
-            command.runId,
-            command.projectId,
-            command.commandId,
-            result
-          );
-        }
-        const staleRefs = findStaleContextSources(runtime.contextSnapshot, current.value);
-        if (staleRefs.length > 0) {
-          runtime.changeSet = { ...changeSet, status: "stale" };
-          const stale = await recordEvent(command.runId, {
-            runId: command.runId,
-            status: "awaiting_context_refresh",
-            type: "context_stale",
-            detail: {
-              staleRefs,
-              changeSetId: changeSet.changeSetId,
-              revision: changeSet.revision,
-              checksum: changeSet.checksum
-            }
-          });
-          const latestSnapshot = stale.ok ? stale.value : snapshot;
-          const result: AgentRunCommandResult = stale.ok
-            ? {
-                ok: false,
-                error: applicationError(
-                  "AGENT_CONTEXT_STALE",
-                  "The Change Set context changed and must be refreshed before approval."
-                ),
-                latestSnapshot
-              }
-            : stale;
-          return persistCommandReceipt(
-            command.runId,
-            command.projectId,
-            command.commandId,
-            result
-          );
-        }
-      }
-      if (command.decision === "update_selection") {
-        const selected = await options.changeSetSession.selectRevision({
-          runId: command.runId,
-          projectId: command.projectId,
-          changeSetId: command.changeSetId,
-          revision: command.revision,
-          files: command.files
-        });
-        if (!selected.ok) {
-          const result = { ok: false as const, error: selected.error, latestSnapshot: snapshot };
-          return persistCommandReceipt(
-            command.runId,
-            command.projectId,
-            command.commandId,
-            result
-          );
-        }
-        runtime.changeSet = selected.value;
-        const revised = await recordEvent(command.runId, {
-          runId: command.runId,
-          status: "awaiting_write_approval",
-          type: "change_set_ready",
-          snapshotPatch: {
-            pendingChangeSetId: selected.value.changeSetId,
-            pendingChangeSetRevision: selected.value.revision,
-            pendingChangeSetChecksum: selected.value.checksum
-          },
-          detail: {
-            changeSetId: selected.value.changeSetId,
-            revision: selected.value.revision,
-            checksum: selected.value.checksum,
-            selectionRevision: true,
-            changeSet: asJsonObject(selected.value)
-          }
-        });
-        return persistCommandReceipt(
-          command.runId,
-          command.projectId,
-          command.commandId,
-          revised
-        );
-      }
-      if (command.decision === "apply_selected" && options.versionGroupExecutor === undefined) {
-        return failure(
-          "AGENT_VERSION_GROUP_UNAVAILABLE",
-          "The approved Change Set cannot be applied without the Version Group service."
-        );
-      }
-      const approval = await options.changeSetSession.decide(command);
-      if (!approval.ok) {
-        const result = { ok: false as const, error: approval.error, latestSnapshot: snapshot };
-        return persistCommandReceipt(
-          command.runId,
-          command.projectId,
-          command.commandId,
-          result
-        );
-      }
-      if (!isChangeSetApproval(approval.value)) {
-        return failure(
-          "CHANGE_SET_DECISION_INVALID",
-          "The Change Set decision did not produce an approval binding."
-        );
-      }
-      const approvalResolved = await recordEvent(command.runId, {
-        runId: command.runId,
-        status: command.decision === "reject_all" ? "executing_model" : "applying_changes",
-        type: "approval_resolved",
-        detail: asJsonObject(approval.value)
-      });
-      if (!approvalResolved.ok) return approvalResolved;
-
-      if (command.decision === "reject_all") {
-        runtime.messages.push({
-          role: "tool",
-          content: JSON.stringify({ ok: true, decision: "rejected_by_user" })
-        });
-        delete runtime.changeSet;
-        const rejected = await recordEvent(command.runId, {
-          runId: command.runId,
-          status: "executing_model",
-          type: "run_resumed",
-          snapshotPatch: {
-            pendingChangeSetId: null,
-            pendingChangeSetRevision: null,
-            pendingChangeSetChecksum: null
-          },
-          detail: { reason: "change_set_rejected" }
-        });
-        const rejectedReceipt = await persistCommandReceipt(
-          command.runId,
-          command.projectId,
-          command.commandId,
-          rejected
-        );
-        if (rejected.ok) scheduleDrive(command.runId);
-        return rejectedReceipt;
-      }
-
-      if (options.versionGroupExecutor === undefined)
-        throw new Error("Version Group availability changed during Change Set approval.");
-      const writeStarted = await recordEvent(command.runId, {
-        runId: command.runId,
-        status: "applying_changes",
-        type: "write_started",
-        detail: {
-          changeSetId: changeSet.changeSetId,
-          revision: changeSet.revision,
-          checksum: changeSet.checksum
-        }
-      });
-      if (!writeStarted.ok) return writeStarted;
-      const applied = await options.versionGroupExecutor.apply({
-        changeSet,
-        approval: approval.value
-      });
-      if (!applied.ok) {
-        await recordEvent(command.runId, {
-          runId: command.runId,
-          status: "applying_changes",
-          type: "write_failed",
-          detail: {
-            code: applied.error.code,
-            message: applied.error.message,
-            ...(applied.error.redactedDetail ?? {})
-          }
-        });
-        const failed = await recordEvent(command.runId, {
-          runId: command.runId,
-          status: "failed",
-          type: "run_failed",
-          detail: {
-            code: applied.error.code,
-            message: applied.error.message,
-            failureKind:
-              applied.error.code.includes("PARTIAL") ? "partial_failure" : "write_failure",
-            ...(applied.error.redactedDetail ?? {})
-          }
-        });
-        const result: AgentRunCommandResult = failed.ok
-          ? { ok: false, error: applied.error, latestSnapshot: failed.value }
-          : failed;
-        return persistCommandReceipt(
-          command.runId,
-          command.projectId,
-          command.commandId,
-          result
-        );
-      }
-      runtime.versionGroup = applied.value;
-      runtime.changeSet = { ...changeSet, status: "applied" };
-      const versionGroupId = readString(applied.value, "versionGroupId") ?? "version_group";
-      const synchronization = isJsonObject(applied.value["synchronization"])
-        ? applied.value["synchronization"]
-        : undefined;
-      const synchronizationStatus =
-        synchronization?.["status"] === "recovery_required"
-          ? "recovery_required"
-          : undefined;
-      const synchronizationFailedHooks = Array.isArray(synchronization?.["failedHooks"])
-        ? synchronization["failedHooks"].filter(
-            (hook): hook is string => typeof hook === "string"
-          )
-        : [];
-      runtime.messages.push({
-        role: "tool",
-        content: JSON.stringify({
-          ok: true,
-          decision: "applied_by_human_confirmation",
-          versionGroupId
-        })
-      });
-      const writeApplied = await recordEvent(command.runId, {
-        runId: command.runId,
-        status: runtime.stopRequested ? "stopping_after_transaction" : "executing_model",
-        type: "write_applied",
-        snapshotPatch: {
-          pendingChangeSetId: null,
-          pendingChangeSetRevision: null,
-          pendingChangeSetChecksum: null,
-          versionGroupId
-        },
-        detail: {
-          versionGroupId,
-          changeSetId: changeSet.changeSetId,
-          revision: changeSet.revision,
-          checksum: changeSet.checksum,
-          ...(synchronizationStatus === undefined
-            ? {}
-            : {
-                synchronizationStatus,
-                synchronizationFailedHooks
-              })
-        }
-      });
-      const finalResult =
-        writeApplied.ok && runtime.stopRequested
-          ? await recordEvent(command.runId, {
-              runId: command.runId,
-              status: "cancelled",
-              type: "run_cancelled",
-              detail: { reason: "stop_requested_during_write" }
-            })
-          : writeApplied;
-      const finalReceipt = await persistCommandReceipt(
-        command.runId,
-        command.projectId,
-        command.commandId,
-        finalResult
-      );
-      if (finalResult.ok && !runtime.stopRequested) scheduleDrive(command.runId);
-      return finalReceipt;
-      });
-    },
-    async undoRun(command) {
-      return runCommandOnce(command, async () => {
-        const prior = await priorCommandReceipt(command.runId, command.projectId, command.commandId);
         if (prior !== undefined) return prior;
         const hydrated = await hydrateRun(command.runId);
         if (!hydrated.ok) return hydrated;
         const snapshot = coordinator.readSnapshot(command.runId);
         const invalid = validateRunCommand(snapshot, command);
         if (invalid !== undefined) return invalid;
+        const runtime = runtimes.get(command.runId);
+        if (
+          snapshot === undefined ||
+          runtime === undefined ||
+          runtime.changeSet === undefined ||
+          options.changeSetSession === undefined
+        ) {
+          return failure("CHANGE_SET_NOT_FOUND", "The pending Change Set does not exist.");
+        }
+        const changeSet = runtime.changeSet;
+        if (
+          snapshot.status !== "awaiting_write_approval" ||
+          changeSet.changeSetId !== command.changeSetId ||
+          changeSet.revision !== command.revision ||
+          changeSet.checksum !== command.checksum
+        ) {
+          return {
+            ok: false,
+            error: applicationError(
+              "CHANGE_SET_BINDING_MISMATCH",
+              "The approval does not match the displayed Change Set revision."
+            ),
+            latestSnapshot: snapshot
+          };
+        }
+        if (
+          command.decision !== "reject_all" &&
+          snapshot.contextSnapshotId !== null &&
+          runtime.contextSnapshot === undefined
+        ) {
+          const result: AgentRunCommandResult = {
+            ok: false,
+            error: applicationError(
+              "AGENT_CONTEXT_SNAPSHOT_UNAVAILABLE",
+              "The Change Set context snapshot could not be restored for approval."
+            ),
+            latestSnapshot: snapshot
+          };
+          return persistCommandReceipt(command.runId, command.projectId, command.commandId, result);
+        }
+        if (
+          command.decision !== "reject_all" &&
+          runtime.contextSnapshot !== undefined &&
+          options.contextSourceReader !== undefined
+        ) {
+          const current = await options.contextSourceReader.readCurrentSources({
+            runId: command.runId,
+            sources: runtime.contextSources
+          });
+          if (!current.ok) {
+            const result = { ok: false as const, error: current.error, latestSnapshot: snapshot };
+            return persistCommandReceipt(
+              command.runId,
+              command.projectId,
+              command.commandId,
+              result
+            );
+          }
+          const staleRefs = findStaleContextSources(runtime.contextSnapshot, current.value);
+          if (staleRefs.length > 0) {
+            runtime.changeSet = { ...changeSet, status: "stale" };
+            const stale = await recordEvent(command.runId, {
+              runId: command.runId,
+              status: "awaiting_context_refresh",
+              type: "context_stale",
+              detail: {
+                staleRefs,
+                changeSetId: changeSet.changeSetId,
+                revision: changeSet.revision,
+                checksum: changeSet.checksum
+              }
+            });
+            const latestSnapshot = stale.ok ? stale.value : snapshot;
+            const result: AgentRunCommandResult = stale.ok
+              ? {
+                  ok: false,
+                  error: applicationError(
+                    "AGENT_CONTEXT_STALE",
+                    "The Change Set context changed and must be refreshed before approval."
+                  ),
+                  latestSnapshot
+                }
+              : stale;
+            return persistCommandReceipt(
+              command.runId,
+              command.projectId,
+              command.commandId,
+              result
+            );
+          }
+        }
+        if (command.decision === "update_selection") {
+          const selected = await options.changeSetSession.selectRevision({
+            runId: command.runId,
+            projectId: command.projectId,
+            changeSetId: command.changeSetId,
+            revision: command.revision,
+            files: command.files
+          });
+          if (!selected.ok) {
+            const result = { ok: false as const, error: selected.error, latestSnapshot: snapshot };
+            return persistCommandReceipt(
+              command.runId,
+              command.projectId,
+              command.commandId,
+              result
+            );
+          }
+          runtime.changeSet = selected.value;
+          const revised = await recordEvent(command.runId, {
+            runId: command.runId,
+            status: "awaiting_write_approval",
+            type: "change_set_ready",
+            snapshotPatch: {
+              pendingChangeSetId: selected.value.changeSetId,
+              pendingChangeSetRevision: selected.value.revision,
+              pendingChangeSetChecksum: selected.value.checksum
+            },
+            detail: {
+              changeSetId: selected.value.changeSetId,
+              revision: selected.value.revision,
+              checksum: selected.value.checksum,
+              selectionRevision: true,
+              changeSet: asJsonObject(selected.value)
+            }
+          });
+          return persistCommandReceipt(
+            command.runId,
+            command.projectId,
+            command.commandId,
+            revised
+          );
+        }
+        if (command.decision === "apply_selected" && options.versionGroupExecutor === undefined) {
+          return failure(
+            "AGENT_VERSION_GROUP_UNAVAILABLE",
+            "The approved Change Set cannot be applied without the Version Group service."
+          );
+        }
+        const approval = await options.changeSetSession.decide(command);
+        if (!approval.ok) {
+          const result = { ok: false as const, error: approval.error, latestSnapshot: snapshot };
+          return persistCommandReceipt(command.runId, command.projectId, command.commandId, result);
+        }
+        if (!isChangeSetApproval(approval.value)) {
+          return failure(
+            "CHANGE_SET_DECISION_INVALID",
+            "The Change Set decision did not produce an approval binding."
+          );
+        }
+        if (
+          approvalSource === "user_preapproved_run" &&
+          (snapshot.writePolicy !== "user_preapproved_run" ||
+            (changeSet.writePolicy ?? "write_before_confirmation") !== "user_preapproved_run")
+        ) {
+          const result: AgentRunCommandResult = {
+            ok: false,
+            error: applicationError(
+              "CHANGE_SET_WRITE_POLICY_REJECTED",
+              "Automatic approval requires the run and Change Set to share the preapproved policy."
+            ),
+            latestSnapshot: snapshot
+          };
+          return persistCommandReceipt(command.runId, command.projectId, command.commandId, result);
+        }
+        const resolvedApproval: ChangeSetApproval =
+          approvalSource === "user_preapproved_run"
+            ? Object.freeze({ ...approval.value, approvalSource })
+            : approval.value;
+        if (approvalSource === "user_preapproved_run") {
+          const autoApproved = await recordEvent(command.runId, {
+            runId: command.runId,
+            status: "awaiting_write_approval",
+            type: "change_set_auto_approved",
+            detail: {
+              changeSetId: changeSet.changeSetId,
+              revision: changeSet.revision,
+              checksum: changeSet.checksum,
+              approvalSource
+            }
+          });
+          if (!autoApproved.ok) return autoApproved;
+        }
+        const approvalResolved = await recordEvent(command.runId, {
+          runId: command.runId,
+          status: command.decision === "reject_all" ? "executing_model" : "applying_changes",
+          type: "approval_resolved",
+          detail: asJsonObject(resolvedApproval)
+        });
+        if (!approvalResolved.ok) return approvalResolved;
+
+        if (command.decision === "reject_all") {
+          runtime.messages.push({
+            role: "tool",
+            content: JSON.stringify({ ok: true, decision: "rejected_by_user" })
+          });
+          delete runtime.changeSet;
+          const rejected = await recordEvent(command.runId, {
+            runId: command.runId,
+            status: "executing_model",
+            type: "run_resumed",
+            snapshotPatch: {
+              pendingChangeSetId: null,
+              pendingChangeSetRevision: null,
+              pendingChangeSetChecksum: null
+            },
+            detail: { reason: "change_set_rejected" }
+          });
+          const rejectedReceipt = await persistCommandReceipt(
+            command.runId,
+            command.projectId,
+            command.commandId,
+            rejected
+          );
+          if (rejected.ok) scheduleDrive(command.runId);
+          return rejectedReceipt;
+        }
+
+        if (options.versionGroupExecutor === undefined)
+          throw new Error("Version Group availability changed during Change Set approval.");
+        const writeStarted = await recordEvent(command.runId, {
+          runId: command.runId,
+          status: "applying_changes",
+          type: "write_started",
+          detail: {
+            changeSetId: changeSet.changeSetId,
+            revision: changeSet.revision,
+            checksum: changeSet.checksum
+          }
+        });
+        if (!writeStarted.ok) return writeStarted;
+        const applied = await applyVersionGroupWithAuthorization(options.versionGroupExecutor, {
+          changeSet,
+          approval: resolvedApproval
+        });
+        if (!applied.ok) {
+          await recordEvent(command.runId, {
+            runId: command.runId,
+            status: "applying_changes",
+            type: "write_failed",
+            detail: {
+              code: applied.error.code,
+              message: applied.error.message,
+              ...(applied.error.redactedDetail ?? {})
+            }
+          });
+          const failed = await recordEvent(command.runId, {
+            runId: command.runId,
+            status: "failed",
+            type: "run_failed",
+            detail: {
+              code: applied.error.code,
+              message: applied.error.message,
+              failureKind: applied.error.code.includes("PARTIAL")
+                ? "partial_failure"
+                : "write_failure",
+              ...(applied.error.redactedDetail ?? {})
+            }
+          });
+          const result: AgentRunCommandResult = failed.ok
+            ? { ok: false, error: applied.error, latestSnapshot: failed.value }
+            : failed;
+          return persistCommandReceipt(command.runId, command.projectId, command.commandId, result);
+        }
+        runtime.versionGroup = applied.value;
+        runtime.changeSet = { ...changeSet, status: "applied" };
+        const versionGroupId = readString(applied.value, "versionGroupId") ?? "version_group";
+        const synchronization = isJsonObject(applied.value["synchronization"])
+          ? applied.value["synchronization"]
+          : undefined;
+        const synchronizationStatus =
+          synchronization?.["status"] === "recovery_required" ? "recovery_required" : undefined;
+        const synchronizationFailedHooks = Array.isArray(synchronization?.["failedHooks"])
+          ? synchronization["failedHooks"].filter(
+              (hook): hook is string => typeof hook === "string"
+            )
+          : [];
+        runtime.messages.push({
+          role: "tool",
+          content: JSON.stringify({
+            ok: true,
+            decision:
+              resolvedApproval.approvalSource === "user_preapproved_run"
+                ? "applied_by_user_preapproval"
+                : "applied_by_human_confirmation",
+            approvalSource: resolvedApproval.approvalSource,
+            versionGroupId
+          })
+        });
+        const writeApplied = await recordEvent(command.runId, {
+          runId: command.runId,
+          status: runtime.stopRequested ? "stopping_after_transaction" : "executing_model",
+          type: "write_applied",
+          snapshotPatch: {
+            pendingChangeSetId: null,
+            pendingChangeSetRevision: null,
+            pendingChangeSetChecksum: null,
+            versionGroupId
+          },
+          detail: {
+            versionGroupId,
+            changeSetId: changeSet.changeSetId,
+            revision: changeSet.revision,
+            checksum: changeSet.checksum,
+            ...(synchronizationStatus === undefined
+              ? {}
+              : {
+                  synchronizationStatus,
+                  synchronizationFailedHooks
+                })
+          }
+        });
+        const finalResult =
+          writeApplied.ok && runtime.stopRequested
+            ? await recordEvent(command.runId, {
+                runId: command.runId,
+                status: "cancelled",
+                type: "run_cancelled",
+                detail: { reason: "stop_requested_during_write" }
+              })
+            : writeApplied;
+        const finalReceipt = await persistCommandReceipt(
+          command.runId,
+          command.projectId,
+          command.commandId,
+          finalResult
+        );
+        if (finalResult.ok && !runtime.stopRequested) scheduleDrive(command.runId);
+        return finalReceipt;
+      });
+    },
+    async undoRun(command) {
+      return runCommandOnce(command, async () => {
+        const prior = await priorCommandReceipt(
+          command.runId,
+          command.projectId,
+          command.commandId
+        );
+        if (prior !== undefined) return prior;
+        const hydrated = await hydrateRun(command.runId);
+        if (!hydrated.ok) return hydrated;
+        const snapshot = coordinator.readSnapshot(command.runId);
+        const invalid = validateRunCommand(snapshot, command);
+        if (invalid !== undefined) return invalid;
+        if (snapshot?.operationMode !== "execution") {
+          return failure(
+            "AGENT_RUN_UNDO_NOT_ALLOWED",
+            "Run-level undo is only available for execution runs."
+          );
+        }
         if (snapshot === undefined || options.versionGroupExecutor === undefined) {
           return failure("AGENT_RUN_UNDO_UNAVAILABLE", "Run-level undo is unavailable.");
         }
@@ -2093,7 +2220,16 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         if (!started.ok) return started;
         const undone = await options.versionGroupExecutor.undoRun({
           runId: command.runId,
-          projectId: command.projectId
+          projectId: command.projectId,
+          commandId: command.commandId,
+          action: command.action,
+          ...(command.action === "resolve"
+            ? {
+                reviewId: command.reviewId,
+                ...(command.decisions === undefined ? {} : { decisions: command.decisions }),
+                ...(command.retryFailedOnly === true ? { retryFailedOnly: true as const } : {})
+              }
+            : {})
         });
         if (!undone.ok) {
           const failed = await recordTerminalAuditEvent(command.runId, {
@@ -2111,12 +2247,32 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
             error: undone.error,
             latestSnapshot: failed.value
           };
+          return persistCommandReceipt(command.runId, command.projectId, command.commandId, result);
+        }
+        const rollbackReview = readObject(undone.value, "rollbackReview");
+        const transactionStatus = readString(undone.value, "transactionStatus");
+        if (
+          rollbackReview !== undefined &&
+          (transactionStatus === "awaiting_review" || transactionStatus === "partial_failure")
+        ) {
+          const runtime = runtimes.get(command.runId);
+          if (runtime !== undefined) runtime.rollbackReview = rollbackReview;
+          const reviewRequired = await recordTerminalAuditEvent(command.runId, {
+            runId: command.runId,
+            type: "run_undo_review_required",
+            detail: { rollbackReview, versionGroup: undone.value }
+          });
+          if (!reviewRequired.ok) return reviewRequired;
           return persistCommandReceipt(
             command.runId,
             command.projectId,
             command.commandId,
-            result
+            reviewRequired
           );
+        }
+        const runtime = runtimes.get(command.runId);
+        if (runtime !== undefined && rollbackReview !== undefined) {
+          runtime.rollbackReview = rollbackReview;
         }
         const audited = await recordTerminalAuditEvent(command.runId, {
           runId: command.runId,
@@ -2124,12 +2280,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           detail: { versionGroup: undone.value }
         });
         if (!audited.ok) return audited;
-        return persistCommandReceipt(
-          command.runId,
-          command.projectId,
-          command.commandId,
-          audited
-        );
+        return persistCommandReceipt(command.runId, command.projectId, command.commandId, audited);
       });
     },
     async readAgentRun(runId) {
@@ -2146,7 +2297,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           ? {}
           : { pendingUserInput: runtime.pendingUserInput }),
         ...(runtime?.planArtifact === undefined ? {} : { planArtifact: runtime.planArtifact }),
-        ...(runtime?.changeSet === undefined ? {} : { changeSet: runtime.changeSet })
+        ...(runtime?.changeSet === undefined ? {} : { changeSet: runtime.changeSet }),
+        ...(runtime?.rollbackReview === undefined ? {} : { rollbackReview: runtime.rollbackReview })
       });
     },
     async listAgentRuns(projectId) {
@@ -2165,6 +2317,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       return () => listeners.delete(listener);
     }
   };
+  return session;
 }
 
 function parseRetryCheckpoint(value: JsonObject | undefined): AssembledToolCall | undefined {
@@ -2366,6 +2519,13 @@ function readString(value: JsonObject, key: string): string | undefined {
   return typeof value[key] === "string" ? value[key] : undefined;
 }
 
+function readObject(value: JsonObject | undefined, key: string): JsonObject | undefined {
+  const candidate = value?.[key];
+  return typeof candidate === "object" && candidate !== null && !Array.isArray(candidate)
+    ? (candidate as JsonObject)
+    : undefined;
+}
+
 function readStringArray(value: JsonObject, key: string): string[] {
   const candidate = value[key];
   return Array.isArray(candidate) && candidate.every((item) => typeof item === "string")
@@ -2425,7 +2585,12 @@ function isTerminal(status: AgentRunSnapshot["status"]): boolean {
 }
 
 function isTerminalStatus(status: string): boolean {
-  return status === "completed" || status === "cancelled" || status === "failed" || status === "limit_reached";
+  return (
+    status === "completed" ||
+    status === "cancelled" ||
+    status === "failed" ||
+    status === "limit_reached"
+  );
 }
 
 function isSupportedCapabilitySnapshot(

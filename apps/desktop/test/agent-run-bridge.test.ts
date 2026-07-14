@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import type { AgentRunEvent, AgentRunSnapshot, ChangeSet } from "@novel-studio/agent-engine";
 import type { NovelStudioApi } from "@novel-studio/application";
@@ -133,6 +133,218 @@ describe("Agent Run renderer bridge", () => {
           dirty: true
         }
       ]
+    });
+  });
+
+  test("binds execution auto-write policy to an explicit per-run acknowledgement", async () => {
+    let received: Record<string, unknown> | undefined;
+    const executionSnapshot = {
+      ...snapshot,
+      operationMode: "execution" as const,
+      writePolicy: "user_preapproved_run" as const
+    };
+    const api = createApi({
+      start: async (command) => {
+        received = command as unknown as Record<string, unknown>;
+        return ok(executionSnapshot);
+      }
+    });
+    const bridge = createAgentRunBridge(api);
+    let props = bridge.syncContext({ projectId: "project-01", settings });
+    props.onOperationModeChange("execution");
+    props = bridge.getProps() ?? props;
+    props.onWritePolicyChange("user_preapproved_run");
+    props.onWritePolicyAcknowledgedChange(true);
+
+    await bridge.send("自动修订当前章节");
+
+    expect(received).toMatchObject({
+      operationMode: "execution",
+      writePolicy: "user_preapproved_run",
+      writePolicyAcknowledged: true
+    });
+  });
+
+  test("defaults the second run to manual writes after a terminal auto-write command", async () => {
+    const commands: Record<string, unknown>[] = [];
+    const automaticCompleted = {
+      ...snapshot,
+      runId: "run-auto-01",
+      operationMode: "execution" as const,
+      writePolicy: "user_preapproved_run" as const,
+      status: "completed" as const,
+      runRevision: 8,
+      lastSequence: 8,
+      versionGroupId: "version-group-auto-01"
+    };
+    const manualStarted = {
+      ...automaticCompleted,
+      runId: "run-manual-02",
+      writePolicy: "write_before_confirmation" as const,
+      status: "executing_model" as const,
+      runRevision: 1,
+      lastSequence: 1,
+      versionGroupId: undefined
+    };
+    let current = automaticCompleted;
+    const historicalEvents = [
+      {
+        ...event(7, "change_set_auto_approved", {
+          changeSetId: "change-set-auto-01",
+          revision: 1
+        }),
+        runId: "run-auto-01"
+      },
+      {
+        ...event(8, "write_applied", { versionGroupId: "version-group-auto-01" }),
+        runId: "run-auto-01"
+      }
+    ];
+    const api = {
+      agentRuns: {
+        onEvent: () => () => undefined,
+        start: async (command: Record<string, unknown>) => {
+          commands.push(structuredClone(command));
+          current = commands.length === 1 ? automaticCompleted : manualStarted;
+          return ok(current);
+        },
+        read: async () =>
+          ok({
+            snapshot: current,
+            events: current.runId === automaticCompleted.runId ? historicalEvents : []
+          })
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    let props = bridge.syncContext({ projectId: "project-01", settings });
+    props.onOperationModeChange("execution");
+    props = bridge.getProps() ?? props;
+    props.onWritePolicyChange("user_preapproved_run");
+    props.onWritePolicyAcknowledgedChange(true);
+
+    props = await bridge.send("自动修订当前章节");
+
+    expect(props.writePolicy).toBe("write_before_confirmation");
+    expect(props.writePolicyAcknowledged).toBe(false);
+    expect(props.events.map((entry) => entry.type)).toEqual([
+      "change_set_auto_approved",
+      "write_applied"
+    ]);
+
+    await bridge.send("继续检查下一章");
+
+    expect(commands[1]).toMatchObject({
+      operationMode: "execution",
+      writePolicy: "write_before_confirmation"
+    });
+    expect(commands[1]).not.toHaveProperty("writePolicyAcknowledged");
+  });
+
+  test("resets next-run auto-write authorization when a terminal event arrives", async () => {
+    let listener: ((event: AgentRunEvent) => void) | undefined;
+    const activeAutomatic = {
+      ...snapshot,
+      operationMode: "execution" as const,
+      writePolicy: "user_preapproved_run" as const,
+      status: "executing_model" as const
+    };
+    const api = {
+      agentRuns: {
+        onEvent: (nextListener: (event: AgentRunEvent) => void) => {
+          listener = nextListener;
+          return () => undefined;
+        },
+        start: async () => ok(activeAutomatic),
+        read: async () => ok({ snapshot: activeAutomatic, events: [] })
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    let props = bridge.syncContext({ projectId: "project-01", settings });
+    props.onOperationModeChange("execution");
+    props = bridge.getProps() ?? props;
+    props.onWritePolicyChange("user_preapproved_run");
+    props.onWritePolicyAcknowledgedChange(true);
+    await bridge.send("自动修订当前章节");
+
+    listener?.({
+      ...event(2, "run_completed", {}),
+      runRevision: 2
+    });
+
+    props = bridge.getProps() ?? props;
+    expect(props.writePolicy).toBe("write_before_confirmation");
+    expect(props.writePolicyAcknowledged).toBe(false);
+    expect(props.events.at(-1)?.type).toBe("run_completed");
+  });
+
+  test("restores an active preapproved run as already acknowledged", async () => {
+    const activeAutomatic = {
+      ...snapshot,
+      operationMode: "execution" as const,
+      writePolicy: "user_preapproved_run" as const,
+      status: "executing_model" as const
+    };
+    const api = {
+      agentRuns: {
+        onEvent: () => () => undefined,
+        list: async () => ok([activeAutomatic]),
+        read: async () => ok({ snapshot: activeAutomatic, events: [] })
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({ projectId: "project-01", settings });
+
+    const props = await bridge.load("project-01");
+
+    expect(props.writePolicy).toBe("user_preapproved_run");
+    expect(props.writePolicyAcknowledged).toBe(true);
+  });
+
+  test("only passes execution policy for an acknowledged automatic plan approval", async () => {
+    const commands: Record<string, unknown>[] = [];
+    const planReadySnapshot = {
+      ...snapshot,
+      status: "plan_ready" as const,
+      runRevision: 4,
+      lastSequence: 4
+    };
+    const artifact = readyPlanArtifact();
+    const api = {
+      agentRuns: {
+        onEvent: () => () => undefined,
+        list: async () => ok([planReadySnapshot]),
+        read: async () => ok({ snapshot: planReadySnapshot, events: [], planArtifact: artifact }),
+        decidePlan: async (command: Record<string, unknown>) => {
+          commands.push(structuredClone(command));
+          return ok(planReadySnapshot);
+        }
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({ projectId: "project-01", settings });
+    await bridge.load("project-01");
+
+    await bridge.decidePlan("approve", {
+      executionContextMode: "writing",
+      executionWritePolicy: "write_before_confirmation"
+    });
+    await bridge.decidePlan("approve", {
+      executionContextMode: "general_file",
+      executionWritePolicy: "user_preapproved_run",
+      executionWritePolicyAcknowledged: true
+    });
+
+    expect(commands[0]).toMatchObject({
+      decision: "approve",
+      executionContextMode: "writing"
+    });
+    expect(commands[0]).not.toHaveProperty("executionWritePolicy");
+    expect(commands[0]).not.toHaveProperty("executionWritePolicyAcknowledged");
+    expect(commands[1]).toMatchObject({
+      decision: "approve",
+      executionContextMode: "general_file",
+      executionWritePolicy: "user_preapproved_run",
+      executionWritePolicyAcknowledged: true
     });
   });
 
@@ -391,6 +603,7 @@ describe("Agent Run renderer bridge", () => {
   test("restores the latest completed applied run without selecting a newer terminal run that has no Change Set", async () => {
     const appliedSnapshot = {
       ...snapshot,
+      operationMode: "execution" as const,
       status: "completed" as const,
       versionGroupId: "version-group-01",
       updatedAt: "2026-07-13T00:00:01.000Z"
@@ -469,12 +682,208 @@ describe("Agent Run renderer bridge", () => {
 
     expect(undoCommands).toHaveLength(1);
     expect(undoCommands[0]).toMatchObject({
+      action: "request",
       runId: "run-bridge",
       projectId: "project-01",
       expectedRunRevision: 20
     });
   });
+
+  test("binds rollback review decisions and failed-only retry to the durable review id", async () => {
+    const appliedSnapshot = {
+      ...snapshot,
+      operationMode: "execution" as const,
+      status: "completed" as const,
+      versionGroupId: "version-group-01",
+      runRevision: 20,
+      lastSequence: 20
+    };
+    const undoCommands: Record<string, unknown>[] = [];
+    const rollbackReview = {
+      schemaVersion: "1.0",
+      reviewId: "rollback-review-01",
+      runId: "run-bridge",
+      status: "partial_failure",
+      sourceVersionGroupIds: ["version-group-01"],
+      createdAt: "2026-07-13T00:00:00.000Z",
+      updatedAt: "2026-07-13T00:01:00.000Z",
+      processedCommandIds: [],
+      files: [
+        {
+          relativePath: "notes/conflict.md",
+          assetType: "text",
+          baselineContent: "before",
+          baselineChecksum: "a".repeat(64),
+          baselineVersionId: "ver-before",
+          runLastWriteContent: "agent",
+          runLastWriteChecksum: "b".repeat(64),
+          reviewedCurrentContent: "user",
+          reviewedCurrentChecksum: "c".repeat(64),
+          diff: {
+            currentToLastWrite: "current -> ai",
+            currentToBaseline: "current -> baseline",
+            lastWriteToBaseline: "ai -> baseline"
+          },
+          status: "conflict"
+        },
+        {
+          relativePath: "notes/failed.md",
+          assetType: "text",
+          baselineContent: "before failed",
+          baselineChecksum: "d".repeat(64),
+          baselineVersionId: "ver-failed",
+          runLastWriteContent: "agent failed",
+          runLastWriteChecksum: "e".repeat(64),
+          reviewedCurrentContent: "user failed",
+          reviewedCurrentChecksum: "f".repeat(64),
+          diff: {
+            currentToLastWrite: "current -> ai",
+            currentToBaseline: "current -> baseline",
+            lastWriteToBaseline: "ai -> baseline"
+          },
+          decision: "restore_baseline",
+          status: "failed"
+        }
+      ]
+    };
+    const api = {
+      agentRuns: {
+        onEvent: () => () => undefined,
+        list: async () => ok([appliedSnapshot]),
+        read: async () =>
+          ok({ snapshot: appliedSnapshot, events: [], rollbackReview }),
+        undoRun: async (command: Record<string, unknown>) => {
+          undoCommands.push(structuredClone(command));
+          return ok({ ...appliedSnapshot, runRevision: appliedSnapshot.runRevision + 2 });
+        }
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({ projectId: "project-01", settings });
+    let props = await bridge.load("project-01");
+
+    props.rollbackReview?.onDecisionChange("notes/conflict.md", "keep_current");
+    props = bridge.getProps() ?? props;
+    props.rollbackReview?.onApply();
+    await vi.waitFor(() => expect(undoCommands).toHaveLength(1));
+    props.rollbackReview?.onRetryFailed();
+    await vi.waitFor(() => expect(undoCommands).toHaveLength(2));
+
+    expect(undoCommands).toMatchObject([
+      {
+        action: "resolve",
+        reviewId: "rollback-review-01",
+        decisions: [{ relativePath: "notes/conflict.md", decision: "keep_current" }]
+      },
+      {
+        action: "resolve",
+        reviewId: "rollback-review-01",
+        retryFailedOnly: true
+      }
+    ]);
+  });
+
+  test("clears decisions when a durable rollback review refreshes in place", async () => {
+    const appliedSnapshot = {
+      ...snapshot,
+      operationMode: "execution" as const,
+      status: "completed" as const,
+      versionGroupId: "version-group-01",
+      runRevision: 20,
+      lastSequence: 20
+    };
+    const initialReview = rollbackReview("user edit", "2026-07-13T00:01:00.000Z");
+    const refreshedReview = rollbackReview("newer edit", "2026-07-13T00:02:00.000Z");
+    let currentSnapshot = appliedSnapshot;
+    let currentReview = initialReview;
+    const api = {
+      agentRuns: {
+        onEvent: () => () => undefined,
+        list: async () => ok([appliedSnapshot]),
+        read: async () =>
+          ok({ snapshot: currentSnapshot, events: [], rollbackReview: currentReview }),
+        undoRun: async () => {
+          currentSnapshot = { ...appliedSnapshot, runRevision: 22, lastSequence: 22 };
+          currentReview = refreshedReview;
+          return ok(currentSnapshot);
+        }
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({ projectId: "project-01", settings });
+    let props = await bridge.load("project-01");
+    props.rollbackReview?.onDecisionChange("notes/conflict.md", "restore_baseline");
+    props = bridge.getProps() ?? props;
+    expect(props.rollbackReview?.decisions).toEqual({
+      "notes/conflict.md": "restore_baseline"
+    });
+
+    props.rollbackReview?.onApply();
+    await vi.waitFor(() =>
+      expect(bridge.getProps()?.rollbackReview?.review.updatedAt).toBe(
+        "2026-07-13T00:02:00.000Z"
+      )
+    );
+
+    expect(bridge.getProps()?.rollbackReview?.decisions).toEqual({});
+  });
 });
+
+function rollbackReview(reviewedCurrentContent: string, updatedAt: string) {
+  return {
+    schemaVersion: "1.0" as const,
+    reviewId: "rollback-review-01",
+    runId: "run-bridge",
+    status: "pending" as const,
+    sourceVersionGroupIds: ["version-group-01"],
+    createdAt: "2026-07-13T00:00:00.000Z",
+    updatedAt,
+    processedCommandIds: [],
+    files: [
+      {
+        relativePath: "notes/conflict.md",
+        assetType: "text",
+        baselineContent: "before",
+        baselineChecksum: "a".repeat(64),
+        baselineVersionId: "ver-before",
+        runLastWriteContent: "agent",
+        runLastWriteChecksum: "b".repeat(64),
+        reviewedCurrentContent,
+        reviewedCurrentChecksum: "c".repeat(64),
+        diff: {
+          currentToLastWrite: "current -> ai",
+          currentToBaseline: "current -> baseline",
+          lastWriteToBaseline: "ai -> baseline"
+        },
+        status: "stale" as const
+      }
+    ]
+  };
+}
+
+function readyPlanArtifact() {
+  return {
+    schemaVersion: "1.0" as const,
+    planId: "plan-01",
+    revision: 1,
+    sourceRunId: "run-bridge",
+    status: "ready" as const,
+    operationMode: "planning" as const,
+    contextMode: "writing" as const,
+    goal: "修订当前章节",
+    successCriteria: ["章节通过复核"],
+    nonGoals: [],
+    facts: [],
+    assumptions: [],
+    openQuestions: [],
+    targetRefs: [],
+    steps: [{ stepId: "step-01", title: "修订正文", verification: "检查版本差异" }],
+    risks: [],
+    verification: ["运行测试"],
+    sourceRefs: ["chapter:chapter-01"],
+    createdAt: "2026-07-13T00:00:00.000Z"
+  };
+}
 
 function event(
   sequence: number,

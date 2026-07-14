@@ -20,8 +20,14 @@ import type {
   ChangeSetSelection,
   ChapterEditorProps,
   ModelSettingsPanelProps,
-  PlainFileEditorProps
+  PlainFileEditorProps,
+  RollbackReviewDecision,
+  RollbackReviewModel
 } from "@novel-studio/ui";
+
+type AgentPlanExecutionOptions = NonNullable<
+  Parameters<AgentRunPanelProps["onDecidePlan"]>[1]
+>;
 
 export interface AgentRunBridgeContext {
   readonly projectId: string;
@@ -41,7 +47,10 @@ export interface AgentRunBridge {
   resume(): Promise<AgentRunPanelProps>;
   retryStep(): Promise<AgentRunPanelProps>;
   refreshContext(decision: "refresh" | "exclude" | "cancel"): Promise<AgentRunPanelProps>;
-  decidePlan(decision: "approve" | "reject"): Promise<AgentRunPanelProps>;
+  decidePlan(
+    decision: "approve" | "reject",
+    execution?: AgentPlanExecutionOptions
+  ): Promise<AgentRunPanelProps>;
   updateChangeSetSelection(selection: ChangeSetSelection): Promise<AgentRunPanelProps>;
   applyChangeSet(): Promise<AgentRunPanelProps>;
   rejectChangeSet(): Promise<AgentRunPanelProps>;
@@ -52,6 +61,8 @@ export interface AgentRunBridge {
 interface BridgeState {
   readonly operationMode: AgentRunPanelProps["operationMode"];
   readonly contextMode: AgentRunPanelProps["contextMode"];
+  readonly writePolicy: AgentRunPanelProps["writePolicy"];
+  readonly writePolicyAcknowledged: boolean;
   readonly userRequest: string;
   readonly snapshot: AgentRunSnapshot | undefined;
   readonly events: AgentRunEvent[];
@@ -60,6 +71,9 @@ interface BridgeState {
   readonly planArtifact: AgentRunPanelProps["planArtifact"] | undefined;
   readonly changeSet: ChangeSet | undefined;
   readonly reviewOpen: boolean;
+  readonly rollbackReview: RollbackReviewModel | undefined;
+  readonly rollbackReviewOpen: boolean;
+  readonly rollbackDecisions: Readonly<Record<string, RollbackReviewDecision>>;
   readonly selectionPending: boolean;
   readonly errorMessage: string | undefined;
 }
@@ -69,6 +83,8 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   let state: BridgeState = {
     operationMode: "planning",
     contextMode: "writing",
+    writePolicy: "write_before_confirmation",
+    writePolicyAcknowledged: false,
     userRequest: "",
     snapshot: undefined,
     events: [],
@@ -77,6 +93,9 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     planArtifact: undefined,
     changeSet: undefined,
     reviewOpen: false,
+    rollbackReview: undefined,
+    rollbackReviewOpen: false,
+    rollbackDecisions: {},
     selectionPending: false,
     errorMessage: undefined
   };
@@ -84,23 +103,28 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   let approvalInFlight: Promise<AgentRunPanelProps> | undefined;
   let selectionInFlight: Promise<AgentRunPanelProps> | undefined;
   let undoInFlight: Promise<AgentRunPanelProps> | undefined;
+  let undoInFlightAction: "request" | "resolve" | "retry" | undefined;
 
   api.agentRuns.onEvent((event) => {
     if (context?.projectId !== event.projectId) return;
     if (state.snapshot !== undefined && state.snapshot.runId !== event.runId) return;
+    const nextSnapshot =
+      state.snapshot === undefined
+        ? state.snapshot
+        : {
+            ...state.snapshot,
+            status: eventStatus(event.type) ?? state.snapshot.status,
+            runRevision: event.runRevision,
+            lastSequence: event.sequence,
+            updatedAt: event.createdAt
+          };
     state = {
       ...state,
       events: appendEvent(state.events, event),
-      snapshot:
-        state.snapshot === undefined
-          ? state.snapshot
-          : {
-              ...state.snapshot,
-              status: eventStatus(event.type) ?? state.snapshot.status,
-              runRevision: event.runRevision,
-              lastSequence: event.sequence,
-              updatedAt: event.createdAt
-            },
+      snapshot: nextSnapshot,
+      ...(nextSnapshot !== undefined && isTerminalRunStatus(nextSnapshot.status)
+        ? defaultNextRunWriteAuthorization()
+        : {}),
       assistantText:
         event.type === "assistant_text_delta"
           ? `${state.assistantText}${stringDetail(event.detail, "delta") ?? ""}`
@@ -148,7 +172,13 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       expectedRunRevision: 0,
       operationMode: state.operationMode,
       contextMode: state.contextMode,
-      writePolicy: "write_before_confirmation",
+      writePolicy:
+        state.operationMode === "planning" ? "write_before_confirmation" : state.writePolicy,
+      ...(state.operationMode === "execution" &&
+      state.writePolicy === "user_preapproved_run" &&
+      state.writePolicyAcknowledged
+        ? { writePolicyAcknowledged: true }
+        : {}),
       userRequest: request,
       providerCapabilitySnapshot: capability.value,
       initialContextSources: contextSources(context)
@@ -235,7 +265,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     return toProps();
   }
 
-  async function decideRun(decision: "approve" | "reject"): Promise<AgentRunPanelProps> {
+  async function decideRun(
+    decision: "approve" | "reject",
+    execution?: AgentPlanExecutionOptions
+  ): Promise<AgentRunPanelProps> {
     const snapshot = requireSnapshot();
     const plan = state.planArtifact;
     if (snapshot === undefined || plan === undefined) return toProps();
@@ -248,7 +281,18 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         planId: plan.planId,
         planRevision: plan.revision,
         decision,
-        executionWritePolicy: "write_before_confirmation"
+        ...(decision === "approve"
+          ? {
+              executionContextMode: execution?.executionContextMode ?? snapshot.contextMode,
+              ...(execution?.executionWritePolicy === "user_preapproved_run" &&
+              execution.executionWritePolicyAcknowledged === true
+                ? {
+                    executionWritePolicy: "user_preapproved_run" as const,
+                    executionWritePolicyAcknowledged: true as const
+                  }
+                : {})
+            }
+          : {})
       } satisfies DecideAgentPlanCommand)
     );
     return toProps();
@@ -325,10 +369,15 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     if (undoInFlight !== undefined) return undoInFlight;
     const snapshot = requireSnapshot();
     if (snapshot === undefined) return Promise.resolve(toProps());
+    if (state.rollbackReview !== undefined && !state.rollbackReviewOpen) {
+      state = { ...state, rollbackReviewOpen: true };
+      notify();
+    }
     const request = (async () => {
       try {
         await applyCommandResult(
           await api.agentRuns.undoRun({
+            action: "request",
             runId: snapshot.runId,
             projectId: snapshot.projectId,
             commandId: createCommandId("undo-run"),
@@ -337,11 +386,55 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         );
       } finally {
         undoInFlight = undefined;
+        undoInFlightAction = undefined;
         notify();
       }
       return toProps();
     })();
     undoInFlight = request;
+    undoInFlightAction = "request";
+    notify();
+    return request;
+  }
+
+  function resolveRollbackReview(retryFailedOnly: boolean): Promise<AgentRunPanelProps> {
+    const action = retryFailedOnly ? "retry" : "resolve";
+    if (undoInFlight !== undefined) {
+      if (undoInFlightAction === action) return undoInFlight;
+      return undoInFlight.then(() => resolveRollbackReview(retryFailedOnly));
+    }
+    const snapshot = requireSnapshot();
+    const review = state.rollbackReview;
+    if (snapshot === undefined || review === undefined) return Promise.resolve(toProps());
+    const decisions = Object.entries(state.rollbackDecisions).map(
+      ([relativePath, decision]) => ({ relativePath, decision })
+    );
+    const request = (async () => {
+      try {
+        await applyCommandResult(
+          await api.agentRuns.undoRun({
+            action: "resolve",
+            runId: snapshot.runId,
+            projectId: snapshot.projectId,
+            commandId: createCommandId("resolve-run-undo"),
+            expectedRunRevision: snapshot.runRevision,
+            reviewId: review.reviewId,
+            ...(retryFailedOnly
+              ? { retryFailedOnly: true }
+              : decisions.length === 0
+                ? {}
+                : { decisions })
+          })
+        );
+      } finally {
+        undoInFlight = undefined;
+        undoInFlightAction = undefined;
+        notify();
+      }
+      return toProps();
+    })();
+    undoInFlight = request;
+    undoInFlightAction = action;
     notify();
     return request;
   }
@@ -366,6 +459,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       snapshot: result.value,
       operationMode: result.value.operationMode,
       contextMode: result.value.contextMode,
+      ...writeAuthorizationForSnapshot(result.value),
       errorMessage: undefined
     };
     await hydrate(result.value.runId);
@@ -380,11 +474,17 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     }
     const read = result.value;
     const nextChangeSet = read.changeSet;
+    const nextRollbackReview = rollbackReviewFromRead(read.rollbackReview);
+    const sameRollbackReview = hasSameRollbackDecisionContext(
+      state.rollbackReview,
+      nextRollbackReview
+    );
     state = {
       ...state,
       snapshot: read.snapshot,
       operationMode: read.snapshot.operationMode,
       contextMode: read.snapshot.contextMode,
+      ...writeAuthorizationForSnapshot(read.snapshot),
       events: [...read.events],
       assistantText: read.events
         .filter((event) => event.type === "assistant_text_delta")
@@ -393,6 +493,14 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       pendingUserInput: read.pendingUserInput,
       planArtifact: read.planArtifact,
       changeSet: nextChangeSet,
+      rollbackReview: nextRollbackReview,
+      rollbackReviewOpen:
+        nextRollbackReview === undefined
+          ? false
+          : sameRollbackReview
+            ? state.rollbackReviewOpen
+            : true,
+      rollbackDecisions: sameRollbackReview ? state.rollbackDecisions : {},
       reviewOpen:
         nextChangeSet === undefined
           ? false
@@ -416,6 +524,8 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       ...(state.snapshot === undefined ? {} : { runId: state.snapshot.runId }),
       operationMode: state.operationMode,
       contextMode: state.contextMode,
+      writePolicy: state.writePolicy,
+      writePolicyAcknowledged: state.writePolicyAcknowledged,
       status: state.snapshot?.status ?? "idle",
       userRequest: state.userRequest,
       assistantText: state.assistantText,
@@ -462,17 +572,78 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
               }
             }
           }),
+      ...(state.rollbackReview === undefined
+        ? {}
+        : {
+            rollbackReview: {
+              review: state.rollbackReview,
+              applying: undoInFlight !== undefined,
+              open: state.rollbackReviewOpen,
+              decisions: state.rollbackDecisions,
+              onDecisionChange: (relativePath, decision) => {
+                state = {
+                  ...state,
+                  rollbackDecisions: { ...state.rollbackDecisions, [relativePath]: decision }
+                };
+                notify();
+              },
+              onApply: () => {
+                void resolveRollbackReview(false);
+              },
+              onRetryFailed: () => {
+                void resolveRollbackReview(true);
+              },
+              onReturn: () => {
+                state = { ...state, rollbackReviewOpen: false };
+                notify();
+              }
+            }
+          }),
+      ...(state.operationMode === "execution"
+        ? {
+            canUndoRun: canUndoAppliedRun(state),
+            onUndoRun: () => {
+              void undoAgentRun();
+            }
+          }
+        : {}),
       ...(state.errorMessage === undefined ? {} : { errorMessage: state.errorMessage }),
       ...providerLabel(state.snapshot, context?.settings),
       ...(context?.chapterEditor?.dirty === true
         ? { contextSourceNotice: "使用未保存编辑器内容 · editor_buffer / dirty" }
         : {}),
       onOperationModeChange: (mode) => {
-        state = { ...state, operationMode: mode };
+        state = {
+          ...state,
+          operationMode: mode,
+          ...(mode === "planning"
+            ? { writePolicy: "write_before_confirmation", writePolicyAcknowledged: false }
+            : {})
+        };
         notify();
       },
       onContextModeChange: (mode) => {
         state = { ...state, contextMode: mode };
+        notify();
+      },
+      onWritePolicyChange: (writePolicy) => {
+        if (state.operationMode !== "execution") return;
+        state = {
+          ...state,
+          writePolicy,
+          writePolicyAcknowledged:
+            writePolicy === "user_preapproved_run" && state.writePolicyAcknowledged
+        };
+        notify();
+      },
+      onWritePolicyAcknowledgedChange: (writePolicyAcknowledged) => {
+        if (
+          state.operationMode !== "execution" ||
+          state.writePolicy !== "user_preapproved_run"
+        ) {
+          return;
+        }
+        state = { ...state, writePolicyAcknowledged };
         notify();
       },
       onSend: (request) => void sendRun(request).then(notify),
@@ -481,7 +652,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       onResume: () => void resumeRun().then(notify),
       onRetryStep: () => void retryRun().then(notify),
       onRefreshContext: (decision) => void refreshRun(decision).then(notify),
-      onDecidePlan: (decision) => void decideRun(decision).then(notify)
+      onDecidePlan: (decision, execution) => void decideRun(decision, execution).then(notify)
     };
   }
 
@@ -504,6 +675,11 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           planArtifact: undefined,
           changeSet: undefined,
           reviewOpen: false,
+          writePolicy: "write_before_confirmation",
+          writePolicyAcknowledged: false,
+          rollbackReview: undefined,
+          rollbackReviewOpen: false,
+          rollbackDecisions: {},
           selectionPending: false,
           errorMessage: undefined
         };
@@ -563,8 +739,8 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       notify();
       return next;
     },
-    async decidePlan(decision) {
-      const next = await decideRun(decision);
+    async decidePlan(decision, execution) {
+      const next = await decideRun(decision, execution);
       notify();
       return next;
     },
@@ -583,6 +759,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
 
 function canUndoAppliedRun(state: BridgeState): boolean {
   return (
+    state.snapshot?.operationMode === "execution" &&
     state.changeSet?.status === "applied" &&
     state.snapshot !== undefined &&
     isTerminalRunStatus(state.snapshot.status) &&
@@ -591,8 +768,72 @@ function canUndoAppliedRun(state: BridgeState): boolean {
   );
 }
 
+function rollbackReviewFromRead(value: unknown): RollbackReviewModel | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    (value as { schemaVersion?: unknown }).schemaVersion !== "1.0" ||
+    typeof (value as { reviewId?: unknown }).reviewId !== "string" ||
+    typeof (value as { runId?: unknown }).runId !== "string" ||
+    !Array.isArray((value as { files?: unknown }).files)
+  ) {
+    return undefined;
+  }
+  return value as RollbackReviewModel;
+}
+
+function hasSameRollbackDecisionContext(
+  current: RollbackReviewModel | undefined,
+  next: RollbackReviewModel | undefined
+): boolean {
+  if (
+    current === undefined ||
+    next === undefined ||
+    current.reviewId !== next.reviewId ||
+    current.updatedAt !== next.updatedAt ||
+    current.files.length !== next.files.length
+  ) {
+    return false;
+  }
+  return next.files.every((nextFile) => {
+    const currentFile = current.files.find(
+      (candidate) => candidate.relativePath === nextFile.relativePath
+    );
+    return (
+      currentFile !== undefined &&
+      currentFile.baselineChecksum === nextFile.baselineChecksum &&
+      currentFile.runLastWriteChecksum === nextFile.runLastWriteChecksum &&
+      currentFile.reviewedCurrentChecksum === nextFile.reviewedCurrentChecksum &&
+      currentFile.status === nextFile.status &&
+      currentFile.decision === nextFile.decision
+    );
+  });
+}
+
 function isTerminalRunStatus(status: AgentRunSnapshot["status"]): boolean {
   return ["completed", "cancelled", "failed", "limit_reached"].includes(status);
+}
+
+function defaultNextRunWriteAuthorization(): Pick<
+  BridgeState,
+  "writePolicy" | "writePolicyAcknowledged"
+> {
+  return {
+    writePolicy: "write_before_confirmation",
+    writePolicyAcknowledged: false
+  };
+}
+
+function writeAuthorizationForSnapshot(
+  snapshot: AgentRunSnapshot
+): Pick<BridgeState, "writePolicy" | "writePolicyAcknowledged"> {
+  if (snapshot.operationMode === "planning" || isTerminalRunStatus(snapshot.status)) {
+    return defaultNextRunWriteAuthorization();
+  }
+  return {
+    writePolicy: snapshot.writePolicy,
+    writePolicyAcknowledged: snapshot.writePolicy === "user_preapproved_run"
+  };
 }
 
 function contextSources(context: AgentRunBridgeContext | undefined): AgentContextSourceInput[] {

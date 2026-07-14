@@ -733,23 +733,83 @@ function toChangeSetFileSelections(value: unknown) {
 
 function toUndoAgentRunCommand(value: unknown): UndoRunCommand | undefined {
   if (!isRecord(value)) return undefined;
-  if (
-    Object.keys(value).some(
-      (key) => !["runId", "projectId", "commandId", "expectedRunRevision"].includes(key)
-    ) ||
-    !isNonEmptyString(value["runId"]) ||
+  if (!isNonEmptyString(value["runId"]) ||
     !isNonEmptyString(value["projectId"]) ||
     !isNonEmptyString(value["commandId"]) ||
-    !isNonNegativeInteger(value["expectedRunRevision"])
+    !isNonNegativeInteger(value["expectedRunRevision"]) ||
+    (value["action"] !== "request" && value["action"] !== "resolve")
   ) {
     return undefined;
   }
-  return {
+  const base = {
     runId: value["runId"],
     projectId: value["projectId"],
     commandId: value["commandId"],
     expectedRunRevision: value["expectedRunRevision"]
   };
+  if (value["action"] === "request") {
+    return Object.keys(value).some(
+      (key) =>
+        !["action", "runId", "projectId", "commandId", "expectedRunRevision"].includes(key)
+    )
+      ? undefined
+      : { ...base, action: "request" };
+  }
+  if (
+    Object.keys(value).some(
+      (key) =>
+        ![
+          "action",
+          "runId",
+          "projectId",
+          "commandId",
+          "expectedRunRevision",
+          "reviewId",
+          "decisions",
+          "retryFailedOnly"
+        ].includes(key)
+    ) ||
+    !isNonEmptyString(value["reviewId"]) ||
+    (value["retryFailedOnly"] !== undefined && value["retryFailedOnly"] !== true)
+  ) {
+    return undefined;
+  }
+  const decisions = toRollbackReviewDecisions(value["decisions"]);
+  if (decisions === undefined || (decisions.length === 0 && value["retryFailedOnly"] !== true)) {
+    return undefined;
+  }
+  return {
+    ...base,
+    action: "resolve",
+    reviewId: value["reviewId"],
+    ...(decisions.length === 0 ? {} : { decisions }),
+    ...(value["retryFailedOnly"] === true ? { retryFailedOnly: true } : {})
+  };
+}
+
+function toRollbackReviewDecisions(
+  value: unknown
+): { readonly relativePath: string; readonly decision: "keep_current" | "restore_baseline" }[] | undefined {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return undefined;
+  const decisions: {
+    relativePath: string;
+    decision: "keep_current" | "restore_baseline";
+  }[] = [];
+  for (const entry of value) {
+    if (
+      !isRecord(entry) ||
+      Object.keys(entry).some((key) => !["relativePath", "decision"].includes(key)) ||
+      !isNonEmptyString(entry["relativePath"]) ||
+      (entry["decision"] !== "keep_current" && entry["decision"] !== "restore_baseline")
+    ) {
+      return undefined;
+    }
+    decisions.push({ relativePath: entry["relativePath"], decision: entry["decision"] });
+  }
+  return new Set(decisions.map((decision) => decision.relativePath)).size === decisions.length
+    ? decisions
+    : undefined;
 }
 
 function isNonEmptyString(value: unknown): value is string {

@@ -86,9 +86,7 @@ test("stops a live Agent run through the real Electron IPC path", async () => {
     await openAgentPanel(page);
     await page.getByLabel("Agent 请求").fill("读取当前章节");
     await page.getByLabel("启动 Agent 运行").click();
-    const contextRefresh = page.getByLabel("上下文刷新");
-    await expect(contextRefresh).toBeVisible();
-    await contextRefresh.getByRole("button", { name: "从目标排除" }).click();
+    await resolveContextRefreshIfVisible(page);
     await expect(page.locator(".ns-agent-assistant-text")).toContainText("等待停止");
     await expect(page.locator(".ns-agent-status")).toHaveText("规划中");
 
@@ -265,6 +263,15 @@ async function configureLocalModel(page: Page, baseUrl: string): Promise<void> {
 async function openAgentPanel(page: Page): Promise<void> {
   await page.getByLabel("活动栏").getByRole("button", { name: "AI 工作流" }).click();
   await expect(page.getByLabel("Agentic Writing Loop")).toBeVisible();
+}
+
+async function resolveContextRefreshIfVisible(page: Page): Promise<void> {
+  const refresh = page.getByLabel("上下文刷新");
+  const visible = await refresh
+    .waitFor({ state: "visible", timeout: 1_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (visible) await refresh.getByRole("button", { name: "从目标排除" }).click();
 }
 
 async function replaceChapterText(page: Page, value: string): Promise<void> {

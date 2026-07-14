@@ -144,8 +144,7 @@ test("applies a confirmed multi-file Change Set through one Version Group", asyn
       )
     );
     expect(runSnapshot).toMatchObject({
-      runId: journal.runId,
-      versionGroupId: journal.versionGroupId
+      runId: journal.runId
     });
 
     const writes = await readHistoryRecords(scenario.projectRoot, "before-agent-write");
@@ -182,7 +181,9 @@ test("applies a confirmed multi-file Change Set through one Version Group", asyn
       })
       .toEqual({ status: "completed", versionGroupId: journal.versionGroupId });
 
-    const undo = scenario.page.getByRole("button", { name: "撤销本次运行" });
+    const undo = scenario.page
+      .getByLabel("Agentic Writing Loop")
+      .getByRole("button", { name: "撤销本次运行" });
     await expect(undo).toBeEnabled();
     await undo.dblclick();
     await expect

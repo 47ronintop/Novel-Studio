@@ -1,6 +1,5 @@
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
-import type { AgentWritePolicy } from "./agent-run-types.js";
 import type { ChangeSet } from "./change-set.js";
 
 export interface ChangeSetApprovalBinding {
@@ -13,14 +12,13 @@ export interface ChangeSetApprovalBinding {
 export interface ChangeSetApproval {
   readonly schemaVersion: "1.0";
   readonly decision: "apply_selected" | "reject_all";
-  readonly approvalSource: "human_confirmation";
+  readonly approvalSource: "human_confirmation" | "user_preapproved_run";
   readonly resolvedAt: string;
   readonly binding: ChangeSetApprovalBinding;
 }
 
 export interface DecideChangeSetApprovalInput {
   readonly changeSet: ChangeSet;
-  readonly writePolicy: AgentWritePolicy;
   readonly decision: ChangeSetApproval["decision"];
   readonly changeSetId: string;
   readonly revision: number;
@@ -31,13 +29,6 @@ export interface DecideChangeSetApprovalInput {
 export function decideChangeSetApproval(
   input: DecideChangeSetApprovalInput
 ): Result<ChangeSetApproval, UnifiedError> {
-  if (input.writePolicy !== "write_before_confirmation") {
-    return failure(
-      "CHANGE_SET_WRITE_POLICY_REJECTED",
-      "Stage 2 requires explicit human confirmation before every write.",
-      "Use the write-before-confirmation policy."
-    );
-  }
   if (
     input.changeSet.changeSetId !== input.changeSetId ||
     input.changeSet.revision !== input.revision ||

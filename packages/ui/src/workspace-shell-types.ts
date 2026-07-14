@@ -4,6 +4,7 @@ import type {
   AgentOperationMode,
   AgentRunEvent,
   AgentRunStatus,
+  AgentWritePolicy,
   PlanArtifact,
   ApplicationCommand,
   ApplicationCommandId,
@@ -16,7 +17,7 @@ import type {
 import type { ChapterSummary, UserAppearancePreferences } from "@novel-studio/shared";
 import type { ChapterEditorProps } from "./chapter-editor.js";
 import type { CommandPaletteFeedback } from "./command-palette.js";
-import type { ChangeSetReviewProps } from "./change-set-review.js";
+import type { ChangeSetReviewProps, RollbackReviewProps } from "./change-set-review.js";
 import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
 import type { EditorPreferences } from "./editor-toolbar.js";
 import type { ModelSettingsPanelProps } from "./model-settings-panel.js";
@@ -193,6 +194,8 @@ export interface AgentRunPanelProps {
   readonly runId?: string;
   readonly operationMode: AgentOperationMode;
   readonly contextMode: AgentContextMode;
+  readonly writePolicy: AgentWritePolicy;
+  readonly writePolicyAcknowledged: boolean;
   readonly status: AgentRunStatus | "idle";
   readonly userRequest: string;
   readonly assistantText: string;
@@ -203,15 +206,29 @@ export interface AgentRunPanelProps {
   readonly providerLabel?: string;
   readonly contextSourceNotice?: string;
   readonly changeSetReview?: ChangeSetReviewProps;
+  readonly rollbackReview?: RollbackReviewProps;
+  readonly canUndoRun?: boolean;
+  readonly onUndoRun?: () => void;
   readonly onOperationModeChange: (mode: AgentOperationMode) => void;
   readonly onContextModeChange: (mode: AgentContextMode) => void;
+  readonly onWritePolicyChange: (policy: AgentWritePolicy) => void;
+  readonly onWritePolicyAcknowledgedChange: (acknowledged: boolean) => void;
   readonly onSend: (request: string) => void;
   readonly onStop: () => void;
   readonly onAnswerUserInput: (answer: string) => void;
   readonly onResume: () => void;
   readonly onRetryStep: () => void;
   readonly onRefreshContext: (decision: "refresh" | "exclude" | "cancel") => void;
-  readonly onDecidePlan: (decision: "approve" | "reject") => void;
+  readonly onDecidePlan: (
+    decision: "approve" | "reject",
+    execution?: AgentPlanExecutionOptions
+  ) => void;
+}
+
+export interface AgentPlanExecutionOptions {
+  readonly executionContextMode: AgentContextMode;
+  readonly executionWritePolicy: AgentWritePolicy;
+  readonly executionWritePolicyAcknowledged?: true;
 }
 
 export interface AgentRunPendingUserInputProps {

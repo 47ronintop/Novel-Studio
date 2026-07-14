@@ -1,14 +1,30 @@
 export type VersionGroupAssetType = "chapter" | "text";
 export type VersionGroupTransactionStatus =
-  "failed" | "applied" | "rolled_back" | "partial_failure";
+  "failed" | "applied" | "rolled_back" | "partial_failure" | "awaiting_review";
 export type VersionGroupFailureKind =
   "preflight_failure" | "write_failure" | "partial_failure" | "undo_conflict" | "undo_failure";
 export type VersionGroupWriteStatus =
-  "pending" | "applied" | "rolled_back" | "rollback_failed" | "conflict";
+  | "pending"
+  | "applied"
+  | "rolled_back"
+  | "rollback_failed"
+  | "conflict"
+  | "completed"
+  | "kept"
+  | "stale";
 export type VersionGroupUndoStatus =
-  "available" | "not_available" | "completed" | "conflict" | "partial_failure";
+  | "available"
+  | "not_available"
+  | "completed"
+  | "conflict"
+  | "partial_failure"
+  | "review_required";
 export type VersionGroupPostCommitHook =
-  "syncSavedEditor" | "markRecoveryClean" | "resumeAutosave";
+  | "syncSavedEditor"
+  | "preserveDirtyBuffers"
+  | "markRecoveryClean"
+  | "surfaceTransactionRecoveryReview"
+  | "resumeAutosave";
 
 export interface VersionGroupSynchronization {
   readonly status: "recovery_required";
@@ -40,6 +56,56 @@ export interface VersionGroupUndoMetadata {
   readonly undoOfVersionGroupIds?: readonly string[];
 }
 
+export type RollbackReviewDecision = "keep_current" | "restore_baseline";
+export type RollbackReviewFileStatus =
+  | "ready"
+  | "conflict"
+  | "stale"
+  | "failed"
+  | "completed"
+  | "kept";
+export type RollbackReviewStatus = "pending" | "partial_failure" | "completed";
+
+export interface RollbackReviewDiff {
+  readonly currentToLastWrite: string;
+  readonly currentToBaseline: string;
+  readonly lastWriteToBaseline: string;
+}
+
+export interface RollbackReviewFile {
+  readonly relativePath: string;
+  readonly assetType: VersionGroupAssetType;
+  readonly assetId?: string;
+  readonly baselineContent: string;
+  readonly baselineChecksum: string;
+  readonly baselineHistoryContent?: string;
+  readonly baselineVersionId: string;
+  readonly runLastWriteContent: string;
+  readonly runLastWriteChecksum: string;
+  readonly runLastWriteHistoryContent?: string;
+  readonly reviewedCurrentContent: string;
+  readonly reviewedCurrentChecksum: string;
+  readonly reviewedCurrentHistoryContent?: string;
+  readonly reviewedEditorChecksum?: string;
+  readonly diff: RollbackReviewDiff;
+  readonly decision?: RollbackReviewDecision;
+  readonly status: RollbackReviewFileStatus;
+  readonly snapshotVersionId?: string;
+  readonly errorCode?: string;
+}
+
+export interface RollbackReview {
+  readonly schemaVersion: "1.0";
+  readonly reviewId: string;
+  readonly runId: string;
+  readonly status: RollbackReviewStatus;
+  readonly sourceVersionGroupIds: readonly string[];
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly processedCommandIds: readonly string[];
+  readonly files: readonly RollbackReviewFile[];
+}
+
 export interface VersionGroup {
   readonly schemaVersion: "1.0";
   readonly versionGroupId: string;
@@ -48,12 +114,15 @@ export interface VersionGroup {
   readonly changeSetId: string;
   readonly changeSetRevision: number;
   readonly changeSetChecksum: string;
+  readonly writePolicy?: AgentWritePolicy;
+  readonly approvalSource?: "human_confirmation" | "user_preapproved_run";
   readonly createdAt: string;
   readonly writes: readonly VersionGroupWrite[];
   readonly baselineByPath: Readonly<Record<string, VersionGroupBaseline>>;
   readonly transactionStatus: VersionGroupTransactionStatus;
   readonly undoStatus: VersionGroupUndoStatus;
   readonly undoMetadata: VersionGroupUndoMetadata;
+  readonly rollbackReview?: RollbackReview;
   readonly failureKind?: VersionGroupFailureKind;
   readonly synchronization?: VersionGroupSynchronization;
 }
@@ -65,6 +134,8 @@ interface VersionGroupBaseInput {
   readonly changeSetId: string;
   readonly changeSetRevision: number;
   readonly changeSetChecksum: string;
+  readonly writePolicy?: AgentWritePolicy;
+  readonly approvalSource?: "human_confirmation" | "user_preapproved_run";
   readonly createdAt: string;
   readonly writes: readonly VersionGroupWrite[];
   readonly baselineByPath: Readonly<Record<string, VersionGroupBaseline>>;
@@ -111,6 +182,8 @@ function baseGroup(
     changeSetId: input.changeSetId,
     changeSetRevision: input.changeSetRevision,
     changeSetChecksum: input.changeSetChecksum,
+    ...(input.writePolicy === undefined ? {} : { writePolicy: input.writePolicy }),
+    ...(input.approvalSource === undefined ? {} : { approvalSource: input.approvalSource }),
     createdAt: input.createdAt,
     writes: input.writes,
     baselineByPath: input.baselineByPath,
@@ -161,11 +234,26 @@ function freezeVersionGroup(group: VersionGroup): VersionGroup {
           ...group.synchronization,
           failedHooks: Object.freeze([...group.synchronization.failedHooks])
         });
+  const rollbackReview =
+    group.rollbackReview === undefined
+      ? undefined
+      : Object.freeze({
+          ...group.rollbackReview,
+          sourceVersionGroupIds: Object.freeze([...group.rollbackReview.sourceVersionGroupIds]),
+          processedCommandIds: Object.freeze([...group.rollbackReview.processedCommandIds]),
+          files: Object.freeze(
+            group.rollbackReview.files.map((file) =>
+              Object.freeze({ ...file, diff: Object.freeze({ ...file.diff }) })
+            )
+          )
+        });
   return Object.freeze({
     ...group,
     writes,
     baselineByPath,
     undoMetadata,
+    ...(rollbackReview === undefined ? {} : { rollbackReview }),
     ...(synchronization === undefined ? {} : { synchronization })
   });
 }
+import type { AgentWritePolicy } from "./agent-run-types.js";

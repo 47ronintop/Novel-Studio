@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import type { ChangeSet, ChangeSetApproval, VersionGroup } from "@novel-studio/agent-engine";
 import { err, ok } from "@novel-studio/shared";
@@ -28,6 +28,7 @@ describe("VersionGroupSession", () => {
 
     expect(result.ok).toBe(true);
     expect(appliedInput).toMatchObject({
+      writePolicy: "write_before_confirmation",
       approvalSource: "human_confirmation",
       approvalToken: "token_01"
     });
@@ -38,6 +39,28 @@ describe("VersionGroupSession", () => {
       "recovery-clean:notes/one.md",
       "resume:notes/one.md"
     ]);
+  });
+
+  test("rejects a publicly forged preapproved-run source before the transaction port", async () => {
+    const operations: string[] = [];
+    const apply = vi.fn(async () =>
+      ok({ ...appliedGroup(), approvalSource: "user_preapproved_run" as const })
+    );
+    const session = createSession(operations, {
+      apply
+    });
+
+    const result = await session.applyApproved({
+      changeSet: { ...changeSet(), writePolicy: "user_preapproved_run" },
+      approval: { ...approval(), approvalSource: "user_preapproved_run" }
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "VERSION_GROUP_APPROVAL_MISMATCH" }
+    });
+    expect(apply).not.toHaveBeenCalled();
+    expect(operations).toEqual([]);
   });
 
   test("reports post-commit synchronization failures without turning an applied write into failure", async () => {
@@ -209,6 +232,377 @@ describe("VersionGroupSession", () => {
       `sync:notes/one.md:Saved:${"b".repeat(64)}`,
       "recovery-clean:notes/one.md",
       "resume:notes/one.md"
+    ]);
+  });
+
+  test("keeps clean run undo recovery dirty when editor synchronization fails", async () => {
+    const operations: string[] = [];
+    const session = createSession(
+      operations,
+      {
+        async undoRun() {
+          return ok({ ...appliedGroup(), undoStatus: "completed" });
+        }
+      },
+      {
+        async syncSavedEditor(input) {
+          operations.push(`sync-failed:${input.relativePath}`);
+          throw new Error("dirty editor changed");
+        }
+      }
+    );
+
+    const result = await session.undoRun({
+      runId: "run_01",
+      relativePaths: ["notes/one.md"]
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.value.synchronization).toEqual({
+      status: "recovery_required",
+      failedHooks: ["syncSavedEditor"]
+    });
+    expect(operations).toEqual([
+      "pause:notes/one.md",
+      "sync-failed:notes/one.md",
+      "preserve-dirty:notes/one.md",
+      "resume:notes/one.md"
+    ]);
+  });
+
+  test("re-reads dirty editor content after pausing autosave", async () => {
+    const operations: string[] = [];
+    let receivedEditorContents: readonly { readonly relativePath: string; readonly content: string }[] = [];
+    const session = createSession(
+      operations,
+      {
+        async undoRun(input) {
+          receivedEditorContents = input.currentEditorContents ?? [];
+          operations.push("undo-run");
+          return ok({ ...appliedGroup(), undoStatus: "completed" });
+        }
+      },
+      {
+        async readEditorState(relativePath: string) {
+          operations.push(`read-editor:${relativePath}`);
+          return { dirty: true, content: "dirty after pause" };
+        }
+      }
+    );
+
+    const result = await session.undoRun({
+      runId: "run_01",
+      relativePaths: ["notes/one.md"],
+      currentEditorContents: [{ relativePath: "notes/one.md", content: "dirty before pause" }]
+    });
+
+    expect(result.ok).toBe(true);
+    expect(receivedEditorContents).toEqual([
+      { relativePath: "notes/one.md", content: "dirty after pause" }
+    ]);
+    expect(operations.slice(0, 3)).toEqual([
+      "pause:notes/one.md",
+      "read-editor:notes/one.md",
+      "undo-run"
+    ]);
+  });
+
+  test("synchronizes completed rollback files without cleaning kept user buffers", async () => {
+    const operations: string[] = [];
+    const base = appliedGroup();
+    const firstWrite = base.writes[0];
+    if (firstWrite === undefined) throw new Error("Expected an applied write fixture.");
+    const session = createSession(operations, {
+      async undoRun() {
+        return ok({
+          ...base,
+          versionGroupId: "rollback_run_01",
+          undoStatus: "completed" as const,
+          writes: [
+            { ...firstWrite, relativePath: "notes/restored.md", status: "completed" as const },
+            { ...firstWrite, relativePath: "notes/kept.md", status: "kept" as const }
+          ],
+          rollbackReview: {
+            schemaVersion: "1.0" as const,
+            reviewId: "rollback_run_01",
+            runId: "run_01",
+            status: "completed" as const,
+            sourceVersionGroupIds: ["vg_01"],
+            createdAt: "2026-07-13T01:03:00.000Z",
+            updatedAt: "2026-07-13T01:03:00.000Z",
+            processedCommandIds: [],
+            files: []
+          }
+        });
+      }
+    });
+
+    const result = await session.undoRun({
+      runId: "run_01",
+      relativePaths: ["notes/restored.md", "notes/kept.md"]
+    });
+
+    expect(result.ok).toBe(true);
+    expect(operations).toEqual([
+      "pause:notes/restored.md,notes/kept.md",
+      `sync:notes/restored.md:Saved:${"b".repeat(64)}`,
+      "recovery-clean:notes/restored.md",
+      "preserve-dirty:notes/kept.md",
+      "resume:notes/restored.md,notes/kept.md"
+    ]);
+  });
+
+  test("keeps rollback recovery dirty when editor synchronization fails", async () => {
+    const operations: string[] = [];
+    const base = appliedGroup();
+    const firstWrite = base.writes[0];
+    if (firstWrite === undefined) throw new Error("Expected an applied write fixture.");
+    const session = createSession(
+      operations,
+      {
+        async undoRun() {
+          return ok({
+            ...base,
+            versionGroupId: "rollback_run_sync_failure",
+            writes: [{ ...firstWrite, status: "completed" as const }],
+            rollbackReview: {
+              schemaVersion: "1.0" as const,
+              reviewId: "rollback_run_sync_failure",
+              runId: "run_01",
+              status: "completed" as const,
+              sourceVersionGroupIds: ["vg_01"],
+              createdAt: "2026-07-13T01:03:00.000Z",
+              updatedAt: "2026-07-13T01:03:00.000Z",
+              processedCommandIds: [],
+              files: [
+                {
+                  relativePath: "notes/one.md",
+                  assetType: "text" as const,
+                  baselineContent: "baseline",
+                  baselineChecksum: "b".repeat(64),
+                  baselineVersionId: "ver-baseline",
+                  runLastWriteContent: "agent",
+                  runLastWriteChecksum: "c".repeat(64),
+                  reviewedCurrentContent: "dirty A",
+                  reviewedCurrentChecksum: "d".repeat(64),
+                  reviewedEditorChecksum: "a".repeat(64),
+                  diff: {
+                    currentToLastWrite: "current -> agent",
+                    currentToBaseline: "current -> baseline",
+                    lastWriteToBaseline: "agent -> baseline"
+                  },
+                  decision: "restore_baseline" as const,
+                  status: "completed" as const
+                }
+              ]
+            }
+          });
+        }
+      },
+      {
+        async syncSavedEditor(input) {
+          operations.push(
+            `sync-failed:${input.relativePath}:${input.expectedDirtyChecksum ?? "missing"}`
+          );
+          throw new Error("dirty editor");
+        }
+      }
+    );
+
+    const result = await session.undoRun({
+      runId: "run_01",
+      relativePaths: ["notes/one.md"]
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.value.synchronization).toEqual({
+      status: "recovery_required",
+      failedHooks: ["syncSavedEditor"]
+    });
+    expect(operations).toEqual([
+      "pause:notes/one.md",
+      `sync-failed:notes/one.md:${"a".repeat(64)}`,
+      "preserve-dirty:notes/one.md",
+      "resume:notes/one.md"
+    ]);
+  });
+
+  test("does not mask a completed rollback when dirty-buffer preservation fails", async () => {
+    const operations: string[] = [];
+    const base = appliedGroup();
+    const firstWrite = base.writes[0];
+    if (firstWrite === undefined) throw new Error("Expected an applied write fixture.");
+    const session = createSession(
+      operations,
+      {
+        async undoRun() {
+          return ok({
+            ...base,
+            versionGroupId: "rollback_run_preserve_failure",
+            writes: [{ ...firstWrite, status: "completed" as const }],
+            rollbackReview: {
+              schemaVersion: "1.0" as const,
+              reviewId: "rollback_run_preserve_failure",
+              runId: "run_01",
+              status: "completed" as const,
+              sourceVersionGroupIds: ["vg_01"],
+              createdAt: "2026-07-13T01:03:00.000Z",
+              updatedAt: "2026-07-13T01:03:00.000Z",
+              processedCommandIds: [],
+              files: []
+            }
+          });
+        }
+      },
+      {
+        async syncSavedEditor() {
+          operations.push("sync-failed");
+          throw new Error("editor changed");
+        },
+        async preserveDirtyBuffers() {
+          operations.push("preserve-failed");
+          throw new Error("recovery unavailable");
+        }
+      }
+    );
+
+    const result = await session.undoRun({
+      runId: "run_01",
+      relativePaths: ["notes/one.md"]
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.value.synchronization).toEqual({
+      status: "recovery_required",
+      failedHooks: ["syncSavedEditor", "preserveDirtyBuffers"]
+    });
+    expect(operations).toEqual([
+      "pause:notes/one.md",
+      "sync-failed",
+      "preserve-failed",
+      "resume:notes/one.md"
+    ]);
+  });
+
+  test("preserves kept buffers alongside failed files in a partial rollback", async () => {
+    const operations: string[] = [];
+    const base = appliedGroup();
+    const firstWrite = base.writes[0];
+    if (firstWrite === undefined) throw new Error("Expected an applied write fixture.");
+    const session = createSession(operations, {
+      async undoRun() {
+        return ok({
+          ...base,
+          versionGroupId: "rollback_run_01",
+          transactionStatus: "partial_failure" as const,
+          failureKind: "undo_failure" as const,
+          undoStatus: "partial_failure" as const,
+          writes: [
+            { ...firstWrite, relativePath: "notes/restored.md", status: "completed" as const },
+            { ...firstWrite, relativePath: "notes/kept.md", status: "kept" as const },
+            {
+              ...firstWrite,
+              relativePath: "notes/failed.md",
+              status: "rollback_failed" as const
+            }
+          ],
+          rollbackReview: {
+            schemaVersion: "1.0" as const,
+            reviewId: "rollback_run_01",
+            runId: "run_01",
+            status: "partial_failure" as const,
+            sourceVersionGroupIds: ["vg_01"],
+            createdAt: "2026-07-13T01:03:00.000Z",
+            updatedAt: "2026-07-13T01:03:00.000Z",
+            processedCommandIds: [],
+            files: []
+          }
+        });
+      }
+    });
+
+    const result = await session.undoRun({
+      runId: "run_01",
+      relativePaths: ["notes/restored.md", "notes/kept.md", "notes/failed.md"]
+    });
+
+    expect(result.ok).toBe(true);
+    expect(operations).toEqual([
+      "pause:notes/restored.md,notes/kept.md,notes/failed.md",
+      `sync:notes/restored.md:Saved:${"b".repeat(64)}`,
+      "recovery-clean:notes/restored.md",
+      "preserve-dirty:notes/kept.md",
+      "preserve-dirty:notes/failed.md",
+      "recovery-review:rollback_run_01:partial_failure",
+      "resume:notes/restored.md,notes/kept.md,notes/failed.md"
+    ]);
+  });
+
+  test("does not mask a partial rollback when recovery hooks fail", async () => {
+    const operations: string[] = [];
+    const base = appliedGroup();
+    const firstWrite = base.writes[0];
+    if (firstWrite === undefined) throw new Error("Expected an applied write fixture.");
+    const session = createSession(
+      operations,
+      {
+        async undoRun() {
+          return ok({
+            ...base,
+            versionGroupId: "rollback_run_hook_failure",
+            transactionStatus: "partial_failure" as const,
+            failureKind: "undo_failure" as const,
+            undoStatus: "partial_failure" as const,
+            writes: [
+              { ...firstWrite, relativePath: "notes/kept.md", status: "kept" as const },
+              {
+                ...firstWrite,
+                relativePath: "notes/failed.md",
+                status: "rollback_failed" as const
+              }
+            ],
+            rollbackReview: {
+              schemaVersion: "1.0" as const,
+              reviewId: "rollback_run_hook_failure",
+              runId: "run_01",
+              status: "partial_failure" as const,
+              sourceVersionGroupIds: ["vg_01"],
+              createdAt: "2026-07-13T01:03:00.000Z",
+              updatedAt: "2026-07-13T01:03:00.000Z",
+              processedCommandIds: [],
+              files: []
+            }
+          });
+        }
+      },
+      {
+        async preserveDirtyBuffers(relativePaths) {
+          operations.push(`preserve-failed:${relativePaths.join(",")}`);
+          throw new Error("recovery unavailable");
+        },
+        async surfaceTransactionRecoveryReview() {
+          operations.push("review-failed");
+          throw new Error("review unavailable");
+        }
+      }
+    );
+
+    const result = await session.undoRun({
+      runId: "run_01",
+      relativePaths: ["notes/kept.md", "notes/failed.md"]
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.value.synchronization).toEqual({
+      status: "recovery_required",
+      failedHooks: ["preserveDirtyBuffers", "surfaceTransactionRecoveryReview"]
+    });
+    expect(operations).toEqual([
+      "pause:notes/kept.md,notes/failed.md",
+      "preserve-failed:notes/kept.md",
+      "preserve-failed:notes/failed.md",
+      "review-failed",
+      "resume:notes/kept.md,notes/failed.md"
     ]);
   });
 

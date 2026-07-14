@@ -14,7 +14,6 @@ describe("Change Set approval gate", () => {
     const changeSet = await validChangeSet();
     const result = decideChangeSetApproval({
       changeSet,
-      writePolicy: "write_before_confirmation",
       decision: "apply_selected",
       changeSetId: changeSet.changeSetId,
       revision: changeSet.revision,
@@ -49,7 +48,6 @@ describe("Change Set approval gate", () => {
     const changeSet = await validChangeSet();
     const result = decideChangeSetApproval({
       changeSet,
-      writePolicy: "write_before_confirmation",
       decision: "apply_selected",
       changeSetId: changeSet.changeSetId,
       revision: changeSet.revision,
@@ -61,21 +59,33 @@ describe("Change Set approval gate", () => {
     expect(result).toMatchObject({ ok: false, error: { code: "CHANGE_SET_BINDING_MISMATCH" } });
   });
 
-  test("rejects every automatic write policy at the Stage 2 gate", async () => {
+  test("does not let a public gate caller mint an automatic approval source", async () => {
     const changeSet = await validChangeSet();
-    const result = decideChangeSetApproval({
-      changeSet,
-      writePolicy: "user_preapproved_run",
-      decision: "apply_selected",
-      changeSetId: changeSet.changeSetId,
-      revision: changeSet.revision,
-      checksum: changeSet.checksum,
-      resolvedAt: "2026-07-13T02:00:00.000Z"
-    });
+    const result = decideChangeSetApproval(
+      {
+        changeSet,
+        writePolicy: "user_preapproved_run",
+        approvalSource: "user_preapproved_run",
+        decision: "apply_selected",
+        changeSetId: changeSet.changeSetId,
+        revision: changeSet.revision,
+        checksum: changeSet.checksum,
+        resolvedAt: "2026-07-13T02:00:00.000Z"
+      } as never
+    );
 
     expect(result).toMatchObject({
-      ok: false,
-      error: { code: "CHANGE_SET_WRITE_POLICY_REJECTED" }
+      ok: true,
+      value: {
+        decision: "apply_selected",
+        approvalSource: "human_confirmation",
+        binding: {
+          changeSetId: changeSet.changeSetId,
+          revision: changeSet.revision,
+          checksum: changeSet.checksum,
+          approvalToken: changeSet.approvalToken
+        }
+      }
     });
   });
 
@@ -140,7 +150,6 @@ async function validChangeSet(): Promise<ChangeSet> {
 function decide(changeSet: ChangeSet, decision: "apply_selected" | "reject_all") {
   return decideChangeSetApproval({
     changeSet,
-    writePolicy: "write_before_confirmation",
     decision,
     changeSetId: changeSet.changeSetId,
     revision: changeSet.revision,

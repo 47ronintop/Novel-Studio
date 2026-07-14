@@ -1,4 +1,5 @@
 import { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage } from "electron";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -75,8 +76,8 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         content: activeChapter.value.state.chapter.body
       };
     },
-    syncSavedEditor: async (relativePath) => {
-      await syncSavedEditorForPath(activeDesktopApplication, relativePath);
+    syncSavedEditor: async (relativePath, options) => {
+      await syncSavedEditorForPath(activeDesktopApplication, relativePath, options);
     },
     resolveModelProfile: async (profileId) => {
       const profiles = await activeDesktopApplication?.listModelProfiles();
@@ -137,7 +138,8 @@ function readPositiveInteger(value: string | undefined): number | undefined {
 
 export async function syncSavedEditorForPath(
   application: Pick<DesktopApplication, "readActiveChapterState" | "loadActiveChapter"> | undefined,
-  relativePath: string
+  relativePath: string,
+  options: { readonly expectedDirtyChecksum?: string } = {}
 ): Promise<void> {
   const match = /^chapters\/([A-Za-z0-9_-]+)\.md$/.exec(relativePath);
   if (application === undefined || match?.[1] === undefined) return;
@@ -145,14 +147,29 @@ export async function syncSavedEditorForPath(
   const activeChapter = await application.readActiveChapterState();
   if (activeChapter.ok && activeChapter.value.state.chapter.frontmatter.id === match[1]) {
     if (activeChapter.value.state.dirty) {
-      throw createUnifiedError({
-        code: "AGENT_WRITE_EDITOR_SYNC_DIRTY",
-        category: "UserError",
-        message: "The active editor changed while Agent changes were being applied.",
-        recoverability: "user-action",
-        suggestedAction: "Review the preserved editor buffer and transaction recovery status.",
-        traceId: "desktop-agent-editor-sync"
-      });
+      if (options.expectedDirtyChecksum === undefined) {
+        throw createUnifiedError({
+          code: "AGENT_WRITE_EDITOR_SYNC_DIRTY",
+          category: "UserError",
+          message: "The active editor changed while Agent changes were being applied.",
+          recoverability: "user-action",
+          suggestedAction: "Review the preserved editor buffer and transaction recovery status.",
+          traceId: "desktop-agent-editor-sync"
+        });
+      }
+      const actualDirtyChecksum = createHash("sha256")
+        .update(activeChapter.value.state.chapter.body, "utf8")
+        .digest("hex");
+      if (actualDirtyChecksum !== options.expectedDirtyChecksum) {
+        throw createUnifiedError({
+          code: "AGENT_WRITE_EDITOR_SYNC_STALE",
+          category: "UserError",
+          message: "The active editor changed while Agent changes were being applied.",
+          recoverability: "user-action",
+          suggestedAction: "Review the preserved editor buffer and transaction recovery status.",
+          traceId: "desktop-agent-editor-sync"
+        });
+      }
     }
     await application.loadActiveChapter();
   }

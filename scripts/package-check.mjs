@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -12,6 +13,7 @@ await checkPackagingEnvironment();
 await checkBuildArtifacts();
 await checkBuildManifest();
 await checkElectronBuilderConfig();
+await checkAgentAutonomyPrerequisites();
 
 if (failures.length > 0) {
   for (const failure of failures) {
@@ -182,6 +184,59 @@ async function checkElectronBuilderConfig() {
   }
   if (config.nsis?.allowToChangeInstallationDirectory !== true) {
     failures.push("NSIS installer must allow changing installation directory.");
+  }
+}
+
+async function checkAgentAutonomyPrerequisites() {
+  const requiredSafetySuites = [
+    "packages/agent-engine/test/full-autonomy-policy.test.ts",
+    "packages/repository/test/agent-write-transaction.test.ts",
+    "packages/repository/test/history-versions.test.ts",
+    "packages/application/test/run-undo-conflict.test.ts",
+    "packages/application/test/chapter-autosave-recovery.test.ts",
+    "apps/desktop/test/agent-write.e2e.ts",
+    "apps/desktop/test/agent-run-autonomy.e2e.ts"
+  ];
+  const existingSafetySuites = new Set();
+
+  for (const suite of requiredSafetySuites) {
+    if (!(await fileExists(join(root, suite)))) {
+      failures.push(`Agent autonomy prerequisite suite is missing: ${suite}`);
+    } else {
+      existingSafetySuites.add(suite);
+    }
+  }
+
+  const manualPolicy = "write_before_confirmation";
+  const policySuitePath = join(root, requiredSafetySuites[0]);
+  if (await fileExists(policySuitePath)) {
+    const policySuite = await readFile(policySuitePath, "utf8");
+    if (
+      !policySuite.includes("keeps manual confirmation as the default execution policy") ||
+      !policySuite.includes(`writePolicy: "${manualPolicy}"`)
+    ) {
+      failures.push("Manual confirmation must remain the default Agent write policy.");
+    }
+  }
+
+  const runnableSafetySuites = requiredSafetySuites.slice(0, 5);
+  if (runnableSafetySuites.every((suite) => existingSafetySuites.has(suite))) {
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(root, "node_modules", "vitest", "vitest.mjs"),
+        "run",
+        "--passWithNoTests",
+        ...runnableSafetySuites
+      ],
+      { cwd: root, encoding: "utf8" }
+    );
+    if (result.status !== 0) {
+      const detail = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim();
+      failures.push(
+        `Agent autonomy prerequisite suites failed.${detail.length === 0 ? "" : `\n${detail}`}`
+      );
+    }
   }
 }
 

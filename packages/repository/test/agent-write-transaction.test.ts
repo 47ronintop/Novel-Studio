@@ -300,12 +300,52 @@ describe("AgentWriteTransaction", () => {
     expect(result.ok).toBe(true);
     expect(persisted[0]).toMatchObject({
       transactionStatus: "prepared",
+      writePolicy: "write_before_confirmation",
       approvalSource: "human_confirmation",
       approvalToken: approvalToken("changes_01", 1, "c".repeat(64))
     });
     expect(journalBeforeFirstReplace).toMatchObject({
       transactionStatus: "applying",
+      writePolicy: "write_before_confirmation",
       approvalSource: "human_confirmation",
+      approvalToken: approvalToken("changes_01", 1, "c".repeat(64))
+    });
+  });
+
+  test("persists a preapproved-run binding before the first replacement", async () => {
+    const projectRoot = await createProject({ "notes/one.md": "before" });
+    const persisted: AgentTransactionJournal[] = [];
+    const backingRecovery = recordingRecovery([]);
+    const transaction = createTransaction(projectRoot, {
+      recoveryRepository: {
+        async writeAgentTransactionJournal(journal) {
+          persisted.push(structuredClone(journal));
+          return backingRecovery.writeAgentTransactionJournal(journal);
+        },
+        readAgentTransactionJournal: (transactionId) =>
+          backingRecovery.readAgentTransactionJournal(transactionId),
+        listAgentTransactionJournals: () => backingRecovery.listAgentTransactionJournals()
+      }
+    });
+
+    const result = await transaction.apply(
+      createInput([fileChange("notes/one.md", "before", "after", "text")], {
+        writePolicy: "user_preapproved_run",
+        approvalSource: "user_preapproved_run"
+      })
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        writePolicy: "user_preapproved_run",
+        approvalSource: "user_preapproved_run"
+      }
+    });
+    expect(persisted[0]).toMatchObject({
+      transactionStatus: "prepared",
+      writePolicy: "user_preapproved_run",
+      approvalSource: "user_preapproved_run",
       approvalToken: approvalToken("changes_01", 1, "c".repeat(64))
     });
   });
@@ -486,6 +526,7 @@ describe("AgentWriteTransaction", () => {
       changeSetId: "changes_01",
       changeSetRevision: 1,
       changeSetChecksum: "c".repeat(64),
+      writePolicy: "write_before_confirmation",
       approvalSource: "human_confirmation",
       approvalToken: approvalToken("changes_01", 1, "c".repeat(64)),
       createdAt: "2026-07-13T01:00:00.000Z",
@@ -557,8 +598,13 @@ describe("AgentWriteTransaction", () => {
       candidateContent: "baseline",
       beforeVersionId: "ver_agent"
     });
-    const { approvalSource: _approvalSource, approvalToken: _approvalToken, ...withoutApproval } =
-      applyShape;
+    const {
+      writePolicy: _writePolicy,
+      approvalSource: _approvalSource,
+      approvalToken: _approvalToken,
+      ...withoutApproval
+    } = applyShape;
+    void _writePolicy;
     void _approvalSource;
     void _approvalToken;
     const preparedUndo: AgentTransactionJournal = {
@@ -644,7 +690,49 @@ describe("AgentWriteTransaction", () => {
     });
   });
 
-  test.each(["missing_binding", "forged_source", "forged_token"] as const)(
+  test("normalizes a missing legacy write policy to manual during recovery", async () => {
+    const projectRoot = await createProject({ "notes/one.md": "candidate" });
+    const journal = appliedJournal({
+      transactionId: "tx_legacy_policy",
+      versionGroupId: "vg_legacy_policy",
+      runSequence: 1,
+      beforeContent: "before",
+      candidateContent: "candidate",
+      beforeVersionId: "ver_before"
+    });
+    const legacy: Record<string, unknown> = { ...journal, transactionStatus: "applying" };
+    delete legacy.writePolicy;
+    const journalRoot = join(projectRoot, "history", "agent-transactions");
+    await mkdir(journalRoot, { recursive: true });
+    await writeFile(
+      join(journalRoot, `${journal.transactionId}.json`),
+      `${JSON.stringify(legacy, null, 2)}\n`,
+      "utf8"
+    );
+
+    const result = await createTransaction(projectRoot).recoverIncompleteTransactions();
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: [
+        expect.objectContaining({
+          writePolicy: "write_before_confirmation",
+          approvalSource: "human_confirmation",
+          transactionStatus: "rolled_back"
+        })
+      ]
+    });
+    expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("before");
+  });
+
+  test.each([
+    "missing_binding",
+    "missing_auto_policy",
+    "forged_policy",
+    "mismatched_policy",
+    "forged_source",
+    "forged_token"
+  ] as const)(
     "fails closed when an apply recovery journal has %s",
     async (corruption) => {
       const projectRoot = await createProject({ "notes/one.md": "candidate" });
@@ -660,8 +748,16 @@ describe("AgentWriteTransaction", () => {
       if (corruption === "missing_binding") {
         delete corrupted.approvalSource;
         delete corrupted.approvalToken;
-      } else if (corruption === "forged_source") {
+      } else if (corruption === "missing_auto_policy") {
+        delete corrupted.writePolicy;
         corrupted.approvalSource = "user_preapproved_run";
+      } else if (corruption === "forged_policy") {
+        corrupted.writePolicy = "model_requested_auto_write";
+      } else if (corruption === "mismatched_policy") {
+        corrupted.writePolicy = "write_before_confirmation";
+        corrupted.approvalSource = "user_preapproved_run";
+      } else if (corruption === "forged_source") {
+        corrupted.approvalSource = "model_requested_auto_write";
       } else {
         corrupted.approvalToken = "forged-approval-token-must-stay-redacted";
       }
@@ -859,7 +955,7 @@ describe("AgentWriteTransaction", () => {
     expect(await readFile(join(projectRoot, "notes/two.md"), "utf8")).toBe("two baseline");
   });
 
-  test("run undo restores the first baseline and refuses to overwrite a later user edit", async () => {
+  test("run undo persists a rollback review and refuses to overwrite a later user edit", async () => {
     const projectRoot = await createProject({ "notes/one.md": "baseline" });
     const transaction = createTransaction(projectRoot);
     const first = await transaction.apply(
@@ -880,14 +976,363 @@ describe("AgentWriteTransaction", () => {
 
     expect(conflict.ok).toBe(true);
     if (!conflict.ok) throw new Error(conflict.error.message);
-    expect(conflict.value.transactionStatus).toBe("failed");
-    expect(conflict.value.failureKind).toBe("undo_conflict");
+    expect(conflict.value.transactionStatus).toBe("awaiting_review");
     expect(conflict.value.writes[0]?.status).toBe("conflict");
+    expect(conflict.value.rollbackReview).toMatchObject({
+      runId: "run_01",
+      status: "pending",
+      files: [
+        {
+          relativePath: "notes/one.md",
+          baselineContent: "baseline",
+          baselineChecksum: checksum("baseline"),
+          runLastWriteContent: "agent two",
+          runLastWriteChecksum: checksum("agent two"),
+          reviewedCurrentContent: "later user edit",
+          reviewedCurrentChecksum: checksum("later user edit"),
+          status: "conflict"
+        }
+      ]
+    });
     expect(conflict.value.undoMetadata.undoOfVersionGroupIds).toEqual([
       first.value.versionGroupId,
       second.value.versionGroupId
     ]);
     expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("later user edit");
+
+    const durable = await new RecoveryRepository({ projectRoot }).readRollbackReview("run_01");
+    expect(durable.ok).toBe(true);
+    expect(durable.ok && durable.value).toEqual(conflict.value.rollbackReview);
+  });
+
+  test("keep_current resolves a reviewed conflict without snapshots or file writes", async () => {
+    const projectRoot = await createProject({ "notes/one.md": "baseline" });
+    const operations: string[] = [];
+    const transaction = createTransaction(projectRoot, {
+      operations,
+      historyRepository: recordingHistory(operations)
+    });
+    const applied = await transaction.apply(
+      createInput([fileChange("notes/one.md", "baseline", "agent", "text")])
+    );
+    if (!applied.ok) throw new Error(applied.error.message);
+    await writeFile(join(projectRoot, "notes/one.md"), "user edit", "utf8");
+    const pending = await transaction.undoRun({ runId: "run_01", commandId: "undo_request" });
+    if (!pending.ok) throw new Error(pending.error.message);
+    const operationCount = operations.length;
+
+    const kept = await transaction.undoRun({
+      runId: "run_01",
+      commandId: "undo_keep",
+      decisions: [{ relativePath: "notes/one.md", decision: "keep_current" }]
+    });
+
+    expect(kept.ok).toBe(true);
+    expect(kept.ok && kept.value.transactionStatus).toBe("applied");
+    expect(kept.ok && kept.value.writes[0]?.status).toBe("kept");
+    expect(operations.slice(operationCount)).toEqual(["lock"]);
+    expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("user edit");
+  });
+
+  test("restore_baseline becomes stale when current bytes change after review", async () => {
+    const projectRoot = await createProject({ "notes/one.md": "baseline" });
+    const operations: string[] = [];
+    const transaction = createTransaction(projectRoot, {
+      operations,
+      historyRepository: recordingHistory(operations)
+    });
+    const applied = await transaction.apply(
+      createInput([fileChange("notes/one.md", "baseline", "agent", "text")])
+    );
+    if (!applied.ok) throw new Error(applied.error.message);
+    await writeFile(join(projectRoot, "notes/one.md"), "reviewed edit", "utf8");
+    const pending = await transaction.undoRun({ runId: "run_01", commandId: "undo_request" });
+    if (!pending.ok) throw new Error(pending.error.message);
+    await writeFile(join(projectRoot, "notes/one.md"), "newer edit", "utf8");
+    const operationCount = operations.length;
+
+    const stale = await transaction.undoRun({
+      runId: "run_01",
+      commandId: "undo_restore",
+      decisions: [{ relativePath: "notes/one.md", decision: "restore_baseline" }]
+    });
+
+    expect(stale.ok).toBe(true);
+    expect(stale.ok && stale.value.transactionStatus).toBe("awaiting_review");
+    expect(stale.ok && stale.value.rollbackReview?.files[0]).toMatchObject({
+      reviewedCurrentContent: "newer edit",
+      reviewedCurrentChecksum: checksum("newer edit"),
+      status: "stale"
+    });
+    expect(stale.ok && stale.value.rollbackReview?.files[0]).not.toHaveProperty("decision");
+    expect(operations.slice(operationCount)).toEqual(["lock"]);
+    expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("newer edit");
+  });
+
+  test("rechecks the reviewed checksum immediately before replace and never overwrites a raced edit", async () => {
+    const projectRoot = await createProject({ "notes/one.md": "baseline" });
+    let raceRestore = false;
+    const transaction = createTransaction(projectRoot, {
+      mutateBeforeFinalVerify: async ({ relativePath }) => {
+        if (!raceRestore) return;
+        raceRestore = false;
+        await writeFile(join(projectRoot, relativePath), "raced edit", "utf8");
+      }
+    });
+    const applied = await transaction.apply(
+      createInput([fileChange("notes/one.md", "baseline", "agent", "text")])
+    );
+    if (!applied.ok) throw new Error(applied.error.message);
+    await writeFile(join(projectRoot, "notes/one.md"), "reviewed edit", "utf8");
+    const pending = await transaction.undoRun({ runId: "run_01", commandId: "undo_request" });
+    if (!pending.ok) throw new Error(pending.error.message);
+    raceRestore = true;
+
+    const stale = await transaction.undoRun({
+      runId: "run_01",
+      commandId: "undo_restore",
+      decisions: [{ relativePath: "notes/one.md", decision: "restore_baseline" }]
+    });
+
+    expect(stale.ok).toBe(true);
+    expect(stale.ok && stale.value.transactionStatus).toBe("awaiting_review");
+    expect(stale.ok && stale.value.rollbackReview?.files[0]).toMatchObject({
+      reviewedCurrentContent: "raced edit",
+      reviewedCurrentChecksum: checksum("raced edit"),
+      status: "stale"
+    });
+    expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("raced edit");
+  });
+
+  test("reconciles a completed rollback after its review status fails to persist", async () => {
+    const projectRoot = await createProject({ "notes/one.md": "baseline" });
+    const durableRecovery = new RecoveryRepository({ projectRoot });
+    let rollbackReviewWrites = 0;
+    const interruptedRecovery: AgentWriteRecoveryPort = {
+      writeAgentTransactionJournal: (journal) =>
+        durableRecovery.writeAgentTransactionJournal(journal),
+      readAgentTransactionJournal: (transactionId) =>
+        durableRecovery.readAgentTransactionJournal(transactionId),
+      listAgentTransactionJournals: () => durableRecovery.listAgentTransactionJournals(),
+      async writeRollbackReview(review) {
+        rollbackReviewWrites += 1;
+        if (rollbackReviewWrites === 6) {
+          return err(transactionTestError("ROLLBACK_REVIEW_WRITE_FAILED"));
+        }
+        return durableRecovery.writeRollbackReview(review);
+      },
+      readRollbackReview: (runId) => durableRecovery.readRollbackReview(runId)
+    };
+    const interrupted = createTransaction(projectRoot, {
+      recoveryRepository: interruptedRecovery
+    });
+    const applied = await interrupted.apply(
+      createInput([fileChange("notes/one.md", "baseline", "agent", "text")])
+    );
+    if (!applied.ok) throw new Error(applied.error.message);
+    await writeFile(join(projectRoot, "notes/one.md"), "user edit", "utf8");
+    const pending = await interrupted.undoRun({
+      runId: "run_01",
+      commandId: "undo_request"
+    });
+    if (!pending.ok || pending.value.rollbackReview === undefined) {
+      throw new Error("Expected a rollback review.");
+    }
+
+    const failedPersistence = await interrupted.undoRun({
+      runId: "run_01",
+      commandId: "undo_interrupted",
+      reviewId: pending.value.rollbackReview.reviewId,
+      decisions: [{ relativePath: "notes/one.md", decision: "restore_baseline" }]
+    });
+
+    expect(failedPersistence.ok).toBe(false);
+    expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("baseline");
+
+    const recovered = await createTransaction(projectRoot).undoRun({
+      runId: "run_01",
+      commandId: "undo_recovered"
+    });
+
+    expect(recovered.ok).toBe(true);
+    expect(recovered.ok && recovered.value.transactionStatus).toBe("applied");
+    expect(recovered.ok && recovered.value.rollbackReview?.files[0]?.status).toBe("completed");
+    expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("baseline");
+  });
+
+  test("persists completed kept and failed files then retries only the failed restore", async () => {
+    const projectRoot = await createProject({
+      "notes/one.md": "one baseline",
+      "notes/two.md": "two baseline",
+      "notes/three.md": "three baseline"
+    });
+    const operations: string[] = [];
+    let failThree = true;
+    const transaction = createTransaction(projectRoot, {
+      operations,
+      historyRepository: recordingHistory(operations),
+      failReplace: ({ phase, relativePath }) =>
+        failThree && phase === "undo" && relativePath === "notes/three.md"
+    });
+    const applied = await transaction.apply(
+      createInput([
+        fileChange("notes/one.md", "one baseline", "one agent", "text"),
+        fileChange("notes/two.md", "two baseline", "two agent", "text"),
+        fileChange("notes/three.md", "three baseline", "three agent", "text")
+      ])
+    );
+    if (!applied.ok) throw new Error(applied.error.message);
+    await writeFile(join(projectRoot, "notes/one.md"), "one user", "utf8");
+    await writeFile(join(projectRoot, "notes/two.md"), "two user", "utf8");
+    await writeFile(join(projectRoot, "notes/three.md"), "three user", "utf8");
+    const pending = await transaction.undoRun({ runId: "run_01", commandId: "undo_request" });
+    if (!pending.ok) throw new Error(pending.error.message);
+
+    const partial = await transaction.undoRun({
+      runId: "run_01",
+      commandId: "undo_decisions",
+      decisions: [
+        { relativePath: "notes/one.md", decision: "restore_baseline" },
+        { relativePath: "notes/two.md", decision: "keep_current" },
+        { relativePath: "notes/three.md", decision: "restore_baseline" }
+      ]
+    });
+
+    expect(partial.ok).toBe(true);
+    expect(partial.ok && partial.value.transactionStatus).toBe("partial_failure");
+    expect(
+      partial.ok &&
+        partial.value.rollbackReview?.files.map((file) => [file.relativePath, file.status])
+    ).toEqual([
+      ["notes/one.md", "completed"],
+      ["notes/two.md", "kept"],
+      ["notes/three.md", "failed"]
+    ]);
+    const beforeRetry = operations.length;
+    failThree = false;
+
+    const retried = await transaction.undoRun({
+      runId: "run_01",
+      commandId: "undo_retry",
+      retryFailedOnly: true
+    });
+
+    expect(retried.ok).toBe(true);
+    expect(retried.ok && retried.value.transactionStatus).toBe("applied");
+    expect(operations.slice(beforeRetry)).toEqual([
+      "lock",
+      "replace:undo:notes/three.md",
+      "lock"
+    ]);
+    expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("one baseline");
+    expect(await readFile(join(projectRoot, "notes/two.md"), "utf8")).toBe("two user");
+    expect(await readFile(join(projectRoot, "notes/three.md"), "utf8")).toBe("three baseline");
+
+    const afterRetry = operations.length;
+    const duplicate = await transaction.undoRun({
+      runId: "run_01",
+      commandId: "undo_retry",
+      retryFailedOnly: true
+    });
+    expect(duplicate.ok).toBe(true);
+    expect(operations.slice(afterRetry)).toEqual(["lock"]);
+  });
+
+  test("a rebuilt transaction restores the pending rollback review", async () => {
+    const projectRoot = await createProject({ "notes/one.md": "baseline" });
+    const firstTransaction = createTransaction(projectRoot);
+    const applied = await firstTransaction.apply(
+      createInput([fileChange("notes/one.md", "baseline", "agent", "text")])
+    );
+    if (!applied.ok) throw new Error(applied.error.message);
+    await writeFile(join(projectRoot, "notes/one.md"), "user edit", "utf8");
+    const firstReview = await firstTransaction.undoRun({
+      runId: "run_01",
+      commandId: "undo_request"
+    });
+    if (!firstReview.ok) throw new Error(firstReview.error.message);
+
+    const restored = await createTransaction(projectRoot).undoRun({ runId: "run_01" });
+
+    expect(restored.ok).toBe(true);
+    expect(restored.ok && restored.value.rollbackReview).toEqual(firstReview.value.rollbackReview);
+    expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("user edit");
+  });
+
+  test("rejects a durable rollback review that is not bound to the run journals", async () => {
+    const projectRoot = await createProject({ "notes/one.md": "baseline" });
+    const transaction = createTransaction(projectRoot);
+    const applied = await transaction.apply(
+      createInput([fileChange("notes/one.md", "baseline", "agent", "text")])
+    );
+    if (!applied.ok) throw new Error(applied.error.message);
+    await writeFile(join(projectRoot, "notes/one.md"), "user edit", "utf8");
+    const pending = await transaction.undoRun({ runId: "run_01", commandId: "undo_request" });
+    if (!pending.ok || pending.value.rollbackReview === undefined) {
+      throw new Error("Expected a rollback review.");
+    }
+    const recovery = new RecoveryRepository({ projectRoot });
+    const tampered = await recovery.writeRollbackReview({
+      ...pending.value.rollbackReview,
+      sourceVersionGroupIds: ["vg_tampered"]
+    });
+    if (!tampered.ok) throw new Error(tampered.error.message);
+
+    const resumed = await createTransaction(projectRoot).undoRun({
+      runId: "run_01",
+      commandId: "undo_tampered",
+      decisions: [{ relativePath: "notes/one.md", decision: "restore_baseline" }]
+    });
+
+    expect(resumed).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_WRITE_ROLLBACK_REVIEW_INVALID" }
+    });
+    expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("user edit");
+  });
+
+  test("rejects a rollback review file that exceeds the configured byte limit", async () => {
+    const projectRoot = await createProject({});
+    const recovery = new RecoveryRepository({ projectRoot, maxRollbackReviewBytes: 256 });
+    const content = "x".repeat(300);
+    const review = {
+      schemaVersion: "1.0" as const,
+      reviewId: `rollback_${checksum("run_01").slice(0, 24)}`,
+      runId: "run_01",
+      status: "pending" as const,
+      sourceVersionGroupIds: ["vg_01"],
+      createdAt: "2026-07-13T01:00:00.000Z",
+      updatedAt: "2026-07-13T01:00:00.000Z",
+      processedCommandIds: [],
+      files: [
+        {
+          relativePath: "notes/one.md",
+          assetType: "text" as const,
+          baselineContent: content,
+          baselineChecksum: checksum(content),
+          baselineVersionId: "ver_01",
+          runLastWriteContent: content,
+          runLastWriteChecksum: checksum(content),
+          reviewedCurrentContent: content,
+          reviewedCurrentChecksum: checksum(content),
+          reviewedCurrentHistoryContent: content,
+          diff: {
+            currentToLastWrite: "current = ai-last-write",
+            currentToBaseline: "current = baseline",
+            lastWriteToBaseline: "ai-last-write = baseline"
+          },
+          status: "conflict" as const,
+          errorCode: "AGENT_WRITE_UNDO_CONFLICT"
+        }
+      ]
+    };
+
+    const written = await recovery.writeRollbackReview(review);
+
+    expect(written).toMatchObject({
+      ok: false,
+      error: { code: "ROLLBACK_REVIEW_TOO_LARGE" }
+    });
   });
 
   test("run undo uses the earliest baseline across multiple successful writes", async () => {
@@ -913,6 +1358,36 @@ describe("AgentWriteTransaction", () => {
     expect(undone.value.undoStatus).toBe("completed");
     expect(undone.value.baselineByPath["notes/one.md"]?.checksum).toBe(checksum("baseline"));
     expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("baseline");
+  });
+
+  test("clean run undo persists one applied run_undo transaction journal", async () => {
+    const projectRoot = await createProject({
+      "notes/one.md": "one baseline",
+      "notes/two.md": "two baseline"
+    });
+    const transaction = createTransaction(projectRoot);
+    const applied = await transaction.apply(
+      createInput([
+        fileChange("notes/one.md", "one baseline", "one agent", "text"),
+        fileChange("notes/two.md", "two baseline", "two agent", "text")
+      ])
+    );
+    if (!applied.ok) throw new Error(applied.error.message);
+
+    const undone = await transaction.undoRun({ runId: "run_01" });
+
+    expect(undone.ok).toBe(true);
+    const undoJournals = (await readJournals(projectRoot)).filter(
+      (journal) => journal.kind === "run_undo"
+    );
+    expect(undoJournals).toHaveLength(1);
+    expect(undoJournals[0]).toMatchObject({
+      runId: "run_01",
+      transactionStatus: "applied",
+      entries: [{ status: "applied" }, { status: "applied" }]
+    });
+    expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("one baseline");
+    expect(await readFile(join(projectRoot, "notes/two.md"), "utf8")).toBe("two baseline");
   });
 
   test("run undo is idempotent after every file already reached its baseline", async () => {
@@ -965,6 +1440,132 @@ describe("AgentWriteTransaction", () => {
     expect(undone.value.transactionStatus).toBe("applied");
     expect(undone.value.undoStatus).toBe("completed");
     expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("baseline");
+  });
+
+  test("run undo snapshots a chapter under its real asset id with chapter body content", async () => {
+    const chapterId = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D4";
+    const relativePath = `chapters/${chapterId}.md`;
+    const baselineBody = "Baseline chapter body.\n";
+    const agentBody = "Agent chapter body.\n";
+    const baselineFile = `---\nid: ${chapterId}\n---\n\n${baselineBody}`;
+    const agentFile = `---\nid: ${chapterId}\n---\n\n${agentBody}`;
+    const projectRoot = await createProject({ [relativePath]: baselineFile });
+    const snapshots: {
+      readonly assetId: string;
+      readonly reason: string;
+      readonly content: string;
+    }[] = [];
+    let version = 0;
+    const historyRepository: AgentWriteHistoryPort = {
+      async snapshotTextAsset(input) {
+        snapshots.push({
+          assetId: input.assetId,
+          reason: input.reason,
+          content: input.content
+        });
+        return ok({
+          schemaVersion: "1.0",
+          versionId: `ver_${++version}`,
+          assetType: input.assetType,
+          assetId: input.assetId,
+          reason: input.reason,
+          createdBy: input.createdBy ?? "system",
+          createdAt: "2026-07-13T01:00:00.000Z",
+          checksum: `sha256:${checksum(input.content)}`
+        });
+      }
+    };
+    const transaction = createTransaction(projectRoot, { historyRepository });
+    const applied = await transaction.apply(
+      createInput([
+        {
+          ...fileChange(relativePath, baselineFile, agentFile, "chapter"),
+          assetId: chapterId,
+          historyBaseContent: baselineBody,
+          historyCandidateContent: agentBody
+        }
+      ])
+    );
+    if (!applied.ok) throw new Error(applied.error.message);
+
+    const undone = await transaction.undoRun({ runId: "run_01" });
+
+    expect(undone.ok).toBe(true);
+    expect(snapshots).toContainEqual({
+      assetId: chapterId,
+      reason: "before-agent-session-undo",
+      content: agentBody
+    });
+  });
+
+  test("keeps a dirty chapter editor in rollback review until the user restores baseline", async () => {
+    const chapterId = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D5";
+    const relativePath = `chapters/${chapterId}.md`;
+    const baselineBody = "Baseline body.\n";
+    const agentBody = "Agent body.\n";
+    const dirtyBody = "Unsaved user body.\n";
+    const baselineFile = `---\nid: ${chapterId}\n---\n\n${baselineBody}`;
+    const agentFile = `---\nid: ${chapterId}\n---\n\n${agentBody}`;
+    const projectRoot = await createProject({ [relativePath]: baselineFile });
+    const snapshots: { readonly reason: string; readonly content: string }[] = [];
+    let version = 0;
+    const transaction = createTransaction(projectRoot, {
+      historyRepository: {
+        async snapshotTextAsset(input) {
+          snapshots.push({ reason: input.reason, content: input.content });
+          return ok({
+            schemaVersion: "1.0",
+            versionId: `ver_${++version}`,
+            assetType: input.assetType,
+            assetId: input.assetId,
+            reason: input.reason,
+            createdBy: input.createdBy ?? "system",
+            createdAt: "2026-07-13T01:00:00.000Z",
+            checksum: `sha256:${checksum(input.content)}`
+          });
+        }
+      }
+    });
+    const applied = await transaction.apply(
+      createInput([
+        {
+          ...fileChange(relativePath, baselineFile, agentFile, "chapter"),
+          assetId: chapterId,
+          historyBaseContent: baselineBody,
+          historyCandidateContent: agentBody
+        }
+      ])
+    );
+    if (!applied.ok) throw new Error(applied.error.message);
+
+    const pending = await transaction.undoRun({
+      runId: "run_01",
+      commandId: "undo_dirty_request",
+      currentEditorContents: [{ relativePath, content: dirtyBody }]
+    });
+
+    expect(pending.ok).toBe(true);
+    expect(pending.ok && pending.value.transactionStatus).toBe("awaiting_review");
+    expect(pending.ok && pending.value.rollbackReview?.files[0]).toMatchObject({
+      reviewedCurrentHistoryContent: dirtyBody,
+      status: "conflict"
+    });
+    expect(await readFile(join(projectRoot, relativePath), "utf8")).toBe(agentFile);
+
+    const restored = await transaction.undoRun({
+      runId: "run_01",
+      commandId: "undo_dirty_restore",
+      currentEditorContents: [{ relativePath, content: dirtyBody }],
+      decisions: [{ relativePath, decision: "restore_baseline" }]
+    });
+
+    expect(restored.ok).toBe(true);
+    expect(restored.ok && restored.value.transactionStatus).toBe("applied");
+    expect(await readFile(join(projectRoot, relativePath), "utf8")).toBe(baselineFile);
+    expect(snapshots).toContainEqual({
+      reason: "before-agent-session-undo",
+      content: dirtyBody
+    });
   });
 });
 
@@ -1161,6 +1762,7 @@ function appliedJournal(input: {
     changeSetId: `changes_${input.runSequence}`,
     changeSetRevision: 1,
     changeSetChecksum: "c".repeat(64),
+    writePolicy: "write_before_confirmation",
     approvalSource: "human_confirmation",
     approvalToken: approvalToken(`changes_${input.runSequence}`, 1, "c".repeat(64)),
     createdAt: "2026-07-13T01:00:00.000Z",
@@ -1230,6 +1832,7 @@ function createInput(
     changeSetId: "changes_01",
     revision: 1,
     checksum: "c".repeat(64),
+    writePolicy: "write_before_confirmation",
     approvalSource: "human_confirmation",
     approvalToken: approvalToken("changes_01", 1, "c".repeat(64)),
     files,

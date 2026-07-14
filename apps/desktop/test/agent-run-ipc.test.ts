@@ -175,6 +175,7 @@ describe("Agent Run IPC", () => {
     expect(() => structuredClone(firstDecision)).not.toThrow();
     expect(duplicateDecision).toEqual(firstDecision);
     await handlers["application:agent-run:undo"]({
+      action: "request",
       projectId: "project-01",
       runId: "run-ipc",
       commandId: "undo-01",
@@ -322,6 +323,56 @@ describe("Agent Run IPC", () => {
 
     expect(called).toBe(false);
     expect(result).toMatchObject({ ok: false });
+  });
+
+  test("validates discriminated rollback review commands before the session boundary", async () => {
+    const received: Record<string, unknown>[] = [];
+    const handlers = createApplicationIpcHandlers(
+      {} as DesktopApplication,
+      {
+        agentRunSession: {
+          async undoRun(command: Record<string, unknown>) {
+            received.push(command);
+            return { ok: true, value: snapshot("completed", 10, 10) };
+          },
+          subscribe: () => () => undefined
+        }
+      } as never
+    ) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+
+    const resolved = await handlers["application:agent-run:undo"]?.({
+      action: "resolve",
+      projectId: "project-01",
+      runId: "run-ipc",
+      commandId: "undo-resolve-01",
+      expectedRunRevision: 9,
+      reviewId: "rollback-review-01",
+      decisions: [{ relativePath: "notes/outline.md", decision: "restore_baseline" }]
+    });
+    const invalid = await handlers["application:agent-run:undo"]?.({
+      action: "resolve",
+      projectId: "project-01",
+      runId: "run-ipc",
+      commandId: "undo-resolve-invalid",
+      expectedRunRevision: 9,
+      reviewId: "rollback-review-01",
+      decisions: [{ relativePath: "notes/outline.md", decision: "overwrite_current" }],
+      candidateText: "must never cross IPC"
+    });
+
+    expect(resolved).toMatchObject({ ok: true });
+    expect(invalid).toMatchObject({ ok: false });
+    expect(received).toEqual([
+      {
+        action: "resolve",
+        projectId: "project-01",
+        runId: "run-ipc",
+        commandId: "undo-resolve-01",
+        expectedRunRevision: 9,
+        reviewId: "rollback-review-01",
+        decisions: [{ relativePath: "notes/outline.md", decision: "restore_baseline" }]
+      }
+    ]);
   });
 });
 

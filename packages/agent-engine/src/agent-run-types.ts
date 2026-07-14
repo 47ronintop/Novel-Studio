@@ -95,11 +95,13 @@ export type AgentRunEventType =
   | "plan_decision_resolved"
   | "plan_execution_started"
   | "change_set_ready"
+  | "change_set_auto_approved"
   | "approval_resolved"
   | "write_started"
   | "write_applied"
   | "write_failed"
   | "run_undo_started"
+  | "run_undo_review_required"
   | "run_undone"
   | "run_undo_failed"
   | "run_completed"
@@ -128,6 +130,7 @@ export interface RecordAgentRunEventInput {
 
 export type TerminalAgentRunAuditEventType =
   | "run_undo_started"
+  | "run_undo_review_required"
   | "run_undone"
   | "run_undo_failed";
 
@@ -143,7 +146,8 @@ export interface StartAgentRunCommand {
   readonly expectedRunRevision: 0;
   readonly operationMode: AgentOperationMode;
   readonly contextMode: AgentContextMode;
-  readonly writePolicy: AgentWritePolicy;
+  readonly writePolicy?: AgentWritePolicy;
+  readonly writePolicyAcknowledged?: true;
   readonly userRequest: string;
   readonly providerCapabilitySnapshot: AgentProviderCapabilitySnapshot;
   readonly limits?: Partial<AgentRunLimits>;
@@ -181,7 +185,9 @@ export interface DecideAgentPlanCommand {
   readonly planId: string;
   readonly planRevision: number;
   readonly decision: "approve" | "reject";
+  readonly executionContextMode?: AgentContextMode;
   readonly executionWritePolicy?: AgentWritePolicy;
+  readonly executionWritePolicyAcknowledged?: true;
 }
 
 export interface RefreshAgentContextCommand {
@@ -216,12 +222,26 @@ export type DecideChangeSetCommand = DecideChangeSetCommandBase &
       }
   );
 
-export interface UndoAgentRunCommand {
+interface UndoAgentRunCommandBase {
   readonly runId: string;
   readonly projectId: string;
   readonly commandId: string;
   readonly expectedRunRevision: number;
 }
+
+export type UndoAgentRunCommand = UndoAgentRunCommandBase &
+  (
+    | { readonly action: "request" }
+    | {
+        readonly action: "resolve";
+        readonly reviewId: string;
+        readonly decisions?: readonly {
+          readonly relativePath: string;
+          readonly decision: "keep_current" | "restore_baseline";
+        }[];
+        readonly retryFailedOnly?: true;
+      }
+  );
 
 export type UndoRunCommand = UndoAgentRunCommand;
 

@@ -12,8 +12,12 @@ import type {
   AgentTransactionJournalKind,
   AgentTransactionJournalStatus,
   AgentWriteHistoryPort,
+  AgentWriteAssetType,
   AgentWriteProjectLockPort,
   AgentWriteRecoveryPort,
+  RollbackReviewDecisionRecord,
+  RollbackReviewFileRecord,
+  RollbackReviewRecord,
   AgentWriteTransactionFile,
   AgentWriteTransactionInput,
   SnapshotReason,
@@ -59,7 +63,7 @@ interface ExecuteTransactionOptions {
 
 type AgentUndoTransactionInput = Omit<
   AgentWriteTransactionInput,
-  "approvalSource" | "approvalToken"
+  "writePolicy" | "approvalSource" | "approvalToken"
 >;
 type TransactionExecutionInput = AgentWriteTransactionInput | AgentUndoTransactionInput;
 
@@ -214,6 +218,17 @@ export class AgentWriteTransaction {
 
   public async undoRun(input: {
     readonly runId: string;
+    readonly commandId?: string;
+    readonly reviewId?: string;
+    readonly currentEditorContents?: readonly {
+      readonly relativePath: string;
+      readonly content: string;
+    }[];
+    readonly decisions?: readonly {
+      readonly relativePath: string;
+      readonly decision: RollbackReviewDecisionRecord;
+    }[];
+    readonly retryFailedOnly?: boolean;
   }): Promise<Result<VersionGroupRecord, UnifiedError>> {
     return this.exclusive(async () => {
       const lock = await this.options.projectLock.verifyProjectLockOwnership();
@@ -226,11 +241,466 @@ export class AgentWriteTransaction {
           journal.runId === input.runId &&
           journal.transactionStatus === "applied"
       );
+      const currentEditorContents = new Map(
+        (input.currentEditorContents ?? []).map((entry) => [entry.relativePath, entry.content])
+      );
+      if (
+        currentEditorContents.size !== (input.currentEditorContents ?? []).length ||
+        [...currentEditorContents.keys()].some(
+          (relativePath) => !validateRelativeTarget(relativePath).ok
+        )
+      ) {
+        return err(this.error("AGENT_WRITE_ROLLBACK_REVIEW_INVALID", "validation"));
+      }
+      const existingReview = await this.readRollbackReview(input.runId);
+      if (!existingReview.ok) return existingReview;
+      if (existingReview.value !== undefined) {
+        if (
+          sources.length === 0 ||
+          !rollbackReviewBoundToSource(existingReview.value, this.buildUndoSource(sources))
+        ) {
+          return err(this.error("AGENT_WRITE_ROLLBACK_REVIEW_INVALID", "validation"));
+        }
+        if (input.reviewId !== undefined && input.reviewId !== existingReview.value.reviewId) {
+          return err(this.error("AGENT_WRITE_ROLLBACK_REVIEW_STALE", "validation"));
+        }
+        if (
+          input.commandId !== undefined &&
+          existingReview.value.processedCommandIds.includes(input.commandId)
+        ) {
+          return ok(this.groupFromRollbackReview(existingReview.value));
+        }
+        const resolved = await this.resolveRollbackReview(
+          existingReview.value,
+          input,
+          currentEditorContents
+        );
+        if (!resolved.ok) return resolved;
+        return ok(this.groupFromRollbackReview(resolved.value));
+      }
       if (sources.length === 0) {
         return err(this.error("AGENT_WRITE_RUN_NOT_FOUND", "validation"));
       }
-      return this.performUndo(this.buildUndoSource(sources), "run_undo");
+      const source = this.buildUndoSource(sources);
+      if (
+        [...currentEditorContents.keys()].some(
+          (path) => !source.files.some((file) => file.relativePath === path)
+        )
+      ) {
+        return err(this.error("AGENT_WRITE_ROLLBACK_REVIEW_INVALID", "validation"));
+      }
+      if (currentEditorContents.size === 0) {
+        const transactional = await this.performUndo(source, "run_undo");
+        if (!transactional.ok || transactional.value.undoStatus !== "conflict") {
+          return transactional;
+        }
+      }
+      const review = await this.createRollbackReview(source, currentEditorContents);
+      if (!review.ok) return review;
+      const restored = await this.restoreReadyRollbackFiles(review.value, currentEditorContents);
+      if (!restored.ok) return restored;
+      const completedCommand = await this.recordRollbackCommand(restored.value, input.commandId);
+      if (!completedCommand.ok) return completedCommand;
+      return ok(this.groupFromRollbackReview(completedCommand.value));
     });
+  }
+
+  private async resolveRollbackReview(
+    source: RollbackReviewRecord,
+    input: {
+      readonly commandId?: string;
+      readonly reviewId?: string;
+      readonly decisions?: readonly {
+        readonly relativePath: string;
+        readonly decision: RollbackReviewDecisionRecord;
+      }[];
+      readonly retryFailedOnly?: boolean;
+    },
+    currentEditorContents: ReadonlyMap<string, string>
+  ): Promise<Result<RollbackReviewRecord, UnifiedError>> {
+    let review = source;
+    const decisions = input.decisions ?? [];
+    if (new Set(decisions.map((decision) => decision.relativePath)).size !== decisions.length) {
+      return err(this.error("AGENT_WRITE_ROLLBACK_REVIEW_INVALID", "validation"));
+    }
+    for (const resolution of decisions) {
+      const file = review.files.find(
+        (candidate) => candidate.relativePath === resolution.relativePath
+      );
+      if (file === undefined || file.status === "completed" || file.status === "kept") {
+        return err(
+          this.error("AGENT_WRITE_ROLLBACK_REVIEW_INVALID", "validation", resolution.relativePath)
+        );
+      }
+      const current = await this.readSafeTarget(file.relativePath);
+      if (!current.ok) return current;
+      const editorContent = currentEditorContents.get(file.relativePath);
+      if (!rollbackCurrentMatches(file, current.value.checksum, editorContent)) {
+        review = replaceRollbackReviewFile(
+          review,
+          staleRollbackFile(
+            file,
+            current.value.content,
+            current.value.checksum,
+            editorContent
+          ),
+          this.now()
+        );
+        continue;
+      }
+      review = replaceRollbackReviewFile(
+        review,
+        resolvedRollbackFile(file, resolution.decision),
+        this.now()
+      );
+    }
+
+    if (input.retryFailedOnly === true) {
+      for (const file of review.files.filter((candidate) => candidate.status === "failed")) {
+        if (file.decision !== "restore_baseline") continue;
+        const current = await this.readSafeTarget(file.relativePath);
+        if (!current.ok) return current;
+        const editorContent = currentEditorContents.get(file.relativePath);
+        review = replaceRollbackReviewFile(
+          review,
+          rollbackCurrentMatches(file, current.value.checksum, editorContent)
+            ? resolvedRollbackFile(file, "restore_baseline")
+            : staleRollbackFile(
+                file,
+                current.value.content,
+                current.value.checksum,
+                editorContent
+              ),
+          this.now()
+        );
+      }
+    }
+
+    review = withRollbackReviewStatus(review, this.now());
+    const persisted = await this.persistRollbackReview(review);
+    if (!persisted.ok) return persisted;
+    const restored = await this.restoreReadyRollbackFiles(
+      persisted.value,
+      currentEditorContents
+    );
+    if (!restored.ok) return restored;
+    return this.recordRollbackCommand(restored.value, input.commandId);
+  }
+
+  private async recordRollbackCommand(
+    source: RollbackReviewRecord,
+    commandId: string | undefined
+  ): Promise<Result<RollbackReviewRecord, UnifiedError>> {
+    if (commandId === undefined || source.processedCommandIds.includes(commandId)) return ok(source);
+    return this.persistRollbackReview(
+      freezeRollbackReview({
+        ...source,
+        updatedAt: this.now(),
+        processedCommandIds: [...source.processedCommandIds, commandId]
+      })
+    );
+  }
+
+  private async createRollbackReview(
+    source: UndoSource,
+    currentEditorContents: ReadonlyMap<string, string>
+  ): Promise<Result<RollbackReviewRecord, UnifiedError>> {
+    const firstJournal = requireDefined(source.journals[0], "Undo source is empty.");
+    const createdAt = this.now();
+    const files: RollbackReviewFileRecord[] = [];
+    for (const file of source.files) {
+      const current = await this.readSafeTarget(file.relativePath);
+      if (!current.ok) return current;
+      const baseline = requireDefined(
+        source.baselineByPath[file.relativePath],
+        "Undo baseline is missing."
+      );
+      const editorContent = currentEditorContents.get(file.relativePath);
+      const status =
+        editorContent !== undefined
+          ? "conflict"
+          : current.value.checksum === file.candidateChecksum
+          ? "completed"
+          : current.value.checksum === file.baseChecksum
+            ? "ready"
+            : "conflict";
+      files.push({
+        relativePath: file.relativePath,
+        assetType: file.assetType,
+        ...(file.assetId === undefined ? {} : { assetId: file.assetId }),
+        baselineContent: file.candidateContent,
+        baselineChecksum: file.candidateChecksum,
+        ...(file.historyCandidateContent === undefined
+          ? {}
+          : { baselineHistoryContent: file.historyCandidateContent }),
+        baselineVersionId: baseline.beforeVersionId,
+        runLastWriteContent: file.baseContent,
+        runLastWriteChecksum: file.baseChecksum,
+        ...(file.historyBaseContent === undefined
+          ? {}
+          : { runLastWriteHistoryContent: file.historyBaseContent }),
+        reviewedCurrentContent: current.value.content,
+        reviewedCurrentChecksum: current.value.checksum,
+        reviewedCurrentHistoryContent:
+          editorContent ?? historyContentForAsset(file.assetType, current.value.content),
+        ...(editorContent === undefined
+          ? {}
+          : { reviewedEditorChecksum: checksum(editorContent) }),
+        diff: rollbackDiff(
+          editorContent ?? historyContentForAsset(file.assetType, current.value.content),
+          file.historyBaseContent ?? file.baseContent,
+          file.historyCandidateContent ?? file.candidateContent
+        ),
+        ...(status === "ready" || status === "completed"
+          ? { decision: "restore_baseline" as const }
+          : {}),
+        status,
+        ...(status === "conflict" ? { errorCode: "AGENT_WRITE_UNDO_CONFLICT" } : {})
+      });
+    }
+    const review = freezeRollbackReview({
+      schemaVersion: "1.0",
+      reviewId: `rollback_${checksum(firstJournal.runId).slice(0, 24)}`,
+      runId: firstJournal.runId,
+      status: rollbackReviewStatus(files),
+      sourceVersionGroupIds: source.versionGroupIds,
+      createdAt,
+      updatedAt: createdAt,
+      processedCommandIds: [],
+      files
+    });
+    return this.persistRollbackReview(review);
+  }
+
+  private async restoreReadyRollbackFiles(
+    source: RollbackReviewRecord,
+    currentEditorContents: ReadonlyMap<string, string> = new Map()
+  ): Promise<Result<RollbackReviewRecord, UnifiedError>> {
+    let review = source;
+    const readyPaths = review.files
+      .filter((file) => file.status === "ready")
+      .map((file) => file.relativePath);
+    if (readyPaths.length === 0) return ok(review);
+
+    for (const relativePath of readyPaths) {
+      const file = requireDefined(
+        review.files.find((candidate) => candidate.relativePath === relativePath),
+        "Rollback review file is missing."
+      );
+      const current = await this.readSafeTarget(file.relativePath);
+      if (!current.ok) return current;
+      const editorContent = currentEditorContents.get(file.relativePath);
+      if (
+        current.value.checksum === file.baselineChecksum &&
+        rollbackEditorMatches(file, editorContent)
+      ) {
+        review = updateRollbackReviewFile(
+          review,
+          relativePath,
+          { status: "completed" },
+          this.now()
+        );
+      } else if (!rollbackCurrentMatches(file, current.value.checksum, editorContent)) {
+        review = replaceRollbackReviewFile(
+          review,
+          staleRollbackFile(
+            file,
+            current.value.content,
+            current.value.checksum,
+            editorContent
+          ),
+          this.now()
+        );
+      }
+    }
+    review = withRollbackReviewStatus(review, this.now());
+    const rechecked = await this.persistRollbackReview(review);
+    if (!rechecked.ok) return rechecked;
+    review = rechecked.value;
+
+    const snapshotPaths = review.files
+      .filter((file) => file.status === "ready" && file.snapshotVersionId === undefined)
+      .map((file) => file.relativePath);
+    for (const relativePath of snapshotPaths) {
+      const file = requireDefined(
+        review.files.find((candidate) => candidate.relativePath === relativePath),
+        "Rollback review file is missing."
+      );
+      const snapshot = await this.options.historyRepository.snapshotTextAsset({
+        assetType: file.assetType,
+        assetId: historyAssetId({
+          relativePath: file.relativePath,
+          assetType: file.assetType,
+          ...(file.assetId === undefined ? {} : { assetId: file.assetId }),
+          baseChecksum: file.reviewedCurrentChecksum,
+          candidateChecksum: file.baselineChecksum,
+          baseContent: file.reviewedCurrentContent,
+          candidateContent: file.baselineContent
+        }),
+        reason: "before-agent-session-undo",
+        content: file.reviewedCurrentHistoryContent ?? file.reviewedCurrentContent,
+        createdBy: "system",
+        relativePath: file.relativePath,
+        runId: review.runId,
+        writeId: rollbackWriteId(review.reviewId, file.relativePath)
+      });
+      if (!snapshot.ok) {
+        review = updateRollbackReviewFile(
+          review,
+          relativePath,
+          { status: "failed", errorCode: snapshot.error.code },
+          this.now()
+        );
+        const failed = await this.persistRollbackReview(withRollbackReviewStatus(review, this.now()));
+        return failed.ok ? ok(failed.value) : failed;
+      }
+      review = updateRollbackReviewFile(
+        review,
+        relativePath,
+        { snapshotVersionId: snapshot.value.versionId },
+        this.now()
+      );
+      const persisted = await this.persistRollbackReview(review);
+      if (!persisted.ok) return persisted;
+      review = persisted.value;
+    }
+
+    for (const relativePath of readyPaths) {
+      const file = requireDefined(
+        review.files.find((candidate) => candidate.relativePath === relativePath),
+        "Rollback review file is missing."
+      );
+      if (file.status !== "ready" || file.snapshotVersionId === undefined) continue;
+      const current = await this.readSafeTarget(file.relativePath);
+      if (!current.ok) return current;
+      const replacement = await this.replacePreparedFile(
+        {
+          relativePath: file.relativePath,
+          targetPath: current.value.targetPath,
+          candidateContent: file.baselineContent
+        },
+        "undo",
+        file.reviewedCurrentChecksum,
+        file.baselineContent
+      );
+      if (replacement.ok) {
+        review = updateRollbackReviewFile(
+          review,
+          relativePath,
+          { status: "completed" },
+          this.now()
+        );
+      } else if (replacement.error.code === "AGENT_WRITE_BASE_CONFLICT") {
+        const refreshed = await this.readSafeTarget(file.relativePath);
+        if (!refreshed.ok) return refreshed;
+        const editorContent = currentEditorContents.get(file.relativePath);
+        review = replaceRollbackReviewFile(
+          review,
+          staleRollbackFile(
+            file,
+            refreshed.value.content,
+            refreshed.value.checksum,
+            editorContent
+          ),
+          this.now()
+        );
+      } else {
+        review = updateRollbackReviewFile(
+          review,
+          relativePath,
+          { status: "failed", errorCode: replacement.error.code },
+          this.now()
+        );
+      }
+      const persisted = await this.persistRollbackReview(withRollbackReviewStatus(review, this.now()));
+      if (!persisted.ok) return persisted;
+      review = persisted.value;
+    }
+    return ok(withRollbackReviewStatus(review, this.now()));
+  }
+
+  private groupFromRollbackReview(review: RollbackReviewRecord): VersionGroupRecord {
+    const baselineByPath = Object.fromEntries(
+      review.files.map((file) => [
+        file.relativePath,
+        {
+          relativePath: file.relativePath,
+          checksum: file.baselineChecksum,
+          beforeVersionId: file.baselineVersionId
+        }
+      ])
+    );
+    const writes: VersionGroupWriteRecord[] = review.files.map((file) => ({
+      writeId: rollbackWriteId(review.reviewId, file.relativePath),
+      relativePath: file.relativePath,
+      assetType: file.assetType,
+      beforeChecksum: file.reviewedCurrentChecksum,
+      afterChecksum: file.baselineChecksum,
+      beforeVersionId: file.snapshotVersionId ?? file.baselineVersionId,
+      status:
+        file.status === "failed"
+          ? "rollback_failed"
+          : file.status === "ready"
+            ? "pending"
+            : file.status,
+      ...(file.errorCode === undefined ? {} : { errorCode: file.errorCode })
+    }));
+    const transactionStatus =
+      review.status === "completed"
+        ? "applied"
+        : review.status === "partial_failure"
+          ? "partial_failure"
+          : "awaiting_review";
+    return freezeGroup({
+      schemaVersion: "1.0",
+      versionGroupId: review.reviewId,
+      runId: review.runId,
+      checkpointId: `rollback_${review.runId}`,
+      changeSetId: `undo_${review.runId}`,
+      changeSetRevision: 0,
+      changeSetChecksum: checksum(review.sourceVersionGroupIds.join("\n")),
+      createdAt: review.createdAt,
+      writes,
+      baselineByPath,
+      transactionStatus,
+      undoStatus:
+        review.status === "completed"
+          ? "completed"
+          : review.status === "partial_failure"
+            ? "partial_failure"
+            : "review_required",
+      undoMetadata: {
+        runId: review.runId,
+        versionGroupId: review.reviewId,
+        baselineVersionIds: Object.fromEntries(
+          review.files.map((file) => [file.relativePath, file.baselineVersionId])
+        ),
+        lastWriteChecksums: Object.fromEntries(
+          review.files.map((file) => [file.relativePath, file.runLastWriteChecksum])
+        ),
+        undoOfVersionGroupIds: review.sourceVersionGroupIds
+      },
+      rollbackReview: review,
+      ...(review.status === "partial_failure" ? { failureKind: "undo_failure" } : {})
+    });
+  }
+
+  private async readRollbackReview(
+    runId: string
+  ): Promise<Result<RollbackReviewRecord | undefined, UnifiedError>> {
+    const read = this.options.recoveryRepository.readRollbackReview;
+    if (read === undefined) return ok(undefined);
+    return read.call(this.options.recoveryRepository, runId);
+  }
+
+  private async persistRollbackReview(
+    review: RollbackReviewRecord
+  ): Promise<Result<RollbackReviewRecord, UnifiedError>> {
+    const write = this.options.recoveryRepository.writeRollbackReview;
+    if (write === undefined) {
+      return err(this.error("AGENT_WRITE_ROLLBACK_REVIEW_UNAVAILABLE", "storage"));
+    }
+    return write.call(this.options.recoveryRepository, freezeRollbackReview(review));
   }
 
   private async executeTransaction(
@@ -561,6 +1031,7 @@ export class AgentWriteTransaction {
       return {
         relativePath,
         assetType: earliest.assetType,
+        ...(earliest.assetId === undefined ? {} : { assetId: earliest.assetId }),
         baseChecksum: latest.candidateChecksum,
         candidateChecksum: earliest.beforeChecksum,
         baseContent: latest.candidateContent,
@@ -758,11 +1229,17 @@ function validateTransactionInput(
   const paths = input.files.map((file) => file.relativePath);
   const approvalBindingInvalid =
     kind === "apply"
-      ? !("approvalSource" in input) ||
-        input.approvalSource !== "human_confirmation" ||
+      ? !("writePolicy" in input) ||
+        (input.writePolicy !== "write_before_confirmation" &&
+          input.writePolicy !== "user_preapproved_run") ||
+        !("approvalSource" in input) ||
+        (input.approvalSource !== "human_confirmation" &&
+          input.approvalSource !== "user_preapproved_run") ||
+        (input.approvalSource === "user_preapproved_run" &&
+          input.writePolicy !== "user_preapproved_run") ||
         !("approvalToken" in input) ||
         input.approvalToken !== approvalToken(input.changeSetId, input.revision, input.checksum)
-      : "approvalSource" in input || "approvalToken" in input;
+      : "writePolicy" in input || "approvalSource" in input || "approvalToken" in input;
   if (
     identifiers.some((value) => value.length === 0) ||
     !Number.isInteger(input.revision) ||
@@ -831,8 +1308,12 @@ function createJournal(input: {
     changeSetId: input.input.changeSetId,
     changeSetRevision: input.input.revision,
     changeSetChecksum: input.input.checksum,
-    ...(input.kind === "apply" && "approvalSource" in input.input && "approvalToken" in input.input
+    ...(input.kind === "apply" &&
+    "writePolicy" in input.input &&
+    "approvalSource" in input.input &&
+    "approvalToken" in input.input
       ? {
+          writePolicy: input.input.writePolicy,
           approvalSource: input.input.approvalSource,
           approvalToken: input.input.approvalToken
         }
@@ -844,6 +1325,7 @@ function createJournal(input: {
       writeId: file.writeId,
       relativePath: file.relativePath,
       assetType: file.assetType,
+      ...(file.assetId === undefined ? {} : { assetId: file.assetId }),
       beforeChecksum: file.baseChecksum,
       candidateChecksum: file.candidateChecksum,
       beforeContent: file.baseContent,
@@ -914,6 +1396,235 @@ function freezeJournal(journal: AgentTransactionJournal): AgentTransactionJourna
   });
 }
 
+function rollbackDiff(
+  currentContent: string,
+  lastWriteContent: string,
+  baselineContent: string
+) {
+  return {
+    currentToLastWrite: displayableDiff("current", currentContent, "ai-last-write", lastWriteContent),
+    currentToBaseline: displayableDiff("current", currentContent, "baseline", baselineContent),
+    lastWriteToBaseline: displayableDiff(
+      "ai-last-write",
+      lastWriteContent,
+      "baseline",
+      baselineContent
+    )
+  };
+}
+
+function displayableDiff(
+  leftLabel: string,
+  leftContent: string,
+  rightLabel: string,
+  rightContent: string
+): string {
+  if (leftContent === rightContent) return `${leftLabel} = ${rightLabel}`;
+  return `--- ${leftLabel}\n+++ ${rightLabel}\n-${leftContent}\n+${rightContent}`;
+}
+
+function updateRollbackReviewFile(
+  review: RollbackReviewRecord,
+  relativePath: string,
+  update: Partial<RollbackReviewFileRecord>,
+  updatedAt: string
+): RollbackReviewRecord {
+  return freezeRollbackReview({
+    ...review,
+    updatedAt,
+    files: review.files.map((file) =>
+      file.relativePath === relativePath
+        ? { ...file, ...update }
+        : file
+    )
+  });
+}
+
+function replaceRollbackReviewFile(
+  review: RollbackReviewRecord,
+  replacement: RollbackReviewFileRecord,
+  updatedAt: string
+): RollbackReviewRecord {
+  return freezeRollbackReview({
+    ...review,
+    updatedAt,
+    files: review.files.map((file) =>
+      file.relativePath === replacement.relativePath ? replacement : file
+    )
+  });
+}
+
+function resolvedRollbackFile(
+  file: RollbackReviewFileRecord,
+  decision: RollbackReviewDecisionRecord
+): RollbackReviewFileRecord {
+  return {
+    relativePath: file.relativePath,
+    assetType: file.assetType,
+    ...(file.assetId === undefined ? {} : { assetId: file.assetId }),
+    baselineContent: file.baselineContent,
+    baselineChecksum: file.baselineChecksum,
+    ...(file.baselineHistoryContent === undefined
+      ? {}
+      : { baselineHistoryContent: file.baselineHistoryContent }),
+    baselineVersionId: file.baselineVersionId,
+    runLastWriteContent: file.runLastWriteContent,
+    runLastWriteChecksum: file.runLastWriteChecksum,
+    ...(file.runLastWriteHistoryContent === undefined
+      ? {}
+      : { runLastWriteHistoryContent: file.runLastWriteHistoryContent }),
+    reviewedCurrentContent: file.reviewedCurrentContent,
+    reviewedCurrentChecksum: file.reviewedCurrentChecksum,
+    ...(file.reviewedCurrentHistoryContent === undefined
+      ? {}
+      : { reviewedCurrentHistoryContent: file.reviewedCurrentHistoryContent }),
+    ...(file.reviewedEditorChecksum === undefined
+      ? {}
+      : { reviewedEditorChecksum: file.reviewedEditorChecksum }),
+    diff: file.diff,
+    ...(file.snapshotVersionId === undefined
+      ? {}
+      : { snapshotVersionId: file.snapshotVersionId }),
+    decision,
+    status: decision === "keep_current" ? "kept" : "ready"
+  };
+}
+
+function staleRollbackFile(
+  file: RollbackReviewFileRecord,
+  currentContent: string,
+  currentChecksum: string,
+  editorContent?: string
+): RollbackReviewFileRecord {
+  return {
+    relativePath: file.relativePath,
+    assetType: file.assetType,
+    ...(file.assetId === undefined ? {} : { assetId: file.assetId }),
+    baselineContent: file.baselineContent,
+    baselineChecksum: file.baselineChecksum,
+    ...(file.baselineHistoryContent === undefined
+      ? {}
+      : { baselineHistoryContent: file.baselineHistoryContent }),
+    baselineVersionId: file.baselineVersionId,
+    runLastWriteContent: file.runLastWriteContent,
+    runLastWriteChecksum: file.runLastWriteChecksum,
+    ...(file.runLastWriteHistoryContent === undefined
+      ? {}
+      : { runLastWriteHistoryContent: file.runLastWriteHistoryContent }),
+    reviewedCurrentContent: currentContent,
+    reviewedCurrentChecksum: currentChecksum,
+    reviewedCurrentHistoryContent:
+      editorContent ?? historyContentForAsset(file.assetType, currentContent),
+    ...(editorContent === undefined ? {} : { reviewedEditorChecksum: checksum(editorContent) }),
+    diff: rollbackDiff(
+      editorContent ?? historyContentForAsset(file.assetType, currentContent),
+      file.runLastWriteHistoryContent ?? file.runLastWriteContent,
+      file.baselineHistoryContent ?? file.baselineContent
+    ),
+    status: "stale",
+    errorCode: "AGENT_WRITE_UNDO_STALE"
+  };
+}
+
+function rollbackCurrentMatches(
+  file: RollbackReviewFileRecord,
+  diskChecksum: string,
+  editorContent: string | undefined
+): boolean {
+  return (
+    diskChecksum === file.reviewedCurrentChecksum &&
+    rollbackEditorMatches(file, editorContent)
+  );
+}
+
+function rollbackEditorMatches(
+  file: RollbackReviewFileRecord,
+  editorContent: string | undefined
+): boolean {
+  if (file.reviewedEditorChecksum === undefined) return editorContent === undefined;
+  return editorContent !== undefined && checksum(editorContent) === file.reviewedEditorChecksum;
+}
+
+function historyContentForAsset(assetType: AgentWriteAssetType, content: string): string {
+  if (assetType === "text") return content;
+  const match = content.match(/^---\n[\s\S]*?\n---\n?([\s\S]*)$/);
+  return (match?.[1] ?? content).replace(/^\n/, "");
+}
+
+function withRollbackReviewStatus(
+  review: RollbackReviewRecord,
+  updatedAt: string
+): RollbackReviewRecord {
+  return freezeRollbackReview({
+    ...review,
+    status: rollbackReviewStatus(review.files),
+    updatedAt
+  });
+}
+
+function rollbackReviewStatus(
+  files: readonly RollbackReviewFileRecord[]
+): RollbackReviewRecord["status"] {
+  if (files.every((file) => file.status === "completed" || file.status === "kept")) {
+    return "completed";
+  }
+  if (files.some((file) => file.status === "failed")) return "partial_failure";
+  return "pending";
+}
+
+function rollbackReviewBoundToSource(
+  review: RollbackReviewRecord,
+  source: UndoSource
+): boolean {
+  const firstJournal = source.journals[0];
+  if (
+    firstJournal === undefined ||
+    review.runId !== firstJournal.runId ||
+    review.reviewId !== `rollback_${checksum(review.runId).slice(0, 24)}` ||
+    review.sourceVersionGroupIds.length !== source.versionGroupIds.length ||
+    review.sourceVersionGroupIds.some((id, index) => id !== source.versionGroupIds[index]) ||
+    review.files.length !== source.files.length
+  ) {
+    return false;
+  }
+  return review.files.every((file) => {
+    const sourceFile = source.files.find(
+      (candidate) => candidate.relativePath === file.relativePath
+    );
+    const baseline = source.baselineByPath[file.relativePath];
+    return (
+      sourceFile !== undefined &&
+      baseline !== undefined &&
+      file.assetType === sourceFile.assetType &&
+      file.assetId === sourceFile.assetId &&
+      file.baselineContent === sourceFile.candidateContent &&
+      file.baselineChecksum === sourceFile.candidateChecksum &&
+      file.baselineHistoryContent === sourceFile.historyCandidateContent &&
+      file.baselineVersionId === baseline.beforeVersionId &&
+      file.runLastWriteContent === sourceFile.baseContent &&
+      file.runLastWriteChecksum === sourceFile.baseChecksum &&
+      file.runLastWriteHistoryContent === sourceFile.historyBaseContent
+    );
+  });
+}
+
+function freezeRollbackReview(review: RollbackReviewRecord): RollbackReviewRecord {
+  return Object.freeze({
+    ...review,
+    sourceVersionGroupIds: Object.freeze([...review.sourceVersionGroupIds]),
+    processedCommandIds: Object.freeze([...review.processedCommandIds]),
+    files: Object.freeze(
+      review.files.map((file) =>
+        Object.freeze({ ...file, diff: Object.freeze({ ...file.diff }) })
+      )
+    )
+  });
+}
+
+function rollbackWriteId(reviewId: string, relativePath: string): string {
+  return `rollback_${checksum(`${reviewId}:${relativePath}`).slice(0, 24)}`;
+}
+
 function groupFromJournal(
   journal: AgentTransactionJournal,
   transactionStatus: VersionGroupTransactionStatus,
@@ -955,6 +1666,10 @@ function groupFromJournal(
     changeSetId: journal.changeSetId,
     changeSetRevision: journal.changeSetRevision,
     changeSetChecksum: journal.changeSetChecksum,
+    ...(journal.writePolicy === undefined ? {} : { writePolicy: journal.writePolicy }),
+    ...(journal.approvalSource === undefined
+      ? {}
+      : { approvalSource: journal.approvalSource }),
     createdAt: journal.createdAt,
     writes,
     baselineByPath,

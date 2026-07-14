@@ -50,6 +50,43 @@ export function createAgentRunCoordinator(
         commandReceipts.set(receiptKey, result);
         return result;
       }
+      const writePolicy: unknown =
+        command.writePolicy === undefined
+          ? "write_before_confirmation"
+          : command.writePolicy;
+      if (
+        writePolicy !== "write_before_confirmation" &&
+        writePolicy !== "user_preapproved_run"
+      ) {
+        const result = failure(
+          "AGENT_WRITE_POLICY_INVALID",
+          "The requested Agent write policy is not supported."
+        );
+        commandReceipts.set(receiptKey, result);
+        return result;
+      }
+      if (
+        writePolicy === "user_preapproved_run" &&
+        command.operationMode !== "execution"
+      ) {
+        const result = failure(
+          "AGENT_WRITE_POLICY_NOT_AVAILABLE",
+          "Automatic writes are available only for execution runs."
+        );
+        commandReceipts.set(receiptKey, result);
+        return result;
+      }
+      if (
+        writePolicy === "user_preapproved_run" &&
+        command.writePolicyAcknowledged !== true
+      ) {
+        const result = failure(
+          "AGENT_WRITE_POLICY_ACK_REQUIRED",
+          "Automatic writes require an explicit acknowledgement for this run."
+        );
+        commandReceipts.set(receiptKey, result);
+        return result;
+      }
 
       const timestamp = now();
       const runId = createRunId();
@@ -59,7 +96,7 @@ export function createAgentRunCoordinator(
         projectId: command.projectId,
         operationMode: command.operationMode,
         contextMode: command.contextMode,
-        writePolicy: command.writePolicy,
+        writePolicy,
         userRequest: command.userRequest,
         status: command.operationMode === "planning" ? "planning_model" : "executing_model",
         runRevision: 1,
@@ -186,6 +223,17 @@ export function createAgentRunCoordinator(
     restoreRun(snapshot, restoredEvents) {
       const existing = runs.get(snapshot.runId);
       if (existing !== undefined) return { ok: true, value: existing };
+      const persistedWritePolicy: unknown = snapshot.writePolicy;
+      if (
+        persistedWritePolicy !== undefined &&
+        persistedWritePolicy !== "write_before_confirmation" &&
+        persistedWritePolicy !== "user_preapproved_run"
+      ) {
+        return failure(
+          "AGENT_WRITE_POLICY_INVALID",
+          "The persisted Agent write policy is not supported."
+        );
+      }
       const lastEvent = restoredEvents.at(-1);
       if (
         lastEvent === undefined ||
@@ -199,10 +247,16 @@ export function createAgentRunCoordinator(
       if (activeRunId !== undefined && !isTerminal(snapshot.status)) {
         return failure("AGENT_RUN_ALREADY_ACTIVE", "An Agent run is already active.");
       }
-      runs.set(snapshot.runId, snapshot);
+      const restoredSnapshot: AgentRunSnapshot = {
+        ...snapshot,
+        writePolicy: "write_before_confirmation"
+      };
+      runs.set(restoredSnapshot.runId, restoredSnapshot);
       events.set(snapshot.runId, [...restoredEvents]);
-      if (!isTerminal(snapshot.status)) activeRunByProject.set(snapshot.projectId, snapshot.runId);
-      return { ok: true, value: snapshot };
+      if (!isTerminal(restoredSnapshot.status)) {
+        activeRunByProject.set(restoredSnapshot.projectId, restoredSnapshot.runId);
+      }
+      return { ok: true, value: restoredSnapshot };
     },
     readSnapshot(runId) {
       return runs.get(runId);
@@ -261,7 +315,12 @@ function isTerminal(status: AgentRunSnapshot["status"]): boolean {
 }
 
 function isTerminalAuditEventType(type: AgentRunEvent["type"]): boolean {
-  return type === "run_undo_started" || type === "run_undone" || type === "run_undo_failed";
+  return (
+    type === "run_undo_started" ||
+    type === "run_undo_review_required" ||
+    type === "run_undone" ||
+    type === "run_undo_failed"
+  );
 }
 
 let runSequence = 0;

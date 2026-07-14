@@ -71,6 +71,31 @@ describe("Change Set application session", () => {
     expect(persisted.map((item) => item.revision)).toEqual([1, 2]);
   });
 
+  test("does not let the public proposal API grant preapproved-run writes", async () => {
+    const session = createChangeSetSession({
+      port: targetPort({ chapter: () => "unused", file: () => "alpha", persisted: [] }),
+      createChangeSetId: () => "change-set-public-policy",
+      createHunkId: () => "hunk-public-policy",
+      now: () => "2026-07-13T03:00:00.000Z"
+    });
+
+    const proposed = await Reflect.apply(session.proposeFileWrite, session, [
+      {
+        ...proposalBinding(),
+        writePolicy: "user_preapproved_run",
+        path: "notes/outline.md",
+        range: { unit: "character", start: 0, end: 5 },
+        baseHash: sha256("alpha"),
+        replacement: "beta"
+      }
+    ]);
+
+    expect(expectOk(proposed)).toMatchObject({
+      changeSetId: "change-set-public-policy",
+      writePolicy: "write_before_confirmation"
+    });
+  });
+
   test.each([
     ["absolute path", "C:/outside.md", false, true, sha256("alpha"), "AGENT_PATH_REJECTED"],
     ["dirty target", "notes/outline.md", true, true, sha256("alpha"), "CHANGE_SET_DIRTY_TARGET"],
@@ -261,7 +286,13 @@ describe("Change Set application session", () => {
       decision: "apply_selected" as const
     };
 
-    const first = await session.decide(command);
+    const first = await Reflect.apply(session.decide, session, [
+      command,
+      {
+        writePolicy: "user_preapproved_run",
+        approvalSource: "user_preapproved_run"
+      }
+    ]);
     const duplicate = await session.decide(command);
     const mismatch = await session.decide({
       ...command,
@@ -273,6 +304,7 @@ describe("Change Set application session", () => {
       ok: true,
       value: {
         decision: "apply_selected",
+        approvalSource: "human_confirmation",
         binding: { changeSetId: "change-set-01", revision: 1, checksum: proposedValue.checksum }
       }
     });

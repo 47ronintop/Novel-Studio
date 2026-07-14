@@ -363,6 +363,152 @@ describe("desktop Agent Run runtime", () => {
     expect(await readFile(chapterPath, "utf8")).toContain("Externally changed chapter body.");
   });
 
+  test("opens rollback review before restoring a chapter with a dirty active editor", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-agent-dirty-undo-"));
+    roots.push(projectRoot);
+    await mkdir(join(projectRoot, "chapters"), { recursive: true });
+    const chapterId = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D6";
+    const relativePath = `chapters/${chapterId}.md`;
+    const chapterPath = join(projectRoot, relativePath);
+    const body = "Original chapter body.\n";
+    const dirtyBody = "Unsaved user body.\n";
+    const original = `---\nschemaVersion: "1.0"\nid: ${chapterId}\ntype: chapter\ntitle: Opening\norder: 1\nstatus: draft\ncreatedAt: "2026-07-13T00:00:00.000Z"\nupdatedAt: "2026-07-13T00:00:00.000Z"\n---\n\n${body}`;
+    await writeFile(chapterPath, original, "utf8");
+    const lockOwnerId = "desktop-agent-dirty-undo-test";
+    const lock = new ProjectLockFileRepository({ projectRoot, ownerId: lockOwnerId });
+    expect((await lock.acquireProjectLock()).ok).toBe(true);
+    let editorDirty = false;
+    const editorReads: boolean[] = [];
+    const syncOptions: (string | undefined)[] = [];
+    let round = 0;
+    const session = createDesktopRuntime({
+      projectRoot,
+      projectId: "project-01",
+      activeChapterId: chapterId,
+      projectLockOwnerId: lockOwnerId,
+      createRunId: () => "run-desktop-dirty-undo",
+      readEditorState: async (path: string) => {
+        editorReads.push(editorDirty);
+        return path === relativePath
+          ? { dirty: editorDirty, content: editorDirty ? dirtyBody : body }
+          : undefined;
+      },
+      syncSavedEditor: async (
+        path: string,
+        options?: { readonly expectedDirtyChecksum?: string }
+      ) => {
+        if (path === relativePath) {
+          syncOptions.push(options?.expectedDirtyChecksum);
+          editorDirty = false;
+        }
+      },
+      modelDriver: {
+        async *streamRound() {
+          round += 1;
+          if (round === 1) {
+            yield runtimeToolCall("proposal-dirty-undo", "propose_chapter_write", {
+              chapterId,
+              baseHash: sha256(body),
+              range: { unit: "character", start: 0, end: 8 },
+              replacement: "Revised"
+            });
+          } else {
+            yield runtimeToolCall("finish-dirty-undo", "finish", { summary: "Applied." });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    }) as unknown as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      decideChangeSet(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      undoRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+
+    await session.startAgentRun(executionCommand());
+    let changeSet: Record<string, unknown> | undefined;
+    let revision = 0;
+    await vi.waitFor(async () => {
+      const read = await session.readAgentRun("run-desktop-dirty-undo");
+      expect(read).toMatchObject({ ok: true, value: { snapshot: { status: "awaiting_write_approval" } } });
+      const value = read as {
+        value: { snapshot: { runRevision: number }; changeSet: Record<string, unknown> };
+      };
+      revision = value.value.snapshot.runRevision;
+      changeSet = value.value.changeSet;
+    });
+    if (changeSet === undefined) throw new Error("Expected Change Set.");
+    await session.decideChangeSet({
+      runId: "run-desktop-dirty-undo",
+      projectId: "project-01",
+      commandId: "apply-desktop-dirty-undo",
+      expectedRunRevision: revision,
+      changeSetId: changeSet["changeSetId"],
+      revision: changeSet["revision"],
+      checksum: changeSet["checksum"],
+      decision: "apply_selected"
+    });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run-desktop-dirty-undo")).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+    const agentFile = await readFile(chapterPath, "utf8");
+    expect(agentFile).toContain("Revised chapter body.");
+    editorDirty = true;
+    const completed = await session.readAgentRun("run-desktop-dirty-undo") as {
+      value: { snapshot: { runRevision: number } };
+    };
+
+    const undoRequested = await session.undoRun({
+      action: "request",
+      runId: "run-desktop-dirty-undo",
+      projectId: "project-01",
+      commandId: "undo-desktop-dirty-undo",
+      expectedRunRevision: completed.value.snapshot.runRevision
+    });
+    expect(undoRequested).toMatchObject({ ok: true });
+    expect(editorReads).toContain(true);
+
+    const reviewed = await session.readAgentRun("run-desktop-dirty-undo");
+    expect(reviewed).toMatchObject({
+      ok: true,
+      value: {
+        rollbackReview: {
+          files: [
+            expect.objectContaining({
+              relativePath,
+              reviewedCurrentHistoryContent: dirtyBody,
+              status: "conflict"
+            })
+          ]
+        }
+      }
+    });
+    expect(await readFile(chapterPath, "utf8")).toBe(agentFile);
+    const reviewValue = reviewed as {
+      value: {
+        snapshot: { runRevision: number };
+        rollbackReview: { reviewId: string };
+      };
+    };
+
+    await session.undoRun({
+      action: "resolve",
+      runId: "run-desktop-dirty-undo",
+      projectId: "project-01",
+      commandId: "restore-desktop-dirty-undo",
+      expectedRunRevision: reviewValue.value.snapshot.runRevision,
+      reviewId: reviewValue.value.rollbackReview.reviewId,
+      decisions: [{ relativePath, decision: "restore_baseline" }]
+    });
+
+    expect(await readFile(chapterPath, "utf8")).toBe(original);
+    expect(syncOptions).toContain(sha256(dirtyBody));
+    expect(editorDirty).toBe(false);
+  });
+
   test("does not claim external schema validation for an ordinary text proposal", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-agent-text-"));
     roots.push(projectRoot);

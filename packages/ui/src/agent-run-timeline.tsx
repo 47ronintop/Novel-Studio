@@ -123,6 +123,47 @@ function timelineItems(events: readonly AgentRunEvent[]): TimelineItem[] {
         status: "waiting",
         statusLabel: "待审阅"
       });
+    } else if (event.type === "change_set_auto_approved") {
+      items.push({
+        key: `${event.runId}:${event.sequence}`,
+        label: "本次运行自动写入已授权",
+        detail: `Change Set v${String(event.detail?.["revision"] ?? "")}`,
+        status: "completed",
+        statusLabel: "已授权"
+      });
+    } else if (event.type === "write_started") {
+      items.push({
+        key: `${event.runId}:${event.sequence}`,
+        label: "正在写入已批准更改",
+        status: "running",
+        statusLabel: "写入中"
+      });
+    } else if (event.type === "write_applied") {
+      items.push({
+        key: `${event.runId}:${event.sequence}`,
+        label: `版本点 ${stringDetail(event, "versionGroupId") ?? "已创建"}`,
+        detail: "写入已完成，可从本次运行撤销。",
+        status: "completed",
+        statusLabel: "已写入"
+      });
+    } else if (event.type === "run_undo_review_required") {
+      items.push({
+        key: `${event.runId}:${event.sequence}`,
+        label: "撤销需要逐文件审阅",
+        status: "waiting",
+        statusLabel: "待决定"
+      });
+    } else if (event.type === "run_undone") {
+      const keptFiles = keptUndoFileCount(event);
+      items.push({
+        key: `${event.runId}:${event.sequence}`,
+        label: keptFiles > 0 ? "撤销审阅已完成" : "本次运行已撤销",
+        ...(keptFiles > 0
+          ? { detail: `保留 ${keptFiles} 个文件的当前内容` }
+          : {}),
+        status: "completed",
+        statusLabel: "已完成"
+      });
     }
   }
   return aggregateCompletedReads(items);
@@ -191,6 +232,22 @@ function toolActivityLabel(toolName: string | undefined): string {
 function stringDetail(event: AgentRunEvent, key: string): string | undefined {
   const value = event.detail?.[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function keptUndoFileCount(event: AgentRunEvent): number {
+  const versionGroup = event.detail?.["versionGroup"];
+  if (typeof versionGroup !== "object" || versionGroup === null || Array.isArray(versionGroup)) {
+    return 0;
+  }
+  const writes = (versionGroup as Record<string, unknown>)["writes"];
+  if (!Array.isArray(writes)) return 0;
+  return writes.filter(
+    (write) =>
+      typeof write === "object" &&
+      write !== null &&
+      !Array.isArray(write) &&
+      (write as Record<string, unknown>)["status"] === "kept"
+  ).length;
 }
 
 function optionalDetail(value: string | undefined): { readonly detail: string } | object {

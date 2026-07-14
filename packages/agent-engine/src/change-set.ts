@@ -6,6 +6,7 @@ import { parse as parseToml } from "@iarna/toml";
 import { createUnifiedError, type UnifiedError } from "@novel-studio/shared";
 
 import { validateAgentRelativePath } from "./path-guard.js";
+import type { AgentWritePolicy } from "./agent-run-types.js";
 
 const require = createRequire(import.meta.url);
 const { load: parseYaml } = require("js-yaml") as {
@@ -69,6 +70,7 @@ export interface ChangeSet {
   readonly projectId: string;
   readonly checkpointId: string;
   readonly contextSnapshotId: string;
+  readonly writePolicy?: AgentWritePolicy;
   readonly status: ChangeSetStatus;
   readonly checksum: string;
   readonly approvalToken: string;
@@ -92,6 +94,7 @@ export interface CreateChangeSetRevisionInput {
   readonly projectId: string;
   readonly checkpointId: string;
   readonly contextSnapshotId: string;
+  readonly writePolicy?: AgentWritePolicy;
   readonly proposal: ChangeSetProposal;
   readonly createdAt: string;
 }
@@ -151,6 +154,7 @@ export async function createChangeSetRevision(
   return finalizeChangeSet(
     {
       ...input,
+      writePolicy: input.writePolicy ?? "write_before_confirmation",
       revision: 1,
       files: [draft]
     },
@@ -207,6 +211,7 @@ export async function appendChangeSetProposal(
       projectId: current.projectId,
       checkpointId: current.checkpointId,
       contextSnapshotId: current.contextSnapshotId,
+      writePolicy: current.writePolicy ?? "write_before_confirmation",
       revision: current.revision + 1,
       createdAt: input.createdAt,
       files
@@ -263,6 +268,7 @@ export async function selectChangeSetRevision(
       projectId: current.projectId,
       checkpointId: current.checkpointId,
       contextSnapshotId: current.contextSnapshotId,
+      writePolicy: current.writePolicy ?? "write_before_confirmation",
       revision: current.revision + 1,
       createdAt: input.createdAt,
       files
@@ -315,6 +321,7 @@ async function finalizeChangeSet(
     readonly projectId: string;
     readonly checkpointId: string;
     readonly contextSnapshotId: string;
+    readonly writePolicy: AgentWritePolicy;
     readonly revision: number;
     readonly createdAt: string;
     readonly files: readonly DraftFileChange[];
@@ -329,6 +336,7 @@ async function finalizeChangeSet(
       runId: input.runId,
       checkpointId: input.checkpointId,
       contextSnapshotId: input.contextSnapshotId,
+      writePolicy: input.writePolicy,
       files: files.map((file) => ({
         relativePath: file.relativePath,
         assetType: file.assetType,
@@ -355,6 +363,7 @@ async function finalizeChangeSet(
     projectId: input.projectId,
     checkpointId: input.checkpointId,
     contextSnapshotId: input.contextSnapshotId,
+    writePolicy: input.writePolicy,
     status: "awaiting_approval",
     checksum,
     approvalToken,

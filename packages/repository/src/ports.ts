@@ -199,13 +199,75 @@ export interface HistoryRepositoryPort {
 
 export type AgentWriteAssetType = "chapter" | "text";
 export type VersionGroupTransactionStatus =
-  "failed" | "applied" | "rolled_back" | "partial_failure";
+  "failed" | "applied" | "rolled_back" | "partial_failure" | "awaiting_review";
 export type VersionGroupFailureKind =
   "preflight_failure" | "write_failure" | "partial_failure" | "undo_conflict" | "undo_failure";
 export type VersionGroupWriteStatus =
-  "pending" | "applied" | "rolled_back" | "rollback_failed" | "conflict";
+  | "pending"
+  | "applied"
+  | "rolled_back"
+  | "rollback_failed"
+  | "conflict"
+  | "completed"
+  | "kept"
+  | "stale";
 export type VersionGroupUndoStatus =
-  "available" | "not_available" | "completed" | "conflict" | "partial_failure";
+  | "available"
+  | "not_available"
+  | "completed"
+  | "conflict"
+  | "partial_failure"
+  | "review_required";
+
+export type RollbackReviewDecisionRecord = "keep_current" | "restore_baseline";
+export type RollbackReviewFileStatusRecord =
+  | "ready"
+  | "conflict"
+  | "stale"
+  | "failed"
+  | "completed"
+  | "kept";
+export type RollbackReviewStatusRecord = "pending" | "partial_failure" | "completed";
+
+export interface RollbackReviewDiffRecord {
+  readonly currentToLastWrite: string;
+  readonly currentToBaseline: string;
+  readonly lastWriteToBaseline: string;
+}
+
+export interface RollbackReviewFileRecord {
+  readonly relativePath: string;
+  readonly assetType: AgentWriteAssetType;
+  readonly assetId?: string;
+  readonly baselineContent: string;
+  readonly baselineChecksum: string;
+  readonly baselineHistoryContent?: string;
+  readonly baselineVersionId: string;
+  readonly runLastWriteContent: string;
+  readonly runLastWriteChecksum: string;
+  readonly runLastWriteHistoryContent?: string;
+  readonly reviewedCurrentContent: string;
+  readonly reviewedCurrentChecksum: string;
+  readonly reviewedCurrentHistoryContent?: string;
+  readonly reviewedEditorChecksum?: string;
+  readonly diff: RollbackReviewDiffRecord;
+  readonly decision?: RollbackReviewDecisionRecord;
+  readonly status: RollbackReviewFileStatusRecord;
+  readonly snapshotVersionId?: string;
+  readonly errorCode?: string;
+}
+
+export interface RollbackReviewRecord {
+  readonly schemaVersion: "1.0";
+  readonly reviewId: string;
+  readonly runId: string;
+  readonly status: RollbackReviewStatusRecord;
+  readonly sourceVersionGroupIds: readonly string[];
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly processedCommandIds: readonly string[];
+  readonly files: readonly RollbackReviewFileRecord[];
+}
 
 export interface AgentWriteTransactionFile {
   readonly relativePath: string;
@@ -225,7 +287,8 @@ export interface AgentWriteTransactionInput {
   readonly changeSetId: string;
   readonly revision: number;
   readonly checksum: string;
-  readonly approvalSource: "human_confirmation";
+  readonly writePolicy: "write_before_confirmation" | "user_preapproved_run";
+  readonly approvalSource: "human_confirmation" | "user_preapproved_run";
   readonly approvalToken: string;
   readonly files: readonly AgentWriteTransactionFile[];
 }
@@ -263,12 +326,15 @@ export interface VersionGroupRecord {
   readonly changeSetId: string;
   readonly changeSetRevision: number;
   readonly changeSetChecksum: string;
+  readonly writePolicy?: "write_before_confirmation" | "user_preapproved_run";
+  readonly approvalSource?: "human_confirmation" | "user_preapproved_run";
   readonly createdAt: string;
   readonly writes: readonly VersionGroupWriteRecord[];
   readonly baselineByPath: Readonly<Record<string, VersionGroupBaselineRecord>>;
   readonly transactionStatus: VersionGroupTransactionStatus;
   readonly undoStatus: VersionGroupUndoStatus;
   readonly undoMetadata: VersionGroupUndoMetadataRecord;
+  readonly rollbackReview?: RollbackReviewRecord;
   readonly failureKind?: VersionGroupFailureKind;
 }
 
@@ -282,6 +348,7 @@ export interface AgentTransactionJournalEntry {
   readonly writeId: string;
   readonly relativePath: string;
   readonly assetType: AgentWriteAssetType;
+  readonly assetId?: string;
   readonly beforeChecksum: string;
   readonly candidateChecksum: string;
   readonly beforeContent: string;
@@ -304,7 +371,8 @@ export interface AgentTransactionJournal {
   readonly changeSetId: string;
   readonly changeSetRevision: number;
   readonly changeSetChecksum: string;
-  readonly approvalSource?: "human_confirmation";
+  readonly writePolicy?: "write_before_confirmation" | "user_preapproved_run";
+  readonly approvalSource?: "human_confirmation" | "user_preapproved_run";
   readonly approvalToken?: string;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -325,6 +393,12 @@ export interface AgentWriteRecoveryPort {
     transactionId: string
   ): Promise<Result<AgentTransactionJournal, UnifiedError>>;
   listAgentTransactionJournals(): Promise<Result<readonly AgentTransactionJournal[], UnifiedError>>;
+  writeRollbackReview?(
+    review: RollbackReviewRecord
+  ): Promise<Result<RollbackReviewRecord, UnifiedError>>;
+  readRollbackReview?(
+    runId: string
+  ): Promise<Result<RollbackReviewRecord | undefined, UnifiedError>>;
 }
 
 export interface AgentWriteProjectLockPort {

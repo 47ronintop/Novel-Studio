@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, FileText } from "lucide-react";
+import { AlertTriangle, CheckCircle2, FileText, RotateCcw } from "lucide-react";
 
 export interface ChangeSetReviewModel {
   readonly changeSetId: string;
@@ -63,6 +63,63 @@ export interface ChangeSetReviewProps {
   readonly onUndoRun?: () => void;
 }
 
+export type RollbackReviewDecision = "keep_current" | "restore_baseline";
+export type RollbackReviewFileStatus =
+  | "ready"
+  | "conflict"
+  | "stale"
+  | "failed"
+  | "completed"
+  | "kept";
+
+export interface RollbackReviewModel {
+  readonly schemaVersion: "1.0";
+  readonly reviewId: string;
+  readonly runId: string;
+  readonly status: "pending" | "partial_failure" | "completed";
+  readonly sourceVersionGroupIds: readonly string[];
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly processedCommandIds: readonly string[];
+  readonly files: readonly RollbackReviewFile[];
+}
+
+export interface RollbackReviewFile {
+  readonly relativePath: string;
+  readonly assetType: string;
+  readonly baselineContent: string;
+  readonly baselineHistoryContent?: string;
+  readonly baselineChecksum: string;
+  readonly baselineVersionId: string;
+  readonly runLastWriteContent: string;
+  readonly runLastWriteHistoryContent?: string;
+  readonly runLastWriteChecksum: string;
+  readonly reviewedCurrentContent: string;
+  readonly reviewedCurrentHistoryContent?: string;
+  readonly reviewedEditorChecksum?: string;
+  readonly reviewedCurrentChecksum: string;
+  readonly diff: {
+    readonly currentToLastWrite: string;
+    readonly currentToBaseline: string;
+    readonly lastWriteToBaseline: string;
+  };
+  readonly decision?: RollbackReviewDecision;
+  readonly status: RollbackReviewFileStatus;
+  readonly snapshotVersionId?: string;
+  readonly errorCode?: string;
+}
+
+export interface RollbackReviewProps {
+  readonly review: RollbackReviewModel;
+  readonly applying: boolean;
+  readonly open?: boolean;
+  readonly decisions: Readonly<Record<string, RollbackReviewDecision>>;
+  readonly onDecisionChange: (relativePath: string, decision: RollbackReviewDecision) => void;
+  readonly onApply: () => void;
+  readonly onRetryFailed: () => void;
+  readonly onReturn: () => void;
+}
+
 export function ChangeSetReview({ review }: { readonly review: ChangeSetReviewProps }) {
   const totals = changeSetTotals(review.changeSet);
   const hasConflict = review.baseHashConflictPaths.length > 0;
@@ -120,6 +177,157 @@ export function ChangeSetReview({ review }: { readonly review: ChangeSetReviewPr
       )}
     </section>
   );
+}
+
+export function RollbackReview({ review }: { readonly review: RollbackReviewProps }) {
+  const unresolved = review.review.files.filter((file) =>
+    ["ready", "conflict", "stale", "failed"].includes(file.status)
+  );
+  const failed = review.review.files.some((file) => file.status === "failed");
+  const canApply =
+    !review.applying &&
+    unresolved.some(
+      (file) =>
+        review.decisions[file.relativePath] !== undefined ||
+        (file.decision !== undefined && file.status !== "failed")
+    );
+
+  return (
+    <section className="ns-rollback-review" aria-label="运行撤销冲突审阅">
+      <header className="ns-rollback-review-header">
+        <div>
+          <strong>撤销本次运行</strong>
+          <span>检测到运行后的人工编辑。逐文件确认，当前内容不会被静默覆盖。</span>
+        </div>
+        <span data-rollback-review-status={review.review.status}>
+          {rollbackReviewStatusLabel(review.review.status)}
+        </span>
+      </header>
+
+      <div className="ns-rollback-review-files">
+        {review.review.files.map((file) => {
+          const decision = review.decisions[file.relativePath] ?? file.decision;
+          const resolved = file.status === "completed" || file.status === "kept";
+          return (
+            <section
+              className="ns-rollback-review-file"
+              data-status={file.status}
+              key={file.relativePath}
+            >
+              <div className="ns-rollback-review-file-header">
+                <div>
+                  <FileText aria-hidden="true" size={14} />
+                  <strong>{file.relativePath}</strong>
+                </div>
+                <span>{rollbackFileStatusLabel(file.status)}</span>
+              </div>
+              {file.errorCode === undefined ? null : (
+                <p className="ns-rollback-review-error" role="status">
+                  {file.errorCode}
+                </p>
+              )}
+              <div className="ns-rollback-comparison">
+                <RollbackContent
+                  label="当前内容"
+                  content={file.reviewedCurrentHistoryContent ?? file.reviewedCurrentContent}
+                />
+                <RollbackContent
+                  label="AI 最后写入"
+                  content={file.runLastWriteHistoryContent ?? file.runLastWriteContent}
+                />
+                <RollbackContent
+                  label="运行前基线"
+                  content={file.baselineHistoryContent ?? file.baselineContent}
+                />
+              </div>
+              {resolved ? null : (
+                <fieldset className="ns-rollback-decisions" disabled={review.applying}>
+                  <legend>此文件如何处理</legend>
+                  <label>
+                    <input
+                      checked={decision === "keep_current"}
+                      name={`rollback-${review.review.reviewId}-${file.relativePath}`}
+                      onChange={() => review.onDecisionChange(file.relativePath, "keep_current")}
+                      type="radio"
+                    />
+                    <span>保留当前</span>
+                  </label>
+                  <label>
+                    <input
+                      checked={decision === "restore_baseline"}
+                      name={`rollback-${review.review.reviewId}-${file.relativePath}`}
+                      onChange={() =>
+                        review.onDecisionChange(file.relativePath, "restore_baseline")
+                      }
+                      type="radio"
+                    />
+                    <span>恢复运行前</span>
+                  </label>
+                </fieldset>
+              )}
+            </section>
+          );
+        })}
+      </div>
+
+      <footer className="ns-rollback-review-actions">
+        <button className="ns-ai-secondary-button" onClick={review.onReturn} type="button">
+          返回对话
+        </button>
+        {failed ? (
+          <button
+            className="ns-ai-secondary-button"
+            disabled={review.applying}
+            onClick={review.onRetryFailed}
+            type="button"
+          >
+            <RotateCcw aria-hidden="true" size={13} />
+            仅重试失败项
+          </button>
+        ) : null}
+        <button
+          className="ns-ai-send-button"
+          disabled={!canApply}
+          onClick={review.onApply}
+          type="button"
+        >
+          应用所选恢复
+        </button>
+      </footer>
+    </section>
+  );
+}
+
+function RollbackContent({ label, content }: { readonly label: string; readonly content: string }) {
+  return (
+    <div className="ns-rollback-content">
+      <span>{label}</span>
+      <pre>{content}</pre>
+    </div>
+  );
+}
+
+function rollbackReviewStatusLabel(status: RollbackReviewModel["status"]): string {
+  if (status === "completed") return "已解决";
+  if (status === "partial_failure") return "部分失败";
+  return "等待决定";
+}
+
+function rollbackFileStatusLabel(status: RollbackReviewFileStatus): string {
+  switch (status) {
+    case "ready":
+      return "待恢复";
+    case "conflict":
+      return "冲突";
+    case "stale":
+      return "已变化";
+    case "failed":
+      return "失败";
+    case "completed":
+      return "已恢复";
+    case "kept":
+      return "已保留";
+  }
 }
 
 export function changeSetTotals(changeSet: ChangeSetReviewModel): {

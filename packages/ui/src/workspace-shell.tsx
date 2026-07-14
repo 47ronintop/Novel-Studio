@@ -52,6 +52,7 @@ import {
 import { AutosaveRecoveryNotice, OnboardingQuickStart } from "./workspace-shell-project-assist.js";
 import { WorkspaceNavigator } from "./workspace-navigator.js";
 import { DiffReview } from "./diff-review.js";
+import { RollbackReview } from "./change-set-review.js";
 import { WorkspaceStatusBar } from "./workspace-status-bar.js";
 import type {
   AiWritingWorkflowProps,
@@ -275,7 +276,11 @@ function WorkspaceShellContent({
         />
 
         <main aria-label="编辑区" className="ns-editor-area" data-region="editor-area">
-          {aiWritingWorkflow?.agentRun?.changeSetReview !== undefined &&
+          {aiWritingWorkflow?.agentRun?.rollbackReview !== undefined &&
+          aiWritingWorkflow.agentRun.rollbackReview.open !== false &&
+          (shellState.activeActivity === "workspace" || shellState.activeActivity === "ai") ? (
+            <RollbackReview review={aiWritingWorkflow.agentRun.rollbackReview} />
+          ) : aiWritingWorkflow?.agentRun?.changeSetReview !== undefined &&
           aiWritingWorkflow.agentRun.changeSetReview.open !== false &&
           (shellState.activeActivity === "workspace" || shellState.activeActivity === "ai") ? (
             <DiffReview review={aiWritingWorkflow.agentRun.changeSetReview} />

@@ -12,9 +12,7 @@ describe("AgentRunSession Stage 2 integration", () => {
       coordinatorOptions: { createRunId: () => "run_stage2_proposal" },
       repository: memoryRepository(),
       modelDriver: {
-        async *streamRound(input: {
-          readonly tools: readonly { readonly name: string }[];
-        }) {
+        async *streamRound(input: { readonly tools: readonly { readonly name: string }[] }) {
           round += 1;
           toolsShownToModel = input.tools.map((tool) => tool.name);
           if (round === 1) {
@@ -71,6 +69,421 @@ describe("AgentRunSession Stage 2 integration", () => {
     expect(
       (read as { value: { events: { type: string }[] } }).value.events.map((event) => event.type)
     ).toContain("change_set_ready");
+  });
+
+  test("auto-approves an acknowledged execution run through the same Version Group path", async () => {
+    const createSession = requireCreateSession();
+    let round = 0;
+    let applyCount = 0;
+    let proposalToolResult: Record<string, unknown> | undefined;
+    const durableRepository = memoryRepository();
+    const receiptCommandIds: string[] = [];
+    const repository = {
+      ...durableRepository,
+      async readCommandReceipt(runId: string, commandId: string) {
+        receiptCommandIds.push(commandId);
+        return /^[A-Za-z0-9_-]+$/.test(commandId)
+          ? durableRepository.readCommandReceipt(runId, commandId)
+          : { ok: false as const, error: storageError("AGENT_RUN_RECEIPT_INVALID") };
+      },
+      async writeCommandReceipt(
+        runId: string,
+        commandId: string,
+        receipt: Record<string, unknown>
+      ) {
+        receiptCommandIds.push(commandId);
+        return /^[A-Za-z0-9_-]+$/.test(commandId)
+          ? durableRepository.writeCommandReceipt(runId, commandId, receipt)
+          : { ok: false as const, error: storageError("AGENT_RUN_RECEIPT_INVALID") };
+      }
+    };
+    const changeSetSession = applicationExports.createChangeSetSession({
+      port: {
+        async readChapterTarget() {
+          throw new Error("unused");
+        },
+        async readFileTarget() {
+          return {
+            ok: true as const,
+            value: {
+              relativePath: "notes/outline.md",
+              assetType: "text" as const,
+              content: "before\n",
+              checksum: sha256("before\n"),
+              dirty: false,
+              supported: true
+            }
+          };
+        },
+        async validateCandidate() {
+          return { ok: true as const, value: {} };
+        },
+        async persistChangeSet(changeSet) {
+          return { ok: true as const, value: changeSet };
+        }
+      },
+      createChangeSetId: () => "changes_stage3_auto",
+      createHunkId: () => "hunk_stage3_auto",
+      now: () => "2026-07-13T00:00:00.000Z"
+    });
+    const versionGroupSession = applicationExports.createVersionGroupSession({
+      transaction: {
+        async listIncompleteTransactionPaths() {
+          return { ok: true as const, value: [] };
+        },
+        async apply(input) {
+          applyCount += 1;
+          expect(input).toMatchObject({
+            writePolicy: "user_preapproved_run",
+            approvalSource: "user_preapproved_run"
+          });
+          return {
+            ok: true as const,
+            value: {
+              schemaVersion: "1.0" as const,
+              versionGroupId: "versions_stage3_auto",
+              runId: input.runId,
+              checkpointId: input.checkpointId,
+              changeSetId: input.changeSetId,
+              changeSetRevision: input.revision,
+              changeSetChecksum: input.checksum,
+              writePolicy: input.writePolicy,
+              approvalSource: input.approvalSource,
+              createdAt: "2026-07-13T00:01:00.000Z",
+              transactionStatus: "applied" as const,
+              undoStatus: "available" as const,
+              writes: [],
+              baselineByPath: {},
+              undoMetadata: {
+                runId: input.runId,
+                versionGroupId: "versions_stage3_auto",
+                baselineVersionIds: {},
+                lastWriteChecksums: {}
+              }
+            }
+          };
+        },
+        async recoverIncompleteTransactions() {
+          return { ok: true as const, value: [] };
+        },
+        async undoVersionGroup() {
+          throw new Error("unused");
+        },
+        async undoWrite() {
+          throw new Error("unused");
+        },
+        async undoRun() {
+          throw new Error("unused");
+        }
+      },
+      hooks: {
+        async pauseAutosave() {},
+        async resumeAutosave() {},
+        async syncSavedEditor() {},
+        async preserveDirtyBuffers() {},
+        async markRecoveryClean() {},
+        async surfaceTransactionRecoveryReview() {}
+      }
+    });
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_stage3_auto" },
+      repository,
+      modelDriver: {
+        async *streamRound(input: {
+          readonly messages: readonly {
+            readonly role: string;
+            readonly content: string;
+            readonly toolCallId?: string;
+          }[];
+        }) {
+          round += 1;
+          if (round === 1) {
+            yield toolCall("propose_auto", "propose_file_write", {
+              path: "notes/outline.md",
+              baseHash: sha256("before\n"),
+              range: { unit: "character", start: 0, end: 7 },
+              replacement: "after\n"
+            });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          proposalToolResult = JSON.parse(
+            input.messages.find(
+              (message) => message.role === "tool" && message.toolCallId === "propose_auto"
+            )?.content ?? "{}"
+          ) as Record<string, unknown>;
+          yield toolCall("finish_auto", "finish", { summary: "verified" });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      readToolExecutor: unusedReadExecutor(),
+      changeSetSession,
+      versionGroupExecutor: {
+        async apply(
+          input: Parameters<typeof versionGroupSession.applyApproved>[0]
+        ): Promise<Record<string, unknown>> {
+          return (await versionGroupSession.applyApproved(input)) as unknown as Record<
+            string,
+            unknown
+          >;
+        },
+        async undoRun() {
+          throw new Error("unused");
+        }
+      }
+    });
+
+    const started = await session.startAgentRun({
+      ...startCommand(),
+      commandId: "start-stage3-auto",
+      writePolicy: "user_preapproved_run",
+      writePolicyAcknowledged: true
+    });
+    expect(started).toMatchObject({ ok: true, value: { writePolicy: "user_preapproved_run" } });
+    await waitForStatus(session, "run_stage3_auto", "completed");
+
+    const read = await session.readAgentRun("run_stage3_auto");
+    expect(applyCount).toBe(1);
+    expect(receiptCommandIds).toContain("auto_approve_changes_stage3_auto_1");
+    expect(proposalToolResult).toMatchObject({ status: "awaiting_approval" });
+    expect(read).toMatchObject({
+      ok: true,
+      value: {
+        changeSet: { status: "applied" },
+        snapshot: { versionGroupId: "versions_stage3_auto" }
+      }
+    });
+    expect(
+      (read as { value: { events: { type: string }[] } }).value.events.map((event) => event.type)
+    ).toEqual(
+      expect.arrayContaining([
+        "change_set_ready",
+        "change_set_auto_approved",
+        "approval_resolved",
+        "write_started",
+        "write_applied"
+      ])
+    );
+    const eventTypes = (read as { value: { events: { type: string }[] } }).value.events.map(
+      (event) => event.type
+    );
+    expect(eventTypes.indexOf("change_set_ready")).toBeLessThan(
+      eventTypes.indexOf("change_set_auto_approved")
+    );
+    expect(eventTypes.indexOf("change_set_auto_approved")).toBeLessThan(
+      eventTypes.indexOf("approval_resolved")
+    );
+    expect(eventTypes.indexOf("approval_resolved")).toBeLessThan(
+      eventTypes.indexOf("write_started")
+    );
+  });
+
+  test("does not emit auto approval when approval validation fails", async () => {
+    const createSession = requireCreateSession();
+    let decisionCount = 0;
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_stage3_invalid_auto" },
+      repository: memoryRepository(),
+      modelDriver: proposalOnlyDriver(),
+      readToolExecutor: unusedReadExecutor(),
+      changeSetSession: {
+        async proposeFileWrite() {
+          return {
+            ok: true,
+            value: pendingChangeSet("run_stage3_invalid_auto", "user_preapproved_run")
+          };
+        },
+        ...unusedChangeSetMethods(),
+        async decide() {
+          decisionCount += 1;
+          return { ok: false, error: storageError("CHANGE_SET_INVALID") };
+        }
+      },
+      versionGroupExecutor: unusedVersionGroupExecutor()
+    });
+
+    await session.startAgentRun({
+      ...startCommand(),
+      commandId: "start-invalid-auto",
+      writePolicy: "user_preapproved_run",
+      writePolicyAcknowledged: true
+    });
+    await vi.waitFor(() => expect(decisionCount).toBe(1));
+
+    const read = await session.readAgentRun("run_stage3_invalid_auto");
+    expect(read).toMatchObject({
+      ok: true,
+      value: { snapshot: { status: "awaiting_write_approval" } }
+    });
+    const eventTypes = (read as { value: { events: { type: string }[] } }).value.events.map(
+      (event) => event.type
+    );
+    expect(eventTypes).not.toContain("change_set_auto_approved");
+    expect(eventTypes).not.toContain("approval_resolved");
+    expect(eventTypes).not.toContain("write_started");
+  });
+
+  test("keeps automatic approval source internal to the run session", async () => {
+    const createSession = requireCreateSession();
+    let observedApprovalSource: unknown;
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_external_source" },
+      repository: memoryRepository(),
+      modelDriver: proposalOnlyDriver(),
+      readToolExecutor: unusedReadExecutor(),
+      changeSetSession: {
+        async proposeFileWrite() {
+          return { ok: true, value: pendingChangeSet("run_external_source") };
+        },
+        ...unusedChangeSetMethods(),
+        async decide() {
+          return {
+            ok: true,
+            value: {
+              schemaVersion: "1.0",
+              decision: "apply_selected",
+              approvalSource: "human_confirmation",
+              resolvedAt: "2026-07-13T00:00:00.000Z",
+              binding: {
+                changeSetId: "changes_stage2",
+                revision: 1,
+                checksum: "checksum_revision_1",
+                approvalToken: "approval_stage2"
+              }
+            }
+          };
+        }
+      },
+      versionGroupExecutor: {
+        async apply(input: Record<string, unknown>) {
+          observedApprovalSource = (input["approval"] as Record<string, unknown> | undefined)?.[
+            "approvalSource"
+          ];
+          return {
+            ok: true,
+            value: {
+              schemaVersion: "1.0",
+              versionGroupId: "versions_external_source",
+              runId: "run_external_source",
+              checkpointId: "checkpoint_stage2",
+              transactionStatus: "applied",
+              undoStatus: "available",
+              writes: []
+            }
+          };
+        },
+        async undoRun() {
+          throw new Error("unused");
+        }
+      }
+    });
+
+    await session.startAgentRun(startCommand());
+    const awaiting = await waitForStatus(session, "run_external_source", "awaiting_write_approval");
+    const command = {
+      action: "request" as const,
+      projectId: "project-01",
+      runId: "run_external_source",
+      commandId: "external-source-injection",
+      expectedRunRevision: awaiting.runRevision,
+      changeSetId: "changes_stage2",
+      revision: 1,
+      checksum: "checksum_revision_1",
+      decision: "apply_selected" as const
+    };
+
+    await Reflect.apply(session.decideChangeSet, session, [command, "user_preapproved_run"]);
+
+    expect(observedApprovalSource).toBe("human_confirmation");
+  });
+
+  test("downgrades a persisted automatic policy before a restored run can write", async () => {
+    const createSession = requireCreateSession();
+    const repository = memoryRepository();
+    const createdAt = "2026-07-13T00:00:00.000Z";
+    await repository.writeSnapshot({
+      schemaVersion: "1.0",
+      runId: "run_forged_auto",
+      projectId: "project-01",
+      operationMode: "execution",
+      contextMode: "general_file",
+      writePolicy: "user_preapproved_run",
+      userRequest: "Update the outline.",
+      status: "executing_model",
+      runRevision: 1,
+      lastSequence: 1,
+      startedAt: createdAt,
+      updatedAt: createdAt,
+      limits: {
+        maxModelRounds: 20,
+        maxToolCalls: 50,
+        maxConsecutiveToolFailures: 3
+      },
+      providerCapabilitySnapshot: startCommand()["providerCapabilitySnapshot"],
+      pendingUserInputId: null,
+      contextSnapshotId: null,
+      sourcePlanId: null,
+      sourcePlanRevision: null
+    });
+    await repository.appendEvent({
+      schemaVersion: "1.0",
+      runId: "run_forged_auto",
+      projectId: "project-01",
+      sequence: 1,
+      runRevision: 1,
+      type: "run_started",
+      createdAt
+    });
+    let applyCount = 0;
+    const session = createSession({
+      repository,
+      modelDriver: proposalOnlyDriver(),
+      readToolExecutor: unusedReadExecutor(),
+      changeSetSession: {
+        async proposeFileWrite() {
+          return { ok: true, value: pendingChangeSet("run_forged_auto") };
+        },
+        ...unusedChangeSetMethods()
+      },
+      versionGroupExecutor: {
+        async apply() {
+          applyCount += 1;
+          return {
+            ok: true,
+            value: {
+              schemaVersion: "1.0",
+              versionGroupId: "versions_forged_auto",
+              runId: "run_forged_auto",
+              checkpointId: "checkpoint_stage2",
+              transactionStatus: "applied",
+              undoStatus: "available",
+              writes: []
+            }
+          };
+        },
+        async undoRun() {
+          throw new Error("unused");
+        }
+      }
+    });
+
+    expect(await session.readAgentRun("run_forged_auto")).toMatchObject({
+      ok: true,
+      value: { snapshot: { writePolicy: "write_before_confirmation" } }
+    });
+    await session.resumeAgentRun({
+      runId: "run_forged_auto",
+      projectId: "project-01",
+      commandId: "resume-forged-auto",
+      expectedRunRevision: 1
+    });
+    await waitForStatus(session, "run_forged_auto", "awaiting_write_approval");
+
+    const read = await session.readAgentRun("run_forged_auto");
+    expect(applyCount).toBe(0);
+    expect(
+      (read as { value: { events: { type: string }[] } }).value.events.map((event) => event.type)
+    ).not.toContain("change_set_auto_approved");
   });
 
   test("applies an approved revision through Version Group once when the command is replayed", async () => {
@@ -177,15 +590,18 @@ describe("AgentRunSession Stage 2 integration", () => {
     expect(duplicate).toEqual(first);
     expect(applyCount).toBe(1);
     const duringVerification = await session.readAgentRun("run_stage2_apply");
-    const eventTypes = (duringVerification as { value: { events: { type: string }[] } }).value.events
-      .map((event) => event.type);
+    const eventTypes = (
+      duringVerification as { value: { events: { type: string }[] } }
+    ).value.events.map((event) => event.type);
     expect(eventTypes).toEqual(
       expect.arrayContaining(["approval_resolved", "write_started", "write_applied"])
     );
     expect(
-      (duringVerification as {
-        value: { events: { type: string; detail?: Record<string, unknown> }[] };
-      }).value.events.find((event) => event.type === "write_applied")
+      (
+        duringVerification as {
+          value: { events: { type: string; detail?: Record<string, unknown> }[] };
+        }
+      ).value.events.find((event) => event.type === "write_applied")
     ).toMatchObject({
       detail: {
         synchronizationStatus: "recovery_required",
@@ -320,11 +736,7 @@ describe("AgentRunSession Stage 2 integration", () => {
     });
 
     await session.startAgentRun(startCommand());
-    const awaiting = await waitForStatus(
-      session,
-      "run_stage2_conflict",
-      "awaiting_write_approval"
-    );
+    const awaiting = await waitForStatus(session, "run_stage2_conflict", "awaiting_write_approval");
     await session.decideChangeSet({
       projectId: "project-01",
       runId: "run_stage2_conflict",
@@ -546,6 +958,241 @@ describe("AgentRunSession Stage 2 integration", () => {
     ]);
   });
 
+  test("rejects run undo for planning before writing audit events or calling the executor", async () => {
+    const createSession = requireCreateSession();
+    let undoCount = 0;
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_stage3_planning_undo" },
+      repository: memoryRepository(),
+      modelDriver: {
+        async *streamRound() {
+          yield toolCall("finish_planning_undo", "finish_plan", {
+            planId: "plan-planning-undo",
+            goal: "Plan without writing files.",
+            successCriteria: ["The plan remains read-only."],
+            nonGoals: ["Do not modify project files."],
+            facts: ["Planning mode is active."],
+            assumptions: [],
+            openQuestions: [],
+            targetRefs: [{ refId: "notes:outline", intent: "Review the outline." }],
+            steps: [{ stepId: "step-01", title: "Review", verification: "Read again." }],
+            risks: [],
+            verification: ["Confirm no write occurred."],
+            sourceRefs: ["notes:outline"]
+          });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      readToolExecutor: unusedReadExecutor(),
+      versionGroupExecutor: {
+        async apply() {
+          throw new Error("Planning must not apply a Version Group.");
+        },
+        async undoRun() {
+          undoCount += 1;
+          return {
+            ok: true,
+            value: { versionGroupId: "unexpected", transactionStatus: "applied" }
+          };
+        }
+      }
+    });
+
+    await session.startAgentRun({ ...startCommand(), operationMode: "planning" });
+    const ready = await waitForStatus(session, "run_stage3_planning_undo", "plan_ready");
+    const cancelled = await session.decidePlan({
+      projectId: "project-01",
+      runId: "run_stage3_planning_undo",
+      commandId: "reject-planning-01",
+      expectedRunRevision: ready.runRevision,
+      planId: "plan-planning-undo",
+      planRevision: 1,
+      decision: "reject"
+    });
+    expect(cancelled).toMatchObject({ ok: true, value: { status: "completed" } });
+    const cancelledRevision = (cancelled as { value: { runRevision: number } }).value.runRevision;
+    const before = await session.readAgentRun("run_stage3_planning_undo");
+    const beforeEvents = (before as { value: { events: readonly unknown[] } }).value.events.length;
+
+    const rejected = await session.undoRun({
+      action: "request",
+      projectId: "project-01",
+      runId: "run_stage3_planning_undo",
+      commandId: "undo-planning-01",
+      expectedRunRevision: cancelledRevision
+    });
+
+    expect(rejected).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUN_UNDO_NOT_ALLOWED" }
+    });
+    expect(undoCount).toBe(0);
+    const after = await session.readAgentRun("run_stage3_planning_undo");
+    expect((after as { value: { events: readonly unknown[] } }).value.events).toHaveLength(
+      beforeEvents
+    );
+  });
+
+  test("keeps a conflict-aware undo interactive until reviewed decisions complete it", async () => {
+    const createSession = requireCreateSession();
+    const undoInputs: Record<string, unknown>[] = [];
+    let round = 0;
+    const rollbackReview = {
+      schemaVersion: "1.0",
+      reviewId: "rollback_review_01",
+      runId: "run_stage3_undo_review",
+      status: "pending",
+      sourceVersionGroupIds: ["versions_stage3_undo_review"],
+      createdAt: "2026-07-13T00:00:00.000Z",
+      updatedAt: "2026-07-13T00:00:00.000Z",
+      processedCommandIds: [],
+      files: [
+        {
+          relativePath: "notes/outline.md",
+          assetType: "text",
+          baselineContent: "before\n",
+          baselineChecksum: sha256("before\n"),
+          baselineVersionId: "ver_before",
+          runLastWriteContent: "after\n",
+          runLastWriteChecksum: sha256("after\n"),
+          reviewedCurrentContent: "user edit\n",
+          reviewedCurrentChecksum: sha256("user edit\n"),
+          diff: {
+            currentToLastWrite: "current -> ai",
+            currentToBaseline: "current -> baseline",
+            lastWriteToBaseline: "ai -> baseline"
+          },
+          status: "conflict"
+        }
+      ]
+    };
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_stage3_undo_review" },
+      repository: memoryRepository(),
+      modelDriver: {
+        async *streamRound() {
+          round += 1;
+          if (round === 1) {
+            yield toolCall("propose_undo_review", "propose_file_write", {
+              path: "notes/outline.md",
+              baseHash: sha256("before\n"),
+              range: { unit: "character", start: 0, end: 7 },
+              replacement: "after\n"
+            });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          yield toolCall("finish_undo_review", "finish", { summary: "verified" });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      readToolExecutor: unusedReadExecutor(),
+      changeSetSession: {
+        async proposeFileWrite() {
+          return { ok: true, value: pendingChangeSet("run_stage3_undo_review") };
+        },
+        ...unusedChangeSetMethods()
+      },
+      versionGroupExecutor: {
+        async apply() {
+          return {
+            ok: true,
+            value: { versionGroupId: "versions_stage3_undo_review", transactionStatus: "applied" }
+          };
+        },
+        async undoRun(input: Record<string, unknown>) {
+          undoInputs.push(input);
+          return input["action"] === "resolve"
+            ? {
+                ok: true,
+                value: {
+                  versionGroupId: "rollback_review_01",
+                  transactionStatus: "applied",
+                  undoStatus: "completed",
+                  rollbackReview: { ...rollbackReview, status: "completed" }
+                }
+              }
+            : {
+                ok: true,
+                value: {
+                  versionGroupId: "rollback_review_01",
+                  transactionStatus: "awaiting_review",
+                  undoStatus: "review_required",
+                  rollbackReview
+                }
+              };
+        },
+        async readRollbackReview() {
+          return { ok: true, value: rollbackReview };
+        }
+      }
+    });
+    await session.startAgentRun(startCommand());
+    const awaiting = await waitForStatus(
+      session,
+      "run_stage3_undo_review",
+      "awaiting_write_approval"
+    );
+    await session.decideChangeSet({
+      projectId: "project-01",
+      runId: "run_stage3_undo_review",
+      commandId: "apply-stage3-undo-review",
+      expectedRunRevision: awaiting.runRevision,
+      changeSetId: "changes_stage2",
+      revision: 1,
+      checksum: "checksum_revision_1",
+      decision: "apply_selected"
+    });
+    const completed = await waitForStatus(session, "run_stage3_undo_review", "completed");
+
+    const requested = await session.undoRun({
+      action: "request",
+      projectId: "project-01",
+      runId: "run_stage3_undo_review",
+      commandId: "undo-review-request",
+      expectedRunRevision: completed.runRevision
+    });
+
+    if (!requested.ok) throw new Error(JSON.stringify(requested));
+    const pendingRead = await session.readAgentRun("run_stage3_undo_review");
+    expect(pendingRead).toMatchObject({
+      ok: true,
+      value: {
+        rollbackReview: { reviewId: "rollback_review_01", status: "pending" }
+      }
+    });
+    expect(
+      (pendingRead as { value: { events: readonly Record<string, unknown>[] } }).value.events
+    ).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "run_undo_review_required" })])
+    );
+    const resolved = await session.undoRun({
+      action: "resolve",
+      projectId: "project-01",
+      runId: "run_stage3_undo_review",
+      commandId: "undo-review-resolve",
+      expectedRunRevision: (requested.value as { runRevision: number }).runRevision,
+      reviewId: "rollback_review_01",
+      decisions: [{ relativePath: "notes/outline.md", decision: "keep_current" }]
+    });
+
+    expect(resolved.ok).toBe(true);
+    expect(undoInputs).toMatchObject([
+      { action: "request", commandId: "undo-review-request" },
+      {
+        action: "resolve",
+        commandId: "undo-review-resolve",
+        reviewId: "rollback_review_01",
+        decisions: [{ relativePath: "notes/outline.md", decision: "keep_current" }]
+      }
+    ]);
+    const resolvedRead = await session.readAgentRun("run_stage3_undo_review");
+    expect(resolvedRead.ok).toBe(true);
+    expect(
+      (resolvedRead as { value: { events: readonly Record<string, unknown>[] } }).value.events
+    ).toEqual(expect.arrayContaining([expect.objectContaining({ type: "run_undone" })]));
+  });
+
   test("records a failed run-level undo without changing the completed terminal status", async () => {
     const createSession = requireCreateSession();
     let round = 0;
@@ -625,6 +1272,7 @@ describe("AgentRunSession Stage 2 integration", () => {
     });
     const completed = await waitForStatus(session, "run_stage2_undo_failure", "completed");
     const result = await session.undoRun({
+      action: "request",
       projectId: "project-01",
       runId: "run_stage2_undo_failure",
       commandId: "undo-stage2-failure",
@@ -715,7 +1363,9 @@ describe("AgentRunSession Stage 2 integration", () => {
       modelDriver: proposalOnlyDriver(),
       readToolExecutor: unusedReadExecutor(),
       contextSourceReader: {
-        async readCurrentSources(input: { readonly sources: readonly { readonly refId: string }[] }) {
+        async readCurrentSources(input: {
+          readonly sources: readonly { readonly refId: string }[];
+        }) {
           return {
             ok: true,
             value: input.sources.map((source) => ({
@@ -793,7 +1443,9 @@ describe("AgentRunSession Stage 2 integration", () => {
       modelDriver: proposalOnlyDriver(),
       readToolExecutor: unusedReadExecutor(),
       contextSourceReader: {
-        async readCurrentSources(input: { readonly sources: readonly { readonly refId: string }[] }) {
+        async readCurrentSources(input: {
+          readonly sources: readonly { readonly refId: string }[];
+        }) {
           return {
             ok: true,
             value: input.sources.map((source) => ({
@@ -1025,11 +1677,7 @@ describe("AgentRunSession Stage 2 integration", () => {
       questionId: "question_checkpoint_reload",
       answer: "Continue"
     });
-    await waitForStatus(
-      reloadedSession,
-      "run_stage2_checkpoint_reload",
-      "awaiting_write_approval"
-    );
+    await waitForStatus(reloadedSession, "run_stage2_checkpoint_reload", "awaiting_write_approval");
 
     expect(checkpointIds).toHaveLength(2);
     expect(checkpointIds[1]).not.toBe(checkpointIds[0]);
@@ -1250,9 +1898,7 @@ describe("AgentRunSession Stage 2 integration", () => {
       ok: true,
       value: {
         snapshot: { status: "awaiting_write_approval" },
-        events: expect.not.arrayContaining([
-          expect.objectContaining({ type: "approval_resolved" })
-        ])
+        events: expect.not.arrayContaining([expect.objectContaining({ type: "approval_resolved" })])
       }
     });
   });
@@ -1268,6 +1914,7 @@ interface SessionShape {
   startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
   answerUserInput(command: Record<string, unknown>): Promise<Record<string, unknown>>;
   stopAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+  decidePlan(command: Record<string, unknown>): Promise<Record<string, unknown>>;
   decideChangeSet(command: Record<string, unknown>): Promise<Record<string, unknown>>;
   undoRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
   resumeAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -1296,7 +1943,10 @@ function startCommand(): Record<string, unknown> {
   };
 }
 
-function pendingChangeSet(runId: string): Record<string, unknown> {
+function pendingChangeSet(
+  runId: string,
+  writePolicy?: "write_before_confirmation" | "user_preapproved_run"
+): Record<string, unknown> {
   return {
     schemaVersion: "1.0",
     changeSetId: "changes_stage2",
@@ -1304,8 +1954,10 @@ function pendingChangeSet(runId: string): Record<string, unknown> {
     runId,
     checkpointId: "checkpoint_stage2",
     contextSnapshotId: "context_stage2",
+    ...(writePolicy === undefined ? {} : { writePolicy }),
     status: "awaiting_approval",
     checksum: "checksum_revision_1",
+    approvalToken: "approval_stage2",
     files: [
       {
         relativePath: "notes/outline.md",
@@ -1443,9 +2095,8 @@ async function waitForStatus(
   await vi.waitFor(async () => {
     const read = await session.readAgentRun(runId);
     expect(read).toMatchObject({ ok: true, value: { snapshot: { status } } });
-    snapshot = (
-      read as { value: { snapshot: { runRevision: number; lastSequence: number } } }
-    ).value.snapshot;
+    snapshot = (read as { value: { snapshot: { runRevision: number; lastSequence: number } } })
+      .value.snapshot;
   });
   if (snapshot === undefined) throw new Error(`Run ${runId} never reached ${status}.`);
   return snapshot;
@@ -1453,7 +2104,8 @@ async function waitForStatus(
 
 function sha256(value: string): string {
   // Fixed fixtures keep this renderer-neutral integration test free of Node crypto imports.
-  if (value === "before\n") return "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb";
+  if (value === "before\n")
+    return "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb";
   return "7b9a72466d3960eb2aacccfc848939453490db0678bd4725def3f789b891c919";
 }
 

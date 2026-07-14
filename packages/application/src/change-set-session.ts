@@ -13,9 +13,11 @@ import {
   type ChangeSetExternalValidation,
   type ChangeSetRange,
   type ChangeSetFileSelection,
-  type DecideChangeSetCommand
+  type DecideChangeSetCommand,
+  type AgentWritePolicy
 } from "@novel-studio/agent-engine";
 import { createUnifiedError, err, type Result, type UnifiedError } from "@novel-studio/shared";
+import { consumeAgentRunProposalAuthorization } from "./agent-write-authorization.js";
 
 export interface ChangeSetProposalTarget {
   readonly relativePath: string;
@@ -70,6 +72,10 @@ interface ChangeSetProposalBinding {
   readonly replacement: string;
 }
 
+interface InternalChangeSetProposalBinding extends ChangeSetProposalBinding {
+  readonly writePolicy?: AgentWritePolicy;
+}
+
 export interface ProposeChapterWriteInput extends ChangeSetProposalBinding {
   readonly chapterId: string;
 }
@@ -114,7 +120,7 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
   const now = options.now ?? (() => new Date().toISOString());
 
   async function propose(
-    binding: ChangeSetProposalBinding,
+    binding: InternalChangeSetProposalBinding,
     target: ChangeSetProposalTarget
   ): Promise<Result<ChangeSet, UnifiedError>> {
     const targetError = validateTarget(target, binding.baseHash);
@@ -123,6 +129,11 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
     const activeId = activeChangeSetByCheckpoint.get(checkpointKey);
 
     try {
+      const writePolicy =
+        binding.writePolicy === "user_preapproved_run" &&
+        consumeAgentRunProposalAuthorization(binding)
+          ? "user_preapproved_run"
+          : "write_before_confirmation";
       let existing = activeId === undefined ? undefined : latestRevision(activeId);
       if (existing === undefined && options.port.readLatestChangeSet !== undefined) {
         const restored = await options.port.readLatestChangeSet({
@@ -142,7 +153,8 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
         (existing.runId !== binding.runId ||
           existing.projectId !== binding.projectId ||
           existing.checkpointId !== binding.checkpointId ||
-          existing.contextSnapshotId !== binding.contextSnapshotId)
+          existing.contextSnapshotId !== binding.contextSnapshotId ||
+          (existing.writePolicy ?? "write_before_confirmation") !== writePolicy)
       ) {
         return failure(
           "CHANGE_SET_CONTEXT_MISMATCH",
@@ -173,6 +185,7 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
                 projectId: binding.projectId,
                 checkpointId: binding.checkpointId,
                 contextSnapshotId: binding.contextSnapshotId,
+                writePolicy,
                 proposal,
                 createdAt: now()
               },
@@ -371,7 +384,6 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
       }
       const decided = decideChangeSetApproval({
         changeSet: current.value,
-        writePolicy: "write_before_confirmation",
         decision: command.decision,
         changeSetId: command.changeSetId,
         revision: command.revision,

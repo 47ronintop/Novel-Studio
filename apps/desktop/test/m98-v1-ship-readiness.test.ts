@@ -29,4 +29,26 @@ describe("M98 V1 ship readiness", () => {
     expect(result.stdout).toContain("V1 conditional ship readiness gate recorded");
     expect(result.stdout).not.toMatch(/push|upload|publish/i);
   });
+
+  test("package check gates autonomy on the Stage 2 safety evidence and manual default", async () => {
+    const packageCheck = await readFile("scripts/package-check.mjs", "utf8");
+    const requiredSuites = [
+      "packages/agent-engine/test/full-autonomy-policy.test.ts",
+      "packages/repository/test/agent-write-transaction.test.ts",
+      "packages/repository/test/history-versions.test.ts",
+      "packages/application/test/run-undo-conflict.test.ts",
+      "packages/application/test/chapter-autosave-recovery.test.ts",
+      "apps/desktop/test/agent-write.e2e.ts",
+      "apps/desktop/test/agent-run-autonomy.e2e.ts"
+    ];
+
+    expect(packageCheck).toContain("checkAgentAutonomyPrerequisites");
+    for (const suite of requiredSuites) expect(packageCheck).toContain(suite);
+    expect(packageCheck).toContain('"write_before_confirmation"');
+    expect(packageCheck).toContain(
+      "Manual confirmation must remain the default Agent write policy."
+    );
+    expect(packageCheck).toContain("Agent autonomy prerequisite suites failed.");
+    expect(packageCheck).toContain("spawnSync");
+  });
 });
