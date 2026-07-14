@@ -1,10 +1,11 @@
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
 import {
   createBootstrappedDefaultDesktopApplication,
+  createBootstrappedDefaultDesktopApplicationWithSnapshot,
   DEFAULT_FIXTURE_CHAPTER_ID
 } from "../src/main/application-composition.js";
 
@@ -17,6 +18,23 @@ afterEach(async () => {
 });
 
 describe("beta startup default project", () => {
+  test("uses the canonical project root for the workspace and project lock", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-canonical-default-"));
+    tempRoots.push(projectRoot);
+    const bootstrapped = await createBootstrappedDefaultDesktopApplicationWithSnapshot({
+      projectRoot,
+      projectLockOwnerId: "desktop-canonical-owner"
+    });
+    const canonicalRoot = await realpath(projectRoot);
+    const lock = JSON.parse(
+      await readFile(join(projectRoot, ".novel-studio", "project-lock.json"), "utf8")
+    ) as { readonly projectRoot: string };
+
+    expect(bootstrapped.workspace.projectRoot).toBe(canonicalRoot);
+    expect(lock.projectRoot).toBe(canonicalRoot);
+    await bootstrapped.application.shutdown();
+  });
+
   test("bootstraps a writable default project without relying on source fixtures", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-empty-default-"));
     tempRoots.push(projectRoot);

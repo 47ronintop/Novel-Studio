@@ -21,6 +21,31 @@ export {
   type AgentModelCapabilityPreflightInput,
   type AgentModelCapabilitySnapshot
 } from "./agent-model-capabilities.js";
+export {
+  LEGACY_AGENT_CONVERSATION_ID,
+  createAgentConversationSession
+} from "./agent-conversation-session.js";
+export type {
+  AgentConversationPersistencePort,
+  AgentConversationPersistenceListPage,
+  AgentConversationCommandResult,
+  AgentConversationDiagnostic,
+  AgentConversationListPage,
+  AgentConversationReadResult,
+  AgentConversationRunReaderPort,
+  AgentConversationSearchPage,
+  AgentConversationSearchHit,
+  AgentConversationSession,
+  AgentConversationStatus,
+  AgentConversationSummary,
+  AgentConversationSummaryFreshness,
+  ChangeAgentConversationStatusCommand,
+  CreateAgentConversationCommand,
+  CreateAgentConversationSessionOptions,
+  ListAgentConversationsQuery,
+  ReadAgentConversationQuery,
+  SearchAgentConversationsQuery
+} from "./agent-conversation-session.js";
 export type {
   AiWritingSuggestionStreamOptions,
   NovelStudioApi,
@@ -302,6 +327,7 @@ export { createChangeSetSession } from "./change-set-session.js";
 export { createVersionGroupSession } from "./version-group-session.js";
 export { createLlmAgentRunModelDriver } from "./agent-run-model-driver.js";
 export type {
+  AgentConversationLifecyclePort,
   AgentModelMessage,
   AgentModelMessageRole,
   AgentModelRoundInput,

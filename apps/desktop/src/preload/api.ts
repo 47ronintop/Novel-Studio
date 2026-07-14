@@ -2,6 +2,11 @@ import type {
   ApplicationCommand,
   ApplicationIpcChannel,
   ApplicationIpcEventChannel,
+  AgentConversationCommandResult,
+  AgentConversationListPage,
+  AgentConversationReadResult,
+  AgentConversationSearchPage,
+  AgentConversationSummary,
   AiWritingSuggestion,
   AiWritingSelectionPreview,
   AiWritingSelectionPreviewRequest,
@@ -34,6 +39,11 @@ import type {
   ProjectSearchResults,
   ProjectWorkspaceSnapshot,
   CreateProjectInput,
+  CreateAgentConversationCommand,
+  ChangeAgentConversationStatusCommand,
+  ListAgentConversationsQuery,
+  ReadAgentConversationQuery,
+  SearchAgentConversationsQuery,
   MemoryRecord,
   StoryBibleAsset,
   StoryBibleConsistencyReport,
@@ -288,6 +298,44 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           if (isAgentRunEvent(payload)) listener(payload);
         });
       }
+    },
+    agentConversations: {
+      create: (command: CreateAgentConversationCommand) =>
+        invokeTyped<Result<AgentConversationSummary, UnifiedError>>(
+          ipc,
+          "application:agent-conversation:create",
+          command
+        ),
+      list: (query: ListAgentConversationsQuery) =>
+        invokeTyped<Result<AgentConversationListPage, UnifiedError>>(
+          ipc,
+          "application:agent-conversation:list",
+          query
+        ),
+      read: (query: ReadAgentConversationQuery) =>
+        invokeTyped<Result<AgentConversationReadResult, UnifiedError>>(
+          ipc,
+          "application:agent-conversation:read",
+          query
+        ),
+      archive: (command: ChangeAgentConversationStatusCommand) =>
+        invokeTyped<AgentConversationCommandResult>(
+          ipc,
+          "application:agent-conversation:archive",
+          command
+        ),
+      restore: (command: ChangeAgentConversationStatusCommand) =>
+        invokeTyped<AgentConversationCommandResult>(
+          ipc,
+          "application:agent-conversation:restore",
+          command
+        ),
+      search: (query: SearchAgentConversationsQuery) =>
+        invokeTyped<Result<AgentConversationSearchPage, UnifiedError>>(
+          ipc,
+          "application:agent-conversation:search",
+          query
+        )
     },
     search: {
       rebuildIndex: () =>

@@ -8,6 +8,7 @@ import type {
 import type { UserAppearancePreferences } from "@novel-studio/shared";
 import type {
   AiWritingWorkflowProps,
+  AgentConversationWorkspaceShellProps,
   ChapterEditorProps,
   CommandPaletteFeedback,
   ConfigStudioPanelProps,
@@ -24,6 +25,7 @@ import { WorkspaceShell } from "@novel-studio/ui";
 export interface RendererWorkspaceShellProps {
   readonly appearancePreferences?: UserAppearancePreferences | undefined;
   readonly aiWritingWorkflow: AiWritingWorkflowProps | undefined;
+  readonly agentConversationWorkspace: AgentConversationWorkspaceShellProps | undefined;
   readonly projectWorkflow: ProjectWorkflowProps | undefined;
   readonly projectSearch: ProjectSearchProps | undefined;
   readonly settings: ModelSettingsPanelProps | undefined;
@@ -145,6 +147,9 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
               onCancelStreaming: props.onCancelAiStreaming
             } satisfies AiWritingWorkflowProps
           })}
+      {...(props.agentConversationWorkspace === undefined
+        ? {}
+        : { agentConversationWorkspace: props.agentConversationWorkspace })}
       {...(props.projectWorkflow === undefined
         ? {}
         : {

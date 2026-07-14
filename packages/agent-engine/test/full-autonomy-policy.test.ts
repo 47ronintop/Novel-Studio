@@ -206,6 +206,7 @@ describe("Stage 3 full-autonomy policy", () => {
 function startCommand(): StartAgentRunCommand {
   return {
     projectId: "project-01",
+    conversationId: "conv-policy",
     commandId: "start-policy",
     expectedRunRevision: 0,
     operationMode: "execution",

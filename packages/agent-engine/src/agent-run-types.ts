@@ -44,6 +44,7 @@ export interface AgentRunSnapshot {
   readonly schemaVersion: "1.0";
   readonly runId: string;
   readonly projectId: string;
+  readonly conversationId: string | null;
   readonly operationMode: AgentOperationMode;
   readonly contextMode: AgentContextMode;
   readonly writePolicy: AgentWritePolicy;
@@ -142,6 +143,7 @@ export interface RecordTerminalAgentRunAuditEventInput {
 
 export interface StartAgentRunCommand {
   readonly projectId: string;
+  readonly conversationId: string;
   readonly commandId: string;
   readonly expectedRunRevision: 0;
   readonly operationMode: AgentOperationMode;

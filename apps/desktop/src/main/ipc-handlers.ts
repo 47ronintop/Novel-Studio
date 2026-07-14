@@ -2,6 +2,7 @@ import { createDesktopApplication } from "@novel-studio/application";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type {
+  AgentConversationSession,
   AgentRunSession,
   AnswerAgentUserInputCommand,
   ApplicationIpcChannel,
@@ -25,6 +26,8 @@ import type {
   ConfigAssetRestoreInput,
   ConfigAssetSaveInput,
   ConfigAssetType,
+  ChangeAgentConversationStatusCommand,
+  CreateAgentConversationCommand,
   CreateProjectInput,
   AiWritingSelectionPreviewRequest,
   AiWritingSuggestionRequest,
@@ -32,7 +35,11 @@ import type {
   AiWritingSuggestionStreamStartRequest,
   ModelProfile,
   MemoryRecord,
+  ListAgentConversationsQuery,
+  ReadAgentConversationQuery,
+  SearchAgentConversationsQuery,
   ProjectSearchQuery,
+  ProjectWorkspaceSnapshot,
   ProjectDirectoryTreeItem,
   StoryBibleAsset,
   StoryBibleContextCandidateOptions,
@@ -48,6 +55,7 @@ import type {
 } from "@novel-studio/shared";
 import { createUnifiedError, err } from "@novel-studio/shared";
 import type { ModelSecretStore } from "./model-runtime.js";
+import type { DesktopAgentRuntimeManager } from "./agent-runtime-manager.js";
 
 export type ApplicationIpcHandlers = {
   readonly [Channel in ApplicationIpcChannel]: (...args: readonly unknown[]) => Promise<unknown>;
@@ -59,6 +67,7 @@ export interface ApplicationIpcHandlerOptions {
   readonly modelSecretStore?: ModelSecretStore;
   readonly publishAiSuggestionStreamEvent?: (event: AiWritingSuggestionStreamPushEvent) => void;
   readonly agentRunSession?: AgentRunSession;
+  readonly agentRuntimeManager?: DesktopAgentRuntimeManager;
   readonly publishAgentRunEvent?: (event: AgentRunEvent) => void;
   readonly agentWriteSaveCoordinator?: AgentWriteSaveCoordinator;
 }
@@ -157,13 +166,19 @@ export function createApplicationIpcHandlers(
   const activeAiSuggestionStreams = new Map<string, ActiveAiSuggestionStream>();
   const activeAiSuggestionPushStreams = new Map<string, ActiveAiSuggestionPushStream>();
   let nextAiSuggestionStreamId = 0;
-  options.agentRunSession?.subscribe((event) => {
+  const publishAgentRunEvent = (event: AgentRunEvent): void => {
     try {
       options.publishAgentRunEvent?.(structuredClone(event));
     } catch {
       // AgentRunSession owns contract failure handling; never forward a non-cloneable payload.
     }
-  });
+  };
+  options.agentRunSession?.subscribe(publishAgentRunEvent);
+  options.agentRuntimeManager?.subscribeAgentRunEvents(publishAgentRunEvent);
+  const currentAgentRunSession = (): AgentRunSession | undefined =>
+    options.agentRuntimeManager?.current()?.agentRunSession ?? options.agentRunSession;
+  const currentAgentConversationSession = (): AgentConversationSession | undefined =>
+    options.agentRuntimeManager?.current()?.agentConversationSession;
 
   return {
     "application:get-shell-state": () => Promise.resolve(application.getShellState()),
@@ -185,12 +200,16 @@ export function createApplicationIpcHandlers(
 
       return ok(projectRoot === undefined ? { canceled: true } : { canceled: false, projectRoot });
     },
-    "application:project:open": (projectRoot: unknown) => {
+    "application:project:open": async (projectRoot: unknown) => {
       if (typeof projectRoot !== "string") {
         return application.openProject("");
       }
 
-      return application.openProject(projectRoot);
+      const active = await options.agentRuntimeManager?.hasActiveRun();
+      if (active?.ok === false) return active;
+      if (active?.value === true) return err(agentRuntimeSwitchBlocked());
+      const opened = await application.openProject(projectRoot);
+      return bindAgentRuntime(options.agentRuntimeManager, opened);
     },
     "application:project:read-directory": (projectRoot: unknown) => {
       if (typeof projectRoot !== "string") {
@@ -217,7 +236,7 @@ export function createApplicationIpcHandlers(
 
       return writeProjectTextFile(projectRoot, path, content);
     },
-    "application:project:create": (input: unknown) => {
+    "application:project:create": async (input: unknown) => {
       const createInput = toCreateProjectInput(input);
       if (createInput === undefined) {
         return application.createProject({
@@ -228,7 +247,11 @@ export function createApplicationIpcHandlers(
         });
       }
 
-      return application.createProject(createInput);
+      const active = await options.agentRuntimeManager?.hasActiveRun();
+      if (active?.ok === false) return active;
+      if (active?.value === true) return err(agentRuntimeSwitchBlocked());
+      const created = await application.createProject(createInput);
+      return bindAgentRuntime(options.agentRuntimeManager, created);
     },
     "application:project:list-chapters": () => application.listProjectChapters(),
     "application:project:create-chapter": (input: unknown) => {
@@ -419,66 +442,121 @@ export function createApplicationIpcHandlers(
     },
     "application:agent-run:start": (command: unknown) => {
       const parsed = toStartAgentRunCommand(command);
-      return parsed === undefined || options.agentRunSession === undefined
+      const session = currentAgentRunSession();
+      return parsed === undefined || session === undefined
         ? Promise.resolve(agentRunUnavailable())
-        : options.agentRunSession.startAgentRun(parsed);
+        : session.startAgentRun(parsed);
     },
     "application:agent-run:stop": (command: unknown) => {
       const parsed = toStopAgentRunCommand(command);
-      return parsed === undefined || options.agentRunSession === undefined
+      const session = currentAgentRunSession();
+      return parsed === undefined || session === undefined
         ? Promise.resolve(agentRunUnavailable())
-        : options.agentRunSession.stopAgentRun(parsed);
+        : session.stopAgentRun(parsed);
     },
     "application:agent-run:answer-user-input": (command: unknown) => {
       const parsed = toAnswerAgentUserInputCommand(command);
-      return parsed === undefined || options.agentRunSession === undefined
+      const session = currentAgentRunSession();
+      return parsed === undefined || session === undefined
         ? Promise.resolve(agentRunUnavailable())
-        : options.agentRunSession.answerUserInput(parsed);
+        : session.answerUserInput(parsed);
     },
     "application:agent-run:resume": (command: unknown) => {
       const parsed = toResumeAgentRunCommand(command);
-      return parsed === undefined || options.agentRunSession === undefined
+      const session = currentAgentRunSession();
+      return parsed === undefined || session === undefined
         ? Promise.resolve(agentRunUnavailable())
-        : options.agentRunSession.resumeAgentRun(parsed);
+        : session.resumeAgentRun(parsed);
     },
     "application:agent-run:retry-step": (command: unknown) => {
       const parsed = toRetryAgentRunStepCommand(command);
-      return parsed === undefined || options.agentRunSession === undefined
+      const session = currentAgentRunSession();
+      return parsed === undefined || session === undefined
         ? Promise.resolve(agentRunUnavailable())
-        : options.agentRunSession.retryStep(parsed);
+        : session.retryStep(parsed);
     },
     "application:agent-run:decide-plan": (command: unknown) => {
       const parsed = toDecideAgentPlanCommand(command);
-      return parsed === undefined || options.agentRunSession === undefined
+      const session = currentAgentRunSession();
+      return parsed === undefined || session === undefined
         ? Promise.resolve(agentRunUnavailable())
-        : options.agentRunSession.decidePlan(parsed);
+        : session.decidePlan(parsed);
     },
     "application:agent-run:refresh-context": (command: unknown) => {
       const parsed = toRefreshAgentContextCommand(command);
-      return parsed === undefined || options.agentRunSession === undefined
+      const session = currentAgentRunSession();
+      return parsed === undefined || session === undefined
         ? Promise.resolve(agentRunUnavailable())
-        : options.agentRunSession.refreshContext(parsed);
+        : session.refreshContext(parsed);
     },
     "application:agent-run:decide-change-set": (command: unknown) => {
       const parsed = toDecideChangeSetCommand(command);
-      return parsed === undefined || options.agentRunSession === undefined
+      const session = currentAgentRunSession();
+      return parsed === undefined || session === undefined
         ? Promise.resolve(invalidAgentRunCommand())
-        : options.agentRunSession.decideChangeSet(parsed);
+        : session.decideChangeSet(parsed);
     },
     "application:agent-run:undo": (command: unknown) => {
       const parsed = toUndoAgentRunCommand(command);
-      return parsed === undefined || options.agentRunSession === undefined
+      const session = currentAgentRunSession();
+      return parsed === undefined || session === undefined
         ? Promise.resolve(invalidAgentRunCommand())
-        : options.agentRunSession.undoRun(parsed);
+        : session.undoRun(parsed);
     },
-    "application:agent-run:read": (runId: unknown) =>
-      typeof runId !== "string" || options.agentRunSession === undefined
+    "application:agent-run:read": (runId: unknown) => {
+      const session = currentAgentRunSession();
+      return typeof runId !== "string" || session === undefined
         ? Promise.resolve(agentRunUnavailable())
-        : options.agentRunSession.readAgentRun(runId),
-    "application:agent-run:list": (projectId: unknown) =>
-      typeof projectId !== "string" || options.agentRunSession === undefined
+        : session.readAgentRun(runId);
+    },
+    "application:agent-run:list": (projectId: unknown) => {
+      const session = currentAgentRunSession();
+      return typeof projectId !== "string" || session === undefined
         ? Promise.resolve(agentRunUnavailable())
-        : options.agentRunSession.listAgentRuns(projectId),
+        : session.listAgentRuns(projectId);
+    },
+    "application:agent-conversation:create": (command: unknown) => {
+      const parsed = toCreateAgentConversationCommand(command);
+      const session = currentAgentConversationSession();
+      return parsed === undefined || session === undefined
+        ? Promise.resolve(err(agentConversationUnavailable()))
+        : session.createConversation(parsed);
+    },
+    "application:agent-conversation:list": (query: unknown) => {
+      const parsed = toListAgentConversationsQuery(query);
+      const session = currentAgentConversationSession();
+      return parsed === undefined || session === undefined
+        ? Promise.resolve(err(agentConversationUnavailable()))
+        : session.listConversations(parsed);
+    },
+    "application:agent-conversation:read": (query: unknown) => {
+      const parsed = toReadAgentConversationQuery(query);
+      const session = currentAgentConversationSession();
+      return parsed === undefined || session === undefined
+        ? Promise.resolve(err(agentConversationUnavailable()))
+        : session.readConversation(parsed);
+    },
+    "application:agent-conversation:archive": (command: unknown) => {
+      const parsed = toChangeAgentConversationStatusCommand(command);
+      const session = currentAgentConversationSession();
+      return parsed === undefined || session === undefined
+        ? Promise.resolve(err(agentConversationUnavailable()))
+        : session.archiveConversation(parsed);
+    },
+    "application:agent-conversation:restore": (command: unknown) => {
+      const parsed = toChangeAgentConversationStatusCommand(command);
+      const session = currentAgentConversationSession();
+      return parsed === undefined || session === undefined
+        ? Promise.resolve(err(agentConversationUnavailable()))
+        : session.restoreConversation(parsed);
+    },
+    "application:agent-conversation:search": (query: unknown) => {
+      const parsed = toSearchAgentConversationsQuery(query);
+      const session = currentAgentConversationSession();
+      return parsed === undefined || session === undefined
+        ? Promise.resolve(err(agentConversationUnavailable()))
+        : session.searchConversations(parsed);
+    },
     "application:chapter:load": () => application.loadActiveChapter(),
     "application:chapter:edit": (nextBody: unknown) => {
       if (typeof nextBody !== "string") {
@@ -625,7 +703,137 @@ export function createApplicationIpcHandlers(
 }
 
 function toStartAgentRunCommand(value: unknown): StartAgentRunCommand | undefined {
-  return isRecord(value) ? (value as unknown as StartAgentRunCommand) : undefined;
+  if (!isRecord(value)) return undefined;
+  if (
+    !hasOnlyKeys(value, [
+      "projectId",
+      "conversationId",
+      "commandId",
+      "expectedRunRevision",
+      "operationMode",
+      "contextMode",
+      "writePolicy",
+      "writePolicyAcknowledged",
+      "userRequest",
+      "providerCapabilitySnapshot",
+      "limits",
+      "initialContextSources",
+      "sourcePlanId",
+      "sourcePlanRevision"
+    ]) ||
+    !isSafeId(value["projectId"]) ||
+    !isSafeId(value["conversationId"]) ||
+    !isSafeId(value["commandId"]) ||
+    value["expectedRunRevision"] !== 0 ||
+    (value["operationMode"] !== "planning" && value["operationMode"] !== "execution") ||
+    (value["contextMode"] !== "writing" && value["contextMode"] !== "general_file") ||
+    (value["writePolicy"] !== undefined &&
+      value["writePolicy"] !== "write_before_confirmation" &&
+      value["writePolicy"] !== "user_preapproved_run") ||
+    (value["writePolicyAcknowledged"] !== undefined &&
+      value["writePolicyAcknowledged"] !== true) ||
+    !isNonEmptyString(value["userRequest"]) ||
+    !isProviderCapabilitySnapshot(value["providerCapabilitySnapshot"]) ||
+    (value["limits"] !== undefined && !isRecord(value["limits"])) ||
+    (value["initialContextSources"] !== undefined &&
+      !Array.isArray(value["initialContextSources"])) ||
+    (value["sourcePlanId"] !== undefined && !isSafeId(value["sourcePlanId"])) ||
+    (value["sourcePlanRevision"] !== undefined && !isPositiveInteger(value["sourcePlanRevision"]))
+  ) {
+    return undefined;
+  }
+  return value as unknown as StartAgentRunCommand;
+}
+
+function toCreateAgentConversationCommand(
+  value: unknown
+): CreateAgentConversationCommand | undefined {
+  return isRecord(value) &&
+    hasOnlyKeys(value, ["projectId", "commandId"]) &&
+    isSafeId(value["projectId"]) &&
+    isSafeId(value["commandId"])
+    ? { projectId: value["projectId"], commandId: value["commandId"] }
+    : undefined;
+}
+
+function toListAgentConversationsQuery(
+  value: unknown
+): ListAgentConversationsQuery | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["projectId", "includeArchived", "cursor", "limit"]) ||
+    !isSafeId(value["projectId"]) ||
+    (value["includeArchived"] !== undefined && typeof value["includeArchived"] !== "boolean") ||
+    (value["cursor"] !== undefined && !isCursor(value["cursor"])) ||
+    (value["limit"] !== undefined &&
+      (!isPositiveInteger(value["limit"]) || Number(value["limit"]) > 100))
+  ) {
+    return undefined;
+  }
+  return {
+    projectId: value["projectId"],
+    ...(value["includeArchived"] === undefined
+      ? {}
+      : { includeArchived: value["includeArchived"] }),
+    ...(value["cursor"] === undefined ? {} : { cursor: value["cursor"] }),
+    ...(value["limit"] === undefined ? {} : { limit: value["limit"] })
+  };
+}
+
+function toReadAgentConversationQuery(
+  value: unknown
+): ReadAgentConversationQuery | undefined {
+  return isRecord(value) &&
+    hasOnlyKeys(value, ["projectId", "conversationId"]) &&
+    isSafeId(value["projectId"]) &&
+    isSafeId(value["conversationId"])
+    ? { projectId: value["projectId"], conversationId: value["conversationId"] }
+    : undefined;
+}
+
+function toChangeAgentConversationStatusCommand(
+  value: unknown
+): ChangeAgentConversationStatusCommand | undefined {
+  return isRecord(value) &&
+    hasOnlyKeys(value, [
+      "projectId",
+      "conversationId",
+      "commandId",
+      "expectedConversationRevision"
+    ]) &&
+    isSafeId(value["projectId"]) &&
+    isSafeId(value["conversationId"]) &&
+    isSafeId(value["commandId"]) &&
+    isNonNegativeInteger(value["expectedConversationRevision"])
+    ? {
+        projectId: value["projectId"],
+        conversationId: value["conversationId"],
+        commandId: value["commandId"],
+        expectedConversationRevision: value["expectedConversationRevision"]
+      }
+    : undefined;
+}
+
+function toSearchAgentConversationsQuery(
+  value: unknown
+): SearchAgentConversationsQuery | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["projectId", "query", "includeArchived", "cursor", "limit"]) ||
+    typeof value["query"] !== "string" ||
+    value["query"].length > 512
+  ) {
+    return undefined;
+  }
+  const list = toListAgentConversationsQuery({
+    projectId: value["projectId"],
+    ...(value["includeArchived"] === undefined
+      ? {}
+      : { includeArchived: value["includeArchived"] }),
+    ...(value["cursor"] === undefined ? {} : { cursor: value["cursor"] }),
+    ...(value["limit"] === undefined ? {} : { limit: value["limit"] })
+  });
+  return list === undefined ? undefined : { ...list, query: value["query"] };
 }
 
 function toStopAgentRunCommand(value: unknown): StopAgentRunCommand | undefined {
@@ -822,6 +1030,72 @@ function isNonNegativeInteger(value: unknown): value is number {
 
 function isPositiveInteger(value: unknown): value is number {
   return isNonNegativeInteger(value) && value > 0;
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  const allowedKeys = new Set(allowed);
+  return Object.keys(value).every((key) => allowedKeys.has(key));
+}
+
+function isSafeId(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(value);
+}
+
+function isCursor(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,2048}$/u.test(value);
+}
+
+function isProviderCapabilitySnapshot(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isSafeId(value["profileId"]) &&
+    isNonEmptyString(value["provider"]) &&
+    isNonEmptyString(value["modelName"]) &&
+    value["streaming"] === true &&
+    value["toolCalling"] === true &&
+    value["structuredArguments"] === true &&
+    typeof value["contextWindow"] === "number" &&
+    Number.isFinite(value["contextWindow"]) &&
+    typeof value["requiredContextTokens"] === "number" &&
+    Number.isFinite(value["requiredContextTokens"])
+  );
+}
+
+async function bindAgentRuntime(
+  manager: DesktopAgentRuntimeManager | undefined,
+  result: Result<ProjectWorkspaceSnapshot, UnifiedError>
+): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>> {
+  if (!result.ok || manager === undefined) return result;
+  const activeChapterId =
+    result.value.activeChapterId ?? result.value.chapters[0]?.id ?? "chapter_unselected";
+  const bound = await manager.bindProject({
+    projectId: result.value.project.projectId,
+    projectRoot: result.value.projectRoot,
+    activeChapterId
+  });
+  return bound.ok ? result : err(bound.error);
+}
+
+function agentRuntimeSwitchBlocked(): UnifiedError {
+  return createUnifiedError({
+    code: "AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED",
+    category: "AgentError",
+    message: "The current project still has an active Agent run.",
+    recoverability: "user-action",
+    suggestedAction: "Stop the active run before switching projects.",
+    traceId: "desktop-agent-runtime-manager"
+  });
+}
+
+function agentConversationUnavailable(): UnifiedError {
+  return createUnifiedError({
+    code: "AGENT_CONVERSATION_IPC_UNAVAILABLE",
+    category: "AgentError",
+    message: "The Agent Conversation service is unavailable.",
+    recoverability: "user-action",
+    suggestedAction: "Open a project and retry.",
+    traceId: "desktop-agent-conversation-ipc"
+  });
 }
 
 function agentRunUnavailable(): Result<never, UnifiedError> {

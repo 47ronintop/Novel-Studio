@@ -32,6 +32,9 @@ import {
 } from "lucide-react";
 
 import { ChapterEditor } from "./chapter-editor.js";
+import { AgentConversationInspector } from "./agent-conversation-inspector.js";
+import { AgentConversationNavigator } from "./agent-conversation-navigator.js";
+import { AgentConversationView } from "./agent-conversation-view.js";
 import { CodeMirrorDocumentEditor } from "./codemirror-document-editor.js";
 import { CommandPalette } from "./command-palette.js";
 import { ConfigStudioPanel } from "./config-studio-panel.js";
@@ -103,6 +106,7 @@ function WorkspaceShellContent({
   chapterEditor,
   projectWorkflow,
   aiWritingWorkflow,
+  agentConversationWorkspace,
   search,
   settings,
   studio,
@@ -247,21 +251,31 @@ function WorkspaceShellContent({
           })}
         </aside>
 
-        <WorkspaceNavigator
-          activeActivity={shellState.activeActivity}
-          collapsed={focusMode || shellState.navigatorCollapsed}
-          expandedSectionIds={shellState.navigatorExpandedSectionIds}
-          fileTree={projectWorkflow?.fileTree}
-          focusHidden={focusMode}
-          onActivitySelect={onActivitySelect}
-          onExpandedSectionIdsChange={onNavigatorExpandedSectionIdsChange}
-          onSearchQueryChange={onNavigatorSearchQueryChange}
-          projectWorkflow={projectWorkflow}
-          searchQuery={navigatorSearchQuery}
-          sections={shellState.navigatorSections}
-          storyBibleEditor={storyBibleEditor}
-          studio={studio}
-        />
+        {shellState.activeActivity === "ai" && agentConversationWorkspace !== undefined ? (
+          <div
+            className="ns-agent-conversation-navigator-region"
+            data-collapsed={focusMode || shellState.navigatorCollapsed}
+            data-focus-hidden={focusMode || shellState.navigatorCollapsed}
+          >
+            <AgentConversationNavigator {...agentConversationWorkspace.navigator} />
+          </div>
+        ) : (
+          <WorkspaceNavigator
+            activeActivity={shellState.activeActivity}
+            collapsed={focusMode || shellState.navigatorCollapsed}
+            expandedSectionIds={shellState.navigatorExpandedSectionIds}
+            fileTree={projectWorkflow?.fileTree}
+            focusHidden={focusMode}
+            onActivitySelect={onActivitySelect}
+            onExpandedSectionIdsChange={onNavigatorExpandedSectionIdsChange}
+            onSearchQueryChange={onNavigatorSearchQueryChange}
+            projectWorkflow={projectWorkflow}
+            searchQuery={navigatorSearchQuery}
+            sections={shellState.navigatorSections}
+            storyBibleEditor={storyBibleEditor}
+            studio={studio}
+          />
+        )}
 
         <div
           aria-label="Navigator resize handle"
@@ -284,6 +298,8 @@ function WorkspaceShellContent({
           aiWritingWorkflow.agentRun.changeSetReview.open !== false &&
           (shellState.activeActivity === "workspace" || shellState.activeActivity === "ai") ? (
             <DiffReview review={aiWritingWorkflow.agentRun.changeSetReview} />
+          ) : shellState.activeActivity === "ai" && agentConversationWorkspace !== undefined ? (
+            <AgentConversationView {...agentConversationWorkspace.view} />
           ) : shellState.activeActivity === "workspace" || shellState.activeActivity === "ai" ? (
             <WorkspaceEditorSurface
               chapterEditor={chapterEditor}
@@ -325,10 +341,16 @@ function WorkspaceShellContent({
           data-region="ai-panel"
         >
           <div className="ns-panel-header">
-            <span>AI 对话</span>
+            <span>
+              {shellState.activeActivity === "ai" && agentConversationWorkspace !== undefined
+                ? "Agent 运行"
+                : "AI 对话"}
+            </span>
             <PanelRight aria-hidden="true" size={15} />
           </div>
-          {aiWritingWorkflow === undefined ? (
+          {shellState.activeActivity === "ai" && agentConversationWorkspace !== undefined ? (
+            <AgentConversationInspector view={agentConversationWorkspace.view} />
+          ) : aiWritingWorkflow === undefined ? (
             <section className="ns-ai-workflow ns-ai-placeholder" aria-label="AI 写作工作流">
               <div className="ns-editor-panel-header">
                 <span>对话式写作助手</span>

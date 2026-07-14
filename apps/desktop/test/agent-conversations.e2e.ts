@@ -1,0 +1,307 @@
+import { expect, test, _electron as electron, type Page } from "@playwright/test";
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
+const electronMain = join(repositoryRoot, "apps", "desktop", "dist", "main", "index.js");
+const projectId = "prj_minimal_chapter";
+
+test("isolates multi-run conversation context and restores project-scoped conversations", async () => {
+  test.setTimeout(120_000);
+  const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-conversations-e2e-"));
+  const projectRoot = join(tempRoot, "Project A");
+  const projectBRoot = join(tempRoot, "Project B");
+  await mkdir(projectBRoot, { recursive: true });
+  const modelRequests: Record<string, unknown>[] = [];
+  const server = createServer(async (request, response) => {
+    const body = await readJsonBody(request);
+    if (request.method === "GET" && request.url === "/v1/models") {
+      json(response, { data: [{ id: "local-agent", context_window: 128000 }] });
+      return;
+    }
+    if (request.method !== "POST" || body["stream"] !== true) {
+      json(response, { choices: [{ message: { role: "assistant", content: "ok" } }] });
+      return;
+    }
+    modelRequests.push(body);
+    const userRequest = lastUserRequest(body);
+    if (userRequest.includes("Hold beta")) {
+      response.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+        connection: "keep-alive"
+      });
+      response.write(
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "Holding beta run" } }] })}\n\n`
+      );
+      return;
+    }
+    sendToolCall(response, `finish-${String(modelRequests.length)}`, "finish", {
+      summary: `Completed ${userRequest}`
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("Expected server address");
+  const electronApp = await electron.launch({
+    args: [electronMain],
+    env: electronEnv({
+      NOVEL_STUDIO_PROJECT_ROOT: projectRoot,
+      NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
+    })
+  });
+
+  try {
+    const page = await electronApp.firstWindow();
+    await configureLocalModel(page, `http://127.0.0.1:${address.port}/v1`);
+    await openAgentActivity(page);
+    const conversationA = await createConversation(page);
+    await selectExecutionMode(page);
+    const policy = page.getByLabel("本次执行写入策略");
+    await policy.getByRole("radio", { name: "本次运行自动写入" }).check();
+    await policy.getByRole("checkbox", { name: /我理解本次执行可自动修改项目文件/ }).check();
+
+    await sendConversationRequest(page, "Remember the alpha lantern clue.");
+    await waitForRunCount(page, 1);
+    await expect(page.getByLabel("Agentic Writing Loop").locator(".ns-agent-status")).toHaveText(
+      "已完成"
+    );
+    await expect(
+      policy.getByRole("radio", { name: "写入前询问" })
+    ).toBeChecked();
+
+    await sendConversationRequest(page, "Continue the alpha thread.");
+    await waitForRunCount(page, 2);
+    await expect.poll(() => modelRequests.length).toBe(2);
+    expect(messageText(modelRequests[1])).toContain("Untrusted conversation context");
+    expect(messageText(modelRequests[1])).toContain("Remember the alpha lantern clue.");
+
+    const conversationB = await createConversation(page);
+    expect(conversationB).not.toBe(conversationA);
+    await selectExecutionMode(page);
+    await expect(
+      page.getByLabel("本次执行写入策略").getByRole("radio", { name: "写入前询问" })
+    ).toBeChecked();
+    await sendConversationRequest(page, "Hold beta without alpha context.");
+    await expect(page.locator(".ns-agent-assistant-text")).toContainText("Holding beta run");
+    await expect.poll(() => modelRequests.length).toBe(3);
+    expect(messageText(modelRequests[2])).not.toContain("alpha lantern clue");
+    expect(messageText(modelRequests[2])).not.toContain("Untrusted conversation context");
+
+    await selectConversation(page, conversationA);
+    await expect(page.getByText(/is running|currently has an active run|正在运行|已有活动运行/).first()).toBeVisible();
+    await expect(
+      page.getByLabel("会话输入区").getByLabel("Agent 请求")
+    ).toBeDisabled();
+    await page.getByRole("button", { name: "返回活动会话" }).click();
+    await page.getByRole("button", { name: "停止 Agent 运行" }).click();
+    await expect(page.getByLabel("Agentic Writing Loop").locator(".ns-agent-status")).toHaveText(
+      "已停止"
+    );
+    await waitForTerminalRuns(page);
+
+    await page.getByRole("button", { name: /^归档会话/ }).click();
+    await page.getByRole("tab", { name: "显示已归档会话" }).click();
+    await page.getByRole("searchbox", { name: "搜索会话" }).fill("Hold beta");
+    await expect(
+      page.locator(`[data-conversation-id="${conversationB}"]`)
+    ).toBeVisible();
+    await page
+      .locator(`[data-conversation-id="${conversationB}"]`)
+      .getByRole("button", { name: /^恢复会话/ })
+      .click();
+    await page.getByRole("tab", { name: "显示活跃会话" }).click();
+    await page.getByRole("searchbox", { name: "搜索会话" }).fill("");
+    await expect(page.locator(`[data-conversation-id="${conversationB}"]`)).toBeVisible();
+
+    await page.reload();
+    await openAgentActivity(page);
+    await expect(page.locator(`[data-conversation-id="${conversationA}"]`)).toBeVisible();
+    await expect(page.locator(`[data-conversation-id="${conversationB}"]`)).toBeVisible();
+
+    await page.getByLabel("活动栏").getByRole("button", { name: "工作区" }).click();
+    await page.getByLabel("项目路径").fill(projectBRoot);
+    await page.getByRole("button", { name: "创建项目" }).click();
+    await expect(page.getByText("Project B", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("项目路径")).toHaveValue(projectBRoot);
+    await openAgentActivity(page);
+    await expect(page.locator(".ns-agent-conversation-row")).toHaveCount(0);
+
+    await page.getByLabel("活动栏").getByRole("button", { name: "工作区" }).click();
+    await page.getByLabel("项目路径").fill(projectRoot);
+    await page.getByRole("button", { name: "打开项目" }).click();
+    await expect(page.getByLabel("项目路径")).toHaveValue(projectRoot);
+    await waitForConversationService(page);
+    await openAgentActivity(page);
+    await expect(page.locator(`[data-conversation-id="${conversationA}"]`)).toBeVisible();
+    await expect(page.locator(`[data-conversation-id="${conversationB}"]`)).toBeVisible();
+
+    expect(
+      (await readdir(join(projectRoot, "history", "conversations"), { withFileTypes: true })).filter(
+        (entry) => entry.isDirectory()
+      )
+    ).toHaveLength(2);
+  } finally {
+    await electronApp.close();
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error === undefined ? resolve() : reject(error)))
+    );
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+async function openAgentActivity(page: Page): Promise<void> {
+  await page.getByLabel("活动栏").getByRole("button", { name: "AI 工作流" }).click();
+  await expect(page.getByLabel("Agent 会话导航")).toBeVisible();
+}
+
+async function createConversation(page: Page): Promise<string> {
+  const rows = page.locator(".ns-agent-conversation-row");
+  const previousCount = await rows.count();
+  const selectedBefore = page.locator(".ns-agent-conversation-row[data-selected=true]");
+  const previousSelected =
+    (await selectedBefore.count()) === 0
+      ? null
+      : await selectedBefore.getAttribute("data-conversation-id");
+  await page.getByRole("button", { name: "新建会话" }).first().click();
+  await expect(rows).toHaveCount(previousCount + 1);
+  const selected = page.locator(".ns-agent-conversation-row[data-selected=true]");
+  await expect(selected).toBeVisible();
+  await expect.poll(() => selected.getAttribute("data-conversation-id")).not.toBe(previousSelected);
+  const selectedId = await selected.getAttribute("data-conversation-id");
+  if (selectedId === null) throw new Error("Expected selected conversation id");
+  return selectedId;
+}
+
+async function selectConversation(page: Page, conversationId: string): Promise<void> {
+  await page
+    .locator(`[data-conversation-id="${conversationId}"] button[data-conversation-select]`)
+    .click();
+}
+
+async function selectExecutionMode(page: Page): Promise<void> {
+  await page.getByLabel("运行模式").getByRole("button", { name: "执行" }).click();
+}
+
+async function sendConversationRequest(page: Page, request: string): Promise<void> {
+  const composer = page.getByLabel("会话输入区");
+  await composer.getByLabel("Agent 请求").fill(request);
+  await composer.getByRole("button", { name: "启动 Agent 运行" }).click();
+}
+
+async function waitForRunCount(page: Page, count: number): Promise<void> {
+  await expect
+    .poll(async () => {
+      const listed = await page.evaluate(async (boundProjectId) =>
+        window.novelStudio?.agentRuns.list(boundProjectId), projectId
+      );
+      return listed?.ok ? listed.value.length : -1;
+    })
+    .toBe(count);
+}
+
+async function waitForTerminalRuns(page: Page): Promise<void> {
+  await expect
+    .poll(async () => {
+      const listed = await page.evaluate(async (boundProjectId) =>
+        window.novelStudio?.agentRuns.list(boundProjectId), projectId
+      );
+      if (!listed?.ok) return false;
+      return listed.value.every((snapshot) =>
+        ["completed", "cancelled", "failed", "limit_reached"].includes(snapshot.status)
+      );
+    })
+    .toBe(true);
+}
+
+async function waitForConversationService(page: Page): Promise<void> {
+  await expect
+    .poll(async () => {
+      const listed = await page.evaluate(async (boundProjectId) =>
+        window.novelStudio?.agentConversations.list({
+          projectId: boundProjectId,
+          includeArchived: false,
+          limit: 30
+        }), projectId
+      );
+      return listed?.ok === true;
+    }, { timeout: 15_000 })
+    .toBe(true);
+}
+
+async function configureLocalModel(page: Page, baseUrl: string): Promise<void> {
+  await page.getByLabel("活动栏").getByRole("button", { name: "设置" }).click();
+  await page.getByLabel("模型 Base URL").fill(baseUrl);
+  await page.getByLabel("模型名称").fill("local-agent");
+  await page.getByLabel("密钥引用").fill("local-conversations-e2e-key");
+  await page.getByRole("button", { name: "保存模型配置" }).click();
+  await page.getByRole("button", { name: "测试连接", exact: true }).click();
+  await expect(page.locator(".ns-project-feedback")).toContainText(
+    "Connected to openai-compatible/local-agent"
+  );
+  await page.getByRole("button", { name: "关闭设置" }).click();
+}
+
+function messageText(body: Record<string, unknown> | undefined): string {
+  const messages = Array.isArray(body?.["messages"]) ? body["messages"] : [];
+  return messages
+    .flatMap((message) =>
+      isRecord(message) && typeof message["content"] === "string" ? [message["content"]] : []
+    )
+    .join("\n");
+}
+
+function lastUserRequest(body: Record<string, unknown>): string {
+  const messages = Array.isArray(body["messages"]) ? body["messages"] : [];
+  const users = messages.filter(isRecord).filter((message) => message["role"] === "user");
+  const content = users.at(-1)?.["content"];
+  return typeof content === "string" ? content : "";
+}
+
+async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const raw = Buffer.concat(chunks).toString("utf8");
+  const parsed = raw.length === 0 ? {} : (JSON.parse(raw) as unknown);
+  return isRecord(parsed) ? parsed : {};
+}
+
+function sendToolCall(
+  response: ServerResponse,
+  id: string,
+  name: string,
+  args: Record<string, unknown>
+): void {
+  response.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-cache",
+    connection: "keep-alive"
+  });
+  response.write(
+    `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: `call_${id}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] })}\n\n`
+  );
+  response.write(
+    `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n\n`
+  );
+  response.end("data: [DONE]\n\n");
+}
+
+function json(response: ServerResponse, payload: Record<string, unknown>): void {
+  response.writeHead(200, { "content-type": "application/json" });
+  response.end(JSON.stringify(payload));
+}
+
+function electronEnv(overrides: Record<string, string>): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env["ELECTRON_RUN_AS_NODE"];
+  return { ...env, ...overrides };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}

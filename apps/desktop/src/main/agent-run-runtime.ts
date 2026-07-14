@@ -1,9 +1,13 @@
 import {
+  createAgentConversationSession,
   createAgentRunSession,
   createChangeSetSession,
   createVersionGroupSession,
   type AgentModelRoundInput,
   type AgentModelStreamEvent,
+  type AgentConversationLifecyclePort,
+  type AgentConversationPersistencePort,
+  type AgentConversationSession,
   type AgentReadToolExecutor,
   type AgentRunModelDriver,
   type AgentRunSession,
@@ -22,6 +26,7 @@ import {
   type UnifiedError
 } from "@novel-studio/shared";
 import {
+  AgentConversationFileRepository,
   AgentWriteTransaction,
   AgentProjectReadRepository,
   AgentRunFileRepository,
@@ -33,8 +38,10 @@ import {
   validateWithSchema,
   writeTextAtomically,
   type AgentTransactionJournal,
+  type AgentConversationRecord,
   type AgentWriteReplaceInput,
-  type AgentWriteTransactionInput
+  type AgentWriteTransactionInput,
+  type UpdateAgentConversationRecordInput
 } from "@novel-studio/repository";
 
 export interface DesktopAgentRunSessionOptions {
@@ -73,9 +80,29 @@ export interface DesktopAgentRunSessionOptions {
   readonly failAgentWriteAt?: number;
 }
 
+export interface DesktopAgentRuntimeServices {
+  readonly projectId: string;
+  readonly projectRoot: string;
+  readonly agentRunSession: AgentRunSession;
+  readonly agentConversationSession: AgentConversationSession;
+}
+
 export function createDesktopAgentRunSession(
   options: DesktopAgentRunSessionOptions
 ): AgentRunSession {
+  return createDesktopAgentRuntimeServices(options, false).agentRunSession;
+}
+
+export function createDesktopAgentRuntime(
+  options: DesktopAgentRunSessionOptions
+): DesktopAgentRuntimeServices {
+  return createDesktopAgentRuntimeServices(options, true);
+}
+
+function createDesktopAgentRuntimeServices(
+  options: DesktopAgentRunSessionOptions,
+  enforceConversationBinding: boolean
+): DesktopAgentRuntimeServices {
   const projectReads = new AgentProjectReadRepository({
     projectRoot: options.projectRoot,
     traceId: "desktop-agent-project-read"
@@ -87,6 +114,10 @@ export function createDesktopAgentRunSession(
   const repository = new AgentRunFileRepository({
     projectRoot: options.projectRoot,
     traceId: "desktop-agent-run-store"
+  });
+  const conversationRepository = new AgentConversationFileRepository({
+    projectRoot: options.projectRoot,
+    traceId: "desktop-agent-conversation-store"
   });
   const chapterRepository = new ChapterFileRepository({
     projectRoot: options.projectRoot,
@@ -145,11 +176,98 @@ export function createDesktopAgentRunSession(
           createAgentModelDriver: options.createAgentModelDriver
         }));
 
+  const conversationPersistence: AgentConversationPersistencePort = {
+    createConversation(record) {
+      return conversationRepository.createConversation(record as AgentConversationRecord);
+    },
+    readConversation(conversationId) {
+      return conversationRepository.readConversation(conversationId);
+    },
+    listConversations(input) {
+      return conversationRepository.listConversations(input);
+    },
+    updateConversation(input) {
+      return conversationRepository.updateConversation(
+        input as unknown as UpdateAgentConversationRecordInput
+      );
+    },
+    writeCommandReceipt(conversationId, commandId, receipt) {
+      return conversationRepository.writeCommandReceipt(conversationId, commandId, receipt);
+    },
+    readCommandReceipt(conversationId, commandId) {
+      return conversationRepository.readCommandReceipt(conversationId, commandId);
+    },
+    readLatestSummary(conversationId) {
+      return conversationRepository.readLatestSummary(conversationId);
+    },
+    writeSummary(summary) {
+      return conversationRepository.writeSummary(
+        summary as Parameters<typeof conversationRepository.writeSummary>[0]
+      );
+    },
+    searchConversations(input) {
+      return conversationRepository.searchConversations(
+        input as Parameters<typeof conversationRepository.searchConversations>[0]
+      );
+    }
+  };
+  const conversationSession = createAgentConversationSession({
+    projectId: options.projectId,
+    repository: conversationPersistence,
+    runReader: {
+      listRunSnapshots(projectId) {
+        return repository.listSnapshots(projectId);
+      },
+      readRunEvents(runId) {
+        return repository.readEvents(runId);
+      },
+      async hasPendingReview(input) {
+        const listed = await repository.listSnapshots(input.projectId);
+        if (!listed.ok) return listed;
+        for (const snapshot of listed.value) {
+          if (snapshot["conversationId"] !== input.conversationId) continue;
+          const runId = snapshot["runId"];
+          if (typeof runId !== "string") continue;
+          const read = await session.readAgentRun(runId);
+          if (!read.ok) return err(read.error);
+          if (
+            read.value.pendingUserInput !== undefined ||
+            read.value.rollbackReview !== undefined ||
+            read.value.changeSet?.status === "awaiting_approval"
+          ) {
+            return ok(true);
+          }
+        }
+        return ok(false);
+      }
+    },
+    ...(options.now === undefined ? {} : { now: options.now })
+  });
+  const conversationLifecycle: AgentConversationLifecyclePort = {
+    async assertRunMayStart(input) {
+      const result = await conversationSession.assertRunMayStart(input);
+      return result.ok ? ok(asJsonObject(result.value)) : err(result.error);
+    },
+    cancelRunStart(input) {
+      return conversationSession.cancelRunStart(input);
+    },
+    loadContext(input) {
+      return conversationSession.loadContext(input);
+    },
+    async noteRunStarted(snapshot) {
+      const result = await conversationSession.noteRunStarted(asJsonObject(snapshot));
+      return result.ok ? ok(undefined) : err(result.error);
+    },
+    noteRunTerminal(snapshot) {
+      return conversationSession.noteRunTerminal(asJsonObject(snapshot));
+    }
+  };
   const session = createAgentRunSession({
     repository,
     modelDriver,
     readToolExecutor,
     changeSetSession,
+    ...(enforceConversationBinding ? { conversationLifecycle } : {}),
     ...(versionGroupServices === undefined
       ? {}
       : { versionGroupExecutor: versionGroupServices.executor }),
@@ -196,7 +314,12 @@ export function createDesktopAgentRunSession(
     }
   });
   void versionGroupServices?.recoverOnStartup();
-  return session;
+  return {
+    projectId: options.projectId,
+    projectRoot: options.projectRoot,
+    agentRunSession: session,
+    agentConversationSession: conversationSession
+  };
 }
 
 function createDesktopChangeSetSession(input: {

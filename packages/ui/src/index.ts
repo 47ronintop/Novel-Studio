@@ -38,10 +38,7 @@ export type {
 } from "./config-studio-panel.js";
 export { ModelSettingsPanel } from "./model-settings-panel.js";
 export { EditorDocumentBar, chapterDocumentLabel } from "./editor-document-bar.js";
-export type {
-  EditorDocumentBarProps,
-  EditorDocumentTab
-} from "./editor-document-bar.js";
+export type { EditorDocumentBarProps, EditorDocumentTab } from "./editor-document-bar.js";
 export { SettingsWorkspace } from "./settings-workspace.js";
 export type { SettingsWorkspaceProps } from "./settings-workspace.js";
 export type { SettingsPanelSection } from "./settings-panel-tabs.js";
@@ -61,6 +58,8 @@ export type {
 export { WorkspaceShell } from "./workspace-shell.js";
 export { AgentRunPanel } from "./agent-run-panel.js";
 export { AgentRunTimeline } from "./agent-run-timeline.js";
+export { AgentConversationNavigator } from "./agent-conversation-navigator.js";
+export { AgentConversationView } from "./agent-conversation-view.js";
 export { ChangeSetReview, RollbackReview } from "./change-set-review.js";
 export type {
   ChangeSetFileSelection,
@@ -69,8 +68,8 @@ export type {
   ChangeSetReviewModel,
   ChangeSetReviewProps,
   ChangeSetReviewValidation,
-  ChangeSetSelection
-  ,RollbackReviewDecision,
+  ChangeSetSelection,
+  RollbackReviewDecision,
   RollbackReviewFile,
   RollbackReviewFileStatus,
   RollbackReviewModel,
@@ -90,6 +89,13 @@ export type {
   AiWorkflowRunHistoryProps,
   AiWritingWorkflowProps,
   AiWritingWorkflowStatus,
+  AgentConversationDetailProps,
+  AgentConversationFilter,
+  AgentConversationListItemProps,
+  AgentConversationNavigatorProps,
+  AgentConversationTurnProps,
+  AgentConversationViewProps,
+  AgentConversationWorkspaceShellProps,
   AgentRunPanelProps,
   AgentRunPendingUserInputProps,
   AiWorkflowBranchChoiceProps,

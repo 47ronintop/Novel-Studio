@@ -23,6 +23,7 @@ describe("Agent Run Coordinator", () => {
     };
     const startCommand = {
       projectId: "project_01",
+      conversationId: "conv_01",
       commandId: "command_start_01",
       expectedRunRevision: 0,
       operationMode: "planning",
@@ -47,6 +48,7 @@ describe("Agent Run Coordinator", () => {
       value: {
         runId: "run_01",
         projectId: "project_01",
+        conversationId: "conv_01",
         status: "planning_model",
         runRevision: 1,
         lastSequence: 1,
@@ -58,6 +60,18 @@ describe("Agent Run Coordinator", () => {
       }
     });
     expect(coordinator.startRun(startCommand)).toEqual(started);
+
+    const { conversationId: _conversationId, ...missingConversation } = startCommand;
+    void _conversationId;
+    expect(
+      coordinator.startRun({
+        ...missingConversation,
+        commandId: "command_start_missing_conversation"
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONVERSATION_ID_INVALID" }
+    });
 
     expect(
       coordinator.recordRunEvent({
@@ -119,6 +133,48 @@ describe("Agent Run Coordinator", () => {
     ]);
   });
 
+  test("normalizes legacy snapshots without a conversation id to null", () => {
+    const source = engineExports.createAgentRunCoordinator({
+      now: () => "2026-07-13T00:00:00.000Z",
+      createRunId: () => "run_legacy"
+    });
+    const started = source.startRun({
+      projectId: "project_01",
+      conversationId: "conv_legacy_source",
+      commandId: "command_start_legacy",
+      expectedRunRevision: 0,
+      operationMode: "planning",
+      contextMode: "writing",
+      userRequest: "Restore an old run.",
+      providerCapabilitySnapshot: {
+        profileId: "model_01",
+        provider: "openai-compatible",
+        modelName: "tool-model",
+        streaming: true,
+        toolCalling: true,
+        structuredArguments: true,
+        contextWindow: 32_000,
+        requiredContextTokens: 8_000
+      }
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    const { conversationId: _conversationId, ...legacySnapshot } = started.value;
+    void _conversationId;
+
+    const restored = engineExports
+      .createAgentRunCoordinator()
+      .restoreRun(
+        legacySnapshot as typeof started.value,
+        source.readEvents(started.value.runId)
+      );
+
+    expect(restored).toMatchObject({
+      ok: true,
+      value: { runId: "run_legacy", conversationId: null }
+    });
+  });
+
   test("appends undo audit events after termination without changing the terminal status", () => {
     const factory = (engineExports as unknown as Record<string, unknown>)[
       "createAgentRunCoordinator"
@@ -137,6 +193,7 @@ describe("Agent Run Coordinator", () => {
     };
     const started = coordinator.startRun({
       projectId: "project_01",
+      conversationId: "conv_terminal_audit",
       commandId: "command_start_terminal_audit",
       expectedRunRevision: 0,
       operationMode: "execution",

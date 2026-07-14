@@ -76,6 +76,7 @@ describe("Agent Run IPC", () => {
 
     const startCommand = {
       projectId: "project-01",
+      conversationId: "conversation-01",
       commandId: "start-01",
       expectedRunRevision: 0,
       operationMode: "planning",
@@ -374,13 +375,240 @@ describe("Agent Run IPC", () => {
       }
     ]);
   });
+
+  test("routes strict Conversation commands through the currently bound runtime", async () => {
+    const calls: string[] = [];
+    const createRuntime = (projectId: string) => ({
+      projectId,
+      projectRoot: `C:/${projectId}`,
+      agentRunSession: {},
+      agentConversationSession: {
+        async createConversation(command: Record<string, unknown>) {
+          calls.push(`${projectId}:create:${String(command["commandId"])}`);
+          return { ok: true, value: conversationSummary(projectId) };
+        },
+        async listConversations(query: Record<string, unknown>) {
+          calls.push(`${projectId}:list:${String(query["limit"])}`);
+          return { ok: true, value: { items: [conversationSummary(projectId)], diagnostics: [] } };
+        },
+        async readConversation(query: Record<string, unknown>) {
+          calls.push(`${projectId}:read:${String(query["conversationId"])}`);
+          return {
+            ok: true,
+            value: { ...conversationSummary(projectId), runs: [], diagnostics: [] }
+          };
+        },
+        async archiveConversation(command: Record<string, unknown>) {
+          calls.push(`${projectId}:archive:${String(command["expectedConversationRevision"])}`);
+          return { ok: true, value: { ...conversationSummary(projectId), status: "archived" } };
+        },
+        async restoreConversation(command: Record<string, unknown>) {
+          calls.push(`${projectId}:restore:${String(command["expectedConversationRevision"])}`);
+          return { ok: true, value: conversationSummary(projectId) };
+        },
+        async searchConversations(query: Record<string, unknown>) {
+          calls.push(`${projectId}:search:${String(query["query"])}`);
+          return {
+            ok: true,
+            value: {
+              items: [{ ...conversationSummary(projectId), snippet: "Opening scene" }],
+              diagnostics: []
+            }
+          };
+        }
+      }
+    });
+    const first = createRuntime("project-01");
+    const second = createRuntime("project-02");
+    let current = first;
+    const handlers = createApplicationIpcHandlers(
+      {} as DesktopApplication,
+      {
+        agentRuntimeManager: {
+          current: () => current,
+          currentProject: () => ({
+            projectId: current.projectId,
+            projectRoot: current.projectRoot
+          }),
+          hasActiveRun: async () => ({ ok: true, value: false }),
+          bindProject: async () => ({ ok: true, value: undefined }),
+          subscribeAgentRunEvents: () => () => undefined,
+          dispose: () => undefined
+        }
+      } as never
+    ) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+
+    const created = await handlers["application:agent-conversation:create"]?.({
+      projectId: "project-01",
+      commandId: "create-01"
+    });
+    await handlers["application:agent-conversation:list"]?.({
+      projectId: "project-01",
+      includeArchived: true,
+      limit: 30
+    });
+    await handlers["application:agent-conversation:read"]?.({
+      projectId: "project-01",
+      conversationId: "conversation-01"
+    });
+    await handlers["application:agent-conversation:archive"]?.({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      commandId: "archive-01",
+      expectedConversationRevision: 1
+    });
+    await handlers["application:agent-conversation:restore"]?.({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      commandId: "restore-01",
+      expectedConversationRevision: 2
+    });
+    await handlers["application:agent-conversation:search"]?.({
+      projectId: "project-01",
+      query: "Opening",
+      cursor: "next_page",
+      limit: 10
+    });
+    expect(() => structuredClone(created)).not.toThrow();
+
+    current = second;
+    await handlers["application:agent-conversation:list"]?.({
+      projectId: "project-02",
+      limit: 5
+    });
+    const callCount = calls.length;
+    const invalidResults = await Promise.all([
+      handlers["application:agent-conversation:create"]?.({
+        projectId: "project-02",
+        commandId: "create-invalid",
+        extra: true
+      }),
+      handlers["application:agent-conversation:list"]?.({
+        projectId: "project-02",
+        cursor: "bad cursor"
+      }),
+      handlers["application:agent-conversation:list"]?.({
+        projectId: "project-02",
+        limit: 101
+      }),
+      handlers["application:agent-conversation:archive"]?.({
+        projectId: "project-02",
+        conversationId: "conversation-01",
+        commandId: "archive-invalid",
+        expectedConversationRevision: -1
+      })
+    ]);
+
+    expect(invalidResults).toEqual(
+      expect.arrayContaining([expect.objectContaining({ ok: false })])
+    );
+    expect(invalidResults.every((result) => (result as { ok?: boolean }).ok === false)).toBe(true);
+    expect(calls).toHaveLength(callCount);
+    expect(calls).toEqual([
+      "project-01:create:create-01",
+      "project-01:list:30",
+      "project-01:read:conversation-01",
+      "project-01:archive:1",
+      "project-01:restore:2",
+      "project-01:search:Opening",
+      "project-02:list:5"
+    ]);
+  });
+
+  test("rebinds the Agent runtime after project open and blocks switching during an active run", async () => {
+    const calls: string[] = [];
+    let active = false;
+    const application = {
+      async openProject(projectRoot: string) {
+        calls.push(`open:${projectRoot}`);
+        return {
+          ok: true,
+          value: {
+            projectRoot,
+            project: { projectId: "project-02" },
+            chapters: [{ id: "chapter-02" }]
+          }
+        };
+      }
+    } as unknown as DesktopApplication;
+    const handlers = createApplicationIpcHandlers(application, {
+      agentRuntimeManager: {
+        current: () => undefined,
+        currentProject: () => undefined,
+        hasActiveRun: async () => ({ ok: true, value: active }),
+        async bindProject(binding: Record<string, unknown>) {
+          calls.push(`bind:${String(binding["projectId"])}:${String(binding["activeChapterId"])}`);
+          return { ok: true, value: undefined };
+        },
+        subscribeAgentRunEvents: () => () => undefined,
+        dispose: () => undefined
+      }
+    } as never) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+
+    expect(await handlers["application:project:open"]?.("C:/Project-Two")).toMatchObject({
+      ok: true
+    });
+    active = true;
+    expect(await handlers["application:project:open"]?.("C:/Project-Three")).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED" }
+    });
+    expect(calls).toEqual(["open:C:/Project-Two", "bind:project-02:chapter-02"]);
+  });
+
+  test("preload exposes all Conversation commands on allowlisted channels", async () => {
+    const invoked: string[] = [];
+    const api = createNovelStudioApi({
+      async invoke(channel) {
+        invoked.push(channel);
+        return { ok: true, value: {} };
+      },
+      on: () => () => undefined
+    }) as unknown as Record<string, unknown>;
+    const conversations = api["agentConversations"] as
+      Record<string, (...args: unknown[]) => Promise<unknown>> | undefined;
+    expect(conversations).toBeDefined();
+    if (conversations === undefined) return;
+
+    await conversations["create"]?.({});
+    await conversations["list"]?.({});
+    await conversations["read"]?.({});
+    await conversations["archive"]?.({});
+    await conversations["restore"]?.({});
+    await conversations["search"]?.({});
+
+    expect(invoked).toEqual([
+      "application:agent-conversation:create",
+      "application:agent-conversation:list",
+      "application:agent-conversation:read",
+      "application:agent-conversation:archive",
+      "application:agent-conversation:restore",
+      "application:agent-conversation:search"
+    ]);
+  });
 });
+
+function conversationSummary(projectId: string) {
+  return {
+    schemaVersion: "1.0",
+    conversationId: "conversation-01",
+    projectId,
+    revision: 1,
+    title: "Opening scene",
+    status: "active",
+    createdAt: "2026-07-14T00:00:00.000Z",
+    updatedAt: "2026-07-14T00:00:00.000Z",
+    runCount: 0,
+    summaryFreshness: "fresh"
+  };
+}
 
 function snapshot(status: string, runRevision: number, lastSequence: number) {
   return {
     schemaVersion: "1.0",
     runId: "run-ipc",
     projectId: "project-01",
+    conversationId: "conversation-01",
     operationMode: "planning",
     contextMode: "writing",
     writePolicy: "write_before_confirmation",

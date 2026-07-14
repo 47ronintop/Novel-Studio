@@ -33,6 +33,7 @@ import { createSettingsBridge } from "./settings-bridge.js";
 import { createStudioBridge } from "./studio-bridge.js";
 import { createPlainFileEditorBridge } from "./plain-file-editor-bridge.js";
 import { createAgentRunBridge } from "./agent-run-bridge.js";
+import { useAgentConversationWorkspace } from "./agent-conversation-workspace.js";
 import {
   createChapterEditorRuntime,
   createOnboardingProps,
@@ -96,6 +97,13 @@ export function App() {
     aiWritingWorkflowBridge?.getProps()
   );
   const [agentRun, setAgentRun] = useState(() => agentRunBridge?.getProps());
+  const agentConversationWorkspace = useAgentConversationWorkspace({
+    api,
+    agentRunBridge,
+    agentRun,
+    projectId: projectWorkflow?.projectId ?? "prj_minimal_chapter",
+    onAgentRunChange: setAgentRun
+  });
   const [studio, setStudio] = useState(() => studioBridge?.getProps());
   const [shortcutState, setShortcutState] = useState({ commandPaletteOpen: false });
   const [commandPaletteFeedback, setCommandPaletteFeedback] = useState<
@@ -128,13 +136,23 @@ export function App() {
       projectWorkflow?.activeChapterId ?? chapterEditor?.chapter.frontmatter.id;
     const next = agentRunBridge.syncContext({
       projectId: projectWorkflow?.projectId ?? "prj_minimal_chapter",
+      ...(agentConversationWorkspace.selectedConversationId === undefined
+        ? {}
+        : { conversationId: agentConversationWorkspace.selectedConversationId }),
       ...(activeChapterId === undefined ? {} : { activeChapterId }),
       ...(chapterEditor === undefined ? {} : { chapterEditor }),
       ...(fileEditor === undefined ? {} : { fileEditor }),
       ...(settings === undefined ? {} : { settings })
     });
     setAgentRun(next);
-  }, [agentRunBridge, chapterEditor, fileEditor, projectWorkflow, settings]);
+  }, [
+    agentConversationWorkspace.selectedConversationId,
+    agentRunBridge,
+    chapterEditor,
+    fileEditor,
+    projectWorkflow,
+    settings
+  ]);
 
   useEffect(() => {
     if (agentRunBridge === undefined) {
@@ -933,6 +951,7 @@ export function App() {
     <RendererWorkspaceShell
       appearancePreferences={appearancePreferences}
       aiWritingWorkflow={workspaceAiWritingWorkflow}
+      agentConversationWorkspace={agentConversationWorkspace.workspace}
       projectWorkflow={projectWorkflow}
       projectSearch={projectSearch}
       settings={interactiveSettings}

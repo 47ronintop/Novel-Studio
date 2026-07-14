@@ -2,6 +2,11 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   ApplicationCommand,
   ApplicationIpcChannel,
+  AgentConversationCommandResult,
+  AgentConversationListPage,
+  AgentConversationReadResult,
+  AgentConversationSearchPage,
+  AgentConversationSummary,
   AgentRunReadResult,
   AnswerAgentUserInputCommand,
   AiWritingSelectionPreview,
@@ -19,6 +24,11 @@ import type {
   ConfigAssetType,
   ConfigVersionSummary,
   CreateProjectInput,
+  CreateAgentConversationCommand,
+  ChangeAgentConversationStatusCommand,
+  ListAgentConversationsQuery,
+  ReadAgentConversationQuery,
+  SearchAgentConversationsQuery,
   DesktopShellState,
   MemoryRecord,
   ModelConnectionResult,
@@ -245,6 +255,38 @@ const api: NovelStudioApi = {
       ipcRenderer.on("application:agent-run:event", wrapped);
       return () => ipcRenderer.removeListener("application:agent-run:event", wrapped);
     }
+  },
+  agentConversations: {
+    create: (command: CreateAgentConversationCommand) =>
+      invokeTyped<Result<AgentConversationSummary, UnifiedError>>(
+        "application:agent-conversation:create",
+        command
+      ),
+    list: (query: ListAgentConversationsQuery) =>
+      invokeTyped<Result<AgentConversationListPage, UnifiedError>>(
+        "application:agent-conversation:list",
+        query
+      ),
+    read: (query: ReadAgentConversationQuery) =>
+      invokeTyped<Result<AgentConversationReadResult, UnifiedError>>(
+        "application:agent-conversation:read",
+        query
+      ),
+    archive: (command: ChangeAgentConversationStatusCommand) =>
+      invokeTyped<AgentConversationCommandResult>(
+        "application:agent-conversation:archive",
+        command
+      ),
+    restore: (command: ChangeAgentConversationStatusCommand) =>
+      invokeTyped<AgentConversationCommandResult>(
+        "application:agent-conversation:restore",
+        command
+      ),
+    search: (query: SearchAgentConversationsQuery) =>
+      invokeTyped<Result<AgentConversationSearchPage, UnifiedError>>(
+        "application:agent-conversation:search",
+        query
+      )
   },
   search: {
     rebuildIndex: () =>

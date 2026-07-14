@@ -1924,6 +1924,7 @@ interface SessionShape {
 function startCommand(): Record<string, unknown> {
   return {
     projectId: "project-01",
+    conversationId: "conv-stage2",
     commandId: "start-stage2",
     expectedRunRevision: 0,
     operationMode: "execution",

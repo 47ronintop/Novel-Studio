@@ -22,8 +22,9 @@ test("blocks an Agent run when the selected model fails capability preflight", a
   try {
     const page = await electronApp.firstWindow();
     await openAgentPanel(page);
-    await page.getByLabel("Agent 请求").fill("检查当前章节");
-    await page.getByLabel("启动 Agent 运行").click();
+    const composer = page.getByLabel("会话输入区");
+    await composer.getByLabel("Agent 请求").fill("检查当前章节");
+    await composer.getByLabel("启动 Agent 运行").click();
 
     await expect(page.getByRole("alert")).toContainText("cannot start an Agent run");
     await expect(page.getByLabel("Agent 运行时间线")).toHaveCount(0);
@@ -84,8 +85,9 @@ test("stops a live Agent run through the real Electron IPC path", async () => {
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await configureLocalModel(page, baseUrl);
     await openAgentPanel(page);
-    await page.getByLabel("Agent 请求").fill("读取当前章节");
-    await page.getByLabel("启动 Agent 运行").click();
+    const composer = page.getByLabel("会话输入区");
+    await composer.getByLabel("Agent 请求").fill("读取当前章节");
+    await composer.getByLabel("启动 Agent 运行").click();
     await resolveContextRefreshIfVisible(page);
     await expect(page.locator(".ns-agent-assistant-text")).toContainText("等待停止");
     await expect(page.locator(".ns-agent-status")).toHaveText("规划中");
@@ -209,8 +211,9 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
     await replaceChapterText(page, "未保存的开头");
     await openAgentPanel(page);
     await expect(page.getByText("editor_buffer / dirty", { exact: false })).toBeVisible();
-    await page.getByLabel("Agent 请求").fill("核对当前章节并给出计划");
-    await page.getByLabel("启动 Agent 运行").click();
+    const composer = page.getByLabel("会话输入区");
+    await composer.getByLabel("Agent 请求").fill("核对当前章节并给出计划");
+    await composer.getByLabel("启动 Agent 运行").click();
 
     const timeline = page.getByLabel("Agent 运行时间线").locator("ol");
     await expect(timeline.getByText(/已列出 chapters 的 1 个条目/)).toBeVisible();
@@ -233,8 +236,10 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
     await expect(page.getByLabel("Agentic Writing Loop")).not.toContainText("应用");
 
     await page.getByRole("button", { name: "按此方案执行" }).click();
+    await expect
+      .poll(() => requests.some((entry) => entry.userRequest.includes("Execute approved plan")))
+      .toBe(true);
     await expect(page.getByLabel("Agentic Writing Loop").locator(".ns-agent-status")).toHaveText("已完成");
-    expect(requests.some((entry) => entry.userRequest.includes("Execute approved plan"))).toBe(true);
 
     const chapterFiles = await readFile(join(projectRoot, "chapters", `${activeChapterId}.md`), "utf8");
     expect(chapterFiles).toContain("这是第一章的正文");
@@ -262,6 +267,8 @@ async function configureLocalModel(page: Page, baseUrl: string): Promise<void> {
 
 async function openAgentPanel(page: Page): Promise<void> {
   await page.getByLabel("活动栏").getByRole("button", { name: "AI 工作流" }).click();
+  const createConversation = page.getByRole("button", { name: "新建会话" }).first();
+  if (await createConversation.isVisible()) await createConversation.click();
   await expect(page.getByLabel("Agentic Writing Loop")).toBeVisible();
 }
 

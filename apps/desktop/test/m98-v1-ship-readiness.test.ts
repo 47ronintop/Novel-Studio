@@ -51,4 +51,29 @@ describe("M98 V1 ship readiness", () => {
     expect(packageCheck).toContain("Agent autonomy prerequisite suites failed.");
     expect(packageCheck).toContain("spawnSync");
   });
+
+  test("package check gates Stage 4 conversation isolation and acceptance evidence", async () => {
+    const packageCheck = await readFile("scripts/package-check.mjs", "utf8");
+    const requiredSuites = [
+      "packages/repository/test/agent-conversation-repository.test.ts",
+      "packages/application/test/agent-conversation-session.test.ts",
+      "apps/desktop/test/agent-conversation-bridge.test.ts",
+      "apps/desktop/test/agent-runtime-manager.test.ts",
+      "apps/desktop/test/agent-run-ipc.test.ts",
+      "apps/desktop/test/desktop-agent-run-runtime.test.ts",
+      "packages/ui/test/agent-conversation-navigator.test.tsx",
+      "packages/ui/test/agent-conversation-view.test.tsx",
+      "packages/ui/test/agent-conversation-workspace.test.tsx",
+      "apps/desktop/test/agent-conversations.e2e.ts",
+      "packages/application/test/agent-run-session.test.ts",
+      "packages/application/test/agent-run-stage2-integration.test.ts",
+      "packages/agent-engine/test/agent-run-coordinator.test.ts",
+      "apps/desktop/test/agent-write.e2e.ts",
+      "apps/desktop/test/agent-run-autonomy.e2e.ts"
+    ];
+
+    expect(packageCheck).toContain("checkAgentConversationPrerequisites");
+    for (const suite of requiredSuites) expect(packageCheck).toContain(suite);
+    expect(packageCheck).toContain("Agent conversation prerequisite suites failed.");
+  });
 });

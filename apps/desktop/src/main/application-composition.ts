@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
@@ -18,6 +19,7 @@ import type {
   DesktopApplication,
   ModelConnectionTester,
   ModelDiscoveryPort,
+  ProjectWorkspaceSnapshot,
   ProjectSettings,
   ProjectSettingsPort
 } from "@novel-studio/application";
@@ -64,6 +66,11 @@ export interface BootstrappedDefaultDesktopApplicationOptions {
   readonly modelDiscoveryPort?: ModelDiscoveryPort;
   readonly createAiProvider?: (input: DesktopAiProviderFactoryInput) => LlmProvider;
   readonly projectLockOwnerId?: string;
+}
+
+export interface BootstrappedDefaultDesktopApplication {
+  readonly application: DesktopApplication;
+  readonly workspace: ProjectWorkspaceSnapshot;
 }
 
 export interface DesktopAiProviderFactoryInput {
@@ -329,10 +336,17 @@ export function createDefaultDesktopApplication(): DesktopApplication {
 export async function createBootstrappedDefaultDesktopApplication(
   options: BootstrappedDefaultDesktopApplicationOptions
 ): Promise<DesktopApplication> {
+  return (await createBootstrappedDefaultDesktopApplicationWithSnapshot(options)).application;
+}
+
+export async function createBootstrappedDefaultDesktopApplicationWithSnapshot(
+  options: BootstrappedDefaultDesktopApplicationOptions
+): Promise<BootstrappedDefaultDesktopApplication> {
   await ensureDefaultProject(options);
+  const canonicalProjectRoot = await realpath(options.projectRoot);
 
   const application = createProjectDesktopApplication({
-    projectRoot: options.projectRoot,
+    projectRoot: canonicalProjectRoot,
     ...(options.userDataRoot === undefined ? {} : { userDataRoot: options.userDataRoot }),
     chapterId: DEFAULT_FIXTURE_CHAPTER_ID,
     projectTitle: DEFAULT_PROJECT_TITLE,
@@ -351,12 +365,12 @@ export async function createBootstrappedDefaultDesktopApplication(
       ? {}
       : { projectLockOwnerId: options.projectLockOwnerId })
   });
-  const opened = await application.openProject(options.projectRoot);
+  const opened = await application.openProject(canonicalProjectRoot);
   if (!opened.ok) {
     throw new Error(opened.error.message);
   }
 
-  return application;
+  return { application, workspace: opened.value };
 }
 
 export function createProjectLockOwnerId(): string {

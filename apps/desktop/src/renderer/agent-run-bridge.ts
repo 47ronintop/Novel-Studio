@@ -31,6 +31,7 @@ type AgentPlanExecutionOptions = NonNullable<
 
 export interface AgentRunBridgeContext {
   readonly projectId: string;
+  readonly conversationId?: string;
   readonly activeChapterId?: string;
   readonly chapterEditor?: ChapterEditorProps;
   readonly fileEditor?: PlainFileEditorProps;
@@ -41,6 +42,8 @@ export interface AgentRunBridge {
   getProps(): AgentRunPanelProps | undefined;
   syncContext(context: AgentRunBridgeContext): AgentRunPanelProps;
   load(projectId: string): Promise<AgentRunPanelProps>;
+  loadRun(runId: string | undefined): Promise<AgentRunPanelProps>;
+  resetWriteAuthorization(): void;
   send(request: string): Promise<AgentRunPanelProps>;
   stop(): Promise<AgentRunPanelProps>;
   answerUserInput(answer: string): Promise<AgentRunPanelProps>;
@@ -166,8 +169,13 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       state = { ...state, errorMessage: "项目尚未打开，无法启动 Agent。" };
       return toProps();
     }
+    if (context.conversationId === undefined) {
+      state = { ...state, errorMessage: "请先选择一个会话。" };
+      return toProps();
+    }
     const command: StartAgentRunCommand = {
       projectId: context.projectId,
+      conversationId: context.conversationId,
       commandId: createCommandId("start"),
       expectedRunRevision: 0,
       operationMode: state.operationMode,
@@ -484,6 +492,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       snapshot: read.snapshot,
       operationMode: read.snapshot.operationMode,
       contextMode: read.snapshot.contextMode,
+      userRequest: read.snapshot.userRequest,
       ...writeAuthorizationForSnapshot(read.snapshot),
       events: [...read.events],
       assistantText: read.events
@@ -664,25 +673,13 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     getProps: () => (context === undefined ? undefined : toProps()),
     syncContext(nextContext) {
       const projectChanged = context?.projectId !== nextContext.projectId;
+      const conversationChanged = context?.conversationId !== nextContext.conversationId;
       context = nextContext;
-      if (projectChanged && state.snapshot?.projectId !== nextContext.projectId) {
-        state = {
-          ...state,
-          snapshot: undefined,
-          events: [],
-          assistantText: "",
-          pendingUserInput: undefined,
-          planArtifact: undefined,
-          changeSet: undefined,
-          reviewOpen: false,
-          writePolicy: "write_before_confirmation",
-          writePolicyAcknowledged: false,
-          rollbackReview: undefined,
-          rollbackReviewOpen: false,
-          rollbackDecisions: {},
-          selectionPending: false,
-          errorMessage: undefined
-        };
+      if (
+        conversationChanged ||
+        (projectChanged && state.snapshot?.projectId !== nextContext.projectId)
+      ) {
+        state = resetRunState(state);
       }
       return toProps();
     },
@@ -708,6 +705,40 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       if (latest !== undefined) await hydrate(latest.runId);
       notify();
       return toProps();
+    },
+    async loadRun(runId) {
+      if (runId === undefined) {
+        state = resetRunState(state);
+        notify();
+        return toProps();
+      }
+      const result = await api.agentRuns.read(runId);
+      if (!result.ok) {
+        state = { ...state, errorMessage: result.error.message };
+        notify();
+        return toProps();
+      }
+      if (
+        context === undefined ||
+        result.value.snapshot.projectId !== context.projectId ||
+        (context.conversationId !== undefined &&
+          result.value.snapshot.conversationId !== context.conversationId)
+      ) {
+        state = { ...resetRunState(state), errorMessage: "The Agent run is outside the selected conversation." };
+        notify();
+        return toProps();
+      }
+      await hydrate(runId);
+      notify();
+      return toProps();
+    },
+    resetWriteAuthorization() {
+      state = {
+        ...state,
+        writePolicy: "write_before_confirmation",
+        writePolicyAcknowledged: false
+      };
+      notify();
     },
     async send(request) {
       const next = await sendRun(request);
@@ -755,6 +786,29 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   };
 
   return bridge;
+}
+
+function resetRunState(state: BridgeState): BridgeState {
+  return {
+    ...state,
+    operationMode: "planning",
+    contextMode: "writing",
+    writePolicy: "write_before_confirmation",
+    writePolicyAcknowledged: false,
+    userRequest: "",
+    snapshot: undefined,
+    events: [],
+    assistantText: "",
+    pendingUserInput: undefined,
+    planArtifact: undefined,
+    changeSet: undefined,
+    reviewOpen: false,
+    rollbackReview: undefined,
+    rollbackReviewOpen: false,
+    rollbackDecisions: {},
+    selectionPending: false,
+    errorMessage: undefined
+  };
 }
 
 function canUndoAppliedRun(state: BridgeState): boolean {

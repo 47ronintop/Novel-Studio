@@ -11,6 +11,7 @@ const snapshot: AgentRunSnapshot = {
   schemaVersion: "1.0",
   runId: "run-bridge",
   projectId: "project-01",
+  conversationId: "conversation-01",
   operationMode: "planning",
   contextMode: "writing",
   writePolicy: "write_before_confirmation",
@@ -103,6 +104,33 @@ const settings = {
 } as ModelSettingsPanelProps;
 
 describe("Agent Run renderer bridge", () => {
+  test("clears run state and write acknowledgement when the selected conversation changes", async () => {
+    const api = createApi({
+      start: async () =>
+        ok({
+          ...snapshot,
+          operationMode: "execution" as const,
+          writePolicy: "user_preapproved_run" as const,
+          status: "executing_read_tool" as const
+        })
+    });
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({ projectId: "project-01", conversationId: "conversation-01", settings });
+    await bridge.send("run in the first conversation");
+    expect(bridge.getProps()).toMatchObject({
+      runId: "run-bridge",
+      writePolicy: "write_before_confirmation"
+    });
+
+    const next = bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-02",
+      settings
+    });
+    expect(next).toMatchObject({ status: "idle", writePolicy: "write_before_confirmation" });
+    expect(next.runId).toBeUndefined();
+  });
+
   test("starts with the dirty editor buffer as an explicit context source", async () => {
     let received: unknown;
     const api = createApi({
@@ -114,6 +142,7 @@ describe("Agent Run renderer bridge", () => {
     const bridge = createAgentRunBridge(api);
     bridge.syncContext({
       projectId: "project-01",
+      conversationId: "conversation-01",
       activeChapterId: "chapter-01",
       chapterEditor: editor,
       settings
@@ -150,7 +179,11 @@ describe("Agent Run renderer bridge", () => {
       }
     });
     const bridge = createAgentRunBridge(api);
-    let props = bridge.syncContext({ projectId: "project-01", settings });
+    let props = bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      settings
+    });
     props.onOperationModeChange("execution");
     props = bridge.getProps() ?? props;
     props.onWritePolicyChange("user_preapproved_run");
@@ -216,7 +249,11 @@ describe("Agent Run renderer bridge", () => {
       }
     } as unknown as NovelStudioApi;
     const bridge = createAgentRunBridge(api);
-    let props = bridge.syncContext({ projectId: "project-01", settings });
+    let props = bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      settings
+    });
     props.onOperationModeChange("execution");
     props = bridge.getProps() ?? props;
     props.onWritePolicyChange("user_preapproved_run");
@@ -259,7 +296,11 @@ describe("Agent Run renderer bridge", () => {
       }
     } as unknown as NovelStudioApi;
     const bridge = createAgentRunBridge(api);
-    let props = bridge.syncContext({ projectId: "project-01", settings });
+    let props = bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      settings
+    });
     props.onOperationModeChange("execution");
     props = bridge.getProps() ?? props;
     props.onWritePolicyChange("user_preapproved_run");
@@ -359,6 +400,7 @@ describe("Agent Run renderer bridge", () => {
     const bridge = createAgentRunBridge(api);
     bridge.syncContext({
       projectId: "project-01",
+      conversationId: "conversation-01",
       activeChapterId: "chapter-01",
       chapterEditor: editor,
       settings: { ...settings, modelDiscovery: undefined }
@@ -385,6 +427,7 @@ describe("Agent Run renderer bridge", () => {
     const bridge = createAgentRunBridge(api);
     bridge.syncContext({
       projectId: "project-01",
+      conversationId: "conversation-01",
       activeChapterId: "chapter-01",
       chapterEditor: editor,
       settings
@@ -392,6 +435,7 @@ describe("Agent Run renderer bridge", () => {
     await bridge.send("检查当前章节");
     bridge.syncContext({
       projectId: "project-01",
+      conversationId: "conversation-01",
       activeChapterId: "chapter-01",
       chapterEditor: { ...editor, chapter: { ...editor.chapter, body: "new dirty body" } },
       settings

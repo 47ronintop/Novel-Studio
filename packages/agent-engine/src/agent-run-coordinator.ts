@@ -36,6 +36,14 @@ export function createAgentRunCoordinator(
       if (receipt !== undefined) {
         return receipt;
       }
+      if (!isSafeId(command.conversationId)) {
+        const result = failure(
+          "AGENT_CONVERSATION_ID_INVALID",
+          "A new Agent run requires a valid conversation identifier."
+        );
+        commandReceipts.set(receiptKey, result);
+        return result;
+      }
       const activeRunId = activeRunByProject.get(command.projectId);
       if (activeRunId !== undefined) {
         const result = failure("AGENT_RUN_ALREADY_ACTIVE", "An Agent run is already active.");
@@ -94,6 +102,7 @@ export function createAgentRunCoordinator(
         schemaVersion: "1.0",
         runId,
         projectId: command.projectId,
+        conversationId: command.conversationId,
         operationMode: command.operationMode,
         contextMode: command.contextMode,
         writePolicy,
@@ -249,6 +258,8 @@ export function createAgentRunCoordinator(
       }
       const restoredSnapshot: AgentRunSnapshot = {
         ...snapshot,
+        conversationId:
+          typeof snapshot.conversationId === "string" ? snapshot.conversationId : null,
         writePolicy: "write_before_confirmation"
       };
       runs.set(restoredSnapshot.runId, restoredSnapshot);
@@ -312,6 +323,10 @@ function isTerminal(status: AgentRunSnapshot["status"]): boolean {
     status === "failed" ||
     status === "limit_reached"
   );
+}
+
+function isSafeId(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(value);
 }
 
 function isTerminalAuditEventType(type: AgentRunEvent["type"]): boolean {

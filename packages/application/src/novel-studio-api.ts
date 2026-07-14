@@ -79,6 +79,17 @@ import type {
   UserPreferencesSnapshot
 } from "./user-preferences-session.js";
 import type { AgentRunReadResult, AnswerAgentUserInputCommand } from "./agent-run-session.js";
+import type {
+  AgentConversationCommandResult,
+  AgentConversationListPage,
+  AgentConversationReadResult,
+  AgentConversationSearchPage,
+  ChangeAgentConversationStatusCommand,
+  CreateAgentConversationCommand,
+  ListAgentConversationsQuery,
+  ReadAgentConversationQuery,
+  SearchAgentConversationsQuery
+} from "./agent-conversation-session.js";
 
 export interface NovelStudioApi {
   getShellState(): Promise<DesktopShellState>;
@@ -166,6 +177,18 @@ export interface NovelStudioApi {
     read(runId: string): Promise<Result<AgentRunReadResult, UnifiedError>>;
     list(projectId: string): Promise<Result<readonly AgentRunSnapshot[], UnifiedError>>;
     onEvent(listener: (event: AgentRunEvent) => void): () => void;
+  };
+  agentConversations: {
+    create(command: CreateAgentConversationCommand): Promise<
+      Result<AgentConversationListPage["items"][number], UnifiedError>
+    >;
+    list(query: ListAgentConversationsQuery): Promise<Result<AgentConversationListPage, UnifiedError>>;
+    read(query: ReadAgentConversationQuery): Promise<Result<AgentConversationReadResult, UnifiedError>>;
+    archive(command: ChangeAgentConversationStatusCommand): Promise<AgentConversationCommandResult>;
+    restore(command: ChangeAgentConversationStatusCommand): Promise<AgentConversationCommandResult>;
+    search(query: SearchAgentConversationsQuery): Promise<
+      Result<AgentConversationSearchPage, UnifiedError>
+    >;
   };
   search: {
     rebuildIndex(): Promise<Result<ProjectSearchIndex, UnifiedError>>;

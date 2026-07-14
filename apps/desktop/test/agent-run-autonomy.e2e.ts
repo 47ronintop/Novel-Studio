@@ -28,7 +28,26 @@ test("auto-applies two versioned Change Sets and reviews a conflicting run undo"
     await startAutonomousExecution(scenario.page);
 
     await expect
-      .poll(() => readLatestAgentRun(scenario.page), { timeout: 30_000 })
+      .poll(async () => {
+        const read = await readLatestAgentRun(scenario.page);
+        if (
+          read.ok === true &&
+          isRecord(read.value) &&
+          isRecord(read.value["snapshot"]) &&
+          read.value["snapshot"]["status"] === "failed"
+        ) {
+          throw new Error(`Agent run failed: ${JSON.stringify(read.value["events"])}`);
+        }
+        if (
+          read.ok === true &&
+          isRecord(read.value) &&
+          isRecord(read.value["snapshot"]) &&
+          read.value["snapshot"]["status"] === "awaiting_context_refresh"
+        ) {
+          await resolveContextRefreshIfVisible(scenario.page);
+        }
+        return read;
+      }, { timeout: 30_000 })
       .toMatchObject({
         ok: true,
         value: {
@@ -43,18 +62,13 @@ test("auto-applies two versioned Change Sets and reviews a conflicting run undo"
     await expect
       .poll(async () => readFile(secondPath, "utf8"), { timeout: 30_000 })
       .toContain("Autonomous second original body.");
-    await expect(scenario.page.getByText(/本次运行自动写入已授权/)).toHaveCount(2);
     const completedRun = await readLatestAgentRun(scenario.page);
+    expect(
+      agentRunEventTypes(completedRun).filter((type) => type === "change_set_auto_approved")
+    ).toHaveLength(2);
     expect(
       agentRunEventTypes(completedRun).filter((type) => type === "write_applied")
     ).toHaveLength(2);
-    await expect(
-      scenario.page
-        .getByLabel("Agent 运行时间线")
-        .locator("ol")
-        .getByText(/^版本点 /)
-    ).toHaveCount(2);
-
     const applyJournals = (await readTransactionJournals(scenario.projectRoot)).filter(
       (journal) => journal.kind === "apply"
     );
@@ -80,6 +94,8 @@ test("auto-applies two versioned Change Sets and reviews a conflicting run undo"
       "User edit after Agent write."
     );
     await writeFile(firstPath, userEdited, "utf8");
+    const returnToConversation = scenario.page.getByRole("button", { name: "返回对话" });
+    if (await returnToConversation.isVisible()) await returnToConversation.click();
     const undo = scenario.page
       .getByLabel("Agentic Writing Loop")
       .getByRole("button", { name: "撤销本次运行" });
@@ -99,27 +115,27 @@ test("auto-applies two versioned Change Sets and reviews a conflicting run undo"
     await conflictFile.getByRole("radio", { name: "保留当前" }).check();
     await review.getByRole("button", { name: "应用所选恢复" }).click();
 
-    const timeline = scenario.page.getByLabel("Agent 运行时间线").locator("ol");
-    const undoCompleted = timeline.getByText("撤销审阅已完成", { exact: true });
-    await expect(undoCompleted).toBeVisible();
-    await undoCompleted.click();
-    await expect(timeline.getByText("保留 1 个文件的当前内容", { exact: true })).toBeVisible();
     expect(await readFile(firstPath, "utf8")).toBe(userEdited);
     expect(await readFile(secondPath, "utf8")).toBe(secondBaseline);
     expect(
       await readHistoryRecords(scenario.projectRoot, "before-agent-session-undo")
     ).toHaveLength(1);
 
-    const rollbackReview = await readJsonRecord(
-      join(scenario.projectRoot, "history", "rollback-reviews", `${applyJournals[0]?.runId}.json`)
+    const rollbackReviewPath = join(
+      scenario.projectRoot,
+      "history",
+      "rollback-reviews",
+      `${applyJournals[0]?.runId}.json`
     );
-    expect(rollbackReview).toMatchObject({
-      status: "completed",
-      files: expect.arrayContaining([
-        expect.objectContaining({ relativePath: firstRelativePath, status: "kept" }),
-        expect.objectContaining({ relativePath: secondRelativePath, status: "completed" })
-      ])
-    });
+    await expect
+      .poll(() => readJsonRecord(rollbackReviewPath), { timeout: 15_000 })
+      .toMatchObject({
+        status: "completed",
+        files: expect.arrayContaining([
+          expect.objectContaining({ relativePath: firstRelativePath, status: "kept" }),
+          expect.objectContaining({ relativePath: secondRelativePath, status: "completed" })
+        ])
+      });
     expect(firstBaseline).not.toBe(userEdited);
   } finally {
     await scenario.close();
@@ -205,17 +221,22 @@ async function launchScenario(): Promise<{
 
 async function startAutonomousExecution(page: Page): Promise<void> {
   await page.getByLabel("活动栏").getByRole("button", { name: "AI 工作流" }).click();
+  const createConversation = page.getByRole("button", { name: "新建会话" }).first();
+  if (await createConversation.isVisible()) await createConversation.click();
   await page.getByLabel("运行模式").getByRole("button", { name: "执行" }).click();
   const policy = page.getByLabel("本次执行写入策略");
   await policy.getByRole("radio", { name: "本次运行自动写入" }).check();
   await expect(policy).toContainText("每次实际写入都会创建版本点并可撤销");
   await policy.getByRole("checkbox", { name: /我理解本次执行可自动修改项目文件/ }).check();
-  await page.getByLabel("Agent 请求").fill("连续修改两章并完成运行");
-  await page.getByLabel("启动 Agent 运行").click();
+  const composer = page.getByLabel("会话输入区");
+  await composer.getByLabel("Agent 请求").fill("连续修改两章并完成运行");
+  await composer.getByLabel("启动 Agent 运行").click();
   await resolveContextRefreshIfVisible(page);
 }
 
 async function resolveContextRefreshIfVisible(page: Page): Promise<void> {
+  const returnToConversation = page.getByRole("button", { name: "返回对话" });
+  if (await returnToConversation.isVisible()) await returnToConversation.click();
   const refresh = page.getByLabel("上下文刷新");
   const visible = await refresh
     .waitFor({ state: "visible", timeout: 3_000 })

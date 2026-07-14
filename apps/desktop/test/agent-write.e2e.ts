@@ -34,7 +34,7 @@ test("proposal stays unwritten, partial selection creates a revision, and double
     const before = await readFile(chapterPath, "utf8");
     await startExecution(scenario.page);
 
-    await expect(scenario.page.getByLabel("Change Set 摘要")).toContainText("尚未写入");
+    await expect(scenario.page.getByLabel("变更集差异审阅")).toContainText("尚未写入");
     await expect(scenario.page.getByLabel("变更集差异审阅")).toBeVisible();
     expect(await readFile(chapterPath, "utf8")).toBe(before);
     expect(await readTransactionJournals(scenario.projectRoot)).toHaveLength(0);
@@ -75,7 +75,7 @@ test("base hash conflict disables apply and preserves the concurrent user edit",
 
     await expect.poll(async () => readFile(chapterPath, "utf8")).toBe(concurrent);
     expect(await readTransactionJournals(scenario.projectRoot)).toHaveLength(0);
-    await expect(scenario.page.getByLabel("Change Set 摘要")).toContainText("Base hash 冲突");
+    await expect(scenario.page.getByLabel("变更集差异审阅")).toContainText("Base hash 冲突");
     await expect(scenario.page.getByRole("button", { name: "应用所选" })).toBeDisabled();
   } finally {
     await scenario.close();
@@ -290,6 +290,7 @@ test("rolls back the first replacement when the second file replacement fails", 
   try {
     await startExecution(scenario.page);
     await scenario.page.getByRole("button", { name: "应用所选" }).click();
+    await scenario.page.getByRole("button", { name: "返回对话" }).click();
 
     await expect(scenario.page.getByRole("alert")).toContainText(
       "Agent writing failed and applied files were rolled back."
@@ -451,14 +452,19 @@ async function prepareProject(projectRoot: string): Promise<void> {
 
 async function startExecution(page: Page): Promise<void> {
   await page.getByLabel("活动栏").getByRole("button", { name: "AI 工作流" }).click();
+  const createConversation = page.getByRole("button", { name: "新建会话" }).first();
+  if (await createConversation.isVisible()) await createConversation.click();
   await page.getByLabel("运行模式").getByRole("button", { name: "执行" }).click();
-  await page.getByLabel("Agent 请求").fill("按候选修改章节");
-  await page.getByLabel("启动 Agent 运行").click();
+  const composer = page.getByLabel("会话输入区");
+  await composer.getByLabel("Agent 请求").fill("按候选修改章节");
+  await composer.getByLabel("启动 Agent 运行").click();
   await resolveContextRefreshIfVisible(page);
-  await expect(page.getByLabel("Change Set 摘要")).toBeVisible();
+  await expect(page.getByLabel("变更集差异审阅")).toBeVisible();
 }
 
 async function resolveContextRefreshIfVisible(page: Page): Promise<void> {
+  const returnToConversation = page.getByRole("button", { name: "返回对话" });
+  if (await returnToConversation.isVisible()) await returnToConversation.click();
   const refresh = page.getByLabel("上下文刷新");
   const refreshVisible = await refresh
     .waitFor({ state: "visible", timeout: 3_000 })

@@ -7,3 +7,20 @@ export {
   applyConfigWorkflowSemanticEdit,
   createConfigWorkflowGraphLayout
 } from "./config-studio-session.js";
+export { LEGACY_AGENT_CONVERSATION_ID } from "./agent-conversation-session.js";
+export type {
+  AgentConversationCommandResult,
+  AgentConversationDiagnostic,
+  AgentConversationListPage,
+  AgentConversationReadResult,
+  AgentConversationSearchHit,
+  AgentConversationSearchPage,
+  AgentConversationStatus,
+  AgentConversationSummary,
+  AgentConversationSummaryFreshness,
+  ChangeAgentConversationStatusCommand,
+  CreateAgentConversationCommand,
+  ListAgentConversationsQuery,
+  ReadAgentConversationQuery,
+  SearchAgentConversationsQuery
+} from "./agent-conversation-session.js";

@@ -79,6 +79,12 @@ describe("Electron security baseline", () => {
       "application:agent-run:undo",
       "application:agent-run:read",
       "application:agent-run:list",
+      "application:agent-conversation:create",
+      "application:agent-conversation:list",
+      "application:agent-conversation:read",
+      "application:agent-conversation:archive",
+      "application:agent-conversation:restore",
+      "application:agent-conversation:search",
       "application:chapter:load",
       "application:chapter:edit",
       "application:chapter:save",
@@ -109,6 +115,7 @@ describe("Electron security baseline", () => {
     expect(isApplicationIpcChannel("application:chapter:save")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-run:decide-change-set")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-run:undo")).toBe(true);
+    expect(isApplicationIpcChannel("application:agent-conversation:search")).toBe(true);
     expect(isApplicationIpcChannel("application:settings:list-model-profiles")).toBe(true);
     expect(isApplicationIpcChannel("application:settings:discover-models")).toBe(true);
     expect(isApplicationIpcChannel("application:story-bible:load")).toBe(true);

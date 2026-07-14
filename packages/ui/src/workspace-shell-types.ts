@@ -34,6 +34,7 @@ export interface WorkspaceShellProps {
   readonly fileEditor?: PlainFileEditorProps;
   readonly projectWorkflow?: ProjectWorkflowProps;
   readonly aiWritingWorkflow?: AiWritingWorkflowProps;
+  readonly agentConversationWorkspace?: AgentConversationWorkspaceShellProps;
   readonly search?: ProjectSearchProps;
   readonly settings?: ModelSettingsPanelProps;
   readonly studio?: ConfigStudioPanelProps;
@@ -54,6 +55,11 @@ export interface WorkspaceShellProps {
   readonly onNavigatorSearchQueryChange?: ((query: string) => void) | undefined;
   readonly onNavigatorExpandedSectionIdsChange?:
     ((sectionIds: readonly string[]) => void) | undefined;
+}
+
+export interface AgentConversationWorkspaceShellProps {
+  readonly navigator: AgentConversationNavigatorProps;
+  readonly view: AgentConversationViewProps;
 }
 
 export interface ProjectWorkflowProps {
@@ -244,6 +250,67 @@ export interface AiWritingConversationMessageProps {
   readonly role: "user" | "assistant";
   readonly content: string;
   readonly createdAtLabel: string;
+}
+
+export type AgentConversationFilter = "active" | "archived";
+
+export interface AgentConversationListItemProps {
+  readonly conversationId: string;
+  readonly title: string;
+  readonly status: AgentConversationFilter;
+  readonly updatedAtLabel: string;
+  readonly runCount: number;
+  readonly lastRunStatusLabel?: string;
+  readonly preview?: string;
+  readonly virtual?: true;
+  readonly canArchive?: boolean;
+  readonly archiveDisabledReason?: string;
+}
+
+export interface AgentConversationTurnProps {
+  readonly runId: string;
+  readonly userRequest: string;
+  readonly assistantText?: string;
+  readonly statusLabel: string;
+  readonly updatedAtLabel: string;
+}
+
+export interface AgentConversationDetailProps extends AgentConversationListItemProps {
+  readonly contextSummary?: string;
+  readonly turns: readonly AgentConversationTurnProps[];
+}
+
+export interface AgentConversationNavigatorProps {
+  readonly conversations: readonly AgentConversationListItemProps[];
+  readonly selectedConversationId?: string;
+  readonly activeConversationId?: string;
+  readonly searchQuery: string;
+  readonly filter: AgentConversationFilter;
+  readonly loading: boolean;
+  readonly busyConversationId?: string;
+  readonly errorMessage?: string;
+  readonly onSearchQueryChange: (query: string) => void;
+  readonly onFilterChange: (filter: AgentConversationFilter) => void;
+  readonly onCreate: () => void;
+  readonly onSelect: (conversationId: string) => void;
+  readonly onArchive: (conversationId: string) => void;
+  readonly onRestore: (conversationId: string) => void;
+}
+
+export interface AgentConversationViewProps {
+  readonly conversation?: AgentConversationDetailProps | undefined;
+  readonly activeConversationId?: string;
+  readonly activeConversationTitle?: string;
+  readonly agentRun?: AgentRunPanelProps;
+  readonly loading: boolean;
+  readonly errorMessage?: string;
+  readonly composerDisabled?: boolean;
+  readonly composerDisabledReason?: string;
+  readonly onCreate: () => void;
+  readonly onArchive: (conversationId: string) => void;
+  readonly onRestore: (conversationId: string) => void;
+  readonly onReturnToActive: () => void;
+  readonly onSend: (request: string) => void;
 }
 
 export interface AiSelectionReviewProps {

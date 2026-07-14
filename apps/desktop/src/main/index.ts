@@ -4,11 +4,13 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  createBootstrappedDefaultDesktopApplication,
+  createBootstrappedDefaultDesktopApplicationWithSnapshot,
   createProjectLockOwnerId,
   DEFAULT_FIXTURE_CHAPTER_ID
 } from "./application-composition.js";
-import { createDesktopAgentRunSession } from "./agent-run-runtime.js";
+import { createDesktopAgentRuntime } from "./agent-run-runtime.js";
+import { createDesktopAgentRuntimeManager } from "./agent-runtime-manager.js";
+import type { DesktopAgentRuntimeManager } from "./agent-runtime-manager.js";
 import { createAgentWriteSaveCoordinator, createApplicationIpcHandlers } from "./ipc-handlers.js";
 import { createApplicationMenuTemplate } from "./menu.js";
 import { createDesktopModelRuntime, createEncryptedFileModelSecretStore } from "./model-runtime.js";
@@ -19,6 +21,7 @@ import { createUnifiedError } from "@novel-studio/shared";
 
 const currentDirectory = fileURLToPath(new URL(".", import.meta.url));
 let activeDesktopApplication: DesktopApplication | undefined;
+let activeAgentRuntimeManager: DesktopAgentRuntimeManager | undefined;
 let shutdownInProgress = false;
 
 export async function registerApplicationIpcHandlers(): Promise<void> {
@@ -36,7 +39,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
   });
   const projectLockOwnerId = createProjectLockOwnerId();
   const agentWriteSaveCoordinator = createAgentWriteSaveCoordinator();
-  activeDesktopApplication = await createBootstrappedDefaultDesktopApplication({
+  const bootstrapped = await createBootstrappedDefaultDesktopApplicationWithSnapshot({
     projectRoot,
     userDataRoot,
     projectLockOwnerId,
@@ -44,65 +47,86 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     modelDiscoveryPort: modelRuntime.modelDiscoveryPort,
     createAiProvider: modelRuntime.createAiProvider
   });
+  activeDesktopApplication = bootstrapped.application;
   const failAgentWriteAt = readPositiveInteger(
     process.env["NOVEL_STUDIO_TEST_AGENT_WRITE_FAIL_AT"]
   );
-  const agentRunSession = createDesktopAgentRunSession({
-    projectRoot,
-    projectId: "prj_minimal_chapter",
-    activeChapterId: DEFAULT_FIXTURE_CHAPTER_ID,
-    projectLockOwnerId,
-    pauseAutosave: agentWriteSaveCoordinator.pauseAutosave,
-    resumeAutosave: agentWriteSaveCoordinator.resumeAutosave,
-    ...(failAgentWriteAt === undefined ? {} : { failAgentWriteAt }),
-    createAgentModelDriver: modelRuntime.createAgentModelDriver,
-    readEditorBuffer: async (refId) => {
-      const chapterId = refId.startsWith("chapter:") ? refId.slice("chapter:".length) : undefined;
-      if (chapterId === undefined || activeDesktopApplication === undefined) return undefined;
-      const activeChapter = await activeDesktopApplication.readActiveChapterState();
-      return activeChapter.ok && activeChapter.value.state.chapter.frontmatter.id === chapterId
-        ? activeChapter.value.state.chapter.body
-        : undefined;
-    },
-    readEditorState: async (relativePath) => {
-      const match = /^chapters\/([A-Za-z0-9_-]+)\.md$/.exec(relativePath);
-      if (match?.[1] === undefined || activeDesktopApplication === undefined) return undefined;
-      const activeChapter = await activeDesktopApplication.readActiveChapterState();
-      if (!activeChapter.ok || activeChapter.value.state.chapter.frontmatter.id !== match[1]) {
-        return undefined;
-      }
-      return {
-        dirty: activeChapter.value.state.dirty,
-        content: activeChapter.value.state.chapter.body
-      };
-    },
-    syncSavedEditor: async (relativePath, options) => {
-      await syncSavedEditorForPath(activeDesktopApplication, relativePath, options);
-    },
-    resolveModelProfile: async (profileId) => {
-      const profiles = await activeDesktopApplication?.listModelProfiles();
-      if (profiles === undefined || !profiles.ok) return undefined;
-      const profile = profiles.value.profiles.find((entry) => entry.id === profileId);
-      if (profile === undefined) return undefined;
-      const modelProfile: LlmModelProfile = {
-        id: profile.id,
-        provider: profile.provider as LlmProviderId,
-        displayName: profile.displayName,
-        modelName: profile.modelName,
-        ...(profile.baseUrl === undefined ? {} : { baseUrl: profile.baseUrl }),
-        ...(profile.apiKeyRef.length === 0 ? {} : { apiKeyRef: profile.apiKeyRef }),
-        timeoutMs: profile.timeoutMs
-      };
-      return {
-        modelProfile,
-        parameters: {
-          temperature: profile.temperature,
-          maxTokens: profile.maxTokens,
-          ...(profile.topP === undefined ? {} : { topP: profile.topP })
+  const agentRuntimeManager = createDesktopAgentRuntimeManager({
+    createRuntime: (binding) =>
+      createDesktopAgentRuntime({
+        projectRoot: binding.projectRoot,
+        projectId: binding.projectId,
+        activeChapterId: binding.activeChapterId,
+        projectLockOwnerId,
+        pauseAutosave: agentWriteSaveCoordinator.pauseAutosave,
+        resumeAutosave: agentWriteSaveCoordinator.resumeAutosave,
+        ...(failAgentWriteAt === undefined ? {} : { failAgentWriteAt }),
+        createAgentModelDriver: modelRuntime.createAgentModelDriver,
+        readEditorBuffer: async (refId) => {
+          const chapterId = refId.startsWith("chapter:")
+            ? refId.slice("chapter:".length)
+            : undefined;
+          if (chapterId === undefined || activeDesktopApplication === undefined) return undefined;
+          const activeChapter = await activeDesktopApplication.readActiveChapterState();
+          return activeChapter.ok && activeChapter.value.state.chapter.frontmatter.id === chapterId
+            ? activeChapter.value.state.chapter.body
+            : undefined;
+        },
+        readEditorState: async (relativePath) => {
+          const match = /^chapters\/([A-Za-z0-9_-]+)\.md$/.exec(relativePath);
+          if (match?.[1] === undefined || activeDesktopApplication === undefined) return undefined;
+          const activeChapter = await activeDesktopApplication.readActiveChapterState();
+          if (!activeChapter.ok || activeChapter.value.state.chapter.frontmatter.id !== match[1]) {
+            return undefined;
+          }
+          return {
+            dirty: activeChapter.value.state.dirty,
+            content: activeChapter.value.state.chapter.body
+          };
+        },
+        syncSavedEditor: async (relativePath, options) => {
+          await syncSavedEditorForPath(activeDesktopApplication, relativePath, options);
+        },
+        resolveModelProfile: async (profileId) => {
+          const profiles = await activeDesktopApplication?.listModelProfiles();
+          if (profiles === undefined || !profiles.ok) return undefined;
+          const profile = profiles.value.profiles.find((entry) => entry.id === profileId);
+          if (profile === undefined) return undefined;
+          const modelProfile: LlmModelProfile = {
+            id: profile.id,
+            provider: profile.provider as LlmProviderId,
+            displayName: profile.displayName,
+            modelName: profile.modelName,
+            ...(profile.baseUrl === undefined ? {} : { baseUrl: profile.baseUrl }),
+            ...(profile.apiKeyRef.length === 0 ? {} : { apiKeyRef: profile.apiKeyRef }),
+            timeoutMs: profile.timeoutMs
+          };
+          return {
+            modelProfile,
+            parameters: {
+              temperature: profile.temperature,
+              maxTokens: profile.maxTokens,
+              ...(profile.topP === undefined ? {} : { topP: profile.topP })
+            }
+          };
         }
-      };
-    }
+      })
   });
+  const initialBinding = await agentRuntimeManager.bindProject({
+    projectId: bootstrapped.workspace.project.projectId,
+    projectRoot: bootstrapped.workspace.projectRoot,
+    activeChapterId:
+      bootstrapped.workspace.activeChapterId ??
+      bootstrapped.workspace.chapters[0]?.id ??
+      DEFAULT_FIXTURE_CHAPTER_ID
+  });
+  if (!initialBinding.ok) {
+    agentRuntimeManager.dispose();
+    await activeDesktopApplication.shutdown();
+    activeDesktopApplication = undefined;
+    throw new Error(initialBinding.error.message);
+  }
+  activeAgentRuntimeManager = agentRuntimeManager;
   const handlers = createApplicationIpcHandlers(activeDesktopApplication, {
     chooseOpenProjectDirectory: () => chooseProjectDirectory("Open Novel Studio project"),
     chooseCreateProjectDirectory: () => chooseProjectDirectory("Create Novel Studio project"),
@@ -114,7 +138,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         }
       }
     },
-    agentRunSession,
+    agentRuntimeManager,
     agentWriteSaveCoordinator,
     publishAgentRunEvent: (event) => {
       for (const window of BrowserWindow.getAllWindows()) {
@@ -176,6 +200,8 @@ export async function syncSavedEditorForPath(
 }
 
 export async function shutdownDesktopApplication(): Promise<void> {
+  activeAgentRuntimeManager?.dispose();
+  activeAgentRuntimeManager = undefined;
   const application = activeDesktopApplication;
   activeDesktopApplication = undefined;
   if (application !== undefined) {

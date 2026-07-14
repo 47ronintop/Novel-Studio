@@ -13,13 +13,164 @@ afterEach(async () => {
   await Promise.all(
     roots
       .splice(0)
-      .map((root) =>
-        rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
-      )
+      .map((root) => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }))
   );
 });
 
 describe("desktop Agent Run runtime", () => {
+  test("binds strict Conversation and Run persistence to the selected project root", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-conversation-"));
+    roots.push(projectRoot);
+    await mkdir(join(projectRoot, "chapters"), { recursive: true });
+    const chapterId = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D1";
+    await writeFile(
+      join(projectRoot, "chapters", `${chapterId}.md`),
+      `---\nschemaVersion: "1.0"\nid: ${chapterId}\ntype: chapter\ntitle: Opening\norder: 1\nstatus: draft\ncreatedAt: "2026-07-14T00:00:00.000Z"\nupdatedAt: "2026-07-14T00:00:00.000Z"\n---\n\nChapter body.\n`,
+      "utf8"
+    );
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      projectRoot,
+      projectId: "project-01",
+      activeChapterId: chapterId,
+      createRunId: () => "run-strict-conversation"
+    });
+
+    const created = await runtime.agentConversationSession.createConversation({
+      projectId: "project-01",
+      commandId: "create-strict-conversation"
+    });
+    expect(created).toMatchObject({ ok: true });
+    if (!created.ok) return;
+    const conversationId = created.value.conversationId;
+    expect(
+      await runtime.agentRunSession.startAgentRun(
+        strictPlanningCommand(conversationId, "start-strict-conversation")
+      )
+    ).toMatchObject({ ok: true });
+    await vi.waitFor(async () => {
+      expect(await runtime.agentRunSession.readAgentRun("run-strict-conversation")).toMatchObject({
+        ok: true,
+        value: { snapshot: { conversationId, status: "plan_ready" } }
+      });
+    });
+    expect(
+      JSON.parse(
+        await readFile(
+          join(projectRoot, "history", "conversations", conversationId, "conversation.json"),
+          "utf8"
+        )
+      )
+    ).toMatchObject({ projectId: "project-01", conversationId });
+    expect(
+      JSON.parse(
+        await readFile(
+          join(projectRoot, "history", "agent-runs", "run-strict-conversation", "run.json"),
+          "utf8"
+        )
+      )
+    ).toMatchObject({ projectId: "project-01", conversationId });
+
+    const archived = await runtime.agentConversationSession.createConversation({
+      projectId: "project-01",
+      commandId: "create-archived-conversation"
+    });
+    expect(archived).toMatchObject({ ok: true });
+    if (!archived.ok) return;
+    expect(
+      await runtime.agentConversationSession.archiveConversation({
+        projectId: "project-01",
+        conversationId: archived.value.conversationId,
+        commandId: "archive-strict-conversation",
+        expectedConversationRevision: archived.value.revision
+      })
+    ).toMatchObject({ ok: true, value: { status: "archived" } });
+    expect(
+      await runtime.agentRunSession.startAgentRun(
+        strictPlanningCommand(archived.value.conversationId, "start-archived-conversation")
+      )
+    ).toMatchObject({ ok: false });
+    expect(
+      await runtime.agentRunSession.startAgentRun(
+        strictPlanningCommand("conversation-missing", "start-missing-conversation")
+      )
+    ).toMatchObject({ ok: false });
+  });
+
+  test("injects and indexes persisted context from earlier runs in the same conversation", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-context-"));
+    roots.push(projectRoot);
+    const runIds = ["run-context-first", "run-context-second"];
+    const roundMessages: Array<readonly { readonly role: string; readonly content: string }[]> = [];
+    let round = 0;
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      projectRoot,
+      projectId: "project-01",
+      activeChapterId: "chapter-unused",
+      createRunId: () => runIds.shift() ?? "run-context-extra",
+      modelDriver: {
+        async *streamRound(input: {
+          readonly messages: readonly { readonly role: string; readonly content: string }[];
+        }) {
+          round += 1;
+          roundMessages.push(input.messages);
+          yield { type: "assistant_text_delta", delta: `Answer ${String(round)}` };
+          yield runtimeToolCall(`finish-context-${String(round)}`, "finish", {
+            summary: `Context summary ${String(round)}`
+          });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+    const created = await runtime.agentConversationSession.createConversation({
+      projectId: "project-01",
+      commandId: "create-context-conversation"
+    });
+    expect(created).toMatchObject({ ok: true });
+    if (!created.ok) return;
+
+    await runtime.agentRunSession.startAgentRun({
+      ...executionCommand("general_file"),
+      conversationId: created.value.conversationId,
+      commandId: "start-context-first",
+      userRequest: "Remember the lantern clue."
+    });
+    await vi.waitFor(async () => {
+      expect(await runtime.agentRunSession.readAgentRun("run-context-first")).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+
+    await runtime.agentRunSession.startAgentRun({
+      ...executionCommand("general_file"),
+      conversationId: created.value.conversationId,
+      commandId: "start-context-second",
+      userRequest: "Continue from the clue."
+    });
+    await vi.waitFor(() => expect(roundMessages).toHaveLength(2), { timeout: 5_000 });
+
+    expect(roundMessages[1]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "system",
+          content: expect.stringContaining("Untrusted conversation context")
+        })
+      ])
+    );
+    expect(roundMessages[1]?.map((message) => message.content).join("\n")).toContain(
+      "Remember the lantern clue."
+    );
+
+    const searched = await runtime.agentConversationSession.searchConversations({
+      projectId: "project-01",
+      query: "lantern"
+    });
+    expect(searched).toMatchObject({
+      ok: true,
+      value: { items: [expect.objectContaining({ conversationId: created.value.conversationId })] }
+    });
+  });
+
   test("stages a chapter proposal using the exact content and checksum returned by read_chapter", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-agent-read-propose-"));
     roots.push(projectRoot);
@@ -104,6 +255,7 @@ describe("desktop Agent Run runtime", () => {
     });
     await session.startAgentRun({
       projectId: "project-01",
+      conversationId: "conv-desktop-plan",
       commandId: "start-desktop-plan",
       expectedRunRevision: 0,
       operationMode: "planning",
@@ -430,7 +582,10 @@ describe("desktop Agent Run runtime", () => {
     let revision = 0;
     await vi.waitFor(async () => {
       const read = await session.readAgentRun("run-desktop-dirty-undo");
-      expect(read).toMatchObject({ ok: true, value: { snapshot: { status: "awaiting_write_approval" } } });
+      expect(read).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "awaiting_write_approval" } }
+      });
       const value = read as {
         value: { snapshot: { runRevision: number }; changeSet: Record<string, unknown> };
       };
@@ -457,7 +612,7 @@ describe("desktop Agent Run runtime", () => {
     const agentFile = await readFile(chapterPath, "utf8");
     expect(agentFile).toContain("Revised chapter body.");
     editorDirty = true;
-    const completed = await session.readAgentRun("run-desktop-dirty-undo") as {
+    const completed = (await session.readAgentRun("run-desktop-dirty-undo")) as {
       value: { snapshot: { runRevision: number } };
     };
 
@@ -639,6 +794,7 @@ function executionCommand(
 ): Record<string, unknown> {
   return {
     projectId: "project-01",
+    conversationId: "conv-desktop",
     commandId: "start-desktop-write",
     expectedRunRevision: 0,
     operationMode: "execution",
@@ -655,6 +811,16 @@ function executionCommand(
       contextWindow: 128000,
       requiredContextTokens: 8000
     }
+  };
+}
+
+function strictPlanningCommand(conversationId: string, commandId: string) {
+  return {
+    ...executionCommand(),
+    conversationId,
+    commandId,
+    operationMode: "planning" as const,
+    userRequest: "Review the active chapter and prepare a plan."
   };
 }
 

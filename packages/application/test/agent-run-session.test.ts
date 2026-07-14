@@ -143,6 +143,7 @@ describe("AgentRunSession", () => {
     expect(publishedTypes).toEqual([
       "run_started",
       "assistant_text_delta",
+      "assistant_text_completed",
       "tool_started",
       "tool_completed",
       "tool_started",
@@ -986,9 +987,25 @@ describe("AgentRunSession", () => {
     if (typeof createSession !== "function") return;
 
     let runs = 0;
+    const notedRunIds: string[] = [];
     const session = (createSession as (options: Record<string, unknown>) => unknown)({
       coordinatorOptions: { createRunId: () => `run_plan_${++runs}` },
       repository: memoryRepository(),
+      conversationLifecycle: {
+        async assertRunMayStart() {
+          return { ok: true, value: {} };
+        },
+        async loadContext() {
+          return { ok: true, value: [] };
+        },
+        async noteRunStarted(snapshot: Record<string, unknown>) {
+          notedRunIds.push(String(snapshot["runId"]));
+          return { ok: true, value: undefined };
+        },
+        async noteRunTerminal() {
+          return { ok: true, value: undefined };
+        }
+      },
       modelDriver: {
         async *streamRound(input: { readonly snapshot: Record<string, unknown> }) {
           if (input.snapshot["sourcePlanId"] === "plan-01") {
@@ -1076,6 +1093,7 @@ describe("AgentRunSession", () => {
     expect(decided).toMatchObject({
       ok: true,
       value: {
+        conversationId: "conv-01",
         sourcePlanId: "plan-01",
         sourcePlanRevision: 1,
         operationMode: "execution",
@@ -1083,6 +1101,7 @@ describe("AgentRunSession", () => {
         writePolicy: "user_preapproved_run"
       }
     });
+    expect(notedRunIds).toEqual(["run_plan_1", "run_plan_2"]);
     await vi.waitFor(async () => {
       expect(await session.readAgentRun(planningRunId)).toMatchObject({
         ok: true,
@@ -1652,6 +1671,230 @@ describe("AgentRunSession", () => {
       })
     ]);
   });
+
+  test("validates a conversation before persisting a new run", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+    let snapshotWrites = 0;
+    const session = (createSession as (options: Record<string, unknown>) => unknown)({
+      repository: {
+        ...memoryRepository(),
+        async writeSnapshot(snapshot: Record<string, unknown>) {
+          snapshotWrites += 1;
+          return { ok: true, value: snapshot };
+        }
+      },
+      conversationLifecycle: {
+        async assertRunMayStart() {
+          return { ok: false, error: { code: "AGENT_CONVERSATION_ARCHIVED" } };
+        },
+        async loadContext() {
+          throw new Error("Context must not load after validation fails.");
+        },
+        async noteRunStarted() {
+          throw new Error("A rejected run must not be noted.");
+        },
+        async noteRunTerminal() {
+          throw new Error("A rejected run cannot terminate.");
+        }
+      },
+      modelDriver: { streamRound: blockedModelRound },
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "ok", data: {} } };
+        }
+      }
+    }) as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+    };
+
+    expect(await session.startAgentRun(startCommand())).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONVERSATION_ARCHIVED" }
+    });
+    expect(snapshotWrites).toBe(0);
+  });
+
+  test("releases the conversation start reservation when context loading fails", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+    let cancellations = 0;
+    const session = (createSession as (options: Record<string, unknown>) => unknown)({
+      repository: memoryRepository(),
+      conversationLifecycle: {
+        async assertRunMayStart() {
+          return { ok: true, value: {} };
+        },
+        async cancelRunStart() {
+          cancellations += 1;
+          return { ok: true, value: undefined };
+        },
+        async loadContext() {
+          return { ok: false, error: { code: "AGENT_CONVERSATION_SUMMARY_UNAVAILABLE" } };
+        },
+        async noteRunStarted() {
+          throw new Error("A failed start must not be noted.");
+        },
+        async noteRunTerminal() {
+          throw new Error("A failed start cannot terminate.");
+        }
+      },
+      modelDriver: { streamRound: blockedModelRound },
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "ok", data: {} } };
+        }
+      }
+    }) as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+    };
+
+    expect(await session.startAgentRun(startCommand())).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONVERSATION_SUMMARY_UNAVAILABLE" }
+    });
+    expect(cancellations).toBe(1);
+  });
+
+  test("injects conversation data before the request and preserves a run when metadata repair fails", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+    const order: string[] = [];
+    let observedMessages: readonly Record<string, unknown>[] = [];
+    const repository = durableMemoryRepository();
+    const session = (createSession as (options: Record<string, unknown>) => unknown)({
+      coordinatorOptions: { createRunId: () => "run_conversation_context" },
+      repository: {
+        ...repository,
+        async writeSnapshot(snapshot: Record<string, unknown>) {
+          order.push("persist-run");
+          return repository.writeSnapshot(snapshot);
+        }
+      },
+      conversationLifecycle: {
+        async assertRunMayStart() {
+          order.push("validate-conversation");
+          return { ok: true, value: {} };
+        },
+        async loadContext() {
+          order.push("load-context");
+          return {
+            ok: true,
+            value: [
+              { role: "user", content: "Earlier request" },
+              { role: "assistant", content: "Earlier answer" }
+            ]
+          };
+        },
+        async noteRunStarted() {
+          order.push("note-started");
+          return { ok: false, error: { code: "AGENT_CONVERSATION_METADATA_REPAIR_REQUIRED" } };
+        },
+        async noteRunTerminal() {
+          order.push("note-terminal");
+          return { ok: true, value: undefined };
+        }
+      },
+      modelDriver: {
+        async *streamRound(input: { readonly messages: readonly Record<string, unknown>[] }) {
+          observedMessages = input.messages;
+          yield { type: "assistant_text_delta", delta: "Current answer" };
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "ok", data: {} } };
+        }
+      }
+    }) as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+
+    const started = await session.startAgentRun(startCommand());
+    expect(started).toMatchObject({
+      ok: true,
+      value: { runId: "run_conversation_context", conversationId: "conv-01" }
+    });
+    expect(order.indexOf("validate-conversation")).toBeLessThan(order.indexOf("persist-run"));
+    expect(order.indexOf("persist-run")).toBeLessThan(order.indexOf("note-started"));
+
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_conversation_context")).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+    expect(observedMessages[0]).toMatchObject({
+      role: "system",
+      content: expect.stringContaining("Untrusted conversation context")
+    });
+    expect(String(observedMessages[0]?.["content"])).toContain("Earlier request");
+    expect(observedMessages.at(-1)).toMatchObject({
+      role: "user",
+      content: "核对第 3 章的人物动机。"
+    });
+    expect(order).toContain("note-terminal");
+  });
+
+  test("normalizes legacy conversation ownership in public run lists", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+    const legacySnapshot = {
+      schemaVersion: "1.0",
+      runId: "run_legacy_list",
+      projectId: "project-01",
+      operationMode: "planning",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      userRequest: "Legacy request",
+      status: "completed",
+      runRevision: 2,
+      lastSequence: 2,
+      startedAt: "2026-07-13T00:00:00.000Z",
+      updatedAt: "2026-07-13T00:00:01.000Z",
+      limits: { maxModelRounds: 20, maxToolCalls: 50, maxConsecutiveToolFailures: 3 },
+      providerCapabilitySnapshot: startCommand()["providerCapabilitySnapshot"],
+      pendingUserInputId: null,
+      contextSnapshotId: null,
+      sourcePlanId: null,
+      sourcePlanRevision: null
+    };
+    const session = (createSession as (options: Record<string, unknown>) => unknown)({
+      repository: {
+        ...memoryRepository(),
+        async listSnapshots() {
+          return { ok: true, value: [legacySnapshot] };
+        }
+      },
+      modelDriver: { streamRound: blockedModelRound },
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "ok", data: {} } };
+        }
+      }
+    }) as {
+      listAgentRuns(projectId: string): Promise<Record<string, unknown>>;
+    };
+
+    expect(await session.listAgentRuns("project-01")).toMatchObject({
+      ok: true,
+      value: [{ runId: "run_legacy_list", conversationId: null }]
+    });
+  });
 });
 
 function toolCall(toolCallId: string, name: string, argumentsValue: Record<string, unknown>) {
@@ -1676,6 +1919,7 @@ async function* unexpectedModelRound(message: string) {
 function startCommand(): Record<string, unknown> {
   return {
     projectId: "project-01",
+    conversationId: "conv-01",
     commandId: "start-01",
     expectedRunRevision: 0,
     operationMode: "execution",
