@@ -6,12 +6,12 @@
 
 ## 1. 背景与结论
 
-Stage 0 至 Stage 4 已经建立了 Agent Run、Context Snapshot、Plan Artifact、Change Set、Version Group、Conversation 和 Electron E2E 基础。下一阶段不再扩展新的写入能力，而是补齐 Agent 在长篇项目中的上下文生命周期、权限可见性、计划执行反馈、错误诊断和用量分析。
+Stage 0 至 Stage 4 已经建立了 Agent Run、Context Snapshot、只读规划模式、Plan Artifact、plan-to-execution handoff、Change Set、Version Group、Conversation 和 Electron E2E 基础。下一阶段不再扩展新的写入能力，也不重新实现规划模式，而是补齐 Agent 在长篇项目中的上下文生命周期、权限可见性、计划执行反馈、错误诊断和用量分析。
 
 本方案把 Stage 5 拆成三个连续但可独立验收的子阶段：
 
 - **Stage 5A：Context Runtime**：写作/通用文件上下文、显式引用、上下文计量、手动压缩和自动压缩。
-- **Stage 5B：Permission and Plan Control**：能力边界摘要、确认/自动执行策略、Plan Mode 执行进度和偏离审批。
+- **Stage 5B：Permission and Plan Execution Control**：能力边界摘要、确认/自动执行策略，以及现有 Plan Mode 的执行进度和偏离审批增强。
 - **Stage 5C：Diagnostics and Usage**：分层错误处理、可复制诊断、单次 run 用量和设置页日用量图。
 
 三个子阶段共享同一个 `AgentRunEvent`、`AgentRunSnapshot` 和 `Context Snapshot` 合同。Stage 5 不改变 Stage 2-3 的 Change Set、Version Group、事务 journal、冲突处理和 run undo 语义。
@@ -24,7 +24,7 @@ Stage 0 至 Stage 4 已经建立了 Agent Run、Context Snapshot、Plan Artifact
 - 在输入区附近显示当前上下文使用量、估算精度和压缩入口。
 - 在达到预算阈值时自动压缩；用户也可以随时手动压缩。
 - 清晰区分“系统能力边界”和“本次写入审批策略”，避免把自动写入误解为扩大权限。
-- 把规划模式做成真正的只读 Plan Mode，并持续报告计划执行步骤、偏离、阻塞和验证结果。
+- 保持 Stage 1 已实现的只读规划模式和 plan-to-execution handoff，并补充计划执行步骤、偏离、阻塞和验证结果。
 - 把错误变成可恢复的操作，而不是只显示一句失败文本。
 - 在设置页提供按日、provider、model、项目的 token 用量和成本趋势，同时在 run 内显示即时用量。
 
@@ -49,7 +49,7 @@ Stage 0 至 Stage 4 已经建立了 Agent Run、Context Snapshot、Plan Artifact
 | 上下文模式 | `writing` / `general_file` | 初始上下文、提示规则和可见读取工具 |
 | 写入策略 | `write_before_confirmation` / `user_preapproved_run` | Change Set 如何获得批准 |
 
-规划模式永远只读，不显示或接受自动写入策略。上下文模式不改变安全级别；写作模式和通用文件模式都受同一 Path Guard、工具注册表和 Repository 边界约束。UI 延续 Stage 1-4 的“通用文件”名称，不另引入“普通文件”模式标识。
+Stage 1 已实现的规划模式继续保持只读，不显示或接受自动写入策略。上下文模式不改变安全级别；写作模式和通用文件模式都受同一 Path Guard、工具注册表和 Repository 边界约束。UI 延续 Stage 1-4 的“通用文件”名称，不另引入“普通文件”模式标识。
 
 ### 4.2 能力边界与审批策略分离
 
@@ -208,7 +208,7 @@ Composer 顶部显示：
 
 当前 run 的压缩事件显示在时间线中，但不播报每个 token。压缩不改变 Conversation 原始 transcript，也不删除历史 run。
 
-## 6. Stage 5B：Permission and Plan Control
+## 6. Stage 5B：Permission and Plan Execution Control
 
 ### 6.1 权限摘要
 
@@ -235,11 +235,11 @@ Agent Run 面板在开始前和运行中显示“本次权限摘要”：
 
 权限摘要中的“可读/可提案/可写入”三个范围必须与 Tool Registry、Approval Gate 和 Version Group 的实际能力一致；任何不一致都阻止 run 创建。
 
-### 6.3 Plan Mode 与执行模式
+### 6.3 现有 Plan Mode 合同保持不变
 
-规划模式对应 Codex 等工具的 Plan Mode，但在 Novel Studio 中必须产出结构化 Plan Artifact，而不是只显示一段自然语言计划。
+Stage 1 已实现 Novel Studio 的只读 Plan Mode：规划 run 使用读取工具调查上下文，通过 `finish_plan` 产出结构化 Plan Artifact，用户批准后创建新的 execution run 并绑定 `sourcePlanId/sourcePlanRevision`。Stage 5 不重建或替换这条链路。
 
-规划模式：
+以下既有合同保持不变并纳入 Stage 5 回归门：
 
 - 只注册读取工具和 `finish_plan`、`request_user_input`；
 - 不注册任何 `propose_*` 或 apply 工具；
@@ -248,7 +248,7 @@ Agent Run 面板在开始前和运行中显示“本次权限摘要”：
 
 用户点击“按此方案执行”时冻结 plan revision，创建新的 execution run，携带 `sourcePlanId` 和 `sourcePlanRevision`，并再次选择上下文模式和写入策略。批准计划不等于批准实际 Change Set。
 
-### 6.4 计划步骤与偏离
+### 6.4 Stage 5 新增：计划执行步骤与偏离
 
 执行 run 为每个 Plan Artifact step 建立独立状态：
 
@@ -484,7 +484,7 @@ Stage 5 命令新增或扩展：
 - 压缩失败、重载和取消都不会让 run 永久停在 running。
 - Renderer 重载后 meter、引用、压缩 revision 与 snapshot 一致。
 
-### 11.2 Permission and Plan Control
+### 11.2 Permission and Plan Execution Control
 
 - 规划模式永远看不到 propose/apply 工具和自动写入策略。
 - 权限摘要与 Tool Registry、Approval Gate、Version Group 实际能力一致。
@@ -529,7 +529,7 @@ Stage 5 命令新增或扩展：
 
 ### Stage 5B Gate
 
-- Permission Summary、三轴模式、Plan Mode、执行步骤、偏离和权限隔离测试通过。
+- Permission Summary、三轴模式、既有 Plan Mode 回归、执行步骤、偏离和权限隔离测试通过。
 - 真实 Electron Playwright 覆盖规划、执行、计划修订、自动写入授权、权限摘要和 plan-step 状态。
 - Stage 2-4 的写入、undo、Conversation 和项目隔离回归通过。
 
@@ -550,10 +550,10 @@ Stage 5 命令新增或扩展：
 
 ## 14. 自审结论
 
-- 本方案覆盖上下文模式、上下文压缩、权限/审批、Plan Mode、错误处理和 Token 用量六类需求。
+- 本方案覆盖上下文模式、上下文压缩、权限/审批、现有 Plan Mode 的执行增强、错误处理和 Token 用量六类需求。
 - “上下文大小”同时定义为当前输入预算和 provider usage；两者不会混为一个不准确的百分比。
 - “自动执行”只改变当前 execution run 的审批来源，不改变安全能力边界。
-- 规划模式是协调器级只读状态；执行模式必须创建新的 run 并关联冻结的 plan revision。
+- Stage 1 的规划模式继续作为协调器级只读状态；Stage 5 只扩展新 execution run 对冻结 plan revision 的步骤跟踪和偏离控制。
 - 成本统计允许未知和估算，不假装提供供应商真实账单。
 - Context Snapshot/Event v1.1、旧 v1.0 读取兼容、引用 draft、权限 checksum、错误持久化和 usage 幂等键均有明确合同。
 - plan -> execution 的合法 handoff 与 execution 期间实质偏离已分开定义。
