@@ -60,6 +60,7 @@ export interface WorkspaceShellProps {
 export interface AgentConversationWorkspaceShellProps {
   readonly navigator: AgentConversationNavigatorProps;
   readonly view: AgentConversationViewProps;
+  readonly planReview?: AgentPlanReviewProps;
 }
 
 export interface ProjectWorkflowProps {
@@ -195,19 +196,43 @@ export interface AiWritingWorkflowProps {
   readonly onCancelStreaming: () => void;
 }
 
+export interface AgentComposerProps {
+  readonly request: string;
+  readonly operationMode: AgentOperationMode;
+  readonly contextMode: AgentContextMode;
+  readonly writePolicy: AgentWritePolicy;
+  readonly writePolicyAcknowledged: boolean;
+  readonly active: boolean;
+  readonly disabled?: boolean;
+  readonly disabledReason?: string;
+  readonly onRequestChange: (request: string) => void;
+  readonly onOperationModeChange: (mode: AgentOperationMode) => void;
+  readonly onContextModeChange: (mode: AgentContextMode) => void;
+  readonly onWritePolicyChange: (policy: AgentWritePolicy) => void;
+  readonly onWritePolicyAcknowledgedChange: (acknowledged: boolean) => void;
+  readonly onSend: (request: string) => void;
+  readonly onStop: () => void;
+}
+
+export interface AgentPlanReviewProps {
+  readonly contextMode: AgentContextMode;
+  readonly plan: PlanArtifact;
+  readonly onDecision: (
+    decision: "approve" | "reject",
+    execution?: AgentPlanExecutionOptions
+  ) => void;
+}
+
 export interface AgentRunPanelProps {
   readonly projectId: string;
   readonly runId?: string;
   readonly operationMode: AgentOperationMode;
   readonly contextMode: AgentContextMode;
   readonly writePolicy: AgentWritePolicy;
-  readonly writePolicyAcknowledged: boolean;
   readonly status: AgentRunStatus | "idle";
-  readonly userRequest: string;
   readonly assistantText: string;
   readonly events: readonly AgentRunEvent[];
   readonly pendingUserInput?: AgentRunPendingUserInputProps;
-  readonly planArtifact?: PlanArtifact;
   readonly errorMessage?: string;
   readonly providerLabel?: string;
   readonly contextSourceNotice?: string;
@@ -215,20 +240,10 @@ export interface AgentRunPanelProps {
   readonly rollbackReview?: RollbackReviewProps;
   readonly canUndoRun?: boolean;
   readonly onUndoRun?: () => void;
-  readonly onOperationModeChange: (mode: AgentOperationMode) => void;
-  readonly onContextModeChange: (mode: AgentContextMode) => void;
-  readonly onWritePolicyChange: (policy: AgentWritePolicy) => void;
-  readonly onWritePolicyAcknowledgedChange: (acknowledged: boolean) => void;
-  readonly onSend: (request: string) => void;
-  readonly onStop: () => void;
   readonly onAnswerUserInput: (answer: string) => void;
   readonly onResume: () => void;
   readonly onRetryStep: () => void;
   readonly onRefreshContext: (decision: "refresh" | "exclude" | "cancel") => void;
-  readonly onDecidePlan: (
-    decision: "approve" | "reject",
-    execution?: AgentPlanExecutionOptions
-  ) => void;
 }
 
 export interface AgentPlanExecutionOptions {
@@ -302,15 +317,13 @@ export interface AgentConversationViewProps {
   readonly activeConversationId?: string;
   readonly activeConversationTitle?: string;
   readonly agentRun?: AgentRunPanelProps;
+  readonly composer?: AgentComposerProps;
   readonly loading: boolean;
   readonly errorMessage?: string;
-  readonly composerDisabled?: boolean;
-  readonly composerDisabledReason?: string;
   readonly onCreate: () => void;
   readonly onArchive: (conversationId: string) => void;
   readonly onRestore: (conversationId: string) => void;
   readonly onReturnToActive: () => void;
-  readonly onSend: (request: string) => void;
 }
 
 export interface AiSelectionReviewProps {

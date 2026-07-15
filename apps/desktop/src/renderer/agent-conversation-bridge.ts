@@ -8,9 +8,11 @@ import type {
   NovelStudioApi
 } from "@novel-studio/application";
 import type {
+  AgentComposerProps,
   AgentConversationDetailProps,
   AgentConversationListItemProps,
   AgentConversationWorkspaceShellProps,
+  AgentPlanReviewProps,
   AgentRunPanelProps
 } from "@novel-studio/ui";
 
@@ -53,7 +55,6 @@ export interface AgentConversationWorkspaceActions {
   readonly onSearchQueryChange: (query: string) => void;
   readonly onFilterChange: (filter: "active" | "archived") => void;
   readonly onReturnToActive: () => void;
-  readonly onSend: (request: string) => void;
 }
 
 interface BridgeState {
@@ -429,6 +430,8 @@ function toProps(state: BridgeState): AgentConversationWorkspaceProps {
 export function toAgentConversationWorkspaceProps(
   state: AgentConversationWorkspaceProps,
   agentRun: AgentRunPanelProps | undefined,
+  composer: AgentComposerProps | undefined,
+  planReview: AgentPlanReviewProps | undefined,
   actions: AgentConversationWorkspaceActions
 ): AgentConversationWorkspaceShellProps {
   const conversations = state.conversations.map((conversation) =>
@@ -443,6 +446,7 @@ export function toAgentConversationWorkspaceProps(
   )?.title;
 
   return {
+    ...(planReview === undefined ? {} : { planReview }),
     navigator: {
       conversations,
       ...(state.selectedConversationId === undefined
@@ -469,13 +473,13 @@ export function toAgentConversationWorkspaceProps(
         : { activeConversationId: state.activeConversationId }),
       ...(activeConversationTitle === undefined ? {} : { activeConversationTitle }),
       ...(agentRun === undefined ? {} : { agentRun }),
+      ...(composer === undefined ? {} : { composer }),
       loading: state.loading,
       ...(state.errorMessage === undefined ? {} : { errorMessage: state.errorMessage }),
       onCreate: actions.onCreate,
       onArchive: actions.onArchive,
       onRestore: actions.onRestore,
-      onReturnToActive: actions.onReturnToActive,
-      onSend: actions.onSend
+      onReturnToActive: actions.onReturnToActive
     }
   };
 }

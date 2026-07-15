@@ -19,15 +19,29 @@ describe("AgentConversationBridge", () => {
     ]);
     const bridge = createAgentConversationBridge(fixture.api);
     const state = await bridge.load("project_01");
-    const workspace = toAgentConversationWorkspaceProps(state, undefined, {
+    const composer = {
+      request: "",
+      operationMode: "execution" as const,
+      contextMode: "writing" as const,
+      writePolicy: "write_before_confirmation" as const,
+      writePolicyAcknowledged: false,
+      active: false,
+      onRequestChange: () => undefined,
+      onOperationModeChange: () => undefined,
+      onContextModeChange: () => undefined,
+      onWritePolicyChange: () => undefined,
+      onWritePolicyAcknowledgedChange: () => undefined,
+      onSend: () => undefined,
+      onStop: () => undefined
+    };
+    const workspace = toAgentConversationWorkspaceProps(state, undefined, composer, undefined, {
       onCreate: () => undefined,
       onSelect: () => undefined,
       onArchive: () => undefined,
       onRestore: () => undefined,
       onSearchQueryChange: () => undefined,
       onFilterChange: () => undefined,
-      onReturnToActive: () => undefined,
-      onSend: () => undefined
+      onReturnToActive: () => undefined
     });
 
     expect(workspace.navigator.conversations[0]).toMatchObject({
@@ -37,6 +51,7 @@ describe("AgentConversationBridge", () => {
       runCount: 1
     });
     expect(workspace.navigator.selectedConversationId).toBe("conv_01");
+    expect(workspace.view.composer).toBe(composer);
     expect(workspace.view.conversation?.turns).toEqual([
       expect.objectContaining({ runId: "run_01", userRequest: "Request for conv_01" })
     ]);

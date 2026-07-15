@@ -119,6 +119,8 @@ describe("Agent Run renderer bridge", () => {
     await bridge.send("run in the first conversation");
     expect(bridge.getProps()).toMatchObject({
       runId: "run-bridge",
+    });
+    expect(bridge.getComposerProps()).toMatchObject({
       writePolicy: "write_before_confirmation"
     });
 
@@ -127,7 +129,12 @@ describe("Agent Run renderer bridge", () => {
       conversationId: "conversation-02",
       settings
     });
-    expect(next).toMatchObject({ status: "idle", writePolicy: "write_before_confirmation" });
+    expect(next).toMatchObject({ status: "idle" });
+    expect(bridge.getComposerProps()).toMatchObject({
+      request: "",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false
+    });
     expect(next.runId).toBeUndefined();
   });
 
@@ -179,15 +186,16 @@ describe("Agent Run renderer bridge", () => {
       }
     });
     const bridge = createAgentRunBridge(api);
-    let props = bridge.syncContext({
+    bridge.syncContext({
       projectId: "project-01",
       conversationId: "conversation-01",
       settings
     });
-    props.onOperationModeChange("execution");
-    props = bridge.getProps() ?? props;
-    props.onWritePolicyChange("user_preapproved_run");
-    props.onWritePolicyAcknowledgedChange(true);
+    let composer = bridge.getComposerProps();
+    composer?.onOperationModeChange("execution");
+    composer = bridge.getComposerProps();
+    composer?.onWritePolicyChange("user_preapproved_run");
+    bridge.getComposerProps()?.onWritePolicyAcknowledgedChange(true);
 
     await bridge.send("自动修订当前章节");
 
@@ -249,20 +257,21 @@ describe("Agent Run renderer bridge", () => {
       }
     } as unknown as NovelStudioApi;
     const bridge = createAgentRunBridge(api);
-    let props = bridge.syncContext({
+    bridge.syncContext({
       projectId: "project-01",
       conversationId: "conversation-01",
       settings
     });
-    props.onOperationModeChange("execution");
-    props = bridge.getProps() ?? props;
-    props.onWritePolicyChange("user_preapproved_run");
-    props.onWritePolicyAcknowledgedChange(true);
+    let composer = bridge.getComposerProps();
+    composer?.onOperationModeChange("execution");
+    composer = bridge.getComposerProps();
+    composer?.onWritePolicyChange("user_preapproved_run");
+    bridge.getComposerProps()?.onWritePolicyAcknowledgedChange(true);
 
-    props = await bridge.send("自动修订当前章节");
+    const props = await bridge.send("自动修订当前章节");
 
-    expect(props.writePolicy).toBe("write_before_confirmation");
-    expect(props.writePolicyAcknowledged).toBe(false);
+    expect(bridge.getComposerProps()?.writePolicy).toBe("write_before_confirmation");
+    expect(bridge.getComposerProps()?.writePolicyAcknowledged).toBe(false);
     expect(props.events.map((entry) => entry.type)).toEqual([
       "change_set_auto_approved",
       "write_applied"
@@ -296,15 +305,16 @@ describe("Agent Run renderer bridge", () => {
       }
     } as unknown as NovelStudioApi;
     const bridge = createAgentRunBridge(api);
-    let props = bridge.syncContext({
+    bridge.syncContext({
       projectId: "project-01",
       conversationId: "conversation-01",
       settings
     });
-    props.onOperationModeChange("execution");
-    props = bridge.getProps() ?? props;
-    props.onWritePolicyChange("user_preapproved_run");
-    props.onWritePolicyAcknowledgedChange(true);
+    let composer = bridge.getComposerProps();
+    composer?.onOperationModeChange("execution");
+    composer = bridge.getComposerProps();
+    composer?.onWritePolicyChange("user_preapproved_run");
+    bridge.getComposerProps()?.onWritePolicyAcknowledgedChange(true);
     await bridge.send("自动修订当前章节");
 
     listener?.({
@@ -312,10 +322,9 @@ describe("Agent Run renderer bridge", () => {
       runRevision: 2
     });
 
-    props = bridge.getProps() ?? props;
-    expect(props.writePolicy).toBe("write_before_confirmation");
-    expect(props.writePolicyAcknowledged).toBe(false);
-    expect(props.events.at(-1)?.type).toBe("run_completed");
+    expect(bridge.getComposerProps()?.writePolicy).toBe("write_before_confirmation");
+    expect(bridge.getComposerProps()?.writePolicyAcknowledged).toBe(false);
+    expect(bridge.getProps()?.events.at(-1)?.type).toBe("run_completed");
   });
 
   test("restores an active preapproved run as already acknowledged", async () => {
@@ -335,10 +344,10 @@ describe("Agent Run renderer bridge", () => {
     const bridge = createAgentRunBridge(api);
     bridge.syncContext({ projectId: "project-01", settings });
 
-    const props = await bridge.load("project-01");
+    await bridge.load("project-01");
 
-    expect(props.writePolicy).toBe("user_preapproved_run");
-    expect(props.writePolicyAcknowledged).toBe(true);
+    expect(bridge.getComposerProps()?.writePolicy).toBe("user_preapproved_run");
+    expect(bridge.getComposerProps()?.writePolicyAcknowledged).toBe(true);
   });
 
   test("only passes execution policy for an acknowledged automatic plan approval", async () => {
@@ -364,6 +373,9 @@ describe("Agent Run renderer bridge", () => {
     const bridge = createAgentRunBridge(api);
     bridge.syncContext({ projectId: "project-01", settings });
     await bridge.load("project-01");
+
+    expect(bridge.getProps()).not.toHaveProperty("onDecidePlan");
+    expect(bridge.getPlanReviewProps()?.plan).toEqual(artifact);
 
     await bridge.decidePlan("approve", {
       executionContextMode: "writing",

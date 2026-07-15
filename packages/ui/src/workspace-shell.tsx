@@ -35,6 +35,7 @@ import { ChapterEditor } from "./chapter-editor.js";
 import { AgentConversationInspector } from "./agent-conversation-inspector.js";
 import { AgentConversationNavigator } from "./agent-conversation-navigator.js";
 import { AgentConversationView } from "./agent-conversation-view.js";
+import { PlanArtifactReview } from "./plan-artifact-review.js";
 import { CodeMirrorDocumentEditor } from "./codemirror-document-editor.js";
 import { CommandPalette } from "./command-palette.js";
 import { ConfigStudioPanel } from "./config-studio-panel.js";
@@ -298,6 +299,9 @@ function WorkspaceShellContent({
           aiWritingWorkflow.agentRun.changeSetReview.open !== false &&
           (shellState.activeActivity === "workspace" || shellState.activeActivity === "ai") ? (
             <DiffReview review={aiWritingWorkflow.agentRun.changeSetReview} />
+          ) : shellState.activeActivity === "ai" &&
+            agentConversationWorkspace?.planReview !== undefined ? (
+            <PlanArtifactReview {...agentConversationWorkspace.planReview} />
           ) : shellState.activeActivity === "ai" && agentConversationWorkspace !== undefined ? (
             <AgentConversationView {...agentConversationWorkspace.view} />
           ) : shellState.activeActivity === "workspace" || shellState.activeActivity === "ai" ? (

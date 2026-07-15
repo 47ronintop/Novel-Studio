@@ -13,8 +13,16 @@ import type {
   StartAgentRunCommand,
   StopAgentRunCommand
 } from "@novel-studio/agent-engine";
-import type { NovelStudioApi } from "@novel-studio/application";
 import type {
+  AgentContextMode,
+  AgentOperationMode,
+  AgentWritePolicy,
+  NovelStudioApi,
+  PlanArtifact
+} from "@novel-studio/application";
+import type {
+  AgentComposerProps,
+  AgentPlanReviewProps,
   AgentRunPanelProps,
   ChangeSetReviewModel,
   ChangeSetSelection,
@@ -26,7 +34,7 @@ import type {
 } from "@novel-studio/ui";
 
 type AgentPlanExecutionOptions = NonNullable<
-  Parameters<AgentRunPanelProps["onDecidePlan"]>[1]
+  Parameters<AgentPlanReviewProps["onDecision"]>[1]
 >;
 
 export interface AgentRunBridgeContext {
@@ -40,6 +48,8 @@ export interface AgentRunBridgeContext {
 
 export interface AgentRunBridge {
   getProps(): AgentRunPanelProps | undefined;
+  getComposerProps(): AgentComposerProps | undefined;
+  getPlanReviewProps(): AgentPlanReviewProps | undefined;
   syncContext(context: AgentRunBridgeContext): AgentRunPanelProps;
   load(projectId: string): Promise<AgentRunPanelProps>;
   loadRun(runId: string | undefined): Promise<AgentRunPanelProps>;
@@ -62,16 +72,16 @@ export interface AgentRunBridge {
 }
 
 interface BridgeState {
-  readonly operationMode: AgentRunPanelProps["operationMode"];
-  readonly contextMode: AgentRunPanelProps["contextMode"];
-  readonly writePolicy: AgentRunPanelProps["writePolicy"];
+  readonly operationMode: AgentOperationMode;
+  readonly contextMode: AgentContextMode;
+  readonly writePolicy: AgentWritePolicy;
   readonly writePolicyAcknowledged: boolean;
   readonly userRequest: string;
   readonly snapshot: AgentRunSnapshot | undefined;
   readonly events: AgentRunEvent[];
   readonly assistantText: string;
   readonly pendingUserInput: AgentRunPanelProps["pendingUserInput"] | undefined;
-  readonly planArtifact: AgentRunPanelProps["planArtifact"] | undefined;
+  readonly planArtifact: PlanArtifact | undefined;
   readonly changeSet: ChangeSet | undefined;
   readonly reviewOpen: boolean;
   readonly rollbackReview: RollbackReviewModel | undefined;
@@ -144,7 +154,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           : state.errorMessage,
       planArtifact:
         event.type === "plan_ready" && event.detail !== undefined
-          ? (event.detail as unknown as AgentRunPanelProps["planArtifact"])
+          ? (event.detail as unknown as PlanArtifact)
           : state.planArtifact
     };
     notify();
@@ -534,13 +544,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       operationMode: state.operationMode,
       contextMode: state.contextMode,
       writePolicy: state.writePolicy,
-      writePolicyAcknowledged: state.writePolicyAcknowledged,
       status: state.snapshot?.status ?? "idle",
-      userRequest: state.userRequest,
       assistantText: state.assistantText,
       events: state.events,
       ...(state.pendingUserInput === undefined ? {} : { pendingUserInput: state.pendingUserInput }),
-      ...(state.planArtifact === undefined ? {} : { planArtifact: state.planArtifact }),
       ...(state.changeSet === undefined
         ? {}
         : {
@@ -621,6 +628,25 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       ...(context?.chapterEditor?.dirty === true
         ? { contextSourceNotice: "使用未保存编辑器内容 · editor_buffer / dirty" }
         : {}),
+      onAnswerUserInput: (answer) => void answerRun(answer).then(notify),
+      onResume: () => void resumeRun().then(notify),
+      onRetryStep: () => void retryRun().then(notify),
+      onRefreshContext: (decision) => void refreshRun(decision).then(notify)
+    };
+  }
+
+  function toComposerProps(): AgentComposerProps {
+    return {
+      request: state.userRequest,
+      operationMode: state.operationMode,
+      contextMode: state.contextMode,
+      writePolicy: state.writePolicy,
+      writePolicyAcknowledged: state.writePolicyAcknowledged,
+      active: state.snapshot !== undefined && !isTerminalRunStatus(state.snapshot.status),
+      onRequestChange: (request) => {
+        state = { ...state, userRequest: request };
+        notify();
+      },
       onOperationModeChange: (mode) => {
         state = {
           ...state,
@@ -656,12 +682,16 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         notify();
       },
       onSend: (request) => void sendRun(request).then(notify),
-      onStop: () => void stopRun().then(notify),
-      onAnswerUserInput: (answer) => void answerRun(answer).then(notify),
-      onResume: () => void resumeRun().then(notify),
-      onRetryStep: () => void retryRun().then(notify),
-      onRefreshContext: (decision) => void refreshRun(decision).then(notify),
-      onDecidePlan: (decision, execution) => void decideRun(decision, execution).then(notify)
+      onStop: () => void stopRun().then(notify)
+    };
+  }
+
+  function toPlanReviewProps(): AgentPlanReviewProps | undefined {
+    if (state.planArtifact === undefined) return undefined;
+    return {
+      contextMode: state.contextMode,
+      plan: state.planArtifact,
+      onDecision: (decision, execution) => void decideRun(decision, execution).then(notify)
     };
   }
 
@@ -671,6 +701,8 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
 
   const bridge: AgentRunBridge = {
     getProps: () => (context === undefined ? undefined : toProps()),
+    getComposerProps: () => (context === undefined ? undefined : toComposerProps()),
+    getPlanReviewProps: () => (context === undefined ? undefined : toPlanReviewProps()),
     syncContext(nextContext) {
       const projectChanged = context?.projectId !== nextContext.projectId;
       const conversationChanged = context?.conversationId !== nextContext.conversationId;

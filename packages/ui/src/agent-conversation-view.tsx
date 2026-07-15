@@ -1,21 +1,14 @@
-import { Archive, ArchiveRestore, CornerUpLeft, Plus, Send } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Archive, ArchiveRestore, CornerUpLeft, Plus } from "lucide-react";
 
+import { AgentComposer } from "./agent-composer.js";
 import { AgentRunPanel } from "./agent-run-panel.js";
 import type {
   AgentConversationDetailProps,
-  AgentConversationViewProps,
-  AgentRunPanelProps
+  AgentConversationViewProps
 } from "./workspace-shell-types.js";
 
 export function AgentConversationView(props: AgentConversationViewProps) {
-  const [request, setRequest] = useState(props.agentRun?.userRequest ?? "");
   const conversation = props.conversation;
-
-  useEffect(
-    () => setRequest(props.agentRun?.userRequest ?? ""),
-    [props.agentRun?.userRequest, conversation?.conversationId]
-  );
 
   if (conversation === undefined) {
     return (
@@ -44,8 +37,6 @@ export function AgentConversationView(props: AgentConversationViewProps) {
   }
 
   const disabledReason = conversationComposerDisabledReason(props, conversation);
-  const composerDisabled = disabledReason !== undefined;
-  const canSend = !composerDisabled && request.trim().length > 0;
 
   return (
     <section className="ns-agent-conversation-view" aria-label="Agent 会话主视图">
@@ -115,29 +106,13 @@ export function AgentConversationView(props: AgentConversationViewProps) {
         </div>
       )}
 
-      <section className="ns-agent-conversation-composer" aria-label="会话输入区">
-        {disabledReason === undefined ? null : (
-          <p className="ns-agent-conversation-composer-note">{disabledReason}</p>
-        )}
-        <div>
-          <textarea
-            aria-label="Agent 请求"
-            disabled={composerDisabled}
-            onChange={(event) => setRequest(event.currentTarget.value)}
-            placeholder="说明本次规划或执行目标"
-            value={request}
-          />
-          <button
-            aria-label="启动 Agent 运行"
-            className="ns-ai-send-button"
-            disabled={!canSend}
-            onClick={() => props.onSend(request.trim())}
-            type="button"
-          >
-            <Send aria-hidden="true" size={14} />
-          </button>
-        </div>
-      </section>
+      {props.composer === undefined ? null : (
+        <AgentComposer
+          {...props.composer}
+          disabled={disabledReason !== undefined}
+          {...(disabledReason === undefined ? {} : { disabledReason })}
+        />
+      )}
     </section>
   );
 }
@@ -179,7 +154,7 @@ function conversationComposerDisabledReason(
   props: AgentConversationViewProps,
   conversation: AgentConversationDetailProps
 ): string | undefined {
-  if (props.composerDisabledReason !== undefined) return props.composerDisabledReason;
+  if (props.composer?.disabledReason !== undefined) return props.composer.disabledReason;
   if (props.loading) return "正在加载会话。";
   if (conversation.virtual) return "历史 Agent 运行为只读会话。";
   if (conversation.status === "archived") return "已归档会话不能启动新运行。";
@@ -189,23 +164,6 @@ function conversationComposerDisabledReason(
   ) {
     return "当前项目已有活动运行。";
   }
-  if (props.composerDisabled === true) return "当前会话暂时不能启动新运行。";
-  if (props.agentRun !== undefined && isActiveRunStatus(props.agentRun.status)) {
-    return "当前运行结束或暂停后可继续。";
-  }
-  if (props.agentRun?.status === "plan_ready") return "请先处理待审阅计划。";
-  if (
-    props.agentRun?.operationMode === "execution" &&
-    props.agentRun.writePolicy === "user_preapproved_run" &&
-    !props.agentRun.writePolicyAcknowledged
-  ) {
-    return "请先确认本次运行的自动写入风险。";
-  }
+  if (props.composer?.disabled === true) return "当前会话暂时不能启动新运行。";
   return undefined;
-}
-
-function isActiveRunStatus(status: AgentRunPanelProps["status"]): boolean {
-  return !["idle", "completed", "cancelled", "failed", "limit_reached", "plan_ready"].includes(
-    status
-  );
 }

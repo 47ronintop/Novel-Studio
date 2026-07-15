@@ -8,18 +8,24 @@ import { AgentRunPanel } from "../src/agent-run-panel.js";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("AgentRunPanel", () => {
-  test("keeps planning read-only and hides write policy controls", () => {
+  test("does not own the composer, mode controls, write policy, stop, or plan decisions", () => {
     const html = renderPanel({ operationMode: "planning", status: "planning_model" });
 
-    expect(html).toContain("规划");
-    expect(html).toContain("写作");
-    expect(html).not.toContain("写入前询问");
-    expect(html).not.toContain("本次运行自动写入");
-    expect(html).not.toContain("应用");
+    const host = document.createElement("div");
+    host.innerHTML = html;
+    const panel = host.querySelector(".ns-agent-run");
+    expect(panel?.querySelector("textarea")).toBeNull();
+    expect(panel?.querySelector(".ns-agent-composer")).toBeNull();
+    expect(panel?.querySelector('[aria-label="运行模式"]')).toBeNull();
+    expect(panel?.querySelector('[aria-label="上下文模式"]')).toBeNull();
+    expect(panel?.querySelector('[aria-label="本次执行写入策略"]')).toBeNull();
+    expect(panel?.querySelector('[aria-label="启动 Agent 运行"]')).toBeNull();
+    expect(panel?.querySelector('[aria-label="停止 Agent 运行"]')).toBeNull();
+    expect(panel?.querySelector('[aria-label="Plan Artifact 审阅"]')).toBeNull();
     expect(html).toContain("正在读取第 3 章");
   });
 
-  test("renders a pending question with keyboard controls and a stop action", () => {
+  test("renders a pending question without duplicating the composer stop action", () => {
     const html = renderPanel({
       operationMode: "execution",
       status: "awaiting_user_input",
@@ -36,7 +42,7 @@ describe("AgentRunPanel", () => {
     });
 
     expect(html).toContain('aria-label="回答并继续"');
-    expect(html).toContain('aria-label="停止 Agent 运行"');
+    expect(html).not.toContain('aria-label="停止 Agent 运行"');
     expect(html).toContain("保留现有揭示时机？");
   });
 
@@ -71,7 +77,6 @@ describe("AgentRunPanel", () => {
     const execution = renderPanel({
       operationMode: "execution",
       writePolicy: "user_preapproved_run",
-      writePolicyAcknowledged: false,
       status: "completed",
       canUndoRun: true,
       onUndoRun,
@@ -105,9 +110,6 @@ describe("AgentRunPanel", () => {
       onUndoRun
     });
 
-    expect(execution).toContain("本次运行自动写入");
-    expect(execution).toContain("写入前询问");
-    expect(execution).toContain("我理解本次执行可自动修改项目文件");
     expect(execution).toContain("版本点 versions-01");
     expect(execution).toContain('aria-label="撤销本次运行"');
     expect(planning).not.toContain("本次运行自动写入");
@@ -166,89 +168,6 @@ describe("AgentRunPanel", () => {
     expect(html).toContain("保留 1 个文件的当前内容");
     expect(html).not.toContain("本次运行已撤销");
   });
-  test("disables send until automatic write access is acknowledged", () => {
-    const host = document.createElement("div");
-    document.body.append(host);
-    let root: Root | undefined;
-    act(() => {
-      root = createRoot(host);
-      root.render(
-        <AgentRunPanel
-          {...createProps()}
-          operationMode="execution"
-          status="completed"
-          writePolicy="user_preapproved_run"
-          writePolicyAcknowledged={false}
-        />
-      );
-    });
-
-    expect(
-      host.querySelector<HTMLButtonElement>(".ns-agent-composer .ns-ai-send-button")?.disabled
-    ).toBe(true);
-
-    act(() => root?.unmount());
-    host.remove();
-  });
-
-  test("requires acknowledgement before approving automatic writes for a ready plan", () => {
-    const host = document.createElement("div");
-    document.body.append(host);
-    const onDecidePlan = vi.fn();
-    let root: Root | undefined;
-    act(() => {
-      root = createRoot(host);
-      root.render(
-        <AgentRunPanel
-          {...createProps()}
-          onDecidePlan={onDecidePlan}
-          planArtifact={readyPlanArtifact()}
-          status="plan_ready"
-        />
-      );
-    });
-
-    const policyInputs = Array.from(
-      host.querySelectorAll<HTMLInputElement>('.ns-plan-review input[type="radio"]')
-    );
-    const manual = policyInputs.find((input) =>
-      input.closest("label")?.textContent?.includes("写入前询问")
-    );
-    const automatic = policyInputs.find((input) =>
-      input.closest("label")?.textContent?.includes("本次运行自动写入")
-    );
-    const generalFile = policyInputs.find((input) =>
-      input.closest("label")?.textContent?.includes("通用文件")
-    );
-    const approve = host.querySelector<HTMLButtonElement>('[aria-label="按此方案执行"]');
-
-    expect(manual?.checked).toBe(true);
-    expect(automatic).toBeDefined();
-    expect(generalFile).toBeDefined();
-    expect(approve?.disabled).toBe(false);
-
-    act(() => generalFile?.click());
-    act(() => automatic?.click());
-
-    expect(approve?.disabled).toBe(true);
-    const acknowledgement = host.querySelector<HTMLInputElement>(
-      '.ns-plan-review input[type="checkbox"]'
-    );
-    expect(acknowledgement).not.toBeNull();
-
-    act(() => acknowledgement?.click());
-    expect(approve?.disabled).toBe(false);
-
-    act(() => approve?.click());
-    expect(onDecidePlan).toHaveBeenCalledWith("approve", {
-      executionContextMode: "general_file",
-      executionWritePolicy: "user_preapproved_run",
-      executionWritePolicyAcknowledged: true
-    });
-
-    act(() => root?.unmount());
-    host.remove();
-  });
 });
 
 function completedRead(sequence: number, toolCallId: string, summary: string) {
@@ -302,7 +221,6 @@ function createProps() {
     operationMode: "planning" as const,
     contextMode: "writing" as const,
     status: "planning_model" as const,
-    userRequest: "检查第 3 章",
     assistantText: "我会先核对当前章节。",
     events: [
       {
@@ -316,42 +234,10 @@ function createProps() {
         detail: { toolName: "read_chapter", summary: "正在读取第 3 章" }
       }
     ],
-    onOperationModeChange: () => undefined,
-    onContextModeChange: () => undefined,
-    onSend: () => undefined,
-    onStop: () => undefined,
     onAnswerUserInput: () => undefined,
     onResume: () => undefined,
     onRetryStep: () => undefined,
     onRefreshContext: () => undefined,
-    onDecidePlan: () => undefined
-    ,writePolicy: "write_before_confirmation" as const,
-    writePolicyAcknowledged: false,
-    onWritePolicyChange: () => undefined,
-    onWritePolicyAcknowledgedChange: () => undefined
-  };
-}
-
-function readyPlanArtifact() {
-  return {
-    schemaVersion: "1.0" as const,
-    planId: "plan-01",
-    revision: 1,
-    sourceRunId: "run-01",
-    status: "ready" as const,
-    operationMode: "planning" as const,
-    contextMode: "writing" as const,
-    goal: "修订当前章节",
-    successCriteria: ["章节通过复核"],
-    nonGoals: [],
-    facts: [],
-    assumptions: [],
-    openQuestions: [],
-    targetRefs: [],
-    steps: [{ stepId: "step-01", title: "修订正文", verification: "检查版本差异" }],
-    risks: [],
-    verification: ["运行测试"],
-    sourceRefs: ["chapter:chapter-01"],
-    createdAt: "2026-07-13T00:00:00.000Z"
+    writePolicy: "write_before_confirmation" as const
   };
 }

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { AgentConversationView } from "../src/agent-conversation-view.js";
 import type {
+  AgentComposerProps,
   AgentConversationViewProps,
   AgentRunPanelProps
 } from "../src/workspace-shell-types.js";
@@ -28,17 +29,17 @@ describe("AgentConversationView", () => {
     expect(onCreate).toHaveBeenCalledTimes(1);
   });
 
-  test("renders turn history and one current Agent run surface", () => {
+  test("renders turn history, one current run surface, and exactly one composer", () => {
     const { host } = renderView();
 
     expect(host.querySelectorAll('[aria-label="Agentic Writing Loop"]')).toHaveLength(1);
     expect(host.textContent).toContain("检查灯塔场景的角色动机");
     expect(host.textContent).toContain("动机成立，但可以延后揭示。");
     expect(host.textContent).toContain("近期上下文已恢复。");
-    expect(
-      host.querySelector(".ns-agent-conversation-run-panel .ns-agent-composer")
-    ).not.toBeNull();
-    expect(host.querySelector('[aria-label="会话输入区"]')).not.toBeNull();
+    expect(host.querySelector(".ns-agent-conversation-run-panel .ns-agent-composer")).toBeNull();
+    expect(host.querySelectorAll('textarea[aria-label="Agent 请求"]')).toHaveLength(1);
+    expect(host.querySelectorAll('[aria-label="会话输入区"]')).toHaveLength(1);
+    expect(host.querySelectorAll('button[aria-label="启动 Agent 运行"]')).toHaveLength(1);
   });
 
   test("disables the composer while another conversation is active and returns to it", () => {
@@ -79,24 +80,33 @@ describe("AgentConversationView", () => {
     expect(host.textContent).toContain("历史 Agent 运行为只读会话。");
   });
 
-  test("submits a trimmed request from the conversation composer", () => {
+  test("projects the public composer callbacks without rebuilding a legacy input", () => {
     const onSend = vi.fn();
-    const { host } = renderView({ onSend });
-    const composer = host.querySelector('[aria-label="会话输入区"]');
-    const input = composer?.querySelector<HTMLTextAreaElement>('[aria-label="Agent 请求"]');
-
-    act(() => {
-      if (input !== null && input !== undefined) {
-        const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
-        setter?.call(input, "  继续检查下一场  ");
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-      }
-    });
+    const { host } = renderView({ composer: composer({ request: "  继续检查下一场  ", onSend }) });
+    const composerSection = host.querySelector('[aria-label="会话输入区"]');
     act(() =>
-      composer?.querySelector<HTMLButtonElement>('[aria-label="启动 Agent 运行"]')?.click()
+      composerSection?.querySelector<HTMLButtonElement>('[aria-label="启动 Agent 运行"]')?.click()
     );
 
     expect(onSend).toHaveBeenCalledWith("继续检查下一场");
+  });
+
+  test("keeps exactly one stop slot across every active run surface", () => {
+    const statuses: AgentRunPanelProps["status"][] = [
+      "planning_model",
+      "executing_model",
+      "awaiting_user_input",
+      "awaiting_context_refresh",
+      "plan_ready",
+      "stopping_after_transaction"
+    ];
+    const { host, rerender } = renderView();
+
+    for (const status of statuses) {
+      rerender({ agentRun: { ...agentRun(), status }, composer: composer({ active: true }) });
+      expect(host.querySelectorAll('[aria-label="停止 Agent 运行"]'), status).toHaveLength(1);
+      expect(host.querySelectorAll('[aria-label="启动 Agent 运行"]'), status).toHaveLength(0);
+    }
   });
 });
 
@@ -110,12 +120,12 @@ function renderView(overrides: Partial<AgentConversationViewProps> = {}) {
       conversation: conversation(),
       activeConversationId: "conv-current",
       agentRun: agentRun(),
+      composer: composer(),
       loading: false,
       onCreate: () => undefined,
       onArchive: () => undefined,
       onRestore: () => undefined,
       onReturnToActive: () => undefined,
-      onSend: () => undefined,
       ...overrides,
       ...nextOverrides
     };
@@ -156,21 +166,31 @@ function agentRun(): AgentRunPanelProps {
     operationMode: "planning",
     contextMode: "writing",
     writePolicy: "write_before_confirmation",
-    writePolicyAcknowledged: false,
     status: "idle",
-    userRequest: "",
     assistantText: "",
     events: [],
+    onAnswerUserInput: () => undefined,
+    onResume: () => undefined,
+    onRetryStep: () => undefined,
+    onRefreshContext: () => undefined
+  };
+}
+
+function composer(overrides: Partial<AgentComposerProps> = {}): AgentComposerProps {
+  return {
+    request: "",
+    operationMode: "execution",
+    contextMode: "writing",
+    writePolicy: "write_before_confirmation",
+    writePolicyAcknowledged: false,
+    active: false,
+    onRequestChange: () => undefined,
     onOperationModeChange: () => undefined,
     onContextModeChange: () => undefined,
     onWritePolicyChange: () => undefined,
     onWritePolicyAcknowledgedChange: () => undefined,
     onSend: () => undefined,
     onStop: () => undefined,
-    onAnswerUserInput: () => undefined,
-    onResume: () => undefined,
-    onRetryStep: () => undefined,
-    onRefreshContext: () => undefined,
-    onDecidePlan: () => undefined
+    ...overrides
   };
 }

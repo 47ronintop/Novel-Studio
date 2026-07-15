@@ -64,31 +64,34 @@ export function useAgentConversationWorkspace(input: {
   };
   return {
     selectedConversationId: conversation.selectedConversationId,
-    workspace: toAgentConversationWorkspaceProps(conversation, agentRun, {
-      onCreate: () => apply(bridge?.create() ?? Promise.resolve(conversation)),
-      onSelect: (conversationId) =>
-        apply(bridge?.select(conversationId) ?? Promise.resolve(conversation)),
-      onArchive: (conversationId) =>
-        apply(bridge?.archive(conversationId) ?? Promise.resolve(conversation)),
-      onRestore: (conversationId) =>
-        apply(bridge?.restore(conversationId) ?? Promise.resolve(conversation)),
-      onSearchQueryChange: (query) =>
-        apply(bridge?.search(query, conversation.includeArchived) ?? Promise.resolve(conversation)),
-      onFilterChange: (filter) =>
-        apply(
-          bridge?.search(conversation.searchQuery, filter === "archived") ??
-            Promise.resolve(conversation)
-        ),
-      onReturnToActive: () => {
-        if (conversation.activeConversationId !== undefined) {
+    workspace: toAgentConversationWorkspaceProps(
+      conversation,
+      agentRun,
+      agentRunBridge?.getComposerProps(),
+      agentRunBridge?.getPlanReviewProps(),
+      {
+        onCreate: () => apply(bridge?.create() ?? Promise.resolve(conversation)),
+        onSelect: (conversationId) =>
+          apply(bridge?.select(conversationId) ?? Promise.resolve(conversation)),
+        onArchive: (conversationId) =>
+          apply(bridge?.archive(conversationId) ?? Promise.resolve(conversation)),
+        onRestore: (conversationId) =>
+          apply(bridge?.restore(conversationId) ?? Promise.resolve(conversation)),
+        onSearchQueryChange: (query) =>
+          apply(bridge?.search(query, conversation.includeArchived) ?? Promise.resolve(conversation)),
+        onFilterChange: (filter) =>
           apply(
-            bridge?.select(conversation.activeConversationId) ?? Promise.resolve(conversation)
-          );
+            bridge?.search(conversation.searchQuery, filter === "archived") ??
+              Promise.resolve(conversation)
+          ),
+        onReturnToActive: () => {
+          if (conversation.activeConversationId !== undefined) {
+            apply(
+              bridge?.select(conversation.activeConversationId) ?? Promise.resolve(conversation)
+            );
+          }
         }
-      },
-      onSend: (request) => {
-        if (agentRunBridge !== undefined) void agentRunBridge.send(request).then(onAgentRunChange);
       }
-    })
+    )
   };
 }

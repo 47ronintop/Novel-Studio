@@ -3569,6 +3569,73 @@ textarea:focus-visible,
   resize: vertical;
 }
 
+.ns-agent-conversation-composer.ns-agent-composer {
+  display: block;
+}
+
+.ns-agent-composer-surface {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  position: relative;
+}
+
+.ns-agent-composer-toolbar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: space-between;
+}
+
+.ns-agent-composer-toolbar-left {
+  align-items: center;
+  display: flex;
+  flex: 1 1 180px;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  position: relative;
+}
+
+.ns-agent-composer-toolbar button,
+.ns-agent-composer-toolbar select {
+  min-height: 28px;
+}
+
+.ns-agent-composer-mode-popover {
+  background: var(--ns-surface-raised);
+  border: 1px solid var(--ns-border-strong);
+  border-radius: 6px;
+  bottom: calc(100% + 6px);
+  box-shadow: 0 8px 14px rgba(0, 0, 0, 0.34);
+  display: grid;
+  gap: 10px;
+  left: 0;
+  min-width: 190px;
+  padding: 8px;
+  position: absolute;
+  z-index: 4;
+}
+
+.ns-agent-composer-mode-popover [role="group"] {
+  display: grid;
+  gap: 4px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ns-agent-composer-command-slot {
+  align-items: center;
+  display: flex;
+  flex: 0 0 32px;
+  justify-content: flex-end;
+  min-height: 32px;
+}
+
+.ns-agent-composer-command-slot > button {
+  height: 32px;
+  width: 32px;
+}
+
 @keyframes ns-agent-spin {
   to {
     transform: rotate(360deg);
