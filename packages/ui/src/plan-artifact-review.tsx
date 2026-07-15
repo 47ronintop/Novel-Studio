@@ -4,18 +4,20 @@ import { useEffect, useState } from "react";
 import type { AgentContextMode, AgentWritePolicy, PlanArtifact } from "@novel-studio/application";
 import type { AgentPlanExecutionOptions } from "./workspace-shell-types.js";
 
-export function PlanArtifactReview({
-  contextMode,
-  plan,
-  onDecision
-}: {
+export interface PlanArtifactReviewProps {
   readonly contextMode: AgentContextMode;
   readonly plan: PlanArtifact;
   readonly onDecision: (
     decision: "approve" | "reject",
     execution?: AgentPlanExecutionOptions
   ) => void;
-}) {
+}
+
+export function PlanArtifactReview({
+  contextMode,
+  plan,
+  onDecision
+}: PlanArtifactReviewProps) {
   const [executionContextMode, setExecutionContextMode] =
     useState<AgentContextMode>(contextMode);
   const [executionWritePolicy, setExecutionWritePolicy] =

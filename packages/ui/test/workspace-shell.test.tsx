@@ -119,6 +119,28 @@ describe("WorkspaceShell", () => {
     );
   });
 
+  test("collapses the navigator before hiding the Agent conversation on narrow workspaces", () => {
+    const css = readFileSync(join(process.cwd(), "packages", "ui", "src", "styles.css"), "utf8");
+    const narrowStart = css.indexOf("@media (max-width: 1279px)");
+    const nextMediaStart = css.indexOf("@media", narrowStart + 1);
+    const narrowWorkspace = css.slice(
+      narrowStart,
+      nextMediaStart === -1 ? undefined : nextMediaStart
+    );
+
+    expect(narrowStart).toBeGreaterThanOrEqual(0);
+    expect(narrowWorkspace).toMatch(
+      /\[data-agent-conversation="true"\]\[data-focus-mode="false"\][^{]*\.ns-agent-conversation-navigator-region[^{]*\{[^}]*display:\s*none/s
+    );
+    expect(narrowWorkspace).toMatch(
+      /\[data-agent-conversation="true"\]\[data-focus-mode="false"\][^{]*\.ns-ai-panel\s*\{[^}]*display:\s*grid/s
+    );
+    expect(narrowWorkspace).toMatch(
+      /\.ns-workspace-grid\[data-focus-mode="true"\]\s*\{[^}]*grid-template-areas:\s*"editor"[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s
+    );
+    expect(css).toMatch(/\.ns-ai-panel\s*\{[^}]*min-width:\s*280px/s);
+  });
+
   test("renders the VS Code style application shell regions", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(

@@ -6,6 +6,7 @@ import type {
   AgentConversationSummary,
   NovelStudioApi
 } from "@novel-studio/application";
+import type { AgentRunPanelProps } from "@novel-studio/ui";
 
 import {
   createAgentConversationBridge,
@@ -55,6 +56,119 @@ describe("AgentConversationBridge", () => {
     expect(workspace.view.conversation?.turns).toEqual([
       expect.objectContaining({ runId: "run_01", userRequest: "Request for conv_01" })
     ]);
+  });
+
+  test.each([
+    ["planning_model", {}, true],
+    ["completed", {}, false],
+    ["completed", { canUndoRun: true }, true],
+    ["completed", { rollbackReview: rollbackReviewProps() }, true],
+    ["completed", { rollbackReview: rollbackReviewProps(false) }, true],
+    ["completed", { changeSetReview: changeSetReviewProps(false) }, true],
+    ["failed", { events: [failedToolEvent()] }, true],
+    ["completed", { rollbackReview: completedRollbackReviewProps() }, false]
+  ] as const)(
+    "projects a %s run with review state %o exactly once",
+    async (status, overrides, expectsLiveProjection) => {
+      const fixture = createApiFixture([
+        conversation("conv_01", "run_01", status, "2026-07-14T00:00:00.000Z")
+      ]);
+      const state = await createAgentConversationBridge(fixture.api).load("project_01");
+      const agentRun = agentRunProps(status, overrides);
+      const workspace = toAgentConversationWorkspaceProps(
+        state,
+        agentRun,
+        undefined,
+        undefined,
+        workspaceActions()
+      );
+
+      expect(workspace.view.agentRun === agentRun).toBe(expectsLiveProjection);
+      expect(workspace.view.conversation?.turns.map((turn) => turn.runId)).toEqual(
+        expectsLiveProjection ? [] : ["run_01"]
+      );
+    }
+  );
+
+  test("uses rollback, change set, and plan review priority for the central projection", async () => {
+    const fixture = createApiFixture([
+      conversation("conv_01", "run_01", "completed", "2026-07-14T00:00:00.000Z")
+    ]);
+    const state = await createAgentConversationBridge(fixture.api).load("project_01");
+    const agentRun = agentRunProps("completed", {
+      canUndoRun: true,
+      changeSetReview: changeSetReviewProps(),
+      rollbackReview: rollbackReviewProps()
+    });
+    const planReview = {
+      contextMode: "writing" as const,
+      plan: readyPlanArtifact(),
+      onDecision: () => undefined
+    };
+
+    const workspace = toAgentConversationWorkspaceProps(
+      state,
+      agentRun,
+      undefined,
+      planReview,
+      workspaceActions()
+    );
+
+    expect(workspace.mainReview).toEqual({
+      kind: "rollback",
+      props: agentRun.rollbackReview
+    });
+  });
+
+  test.each([
+    ["ready", true],
+    ["approved", false],
+    ["rejected", false]
+  ] as const)("projects a %s plan review only while it is open", async (status, expectsLive) => {
+    const fixture = createApiFixture([
+      conversation("conv_01", "run_01", "completed", "2026-07-14T00:00:00.000Z")
+    ]);
+    const state = await createAgentConversationBridge(fixture.api).load("project_01");
+    const planReview = {
+      contextMode: "writing" as const,
+      plan: { ...readyPlanArtifact(), sourceRunId: "run_01", status },
+      onDecision: () => undefined
+    };
+    const workspace = toAgentConversationWorkspaceProps(
+      state,
+      agentRunProps("completed"),
+      undefined,
+      planReview,
+      workspaceActions()
+    );
+
+    expect(workspace.view.agentRun !== undefined).toBe(expectsLive);
+    expect(workspace.mainReview?.kind === "plan").toBe(expectsLive);
+    expect(workspace.view.conversation?.turns.map((turn) => turn.runId)).toEqual(
+      expectsLive ? [] : ["run_01"]
+    );
+  });
+
+  test("does not project a run owned by another selected conversation", async () => {
+    const fixture = createApiFixture([
+      conversation("conv_01", "run_01", "completed", "2026-07-14T00:00:00.000Z")
+    ]);
+    const state = await createAgentConversationBridge(fixture.api).load("project_01");
+    const workspace = toAgentConversationWorkspaceProps(
+      state,
+      agentRunProps("planning_model", { runId: "run_other" }),
+      undefined,
+      {
+        contextMode: "writing",
+        plan: { ...readyPlanArtifact(), sourceRunId: "run_other" },
+        onDecision: () => undefined
+      },
+      workspaceActions()
+    );
+
+    expect(workspace.view.agentRun).toBeUndefined();
+    expect(workspace.mainReview).toBeUndefined();
+    expect(workspace.view.conversation?.turns.map((turn) => turn.runId)).toEqual(["run_01"]);
   });
 
   test("lists conversations and hydrates the active conversation on load", async () => {
@@ -419,4 +533,128 @@ function runEvent(
 async function flushAsyncRouting(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+function workspaceActions() {
+  return {
+    onCreate: () => undefined,
+    onSelect: () => undefined,
+    onArchive: () => undefined,
+    onRestore: () => undefined,
+    onSearchQueryChange: () => undefined,
+    onFilterChange: () => undefined,
+    onReturnToActive: () => undefined
+  };
+}
+
+function agentRunProps(
+  status: string,
+  overrides: Partial<AgentRunPanelProps> = {}
+): AgentRunPanelProps {
+  return {
+    projectId: "project_01",
+    runId: "run_01",
+    operationMode: "planning",
+    contextMode: "writing",
+    writePolicy: "write_before_confirmation",
+    status: status as AgentRunPanelProps["status"],
+    assistantText: "Assistant response",
+    events: [],
+    onAnswerUserInput: () => undefined,
+    onResume: () => undefined,
+    onRetryStep: () => undefined,
+    onRefreshContext: () => undefined,
+    ...overrides
+  };
+}
+
+function changeSetReviewProps(open = true) {
+  return {
+    changeSet: {
+      changeSetId: "change-set-01",
+      revision: 1,
+      checksum: "checksum-01",
+      status: "pending",
+      files: []
+    },
+    runRevision: 2,
+    applying: false,
+    stale: false,
+    selectionPending: false,
+    baseHashConflictPaths: [],
+    dirtyTargetPaths: [],
+    open,
+    onSelectionChange: () => undefined,
+    onApply: () => undefined,
+    onReject: () => undefined,
+    onReturn: () => undefined
+  };
+}
+
+function rollbackReviewProps(open = true) {
+  return {
+    review: {
+      schemaVersion: "1.0" as const,
+      reviewId: "rollback-01",
+      runId: "run_01",
+      status: "pending" as const,
+      sourceVersionGroupIds: ["versions-01"],
+      createdAt: "2026-07-15T00:00:00.000Z",
+      updatedAt: "2026-07-15T00:00:00.000Z",
+      processedCommandIds: [],
+      files: []
+    },
+    applying: false,
+    open,
+    decisions: {},
+    onDecisionChange: () => undefined,
+    onApply: () => undefined,
+    onRetryFailed: () => undefined,
+    onReturn: () => undefined
+  };
+}
+
+function completedRollbackReviewProps() {
+  const props = rollbackReviewProps(false);
+  return {
+    ...props,
+    review: { ...props.review, status: "completed" as const }
+  };
+}
+
+function readyPlanArtifact() {
+  return {
+    schemaVersion: "1.0" as const,
+    planId: "plan-01",
+    revision: 1,
+    sourceRunId: "run-01",
+    status: "ready" as const,
+    operationMode: "planning" as const,
+    contextMode: "writing" as const,
+    goal: "Revise the opening",
+    successCriteria: ["Opening reviewed"],
+    nonGoals: [],
+    facts: [],
+    assumptions: [],
+    openQuestions: [],
+    targetRefs: [],
+    steps: [{ stepId: "step-01", title: "Revise prose", verification: "Review diff" }],
+    risks: [],
+    verification: ["Run tests"],
+    sourceRefs: ["chapter:chapter-01"],
+    createdAt: "2026-07-13T00:00:00.000Z"
+  };
+}
+
+function failedToolEvent(): AgentRunEvent {
+  return {
+    schemaVersion: "1.0",
+    runId: "run_01",
+    projectId: "project_01",
+    sequence: 2,
+    runRevision: 2,
+    type: "tool_failed",
+    createdAt: "2026-07-14T02:00:02.000Z",
+    detail: { toolCallId: "tool-01", message: "Read failed" }
+  };
 }

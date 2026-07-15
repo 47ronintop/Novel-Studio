@@ -595,6 +595,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
               review: state.rollbackReview,
               applying: undoInFlight !== undefined,
               open: state.rollbackReviewOpen,
+              onOpen: () => {
+                state = { ...state, rollbackReviewOpen: true };
+                notify();
+              },
               decisions: state.rollbackDecisions,
               onDecisionChange: (relativePath, decision) => {
                 state = {

@@ -5,7 +5,6 @@ import type {
   AgentRunEvent,
   AgentRunStatus,
   AgentWritePolicy,
-  PlanArtifact,
   ApplicationCommand,
   ApplicationCommandId,
   DesktopShellState,
@@ -21,6 +20,7 @@ import type { ChangeSetReviewProps, RollbackReviewProps } from "./change-set-rev
 import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
 import type { EditorPreferences } from "./editor-toolbar.js";
 import type { ModelSettingsPanelProps } from "./model-settings-panel.js";
+import type { PlanArtifactReviewProps } from "./plan-artifact-review.js";
 
 export interface WorkspaceShellProps {
   readonly appearancePreferences?: UserAppearancePreferences | undefined;
@@ -57,10 +57,15 @@ export interface WorkspaceShellProps {
     ((sectionIds: readonly string[]) => void) | undefined;
 }
 
+export type AgentConversationMainReview =
+  | { readonly kind: "plan"; readonly props: PlanArtifactReviewProps }
+  | { readonly kind: "change_set"; readonly props: ChangeSetReviewProps }
+  | { readonly kind: "rollback"; readonly props: RollbackReviewProps };
+
 export interface AgentConversationWorkspaceShellProps {
   readonly navigator: AgentConversationNavigatorProps;
   readonly view: AgentConversationViewProps;
-  readonly planReview?: AgentPlanReviewProps;
+  readonly mainReview?: AgentConversationMainReview;
 }
 
 export interface ProjectWorkflowProps {
@@ -214,14 +219,7 @@ export interface AgentComposerProps {
   readonly onStop: () => void;
 }
 
-export interface AgentPlanReviewProps {
-  readonly contextMode: AgentContextMode;
-  readonly plan: PlanArtifact;
-  readonly onDecision: (
-    decision: "approve" | "reject",
-    execution?: AgentPlanExecutionOptions
-  ) => void;
-}
+export type AgentPlanReviewProps = PlanArtifactReviewProps;
 
 export interface AgentRunPanelProps {
   readonly projectId: string;

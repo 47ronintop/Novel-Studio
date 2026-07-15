@@ -32,7 +32,6 @@ import {
 } from "lucide-react";
 
 import { ChapterEditor } from "./chapter-editor.js";
-import { AgentConversationInspector } from "./agent-conversation-inspector.js";
 import { AgentConversationNavigator } from "./agent-conversation-navigator.js";
 import { AgentConversationView } from "./agent-conversation-view.js";
 import { PlanArtifactReview } from "./plan-artifact-review.js";
@@ -217,9 +216,12 @@ function WorkspaceShellContent({
         <SettingsWorkspace onClose={onSettingsClose} settings={settings} />
       ) : (
         <>
-          <div
-            className="ns-workspace-grid"
-            data-focus-mode={focusMode}
+      <div
+        className="ns-workspace-grid"
+        data-agent-conversation={
+          shellState.activeActivity === "ai" && agentConversationWorkspace !== undefined
+        }
+        data-focus-mode={focusMode}
             data-split-view={workspaceLayout.splitView}
             style={workspaceGridStyle}
           >
@@ -291,19 +293,23 @@ function WorkspaceShellContent({
         />
 
         <main aria-label="编辑区" className="ns-editor-area" data-region="editor-area">
-          {aiWritingWorkflow?.agentRun?.rollbackReview !== undefined &&
+          {shellState.activeActivity === "ai" &&
+          agentConversationWorkspace?.mainReview?.kind === "rollback" ? (
+            <RollbackReview review={agentConversationWorkspace.mainReview.props} />
+          ) : shellState.activeActivity === "ai" &&
+            agentConversationWorkspace?.mainReview?.kind === "change_set" ? (
+            <DiffReview review={agentConversationWorkspace.mainReview.props} />
+          ) : shellState.activeActivity === "ai" &&
+            agentConversationWorkspace?.mainReview?.kind === "plan" ? (
+            <PlanArtifactReview {...agentConversationWorkspace.mainReview.props} />
+          ) : aiWritingWorkflow?.agentRun?.rollbackReview !== undefined &&
           aiWritingWorkflow.agentRun.rollbackReview.open !== false &&
-          (shellState.activeActivity === "workspace" || shellState.activeActivity === "ai") ? (
+          shellState.activeActivity === "workspace" ? (
             <RollbackReview review={aiWritingWorkflow.agentRun.rollbackReview} />
           ) : aiWritingWorkflow?.agentRun?.changeSetReview !== undefined &&
           aiWritingWorkflow.agentRun.changeSetReview.open !== false &&
-          (shellState.activeActivity === "workspace" || shellState.activeActivity === "ai") ? (
+          shellState.activeActivity === "workspace" ? (
             <DiffReview review={aiWritingWorkflow.agentRun.changeSetReview} />
-          ) : shellState.activeActivity === "ai" &&
-            agentConversationWorkspace?.planReview !== undefined ? (
-            <PlanArtifactReview {...agentConversationWorkspace.planReview} />
-          ) : shellState.activeActivity === "ai" && agentConversationWorkspace !== undefined ? (
-            <AgentConversationView {...agentConversationWorkspace.view} />
           ) : shellState.activeActivity === "workspace" || shellState.activeActivity === "ai" ? (
             <WorkspaceEditorSurface
               chapterEditor={chapterEditor}
@@ -353,7 +359,7 @@ function WorkspaceShellContent({
             <PanelRight aria-hidden="true" size={15} />
           </div>
           {shellState.activeActivity === "ai" && agentConversationWorkspace !== undefined ? (
-            <AgentConversationInspector view={agentConversationWorkspace.view} />
+            <AgentConversationView {...agentConversationWorkspace.view} />
           ) : aiWritingWorkflow === undefined ? (
             <section className="ns-ai-workflow ns-ai-placeholder" aria-label="AI 写作工作流">
               <div className="ns-editor-panel-header">

@@ -2023,8 +2023,8 @@ textarea:focus-visible,
   display: grid;
   grid-area: ai;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  min-width: 0;
-  overflow: visible;
+  min-width: 280px;
+  overflow: hidden;
   position: relative;
   z-index: 3;
 }
@@ -5074,6 +5074,36 @@ textarea:focus-visible,
   .ns-ai-panel,
   .ns-resize-handle-ai {
     display: none;
+  }
+
+  .ns-workspace-grid[data-agent-conversation="true"][data-focus-mode="false"] {
+    grid-template-columns:
+      48px minmax(0, 1fr) 4px minmax(280px, var(--ns-ai-panel-width, 320px));
+    grid-template-areas:
+      "activity editor ai-resize ai"
+      "bottom bottom bottom bottom";
+  }
+
+  .ns-workspace-grid[data-agent-conversation="true"][data-focus-mode="false"]
+    .ns-agent-conversation-navigator-region,
+  .ns-workspace-grid[data-agent-conversation="true"][data-focus-mode="false"]
+    .ns-resize-handle-navigator {
+    display: none;
+  }
+
+  .ns-workspace-grid[data-agent-conversation="true"][data-focus-mode="false"] .ns-ai-panel {
+    display: grid;
+  }
+
+  .ns-workspace-grid[data-agent-conversation="true"][data-focus-mode="false"]
+    .ns-resize-handle-ai {
+    display: block;
+  }
+
+  .ns-workspace-grid[data-focus-mode="true"] {
+    grid-template-areas: "editor";
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
   }
 
   .config-studio-grid {

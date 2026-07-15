@@ -168,6 +168,72 @@ describe("AgentRunPanel", () => {
     expect(html).toContain("保留 1 个文件的当前内容");
     expect(html).not.toContain("本次运行已撤销");
   });
+
+  test("reopens closed Change Set and rollback reviews from the run projection", () => {
+    const onOpenChangeSet = vi.fn();
+    const onOpenRollback = vi.fn();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    act(() => {
+      root.render(
+        <AgentRunPanel
+          {...createProps()}
+          status="completed"
+          changeSetReview={{
+            changeSet: {
+              changeSetId: "change-set-01",
+              revision: 1,
+              checksum: "checksum-01",
+              status: "awaiting_approval",
+              files: []
+            },
+            runRevision: 2,
+            applying: false,
+            stale: false,
+            selectionPending: false,
+            baseHashConflictPaths: [],
+            dirtyTargetPaths: [],
+            open: false,
+            onOpen: onOpenChangeSet,
+            onSelectionChange: () => undefined,
+            onApply: () => undefined,
+            onReject: () => undefined,
+            onReturn: () => undefined
+          }}
+          rollbackReview={{
+            review: {
+              schemaVersion: "1.0",
+              reviewId: "rollback-01",
+              runId: "run-01",
+              status: "pending",
+              sourceVersionGroupIds: ["versions-01"],
+              createdAt: "2026-07-15T00:00:00.000Z",
+              updatedAt: "2026-07-15T00:00:00.000Z",
+              processedCommandIds: [],
+              files: []
+            },
+            applying: false,
+            open: false,
+            decisions: {},
+            onOpen: onOpenRollback,
+            onDecisionChange: () => undefined,
+            onApply: () => undefined,
+            onRetryFailed: () => undefined,
+            onReturn: () => undefined
+          }}
+        />
+      );
+    });
+
+    act(() => host.querySelector<HTMLElement>('[aria-label="Change Set 摘要"]')?.click());
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="重新打开撤销审阅"]')?.click());
+    expect(onOpenChangeSet).toHaveBeenCalledOnce();
+    expect(onOpenRollback).toHaveBeenCalledOnce();
+
+    act(() => root.unmount());
+    host.remove();
+  });
 });
 
 function completedRead(sequence: number, toolCallId: string, summary: string) {

@@ -939,18 +939,10 @@ export function App() {
     }
   });
 
-  const workspaceAiWritingWorkflow =
-    aiWritingWorkflow === undefined
-      ? undefined
-      : {
-          ...aiWritingWorkflow,
-          ...(agentRun === undefined ? {} : { agentRun })
-        };
-
   return (
     <RendererWorkspaceShell
       appearancePreferences={appearancePreferences}
-      aiWritingWorkflow={workspaceAiWritingWorkflow}
+      aiWritingWorkflow={aiWritingWorkflow}
       agentConversationWorkspace={agentConversationWorkspace.workspace}
       projectWorkflow={projectWorkflow}
       projectSearch={projectSearch}

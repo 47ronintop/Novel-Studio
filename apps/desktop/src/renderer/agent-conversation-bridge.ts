@@ -434,19 +434,45 @@ export function toAgentConversationWorkspaceProps(
   planReview: AgentPlanReviewProps | undefined,
   actions: AgentConversationWorkspaceActions
 ): AgentConversationWorkspaceShellProps {
+  const openPlanReview = planReview?.plan.status === "ready" ? planReview : undefined;
+  const selectedRunIds = new Set(
+    state.selectedConversation?.runs.flatMap((run) => {
+      const runId = readRunString(run, "runId");
+      return runId === undefined ? [] : [runId];
+    }) ?? []
+  );
+  if (state.selectedConversation?.lastRunId !== undefined) {
+    selectedRunIds.add(state.selectedConversation.lastRunId);
+  }
+  const selectedAgentRun =
+    agentRun?.runId !== undefined && selectedRunIds.has(agentRun.runId) ? agentRun : undefined;
+  const selectedPlanReview =
+    openPlanReview !== undefined && selectedRunIds.has(openPlanReview.plan.sourceRunId)
+      ? openPlanReview
+      : undefined;
   const conversations = state.conversations.map((conversation) =>
     toConversationListItem(conversation, state.activeConversationId)
   );
   const conversation =
     state.selectedConversation === undefined
       ? undefined
-      : toConversationDetail(state.selectedConversation, state.activeConversationId);
+      : toConversationDetail(
+          state.selectedConversation,
+          state.activeConversationId,
+          liveAgentRunId(selectedAgentRun, selectedPlanReview)
+        );
   const activeConversationTitle = state.conversations.find(
     (candidate) => candidate.conversationId === state.activeConversationId
   )?.title;
 
+  const liveAgentRun =
+    liveAgentRunId(selectedAgentRun, selectedPlanReview) === undefined
+      ? undefined
+      : selectedAgentRun;
+  const mainReview = toAgentConversationMainReview(liveAgentRun, selectedPlanReview);
+
   return {
-    ...(planReview === undefined ? {} : { planReview }),
+    ...(mainReview === undefined ? {} : { mainReview }),
     navigator: {
       conversations,
       ...(state.selectedConversationId === undefined
@@ -472,7 +498,7 @@ export function toAgentConversationWorkspaceProps(
         ? {}
         : { activeConversationId: state.activeConversationId }),
       ...(activeConversationTitle === undefined ? {} : { activeConversationTitle }),
-      ...(agentRun === undefined ? {} : { agentRun }),
+      ...(liveAgentRun === undefined ? {} : { agentRun: liveAgentRun }),
       ...(composer === undefined ? {} : { composer }),
       loading: state.loading,
       ...(state.errorMessage === undefined ? {} : { errorMessage: state.errorMessage }),
@@ -509,7 +535,8 @@ function toConversationListItem(
 
 function toConversationDetail(
   conversation: AgentConversationReadResult,
-  activeConversationId: string | undefined
+  activeConversationId: string | undefined,
+  excludedRunId?: string
 ): AgentConversationDetailProps {
   return {
     ...toConversationListItem(conversation, activeConversationId),
@@ -520,6 +547,7 @@ function toConversationDetail(
       const runId = readRunString(run, "runId");
       const userRequest = readRunString(run, "userRequest");
       if (runId === undefined || userRequest === undefined) return [];
+      if (runId === excludedRunId) return [];
       const assistantText = readRunString(run, "assistantText");
       return [
         {
@@ -532,6 +560,49 @@ function toConversationDetail(
       ];
     })
   };
+}
+
+function liveAgentRunId(
+  agentRun: AgentRunPanelProps | undefined,
+  planReview: AgentPlanReviewProps | undefined
+): string | undefined {
+  if (agentRun === undefined || agentRun.runId === undefined) return undefined;
+  const runId = agentRun.runId;
+  if (!isTerminalRunStatus(agentRun.status)) return runId;
+  if (
+    agentRun.rollbackReview !== undefined &&
+    agentRun.rollbackReview.review.status !== "completed"
+  ) {
+    return runId;
+  }
+  if (
+    agentRun.changeSetReview !== undefined &&
+    !["rejected", "applied", "abandoned"].includes(agentRun.changeSetReview.changeSet.status)
+  ) {
+    return runId;
+  }
+  if (agentRun.canUndoRun === true) return runId;
+  if (planReview?.plan.sourceRunId === runId) return runId;
+  if (agentRun.events.at(-1)?.type === "tool_failed") return runId;
+  return undefined;
+}
+
+function toAgentConversationMainReview(
+  agentRun: AgentRunPanelProps | undefined,
+  planReview: AgentPlanReviewProps | undefined
+): AgentConversationWorkspaceShellProps["mainReview"] {
+  if (agentRun?.rollbackReview !== undefined && agentRun.rollbackReview.open !== false) {
+    return { kind: "rollback", props: agentRun.rollbackReview };
+  }
+  if (agentRun?.changeSetReview !== undefined && agentRun.changeSetReview.open !== false) {
+    return { kind: "change_set", props: agentRun.changeSetReview };
+  }
+  if (planReview !== undefined) return { kind: "plan", props: planReview };
+  return undefined;
+}
+
+function isTerminalRunStatus(status: AgentRunPanelProps["status"]): boolean {
+  return ["completed", "cancelled", "failed", "limit_reached", "idle"].includes(status);
 }
 
 function readRunString(run: Readonly<Record<string, unknown>>, key: string): string | undefined {

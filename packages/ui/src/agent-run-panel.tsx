@@ -2,6 +2,7 @@ import { Play, RefreshCw, RotateCcw } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { AgentRunTimeline } from "./agent-run-timeline.js";
+import { ChangeSetReview } from "./change-set-review.js";
 import type { AgentRunPanelProps } from "./workspace-shell-types.js";
 
 export function AgentRunPanel(props: AgentRunPanelProps) {
@@ -88,6 +89,25 @@ export function AgentRunPanel(props: AgentRunPanelProps) {
             </button>
           </div>
         </section>
+      )}
+
+      {props.changeSetReview === undefined || props.changeSetReview.open !== false ? null : (
+        <ChangeSetReview review={props.changeSetReview} />
+      )}
+
+      {props.rollbackReview === undefined ||
+      props.rollbackReview.open !== false ||
+      props.rollbackReview.review.status === "completed" ||
+      props.rollbackReview.onOpen === undefined ? null : (
+        <button
+          aria-label="重新打开撤销审阅"
+          className="ns-ai-secondary-button"
+          onClick={props.rollbackReview.onOpen}
+          type="button"
+        >
+          <RotateCcw aria-hidden="true" size={13} />
+          继续撤销审阅
+        </button>
       )}
 
       {props.errorMessage === undefined ? null : (

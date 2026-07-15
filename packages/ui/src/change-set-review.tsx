@@ -113,6 +113,7 @@ export interface RollbackReviewProps {
   readonly review: RollbackReviewModel;
   readonly applying: boolean;
   readonly open?: boolean;
+  readonly onOpen?: () => void;
   readonly decisions: Readonly<Record<string, RollbackReviewDecision>>;
   readonly onDecisionChange: (relativePath: string, decision: RollbackReviewDecision) => void;
   readonly onApply: () => void;

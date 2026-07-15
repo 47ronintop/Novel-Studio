@@ -818,6 +818,11 @@ describe("Agent Run renderer bridge", () => {
     bridge.syncContext({ projectId: "project-01", settings });
     let props = await bridge.load("project-01");
 
+    props.rollbackReview?.onReturn();
+    expect(bridge.getProps()?.rollbackReview?.open).toBe(false);
+    bridge.getProps()?.rollbackReview?.onOpen?.();
+    expect(bridge.getProps()?.rollbackReview?.open).toBe(true);
+
     props.rollbackReview?.onDecisionChange("notes/conflict.md", "keep_current");
     props = bridge.getProps() ?? props;
     props.rollbackReview?.onApply();

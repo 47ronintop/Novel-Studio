@@ -78,6 +78,7 @@ export type {
 } from "./change-set-review.js";
 export { DiffReview } from "./diff-review.js";
 export { PlanArtifactReview } from "./plan-artifact-review.js";
+export type { PlanArtifactReviewProps } from "./plan-artifact-review.js";
 export { WorkspaceNavigator } from "./workspace-navigator.js";
 export type { WorkspaceNavigatorProps } from "./workspace-navigator.js";
 export type {
@@ -93,6 +94,7 @@ export type {
   AgentConversationDetailProps,
   AgentConversationFilter,
   AgentConversationListItemProps,
+  AgentConversationMainReview,
   AgentConversationNavigatorProps,
   AgentConversationTurnProps,
   AgentConversationViewProps,

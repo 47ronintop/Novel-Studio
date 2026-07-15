@@ -131,7 +131,8 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
   return (
     <WorkspaceShell
       appearancePreferences={props.appearancePreferences}
-      {...(props.aiWritingWorkflow === undefined
+      {...(props.aiWritingWorkflow === undefined ||
+      (props.shellState.activeActivity === "ai" && props.agentConversationWorkspace !== undefined)
         ? {}
         : {
             aiWritingWorkflow: {
