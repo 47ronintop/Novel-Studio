@@ -1,6 +1,7 @@
 import { Archive, ArchiveRestore, CornerUpLeft, Plus } from "lucide-react";
 
 import { AgentComposer } from "./agent-composer.js";
+import { AgentActivitySummary } from "./agent-activity-summary.js";
 import { AgentRunPanel } from "./agent-run-panel.js";
 import type {
   AgentConversationDetailProps,
@@ -129,7 +130,7 @@ function ConversationTurns({
   return (
     <ol className="ns-agent-conversation-turns" aria-label="会话运行历史">
       {conversation.turns.map((turn) => (
-        <li key={turn.runId}>
+        <li data-run-id={turn.runId} key={turn.runId}>
           <div className="ns-agent-conversation-turn-meta">
             <span>{turn.statusLabel}</span>
             <time>{turn.updatedAtLabel}</time>
@@ -138,10 +139,14 @@ function ConversationTurns({
             <span>你</span>
             <p>{turn.userRequest}</p>
           </div>
-          {turn.assistantText === undefined || turn.assistantText.length === 0 ? null : (
+          {(turn.assistantText === undefined || turn.assistantText.length === 0) &&
+          (turn.events === undefined || turn.events.length === 0) ? null : (
             <div className="ns-agent-conversation-message" data-speaker="assistant">
               <span>Agent</span>
-              <p>{turn.assistantText}</p>
+              {turn.assistantText === undefined || turn.assistantText.length === 0 ? null : (
+                <p>{turn.assistantText}</p>
+              )}
+              <AgentActivitySummary events={turn.events ?? []} />
             </div>
           )}
         </li>

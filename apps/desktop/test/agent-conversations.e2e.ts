@@ -59,19 +59,43 @@ test("isolates multi-run conversation context and restores project-scoped conver
     await configureLocalModel(page, `http://127.0.0.1:${address.port}/v1`);
     await openAgentActivity(page);
     const conversationA = await createConversation(page);
+    await expect(page.getByLabel("AI 对话面板")).toBeVisible();
+    await expect(page.getByLabel("Agent 请求")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: /启动 Agent 运行|停止 Agent 运行/ })).toHaveCount(
+      1
+    );
+    await expect(
+      page.getByRole("button", {
+        name: /执行 · 写作|规划 · 写作|执行 · 通用文件|规划 · 通用文件/
+      })
+    ).toHaveCount(1);
+    await expect(page.getByLabel("AI 对话记录")).toHaveCount(0);
+    await expect(page.getByLabel("AI 写作工作流")).toHaveCount(0);
+    await expect(page.getByLabel("AI 文风规则检查")).toHaveCount(0);
+    await expect(page.getByLabel("工作流运行历史")).toHaveCount(0);
+    await expect(page.getByLabel("AI 工作流运行观测")).toHaveCount(0);
+
+    await selectPlanningWritingMode(page);
+    await expect(page.getByRole("button", { name: "规划 · 写作" })).toHaveCount(1);
+    await expect(page.getByLabel("写入策略")).toHaveCount(0);
+    await expect(page.getByLabel("运行方式")).toHaveCount(0);
+    await expect(page.getByLabel("上下文")).toHaveCount(0);
     await selectExecutionMode(page);
-    const policy = page.getByLabel("本次执行写入策略");
-    await policy.getByRole("radio", { name: "本次运行自动写入" }).check();
-    await policy.getByRole("checkbox", { name: /我理解本次执行可自动修改项目文件/ }).check();
+    const policy = page.getByLabel("写入策略");
+    await policy.selectOption("user_preapproved_run");
+    await page.getByText("确认本次运行自动修改", { exact: true }).click();
 
     await sendConversationRequest(page, "Remember the alpha lantern clue.");
     await waitForRunCount(page, 1);
-    await expect(page.getByLabel("Agentic Writing Loop").locator(".ns-agent-status")).toHaveText(
-      "已完成"
-    );
+    await waitForLatestRunStatus(page, "completed");
+    await expect(policy).toHaveValue("write_before_confirmation");
+    const firstRunId = await latestRunId(page);
+    await expect(page.locator(`[data-run-id="${firstRunId}"]`)).toHaveCount(1);
     await expect(
-      policy.getByRole("radio", { name: "写入前询问" })
-    ).toBeChecked();
+      page.getByText("Completed Remember the alpha lantern clue.", { exact: true })
+    ).toHaveCount(1);
+    await expect(page.getByLabel("会话运行历史")).not.toContainText(/tokens?|成本|cost/i);
+    await assertCompactConversationSurface(page);
 
     await sendConversationRequest(page, "Continue the alpha thread.");
     await waitForRunCount(page, 2);
@@ -82,33 +106,37 @@ test("isolates multi-run conversation context and restores project-scoped conver
     const conversationB = await createConversation(page);
     expect(conversationB).not.toBe(conversationA);
     await selectExecutionMode(page);
-    await expect(
-      page.getByLabel("本次执行写入策略").getByRole("radio", { name: "写入前询问" })
-    ).toBeChecked();
+    await expect(page.getByLabel("写入策略")).toHaveValue("write_before_confirmation");
     await sendConversationRequest(page, "Hold beta without alpha context.");
     await expect(page.locator(".ns-agent-assistant-text")).toContainText("Holding beta run");
+    const conversationView = page.getByLabel("Agent 会话主视图");
+    const runProjection = conversationView.locator(".ns-agent-run");
+    const projectionWrapper = conversationView.locator(".ns-agent-conversation-run-panel");
+    await expect(conversationView).toHaveCSS("overflow-y", "auto");
+    await expect(runProjection).toHaveCSS("overflow-y", "visible");
+    await expect(projectionWrapper).toHaveCSS("border-top-width", "0px");
+    await expect(runProjection.locator(".ns-agent-runtime-label")).toHaveCount(0);
+    await expect(runProjection).not.toContainText(
+      /tokens?|成本|cost|Context Trace|Workflow History|Observability|文风规则|运行历史/i
+    );
     await expect.poll(() => modelRequests.length).toBe(3);
     expect(messageText(modelRequests[2])).not.toContain("alpha lantern clue");
     expect(messageText(modelRequests[2])).not.toContain("Untrusted conversation context");
 
     await selectConversation(page, conversationA);
-    await expect(page.getByText(/is running|currently has an active run|正在运行|已有活动运行/).first()).toBeVisible();
     await expect(
-      page.getByLabel("会话输入区").getByLabel("Agent 请求")
-    ).toBeDisabled();
+      page.getByText(/is running|currently has an active run|正在运行|已有活动运行/).first()
+    ).toBeVisible();
+    await expect(page.getByLabel("会话输入区").getByLabel("Agent 请求")).toBeDisabled();
     await page.getByRole("button", { name: "返回活动会话" }).click();
     await page.getByRole("button", { name: "停止 Agent 运行" }).click();
-    await expect(page.getByLabel("Agentic Writing Loop").locator(".ns-agent-status")).toHaveText(
-      "已停止"
-    );
     await waitForTerminalRuns(page);
+    await expect(page.getByLabel("会话运行历史")).toContainText("cancelled");
 
     await page.getByRole("button", { name: /^归档会话/ }).click();
     await page.getByRole("tab", { name: "显示已归档会话" }).click();
     await page.getByRole("searchbox", { name: "搜索会话" }).fill("Hold beta");
-    await expect(
-      page.locator(`[data-conversation-id="${conversationB}"]`)
-    ).toBeVisible();
+    await expect(page.locator(`[data-conversation-id="${conversationB}"]`)).toBeVisible();
     await page
       .locator(`[data-conversation-id="${conversationB}"]`)
       .getByRole("button", { name: /^恢复会话/ })
@@ -140,9 +168,9 @@ test("isolates multi-run conversation context and restores project-scoped conver
     await expect(page.locator(`[data-conversation-id="${conversationB}"]`)).toBeVisible();
 
     expect(
-      (await readdir(join(projectRoot, "history", "conversations"), { withFileTypes: true })).filter(
-        (entry) => entry.isDirectory()
-      )
+      (
+        await readdir(join(projectRoot, "history", "conversations"), { withFileTypes: true })
+      ).filter((entry) => entry.isDirectory())
     ).toHaveLength(2);
   } finally {
     await electronApp.close();
@@ -183,7 +211,23 @@ async function selectConversation(page: Page, conversationId: string): Promise<v
 }
 
 async function selectExecutionMode(page: Page): Promise<void> {
-  await page.getByLabel("运行模式").getByRole("button", { name: "执行" }).click();
+  const trigger = page.getByRole("button", {
+    name: /执行 · 写作|规划 · 写作|执行 · 通用文件|规划 · 通用文件/
+  });
+  if ((await trigger.getAttribute("aria-label")) === "执行 · 写作") return;
+  await trigger.click();
+  await page.getByLabel("运行方式").getByRole("button", { name: "执行", exact: true }).click();
+}
+
+async function selectPlanningWritingMode(page: Page): Promise<void> {
+  let trigger = page.getByRole("button", {
+    name: /执行 · 写作|规划 · 写作|执行 · 通用文件|规划 · 通用文件/
+  });
+  await trigger.click();
+  await page.getByLabel("运行方式").getByRole("button", { name: "规划（只读）" }).click();
+  trigger = page.getByRole("button", { name: /规划 · 写作|规划 · 通用文件/ });
+  await trigger.click();
+  await page.getByLabel("上下文").getByRole("button", { name: "写作", exact: true }).click();
 }
 
 async function sendConversationRequest(page: Page, request: string): Promise<void> {
@@ -195,19 +239,42 @@ async function sendConversationRequest(page: Page, request: string): Promise<voi
 async function waitForRunCount(page: Page, count: number): Promise<void> {
   await expect
     .poll(async () => {
-      const listed = await page.evaluate(async (boundProjectId) =>
-        window.novelStudio?.agentRuns.list(boundProjectId), projectId
+      const listed = await page.evaluate(
+        async (boundProjectId) => window.novelStudio?.agentRuns.list(boundProjectId),
+        projectId
       );
       return listed?.ok ? listed.value.length : -1;
     })
     .toBe(count);
 }
 
+async function latestRunId(page: Page): Promise<string> {
+  const runId = await page.evaluate(async (boundProjectId) => {
+    const listed = await window.novelStudio?.agentRuns.list(boundProjectId);
+    return listed?.ok ? listed.value.at(-1)?.runId : undefined;
+  }, projectId);
+  if (runId === undefined) throw new Error("Expected a persisted Agent run");
+  return runId;
+}
+
+async function waitForLatestRunStatus(page: Page, status: string): Promise<void> {
+  await expect
+    .poll(async () => {
+      const listed = await page.evaluate(
+        async (boundProjectId) => window.novelStudio?.agentRuns.list(boundProjectId),
+        projectId
+      );
+      return listed?.ok ? listed.value.at(-1)?.status : undefined;
+    })
+    .toBe(status);
+}
+
 async function waitForTerminalRuns(page: Page): Promise<void> {
   await expect
     .poll(async () => {
-      const listed = await page.evaluate(async (boundProjectId) =>
-        window.novelStudio?.agentRuns.list(boundProjectId), projectId
+      const listed = await page.evaluate(
+        async (boundProjectId) => window.novelStudio?.agentRuns.list(boundProjectId),
+        projectId
       );
       if (!listed?.ok) return false;
       return listed.value.every((snapshot) =>
@@ -217,18 +284,35 @@ async function waitForTerminalRuns(page: Page): Promise<void> {
     .toBe(true);
 }
 
+async function assertCompactConversationSurface(page: Page): Promise<void> {
+  const panel = page.getByLabel("AI 对话面板");
+  await expect(panel.getByLabel("AI 对话记录")).toHaveCount(0);
+  await expect(panel.getByLabel("AI 写作工作流")).toHaveCount(0);
+  await expect(panel.getByLabel("AI 文风规则检查")).toHaveCount(0);
+  await expect(panel.getByLabel("工作流运行历史")).toHaveCount(0);
+  await expect(panel.getByLabel("AI 工作流运行观测")).toHaveCount(0);
+  await expect(panel).not.toContainText(
+    /tokens?|成本|cost|Context Trace|Workflow History|Observability|文风规则/i
+  );
+}
+
 async function waitForConversationService(page: Page): Promise<void> {
   await expect
-    .poll(async () => {
-      const listed = await page.evaluate(async (boundProjectId) =>
-        window.novelStudio?.agentConversations.list({
-          projectId: boundProjectId,
-          includeArchived: false,
-          limit: 30
-        }), projectId
-      );
-      return listed?.ok === true;
-    }, { timeout: 15_000 })
+    .poll(
+      async () => {
+        const listed = await page.evaluate(
+          async (boundProjectId) =>
+            window.novelStudio?.agentConversations.list({
+              projectId: boundProjectId,
+              includeArchived: false,
+              limit: 30
+            }),
+          projectId
+        );
+        return listed?.ok === true;
+      },
+      { timeout: 15_000 }
+    )
     .toBe(true);
 }
 

@@ -15,6 +15,7 @@ import type {
   AgentPlanReviewProps,
   AgentRunPanelProps
 } from "@novel-studio/ui";
+import type { JsonObject } from "@novel-studio/shared";
 
 export interface AgentConversationWorkspaceProps {
   readonly projectId: string;
@@ -228,13 +229,15 @@ export function createAgentConversationBridge(
         entry.conversationId === conversationId ? updatedSummary : entry
       ),
       activeConversationId: findActiveConversation(knownConversations.values()),
-      ...(state.selectedConversationId === conversationId && state.selectedConversation !== undefined
+      ...(state.selectedConversationId === conversationId &&
+      state.selectedConversation !== undefined
         ? {
             selectedConversation: updateSelectedConversation(
               state.selectedConversation,
               updatedSummary,
               event,
-              status
+              status,
+              snapshot
             )
           }
         : {})
@@ -445,7 +448,15 @@ export function toAgentConversationWorkspaceProps(
     selectedRunIds.add(state.selectedConversation.lastRunId);
   }
   const selectedAgentRun =
-    agentRun?.runId !== undefined && selectedRunIds.has(agentRun.runId) ? agentRun : undefined;
+    agentRun?.runId === undefined
+      ? agentRun?.errorMessage !== undefined &&
+        agentRun.projectId === state.projectId &&
+        state.selectedConversation !== undefined
+        ? agentRun
+        : undefined
+      : selectedRunIds.has(agentRun.runId)
+        ? agentRun
+        : undefined;
   const selectedPlanReview =
     openPlanReview !== undefined && selectedRunIds.has(openPlanReview.plan.sourceRunId)
       ? openPlanReview
@@ -466,9 +477,11 @@ export function toAgentConversationWorkspaceProps(
   )?.title;
 
   const liveAgentRun =
-    liveAgentRunId(selectedAgentRun, selectedPlanReview) === undefined
-      ? undefined
-      : selectedAgentRun;
+    selectedAgentRun?.runId === undefined && selectedAgentRun?.errorMessage !== undefined
+      ? selectedAgentRun
+      : liveAgentRunId(selectedAgentRun, selectedPlanReview) === undefined
+        ? undefined
+        : selectedAgentRun;
   const mainReview = toAgentConversationMainReview(liveAgentRun, selectedPlanReview);
 
   return {
@@ -549,11 +562,13 @@ function toConversationDetail(
       if (runId === undefined || userRequest === undefined) return [];
       if (runId === excludedRunId) return [];
       const assistantText = readRunString(run, "assistantText");
+      const events = readRunEvents(run);
       return [
         {
           runId,
           userRequest,
           ...(assistantText === undefined ? {} : { assistantText }),
+          ...(events.length === 0 ? {} : { events }),
           statusLabel: readRunString(run, "status") ?? "unknown",
           updatedAtLabel: readRunString(run, "updatedAt") ?? conversation.updatedAt
         }
@@ -622,13 +637,14 @@ function preferredConversationId(
 function findActiveConversation(
   conversations: Iterable<AgentConversationSummary>
 ): string | undefined {
-  return [...conversations].find((conversation) =>
-    isActiveRunStatus(conversation.lastRunStatus)
-  )?.conversationId;
+  return [...conversations].find((conversation) => isActiveRunStatus(conversation.lastRunStatus))
+    ?.conversationId;
 }
 
 function isActiveRunStatus(status: string | undefined): boolean {
-  return status !== undefined && !["completed", "cancelled", "failed", "limit_reached"].includes(status);
+  return (
+    status !== undefined && !["completed", "cancelled", "failed", "limit_reached"].includes(status)
+  );
 }
 
 function compareConversations(
@@ -641,7 +657,10 @@ function compareConversations(
   );
 }
 
-function statusForEvent(type: AgentRunEvent["type"], fallback: string | undefined): string | undefined {
+function statusForEvent(
+  type: AgentRunEvent["type"],
+  fallback: string | undefined
+): string | undefined {
   switch (type) {
     case "tool_started":
       return "executing_read_tool";
@@ -672,24 +691,117 @@ function updateSelectedConversation(
   selected: AgentConversationReadResult,
   summary: AgentConversationSummary,
   event: AgentRunEvent,
-  status: string | undefined
+  status: string | undefined,
+  snapshot: AgentRunSnapshot | undefined
 ): AgentConversationReadResult {
-  const runs = selected.runs.map((run) =>
-    run["runId"] === event.runId
-      ? {
-          ...run,
-          runRevision: event.runRevision,
-          lastSequence: event.sequence,
-          updatedAt: event.createdAt,
-          ...(status === undefined ? {} : { status })
-        }
-      : run
-  );
+  const existing = selected.runs.find((run) => run["runId"] === event.runId);
+  const updatedRun = {
+    ...(existing ?? runSummaryFromSnapshot(snapshot, event)),
+    runRevision: event.runRevision,
+    lastSequence: event.sequence,
+    updatedAt: event.createdAt,
+    ...(status === undefined ? {} : { status }),
+    ...activityEventsPatch(existing, event),
+    ...assistantTextPatch(event)
+  };
+  const runs =
+    existing === undefined
+      ? [updatedRun, ...selected.runs]
+      : selected.runs.map((run) => (run["runId"] === event.runId ? updatedRun : run));
   return {
     ...selected,
     ...summary,
     runs
   };
+}
+
+function runSummaryFromSnapshot(
+  snapshot: AgentRunSnapshot | undefined,
+  event: AgentRunEvent
+): Readonly<Record<string, unknown>> {
+  return {
+    runId: event.runId,
+    projectId: event.projectId,
+    ...(snapshot?.conversationId === undefined ? {} : { conversationId: snapshot.conversationId }),
+    userRequest: snapshot?.userRequest ?? "Agent request",
+    status: snapshot?.status ?? statusForEvent(event.type, "created") ?? "created",
+    runRevision: event.runRevision,
+    lastSequence: event.sequence,
+    startedAt: snapshot?.startedAt ?? event.createdAt,
+    updatedAt: event.createdAt
+  };
+}
+
+function assistantTextPatch(event: AgentRunEvent): Readonly<Record<string, string>> {
+  if (event.type === "assistant_text_completed") {
+    const text = event.detail?.["text"];
+    return typeof text === "string" && text.length > 0 ? { assistantText: text } : {};
+  }
+  if (event.type === "run_completed") {
+    const summary = event.detail?.["summary"];
+    return typeof summary === "string" && summary.length > 0 ? { assistantText: summary } : {};
+  }
+  return {};
+}
+
+function activityEventsPatch(
+  run: Readonly<Record<string, unknown>> | undefined,
+  event: AgentRunEvent
+): Readonly<Record<string, JsonObject[]>> {
+  if (!CONVERSATION_ACTIVITY_EVENT_TYPES.has(event.type)) return {};
+  const existing = run === undefined ? [] : readRunEventRecords(run);
+  const projected = toConversationActivityEventRecord(event);
+  return {
+    events: [
+      ...existing.filter((candidate) => candidate["sequence"] !== event.sequence),
+      projected
+    ].sort((left, right) => Number(left["sequence"]) - Number(right["sequence"]))
+  };
+}
+
+const CONVERSATION_ACTIVITY_EVENT_TYPES = new Set<AgentRunEvent["type"]>([
+  "tool_started",
+  "tool_completed",
+  "tool_failed",
+  "change_set_ready"
+]);
+
+function toConversationActivityEventRecord(event: AgentRunEvent): JsonObject {
+  return {
+    schemaVersion: event.schemaVersion,
+    runId: event.runId,
+    projectId: event.projectId,
+    sequence: event.sequence,
+    runRevision: event.runRevision,
+    type: event.type,
+    createdAt: event.createdAt,
+    ...(event.detail === undefined ? {} : { detail: event.detail as JsonObject })
+  };
+}
+
+function readRunEventRecords(run: Readonly<Record<string, unknown>>): JsonObject[] {
+  const events = run["events"];
+  return Array.isArray(events) ? events.filter(isJsonObject) : [];
+}
+
+function readRunEvents(run: Readonly<Record<string, unknown>>): AgentRunEvent[] {
+  return readRunEventRecords(run).filter(isAgentRunEventRecord) as unknown as AgentRunEvent[];
+}
+
+function isAgentRunEventRecord(event: JsonObject): boolean {
+  return (
+    typeof event["schemaVersion"] === "string" &&
+    typeof event["runId"] === "string" &&
+    typeof event["projectId"] === "string" &&
+    Number.isSafeInteger(event["sequence"]) &&
+    Number.isSafeInteger(event["runRevision"]) &&
+    typeof event["type"] === "string" &&
+    typeof event["createdAt"] === "string"
+  );
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function laterTimestamp(current: string, candidate: string): string {

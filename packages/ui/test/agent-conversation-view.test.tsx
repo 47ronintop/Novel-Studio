@@ -40,6 +40,40 @@ describe("AgentConversationView", () => {
     expect(host.querySelectorAll('textarea[aria-label="Agent 请求"]')).toHaveLength(1);
     expect(host.querySelectorAll('[aria-label="会话输入区"]')).toHaveLength(1);
     expect(host.querySelectorAll('button[aria-label="启动 Agent 运行"]')).toHaveLength(1);
+    expect(host.querySelectorAll('[data-run-id="run-previous"]')).toHaveLength(1);
+    expect(host.querySelectorAll('[data-run-id="run-current"]')).toHaveLength(1);
+  });
+
+  test("keeps a completed turn activity summary collapsed and expandable", () => {
+    const prior = conversation().turns[0];
+    if (prior === undefined) throw new Error("Expected prior turn fixture");
+    const completedConversation = {
+      ...conversation(),
+      turns: [
+        {
+          ...prior,
+          events: [
+            runEvent(1, "tool_started", {
+              toolCallId: "read-01",
+              toolName: "read_chapter",
+              summary: "正在读取第一章"
+            }),
+            runEvent(2, "tool_completed", {
+              toolCallId: "read-01",
+              toolName: "read_chapter",
+              summary: "已读取第一章"
+            })
+          ]
+        }
+      ]
+    } as NonNullable<AgentConversationViewProps["conversation"]>;
+    const { host } = renderView({ conversation: completedConversation });
+    const summary = host.querySelector<HTMLDetailsElement>('[aria-label="Agent 活动摘要"]');
+
+    expect(summary).not.toBeNull();
+    expect(summary?.open).toBe(false);
+    expect(summary?.querySelector("summary")?.textContent).toContain("已读取 1 项");
+    expect(summary?.querySelector("ol")?.textContent).toContain("已读取第一章");
   });
 
   test("disables the composer while another conversation is active and returns to it", () => {
@@ -173,6 +207,23 @@ function agentRun(): AgentRunPanelProps {
     onResume: () => undefined,
     onRetryStep: () => undefined,
     onRefreshContext: () => undefined
+  };
+}
+
+function runEvent(
+  sequence: number,
+  type: "tool_started" | "tool_completed",
+  detail: Record<string, unknown>
+) {
+  return {
+    schemaVersion: "1.0" as const,
+    runId: "run-previous",
+    projectId: "project-01",
+    sequence,
+    runRevision: sequence,
+    type,
+    createdAt: `2026-07-14T00:00:0${String(sequence)}.000Z`,
+    detail
   };
 }
 

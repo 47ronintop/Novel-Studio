@@ -136,9 +136,7 @@ export interface AgentConversationPersistencePort {
     conversationId: string,
     commandId: string
   ): Promise<Result<JsonObject | undefined, UnifiedError>>;
-  readLatestSummary?(
-    conversationId: string
-  ): Promise<Result<JsonObject | undefined, UnifiedError>>;
+  readLatestSummary?(conversationId: string): Promise<Result<JsonObject | undefined, UnifiedError>>;
   writeSummary?(summary: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
   searchConversations?(input: {
     readonly projectId: string;
@@ -249,6 +247,44 @@ export function createAgentConversationSession(
       }
     }
     return ok([...byRunId.values()].sort(compareRuns));
+  }
+
+  async function runsForRead(
+    conversationId: string,
+    runs: readonly JsonObject[]
+  ): Promise<{
+    readonly runs: readonly JsonObject[];
+    readonly diagnostics: readonly AgentConversationDiagnostic[];
+  }> {
+    if (options.runReader.readRunEvents === undefined) return { runs, diagnostics: [] };
+    let eventsUnavailable = false;
+    const projectedRuns = await Promise.all(
+      runs.map(async (run) => {
+        const runId = readSafeId(run, "runId");
+        if (runId === undefined) return run;
+        const read = await options.runReader.readRunEvents?.(runId);
+        if (read === undefined || !read.ok) {
+          eventsUnavailable = true;
+          return run;
+        }
+        const events = read.value
+          .map(toConversationActivityEvent)
+          .filter((event): event is JsonObject => event !== undefined);
+        const assistantText =
+          readString(run, "assistantText") ?? assistantTextFromEvents(read.value);
+        return {
+          ...run,
+          ...(assistantText === undefined ? {} : { assistantText }),
+          ...(events.length === 0 ? {} : { events })
+        };
+      })
+    );
+    return {
+      runs: projectedRuns,
+      diagnostics: eventsUnavailable
+        ? [{ conversationId, code: "AGENT_CONVERSATION_RUN_EVENTS_UNAVAILABLE" }]
+        : []
+    };
   }
 
   async function summaryFor(
@@ -423,7 +459,10 @@ export function createAgentConversationSession(
           conversationId: command.conversationId
         });
         if (!pending.ok) return pending;
-        if (pending.value || runs.value.some((run) => !isTerminalStatus(readString(run, "status")))) {
+        if (
+          pending.value ||
+          runs.value.some((run) => !isTerminalStatus(readString(run, "status")))
+        ) {
           return failure("AGENT_CONVERSATION_ARCHIVE_BLOCKED");
         }
       }
@@ -547,9 +586,7 @@ export function createAgentConversationSession(
       return ok({
         items: summaries,
         diagnostics,
-        ...(listed.value.nextCursor === undefined
-          ? {}
-          : { nextCursor: listed.value.nextCursor })
+        ...(listed.value.nextCursor === undefined ? {} : { nextCursor: listed.value.nextCursor })
       });
     },
 
@@ -561,10 +598,11 @@ export function createAgentConversationSession(
         const runs = await runsFor(query.conversationId);
         if (!runs.ok) return runs;
         if (runs.value.length === 0) return failure("AGENT_CONVERSATION_NOT_FOUND");
+        const projected = await runsForRead(query.conversationId, runs.value);
         return ok({
           ...legacySummary(options.projectId, runs.value),
-          runs: runs.value,
-          diagnostics: []
+          runs: projected.runs,
+          diagnostics: projected.diagnostics
         });
       }
       const record = await options.repository.readConversation(query.conversationId);
@@ -577,19 +615,19 @@ export function createAgentConversationSession(
       if (!runs.ok) return runs;
       const latestSummary = await options.repository.readLatestSummary?.(query.conversationId);
       const diagnostics: AgentConversationDiagnostic[] = [];
+      const projected = await runsForRead(query.conversationId, runs.value);
+      diagnostics.push(...projected.diagnostics);
       let contextSummary: string | undefined;
       let summaryFreshness: AgentConversationSummaryFreshness = "unavailable";
       if (latestSummary?.ok === false) {
         diagnostics.push({ conversationId: query.conversationId, code: latestSummary.error.code });
       } else if (latestSummary?.value !== undefined) {
         contextSummary = readString(latestSummary.value, "content");
-        summaryFreshness = isSummaryCurrent(latestSummary.value, runs.value[0])
-          ? "fresh"
-          : "stale";
+        summaryFreshness = isSummaryCurrent(latestSummary.value, runs.value[0]) ? "fresh" : "stale";
       }
       return ok({
         ...toSummary(parsed, runs.value, summaryFreshness),
-        runs: runs.value,
+        runs: projected.runs,
         diagnostics,
         ...(contextSummary === undefined ? {} : { contextSummary })
       });
@@ -870,6 +908,99 @@ interface AgentConversationRunFact {
   readonly errorCodes?: readonly string[];
 }
 
+const CONVERSATION_ACTIVITY_EVENT_TYPES = new Set([
+  "tool_started",
+  "tool_completed",
+  "tool_failed",
+  "change_set_ready"
+]);
+
+function toConversationActivityEvent(event: JsonObject): JsonObject | undefined {
+  const type = readString(event, "type");
+  const schemaVersion = readString(event, "schemaVersion");
+  const runId = readSafeId(event, "runId");
+  const projectId = readSafeId(event, "projectId");
+  const sequence = readNonNegativeInteger(event, "sequence");
+  const runRevision = readNonNegativeInteger(event, "runRevision");
+  const createdAt = readString(event, "createdAt");
+  if (
+    type === undefined ||
+    !CONVERSATION_ACTIVITY_EVENT_TYPES.has(type) ||
+    schemaVersion === undefined ||
+    runId === undefined ||
+    projectId === undefined ||
+    sequence === undefined ||
+    runRevision === undefined ||
+    createdAt === undefined
+  ) {
+    return undefined;
+  }
+
+  const detail = readObject(event, "detail");
+  const projectedDetail =
+    type === "change_set_ready" ? changeSetActivityDetail(detail) : toolActivityDetail(detail);
+  return {
+    schemaVersion,
+    runId,
+    projectId,
+    sequence,
+    runRevision,
+    type,
+    createdAt,
+    ...(projectedDetail === undefined ? {} : { detail: projectedDetail })
+  };
+}
+
+function toolActivityDetail(detail: JsonObject | undefined): JsonObject | undefined {
+  if (detail === undefined) return undefined;
+  const projected: JsonObject = {};
+  for (const key of ["toolCallId", "toolName", "summary", "relativePath", "message"]) {
+    const value = readString(detail, key);
+    if (value !== undefined) projected[key] = value;
+  }
+  return Object.keys(projected).length === 0 ? undefined : projected;
+}
+
+function changeSetActivityDetail(detail: JsonObject | undefined): JsonObject | undefined {
+  const changeSet = readObject(detail ?? {}, "changeSet");
+  const files = readObjectArray(changeSet ?? {}, "files").flatMap((file) => {
+    const relativePath = readString(file, "relativePath");
+    return relativePath === undefined ? [] : [{ relativePath }];
+  });
+  return files.length === 0 ? undefined : { changeSet: { files } };
+}
+
+function assistantTextFromEvents(rawEvents: readonly JsonObject[]): string | undefined {
+  let assistantText = "";
+  let pendingDelta = "";
+  for (const event of [...rawEvents].sort(
+    (left, right) => Number(left["sequence"] ?? 0) - Number(right["sequence"] ?? 0)
+  )) {
+    const type = readString(event, "type");
+    const detail = readObject(event, "detail") ?? {};
+    if (type === "assistant_text_delta") {
+      pendingDelta += readString(detail, "delta") ?? "";
+      continue;
+    }
+    if (type === "assistant_text_completed") {
+      const text = readString(detail, "text")?.trim();
+      if (text !== undefined && text.length > 0) assistantText = text;
+      pendingDelta = "";
+      continue;
+    }
+    if (pendingDelta.trim().length > 0) {
+      assistantText = pendingDelta.trim();
+      pendingDelta = "";
+    }
+    if (type === "run_completed") {
+      const summary = readString(detail, "summary")?.trim();
+      if (summary !== undefined && summary.length > 0) assistantText = summary;
+    }
+  }
+  if (pendingDelta.trim().length > 0) assistantText = pendingDelta.trim();
+  return assistantText.length === 0 ? undefined : assistantText;
+}
+
 function toRunFact(run: JsonObject, rawEvents: readonly JsonObject[]): AgentConversationRunFact {
   const events = [...rawEvents].sort(
     (left, right) => Number(left["sequence"] ?? 0) - Number(right["sequence"] ?? 0)
@@ -977,9 +1108,7 @@ function toRunFact(run: JsonObject, rawEvents: readonly JsonObject[]): AgentConv
     ...(unresolvedQuestions.length === 0
       ? {}
       : {
-          unresolvedQuestions: unresolvedQuestions
-            .slice(0, 4)
-            .map((text) => boundedFactText(text))
+          unresolvedQuestions: unresolvedQuestions.slice(0, 4).map((text) => boundedFactText(text))
         }),
     ...(changeSetTargets.length === 0
       ? {}
@@ -1329,7 +1458,9 @@ function isJsonObject(value: unknown): value is JsonObject {
 }
 
 function isTerminalStatus(status: string | undefined): boolean {
-  return status !== undefined && ["completed", "cancelled", "failed", "limit_reached"].includes(status);
+  return (
+    status !== undefined && ["completed", "cancelled", "failed", "limit_reached"].includes(status)
+  );
 }
 
 function asJsonObject(value: object): JsonObject {

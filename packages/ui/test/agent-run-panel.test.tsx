@@ -1,11 +1,16 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { describe, expect, test, vi } from "vitest";
 
 import { AgentRunPanel } from "../src/agent-run-panel.js";
 
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("AgentRunPanel", () => {
   test("does not own the composer, mode controls, write policy, stop, or plan decisions", () => {
@@ -46,30 +51,129 @@ describe("AgentRunPanel", () => {
     expect(html).toContain("保留现有揭示时机？");
   });
 
-  test("labels demo runtime and dirty editor context without exposing apply controls", () => {
+  test("labels dirty editor context without exposing provider observability or apply controls", () => {
     const html = renderPanel({
       status: "idle",
       providerLabel: "Demo · scripted-agent",
       contextSourceNotice: "使用未保存编辑器内容 · editor_buffer / dirty"
     });
 
-    expect(html).toContain("Demo · scripted-agent");
+    expect(html).not.toContain("Demo · scripted-agent");
     expect(html).toContain("editor_buffer / dirty");
     expect(html).not.toContain("应用");
   });
 
-  test("aggregates more than three consecutive completed reads while retaining each item", () => {
+  test("collapses completed reads and proposed file changes into one activity summary", () => {
     const events = [
       completedRead(2, "read-01", "已读取第 1 章"),
       completedRead(4, "read-02", "已读取第 2 章"),
       completedRead(6, "read-03", "已读取第 3 章"),
-      completedRead(8, "read-04", "已读取第 4 章")
+      completedRead(8, "read-04", "已读取第 4 章"),
+      completedProposal(10, "write-01", "notes/outline.md"),
+      completedProposal(12, "write-02", "chapters/chapter-02.md")
     ].flat();
-    const html = renderPanel({ events });
+    const host = renderPanelHost({ events, status: "completed" });
+    const summary = host.querySelector<HTMLDetailsElement>('[aria-label="Agent 活动摘要"]');
 
-    expect(html).toContain("已读取 4 项");
-    expect(html).toContain("已读取第 1 章");
-    expect(html).toContain("已读取第 4 章");
+    expect(summary).not.toBeNull();
+    expect(summary?.open).toBe(false);
+    expect(summary?.querySelector("summary")?.textContent).toContain("已读取 4 项 · 修改 2 个文件");
+    expect(summary?.querySelector("ol")?.textContent).toContain("已读取第 1 章");
+    expect(summary?.querySelector("ol")?.textContent).toContain("已读取第 4 章");
+    expect(summary?.querySelector("ol")?.textContent).toContain("notes/outline.md");
+    expect(summary?.querySelectorAll(":scope > .ns-agent-timeline > ol > li")).toHaveLength(6);
+    expect(summary?.querySelector(".ns-agent-timeline-group")).toBeNull();
+
+    disposePanelHost(host);
+  });
+
+  test("summarizes previous actions while keeping the current action expanded", () => {
+    const events = [
+      ...completedRead(2, "read-01", "已读取第 1 章"),
+      ...completedRead(4, "read-02", "已读取第 2 章"),
+      {
+        schemaVersion: "1.0" as const,
+        runId: "run-01",
+        projectId: "project-01",
+        sequence: 6,
+        runRevision: 6,
+        type: "tool_started" as const,
+        createdAt: "2026-07-13T00:00:02.000Z",
+        detail: {
+          toolCallId: "read-current",
+          toolName: "read_story_bible",
+          summary: "正在读取人物设定"
+        }
+      }
+    ];
+    const host = renderPanelHost({ events, status: "executing_read_tool" });
+    const completed = host.querySelector<HTMLDetailsElement>('[aria-label="Agent 活动摘要"]');
+    const current = host.querySelector<HTMLElement>('[aria-label="Agent 当前活动"]');
+
+    expect(completed?.open).toBe(false);
+    expect(completed?.querySelector("summary")?.textContent).toContain("已读取 2 项");
+    expect(current?.textContent).toContain("正在读取人物设定");
+    expect(current?.querySelector("details")?.open).toBe(true);
+
+    disposePanelHost(host);
+  });
+
+  test("keeps exact persisted tool steps in sequence order and hides raw observability", () => {
+    const events = [
+      ...completedProposal(8, "write-02", "chapters/chapter-02.md"),
+      ...completedRead(2, "read-01", "已读取第 1 章"),
+      ...completedProposal(6, "write-01", "notes/outline.md"),
+      ...completedRead(4, "read-02", "已读取第 2 章"),
+      {
+        schemaVersion: "1.0" as const,
+        runId: "run-01",
+        projectId: "project-01",
+        sequence: 20,
+        runRevision: 20,
+        type: "run_completed" as const,
+        createdAt: "2026-07-13T00:00:04.000Z",
+        detail: {
+          argumentsText: '{"path":"secret.md"}',
+          providerFrame: "raw-provider-frame",
+          inputTokens: 1234,
+          cost: 9.99,
+          contextTrace: "hidden-context-trace",
+          workflowHistory: "hidden-workflow-history"
+        }
+      }
+    ];
+    const host = renderPanelHost({
+      events,
+      status: "completed",
+      providerLabel: "openai-compatible · local-agent"
+    });
+    const steps = Array.from(
+      host.querySelectorAll('[aria-label="Agent 活动摘要"] ol > li'),
+      (item) => item.textContent
+    );
+
+    expect(steps).toHaveLength(4);
+    expect(steps[0]).toContain("已读取第 1 章");
+    expect(steps[1]).toContain("已读取第 2 章");
+    expect(steps[2]).toContain("notes/outline.md");
+    expect(steps[3]).toContain("chapters/chapter-02.md");
+    expect(host.textContent).not.toContain("openai-compatible");
+    expect(host.textContent).not.toContain("raw-provider-frame");
+    expect(host.textContent).not.toContain("1234");
+    expect(host.textContent).not.toContain("9.99");
+    expect(host.textContent).not.toContain("hidden-context-trace");
+    expect(host.textContent).not.toContain("hidden-workflow-history");
+
+    disposePanelHost(host);
+  });
+
+  test("renders the run as inline assistant content without another frame or scroller", () => {
+    const css = readUiStyles();
+    const runRule = css.match(/\.ns-agent-run\s*\{[^}]*\}/s)?.[0] ?? "";
+    const wrapperRule = css.match(/\.ns-agent-conversation-run-panel\s*\{[^}]*\}/s)?.[0] ?? "";
+
+    expect(runRule).not.toMatch(/overflow\s*:\s*(?:auto|scroll)/);
+    expect(wrapperRule).not.toMatch(/border(?:-top)?\s*:/);
   });
 
   test("shows automatic-write risk version points and run undo only for execution", () => {
@@ -261,24 +365,66 @@ function completedRead(sequence: number, toolCallId: string, summary: string) {
   ];
 }
 
+function completedProposal(sequence: number, toolCallId: string, relativePath: string) {
+  return [
+    {
+      schemaVersion: "1.0" as const,
+      runId: "run-01",
+      projectId: "project-01",
+      sequence,
+      runRevision: sequence,
+      type: "tool_started" as const,
+      createdAt: "2026-07-13T00:00:00.000Z",
+      detail: { toolCallId, toolName: "propose_file_write", relativePath }
+    },
+    {
+      schemaVersion: "1.0" as const,
+      runId: "run-01",
+      projectId: "project-01",
+      sequence: sequence + 1,
+      runRevision: sequence + 1,
+      type: "tool_completed" as const,
+      createdAt: "2026-07-13T00:00:01.000Z",
+      detail: {
+        toolCallId,
+        toolName: "propose_file_write",
+        relativePath,
+        summary: `已准备修改 ${relativePath}`
+      }
+    }
+  ];
+}
+
 function renderPanel(overrides: Record<string, unknown>): string {
-  const host = document.createElement("div");
-  document.body.append(host);
-  let root: Root | undefined;
-  act(() => {
-    root = createRoot(host);
-    root.render(
-      <AgentRunPanel
-        {...createProps()}
-        {...overrides}
-      />
-    );
-  });
+  const host = renderPanelHost(overrides);
   const html = host.innerHTML;
-  act(() => root?.unmount());
-  host.remove();
+  disposePanelHost(host);
   return html;
 }
+
+function renderPanelHost(overrides: Record<string, unknown>): HTMLDivElement {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  roots.set(host, root);
+  act(() => {
+    root.render(<AgentRunPanel {...createProps()} {...overrides} />);
+  });
+  return host;
+}
+
+function disposePanelHost(host: HTMLDivElement): void {
+  const root = roots.get(host);
+  act(() => root?.unmount());
+  roots.delete(host);
+  host.remove();
+}
+
+function readUiStyles(): string {
+  return readFileSync(resolve("packages/ui/src/styles.css"), "utf8");
+}
+
+const roots = new WeakMap<HTMLDivElement, Root>();
 
 function createProps() {
   return {

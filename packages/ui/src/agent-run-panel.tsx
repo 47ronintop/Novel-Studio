@@ -1,6 +1,7 @@
 import { Play, RefreshCw, RotateCcw } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { AgentActivitySummary } from "./agent-activity-summary.js";
 import { AgentRunTimeline } from "./agent-run-timeline.js";
 import { ChangeSetReview } from "./change-set-review.js";
 import type { AgentRunPanelProps } from "./workspace-shell-types.js";
@@ -9,6 +10,12 @@ export function AgentRunPanel(props: AgentRunPanelProps) {
   const [answer, setAnswer] = useState("");
   const [selectedOption, setSelectedOption] = useState("");
   const lastEvent = props.events.at(-1);
+  const nonToolEvents = props.events.filter(
+    (event) =>
+      event.type !== "tool_started" &&
+      event.type !== "tool_completed" &&
+      event.type !== "tool_failed"
+  );
 
   useEffect(() => {
     setAnswer("");
@@ -16,14 +23,15 @@ export function AgentRunPanel(props: AgentRunPanelProps) {
   }, [props.pendingUserInput?.questionId]);
 
   return (
-    <section className="ns-agent-run" aria-label="Agentic Writing Loop">
+    <section
+      className="ns-agent-run"
+      aria-label="Agentic Writing Loop"
+      {...(props.runId === undefined ? {} : { "data-run-id": props.runId })}
+    >
       <header className="ns-agent-run-header">
         <span className="ns-agent-status">{statusLabel(props.status)}</span>
       </header>
 
-      {props.providerLabel === undefined ? null : (
-        <p className="ns-agent-runtime-label">{props.providerLabel}</p>
-      )}
       {props.contextSourceNotice === undefined ? null : (
         <p className="ns-agent-context-notice">{props.contextSourceNotice}</p>
       )}
@@ -31,7 +39,8 @@ export function AgentRunPanel(props: AgentRunPanelProps) {
       {props.assistantText.length === 0 ? null : (
         <p className="ns-agent-assistant-text">{props.assistantText}</p>
       )}
-      {props.events.length === 0 ? null : <AgentRunTimeline events={props.events} />}
+      <AgentActivitySummary events={props.events} />
+      <AgentRunTimeline ariaLabel="Agent 运行状态" events={nonToolEvents} />
 
       {props.pendingUserInput === undefined ? null : (
         <section className="ns-agent-question" aria-label="Agent 阻塞问题">
@@ -128,7 +137,9 @@ export function AgentRunPanel(props: AgentRunPanelProps) {
             重试步骤
           </button>
         ) : null}
-        {props.operationMode === "execution" && props.canUndoRun && props.onUndoRun !== undefined ? (
+        {props.operationMode === "execution" &&
+        props.canUndoRun &&
+        props.onUndoRun !== undefined ? (
           <button
             aria-label="撤销本次运行"
             className="ns-ai-secondary-button"
@@ -140,7 +151,6 @@ export function AgentRunPanel(props: AgentRunPanelProps) {
           </button>
         ) : null}
       </div>
-
     </section>
   );
 }

@@ -284,6 +284,7 @@ export interface AgentConversationTurnProps {
   readonly runId: string;
   readonly userRequest: string;
   readonly assistantText?: string;
+  readonly events?: readonly AgentRunEvent[];
   readonly statusLabel: string;
   readonly updatedAtLabel: string;
 }

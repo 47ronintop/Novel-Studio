@@ -2782,11 +2782,11 @@ textarea:focus-visible,
 
 .ns-agent-run {
   display: flex;
-  flex: 1;
+  flex: 0 0 auto;
   flex-direction: column;
   gap: 12px;
   min-height: 0;
-  overflow: auto;
+  overflow: visible;
   padding: 10px 12px 12px;
 }
 
@@ -2918,6 +2918,48 @@ textarea:focus-visible,
   white-space: pre-wrap;
 }
 
+.ns-agent-activity {
+  display: grid;
+  gap: 6px;
+}
+
+.ns-agent-activity-summary {
+  min-width: 0;
+}
+
+.ns-agent-activity-summary > summary {
+  align-items: center;
+  color: var(--ns-muted);
+  cursor: pointer;
+  display: flex;
+  font-size: 12px;
+  gap: 7px;
+  list-style: none;
+  min-height: 28px;
+  padding: 4px 2px;
+}
+
+.ns-agent-activity-summary > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ns-agent-activity-summary > summary span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ns-agent-activity-summary[open] > summary {
+  color: var(--ns-ink);
+}
+
+.ns-agent-activity-summary > .ns-agent-timeline {
+  padding-left: 2px;
+}
+
+.ns-agent-current-activity {
+  min-width: 0;
+}
+
 .ns-agent-timeline ol {
   display: grid;
   gap: 4px;
@@ -2979,28 +3021,6 @@ textarea:focus-visible,
 
 .ns-agent-timeline p {
   margin: 5px 0 0;
-}
-
-.ns-agent-timeline-group {
-  display: grid;
-  gap: 4px;
-  list-style: none;
-  margin: 6px 0 0;
-  padding: 0 0 0 2px;
-}
-
-.ns-agent-timeline-group li {
-  align-items: center;
-  display: flex;
-  gap: 8px;
-  justify-content: space-between;
-  min-height: 24px;
-  padding: 2px 0;
-}
-
-.ns-agent-timeline-group span {
-  min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 .ns-agent-spin {
@@ -3364,7 +3384,7 @@ textarea:focus-visible,
 }
 
 .ns-agent-conversation-run-panel {
-  border-top: 1px solid var(--ns-border);
+  display: contents;
 }
 
 .ns-agent-conversation-run-panel .ns-agent-composer {
@@ -5077,8 +5097,7 @@ textarea:focus-visible,
   }
 
   .ns-workspace-grid[data-agent-conversation="true"][data-focus-mode="false"] {
-    grid-template-columns:
-      48px minmax(0, 1fr) 4px minmax(280px, var(--ns-ai-panel-width, 320px));
+    grid-template-columns: 48px minmax(0, 1fr) 4px minmax(280px, var(--ns-ai-panel-width, 320px));
     grid-template-areas:
       "activity editor ai-resize ai"
       "bottom bottom bottom bottom";
@@ -5095,8 +5114,7 @@ textarea:focus-visible,
     display: grid;
   }
 
-  .ns-workspace-grid[data-agent-conversation="true"][data-focus-mode="false"]
-    .ns-resize-handle-ai {
+  .ns-workspace-grid[data-agent-conversation="true"][data-focus-mode="false"] .ns-resize-handle-ai {
     display: block;
   }
 

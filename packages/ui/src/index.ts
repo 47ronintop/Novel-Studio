@@ -57,6 +57,7 @@ export type {
 } from "./model-settings-panel.js";
 export { WorkspaceShell } from "./workspace-shell.js";
 export { AgentRunPanel } from "./agent-run-panel.js";
+export { AgentActivitySummary } from "./agent-activity-summary.js";
 export { AgentComposer } from "./agent-composer.js";
 export { AgentRunTimeline } from "./agent-run-timeline.js";
 export { AgentConversationNavigator } from "./agent-conversation-navigator.js";

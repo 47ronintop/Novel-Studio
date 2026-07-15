@@ -50,7 +50,13 @@ export function AgentComposer(props: AgentComposerProps) {
   }
 
   function moveOptionFocus(event: KeyboardEvent<HTMLButtonElement>): void {
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    if (
+      event.key !== "ArrowLeft" &&
+      event.key !== "ArrowRight" &&
+      event.key !== "ArrowUp" &&
+      event.key !== "ArrowDown"
+    )
+      return;
     event.preventDefault();
     const options = Array.from(
       event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("button") ?? []
@@ -66,7 +72,7 @@ export function AgentComposer(props: AgentComposerProps) {
     if (canSend) props.onSend(props.request.trim());
   }
 
-  const operationLabel = props.operationMode === "execution" ? "执行" : "规划（只读）";
+  const operationLabel = props.operationMode === "execution" ? "执行" : "规划";
   const contextLabel = props.contextMode === "writing" ? "写作" : "通用文件";
 
   return (
@@ -88,7 +94,7 @@ export function AgentComposer(props: AgentComposerProps) {
             <button
               aria-expanded={popoverOpen}
               aria-haspopup="dialog"
-              aria-label="选择运行方式和上下文"
+              aria-label={`${operationLabel} · ${contextLabel}`}
               disabled={draftDisabled}
               onClick={() => (popoverOpen ? closePopover() : openPopover())}
               onKeyDown={(event) => {
@@ -98,6 +104,7 @@ export function AgentComposer(props: AgentComposerProps) {
                 }
               }}
               ref={triggerRef}
+              title="选择运行方式和上下文"
               type="button"
             >
               {operationLabel} · {contextLabel}
@@ -196,7 +203,9 @@ export function AgentComposer(props: AgentComposerProps) {
                   aria-label="写入策略"
                   disabled={draftDisabled}
                   onChange={(event) =>
-                    props.onWritePolicyChange(event.currentTarget.value as AgentComposerProps["writePolicy"])
+                    props.onWritePolicyChange(
+                      event.currentTarget.value as AgentComposerProps["writePolicy"]
+                    )
                   }
                   value={props.writePolicy}
                 >
@@ -210,7 +219,9 @@ export function AgentComposer(props: AgentComposerProps) {
                 <input
                   checked={props.writePolicyAcknowledged}
                   disabled={draftDisabled}
-                  onChange={(event) => props.onWritePolicyAcknowledgedChange(event.currentTarget.checked)}
+                  onChange={(event) =>
+                    props.onWritePolicyAcknowledgedChange(event.currentTarget.checked)
+                  }
                   type="checkbox"
                 />
                 <span>确认本次运行自动修改</span>

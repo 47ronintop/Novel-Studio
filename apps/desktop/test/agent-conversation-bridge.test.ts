@@ -171,6 +171,87 @@ describe("AgentConversationBridge", () => {
     expect(workspace.view.conversation?.turns.map((turn) => turn.runId)).toEqual(["run_01"]);
   });
 
+  test("projects a preflight error without a run id into the selected conversation", async () => {
+    const fixture = createApiFixture([
+      conversation("conv_01", undefined, undefined, "2026-07-14T00:00:00.000Z")
+    ]);
+    const state = await createAgentConversationBridge(fixture.api).load("project_01");
+    const preflightFailure = agentRunProps("idle", {
+      runId: undefined,
+      errorMessage: "The selected model cannot start an Agent run."
+    });
+
+    const workspace = toAgentConversationWorkspaceProps(
+      state,
+      preflightFailure,
+      undefined,
+      undefined,
+      workspaceActions()
+    );
+
+    expect(workspace.view.agentRun).toBe(preflightFailure);
+    expect(workspace.view.conversation?.turns).toEqual([]);
+  });
+
+  test("keeps a newly started run exactly once when it becomes a terminal turn", async () => {
+    const fixture = createApiFixture([
+      conversation("conv_01", undefined, undefined, "2026-07-14T00:00:00.000Z")
+    ]);
+    const bridge = createAgentConversationBridge(fixture.api);
+    await bridge.load("project_01");
+    fixture.setProjectConversations("project_01", [
+      conversation("conv_01", "run_new", "planning_model", "2026-07-14T01:00:00.000Z")
+    ]);
+
+    fixture.emit(runEvent("run_new", "run_started", 1));
+    await flushAsyncRouting();
+    fixture.emit(
+      runEvent("run_new", "assistant_text_completed", 2, { text: "Completed response" })
+    );
+    await flushAsyncRouting();
+    fixture.emit(
+      runEvent("run_new", "tool_started", 3, {
+        toolCallId: "read-01",
+        toolName: "read_chapter",
+        summary: "正在读取第一章"
+      })
+    );
+    await flushAsyncRouting();
+    fixture.emit(
+      runEvent("run_new", "tool_completed", 4, {
+        toolCallId: "read-01",
+        toolName: "read_chapter",
+        summary: "已读取第一章"
+      })
+    );
+    await flushAsyncRouting();
+    fixture.emit(runEvent("run_new", "run_completed", 5));
+    await flushAsyncRouting();
+
+    const state = bridge.getProps();
+    if (state === undefined) throw new Error("Expected loaded conversation state");
+    const workspace = toAgentConversationWorkspaceProps(
+      state,
+      agentRunProps("completed", { runId: "run_new", assistantText: "Completed response" }),
+      undefined,
+      undefined,
+      workspaceActions()
+    );
+
+    expect(workspace.view.agentRun).toBeUndefined();
+    expect(workspace.view.conversation?.turns).toEqual([
+      expect.objectContaining({
+        runId: "run_new",
+        assistantText: "Completed response",
+        statusLabel: "completed",
+        events: [
+          expect.objectContaining({ sequence: 3, type: "tool_started" }),
+          expect.objectContaining({ sequence: 4, type: "tool_completed" })
+        ]
+      })
+    ]);
+  });
+
   test("lists conversations and hydrates the active conversation on load", async () => {
     const fixture = createApiFixture([
       conversation("conv_old", "run_old", "completed", "2026-07-14T00:00:00.000Z"),
@@ -210,9 +291,7 @@ describe("AgentConversationBridge", () => {
     const resetsAfterLoad = resets;
 
     const created = await bridge.create();
-    expect(fixture.createCommands).toEqual([
-      { projectId: "project_01", commandId: "cmd_create" }
-    ]);
+    expect(fixture.createCommands).toEqual([{ projectId: "project_01", commandId: "cmd_create" }]);
     expect(created.selectedConversationId).toBe("conv_created");
     expect(created.selectedConversation?.conversationId).toBe("conv_created");
     expect(resets).toBe(resetsAfterLoad + 1);
@@ -318,9 +397,7 @@ describe("AgentConversationBridge", () => {
 });
 
 function createApiFixture(initial: readonly AgentConversationSummary[]) {
-  const byProject = new Map<string, AgentConversationSummary[]>([
-    ["project_01", [...initial]]
-  ]);
+  const byProject = new Map<string, AgentConversationSummary[]>([["project_01", [...initial]]]);
   const eventListeners = new Set<(event: AgentRunEvent) => void>();
   const listQueries: Record<string, unknown>[] = [];
   const readQueries: Record<string, unknown>[] = [];
@@ -337,9 +414,7 @@ function createApiFixture(initial: readonly AgentConversationSummary[]) {
     byProject.set(projectId, [next, ...values]);
   };
   const detail = (projectId: string, conversationId: string): AgentConversationReadResult => {
-    const summary = summaries(projectId).find(
-      (entry) => entry.conversationId === conversationId
-    );
+    const summary = summaries(projectId).find((entry) => entry.conversationId === conversationId);
     if (summary === undefined) throw new Error(`Missing conversation ${conversationId}`);
     return {
       ...summary,
@@ -517,7 +592,8 @@ function runSnapshot(
 function runEvent(
   runId: string,
   type: AgentRunEvent["type"],
-  sequence: number
+  sequence: number,
+  detail?: AgentRunEvent["detail"]
 ): AgentRunEvent {
   return {
     schemaVersion: "1.0",
@@ -526,7 +602,8 @@ function runEvent(
     sequence,
     runRevision: sequence,
     type,
-    createdAt: `2026-07-14T02:00:0${String(sequence)}.000Z`
+    createdAt: `2026-07-14T02:00:0${String(sequence)}.000Z`,
+    ...(detail === undefined ? {} : { detail })
   };
 }
 

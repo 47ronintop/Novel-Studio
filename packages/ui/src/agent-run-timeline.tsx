@@ -1,25 +1,28 @@
-import {
-  CheckCircle2,
-  Circle,
-  HelpCircle,
-  LoaderCircle,
-  XCircle
-} from "lucide-react";
+import { CheckCircle2, Circle, HelpCircle, LoaderCircle, XCircle } from "lucide-react";
 
 import type { AgentRunEvent } from "@novel-studio/application";
 
-export function AgentRunTimeline({ events }: { readonly events: readonly AgentRunEvent[] }) {
+export function AgentRunTimeline({
+  events,
+  ariaLabel = "Agent 运行时间线"
+}: {
+  readonly events: readonly AgentRunEvent[];
+  readonly ariaLabel?: string;
+}) {
   const items = timelineItems(events);
   const current = items.at(-1);
 
+  if (items.length === 0) return null;
+
   return (
-    <section className="ns-agent-timeline" aria-label="Agent 运行时间线">
+    <section className="ns-agent-timeline" aria-label={ariaLabel}>
       <span className="ns-visually-hidden" aria-live="polite">
         {current?.label ?? ""}
       </span>
       <ol>
         {items.map((item) => {
-          const expanded = item.status === "running" || item.status === "waiting" || item.status === "failed";
+          const expanded =
+            item.status === "running" || item.status === "waiting" || item.status === "failed";
           return (
             <li data-status={item.status} key={item.key}>
               <TimelineIcon status={item.status} />
@@ -29,16 +32,6 @@ export function AgentRunTimeline({ events }: { readonly events: readonly AgentRu
                   <small>{item.statusLabel}</small>
                 </summary>
                 {item.detail === undefined ? null : <p>{item.detail}</p>}
-                {item.children === undefined ? null : (
-                  <ul className="ns-agent-timeline-group">
-                    {item.children.map((child) => (
-                      <li key={child.key}>
-                        <span>{child.label}</span>
-                        <small>{child.statusLabel}</small>
-                      </li>
-                    ))}
-                  </ul>
-                )}
               </details>
             </li>
           );
@@ -54,24 +47,20 @@ interface TimelineItem {
   readonly detail?: string;
   readonly status: "pending" | "running" | "completed" | "failed" | "waiting";
   readonly statusLabel: string;
-  readonly category?: "read";
-  readonly children?: readonly TimelineItem[];
 }
 
 function timelineItems(events: readonly AgentRunEvent[]): TimelineItem[] {
   const items: TimelineItem[] = [];
   const startedByCall = new Map<string, number>();
-  for (const event of events) {
+  for (const event of [...events].sort(compareEvents)) {
     if (event.type === "tool_started") {
       const toolCallId = stringDetail(event, "toolCallId") ?? `tool-${event.sequence}`;
       const item: TimelineItem = {
         key: `${event.runId}:${event.sequence}`,
-        label:
-          stringDetail(event, "summary") ?? toolActivityLabel(stringDetail(event, "toolName")),
+        label: stringDetail(event, "summary") ?? toolActivityLabel(stringDetail(event, "toolName")),
         ...optionalDetail(stringDetail(event, "relativePath")),
         status: "running",
-        statusLabel: "进行中",
-        ...readCategory(stringDetail(event, "toolName"))
+        statusLabel: "进行中"
       };
       startedByCall.set(toolCallId, items.length);
       items.push(item);
@@ -81,21 +70,18 @@ function timelineItems(events: readonly AgentRunEvent[]): TimelineItem[] {
       const toolCallId = stringDetail(event, "toolCallId");
       const itemIndex = toolCallId === undefined ? undefined : startedByCall.get(toolCallId);
       const replacement: TimelineItem = {
-        key: itemIndex === undefined ? `${event.runId}:${event.sequence}` : items[itemIndex]?.key ?? "",
-        label:
-          stringDetail(event, "summary") ?? toolActivityLabel(stringDetail(event, "toolName")),
+        key:
+          itemIndex === undefined
+            ? `${event.runId}:${event.sequence}`
+            : (items[itemIndex]?.key ?? ""),
+        label: stringDetail(event, "summary") ?? toolActivityLabel(stringDetail(event, "toolName")),
         ...optionalDetail(
           event.type === "tool_failed"
             ? stringDetail(event, "message")
             : stringDetail(event, "relativePath")
         ),
         status: event.type === "tool_failed" ? "failed" : "completed",
-        statusLabel: event.type === "tool_failed" ? "失败" : "已完成",
-        ...(itemIndex === undefined
-          ? readCategory(stringDetail(event, "toolName"))
-          : items[itemIndex]?.category === "read"
-            ? { category: "read" as const }
-            : {})
+        statusLabel: event.type === "tool_failed" ? "失败" : "已完成"
       };
       if (itemIndex === undefined) items.push(replacement);
       else items[itemIndex] = replacement;
@@ -158,51 +144,17 @@ function timelineItems(events: readonly AgentRunEvent[]): TimelineItem[] {
       items.push({
         key: `${event.runId}:${event.sequence}`,
         label: keptFiles > 0 ? "撤销审阅已完成" : "本次运行已撤销",
-        ...(keptFiles > 0
-          ? { detail: `保留 ${keptFiles} 个文件的当前内容` }
-          : {}),
+        ...(keptFiles > 0 ? { detail: `保留 ${keptFiles} 个文件的当前内容` } : {}),
         status: "completed",
         statusLabel: "已完成"
       });
     }
   }
-  return aggregateCompletedReads(items);
+  return items;
 }
 
-function aggregateCompletedReads(items: readonly TimelineItem[]): TimelineItem[] {
-  const aggregated: TimelineItem[] = [];
-  for (let index = 0; index < items.length; ) {
-    const consecutive: TimelineItem[] = [];
-    while (
-      index < items.length &&
-      items[index]?.category === "read" &&
-      items[index]?.status === "completed"
-    ) {
-      const item = items[index];
-      if (item !== undefined) consecutive.push(item);
-      index += 1;
-    }
-    if (consecutive.length === 0) {
-      const item = items[index];
-      if (item !== undefined) aggregated.push(item);
-      index += 1;
-    } else if (consecutive.length > 3) {
-      const first = consecutive[0];
-      if (first !== undefined) {
-        aggregated.push({
-          key: `${first.key}:read-group`,
-          label: `已读取 ${consecutive.length} 项`,
-          status: "completed",
-          statusLabel: "已完成",
-          category: "read",
-          children: consecutive
-        });
-      }
-    } else {
-      aggregated.push(...consecutive);
-    }
-  }
-  return aggregated;
+function compareEvents(left: AgentRunEvent, right: AgentRunEvent): number {
+  return left.sequence - right.sequence || left.createdAt.localeCompare(right.createdAt);
 }
 
 function TimelineIcon({ status }: { readonly status: TimelineItem["status"] }) {
@@ -252,10 +204,4 @@ function keptUndoFileCount(event: AgentRunEvent): number {
 
 function optionalDetail(value: string | undefined): { readonly detail: string } | object {
   return value === undefined ? {} : { detail: value };
-}
-
-function readCategory(toolName: string | undefined): { readonly category: "read" } | object {
-  return toolName === "list_project_entries" || toolName?.startsWith("read_") === true
-    ? { category: "read" }
-    : {};
 }

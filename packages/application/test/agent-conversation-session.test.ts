@@ -95,6 +95,53 @@ describe("AgentConversationSession", () => {
     });
   });
 
+  test("restores assistant text and sanitized activity events from persisted run events", async () => {
+    const port = new MemoryConversationPort();
+    const session = createSession(port);
+    await session.createConversation({ projectId: "project_01", commandId: "cmd_create" });
+    port.runs.push(runSnapshot({ runRevision: 5, lastSequence: 5 }));
+    port.events.set("run_01", [
+      runEvent("run_01", 1, "tool_started", {
+        toolCallId: "read-01",
+        toolName: "read_chapter",
+        summary: "正在读取第一章",
+        argumentsText: '{"chapterId":"chapter-01"}'
+      }),
+      runEvent("run_01", 2, "tool_completed", {
+        toolCallId: "read-01",
+        toolName: "read_chapter",
+        summary: "已读取第一章",
+        relativePath: "chapters/chapter-01.md",
+        providerFrame: "raw-provider-frame"
+      }),
+      runEvent("run_01", 3, "assistant_text_completed", { text: "第一章线索已经核对。" }),
+      runEvent("run_01", 4, "run_completed", { summary: "核对完成。" })
+    ]);
+
+    const read = await session.readConversation({
+      projectId: "project_01",
+      conversationId: "conv_01"
+    });
+
+    expect(read).toMatchObject({
+      ok: true,
+      value: {
+        runs: [
+          {
+            runId: "run_01",
+            assistantText: "核对完成。",
+            events: [
+              { sequence: 1, type: "tool_started" },
+              { sequence: 2, type: "tool_completed" }
+            ]
+          }
+        ]
+      }
+    });
+    expect(JSON.stringify(read)).not.toContain("argumentsText");
+    expect(JSON.stringify(read)).not.toContain("raw-provider-frame");
+  });
+
   test("exposes non-empty old runs through a read-only virtual conversation", async () => {
     const port = new MemoryConversationPort();
     port.runs.push(runSnapshot({ runId: "run_legacy", conversationId: null }));
@@ -262,9 +309,7 @@ describe("AgentConversationSession", () => {
       status: "active",
       updatedAt: "2026-07-14T00:30:00.000Z"
     });
-    port.listDiagnostics = [
-      { conversationId: "conv_bad", code: "AGENT_CONVERSATION_READ_FAILED" }
-    ];
+    port.listDiagnostics = [{ conversationId: "conv_bad", code: "AGENT_CONVERSATION_READ_FAILED" }];
 
     expect(await session.listConversations({ projectId: "project_01" })).toMatchObject({
       ok: true,
@@ -489,9 +534,10 @@ describe("AgentConversationSession", () => {
     });
 
     for (const query of ["雪山", "父亲留下", "人物动机"]) {
-      expect(
-        await session.searchConversations({ projectId: "project_01", query })
-      ).toMatchObject({ ok: true, value: { items: [{ conversationId: "conv_01" }] } });
+      expect(await session.searchConversations({ projectId: "project_01", query })).toMatchObject({
+        ok: true,
+        value: { items: [{ conversationId: "conv_01" }] }
+      });
     }
     expect(port.searchInputs).toHaveLength(3);
     const document = (port.searchInputs[0]?.["documents"] as JsonObject[] | undefined)?.[0];
@@ -692,7 +738,9 @@ class MemoryConversationPort implements AgentConversationPersistencePort {
   }
 
   public writeSummary(summary: JsonObject): Promise<Result<JsonObject, UnifiedError>> {
-    const existing = this.summaries.find((candidate) => candidate["revision"] === summary["revision"]);
+    const existing = this.summaries.find(
+      (candidate) => candidate["revision"] === summary["revision"]
+    );
     if (existing !== undefined) {
       return Promise.resolve(
         JSON.stringify(existing) === JSON.stringify(summary)
@@ -764,12 +812,7 @@ function runSnapshot(overrides: JsonObject = {}): JsonObject {
   };
 }
 
-function runEvent(
-  runId: string,
-  sequence: number,
-  type: string,
-  detail?: JsonObject
-): JsonObject {
+function runEvent(runId: string, sequence: number, type: string, detail?: JsonObject): JsonObject {
   return {
     schemaVersion: "1.0",
     runId,
