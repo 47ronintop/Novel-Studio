@@ -20,6 +20,8 @@ const MAX_TITLE_BYTES = 512;
 const MAX_SUMMARY_CONTENT_BYTES = 8 * 1024;
 const MAX_SUMMARY_RECORD_BYTES = 64 * 1024;
 const MAX_RECEIPT_BYTES = 64 * 1024;
+const MAX_DRAFT_RECORD_BYTES = 64 * 1024;
+type DraftLeaf = "run-drafts" | "context-drafts";
 const MAX_SUMMARY_RUN_IDS = 100;
 const MAX_SEARCH_QUERY_BYTES = 1024;
 const MAX_SEARCH_INDEX_BYTES = 4 * 1024 * 1024;
@@ -423,6 +425,100 @@ export class AgentConversationFileRepository {
     );
   }
 
+  public writeRunDraft(draft: JsonObject): Promise<Result<JsonObject, UnifiedError>> {
+    return this.writeDraft("run-drafts", draft);
+  }
+
+  public readLatestRunDraft(
+    conversationId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    return this.readLatestDraft("run-drafts", conversationId);
+  }
+
+  public writeContextDraft(draft: JsonObject): Promise<Result<JsonObject, UnifiedError>> {
+    return this.writeDraft("context-drafts", draft);
+  }
+
+  public readLatestContextDraft(
+    conversationId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    return this.readLatestDraft("context-drafts", conversationId);
+  }
+
+  private writeDraft(
+    leaf: DraftLeaf,
+    draft: JsonObject
+  ): Promise<Result<JsonObject, UnifiedError>> {
+    const conversationId = draft["conversationId"];
+    const revision = draft["revision"];
+    if (
+      typeof conversationId !== "string" ||
+      !isSafeId(conversationId) ||
+      conversationId === LEGACY_CONVERSATION_ID ||
+      !isDraftRevisionNumber(revision) ||
+      jsonByteLength(draft) > MAX_DRAFT_RECORD_BYTES
+    ) {
+      return Promise.resolve(this.invalid("AGENT_CONVERSATION_DRAFT_INVALID"));
+    }
+    return this.withConversationWrite(conversationId, async () => {
+      const existing = await this.readDraftRevision(leaf, conversationId, revision);
+      if (!existing.ok) return existing;
+      if (existing.value !== undefined) {
+        return sameJson(existing.value, draft)
+          ? ok(existing.value)
+          : this.invalid("AGENT_CONVERSATION_DRAFT_CONFLICT");
+      }
+      const written = await this.writeJson(this.draftPath(leaf, conversationId, revision), draft);
+      return written.ok ? ok(draft) : written;
+    });
+  }
+
+  private async readLatestDraft(
+    leaf: DraftLeaf,
+    conversationId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    if (!isSafeId(conversationId) || conversationId === LEGACY_CONVERSATION_ID) {
+      return this.invalid("AGENT_CONVERSATION_ID_INVALID");
+    }
+    const root = this.draftRoot(leaf, conversationId);
+    const verified = await verifyProjectStoragePath(this.pathGuard, root, this.traceId);
+    if (!verified.ok) return verified;
+    try {
+      const revisions = (await readdir(root, { withFileTypes: true }))
+        .filter((entry) => entry.isFile() && /^[1-9][0-9]*\.json$/u.test(entry.name))
+        .map((entry) => Number(entry.name.slice(0, -5)))
+        .filter(Number.isSafeInteger)
+        .sort((left, right) => right - left);
+      return revisions[0] === undefined
+        ? ok(undefined)
+        : this.readDraftRevision(leaf, conversationId, revisions[0]);
+    } catch (error) {
+      return isMissingFileError(error)
+        ? ok(undefined)
+        : err(this.storageFailure("AGENT_CONVERSATION_DRAFT_READ_FAILED", error));
+    }
+  }
+
+  private async readDraftRevision(
+    leaf: DraftLeaf,
+    conversationId: string,
+    revision: number
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    if (!isSafeId(conversationId) || !isDraftRevisionNumber(revision)) {
+      return this.invalid("AGENT_CONVERSATION_DRAFT_INVALID");
+    }
+    const read = await this.readJson(
+      this.draftPath(leaf, conversationId, revision),
+      "AGENT_CONVERSATION_DRAFT_READ_FAILED",
+      MAX_DRAFT_RECORD_BYTES
+    );
+    if (!read.ok) return err(read.error);
+    if (read.value === undefined) return ok(undefined);
+    return read.value["conversationId"] === conversationId && read.value["revision"] === revision
+      ? ok(read.value)
+      : this.invalid("AGENT_CONVERSATION_DRAFT_INVALID");
+  }
+
   public writeSummary(
     summary: AgentConversationSummaryRevision
   ): Promise<Result<AgentConversationSummaryRevision, UnifiedError>> {
@@ -516,6 +612,14 @@ export class AgentConversationFileRepository {
 
   private summaryPath(conversationId: string, revision: number): string {
     return join(this.summariesRoot(conversationId), `${String(revision)}.json`);
+  }
+
+  private draftRoot(leaf: DraftLeaf, conversationId: string): string {
+    return join(this.conversationsRoot(), conversationId, leaf);
+  }
+
+  private draftPath(leaf: DraftLeaf, conversationId: string, revision: number): string {
+    return join(this.draftRoot(leaf, conversationId), `${String(revision)}.json`);
   }
 
   private searchIndexPath(): string {
@@ -618,6 +722,10 @@ function isConversationRecord(value: unknown): value is AgentConversationRecord 
     optionalSafeId(value["createdByCommandId"]) &&
     optionalSafeId(value["lastMutationCommandId"])
   );
+}
+
+function isDraftRevisionNumber(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 1;
 }
 
 function isSummaryRevision(value: unknown): value is AgentConversationSummaryRevision {

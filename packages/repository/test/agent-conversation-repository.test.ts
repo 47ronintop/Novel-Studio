@@ -63,6 +63,66 @@ describe("AgentConversationFileRepository", () => {
     });
   });
 
+  test("persists immutable run-draft and context-draft revisions as guarded conversation siblings", async () => {
+    const { projectRoot, repository } = await createRepository();
+    const runDraft = {
+      schemaVersion: "1.0" as const,
+      runDraftId: "run_draft_01",
+      conversationId: "conv_draft",
+      projectId: "project_01",
+      revision: 1,
+      checksum: "a".repeat(64),
+      userRequest: "续写",
+      operationMode: "planning" as const,
+      contextMode: "writing" as const,
+      writePolicy: "write_before_confirmation" as const,
+      writePolicyAcknowledged: false,
+      modelProfileId: "model_01",
+      contextDraftId: "context_draft_01",
+      contextDraftRevision: 1,
+      contextDraftChecksum: "b".repeat(64),
+      contextBudgetSnapshotId: null,
+      updatedAt: "2026-07-16T00:00:00.000Z"
+    };
+    const contextDraft = {
+      schemaVersion: "1.0" as const,
+      contextDraftId: "context_draft_01",
+      conversationId: "conv_draft",
+      projectId: "project_01",
+      contextMode: "writing" as const,
+      revision: 1,
+      refs: [],
+      checksum: "b".repeat(64),
+      updatedAt: "2026-07-16T00:00:00.000Z"
+    };
+
+    expect(await repository.writeRunDraft(runDraft)).toEqual({ ok: true, value: runDraft });
+    // Idempotent replay of the same revision returns the stored record.
+    expect(await repository.writeRunDraft(runDraft)).toEqual({ ok: true, value: runDraft });
+    // A different record at the same revision is a conflict.
+    expect(
+      await repository.writeRunDraft({ ...runDraft, userRequest: "changed" })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_CONVERSATION_DRAFT_CONFLICT" } });
+
+    expect(await repository.writeContextDraft(contextDraft)).toEqual({ ok: true, value: contextDraft });
+    expect(await repository.readLatestRunDraft("conv_draft")).toEqual({ ok: true, value: runDraft });
+    expect(await repository.readLatestContextDraft("conv_draft")).toEqual({
+      ok: true,
+      value: contextDraft
+    });
+
+    // Drafts live under the conversation-owned subtree, as guarded siblings of summaries/.
+    expect(
+      JSON.parse(
+        await readFile(
+          join(projectRoot, "history", "conversations", "conv_draft", "run-drafts", "1.json"),
+          "utf8"
+        )
+      )
+    ).toEqual(runDraft);
+    expect(await repository.readLatestRunDraft("conv_absent")).toEqual({ ok: true, value: undefined });
+  });
+
   test("updates status with optimistic revision control and persists command receipts", async () => {
     const { repository } = await createRepository();
     const record = conversationRecord("conv_status", "2026-07-14T00:00:00.000Z");

@@ -323,8 +323,21 @@ export type {
 } from "./ai-writing-workflow-types.js";
 export { createAgentBackedAiWritingWorkflowSession } from "./ai-writing-workflow-session.js";
 export { createAgentRunSession } from "./agent-run-session.js";
+export { createAgentRunDraftSession } from "./agent-run-draft-session.js";
 export { createChangeSetSession } from "./change-set-session.js";
 export { createVersionGroupSession } from "./version-group-session.js";
+export type {
+  AgentRunDraftInitialization,
+  AgentRunDraftResult,
+  AgentRunDraftSession,
+  AgentRunDraftSessionRepository,
+  AgentRunDraftView,
+  CreateAgentRunDraftSessionOptions,
+  ReadAgentRunDraftCommand,
+  RefreshContextDraftCommand,
+  UpdateAgentRunDraftCommand,
+  UpdateContextDraftCommand
+} from "./agent-run-draft-session.js";
 export { createLlmAgentRunModelDriver } from "./agent-run-model-driver.js";
 export type {
   AgentConversationLifecyclePort,

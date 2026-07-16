@@ -10,6 +10,31 @@ export type {
 export { validateAgentRelativePath } from "./path-guard.js";
 export type { AgentRelativePath } from "./path-guard.js";
 export {
+  applyAgentRunDraftMutation,
+  bindContextDraft,
+  checksumAgentRunDraft,
+  createAgentRunDraft
+} from "./agent-run-draft.js";
+export type {
+  AgentRunDraft,
+  AgentRunDraftMutation,
+  CreateAgentRunDraftInput
+} from "./agent-run-draft.js";
+export {
+  applyContextDraftMutation,
+  checksumContextDraft,
+  createContextDraft,
+  refreshContextDraft,
+  setContextDraftMode
+} from "./context-draft.js";
+export type {
+  AgentContextRange,
+  ContextDraft,
+  ContextDraftMutation,
+  ContextDraftRef,
+  CreateContextDraftInput
+} from "./context-draft.js";
+export {
   createAgentContextSnapshot,
   findStaleContextSources,
   normalizeAgentContextSnapshot
