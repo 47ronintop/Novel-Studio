@@ -1,7 +1,7 @@
 # Agentic Writing Loop Stage 5 上下文与运行控制设计
 
-版本：1.2
-日期：2026-07-15
+版本：1.3
+日期：2026-07-16
 状态：已确认，实施计划已编写
 
 ## 1. 背景与结论
@@ -134,6 +134,8 @@ Composer 结构固定为：
 7. Agent 本次 run 实际读取的工具结果摘要。
 8. 待审批 Change Set 的摘要；不把候选正文隐式塞回下一轮上下文。
 
+层内的独立 source block 保持明确边界，不为了制造“连贯段落”而拼接不相关内容。当前用户目标、最近决定和活动编辑器/工具结果在组装后的开头或结尾保持可见；只有显式引用、编辑器和工具结果这些 source layer 可以在层内按相关性排序。Conversation transcript、assistant 消息和 tool protocol 消息始终按 `sequence` 保持时间顺序，不能为了“lost in the middle”而重排事件。
+
 文件正文仍然是不可信数据。所有文件内容以 data envelope 进入模型，文件中的“忽略规则”“扩大权限”“写入其他路径”等文本永远不能改变系统规则。
 
 ### 5.2 写作模式
@@ -209,6 +211,21 @@ safeInputBudget = contextWindow - outputReserve - toolReserve - systemReserve
 
 手动压缩入口位于 Agent composer 的上下文状态弹层中，按钮名为“压缩上下文”。点击后直接进入短暂的 `context_compacting` 状态，不再弹出重复确认；用户可先通过“查看来源”检查将参与压缩的范围。压缩不与普通模型轮次并行，也不产生文件副作用。
 
+压缩采用三段式降载流程。它不创建新的可变记忆库；Conversation Summary、Plan Artifact/PlanExecutionRecord、Context Snapshot、Change Set、Version Group 和 recovery journal 仍是各自领域的事实源。压缩前生成的 `CompactionInputManifest` 只是一次压缩的不可变输入清单，用于固定事实来源和回滚边界。
+
+第一段是确定性清理，按以下顺序执行：
+
+1. 去重重复的工具结果、重复事件摘要和已被后续 revision 覆盖的 transient 文本；
+2. 移除已经有结构化摘要的原始工具结果；
+3. 对可按 source ref 重新读取的正文全文只保留指针；指针仍保留 `sourceId/sourceRevision/checksum/range/state` 等元数据并计入少量预算，不能声称“零 token”；
+4. 对被后续内容明确取代的旧草稿只保留其 provenance，不再把旧正文带入活动输入。
+
+第二段是结构化摘要。只有第一段完成且仍超过目标预算时，才向当前 provider/model 发起一次无工具摘要请求。请求输入只包含 manifest 标记为可驱逐的材料；受保护事实不会交给模型决定是否保留。摘要结果通过 manifest 中的 source ID 合并回新的 snapshot，受保护事实由系统从其 canonical source 重新物化并确定性合并。模型摘要不得创建 Plan Artifact、Change Set 或权限变化。
+
+第三段是安全暂停。若确定性清理和结构化摘要仍不能满足预算，运行进入 `awaiting_context_refresh`，要求用户移除引用、刷新 source、切换模型或开始新 run。不得继续压缩到丢失恢复所需事实。
+
+每次压缩开始前必须先持久化 `CompactionInputManifest`。manifest 至少包含 `compactionId`、`runId`、`sourceSnapshotId`、`throughSequence`、带 provenance 的 `protectedFacts[]`、`evictableSources[]`、`checksum` 和 `createdAt`。受保护事实至少覆盖：当前用户目标、用户确认的决定、仍有效的 approved Plan revision、存在时的 PlanExecutionRecord revision/步骤进度、未决问题、显式引用、待审批 Change Set 的 ID/revision/checksum，以及 recovery/undo 所需的 checkpoint、Version Group 和 journal 事实。每条 fact 都必须带 `kind`、`factId`、`sourceId`、`sourceRevision` 或 `eventSequence`、`checksum`；不得使用没有来源的纯字符串“记忆”。
+
 自动压缩规则：
 
 - 使用量达到安全预算的 70%：显示黄色提醒；
@@ -217,7 +234,9 @@ safeInputBudget = contextWindow - outputReserve - toolReserve - systemReserve
 - 连续压缩仍无法满足预算：暂停到 `awaiting_context_refresh`，要求用户移除引用、切换模型或开始新 run；
 - 不允许通过压缩删除审批、版本、错误或恢复事实。
 
-压缩产生不可变 `ContextCompactionRevision`，包含原始 snapshot ID、保留 source refs、摘要 checksum、输入/输出 token、触发原因和压缩时间。事件流新增：
+压缩产生不可变 `ContextCompactionRevision`，包含输入 manifest ID/checksum、原始和结果 snapshot ID、`throughSequence`、受保护 fact ID、被驱逐 source ID、摘要 checksum、输入/输出 token、触发原因和压缩时间。只有完成的 revision 能成为 active snapshot；失败或取消必须保留上一个 active snapshot、预算和 `throughSequence`。
+
+事件流新增：
 
 - `context_compaction_started`
 - `context_compaction_completed`
@@ -225,12 +244,9 @@ safeInputBudget = contextWindow - outputReserve - toolReserve - systemReserve
 
 重载后从 snapshot 和 compaction revision 恢复同一个模型输入边界；压缩失败不能让 run 永久停在 running。
 
-压缩由独立 `Context Compactor` 执行两级处理：
+压缩由独立 `Context Compactor` 执行上述三段流程。`context_compacting` 不占用普通模型轮次，但第二段可能占用一个 provider 请求并把 usage 写入同一个 `AgentUsageRecord` 合同。provider 不可用时只执行第一段；仍无法满足预算则进入 `awaiting_context_refresh`。用户停止压缩时保留上一个已提交的 Context Snapshot，不写入半成品 revision。
 
-1. 先确定性去重和裁剪已经结构化的旧工具结果、重复事件、过期 transient 文本和可由 source ref 重新读取的正文；
-2. 如果仍然超过目标预算，再使用当前 provider/model 发起一次无工具的专用摘要请求，并把该请求的 usage 计入 run。
-
-因此 `context_compacting` 不占用普通模型轮次，但第二级压缩可能占用一个 provider 请求。压缩请求不能调用工具、产生 Plan Artifact 或 Change Set。provider 不可用时只执行第一级确定性压缩；仍无法满足预算则进入 `awaiting_context_refresh`。用户停止压缩时保留上一个已提交的 Context Snapshot，不写入半成品 revision。
+持久化和事件发布顺序固定为：持久化 manifest -> 发布 `context_compaction_started` -> 完成确定性/模型处理 -> 持久化 usage（若有）和 completed compaction revision -> 持久化结果 snapshot 与 budget snapshot -> 原子更新 run 的 active compaction 指针 -> 发布 `context_compaction_completed`。任一步骤失败都保留旧 active snapshot，`context_compaction_failed` 只能引用失败原因和 fallback 结果，不能伪造新 snapshot 已生效。
 
 ### 5.7 Context UI
 
@@ -322,6 +338,8 @@ pending -> running -> completed
 - 最终 Change Set、Version Group 和 undo 状态。
 
 不能用一段“计划已完成”的模型文本伪装真实执行进度。
+
+当 Stage 5A 的压缩运行在已有 execution run 上发生时，`PlanExecutionRecord` 的 ID、revision、每个 step 的状态/验证和最近 checkpoint 作为受保护事实参与 manifest。压缩后只能保持相同或更高的 execution revision/事件序号；若恢复出的进度比压缩前倒退，系统必须拒绝该 revision 并保留旧 snapshot。
 
 ## 7. Stage 5C：Diagnostics and Usage
 
@@ -428,9 +446,37 @@ Snapshot 不复制完整项目正文。恢复时按稳定 ref 重新读取并比
 
 包含 `contextWindow`、`maxOutputTokens`、`contextWindowSemantics`、`safeInputBudget`、`requiredContextTokens`、`outputReserve`、`toolReserve`、`systemReserve`、`usedTokens`、`remainingTokens`、`precision`、`provider`、`model` 和 `calculatedAt`。`contextWindowSemantics` 在 Stage 5 固定为 `shared_input_output_window`；其他语义必须先由 model profile 规范化。
 
-### 8.4 `ContextCompactionRevision`
+### 8.4 `CompactionInputManifest` 与 `ContextCompactionRevision`
 
-包含 `compactionId`、`runId`、`sourceSnapshotId`、`revision`、`trigger(manual/automatic/recovery)`、`strategy(deterministic/model_assisted)`、`keptFacts`、`excludedSources`、`inputTokens`、`outputTokens`、`usageRecordId`、`precision`、`summaryChecksum`、`status` 和 `createdAt`。只有 `completed` revision 可成为 snapshot 的 `activeCompactionId`，记录不可原地修改。
+压缩使用两个关联的不可变对象，不能引入独立的可变“创作进度笔记”：
+
+```text
+ProtectedContextFact {
+  kind: run_goal | user_decision | approved_plan | plan_execution |
+        unresolved_question | explicit_ref | pending_change_set | recovery | undo
+  factId
+  sourceId
+  sourceRevision 或 eventSequence
+  checksum
+}
+
+CompactionInputManifest {
+  compactionId
+  runId
+  sourceSnapshotId
+  throughSequence
+  protectedFacts[]
+  evictableSources[]
+  checksum
+  createdAt
+}
+```
+
+`protectedFacts[]` 是对 Conversation Summary、Plan Artifact/PlanExecutionRecord、Context Snapshot、Change Set、Version Group 和 recovery journal 的有 provenance 引用；正文按 source ID 重新物化。`evictableSources[]` 至少记录 source ID、source revision、所属 layer、原 checksum、驱逐原因和保留指针的 token 元数据。manifest 的 checksum 覆盖有序 fact/source 列表和 `throughSequence`，用于证明压缩输入没有在处理中被替换。
+
+`ContextCompactionRevision` 包含 `compactionId`、`runId`、`sourceSnapshotId`、`resultSnapshotId`、`budgetSnapshotId`、`inputManifestId`、`inputManifestChecksum`、`revision`、`throughSequence`、`trigger(manual/automatic/recovery)`、`strategy(deterministic/model_assisted)`、`protectedFactIds`、`evictedSourceIds`、`inputTokens`、`outputTokens`、`usageRecordId`、`precision`、`summaryChecksum`、`status` 和 `createdAt`。`resultSnapshotId`/`budgetSnapshotId` 在 `completed` 时必须存在，失败或取消时必须为空。只有 `completed` revision 可成为 snapshot 的 `activeCompactionId`，记录不可原地修改。
+
+manifest、compaction revision 和结果 snapshot 均存放在当前 run 的系统目录下，例如 `history/agent-runs/<runId>/context-compactions/<compactionId>/`；active 指针只引用已完整落盘的 revision，不把 manifest 变成可编辑的长期记忆文件。
 
 ### 8.5 `PermissionSummary`
 
@@ -523,7 +569,9 @@ Stage 5 命令新增或扩展：
 - 不同 context window 得到不同 safe input budget；切换 model 后重新计算。
 - reported/estimated/unknown 三种计量状态显示正确。
 - 手动压缩产生新 revision；自动阈值触发一次且不删除审计事实。
-- 压缩失败、重载和取消都不会让 run 永久停在 running。
+- 压缩按“确定性清理 -> 受限无工具摘要 -> `awaiting_context_refresh`”顺序执行；指针元数据计入预算，不能把正文替换描述为零成本。
+- 压缩 manifest 在任何压缩工作前持久化；protected fact 的 ID、来源 revision/event sequence 和 checksum 在结果 snapshot 中保持一致，重复压缩的 `throughSequence`/revision 单调不下降。
+- 压缩失败、重载和取消都不会让 run 永久停在 running，且保留上一个 active snapshot/budget。
 - Renderer 重载后 meter、引用、压缩 revision 与 snapshot 一致。
 
 ### 11.2 Permission and Plan Execution Control
@@ -567,6 +615,7 @@ Stage 5 命令新增或扩展：
 | 手动压缩成功 | compaction_started -> usage_updated* -> compaction_completed | 返回压缩前活动/暂停状态 | compaction revision、budget snapshot、final usage |
 | 自动压缩后仍超限 | compaction_started -> compaction_completed/failed -> context_stale | awaiting_context_refresh | 已完成 revision 或 error record |
 | 压缩中停止 | compaction_started -> run_cancelled | cancelled | 上一个 committed snapshot、cancel receipt |
+| 受保护事实连续性 | manifest -> compaction_completed | 返回活动/暂停状态 | protected fact IDs/checksums、throughSequence、结果 snapshot/budget |
 | 权限摘要过期 | permission_summary_ready 后 registry/root revision 变化 | run 不创建 | rejected command receipt、error record |
 | 计划轻微偏离 | plan_step_started -> deviation_recorded -> plan_step_completed | execution 继续 | execution revision、deviation |
 | 计划实质偏离 | plan_step_started -> plan_revision_requested | awaiting_plan_revision | revision request、受影响步骤 |

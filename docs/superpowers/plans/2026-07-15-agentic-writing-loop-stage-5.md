@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Deliver the Stage 5 v1.2 context runtime, compact Codex/Claude Code-style Agent conversation, permission and plan-execution controls, recoverable diagnostics, and settings-level usage analytics without changing the existing Change Set, Version Group, recovery, or undo safety boundaries.
+**Goal:** Deliver the Stage 5 v1.3 context runtime, compact Codex/Claude Code-style Agent conversation, permission and plan-execution controls, recoverable diagnostics, and settings-level usage analytics without changing the existing Change Set, Version Group, recovery, or undo safety boundaries.
 
 **Architecture:** Keep `AgentRunSession` and the main process as the source of truth. First remove the duplicate renderer surfaces and establish one right-side `AgentComposer`; then extend the run/context contracts to v1.1, build context draft/budget/compaction services, add permission and plan-execution facts, and finally persist redacted diagnostics and usage. Renderer components consume validated snapshots and events only; model capability, context, permission, cost, and recovery facts are never authored by the renderer or model.
 
@@ -12,7 +12,7 @@
 
 ## Scope and Gates
 
-- Implement the approved design in `docs/superpowers/specs/2026-07-14-agentic-writing-loop-stage-5-context-runtime-design.md` version 1.1.
+- Implement the approved design in `docs/superpowers/specs/2026-07-14-agentic-writing-loop-stage-5-context-runtime-design.md` version 1.3.
 - Deliver in four independently testable gates: Stage 5.0 conversation UI baseline, Stage 5A Context Runtime, Stage 5B Permission and Plan Execution Control, and Stage 5C Diagnostics and Usage.
 - Do not add Shell, Git, MCP, browser tools, network research, plugins, deletion/move/rename, directory creation, binary editing, multi-Agent execution, or unattended background work.
 - Do not manually open a browser. All Electron UI verification uses Playwright automation.
@@ -695,13 +695,14 @@ git commit -m "feat: calculate agent context budgets"
 
 - [ ] **Step 1: Write failing compaction tests**
 
-Cover manual trigger, 70% warning, one 85% automatic trigger, deterministic de-duplication, protected facts, model-assisted fallback, provider unavailable, cancellation, failed compaction rollback, reload, and a second compaction still exceeding budget.
+Cover manual trigger, 70% warning, one 85% automatic trigger, the exact deterministic eviction order, protected fact provenance, manifest persistence before compaction work, model-assisted fallback limited to evictable sources, pointer metadata token accounting, provider unavailable, cancellation, failed compaction rollback, reload, repeated compaction, chronological protocol preservation, and a second compaction still exceeding budget. Assert protected fact IDs/checksums, pending Change Set identity, recovery/undo references, and `throughSequence` remain unchanged or advance monotonically; do not use a nondeterministic “model remembers a sentence” assertion as the only gate.
 
 - [ ] **Step 2: Define the final usage record shape and the minimal sink**
 
 Define the one forward-compatible record now so compaction and normal model rounds never create competing usage types. Stage 5A writes `pricingVersion = null`, `unitPrices = null`, and `cost.status = "unknown"` when no provider cost exists; Task 3.2 activates registry pricing, retention, aggregation, and query behavior without replacing this contract.
 
 ```ts
+import type { Result, UnifiedError } from "@novel-studio/shared";
 import type { LlmCost } from "@novel-studio/llm-adapter";
 
 export interface AgentUsageUnitPriceSnapshot {
@@ -762,16 +763,65 @@ Create `AgentUsageFileRepository` with only idempotent `writeFinal/readById` und
 - [ ] **Step 3: Implement immutable compaction revisions**
 
 ```ts
+export type ProtectedContextFactKind =
+  | "run_goal"
+  | "user_decision"
+  | "approved_plan"
+  | "plan_execution"
+  | "unresolved_question"
+  | "explicit_ref"
+  | "pending_change_set"
+  | "recovery"
+  | "undo";
+
+interface ProtectedContextFactBase {
+  readonly kind: ProtectedContextFactKind;
+  readonly factId: string;
+  readonly sourceId: string;
+  readonly checksum: string;
+}
+
+export type ProtectedContextFact =
+  | (ProtectedContextFactBase & { readonly sourceRevision: number; readonly eventSequence?: never })
+  | (ProtectedContextFactBase & { readonly sourceRevision?: never; readonly eventSequence: number });
+
+export interface EvictableContextSource {
+  readonly sourceId: string;
+  readonly sourceRevision: number;
+  readonly layer: AgentContextLayer;
+  readonly checksum: string;
+  readonly tokenCount: number;
+  readonly evictionReason: "duplicate" | "raw_result" | "rereadable_body" | "superseded_transient";
+  readonly pointerTokenCount: number;
+}
+
+export interface CompactionInputManifest {
+  readonly schemaVersion: "1.0";
+  readonly compactionId: string;
+  readonly runId: string;
+  readonly sourceSnapshotId: string;
+  readonly throughSequence: number;
+  readonly protectedFacts: readonly ProtectedContextFact[];
+  readonly evictableSources: readonly EvictableContextSource[];
+  readonly checksum: string;
+  readonly createdAt: string;
+}
+
 export interface ContextCompactionRevision {
   readonly schemaVersion: "1.0";
   readonly compactionId: string;
   readonly runId: string;
   readonly sourceSnapshotId: string;
+  readonly resultSnapshotId: string | null;
+  readonly budgetSnapshotId: string | null;
+  readonly inputManifestId: string;
+  readonly inputManifestChecksum: string;
   readonly revision: number;
+  readonly throughSequence: number;
   readonly trigger: "manual" | "automatic" | "recovery";
   readonly strategy: "deterministic" | "model_assisted";
-  readonly keptFacts: readonly string[];
-  readonly excludedSources: readonly string[];
+  readonly protectedFactIds: readonly string[];
+  readonly evictedSourceIds: readonly string[];
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly usageRecordId: string | null;
@@ -782,11 +832,11 @@ export interface ContextCompactionRevision {
 }
 ```
 
-Only `completed` revisions can become `activeCompactionId`. Always preserve the user goal, approved plan facts, unresolved questions, source refs, tool summaries needed for the next action, pending Change Set identity, and recovery facts.
+Build the manifest from canonical stores before any deterministic pass or provider call. Require exactly one of `sourceRevision` and `eventSequence` on each protected fact, validate all fact/source checksums, and retain pointer metadata in the active budget. The deterministic pass evicts in the documented order. The model-assisted request receives only `evictableSources`; merge protected facts back from their source IDs and reject a result whose `throughSequence` or protected fact checksums regress. Only `completed` revisions can become `activeCompactionId`; always preserve the user goal, approved plan facts, unresolved questions, source refs, tool summaries needed for the next action, pending Change Set identity, and recovery/undo facts.
 
 - [ ] **Step 4: Add state/events and persistence ordering**
 
-Add `context_compaction_started/completed/failed`; persist revision and budget snapshot before publishing completion. Model-assisted compaction uses a no-tools request, cannot produce a plan or Change Set, and records usage. Cancellation restores the last committed snapshot.
+Add `context_compaction_started/completed/failed`; persist the manifest before publishing `context_compaction_started`. Add a repository `commitCompactionResult` operation that writes the usage record (when present), completed revision, result snapshot, and budget snapshot first, then updates the run's active-compaction pointer as the final commit marker. A crash before that marker leaves the previous active snapshot valid; a marker is accepted only when all referenced artifacts already exist. Publish completion only after this commit marker succeeds. Model-assisted compaction uses a no-tools request, receives only evictable material, cannot produce a plan or Change Set, and records usage. Cancellation or failure restores the last committed snapshot/budget and never publishes a completion event for an uncommitted revision.
 
 - [ ] **Step 5: Run focused tests**
 
@@ -862,7 +912,7 @@ npm run build
 npx playwright test apps/desktop/test/agent-context-runtime.e2e.ts
 ```
 
-Expected: PASS for references, model/reasoning changes, budget recalculation, manual/automatic compaction, stale context, and reload recovery.
+Expected: PASS for references, model/reasoning changes, budget recalculation, manual/automatic compaction, stale context, protected fact continuity, repeated-compaction monotonicity, and reload recovery.
 
 - [ ] **Step 5: Commit**
 
@@ -983,11 +1033,15 @@ export interface PlanExecutionStep {
 
 Every transition creates a new record revision. Handoff choices are facts, not deviation. Material deviation emits `plan_revision_requested` and releases the provider connection.
 
-- [ ] **Step 3: Add events and command**
+- [ ] **Step 3: Register plan execution as a protected compaction fact**
+
+Extend the context session/compactor integration so an execution run contributes a `plan_execution` fact containing `planExecutionId`, the immutable `PlanExecutionRecord` revision, each step status/verification, and the latest checkpoint/event sequence. During compaction, merge this record by source ID and reject any result whose plan execution revision or completed-step status is lower than the manifest. Add a regression test for a run that compacts after a late plan step: the step remains `completed` (or its newer `blocked/skipped` state), and the execution record never jumps backward. This step modifies `packages/agent-engine/src/context-compaction.ts`, `packages/agent-engine/test/context-compaction.test.ts`, `packages/application/src/agent-context-session.ts`, and `packages/application/test/agent-context-session.test.ts` in addition to the files listed above.
+
+- [ ] **Step 4: Add events and command**
 
 Add `plan_step_started/completed/blocked/skipped`, `plan_deviation_recorded`, and `plan_revision_requested`. Add `decidePlanRevision` with `commandId + expectedRunRevision + requestId + planId/revision + decision`. Duplicate commands return the first receipt.
 
-- [ ] **Step 4: Run focused tests and commit**
+- [ ] **Step 5: Run focused tests and commit**
 
 Run:
 
@@ -1424,7 +1478,7 @@ git commit -m "test: complete stage 5 acceptance gate"
 
 ## Final Plan Self-Review
 
-- [ ] Verify every Stage 5 v1.2 requirement maps to a task: one right-side composer, one lower-left grouped mode popover, no duplicate assistant/run projection or nested chat surface, model/reasoning placement, explicit refs, context modes, provider-aware budget, manual/automatic compaction, permission checksum, existing Plan Mode regression, plan execution/deviation, inline recoverable errors, redacted usage, and settings daily analytics.
+- [ ] Verify every Stage 5 v1.3 requirement maps to a task: one right-side composer, one lower-left grouped mode popover, no duplicate assistant/run projection or nested chat surface, model/reasoning placement, explicit refs, context modes, provider-aware budget, manifest-backed three-stage compaction, permission checksum, existing Plan Mode regression, plan execution/deviation, inline recoverable errors, redacted usage, and settings daily analytics.
 - [ ] Search this plan for `TBD`, `TODO`, `implement later`, `fill in`, and vague “add tests” language; none may remain.
 - [ ] Verify type names remain consistent across tasks: `AgentRunDraft`, `AgentReasoningEffort`, `ContextDraft`, `ContextBudgetSnapshot`, `ContextCompactionRevision`, `PermissionSummary`, `PlanExecutionRecord`, `AgentRunErrorRecord`, `AgentUsageUnitPriceSnapshot`, `AgentUsageRecord`, and `RetryRunTargetCommand`.
 - [ ] Verify no task adds Shell, Git, MCP, browser, network research, plugins, multi-Agent execution, or another file-write path.
