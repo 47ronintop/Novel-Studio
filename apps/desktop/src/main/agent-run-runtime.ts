@@ -23,6 +23,7 @@ import {
   type VersionGroupSessionTransactionPort,
   type VersionGroupTransactionApplyInput
 } from "@novel-studio/application";
+import { createDesktopCompactionSources } from "./agent-compaction-composer.js";
 import type { LlmModelProfile, LlmParameters } from "@novel-studio/llm-adapter";
 import type {
   AgentContextSourceInput,
@@ -390,6 +391,8 @@ function createDesktopAgentRuntimeServices(
   });
   const contextSession = createDesktopAgentContextSession({
     draftSession,
+    repository,
+    ...(usageRepository === undefined ? {} : { usageRepository }),
     chapterRepository,
     projectReads,
     storyBible,
@@ -417,12 +420,15 @@ function createDesktopAgentRuntimeServices(
  * Build the read-only context session for the desktop. `previewContextBudget` resolves model facts +
  * ref content server-side (renderer previews are never trusted), so the session stays pure arithmetic
  * over already-resolved material. `toolReserve`/`systemReserve` are 0 until Task 1.7 counts the
- * system-guidance/tool-schema tokens. The compaction composer (`compactionSources` +
- * `runRepository`/`usageSink`) is not wired yet, so `compactContext` returns its
- * `AGENT_CONTEXT_COMPACTION_UNAVAILABLE` guard; wiring it is the next Task 1.6 step.
+ * system-guidance/tool-schema tokens. Compaction is wired only when a usage sink exists (i.e.
+ * `userDataRoot` was threaded in): the run repository owns the revision/result/budget artifacts and the
+ * pointer-last commit marker, the usage repository owns the redacted final record. Without a usage sink
+ * `compactContext` returns its `AGENT_CONTEXT_COMPACTION_UNAVAILABLE` guard.
  */
 function createDesktopAgentContextSession(input: {
   readonly draftSession: AgentRunDraftSession;
+  readonly repository: AgentRunFileRepository;
+  readonly usageRepository?: AgentUsageFileRepository;
   readonly chapterRepository: ChapterFileRepository;
   readonly projectReads: AgentProjectReadRepository;
   readonly storyBible: StoryBibleFileRepository;
@@ -460,9 +466,35 @@ function createDesktopAgentContextSession(input: {
       return ok(inputs);
     }
   };
+  const repository = input.repository;
+  const usageRepository = input.usageRepository;
+  const compaction =
+    usageRepository === undefined
+      ? {}
+      : {
+          compactionSources: createDesktopCompactionSources({
+            repository,
+            ...(input.now === undefined ? {} : { now: input.now })
+          }),
+          runRepository: {
+            writeCompactionManifest: (manifest: JsonObject) =>
+              repository.writeCompactionManifest(manifest),
+            writeCompactionRevision: (revision: JsonObject) =>
+              repository.writeCompactionRevision(revision),
+            writeContextSnapshot: (snapshot: JsonObject) =>
+              repository.writeContextSnapshot(snapshot),
+            writeBudgetSnapshot: (runId: string, snapshot: JsonObject) =>
+              repository.writeBudgetSnapshot(runId, snapshot),
+            commitCompaction: (snapshot: JsonObject) => repository.commitCompaction(snapshot)
+          },
+          usageSink: {
+            writeFinal: (record: JsonObject) => usageRepository.writeFinal(record)
+          }
+        };
   return createAgentContextSession({
     draftSession: input.draftSession,
     budgetInputs,
+    ...compaction,
     ...(input.now === undefined ? {} : { now: input.now })
   });
 }
