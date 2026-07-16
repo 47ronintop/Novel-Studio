@@ -5,6 +5,7 @@ import {
   createAgentRunSession,
   createChangeSetSession,
   createVersionGroupSession,
+  estimateAgentSystemReserveTokens,
   type AgentContextBudgetInputs,
   type AgentContextBudgetInputsPort,
   type AgentContextSession,
@@ -455,7 +456,10 @@ function createDesktopAgentContextSession(input: {
           model: model.modelName,
           contextWindow: model.capabilities.contextWindow ?? 0,
           toolReserve: 0,
-          systemReserve: 0,
+          // Count the mode-specific system guidance the run will inject (Task 1.7) so the safe input
+          // budget reserves room for it. The estimator here mirrors the deterministic fallback the
+          // session uses; a provider tokenizer would refine it without changing the accounting shape.
+          systemReserve: estimateAgentSystemReserveTokens(draft.contextMode),
           requiredContextTokens: model.requiredContextTokens
         },
         contents: sources.value.map((source) => ({

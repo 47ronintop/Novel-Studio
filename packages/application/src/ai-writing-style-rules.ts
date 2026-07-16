@@ -83,13 +83,24 @@ export const DEFAULT_AI_WRITING_STYLE_RULE_PACK: AiWritingStyleRulePack = {
   ]
 };
 
+export interface FormatAiWritingStyleRulesOptions {
+  /**
+   * Append the legacy AI-writing workflow's "只返回 JSON 字段" reminder. The workflow path needs it
+   * (its response is a JSON envelope); the Agent path does not (the Agent uses tools, not a JSON
+   * reply), so it passes `false`. Defaults to `true` to keep the workflow output unchanged.
+   */
+  readonly includeJsonOutputReminder?: boolean;
+}
+
 export function formatAiWritingStyleRulesForPrompt(
-  pack: AiWritingStyleRulePack = DEFAULT_AI_WRITING_STYLE_RULE_PACK
+  pack: AiWritingStyleRulePack = DEFAULT_AI_WRITING_STYLE_RULE_PACK,
+  options: FormatAiWritingStyleRulesOptions = {}
 ): string {
+  const includeJsonOutputReminder = options.includeJsonOutputReminder ?? true;
   return [
     `文风规则：${pack.title}。生成前请按以下规则自检，目标是让章节更具体、自然、符合当前叙事声音。`,
     ...pack.rules.map((rule, index) => `${index + 1}. ${rule.title}：${rule.promptInstruction}`),
-    "输出仍只返回请求要求的 JSON 字段，不要额外附加规则说明。"
+    ...(includeJsonOutputReminder ? ["输出仍只返回请求要求的 JSON 字段，不要额外附加规则说明。"] : [])
   ].join("\n");
 }
 

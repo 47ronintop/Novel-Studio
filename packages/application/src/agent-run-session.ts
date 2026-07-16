@@ -49,10 +49,18 @@ import {
   type UnifiedError
 } from "@novel-studio/shared";
 import {
+  createDeterministicTokenEstimator,
+  type AgentTokenEstimator
+} from "@novel-studio/agent-engine";
+import {
   preflightAgentModelCapabilities,
   resolveAgentReasoningEffort,
   type AgentModelCapabilityDeclaration
 } from "./agent-model-capabilities.js";
+import {
+  DEFAULT_AI_WRITING_STYLE_RULE_PACK,
+  formatAiWritingStyleRulesForPrompt
+} from "./ai-writing-style-rules.js";
 import type { ModelReasoningStrengthControl } from "./model-discovery-session.js";
 import type { ChangeSetSession } from "./change-set-session.js";
 import {
@@ -108,6 +116,12 @@ export interface AgentModelRoundInput {
   readonly messages: readonly AgentModelMessage[];
   readonly tools: readonly Pick<AgentToolDescriptor, "name" | "inputSchema">[];
   readonly signal: AbortSignal;
+  /**
+   * The mode-specific, system-authored guidance for this round (Task 1.7). It is computed per run
+   * from `snapshot.contextMode`, so it overrides any static creation-time prompt in the driver. The
+   * driver prepends it as the leading system message; it is trusted authority, not project data.
+   */
+  readonly systemPrompt?: string;
 }
 
 export interface AgentRunModelDriver {
@@ -350,6 +364,12 @@ interface RunRuntime {
   toolCalls: number;
   consecutiveToolFailures: number;
   lastFailedToolCall?: AssembledToolCall;
+  /**
+   * The system-guidance audit source for this run (Task 1.7). Prepended into every Context Snapshot
+   * this run writes so the guidance layer is always recorded, but kept out of the live source list
+   * that the staleness reader and change-set path work over.
+   */
+  systemGuidanceSource?: AgentContextSourceInput;
 }
 
 interface AssembledToolCall {
@@ -364,6 +384,82 @@ const readToolNames = new Set<AgentToolName>([
   "read_story_bible",
   "read_project_text"
 ]);
+
+/**
+ * The version of the mode-specific system guidance. It is bumped when the guidance text changes so a
+ * restored run's Context Snapshot source records which guidance layer participated. The guidance is
+ * system-authored and fixed; project/file content read by tools always remains data, not authority.
+ */
+export const AGENT_SYSTEM_GUIDANCE_VERSION = "1.0";
+
+const WRITING_MODE_GUIDANCE = [
+  "你正在小说写作模式下工作。优先保持叙事连续性：新写的内容必须与已读到的情节、时间线和伏笔衔接。",
+  "保持人物一致性：人物的性格、动机、称谓与已确立的设定一致，不要臆造尚未读到的设定、地名或历史。",
+  "需要背景时用读取工具按需拉取当前章节、设定条目或其他章节，不要假设未读到的内容。",
+  "改动通过修改提案提交，落笔前先自检是否符合当前叙事声音。"
+].join("\n");
+
+const GENERAL_FILE_MODE_GUIDANCE = [
+  "你正在通用文件模式下工作。优先忠实处理文本：准确理解文件原意，保留原有格式、缩进与结构。",
+  "以最小改动完成任务：只修改与请求直接相关的部分，不做无关的重写或风格调整。",
+  "需要更多上下文时用读取工具按需拉取当前文件或同目录条目，不要臆造未读到的内容。",
+  "改动通过修改提案提交，改动范围应可清晰对应到用户请求。"
+].join("\n");
+
+/**
+ * Build the versioned, mode-specific system guidance for a run (Task 1.7). Writing mode gets
+ * narrative-continuity guidance plus the writing style pack (the novel-project CLAUDE.md equivalent);
+ * general-file mode gets faithful-text guidance with no style pack. The two are genuinely different
+ * context-engineering profiles, not the same string with a different tool subset.
+ */
+export function buildAgentSystemGuidance(contextMode: AgentContextMode): string {
+  const header = `Agent 系统指导 v${AGENT_SYSTEM_GUIDANCE_VERSION}`;
+  if (contextMode === "general_file") {
+    return `${header}\n${GENERAL_FILE_MODE_GUIDANCE}`;
+  }
+  const stylePack = formatAiWritingStyleRulesForPrompt(DEFAULT_AI_WRITING_STYLE_RULE_PACK, {
+    includeJsonOutputReminder: false
+  });
+  return `${header}\n${WRITING_MODE_GUIDANCE}\n\n${stylePack}`;
+}
+
+/**
+ * Estimate the token reserve the mode-specific guidance consumes so `systemReserve` (Task 1.4) stays
+ * honest. Uses the injected estimator, or the deterministic UTF-8 fallback, over the exact guidance
+ * text `buildAgentSystemGuidance` would inject — so the reserve tracks the guidance it accounts for.
+ */
+export function estimateAgentSystemReserveTokens(
+  contextMode: AgentContextMode,
+  estimator: AgentTokenEstimator = createDeterministicTokenEstimator(),
+  modelProfileId = "agent-system-guidance"
+): number {
+  return estimator.count(buildAgentSystemGuidance(contextMode), modelProfileId).tokens;
+}
+
+/**
+ * The auditable Context Snapshot source that records the guidance layer for a run. It carries the
+ * exact guidance text so `createAgentContextSnapshot` checksums it and "查看来源" can surface it. It is
+ * layer `system` (never read back, never stale) and never enters the untrusted-data envelope.
+ */
+function agentGuidanceSource(contextMode: AgentContextMode): AgentContextSourceInput {
+  return {
+    refId: `system_guidance:${contextMode}`,
+    sourceKind: "system_guidance",
+    content: buildAgentSystemGuidance(contextMode),
+    dirty: false
+  };
+}
+
+/**
+ * The sources written into a Context Snapshot: the run's live sources with the system-guidance audit
+ * source prepended (once). Guidance stays out of `runtime.contextSources` so it never reaches the
+ * staleness reader or the change-set target checks, but always appears in the persisted snapshot.
+ */
+function snapshotSourcesFor(runtime: RunRuntime): AgentContextSourceInput[] {
+  const guidance = runtime.systemGuidanceSource;
+  if (guidance === undefined) return runtime.contextSources;
+  return [guidance, ...runtime.contextSources.filter((source) => source.refId !== guidance.refId)];
+}
 
 export function createAgentRunSession(options: CreateAgentRunSessionOptions): AgentRunSession {
   const coordinator = options.coordinator ?? createAgentRunCoordinator(options.coordinatorOptions);
@@ -640,15 +736,20 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       generation: 1,
       driving: false,
       contextSources:
-        restoredContextSnapshot?.sources.map((source) => ({
-          refId: source.refId,
-          sourceKind: source.sourceKind,
-          ...(source.relativePath === undefined ? {} : { relativePath: source.relativePath }),
-          ...(source.assetId === undefined ? {} : { assetId: source.assetId }),
-          content: "",
-          dirty: source.dirty,
-          ...(source.range === undefined ? {} : { range: source.range })
-        })) ?? [],
+        restoredContextSnapshot?.sources
+          // The persisted system-guidance source is regenerated deterministically below, never read
+          // back with empty content, so it must not re-enter the live (reader-visible) source list.
+          .filter((source) => source.sourceKind !== "system_guidance")
+          .map((source) => ({
+            refId: source.refId,
+            sourceKind: source.sourceKind,
+            ...(source.relativePath === undefined ? {} : { relativePath: source.relativePath }),
+            ...(source.assetId === undefined ? {} : { assetId: source.assetId }),
+            content: "",
+            dirty: source.dirty,
+            ...(source.range === undefined ? {} : { range: source.range })
+          })) ?? [],
+      systemGuidanceSource: agentGuidanceSource(snapshot.contextMode),
       ...(restoredContextSnapshot === undefined
         ? {}
         : { contextSnapshot: restoredContextSnapshot }),
@@ -895,6 +996,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           name: tool.name,
           inputSchema: tool.inputSchema
         })),
+        // Mode-specific guidance is trusted system authority computed from the run's context mode; it
+        // rides the systemPrompt seam, never the untrusted-data envelope.
+        systemPrompt: buildAgentSystemGuidance(snapshot.contextMode),
         signal: runtime.controller.signal
       })) {
         if (!isCurrent(runId, generation) || runtime.controller.signal.aborted) return;
@@ -1156,7 +1260,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           contextSnapshotId,
           runId,
           createdAt: new Date().toISOString(),
-          sources: runtime.contextSources
+          sources: snapshotSourcesFor(runtime)
         });
         if (options.repository.writeContextSnapshot !== undefined) {
           const persistedContext = await options.repository.writeContextSnapshot(
@@ -1254,7 +1358,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           contextSnapshotId,
           runId,
           createdAt: new Date().toISOString(),
-          sources: runtime.contextSources
+          sources: snapshotSourcesFor(runtime)
         });
         if (options.repository.writeContextSnapshot !== undefined) {
           const persisted = await options.repository.writeContextSnapshot(
@@ -1532,6 +1636,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         generation: 1,
         driving: false,
         contextSources: initialContextSources,
+        systemGuidanceSource: agentGuidanceSource(startInput.contextMode),
         modelRounds: 0,
         toolCalls: 0,
         consecutiveToolFailures: 0,
@@ -1561,7 +1666,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           contextSnapshotId,
           runId: result.value.runId,
           createdAt: new Date().toISOString(),
-          sources: initialContextSources
+          sources: snapshotSourcesFor(runtime)
         });
         if (options.repository.writeContextSnapshot !== undefined) {
           const contextPersisted = await options.repository.writeContextSnapshot(
@@ -1991,6 +2096,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         generation: 1,
         driving: false,
         contextSources: [...runtime.contextSources],
+        systemGuidanceSource: agentGuidanceSource(executionStart.contextMode),
         planArtifact: Object.freeze({ ...plan, status: "executing" }),
         modelRounds: 0,
         toolCalls: 0,
@@ -2117,7 +2223,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         contextSnapshotId,
         runId: command.runId,
         createdAt: new Date().toISOString(),
-        sources: nextSources,
+        sources: snapshotSourcesFor(runtime),
         excludedSources: command.decision === "exclude" ? [...selectedRefs] : []
       });
       if (options.repository.writeContextSnapshot !== undefined) {

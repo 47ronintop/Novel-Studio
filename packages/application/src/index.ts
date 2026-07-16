@@ -325,7 +325,13 @@ export type {
   WorkflowRunUsageSummary
 } from "./ai-writing-workflow-types.js";
 export { createAgentBackedAiWritingWorkflowSession } from "./ai-writing-workflow-session.js";
-export { createAgentRunSession, evaluateContextBudgetPressure } from "./agent-run-session.js";
+export {
+  createAgentRunSession,
+  evaluateContextBudgetPressure,
+  buildAgentSystemGuidance,
+  estimateAgentSystemReserveTokens,
+  AGENT_SYSTEM_GUIDANCE_VERSION
+} from "./agent-run-session.js";
 export { createAgentRunDraftSession } from "./agent-run-draft-session.js";
 export { createAgentContextSession } from "./agent-context-session.js";
 export type {

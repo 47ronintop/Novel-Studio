@@ -25,10 +25,12 @@ export function createLlmAgentRunModelDriver(
 ): AgentRunModelDriver {
   return {
     async *streamRound(input: AgentModelRoundInput): AsyncIterable<AgentModelStreamEvent> {
+      // The per-round, mode-specific guidance the session computes wins over any static base prompt.
+      const systemPrompt = input.systemPrompt ?? options.systemPrompt;
       const messages: LlmMessage[] = [
-        ...(options.systemPrompt === undefined
+        ...(systemPrompt === undefined
           ? []
-          : [{ role: "system" as const, content: options.systemPrompt }]),
+          : [{ role: "system" as const, content: systemPrompt }]),
         ...input.messages.map(toLlmMessage)
       ];
       const tools: LlmToolDefinition[] = input.tools.map((tool) => ({

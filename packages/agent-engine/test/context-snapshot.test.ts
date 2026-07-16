@@ -48,4 +48,52 @@ describe("Agent Context Snapshot", () => {
       ])
     ).toEqual(["chapter_01"]);
   });
+
+  test("records system guidance as an auditable system-layer source that never goes stale", () => {
+    const exports = engineExports as unknown as Record<string, unknown>;
+    const createSnapshot = exports["createAgentContextSnapshot"];
+    const findStale = exports["findStaleContextSources"];
+    if (typeof createSnapshot !== "function" || typeof findStale !== "function") return;
+
+    const snapshot = createSnapshot({
+      contextSnapshotId: "context_guidance",
+      runId: "run_guidance",
+      createdAt: "2026-07-16T00:00:00.000Z",
+      sources: [
+        {
+          refId: "system_guidance:writing",
+          sourceKind: "system_guidance",
+          content: "写作模式指导 + 文风规则",
+          dirty: false
+        },
+        {
+          refId: "chapter_01",
+          sourceKind: "editor_buffer",
+          relativePath: "chapters/ch_01.md",
+          content: "Chapter body",
+          dirty: false
+        }
+      ]
+    }) as {
+      readonly sources: readonly {
+        readonly refId: string;
+        readonly sourceKind: string;
+        readonly layer: string;
+        readonly checksum: string;
+      }[];
+    };
+
+    // The guidance layer is recorded as an auditable source with a checksum ("查看来源" surfaces it).
+    const guidance = snapshot.sources.find(
+      (source) => source.refId === "system_guidance:writing"
+    );
+    expect(guidance).toMatchObject({ sourceKind: "system_guidance", layer: "system" });
+    expect(guidance?.checksum).toMatch(/^[0-9a-f]{64}$/);
+
+    // System-authored guidance is fixed; the staleness check never reads it back or flags it, even
+    // when the current reader does not surface it at all.
+    expect(
+      findStale(snapshot, [{ refId: "chapter_01", content: "Chapter body" }])
+    ).toEqual([]);
+  });
 });

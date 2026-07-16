@@ -157,4 +157,48 @@ describe("AgentRunModelDriver", () => {
       (providerRequest?.["parameters"] as Record<string, unknown>)["reasoningEffort"]
     ).toBeUndefined();
   });
+
+  test("prepends the per-round mode-specific system guidance ahead of the run messages", async () => {
+    const createDriver = (applicationExports as unknown as Record<string, unknown>)[
+      "createLlmAgentRunModelDriver"
+    ];
+    if (typeof createDriver !== "function") return;
+
+    let providerRequest: Record<string, unknown> | undefined;
+    const driver = (createDriver as (options: Record<string, unknown>) => {
+      streamRound(input: Record<string, unknown>): AsyncIterable<Record<string, unknown>>;
+    })({
+      adapter: {
+        async *stream(request: Record<string, unknown>) {
+          providerRequest = request;
+          yield { ok: true, value: { type: "round_completed", finishReason: "stop" } };
+        }
+      },
+      modelProfile: { id: "profile-01", provider: "openai", displayName: "Model", modelName: "gpt-5" },
+      // A static creation-time prompt must be overridden by the per-round, mode-specific guidance the
+      // session computes from the run's context mode.
+      systemPrompt: "static base prompt"
+    });
+
+    for await (const _event of driver.streamRound({
+      runId: "run-guidance",
+      snapshot: {
+        runRevision: 1,
+        operationMode: "execution",
+        contextMode: "writing",
+        userRequest: "write"
+      },
+      systemPrompt: "写作模式指导：保持叙事连续性。",
+      messages: [{ role: "user", content: "write" }],
+      tools: [],
+      signal: new AbortController().signal
+    })) {
+      void _event;
+    }
+
+    const messages = providerRequest?.["messages"] as { role: string; content: string }[];
+    expect(messages[0]).toEqual({ role: "system", content: "写作模式指导：保持叙事连续性。" });
+    expect(messages.some((message) => message.content === "static base prompt")).toBe(false);
+    expect(messages.at(-1)).toEqual({ role: "user", content: "write" });
+  });
 });

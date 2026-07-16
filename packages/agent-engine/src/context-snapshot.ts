@@ -2,7 +2,11 @@ import { createHash } from "node:crypto";
 
 import type { JsonObject } from "@novel-studio/shared";
 
-export type AgentContextSourceKind = "disk_file" | "editor_buffer" | "story_bible_asset";
+export type AgentContextSourceKind =
+  | "disk_file"
+  | "editor_buffer"
+  | "story_bible_asset"
+  | "system_guidance";
 
 /** The context layer a source occupies. Stage 5 uses this for budget accounting and eviction order. */
 export type AgentContextLayer =
@@ -133,6 +137,8 @@ function defaultLayerForSource(kind: AgentContextSourceKind): AgentContextLayer 
       return "editor";
     case "story_bible_asset":
       return "explicit_ref";
+    case "system_guidance":
+      return "system";
     default:
       return "tool_result";
   }
@@ -146,7 +152,12 @@ export function findStaleContextSources(
     currentSources.map((source) => [source.refId, checksumText(source.content)])
   );
   return snapshot.sources
-    .filter((source) => currentByRef.get(source.refId) !== source.checksum)
+    .filter(
+      // System-authored guidance (mode-specific prompt + style pack) is fixed for the run and never
+      // read back from a file or editor buffer, so it can never go stale and must not be compared
+      // against the current-source reader (which does not surface it).
+      (source) => source.layer !== "system" && currentByRef.get(source.refId) !== source.checksum
+    )
     .map((source) => source.refId);
 }
 

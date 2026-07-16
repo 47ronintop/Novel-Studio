@@ -2287,6 +2287,177 @@ describe("AgentRunSession server-authoritative start", () => {
   });
 });
 
+describe("AgentRunSession context-engineering profiles", () => {
+  test("a writing run gets narrative guidance plus the writing style pack, recorded as an audit source", async () => {
+    const captured = await runGuidanceProbe({
+      contextMode: "writing",
+      initialContextSources: [
+        {
+          refId: "chapter:chapter-03",
+          sourceKind: "editor_buffer",
+          relativePath: "chapters/chapter-03.md",
+          content: "当前章节正文",
+          dirty: false
+        }
+      ]
+    });
+
+    // Writing guidance emphasizes narrative continuity, character consistency, and not inventing
+    // settings the model has not read.
+    expect(captured.systemPrompt).toContain("叙事连续性");
+    expect(captured.systemPrompt).toContain("人物一致性");
+    expect(captured.systemPrompt).toContain("不要臆造");
+    // The writing style pack is injected as persistent guidance (the novel-project CLAUDE.md).
+    expect(captured.systemPrompt).toContain("文风规则");
+    expect(captured.systemPrompt).toContain("连续比喻");
+
+    // Guidance travels through the trusted system-prompt seam, never the untrusted-data envelope.
+    const envelope = JSON.stringify(captured.messages);
+    expect(envelope).not.toContain("叙事连续性");
+    expect(envelope).not.toContain("文风规则");
+
+    // Neither mode eagerly preloads non-current chapter bodies: only the current chapter appears.
+    expect(envelope).toContain("当前章节正文");
+
+    // The Context Snapshot records the guidance layer as an auditable system source with a checksum.
+    const guidance = captured.snapshotSources.find(
+      (source) => source["sourceKind"] === "system_guidance"
+    );
+    expect(guidance).toBeDefined();
+    expect(guidance?.["layer"]).toBe("system");
+    expect(String(guidance?.["checksum"])).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test("a general-file run gets faithful-text guidance with no writing style pack or character bodies", async () => {
+    const captured = await runGuidanceProbe({
+      contextMode: "general_file",
+      initialContextSources: [
+        {
+          refId: "file:notes/spec.md",
+          sourceKind: "disk_file",
+          relativePath: "notes/spec.md",
+          content: "当前文件正文",
+          dirty: false
+        }
+      ]
+    });
+
+    // General-file guidance emphasizes faithful text handling, format preservation, minimal edits.
+    expect(captured.systemPrompt).toContain("忠实");
+    expect(captured.systemPrompt).toContain("保留原有格式");
+    expect(captured.systemPrompt).toContain("最小改动");
+
+    // No writing style pack / Story Bible / character bodies belong in general-file guidance.
+    expect(captured.systemPrompt).not.toContain("文风规则");
+    expect(captured.systemPrompt).not.toContain("连续比喻");
+
+    // The two profiles are genuinely different guidance, not the same string.
+    expect(captured.systemPrompt).not.toContain("叙事连续性");
+
+    // The guidance layer is still recorded as an auditable system source.
+    const guidance = captured.snapshotSources.find(
+      (source) => source["sourceKind"] === "system_guidance"
+    );
+    expect(guidance).toBeDefined();
+    expect(guidance?.["layer"]).toBe("system");
+  });
+
+  test("exposes a versioned guidance builder and a system-reserve token estimate", () => {
+    const exports = applicationExports as unknown as Record<string, unknown>;
+    const build = exports["buildAgentSystemGuidance"];
+    const estimate = exports["estimateAgentSystemReserveTokens"];
+    const version = exports["AGENT_SYSTEM_GUIDANCE_VERSION"];
+    expect(typeof build).toBe("function");
+    expect(typeof estimate).toBe("function");
+    expect(typeof version).toBe("string");
+    if (typeof build !== "function" || typeof estimate !== "function") return;
+
+    const writing = (build as (mode: string) => string)("writing");
+    const general = (build as (mode: string) => string)("general_file");
+    expect(writing).not.toEqual(general);
+    expect(writing).toContain("文风规则");
+    expect(general).not.toContain("文风规则");
+
+    // The reserve estimate is a positive token count and larger for the style-pack-bearing mode.
+    const writingReserve = (estimate as (mode: string) => number)("writing");
+    const generalReserve = (estimate as (mode: string) => number)("general_file");
+    expect(Number.isSafeInteger(writingReserve)).toBe(true);
+    expect(writingReserve).toBeGreaterThan(0);
+    expect(generalReserve).toBeGreaterThan(0);
+    expect(writingReserve).toBeGreaterThan(generalReserve);
+  });
+});
+
+/**
+ * Start a run that finishes on its first round, capturing the mode-specific system guidance the
+ * session hands the driver, the untrusted-data envelope messages, and the sources written into the
+ * initial Context Snapshot. Used to assert the two context-engineering profiles differ.
+ */
+async function runGuidanceProbe(overrides: {
+  readonly contextMode: "writing" | "general_file";
+  readonly initialContextSources: readonly Record<string, unknown>[];
+}): Promise<{
+  systemPrompt: string;
+  messages: readonly Record<string, unknown>[];
+  snapshotSources: readonly Record<string, unknown>[];
+}> {
+  const createSession = (applicationExports as unknown as Record<string, unknown>)[
+    "createAgentRunSession"
+  ] as (options: Record<string, unknown>) => {
+    startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+    readAgentRun(runId: string): Promise<Record<string, unknown>>;
+  };
+
+  let systemPrompt = "";
+  let messages: readonly Record<string, unknown>[] = [];
+  const contextSnapshots: Record<string, unknown>[] = [];
+  const runId = `run_guidance_${overrides.contextMode}`;
+
+  const session = createSession({
+    coordinatorOptions: { createRunId: () => runId },
+    repository: {
+      ...memoryRepository(),
+      async writeContextSnapshot(snapshot: Record<string, unknown>) {
+        contextSnapshots.push(snapshot);
+        return { ok: true, value: snapshot };
+      }
+    },
+    modelDriver: {
+      async *streamRound(input: {
+        readonly systemPrompt?: string;
+        readonly messages: readonly Record<string, unknown>[];
+      }) {
+        systemPrompt = input.systemPrompt ?? "";
+        messages = input.messages;
+        yield toolCall("guidance_finish", "finish", { summary: "完成" });
+        yield { type: "round_completed", finishReason: "tool_calls" };
+      }
+    },
+    startPreflight: echoStartPreflight(),
+    readToolExecutor: {
+      async execute() {
+        return { ok: true, value: { summary: "ok", data: {} } };
+      }
+    }
+  });
+
+  await session.startAgentRun({
+    ...startCommand(),
+    contextMode: overrides.contextMode,
+    initialContextSources: overrides.initialContextSources
+  });
+  await vi.waitFor(async () => {
+    expect(await session.readAgentRun(runId)).toMatchObject({
+      value: { snapshot: { status: "completed" } }
+    });
+  });
+
+  const sources = contextSnapshots.flatMap((snapshot) =>
+    Array.isArray(snapshot["sources"]) ? (snapshot["sources"] as Record<string, unknown>[]) : []
+  );
+  return { systemPrompt, messages, snapshotSources: sources };
+}
+
 function toolCall(toolCallId: string, name: string, argumentsValue: Record<string, unknown>) {
   return {
     type: "tool_call_delta",
