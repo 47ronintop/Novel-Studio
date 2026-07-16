@@ -59,8 +59,11 @@ import type {
   AgentRunCommandResult,
   AgentRunEvent,
   AgentRunSnapshot,
+  CompactContextCommand,
+  ContextBudgetSnapshot,
   DecideChangeSetCommand,
   DecideAgentPlanCommand,
+  PreviewContextBudgetCommand,
   RefreshAgentContextCommand,
   ResumeAgentRunCommand,
   RetryAgentRunStepCommand,
@@ -68,7 +71,15 @@ import type {
   StopAgentRunCommand,
   UndoRunCommand
 } from "@novel-studio/agent-engine";
-import type { AgentRunDraftResult, SyncStartDraftCommand } from "@novel-studio/application";
+import type {
+  AgentRunDraftResult,
+  CompactContextResult,
+  ReadAgentRunDraftCommand,
+  RefreshContextDraftCommand,
+  SyncStartDraftCommand,
+  UpdateAgentRunDraftCommand,
+  UpdateContextDraftCommand
+} from "@novel-studio/application";
 import type { AgentRunReadResult, AnswerAgentUserInputCommand } from "@novel-studio/application";
 import type {
   ChapterSummary,
@@ -261,6 +272,34 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
     agentRuns: {
       prepareStart: (command: SyncStartDraftCommand) =>
         invokeTyped<AgentRunDraftResult>(ipc, "application:agent-run:prepare-start", command),
+      readRunDraft: (command: ReadAgentRunDraftCommand) =>
+        invokeTyped<AgentRunDraftResult>(ipc, "application:agent-run:read-run-draft", command),
+      updateRunDraft: (command: UpdateAgentRunDraftCommand) =>
+        invokeTyped<AgentRunDraftResult>(ipc, "application:agent-run:update-run-draft", command),
+      updateContextDraft: (command: UpdateContextDraftCommand) =>
+        invokeTyped<AgentRunDraftResult>(
+          ipc,
+          "application:agent-run:update-context-draft",
+          command
+        ),
+      refreshContextDraft: (command: RefreshContextDraftCommand) =>
+        invokeTyped<AgentRunDraftResult>(
+          ipc,
+          "application:agent-run:refresh-context-draft",
+          command
+        ),
+      previewContextBudget: (command: PreviewContextBudgetCommand) =>
+        invokeTyped<Result<ContextBudgetSnapshot, UnifiedError>>(
+          ipc,
+          "application:agent-run:preview-context-budget",
+          command
+        ),
+      compactContext: (command: CompactContextCommand) =>
+        invokeTyped<Result<CompactContextResult, UnifiedError>>(
+          ipc,
+          "application:agent-run:compact-context",
+          command
+        ),
       start: (command: StartAgentRunCommand) =>
         invokeTyped<AgentRunCommandResult>(ipc, "application:agent-run:start", command),
       stop: (command: StopAgentRunCommand) =>

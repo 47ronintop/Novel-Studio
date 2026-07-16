@@ -1,6 +1,7 @@
 import { realpath } from "node:fs/promises";
 
 import type {
+  AgentContextSession,
   AgentConversationSession,
   AgentRunDraftSession,
   AgentRunSession
@@ -20,6 +21,7 @@ export interface DesktopAgentRuntime {
   readonly agentRunSession: AgentRunSession;
   readonly agentConversationSession: AgentConversationSession;
   readonly agentRunDraftSession?: AgentRunDraftSession;
+  readonly agentContextSession?: AgentContextSession;
   dispose?(): void;
 }
 

@@ -575,6 +575,184 @@ describe("Agent Run IPC", () => {
       "application:agent-conversation:search"
     ]);
   });
+
+  test("routes draft/context-budget commands through the bound runtime and rejects malformed ones", async () => {
+    const calls: string[] = [];
+    const draftView = { ok: true, value: { runDraft: {}, contextDraft: {} } };
+    const runtime = {
+      projectId: "project-01",
+      projectRoot: "C:/project-01",
+      agentRunSession: {},
+      agentRunDraftSession: {
+        async readAgentRunDraft(command: Record<string, unknown>) {
+          calls.push(`read-run-draft:${String(command["conversationId"])}`);
+          return draftView;
+        },
+        async updateAgentRunDraft(command: Record<string, unknown>) {
+          calls.push(
+            `update-run-draft:${String(
+              (command["mutation"] as Record<string, unknown>)["kind"]
+            )}`
+          );
+          return draftView;
+        },
+        async updateContextDraft(command: Record<string, unknown>) {
+          calls.push(
+            `update-context-draft:${String(
+              (command["mutation"] as Record<string, unknown>)["kind"]
+            )}`
+          );
+          return draftView;
+        },
+        async refreshContextDraft(command: Record<string, unknown>) {
+          calls.push(`refresh-context-draft:${String(command["contextDraftId"])}`);
+          return draftView;
+        }
+      },
+      agentContextSession: {
+        async previewContextBudget(command: Record<string, unknown>) {
+          calls.push(`preview-budget:${String(command["commandId"])}`);
+          return { ok: true, value: { contextBudgetSnapshotId: "budget-01" } };
+        },
+        async compactContext(command: Record<string, unknown>) {
+          calls.push(`compact:${String(command["trigger"])}`);
+          return { ok: true, value: { compactionId: "compaction-01" } };
+        }
+      }
+    };
+    const handlers = createApplicationIpcHandlers(
+      {} as DesktopApplication,
+      {
+        agentRuntimeManager: {
+          current: () => runtime,
+          currentProject: () => ({ projectId: runtime.projectId, projectRoot: runtime.projectRoot }),
+          hasActiveRun: async () => ({ ok: true, value: false }),
+          bindProject: async () => ({ ok: true, value: undefined }),
+          subscribeAgentRunEvents: () => () => undefined,
+          dispose: () => undefined
+        }
+      } as never
+    ) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+
+    const readDraft = await handlers["application:agent-run:read-run-draft"]?.({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      initialize: {
+        modelProfileId: "profile-01",
+        operationMode: "execution",
+        contextMode: "writing",
+        writePolicy: "write_before_confirmation"
+      }
+    });
+    expect(() => structuredClone(readDraft)).not.toThrow();
+    await handlers["application:agent-run:update-run-draft"]?.({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      commandId: "cmd-01",
+      expectedDraftRevision: 1,
+      mutation: { kind: "set_model", modelProfileId: "profile-02" }
+    });
+    await handlers["application:agent-run:update-context-draft"]?.({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      commandId: "cmd-02",
+      contextDraftId: "context-01",
+      expectedDraftRevision: 1,
+      mutation: { kind: "remove_ref", refId: "chapter:ch-01" }
+    });
+    await handlers["application:agent-run:refresh-context-draft"]?.({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      commandId: "cmd-03",
+      contextDraftId: "context-01",
+      expectedDraftRevision: 2
+    });
+    await handlers["application:agent-run:preview-context-budget"]?.({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      commandId: "cmd-04",
+      runDraftId: "draft-01",
+      expectedDraftRevision: 3,
+      runDraftChecksum: "checksum-01"
+    });
+    await handlers["application:agent-run:compact-context"]?.({
+      projectId: "project-01",
+      runId: "run-01",
+      commandId: "cmd-05",
+      expectedRunRevision: 4,
+      contextBudgetSnapshotId: "budget-01",
+      trigger: "manual"
+    });
+
+    const before = calls.length;
+    const rejected = await Promise.all([
+      handlers["application:agent-run:update-run-draft"]?.({
+        projectId: "project-01",
+        conversationId: "conversation-01",
+        commandId: "cmd-bad",
+        expectedDraftRevision: 1,
+        mutation: { kind: "set_model" }
+      }),
+      handlers["application:agent-run:update-context-draft"]?.({
+        projectId: "project-01",
+        conversationId: "conversation-01",
+        commandId: "cmd-bad",
+        contextDraftId: "context-01",
+        expectedDraftRevision: 1,
+        mutation: { kind: "unknown_mutation" }
+      }),
+      handlers["application:agent-run:compact-context"]?.({
+        projectId: "project-01",
+        runId: "run-01",
+        commandId: "cmd-bad",
+        expectedRunRevision: 4,
+        contextBudgetSnapshotId: "budget-01",
+        trigger: "sideways"
+      })
+    ]);
+    expect(rejected.every((result) => (result as { ok?: boolean }).ok === false)).toBe(true);
+    expect(calls).toHaveLength(before);
+    expect(calls).toEqual([
+      "read-run-draft:conversation-01",
+      "update-run-draft:set_model",
+      "update-context-draft:remove_ref",
+      "refresh-context-draft:context-01",
+      "preview-budget:cmd-04",
+      "compact:manual"
+    ]);
+  });
+
+  test("preload exposes the Stage 5 context controls on allowlisted channels", async () => {
+    const invoked: string[] = [];
+    const api = createNovelStudioApi({
+      async invoke(channel) {
+        invoked.push(channel);
+        return { ok: true, value: {} };
+      },
+      on: () => () => undefined
+    }) as unknown as Record<string, unknown>;
+    const agentRuns = api["agentRuns"] as
+      | Record<string, (...args: unknown[]) => Promise<unknown>>
+      | undefined;
+    expect(agentRuns).toBeDefined();
+    if (agentRuns === undefined) return;
+
+    await agentRuns["readRunDraft"]?.({});
+    await agentRuns["updateRunDraft"]?.({});
+    await agentRuns["updateContextDraft"]?.({});
+    await agentRuns["refreshContextDraft"]?.({});
+    await agentRuns["previewContextBudget"]?.({});
+    await agentRuns["compactContext"]?.({});
+
+    expect(invoked).toEqual([
+      "application:agent-run:read-run-draft",
+      "application:agent-run:update-run-draft",
+      "application:agent-run:update-context-draft",
+      "application:agent-run:refresh-context-draft",
+      "application:agent-run:preview-context-budget",
+      "application:agent-run:compact-context"
+    ]);
+  });
 });
 
 function conversationSummary(projectId: string) {

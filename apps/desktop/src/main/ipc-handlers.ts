@@ -3,12 +3,19 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type {
   AgentConversationSession,
+  AgentContextSession,
   AgentRunDraftSession,
   AgentRunSession,
   AnswerAgentUserInputCommand,
   ApplicationIpcChannel,
+  CompactContextCommand,
   DesktopApplication,
-  SyncStartDraftCommand
+  PreviewContextBudgetCommand,
+  ReadAgentRunDraftCommand,
+  RefreshContextDraftCommand,
+  SyncStartDraftCommand,
+  UpdateAgentRunDraftCommand,
+  UpdateContextDraftCommand
 } from "@novel-studio/application";
 import type {
   AgentRunEvent,
@@ -183,6 +190,8 @@ export function createApplicationIpcHandlers(
     options.agentRuntimeManager?.current()?.agentConversationSession;
   const currentAgentRunDraftSession = (): AgentRunDraftSession | undefined =>
     options.agentRuntimeManager?.current()?.agentRunDraftSession;
+  const currentAgentContextSession = (): AgentContextSession | undefined =>
+    options.agentRuntimeManager?.current()?.agentContextSession;
 
   return {
     "application:get-shell-state": () => Promise.resolve(application.getShellState()),
@@ -452,6 +461,48 @@ export function createApplicationIpcHandlers(
       return parsed === undefined || draftSession === undefined
         ? Promise.resolve(agentRunUnavailable())
         : draftSession.syncStartDraft(parsed);
+    },
+    "application:agent-run:read-run-draft": (command: unknown) => {
+      const parsed = toReadAgentRunDraftCommand(command);
+      const draftSession = currentAgentRunDraftSession();
+      return parsed === undefined || draftSession === undefined
+        ? Promise.resolve(agentRunUnavailable())
+        : draftSession.readAgentRunDraft(parsed);
+    },
+    "application:agent-run:update-run-draft": (command: unknown) => {
+      const parsed = toUpdateAgentRunDraftCommand(command);
+      const draftSession = currentAgentRunDraftSession();
+      return parsed === undefined || draftSession === undefined
+        ? Promise.resolve(agentRunUnavailable())
+        : draftSession.updateAgentRunDraft(parsed);
+    },
+    "application:agent-run:update-context-draft": (command: unknown) => {
+      const parsed = toUpdateContextDraftCommand(command);
+      const draftSession = currentAgentRunDraftSession();
+      return parsed === undefined || draftSession === undefined
+        ? Promise.resolve(agentRunUnavailable())
+        : draftSession.updateContextDraft(parsed);
+    },
+    "application:agent-run:refresh-context-draft": (command: unknown) => {
+      const parsed = toRefreshContextDraftCommand(command);
+      const draftSession = currentAgentRunDraftSession();
+      return parsed === undefined || draftSession === undefined
+        ? Promise.resolve(agentRunUnavailable())
+        : draftSession.refreshContextDraft(parsed);
+    },
+    "application:agent-run:preview-context-budget": (command: unknown) => {
+      const parsed = toPreviewContextBudgetCommand(command);
+      const contextSession = currentAgentContextSession();
+      return parsed === undefined || contextSession === undefined
+        ? Promise.resolve(agentRunUnavailable())
+        : contextSession.previewContextBudget(parsed);
+    },
+    "application:agent-run:compact-context": (command: unknown) => {
+      const parsed = toCompactContextCommand(command);
+      const contextSession = currentAgentContextSession();
+      return parsed === undefined || contextSession === undefined
+        ? Promise.resolve(agentRunUnavailable())
+        : contextSession.compactContext(parsed);
     },
     "application:agent-run:start": (command: unknown) => {
       const parsed = toStartAgentRunCommand(command);
@@ -783,6 +834,193 @@ function toSyncStartDraftCommand(value: unknown): SyncStartDraftCommand | undefi
     return undefined;
   }
   return value as unknown as SyncStartDraftCommand;
+}
+
+function toReadAgentRunDraftCommand(value: unknown): ReadAgentRunDraftCommand | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["projectId", "conversationId", "initialize"]) ||
+    !isSafeId(value["projectId"]) ||
+    !isSafeId(value["conversationId"]) ||
+    !isRecord(value["initialize"])
+  ) {
+    return undefined;
+  }
+  const initialize = value["initialize"];
+  if (
+    !isNonEmptyString(initialize["modelProfileId"]) ||
+    (initialize["reasoningEffort"] !== undefined &&
+      typeof initialize["reasoningEffort"] !== "string") ||
+    (initialize["operationMode"] !== "planning" && initialize["operationMode"] !== "execution") ||
+    (initialize["contextMode"] !== "writing" && initialize["contextMode"] !== "general_file") ||
+    (initialize["writePolicy"] !== "write_before_confirmation" &&
+      initialize["writePolicy"] !== "user_preapproved_run") ||
+    (initialize["writePolicyAcknowledged"] !== undefined &&
+      typeof initialize["writePolicyAcknowledged"] !== "boolean") ||
+    (initialize["contextRefs"] !== undefined && !Array.isArray(initialize["contextRefs"]))
+  ) {
+    return undefined;
+  }
+  return value as unknown as ReadAgentRunDraftCommand;
+}
+
+function toUpdateAgentRunDraftCommand(value: unknown): UpdateAgentRunDraftCommand | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      "projectId",
+      "conversationId",
+      "commandId",
+      "expectedDraftRevision",
+      "mutation"
+    ]) ||
+    !isSafeId(value["projectId"]) ||
+    !isSafeId(value["conversationId"]) ||
+    !isSafeId(value["commandId"]) ||
+    !isPositiveInteger(value["expectedDraftRevision"]) ||
+    !isAgentRunDraftMutation(value["mutation"])
+  ) {
+    return undefined;
+  }
+  return value as unknown as UpdateAgentRunDraftCommand;
+}
+
+function toUpdateContextDraftCommand(value: unknown): UpdateContextDraftCommand | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      "projectId",
+      "conversationId",
+      "commandId",
+      "contextDraftId",
+      "expectedDraftRevision",
+      "mutation"
+    ]) ||
+    !isSafeId(value["projectId"]) ||
+    !isSafeId(value["conversationId"]) ||
+    !isSafeId(value["commandId"]) ||
+    !isSafeId(value["contextDraftId"]) ||
+    !isPositiveInteger(value["expectedDraftRevision"]) ||
+    !isContextDraftMutation(value["mutation"])
+  ) {
+    return undefined;
+  }
+  return value as unknown as UpdateContextDraftCommand;
+}
+
+function toRefreshContextDraftCommand(value: unknown): RefreshContextDraftCommand | undefined {
+  return isRecord(value) &&
+    hasOnlyKeys(value, [
+      "projectId",
+      "conversationId",
+      "commandId",
+      "contextDraftId",
+      "expectedDraftRevision"
+    ]) &&
+    isSafeId(value["projectId"]) &&
+    isSafeId(value["conversationId"]) &&
+    isSafeId(value["commandId"]) &&
+    isSafeId(value["contextDraftId"]) &&
+    isPositiveInteger(value["expectedDraftRevision"])
+    ? (value as unknown as RefreshContextDraftCommand)
+    : undefined;
+}
+
+function toPreviewContextBudgetCommand(value: unknown): PreviewContextBudgetCommand | undefined {
+  return isRecord(value) &&
+    hasOnlyKeys(value, [
+      "projectId",
+      "conversationId",
+      "commandId",
+      "runDraftId",
+      "expectedDraftRevision",
+      "runDraftChecksum"
+    ]) &&
+    isSafeId(value["projectId"]) &&
+    isSafeId(value["conversationId"]) &&
+    isSafeId(value["commandId"]) &&
+    isSafeId(value["runDraftId"]) &&
+    isPositiveInteger(value["expectedDraftRevision"]) &&
+    isNonEmptyString(value["runDraftChecksum"])
+    ? (value as unknown as PreviewContextBudgetCommand)
+    : undefined;
+}
+
+function toCompactContextCommand(value: unknown): CompactContextCommand | undefined {
+  return isRecord(value) &&
+    hasOnlyKeys(value, [
+      "projectId",
+      "runId",
+      "commandId",
+      "expectedRunRevision",
+      "contextBudgetSnapshotId",
+      "trigger"
+    ]) &&
+    isSafeId(value["projectId"]) &&
+    isNonEmptyString(value["runId"]) &&
+    isSafeId(value["commandId"]) &&
+    isNonNegativeInteger(value["expectedRunRevision"]) &&
+    isNonEmptyString(value["contextBudgetSnapshotId"]) &&
+    (value["trigger"] === "manual" ||
+      value["trigger"] === "automatic" ||
+      value["trigger"] === "recovery")
+    ? (value as unknown as CompactContextCommand)
+    : undefined;
+}
+
+function isAgentRunDraftMutation(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  switch (value["kind"]) {
+    case "set_request":
+      return typeof value["request"] === "string" && hasOnlyKeys(value, ["kind", "request"]);
+    case "set_operation_mode":
+      return (
+        (value["operationMode"] === "planning" || value["operationMode"] === "execution") &&
+        hasOnlyKeys(value, ["kind", "operationMode"])
+      );
+    case "set_context_mode":
+      return (
+        (value["contextMode"] === "writing" || value["contextMode"] === "general_file") &&
+        hasOnlyKeys(value, ["kind", "contextMode"])
+      );
+    case "set_write_policy":
+      return (
+        (value["writePolicy"] === "write_before_confirmation" ||
+          value["writePolicy"] === "user_preapproved_run") &&
+        typeof value["acknowledged"] === "boolean" &&
+        hasOnlyKeys(value, ["kind", "writePolicy", "acknowledged"])
+      );
+    case "set_model":
+      return (
+        isNonEmptyString(value["modelProfileId"]) &&
+        (value["reasoningEffort"] === undefined ||
+          typeof value["reasoningEffort"] === "string") &&
+        hasOnlyKeys(value, ["kind", "modelProfileId", "reasoningEffort"])
+      );
+    case "set_reasoning":
+      return (
+        typeof value["reasoningEffort"] === "string" &&
+        hasOnlyKeys(value, ["kind", "reasoningEffort"])
+      );
+    default:
+      return false;
+  }
+}
+
+function isContextDraftMutation(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  switch (value["kind"]) {
+    case "add_ref":
+      return isRecord(value["ref"]) && hasOnlyKeys(value, ["kind", "ref"]);
+    case "remove_ref":
+      return isNonEmptyString(value["refId"]) && hasOnlyKeys(value, ["kind", "refId"]);
+    case "set_selection":
+      return (
+        (value["ref"] === null || isRecord(value["ref"])) && hasOnlyKeys(value, ["kind", "ref"])
+      );
+    default:
+      return false;
+  }
 }
 
 function toCreateAgentConversationCommand(

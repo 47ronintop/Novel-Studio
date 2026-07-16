@@ -13,8 +13,11 @@ import type {
   AgentRunCommandResult,
   AgentRunEvent,
   AgentRunSnapshot,
+  CompactContextCommand,
+  ContextBudgetSnapshot,
   DecideChangeSetCommand,
   DecideAgentPlanCommand,
+  PreviewContextBudgetCommand,
   RefreshAgentContextCommand,
   ResumeAgentRunCommand,
   RetryAgentRunStepCommand,
@@ -24,7 +27,17 @@ import type {
 } from "@novel-studio/agent-engine";
 
 import type { ApplicationCommand } from "./command-registry.js";
-import type { AgentRunDraftResult, SyncStartDraftCommand } from "./agent-run-draft-session.js";
+import type {
+  AgentRunDraftResult,
+  ReadAgentRunDraftCommand,
+  RefreshContextDraftCommand,
+  SyncStartDraftCommand,
+  UpdateAgentRunDraftCommand,
+  UpdateContextDraftCommand
+} from "./agent-run-draft-session.js";
+import type {
+  CompactContextResult
+} from "./agent-context-session.js";
 import type {
   AiWritingSuggestion,
   AiWritingSelectionPreview,
@@ -167,6 +180,16 @@ export interface NovelStudioApi {
   };
   agentRuns: {
     prepareStart(command: SyncStartDraftCommand): Promise<AgentRunDraftResult>;
+    readRunDraft(command: ReadAgentRunDraftCommand): Promise<AgentRunDraftResult>;
+    updateRunDraft(command: UpdateAgentRunDraftCommand): Promise<AgentRunDraftResult>;
+    updateContextDraft(command: UpdateContextDraftCommand): Promise<AgentRunDraftResult>;
+    refreshContextDraft(command: RefreshContextDraftCommand): Promise<AgentRunDraftResult>;
+    previewContextBudget(
+      command: PreviewContextBudgetCommand
+    ): Promise<Result<ContextBudgetSnapshot, UnifiedError>>;
+    compactContext(
+      command: CompactContextCommand
+    ): Promise<Result<CompactContextResult, UnifiedError>>;
     start(command: StartAgentRunCommand): Promise<AgentRunCommandResult>;
     stop(command: StopAgentRunCommand): Promise<AgentRunCommandResult>;
     answerUserInput(command: AnswerAgentUserInputCommand): Promise<AgentRunCommandResult>;

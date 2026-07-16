@@ -57,14 +57,22 @@ import type {
   WorkflowRunRecord,
   WorkflowRunSummary,
   AgentRunDraftResult,
-  SyncStartDraftCommand
+  CompactContextResult,
+  ReadAgentRunDraftCommand,
+  RefreshContextDraftCommand,
+  SyncStartDraftCommand,
+  UpdateAgentRunDraftCommand,
+  UpdateContextDraftCommand
 } from "@novel-studio/application";
 import type {
   AgentRunCommandResult,
   AgentRunEvent,
   AgentRunSnapshot,
+  CompactContextCommand,
+  ContextBudgetSnapshot,
   DecideChangeSetCommand,
   DecideAgentPlanCommand,
+  PreviewContextBudgetCommand,
   RefreshAgentContextCommand,
   ResumeAgentRunCommand,
   RetryAgentRunStepCommand,
@@ -227,6 +235,24 @@ const api: NovelStudioApi = {
   agentRuns: {
     prepareStart: (command: SyncStartDraftCommand) =>
       invokeTyped<AgentRunDraftResult>("application:agent-run:prepare-start", command),
+    readRunDraft: (command: ReadAgentRunDraftCommand) =>
+      invokeTyped<AgentRunDraftResult>("application:agent-run:read-run-draft", command),
+    updateRunDraft: (command: UpdateAgentRunDraftCommand) =>
+      invokeTyped<AgentRunDraftResult>("application:agent-run:update-run-draft", command),
+    updateContextDraft: (command: UpdateContextDraftCommand) =>
+      invokeTyped<AgentRunDraftResult>("application:agent-run:update-context-draft", command),
+    refreshContextDraft: (command: RefreshContextDraftCommand) =>
+      invokeTyped<AgentRunDraftResult>("application:agent-run:refresh-context-draft", command),
+    previewContextBudget: (command: PreviewContextBudgetCommand) =>
+      invokeTyped<Result<ContextBudgetSnapshot, UnifiedError>>(
+        "application:agent-run:preview-context-budget",
+        command
+      ),
+    compactContext: (command: CompactContextCommand) =>
+      invokeTyped<Result<CompactContextResult, UnifiedError>>(
+        "application:agent-run:compact-context",
+        command
+      ),
     start: (command: StartAgentRunCommand) =>
       invokeTyped<AgentRunCommandResult>("application:agent-run:start", command),
     stop: (command: StopAgentRunCommand) =>

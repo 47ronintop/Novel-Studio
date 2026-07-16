@@ -1,9 +1,13 @@
 import {
   createAgentConversationSession,
+  createAgentContextSession,
   createAgentRunDraftSession,
   createAgentRunSession,
   createChangeSetSession,
   createVersionGroupSession,
+  type AgentContextBudgetInputs,
+  type AgentContextBudgetInputsPort,
+  type AgentContextSession,
   type AgentModelRoundInput,
   type AgentModelStreamEvent,
   type AgentConversationLifecyclePort,
@@ -119,9 +123,10 @@ export interface DesktopAgentRuntimeServices {
   readonly agentRunSession: AgentRunSession;
   readonly agentConversationSession: AgentConversationSession;
   readonly agentRunDraftSession: AgentRunDraftSession;
+  readonly agentContextSession: AgentContextSession;
   /**
-   * The redacted usage sink, present only when `userDataRoot` was threaded in. Task 1.6 injects it as
-   * the `usageSink` port of the compaction composer; Task 1.5 only constructs and exposes it.
+   * The redacted usage sink, present only when `userDataRoot` was threaded in. It is the `usageSink`
+   * port of the compaction composer wired below.
    */
   readonly agentUsageRepository?: AgentUsageFileRepository;
 }
@@ -383,6 +388,19 @@ function createDesktopAgentRuntimeServices(
       ...(options.now === undefined ? {} : { now: options.now })
     }
   });
+  const contextSession = createDesktopAgentContextSession({
+    draftSession,
+    chapterRepository,
+    projectReads,
+    storyBible,
+    ...(options.readEditorBuffer === undefined
+      ? {}
+      : { readEditorBuffer: options.readEditorBuffer }),
+    ...(options.resolveModelStartFacts === undefined
+      ? {}
+      : { resolveModelStartFacts: options.resolveModelStartFacts }),
+    ...(options.now === undefined ? {} : { now: options.now })
+  });
   void versionGroupServices?.recoverOnStartup();
   return {
     projectId: options.projectId,
@@ -390,8 +408,63 @@ function createDesktopAgentRuntimeServices(
     agentRunSession: session,
     agentConversationSession: conversationSession,
     agentRunDraftSession: draftSession,
+    agentContextSession: contextSession,
     ...(usageRepository === undefined ? {} : { agentUsageRepository: usageRepository })
   };
+}
+
+/**
+ * Build the read-only context session for the desktop. `previewContextBudget` resolves model facts +
+ * ref content server-side (renderer previews are never trusted), so the session stays pure arithmetic
+ * over already-resolved material. `toolReserve`/`systemReserve` are 0 until Task 1.7 counts the
+ * system-guidance/tool-schema tokens. The compaction composer (`compactionSources` +
+ * `runRepository`/`usageSink`) is not wired yet, so `compactContext` returns its
+ * `AGENT_CONTEXT_COMPACTION_UNAVAILABLE` guard; wiring it is the next Task 1.6 step.
+ */
+function createDesktopAgentContextSession(input: {
+  readonly draftSession: AgentRunDraftSession;
+  readonly chapterRepository: ChapterFileRepository;
+  readonly projectReads: AgentProjectReadRepository;
+  readonly storyBible: StoryBibleFileRepository;
+  readonly readEditorBuffer?: NonNullable<DesktopAgentRunSessionOptions["readEditorBuffer"]>;
+  readonly resolveModelStartFacts?: NonNullable<
+    DesktopAgentRunSessionOptions["resolveModelStartFacts"]
+  >;
+  readonly now?: () => string;
+}): AgentContextSession {
+  const budgetInputs: AgentContextBudgetInputsPort = {
+    async resolveBudgetInputs({ draft, contextDraft }) {
+      if (input.resolveModelStartFacts === undefined) {
+        return err(runtimeError("AGENT_MODEL_CAPABILITY_UNSUPPORTED"));
+      }
+      const model = await input.resolveModelStartFacts(draft.modelProfileId);
+      if (model === undefined) {
+        return err(runtimeError("AGENT_MODEL_CAPABILITY_UNSUPPORTED"));
+      }
+      const sources = await resolveContextDraftSources(contextDraft.refs, input);
+      if (!sources.ok) return err(sources.error);
+      const inputs: AgentContextBudgetInputs = {
+        model: {
+          provider: model.provider,
+          model: model.modelName,
+          contextWindow: model.capabilities.contextWindow ?? 0,
+          toolReserve: 0,
+          systemReserve: 0,
+          requiredContextTokens: model.requiredContextTokens
+        },
+        contents: sources.value.map((source) => ({
+          refId: source.refId,
+          content: source.content
+        }))
+      };
+      return ok(inputs);
+    }
+  };
+  return createAgentContextSession({
+    draftSession: input.draftSession,
+    budgetInputs,
+    ...(input.now === undefined ? {} : { now: input.now })
+  });
 }
 
 function createDesktopChangeSetSession(input: {
