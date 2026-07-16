@@ -15,6 +15,9 @@
 - Implement the approved design in `docs/superpowers/specs/2026-07-14-agentic-writing-loop-stage-5-context-runtime-design.md` version 1.3.
 - Deliver in four independently testable gates: Stage 5.0 conversation UI baseline, Stage 5A Context Runtime, Stage 5B Permission and Plan Execution Control, and Stage 5C Diagnostics and Usage.
 - Do not add Shell, Git, MCP, browser tools, network research, plugins, deletion/move/rename, directory creation, binary editing, multi-Agent execution, or unattended background work.
+- **Deferred to P1 (not Stage 5), recorded here so context engineering does not silently pull them in):**
+  - A cross-chapter/project full-text **search tool** (`search_project_text`). Writing-mode continuity checking ("where was this character detail first written") is meaningfully weaker without it, because Stage 5 tools only read by chapter ID / path. It needs its own permission, audit, and result-truncation contract, so it stays P1 per design v1.4 §12.8. Task 1.7 raises writing/general-file context quality within the *existing* read tools; it does not add search.
+  - A **user-writable writing-conventions file** (a persistent, editable "novel project CLAUDE.md": persona/tense/naming/tone rules). Task 1.7 injects the built-in `DEFAULT_AI_WRITING_STYLE_RULE_PACK` as persistent guidance; letting the user author/override that pack per project is the P1 follow-up.
 - Do not manually open a browser. All Electron UI verification uses Playwright automation.
 - Preserve Stage 2-4 Change Set, Approval Gate, Version Group, transaction journal, recovery, conflict, and run-undo semantics.
 - Use TDD for every task. Each task must leave its focused tests green before its commit.
@@ -38,7 +41,8 @@
 - Extend `packages/application/src/agent-run-model-driver.ts`, `agent-run-session.ts`, `agent-model-capabilities.ts`, `novel-studio-api.ts`, `ipc-contract.ts`, and exports.
 - Extend `packages/repository/src/agent-run-repository.ts` for context drafts, budget snapshots, and compaction revisions.
 - Modify Electron main/preload/renderer bridges for draft updates, model/reasoning selection, context status, and compaction commands.
-- Create `packages/ui/src/agent-context-menu.tsx` and extend the single composer with reference chips and warning-only context status.
+- Create `packages/ui/src/agent-popover.tsx` (shared trigger + dialog + keyboard/focus primitive) and `packages/ui/src/agent-context-menu.tsx`; extend the single composer with grouped sub-object props (`model`/`reasoning`/`references`/`contextStatus`) for reference chips and warning-only context status; refactor the Stage 5.0 mode popover onto the shared primitive.
+- Differentiate the two context modes (Task 1.7) via mode-specific system guidance and writing style-pack injection in `packages/application/src/agent-run-session.ts`, `agent-run-model-driver.ts`, and `ai-writing-style-rules.ts`; keep initial context minimal and tool-pulled.
 
 **Stage 5B Permission and Plan Execution Control**
 
@@ -379,6 +383,15 @@ export interface AgentRunSnapshotV11 extends Omit<AgentRunSnapshotV10, "schemaVe
 
 Define `AgentContextSnapshotV11` with layers, source revision/token/precision/state fields and define `AgentRunEventV11` with the Stage 5 event union. Retain exported v1.0 types for persisted compatibility and export `normalizeAgentRunSnapshot()`, `normalizeAgentRunEvent()`, and `normalizeAgentContextSnapshot()` returning v1.1 views. Missing v1.0 fields map to `modelProfileId = providerCapabilitySnapshot.profileId`, `reasoningEffort = undefined`, nullable Stage 5 IDs, `recoveryState = "none"`, zero/unknown usage summary, source `layer = "tool_result"`, `tokenCount = null`, `precision = "unknown"`, and `state = "active"`.
 
+**Implementation constraints (resolve these before writing code — verified against the current source):**
+
+1. **`AgentRunSnapshotV10` does not exist as a name.** The current type in `agent-run-types.ts` is `AgentRunSnapshot` (`schemaVersion: "1.0"`), exported from `index.ts` and consumed by the coordinator, session, and `AgentRunCommandResult`. First rename/alias `AgentRunSnapshot` → `AgentRunSnapshotV10` (keep an `AgentRunSnapshot` alias pointing at the normalized v1.1 view for existing consumers), then declare `AgentRunSnapshotV11 extends Omit<AgentRunSnapshotV10, "schemaVersion" | "status">`. The `Omit` idiom already appears in this package (`CreatePlanArtifactInput = Omit<PlanArtifact, "schemaVersion" | "revision" | "status">`).
+2. **Coordinator ownership decision (mandatory).** `agent-run-coordinator.ts` hardcodes `schemaVersion: "1.0"` (in `startRun` and `toEvent`) and its snapshot literal does not set the new required fields (`modelProfileId`, `recoveryState`, `usageSummary`, nullable Stage 5 IDs). This contradicts "write only v1.1 for new runs." Decision for Stage 5: **the coordinator continues to emit its current literal and the Application layer normalizes-before-write to v1.1** (`normalizeAgentRunSnapshot` runs at the persistence boundary). Do NOT widen the coordinator's literal to carry Stage 5 pointer fields it cannot populate. Add a focused test asserting a freshly started run is persisted as `schemaVersion: "1.1"` via the Application boundary even though the coordinator authored a v1.0-shaped literal. (Add `agent-run-coordinator.ts` to this task's file list only if the schema literal must change; under this decision it stays as `agent-run-session.ts`'s responsibility.)
+3. **Widen the mutation surface now.** `AgentRunSnapshotPatch` currently carries only pending-change-set/plan/version-group fields; widen it to accept the new Stage 5 pointer fields (`contextBudgetSnapshotId`, `activeCompactionId`, `planExecutionId`/`planExecutionRevision`, `activeErrorId`, `permissionSummaryId`/`permissionSummaryChecksum`, `recoveryState`, `usageSummary`). Widen `RecordAgentRunEventInput.status` to accept `context_compacting` and `awaiting_plan_revision`. These land in Task 1.1's type edits so Tasks 1.4/1.5/2.x compile against the coordinator.
+4. **Name collision on `normalizeAgentRunSnapshot`.** An existing function of this name already lives in `agent-run-session.ts` and is wired into `listAgentRuns` (it only backfills `conversationId`). Replace that local helper with the new agent-engine export rather than shipping two divergent normalizers; update `listAgentRuns` to call the engine version.
+5. **`modelProfileId` is a deliberate hoist**, not net-new data: it duplicates `providerCapabilitySnapshot.profileId`. Keep the normalization rule and do not treat it as a second source of truth.
+6. Use the `AgentReasoningEffort` alias (defined above) in `AgentRunSnapshotV11.reasoningEffort?` rather than re-inlining the union.
+
 - [ ] **Step 3: Add schema-aware repository reads**
 
 Make `AgentRunFileRepository`, Application restore, IPC validators, preload event guards, and renderer bridge accept v1.0 and v1.1 records, reject malformed versions, and write only v1.1 for new Stage 5 runs. Normalize at the owning boundary; do not rewrite old files during read.
@@ -512,6 +525,8 @@ export interface RefreshContextDraftCommand {
 
 Expose `readAgentRunDraft`, `updateAgentRunDraft`, `updateContextDraft`, and `refreshContextDraft`. New Conversations initialize from the project default profile, the model's declared default reasoning effort, planning/execution default, context inferred from the editor, and `write_before_confirmation`. Store revisions under `history/conversations/<conversationId>/run-drafts` and `context-drafts`. Resolve document content only when creating a Context Snapshot; never persist renderer-provided document content.
 
+**Repository ownership and path-guard (resolve before coding):** The `history/conversations/<conversationId>/` tree is currently owned exclusively by `AgentConversationFileRepository`, which guards every write with a `ProjectPathGuard` (`verifyProjectStoragePath`) and already uses the `<revision>.json` numbering convention (`summaries/`, scan by `/^[1-9][0-9]*\.json$/`). `AgentRunFileRepository` uses **no** path guard. Do NOT let `AgentRunFileRepository` write run-drafts/context-drafts into the conversation-owned subtree unguarded. Decision: **add `run-drafts/` and `context-drafts/` as new siblings of `summaries/` on `AgentConversationFileRepository`**, reusing its existing `ProjectPathGuard` and revision-numbering helpers; the Application draft session calls the conversation repository for draft persistence. Update this task's file list accordingly (add `packages/repository/src/agent-conversation-repository.ts`, drop the run-repository from draft persistence). This keeps one guarded owner for the conversation subtree.
+
 - [ ] **Step 4: Run focused tests and commit**
 
 Run:
@@ -573,7 +588,13 @@ export interface StartAgentRunCommand {
 }
 ```
 
-Application reloads the run draft, Context Draft, editor content, model profile, discovery/capability facts, and context window in one preflight. It creates `AgentProviderCapabilitySnapshot`. Renderer cannot submit provider, model name, context window, capabilities, or document content.
+Application reloads the run draft, Context Draft, editor content, model profile, discovery/capability facts, and context window in one preflight. It populates the existing `AgentProviderCapabilitySnapshot` type (it already exists in `agent-run-types.ts`; the preflight fills it, it is not a new type). Renderer cannot submit provider, model name, context window, capabilities, or document content.
+
+**Blast radius — do NOT skip this (verified against the current source):** Narrowing the *public* `StartAgentRunCommand` breaks two internal callers that still consume the wide field set, and neither is mentioned in the naive file list:
+
+1. **`AgentRunCoordinator.startRun` still needs the resolved fields.** `coordinator.startRun` (in `agent-engine`) consumes `operationMode`, `contextMode`, `providerCapabilitySnapshot`, `userRequest`, and `initialContextSources`. Do NOT push draft IDs into the coordinator. Introduce an **internal `ResolvedAgentRunStartInput`** type (the old wide shape, minus renderer authority) that the Application preflight builds server-side from the draft + Context Draft + editor + profile, and change `coordinator.startRun` to accept `ResolvedAgentRunStartInput`. The public IPC command stays draft-only; the coordinator stays field-based. Add `packages/agent-engine/src/agent-run-types.ts` (already listed) plus an explicit note that `coordinator.startRun`'s signature changes to the resolved-input type.
+2. **The `decidePlan` plan→execution handoff re-calls `coordinator.startRun`** (in `agent-run-session.ts`, ~lines 1817-1834) reusing the parent run's `providerCapabilitySnapshot` and context sources. Under the draft-only command this path has no run draft. Migrate it to build a `ResolvedAgentRunStartInput` **server-side** from: the approved plan's `handoffContextMode`/`handoffWritePolicy`, the parent run's model profile + reasoning (or the conversation's current draft model), and a freshly re-derived capability snapshot + context. State explicitly that an execution run started from an approved plan obtains model/reasoning/context authority from the server preflight, never from a renderer command.
+3. **Replay compatibility.** Old persisted command receipts referencing the wide `StartAgentRunCommand` remain readable (they are receipts, not replayed as new starts); add a test asserting a legacy receipt read does not attempt to re-validate against the narrowed command shape.
 
 - [ ] **Step 3: Forward reasoning to the model driver**
 
@@ -758,7 +779,9 @@ export interface CompactContextCommand {
 }
 ```
 
-Create `AgentUsageFileRepository` with only idempotent `writeFinal/readById` under the Electron user-data root. Key idempotency by `runId:roundId:finalSequence`; validate finite non-negative token/budget values and reject prompt text, file contents, absolute paths, credentials, authorization headers, and raw provider frames. Wire `userDataRoot` through `main/index.ts`, runtime manager, and runtime composition. Task 3.2 extends this same repository with retention and query APIs.
+Create `AgentUsageFileRepository` with idempotent `writeFinal/readById` under the Electron user-data root. Key idempotency by `runId:roundId:finalSequence`; validate finite non-negative token/budget values and reject prompt text, file contents, absolute paths, credentials, authorization headers, and raw provider frames. `UserPreferencesFileRepository` is the direct template: same `{ userDataRoot }` option, same guard-free `writeTextAtomically`. Wire `userDataRoot` through `main/index.ts`, runtime manager, and runtime composition (the preferences repo already threads it — follow that precedent). Export `AgentUsageFileRepositoryOptions` from `packages/repository/src/index.ts` alongside the class. Task 3.2 extends this same repository with retention and query APIs.
+
+**Daily-aggregate seam (avoid write-path rework in 5C):** Task 3.2 introduces 365-day daily aggregates while detail records retain only 30 days. If 5A's `writeFinal` writes only detail records, aggregates for records aged past 30 days can never be backfilled. Therefore **5A's `writeFinal` already maintains the daily aggregate** (incrementally update the `localDate` bucket in the same call, keyed off the record's stored `localDate/timezone/utcOffsetMinutes`), so Task 3.2 only adds query/retention/clear on top and never rewrites the write path.
 
 - [ ] **Step 3: Implement immutable compaction revisions**
 
@@ -836,7 +859,15 @@ Build the manifest from canonical stores before any deterministic pass or provid
 
 - [ ] **Step 4: Add state/events and persistence ordering**
 
-Add `context_compaction_started/completed/failed`; persist the manifest before publishing `context_compaction_started`. Add a repository `commitCompactionResult` operation that writes the usage record (when present), completed revision, result snapshot, and budget snapshot first, then updates the run's active-compaction pointer as the final commit marker. A crash before that marker leaves the previous active snapshot valid; a marker is accepted only when all referenced artifacts already exist. Publish completion only after this commit marker succeeds. Model-assisted compaction uses a no-tools request, receives only evictable material, cannot produce a plan or Change Set, and records usage. Cancellation or failure restores the last committed snapshot/budget and never publishes a completion event for an uncommitted revision.
+Add `context_compaction_started/completed/failed`; persist the manifest before publishing `context_compaction_started`.
+
+**The compaction "commit" is cross-repository and Application-orchestrated — not a single repository method (verified against the current source).** The usage record lives in `AgentUsageFileRepository` (Electron user-data root), while the compaction revision, result snapshot, budget snapshot, and the `activeCompactionId` pointer live in `AgentRunFileRepository` (project `history`). Two repositories, two roots — the ordering guarantee cannot be one repo method. Sequence it in `agent-context-session` (Application layer) using the rename-based `writeTextAtomically` primitive (there is no multi-file transaction or fsync barrier available):
+
+1. write the usage record to `AgentUsageFileRepository`, capture its `usageId`;
+2. write the completed `ContextCompactionRevision` (with `usageRecordId` pointing at that id), the result snapshot, and the budget snapshot to `AgentRunFileRepository`;
+3. **last**, rewrite `run.json` with the new `activeCompactionId` as the commit marker.
+
+A crash before step 3 leaves orphaned-but-harmless artifacts and the prior `activeCompactionId` intact. The **read path** must cross-validate that the revision + result/budget snapshots referenced by `activeCompactionId` all exist before honoring the pointer (today `readSnapshot` does zero cross-reference validation — this is new read-path logic). Give the pointer rewrite the `writeChangeSet` read-before-write + JSON-equality idempotency pattern so a replayed commit returns the first result. Publish completion only after the commit marker succeeds. Model-assisted compaction uses a no-tools request, receives only evictable material, cannot produce a plan or Change Set, and records usage. Cancellation or failure restores the last committed snapshot/budget and never publishes a completion event for an uncommitted revision.
 
 - [ ] **Step 5: Run focused tests**
 
@@ -868,10 +899,14 @@ git commit -m "feat: compact agent context safely"
 - Modify: `apps/desktop/src/preload/api.ts`
 - Modify: `apps/desktop/src/preload/index.cts`
 - Modify: `apps/desktop/src/renderer/agent-run-bridge.ts`
+- Modify: `apps/desktop/src/renderer/agent-conversation-bridge.ts`
+- Modify: `apps/desktop/src/renderer/agent-conversation-workspace.ts`
+- Create: `packages/ui/src/agent-popover.tsx`
 - Create: `packages/ui/src/agent-context-menu.tsx`
 - Modify: `packages/ui/src/agent-composer.tsx`
 - Modify: `packages/ui/src/workspace-shell-types.ts`
 - Modify: `packages/ui/src/styles.css`
+- Test: `packages/ui/test/agent-popover.test.tsx`
 - Test: `apps/desktop/test/agent-run-ipc.test.ts`
 - Test: `apps/desktop/test/agent-run-bridge.test.ts`
 - Test: `packages/ui/test/agent-composer.test.tsx`
@@ -899,7 +934,15 @@ Validate every payload in main before calling Application. Preload exposes no ra
 
 - [ ] **Step 3: Complete the composer toolbar**
 
-Place references/modes/permission on the left and model/reasoning/send on the right. Populate model profiles from the existing Settings snapshot, but write selections to `AgentRunDraft` rather than mutating the project default profile. Project these draft facts through `agent-conversation-bridge.ts` and `agent-conversation-workspace.ts` into the existing `AgentConversationViewProps.composer`; do not add model/context controls back to `AgentRunPanelProps`. A model change atomically chooses that profile's supported/default reasoning value and invalidates the old budget preview; reload restores the draft. The context button is quiet in normal state; show only `上下文较多`, `上下文需刷新`, or `上下文压缩失败` proactively. The popover contains exact usage, precision, sources, and compact command.
+Place references/modes/permission on the left and model/reasoning/send on the right. Populate model profiles from the existing Settings snapshot, but write selections to `AgentRunDraft` rather than mutating the project default profile. A model change atomically chooses that profile's supported/default reasoning value and invalidates the old budget preview; reload restores the draft. The context button is quiet in normal state; show only `上下文较多`, `上下文需刷新`, or `上下文压缩失败` proactively. The popover contains exact usage, precision, sources, and compact command.
+
+**Prop-grouping contract (avoid prop explosion — verified against the Stage 5.0 composer):** `AgentComposerProps` is today a flat 8-data + 7-callback object. Do NOT flat-add references, model, reasoning, and context-status (that roughly doubles the surface). Add them as **nested sub-objects** following the existing `AgentRunPanelProps` precedent (which nests `changeSetReview`/`rollbackReview`): `composer.model` (`profiles`, `selectedProfileId`, `onSelect`), `composer.reasoning` (`values`, `current`, `visible`, `onSelect`), `composer.references` (`chips`, `available`, `onAdd`, `onRemove`), `composer.contextStatus` (`state`, `usage`, `precision`, `sources`, `onCompact`, `onRefresh`). Each sub-object stays clone-safe for the DTO forwarders.
+
+**Projection point (correcting the plan's prose):** the composer props do NOT originate in `agent-conversation-bridge.ts`. They are built by `agent-run-bridge.ts::toComposerProps()` from `BridgeState`; `agent-conversation-workspace.ts` and `agent-conversation-bridge.ts` are agnostic forwarders (`view.composer`). So implement the new draft facts in `toComposerProps()`; the two conversation files change only to keep the enlarged (grouped) composer object flowing through as clone-safe DTOs. `toComposerProps` currently does not read `context.settings` — populating the model selector adds that read (the `ModelSettingsPanelProps` snapshot is already on `AgentRunBridgeContext.settings`, and reasoning allowed-values come from `modelDiscovery`, not the profile object).
+
+**Draft dependency and async conversion:** Task 1.6 hard-depends on Task 1.2 (`AgentRunDraft` + `updateAgentRunDraft`) and Task 1.3 (server-authoritative model/reasoning) landing first — `AgentRunDraft` does not exist in renderer code today, and composer edits currently mutate synchronous in-memory `BridgeState`. Converting `toComposerProps` callbacks to async draft-update commands must follow the existing `updateChangeSetSelection` in-flight/optimistic guard as the template; do not leave a synchronous-local-state fallback that diverges from the persisted draft.
+
+**Shared popover primitive:** the Stage 5.0 mode popover's open/close/auto-focus/arrow-roving/Escape logic is hand-rolled inline in `agent-composer.tsx`, and no shared popover component exists anywhere in the repo. Rather than reimplementing that logic in the reference menu, context-status menu, model menu, reasoning menu, and (Task 2.3) permission menu, extract one `agent-popover.tsx` primitive (trigger + `role="dialog"` panel + keyboard/focus contract) in this task and **refactor the existing mode popover to use it too**, so there is one popover behavior, not five divergent ones.
 
 - [ ] **Step 4: Run Stage 5A gate**
 
@@ -912,13 +955,67 @@ npm run build
 npx playwright test apps/desktop/test/agent-context-runtime.e2e.ts
 ```
 
-Expected: PASS for references, model/reasoning changes, budget recalculation, manual/automatic compaction, stale context, protected fact continuity, repeated-compaction monotonicity, and reload recovery.
+Expected: PASS for references, model/reasoning changes, budget recalculation, manual/automatic compaction, stale context, protected fact continuity, repeated-compaction monotonicity, reload recovery, and (Task 1.7) writing-vs-general-file guidance/style-pack/initial-context differentiation.
 
 - [ ] **Step 5: Commit**
 
 ```powershell
-git add packages/application/src/novel-studio-api.ts packages/application/src/ipc-contract.ts packages/application/src/desktop-application.ts apps/desktop/src/main/agent-run-runtime.ts apps/desktop/src/main/ipc-handlers.ts apps/desktop/src/main/ipc-allowlist.ts apps/desktop/src/preload/api.ts apps/desktop/src/preload/index.cts apps/desktop/src/renderer/agent-run-bridge.ts apps/desktop/src/renderer/agent-conversation-bridge.ts apps/desktop/src/renderer/agent-conversation-workspace.ts packages/ui/src/agent-context-menu.tsx packages/ui/src/agent-composer.tsx packages/ui/src/workspace-shell-types.ts packages/ui/src/styles.css apps/desktop/test/agent-run-ipc.test.ts apps/desktop/test/agent-run-bridge.test.ts apps/desktop/test/agent-conversation-bridge.test.ts packages/ui/test/agent-composer.test.tsx apps/desktop/test/agent-context-runtime.e2e.ts
+git add packages/application/src/novel-studio-api.ts packages/application/src/ipc-contract.ts packages/application/src/desktop-application.ts apps/desktop/src/main/agent-run-runtime.ts apps/desktop/src/main/ipc-handlers.ts apps/desktop/src/main/ipc-allowlist.ts apps/desktop/src/preload/api.ts apps/desktop/src/preload/index.cts apps/desktop/src/renderer/agent-run-bridge.ts apps/desktop/src/renderer/agent-conversation-bridge.ts apps/desktop/src/renderer/agent-conversation-workspace.ts packages/ui/src/agent-popover.tsx packages/ui/src/agent-context-menu.tsx packages/ui/src/agent-composer.tsx packages/ui/src/workspace-shell-types.ts packages/ui/src/styles.css packages/ui/test/agent-popover.test.tsx apps/desktop/test/agent-run-ipc.test.ts apps/desktop/test/agent-run-bridge.test.ts apps/desktop/test/agent-conversation-bridge.test.ts packages/ui/test/agent-composer.test.tsx apps/desktop/test/agent-context-runtime.e2e.ts
 git commit -m "feat: expose stage 5 context controls"
+```
+
+### Task 1.7: Make writing and general-file genuinely different context engineering
+
+This task turns the two context modes from "different tool subset" into two distinct context-engineering profiles, matching the Claude Code / Codex principle of minimal preloaded context + mode-specific persistent guidance. It adds no new file tool and no new safety boundary; all changes stay inside context assembly.
+
+**Files:**
+- Modify: `packages/application/src/agent-run-session.ts` (initial message assembly and the `systemPrompt` seam)
+- Modify: `packages/application/src/agent-run-model-driver.ts` (pass mode-specific `systemPrompt`)
+- Modify: `packages/application/src/ai-writing-style-rules.ts` (expose the pack for the Agent path; reuse `formatAiWritingStyleRulesForPrompt`)
+- Modify: `packages/agent-engine/src/context-snapshot.ts` (record which guidance/style layer participated, as an auditable source)
+- Test: `packages/application/test/agent-run-session.test.ts`
+- Test: `packages/application/test/agent-run-model-driver.test.ts`
+
+- [ ] **Step 1: Write failing context-engineering tests**
+
+Assert that a `writing` run and a `general_file` run produce **different** system guidance and different initial context, and that both keep the untrusted-data envelope. Concretely:
+
+```text
+writing:      system guidance emphasizes narrative continuity, character consistency,
+              and "do not invent unread settings"; the writing style pack is injected
+              as persistent guidance; initial context is current chapter/selection +
+              Story Bible INDEX (not full-novel bodies).
+general_file: system guidance emphasizes faithful text handling, format preservation,
+              and minimal edits; NO Story Bible / character / other-chapter bodies are
+              injected; initial context is current file + same-directory name summary.
+```
+
+Assert the style pack text is present in a writing run's system messages and absent in a general-file run. Assert neither mode injects full non-current chapter bodies at start (bodies come from read tools, not eager preload). Assert the Context Snapshot records the guidance/style layer as an auditable source with a checksum.
+
+- [ ] **Step 2: Fill the mode-specific `systemPrompt` seam**
+
+Today the Agent loop injects only the untrusted-data envelope and restored read summaries — there is **no** mode-specific narrative/faithful-text guidance, and `agent-run-model-driver.ts` exposes an unused `systemPrompt?: string`. Build a versioned, mode-specific guidance string in `agent-run-session.ts` and pass it as `systemPrompt`. The guidance is system-authored and fixed; file content remains data-not-authority. Count its tokens into `systemReserve` (Task 1.4) so the budget stays honest.
+
+- [ ] **Step 3: Inject the writing style pack as persistent guidance (writing mode only)**
+
+Reuse `DEFAULT_AI_WRITING_STYLE_RULE_PACK` and `formatAiWritingStyleRulesForPrompt` from `ai-writing-style-rules.ts` (currently wired only into the legacy AI writing workflow, not the Agent path). Inject the formatted pack into writing-mode runs as persistent guidance — the CLAUDE.md-equivalent for a novel project's conventions. Do not inject it in general-file mode. Record it as a Context Snapshot source so "查看来源" shows it.
+
+- [ ] **Step 4: Make initial context minimal, tool-pulled thereafter**
+
+Align the start-preflight context assembly (Task 1.3) with the design's "写作模式不自动预读整部小说": writing mode seeds only the current chapter/selection + Story Bible index summary; general-file mode seeds only the current file + same-directory name summary. Everything else is pulled by the read tools already registered per mode. This also removes the current eager smell where full chapter bodies enter context at start (already being removed by the `ContextDraft` ref-only approach in Task 1.2).
+
+- [ ] **Step 5: Run focused tests and commit**
+
+```powershell
+npx vitest run packages/application/test/agent-run-session.test.ts packages/application/test/agent-run-model-driver.test.ts packages/agent-engine/test/context-snapshot.test.ts
+npm run typecheck
+```
+
+Expected: PASS; writing and general-file runs differ in guidance, style-pack presence, and initial context, while both preserve the untrusted-data envelope and neither eagerly preloads non-current bodies.
+
+```powershell
+git add packages/application/src/agent-run-session.ts packages/application/src/agent-run-model-driver.ts packages/application/src/ai-writing-style-rules.ts packages/agent-engine/src/context-snapshot.ts packages/application/test/agent-run-session.test.ts packages/application/test/agent-run-model-driver.test.ts
+git commit -m "feat: differentiate writing and general-file context engineering"
 ```
 
 ## Stage 5B: Permission and Plan Execution Control
@@ -1095,7 +1192,7 @@ Expose `readPermissionSummary` and `decidePlanRevision`. Compose the permission 
 
 - [ ] **Step 3: Implement the compact UI**
 
-Permission details open from the composer only. Preflight failures appear inline. Active plan step stays expanded; completed steps collapse. A material deviation card shows original plan, discovery, proposed revision, affected steps, approve, and reject.
+Permission details open from the composer only, using the shared `agent-popover.tsx` primitive extracted in Task 1.6 (do not reimplement open/close/focus/Escape). The permission menu largely relocates controls that already exist verbatim in the Stage 5.0 composer (`每次修改前确认` / `本次运行自动修改` write-policy select and the `只读规划` fallback), plus permission-summary projection. Preflight failures appear inline. Active plan step stays expanded; completed steps collapse. A material deviation card shows original plan, discovery, proposed revision, affected steps, approve, and reject.
 
 - [ ] **Step 4: Run Stage 5B gate**
 
@@ -1479,6 +1576,8 @@ git commit -m "test: complete stage 5 acceptance gate"
 ## Final Plan Self-Review
 
 - [ ] Verify every Stage 5 v1.3 requirement maps to a task: one right-side composer, one lower-left grouped mode popover, no duplicate assistant/run projection or nested chat surface, model/reasoning placement, explicit refs, context modes, provider-aware budget, manifest-backed three-stage compaction, permission checksum, existing Plan Mode regression, plan execution/deviation, inline recoverable errors, redacted usage, and settings daily analytics.
+- [ ] Verify the pre-implementation decisions are captured and non-contradictory: `AgentRunSnapshotV10` alias/rename + Application-boundary normalize-before-write (Task 1.1); `ResolvedAgentRunStartInput` internal type + `decidePlan` server-side handoff migration (Task 1.3); conversation-repository ownership of run/context drafts with its path guard (Task 1.2); cross-repository, Application-orchestrated compaction commit with pointer-last marker (Task 1.5); grouped composer sub-objects + shared `agent-popover.tsx` primitive (Tasks 1.6/2.3); 5A `writeFinal` maintains the daily aggregate (Task 1.5).
+- [ ] Verify Task 1.7 makes writing vs general-file two real context-engineering profiles (mode-specific guidance, writing style-pack injection, minimal tool-pulled initial context) without adding a search tool or a user-writable conventions file — both explicitly deferred to P1.
 - [ ] Search this plan for `TBD`, `TODO`, `implement later`, `fill in`, and vague “add tests” language; none may remain.
 - [ ] Verify type names remain consistent across tasks: `AgentRunDraft`, `AgentReasoningEffort`, `ContextDraft`, `ContextBudgetSnapshot`, `ContextCompactionRevision`, `PermissionSummary`, `PlanExecutionRecord`, `AgentRunErrorRecord`, `AgentUsageUnitPriceSnapshot`, `AgentUsageRecord`, and `RetryRunTargetCommand`.
 - [ ] Verify no task adds Shell, Git, MCP, browser, network research, plugins, multi-Agent execution, or another file-write path.
