@@ -237,6 +237,51 @@ describe("AgentRunSession", () => {
     expect(publishedTypes).not.toContain("run_completed");
   });
 
+  test("binds the preflight-resolved context budget id onto the started run", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    if (typeof createSession !== "function") return;
+    const create = createSession as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+
+    const withBudget = create({
+      coordinatorOptions: { createRunId: () => "run_budget" },
+      repository: memoryRepository(),
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: budgetStartPreflight("budget_start_01"),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      }
+    });
+    const started = await withBudget.startAgentRun(startCommand());
+    expect(started).toMatchObject({
+      ok: true,
+      value: { runId: "run_budget", contextBudgetSnapshotId: "budget_start_01" }
+    });
+
+    const withoutBudget = create({
+      coordinatorOptions: { createRunId: () => "run_no_budget" },
+      repository: memoryRepository(),
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      }
+    });
+    const plain = await withoutBudget.startAgentRun({ ...startCommand(), commandId: "start-02" });
+    expect(plain).toMatchObject({
+      ok: true,
+      value: { runId: "run_no_budget", contextBudgetSnapshotId: null }
+    });
+  });
+
   test("returns the persisted stop receipt after application reload", async () => {
     const createSession = (applicationExports as unknown as Record<string, unknown>)[
       "createAgentRunSession"
@@ -2240,6 +2285,18 @@ function echoStartPreflight() {
           initialContextSources: command["initialContextSources"] ?? []
         }
       };
+    }
+  };
+}
+
+/** Echoes intent like `echoStartPreflight`, but also resolves a context budget id (Task 1.4). */
+function budgetStartPreflight(contextBudgetSnapshotId: string) {
+  const base = echoStartPreflight();
+  return {
+    async resolveStart(command: Record<string, unknown>) {
+      const resolved = await base.resolveStart(command);
+      if (!resolved.ok) return resolved;
+      return { ok: true, value: { ...resolved.value, contextBudgetSnapshotId } };
     }
   };
 }

@@ -273,6 +273,7 @@ export interface ResolvedAgentRunStartInput {
   readonly reasoningEffort?: AgentReasoningEffort;
   readonly limits?: Partial<AgentRunLimits>;
   readonly initialContextSources?: readonly AgentContextSourceInput[];
+  readonly contextBudgetSnapshotId?: string;
   readonly sourcePlanId?: string;
   readonly sourcePlanRevision?: number;
 }

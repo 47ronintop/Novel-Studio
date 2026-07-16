@@ -164,6 +164,12 @@ export interface AgentRunStartFacts {
   readonly requestedReasoningEffort?: AgentReasoningEffort;
   readonly model: AgentRunStartModelFacts;
   readonly initialContextSources: readonly AgentContextSourceInput[];
+  /**
+   * The provider-aware budget the preflight recalculated for this start (Task 1.4). Its id binds onto
+   * the run snapshot so compaction (Task 1.5) works against the same budget the run started with. The
+   * budget is server-recalculated at start rather than trusted from a renderer preview.
+   */
+  readonly contextBudgetSnapshotId?: string;
 }
 
 export interface AgentRunStartPreflightPort {
@@ -2910,6 +2916,9 @@ function resolveStartInput(
       : { reasoningEffort: reasoning.value.reasoningEffort }),
     ...(command.limits === undefined ? {} : { limits: command.limits }),
     initialContextSources: facts.initialContextSources,
+    ...(facts.contextBudgetSnapshotId === undefined
+      ? {}
+      : { contextBudgetSnapshotId: facts.contextBudgetSnapshotId }),
     ...(command.sourcePlanId === undefined ? {} : { sourcePlanId: command.sourcePlanId }),
     ...(command.sourcePlanRevision === undefined
       ? {}

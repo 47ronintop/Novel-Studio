@@ -125,7 +125,7 @@ export function createAgentRunCoordinator(
           : { reasoningEffort: command.reasoningEffort }),
         permissionSummaryId: null,
         permissionSummaryChecksum: null,
-        contextBudgetSnapshotId: null,
+        contextBudgetSnapshotId: command.contextBudgetSnapshotId ?? null,
         activeCompactionId: null,
         planExecutionId: null,
         planExecutionRevision: null,

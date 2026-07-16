@@ -39,6 +39,20 @@ export {
   findStaleContextSources,
   normalizeAgentContextSnapshot
 } from "./context-snapshot.js";
+export {
+  CONTEXT_BUDGET_OUTPUT_RESERVE_MAX,
+  CONTEXT_BUDGET_OUTPUT_RESERVE_MIN,
+  aggregateContextPrecision,
+  calculateContextBudget,
+  createDeterministicTokenEstimator
+} from "./context-budget.js";
+export type {
+  AgentTokenCount,
+  AgentTokenEstimator,
+  CalculateContextBudgetInput,
+  ContextBudgetSnapshot,
+  PreviewContextBudgetCommand
+} from "./context-budget.js";
 export type {
   AgentContextLayer,
   AgentContextPrecision,

@@ -628,12 +628,15 @@ git commit -m "feat: bind agent runs to model and reasoning selections"
 - Modify: `packages/application/src/agent-run-session.ts`
 - Modify: `packages/application/src/index.ts`
 - Modify: `packages/agent-engine/src/index.ts`
+- Modify (deviation — Step 4 binding seam): `packages/agent-engine/src/agent-run-types.ts` (add `contextBudgetSnapshotId?` to `ResolvedAgentRunStartInput`), `packages/agent-engine/src/agent-run-coordinator.ts` (bind it at `startRun`), `packages/application/test/agent-run-session.test.ts` (budget-binding test)
 
-- [ ] **Step 1: Write failing arithmetic and precision tests**
+**Implementation note (DONE 2026-07-16):** Binding the budget id at start required a server-authoritative seam the file list omitted: the coordinator authors `contextBudgetSnapshotId` on the V11 snapshot, so `ResolvedAgentRunStartInput` gained an optional `contextBudgetSnapshotId?` and `startRun` binds `command.contextBudgetSnapshotId ?? null`. `AgentRunStartFacts` gained an optional `contextBudgetSnapshotId?` that `resolveStartInput` forwards, so the preflight is where the budget is recalculated at start (renderer previews are never trusted). `previewContextBudget` is read-only over `resolveStartDraft` (verifies id/rev/checksum) and a `AgentContextBudgetInputsPort` that resolves model facts + ref content; token estimation uses the injected `AgentTokenEstimator` or the deterministic UTF-8 fallback (always `estimated`, never `reported`). Desktop wiring of `previewContextBudget` + start-time budget recompute is deferred to Task 1.6 (composer); the `decidePlan` execution handoff leaves the budget id unset (recomputed there in 1.5/1.6). Persisting the budget-snapshot body is a repository concern (not in 1.4).
+
+- [x] **Step 1: Write failing arithmetic and precision tests**
 
 Test 8K/32K/128K windows, explicit maximum output, fallback output reserve, tool-schema reserve, system reserve, negative/NaN/overflow rejection, required budget below 8K, reported/estimated/unknown precision, and model switching.
 
-- [ ] **Step 2: Implement the pure budget function**
+- [x] **Step 2: Implement the pure budget function**
 
 ```ts
 export interface ContextBudgetSnapshot {
@@ -667,15 +670,15 @@ export interface PreviewContextBudgetCommand {
 
 Compute `safeInputBudget = contextWindow - outputReserve - toolReserve - systemReserve`; reject invalid operands before subtraction. Use `min(16K, max(4K, floor(contextWindow * 0.15)))` only when the profile lacks a valid maximum output.
 
-- [ ] **Step 3: Integrate the estimator port**
+- [x] **Step 3: Integrate the estimator port**
 
 Define `AgentTokenEstimator.count(text, modelProfileId)` returning `{ tokens, precision }`. Use provider/tokenizer implementations when injected; otherwise use one deterministic UTF-8 estimator marked `estimated`. Do not label local estimates as reported usage.
 
-- [ ] **Step 4: Bind budgets to run draft and snapshot**
+- [x] **Step 4: Bind budgets to run draft and snapshot**
 
 Calculate a preview budget when model, request, refs, editor, or modes change. Recalculate during start preflight and bind `contextBudgetSnapshotId`; reject a mismatched draft preview rather than trusting renderer percentages.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
 Run:
 
@@ -686,7 +689,7 @@ npm run typecheck
 
 Expected: PASS; all arithmetic is finite and non-negative.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add packages/agent-engine/src/context-budget.ts packages/agent-engine/src/index.ts packages/agent-engine/test/context-budget.test.ts packages/application/src/agent-context-session.ts packages/application/src/agent-run-session.ts packages/application/src/index.ts packages/application/test/agent-context-session.test.ts packages/application/test/agent-run-session.test.ts

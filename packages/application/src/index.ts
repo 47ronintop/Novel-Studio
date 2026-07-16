@@ -327,6 +327,15 @@ export type {
 export { createAgentBackedAiWritingWorkflowSession } from "./ai-writing-workflow-session.js";
 export { createAgentRunSession } from "./agent-run-session.js";
 export { createAgentRunDraftSession } from "./agent-run-draft-session.js";
+export { createAgentContextSession } from "./agent-context-session.js";
+export type {
+  AgentContextBudgetContent,
+  AgentContextBudgetInputs,
+  AgentContextBudgetInputsPort,
+  AgentContextBudgetModelFacts,
+  AgentContextSession,
+  CreateAgentContextSessionOptions
+} from "./agent-context-session.js";
 export { createChangeSetSession } from "./change-set-session.js";
 export { createVersionGroupSession } from "./version-group-session.js";
 export type {
@@ -393,6 +402,11 @@ export type {
   AgentContextMode,
   AgentOperationMode,
   AgentWritePolicy,
+  AgentTokenCount,
+  AgentTokenEstimator,
+  CalculateContextBudgetInput,
+  ContextBudgetSnapshot,
+  PreviewContextBudgetCommand,
   PlanArtifact,
   PlanOpenQuestion
 } from "@novel-studio/agent-engine";
