@@ -58,6 +58,63 @@ describe("AgentConversationBridge", () => {
     ]);
   });
 
+  test("forwards the enlarged grouped composer object with its callbacks intact", async () => {
+    const fixture = createApiFixture([
+      conversation("conv_01", "run_01", "completed", "2026-07-14T00:00:00.000Z")
+    ]);
+    const bridge = createAgentConversationBridge(fixture.api);
+    const state = await bridge.load("project_01");
+    const onSelectModel = () => undefined;
+    const onAddRef = () => undefined;
+    const composer = {
+      request: "",
+      operationMode: "execution" as const,
+      contextMode: "writing" as const,
+      writePolicy: "write_before_confirmation" as const,
+      writePolicyAcknowledged: false,
+      active: false,
+      model: {
+        profiles: [{ id: "p1", label: "GPT", provider: "openai" }],
+        selectedProfileId: "p1",
+        onSelect: onSelectModel
+      },
+      reasoning: { visible: true, values: ["low", "high"] as const, current: "low" as const, onSelect: () => undefined },
+      references: {
+        chips: [{ refId: "chapter:ch-01", label: "第一章", kind: "chapter" as const }],
+        available: [],
+        onAdd: onAddRef,
+        onRemove: () => undefined
+      },
+      contextStatus: {
+        state: "normal" as const,
+        usageLabel: "12k / 100k",
+        precision: "reported" as const,
+        sources: []
+      },
+      onRequestChange: () => undefined,
+      onOperationModeChange: () => undefined,
+      onContextModeChange: () => undefined,
+      onWritePolicyChange: () => undefined,
+      onWritePolicyAcknowledgedChange: () => undefined,
+      onSend: () => undefined,
+      onStop: () => undefined
+    };
+    const workspace = toAgentConversationWorkspaceProps(state, undefined, composer, undefined, {
+      onCreate: () => undefined,
+      onSelect: () => undefined,
+      onArchive: () => undefined,
+      onRestore: () => undefined,
+      onSearchQueryChange: () => undefined,
+      onFilterChange: () => undefined,
+      onReturnToActive: () => undefined
+    });
+
+    // Opaque forwarding: the grouped object and its function-valued props are preserved by reference.
+    expect(workspace.view.composer).toBe(composer);
+    expect(workspace.view.composer?.model?.onSelect).toBe(onSelectModel);
+    expect(workspace.view.composer?.references?.onAdd).toBe(onAddRef);
+  });
+
   test.each([
     ["planning_model", {}, true],
     ["completed", {}, false],

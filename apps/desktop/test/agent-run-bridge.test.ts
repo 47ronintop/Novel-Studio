@@ -1,8 +1,17 @@
 import { describe, expect, test, vi } from "vitest";
 
-import type { AgentRunEvent, AgentRunSnapshot, ChangeSet } from "@novel-studio/agent-engine";
-import type { NovelStudioApi } from "@novel-studio/application";
-import { ok } from "@novel-studio/shared";
+import type {
+  AgentRunEvent,
+  AgentRunSnapshot,
+  ChangeSet,
+  ContextBudgetSnapshot
+} from "@novel-studio/agent-engine";
+import {
+  createAgentRunDraftSession,
+  type AgentRunDraftSessionRepository,
+  type NovelStudioApi
+} from "@novel-studio/application";
+import { ok, type JsonObject } from "@novel-studio/shared";
 import type { ChapterEditorProps, ModelSettingsPanelProps } from "@novel-studio/ui";
 
 import { createAgentRunBridge } from "../src/renderer/agent-run-bridge.js";
@@ -928,6 +937,287 @@ describe("Agent Run renderer bridge", () => {
     expect(bridge.getProps()?.rollbackReview?.decisions).toEqual({});
   });
 });
+
+describe("Agent Run renderer bridge — draft-backed composer", () => {
+  const draftSettings = {
+    ...settings,
+    profiles: [
+      settings.profiles[0]!,
+      {
+        id: "profile-02",
+        provider: "anthropic",
+        displayName: "Claude Writer",
+        baseUrl: "",
+        modelName: "claude-writer",
+        apiKeyRef: "secret://claude/key",
+        temperature: 0.3,
+        maxTokens: 8192,
+        timeoutMs: 60000
+      }
+    ],
+    modelDiscovery: {
+      profileId: "profile-01",
+      provider: "openai-compatible",
+      status: "loaded" as const,
+      models: [
+        { id: "local-model", displayName: "local-model", provider: "openai-compatible", contextWindow: 128000 }
+      ],
+      reasoningStrength: {
+        status: "available" as const,
+        providerParamName: "reasoning_effort" as const,
+        allowedValues: ["low", "medium", "high"] as const,
+        defaultValue: "medium" as const
+      }
+    }
+  } as ModelSettingsPanelProps;
+
+  test("loads a draft-backed composer with model, reasoning, and chapter reference", async () => {
+    const { api } = createDraftApi();
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.model).toBeDefined());
+    const composer = bridge.getComposerProps();
+    expect(composer?.model?.selectedProfileId).toBe("profile-01");
+    expect(composer?.model?.profiles.map((profile) => profile.id)).toEqual([
+      "profile-01",
+      "profile-02"
+    ]);
+    expect(composer?.reasoning).toMatchObject({ visible: true, current: "medium" });
+    expect(composer?.references?.chips.map((chip) => chip.refId)).toEqual(["chapter:chapter-01"]);
+    expect(composer?.contextStatus?.state).toBe("normal");
+  });
+
+  test("writes a model selection to the draft and re-previews the budget", async () => {
+    const { api, budgetCalls } = createDraftApi();
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.model).toBeDefined());
+    const before = budgetCalls.length;
+
+    bridge.getComposerProps()?.model?.onSelect("profile-02");
+
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()?.model?.selectedProfileId).toBe("profile-02")
+    );
+    expect(budgetCalls.length).toBeGreaterThan(before);
+  });
+
+  test("selects a reasoning effort and persists it to the draft", async () => {
+    const { api } = createDraftApi();
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.reasoning?.visible).toBe(true));
+
+    bridge.getComposerProps()?.reasoning?.onSelect("high");
+
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()?.reasoning?.current).toBe("high")
+    );
+  });
+
+  test("adds and removes a context reference through the context draft", async () => {
+    const { api } = createDraftApi();
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      fileEditor: {
+        path: "notes/outline.md",
+        fileName: "outline.md",
+        content: "outline",
+        dirty: false,
+        saveStatus: "Saved"
+      },
+      settings: draftSettings
+    });
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.references).toBeDefined());
+    expect(bridge.getComposerProps()?.references?.available.map((ref) => ref.refId)).toEqual([
+      "file:notes/outline.md"
+    ]);
+
+    bridge.getComposerProps()?.references?.onAdd("file:notes/outline.md");
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()?.references?.chips.map((chip) => chip.refId)).toEqual([
+        "chapter:chapter-01",
+        "file:notes/outline.md"
+      ])
+    );
+
+    bridge.getComposerProps()?.references?.onRemove("file:notes/outline.md");
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()?.references?.chips.map((chip) => chip.refId)).toEqual([
+        "chapter:chapter-01"
+      ])
+    );
+  });
+
+  test("surfaces a heavy context and compacts the live run", async () => {
+    const activeRun: AgentRunSnapshot = {
+      ...snapshot,
+      status: "executing_model",
+      contextBudgetSnapshotId: "budget-live-01",
+      runRevision: 5
+    };
+    const { api, compactCalls } = createDraftApi({ activeRun, heavyRefThreshold: 1 });
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+    await bridge.load("project-01");
+
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.contextStatus?.state).toBe("heavy"));
+    const contextStatus = bridge.getComposerProps()?.contextStatus;
+    expect(typeof contextStatus?.onCompact).toBe("function");
+    contextStatus?.onCompact?.();
+
+    await vi.waitFor(() => expect(compactCalls.length).toBe(1));
+    expect(compactCalls[0]).toMatchObject({
+      runId: "run-bridge",
+      contextBudgetSnapshotId: "budget-live-01",
+      trigger: "manual"
+    });
+  });
+});
+
+/**
+ * A high-fidelity draft-backed fake API: the real draft session over an in-memory repo (so revisions,
+ * checksums, and mutations behave exactly as in production), plus a synthetic budget preview whose
+ * usage scales with the reference count, and a compaction sink that records its commands.
+ */
+function createDraftApi(
+  options: {
+    readonly activeRun?: AgentRunSnapshot;
+    readonly heavyRefThreshold?: number;
+  } = {}
+): {
+  api: NovelStudioApi;
+  budgetCalls: unknown[];
+  compactCalls: Record<string, unknown>[];
+} {
+  const runDrafts = new Map<string, JsonObject>();
+  const contextDrafts = new Map<string, JsonObject>();
+  const repository: AgentRunDraftSessionRepository = {
+    async writeRunDraft(draft) {
+      runDrafts.set(draft["conversationId"] as string, draft);
+      return ok(draft);
+    },
+    async readLatestRunDraft(conversationId) {
+      return ok(runDrafts.get(conversationId));
+    },
+    async writeContextDraft(draft) {
+      contextDrafts.set(draft["conversationId"] as string, draft);
+      return ok(draft);
+    },
+    async readLatestContextDraft(conversationId) {
+      return ok(contextDrafts.get(conversationId));
+    }
+  };
+  let idSequence = 0;
+  const session = createAgentRunDraftSession({
+    repository,
+    now: () => "2026-07-16T00:00:00.000Z",
+    createId: () => `draft_${(idSequence += 1)}`
+  });
+  const budgetCalls: unknown[] = [];
+  const compactCalls: Record<string, unknown>[] = [];
+  const heavyRefThreshold = options.heavyRefThreshold ?? 2;
+  const eventListeners = new Set<(event: AgentRunEvent) => void>();
+  const activeRun = options.activeRun;
+  return {
+    budgetCalls,
+    compactCalls,
+    api: {
+      agentRuns: {
+        onEvent: (listener: (event: AgentRunEvent) => void) => {
+          eventListeners.add(listener);
+          return () => eventListeners.delete(listener);
+        },
+        readRunDraft: (command: unknown) => session.readAgentRunDraft(command as never),
+        updateRunDraft: (command: unknown) => session.updateAgentRunDraft(command as never),
+        updateContextDraft: (command: unknown) => session.updateContextDraft(command as never),
+        refreshContextDraft: (command: unknown) => session.refreshContextDraft(command as never),
+        previewContextBudget: async (command: unknown) => {
+          budgetCalls.push(command);
+          const conversationId = (command as { conversationId: string }).conversationId;
+          const contextDraft = contextDrafts.get(conversationId);
+          const refCount = Array.isArray(contextDraft?.["refs"])
+            ? (contextDraft["refs"] as unknown[]).length
+            : 0;
+          const safeInputBudget = 100000;
+          const usedTokens = refCount >= heavyRefThreshold ? 90000 : 20000;
+          return ok(budgetSnapshot(safeInputBudget, usedTokens));
+        },
+        compactContext: async (command: Record<string, unknown>) => {
+          compactCalls.push(command);
+          return ok({
+            compactionId: "compaction-01",
+            revision: {
+              schemaVersion: "1.0",
+              compactionId: "compaction-01",
+              runId: command["runId"],
+              revision: 1
+            },
+            runSnapshot: { ...(activeRun ?? snapshot) } as unknown as JsonObject
+          });
+        },
+        prepareStart: async () =>
+          ok({
+            runDraft: { runDraftId: "draft-01", revision: 1, checksum: "checksum-01" },
+            contextDraft: { contextDraftId: "context-01", revision: 1 }
+          }),
+        start: async () => ok(activeRun ?? snapshot),
+        read: async () => ok({ snapshot: activeRun ?? snapshot, events: [] }),
+        list: async () => ok(activeRun === undefined ? [] : [activeRun])
+      }
+    } as unknown as NovelStudioApi
+  };
+}
+
+function budgetSnapshot(safeInputBudget: number, usedTokens: number): ContextBudgetSnapshot {
+  return {
+    schemaVersion: "1.0",
+    contextBudgetSnapshotId: "budget-preview-01",
+    contextWindow: 128000,
+    maxOutputTokens: 16384,
+    contextWindowSemantics: "shared_input_output_window",
+    safeInputBudget,
+    requiredContextTokens: usedTokens,
+    outputReserve: 16384,
+    toolReserve: 0,
+    systemReserve: 0,
+    usedTokens,
+    remainingTokens: Math.max(0, safeInputBudget - usedTokens),
+    precision: "estimated",
+    provider: "openai-compatible",
+    model: "local-model",
+    calculatedAt: "2026-07-16T00:00:00.000Z"
+  };
+}
 
 function rollbackReview(reviewedCurrentContent: string, updatedAt: string) {
   return {

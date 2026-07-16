@@ -59,6 +59,14 @@ export { WorkspaceShell } from "./workspace-shell.js";
 export { AgentRunPanel } from "./agent-run-panel.js";
 export { AgentActivitySummary } from "./agent-activity-summary.js";
 export { AgentComposer } from "./agent-composer.js";
+export { AgentPopover, rovePopoverOptions } from "./agent-popover.js";
+export type {
+  AgentPopoverProps,
+  AgentPopoverInitialFocus,
+  AgentPopoverRenderProps
+} from "./agent-popover.js";
+export { AgentContextMenu } from "./agent-context-menu.js";
+export type { AgentContextMenuProps } from "./agent-context-menu.js";
 export { AgentRunTimeline } from "./agent-run-timeline.js";
 export { AgentConversationNavigator } from "./agent-conversation-navigator.js";
 export { AgentConversationView } from "./agent-conversation-view.js";
@@ -101,6 +109,16 @@ export type {
   AgentConversationViewProps,
   AgentConversationWorkspaceShellProps,
   AgentComposerProps,
+  AgentComposerContextSourceRow,
+  AgentComposerContextState,
+  AgentComposerContextStatusControl,
+  AgentComposerModelControl,
+  AgentComposerModelOption,
+  AgentComposerReasoningControl,
+  AgentComposerReferenceChip,
+  AgentComposerReferenceControl,
+  AgentComposerReferenceKind,
+  AgentContextPrecision,
   AgentPlanReviewProps,
   AgentRunPanelProps,
   AgentRunPendingUserInputProps,

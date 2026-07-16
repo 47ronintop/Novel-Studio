@@ -3622,6 +3622,11 @@ textarea:focus-visible,
   min-height: 28px;
 }
 
+.ns-agent-popover {
+  display: inline-flex;
+  position: relative;
+}
+
 .ns-agent-composer-mode-popover {
   background: var(--ns-surface-raised);
   border: 1px solid var(--ns-border-strong);
@@ -3641,6 +3646,173 @@ textarea:focus-visible,
   display: grid;
   gap: 4px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ns-agent-composer-toolbar-right {
+  align-items: center;
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.ns-agent-composer-references {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ns-agent-composer-reference-chips {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ns-agent-composer-reference-chips > li {
+  align-items: center;
+  background: color-mix(in srgb, var(--ns-surface-raised) 76%, transparent);
+  border: 1px solid var(--ns-border);
+  border-radius: 999px;
+  display: inline-flex;
+  gap: 4px;
+  max-width: 160px;
+  padding: 1px 4px 1px 8px;
+}
+
+.ns-agent-composer-reference-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ns-agent-composer-reference-chips > li > button {
+  align-items: center;
+  display: inline-flex;
+  min-height: 20px;
+  padding: 2px;
+}
+
+.ns-agent-context-trigger-attention {
+  border-color: var(--ns-border-strong);
+  color: var(--ns-warning, #d08b1a);
+}
+
+.ns-agent-composer-model-popover,
+.ns-agent-composer-reasoning-popover,
+.ns-agent-composer-reference-popover,
+.ns-agent-context-popover {
+  background: var(--ns-surface-raised);
+  border: 1px solid var(--ns-border-strong);
+  border-radius: 6px;
+  bottom: calc(100% + 6px);
+  box-shadow: 0 8px 14px rgba(0, 0, 0, 0.34);
+  min-width: 200px;
+  padding: 6px;
+  position: absolute;
+  right: 0;
+  z-index: 4;
+}
+
+.ns-agent-composer-reference-popover {
+  left: 0;
+  right: auto;
+}
+
+.ns-agent-composer-option-list {
+  display: grid;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  max-height: min(320px, 40vh);
+  overflow: auto;
+  padding: 0;
+}
+
+.ns-agent-composer-option-list button {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  min-height: 28px;
+  text-align: left;
+  width: 100%;
+}
+
+.ns-agent-composer-option-list button[aria-selected="true"] {
+  background: color-mix(in srgb, var(--ns-accent, #4f7cff) 22%, transparent);
+}
+
+.ns-agent-composer-option-hint {
+  color: var(--ns-muted);
+  font-size: 11px;
+}
+
+.ns-agent-context-panel {
+  display: grid;
+  gap: 8px;
+  min-width: 220px;
+}
+
+.ns-agent-context-usage {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  margin: 0;
+}
+
+.ns-agent-context-precision {
+  color: var(--ns-muted);
+  font-size: 11px;
+}
+
+.ns-agent-context-warning {
+  color: var(--ns-warning, #d08b1a);
+  margin: 0;
+}
+
+.ns-agent-context-sources {
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  max-height: min(260px, 36vh);
+  overflow: auto;
+  padding: 0;
+}
+
+.ns-agent-context-sources > li {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.ns-agent-context-source-detail,
+.ns-agent-context-empty {
+  color: var(--ns-muted);
+  font-size: 11px;
+}
+
+.ns-agent-context-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.ns-agent-context-actions button {
+  align-items: center;
+  display: inline-flex;
+  gap: 4px;
+  min-height: 26px;
 }
 
 .ns-agent-composer-command-slot {

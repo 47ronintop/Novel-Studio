@@ -210,6 +210,14 @@ export interface AgentComposerProps {
   readonly active: boolean;
   readonly disabled?: boolean;
   readonly disabledReason?: string;
+  /** Model profile selector (right toolbar). Populated from the Settings snapshot, written to the draft. */
+  readonly model?: AgentComposerModelControl;
+  /** Reasoning-effort selector (right toolbar). Hidden when the selected model does not expose it. */
+  readonly reasoning?: AgentComposerReasoningControl;
+  /** Context references (`+` menu + removable chips, left toolbar), backed by the Context Draft. */
+  readonly references?: AgentComposerReferenceControl;
+  /** Quiet context-status button; surfaces heavy/stale/failed states and the compact command. */
+  readonly contextStatus?: AgentComposerContextStatusControl;
   readonly onRequestChange: (request: string) => void;
   readonly onOperationModeChange: (mode: AgentOperationMode) => void;
   readonly onContextModeChange: (mode: AgentContextMode) => void;
@@ -217,6 +225,69 @@ export interface AgentComposerProps {
   readonly onWritePolicyAcknowledgedChange: (acknowledged: boolean) => void;
   readonly onSend: (request: string) => void;
   readonly onStop: () => void;
+}
+
+/** Local mirror of `agent-engine`'s AgentContextPrecision (UI cannot import agent-engine directly). */
+export type AgentContextPrecision = "reported" | "estimated" | "unknown";
+
+export interface AgentComposerModelOption {
+  readonly id: string;
+  readonly label: string;
+  readonly provider: string;
+}
+
+export interface AgentComposerModelControl {
+  readonly profiles: readonly AgentComposerModelOption[];
+  readonly selectedProfileId: string;
+  readonly onSelect: (profileId: string) => void;
+}
+
+export interface AgentComposerReasoningControl {
+  readonly visible: boolean;
+  readonly values: readonly ModelReasoningStrengthValue[];
+  readonly current: ModelReasoningStrengthValue;
+  readonly onSelect: (value: ModelReasoningStrengthValue) => void;
+}
+
+export type AgentComposerReferenceKind =
+  | "chapter"
+  | "story_bible"
+  | "project_file"
+  | "editor_selection";
+
+export interface AgentComposerReferenceChip {
+  readonly refId: string;
+  readonly label: string;
+  readonly kind: AgentComposerReferenceKind;
+}
+
+export interface AgentComposerReferenceControl {
+  readonly chips: readonly AgentComposerReferenceChip[];
+  readonly available: readonly AgentComposerReferenceChip[];
+  readonly onAdd: (refId: string) => void;
+  readonly onRemove: (refId: string) => void;
+}
+
+export type AgentComposerContextState =
+  | "normal"
+  | "heavy"
+  | "needs_refresh"
+  | "compaction_failed";
+
+export interface AgentComposerContextSourceRow {
+  readonly refId: string;
+  readonly label: string;
+  readonly detail: string;
+}
+
+export interface AgentComposerContextStatusControl {
+  readonly state: AgentComposerContextState;
+  readonly usageLabel: string;
+  readonly precision: AgentContextPrecision;
+  readonly sources: readonly AgentComposerContextSourceRow[];
+  readonly onCompact?: (() => void) | undefined;
+  readonly onRefresh?: (() => void) | undefined;
+  readonly busy?: boolean | undefined;
 }
 
 export type AgentPlanReviewProps = PlanArtifactReviewProps;

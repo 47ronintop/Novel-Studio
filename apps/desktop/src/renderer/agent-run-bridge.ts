@@ -1,10 +1,14 @@
 import type {
   AgentContextSourceInput,
   AgentProviderCapabilitySnapshot,
+  AgentReasoningEffort,
   AgentRunCommandResult,
+  AgentRunDraft,
   AgentRunEvent,
   AgentRunSnapshot,
   ChangeSet,
+  ContextBudgetSnapshot,
+  ContextDraft,
   ContextDraftRef,
   DecideChangeSetCommand,
   DecideAgentPlanCommand,
@@ -17,12 +21,22 @@ import type {
 import type {
   AgentContextMode,
   AgentOperationMode,
+  AgentRunDraftInitialization,
   AgentWritePolicy,
+  ModelReasoningStrengthControl,
+  ModelReasoningStrengthValue,
   NovelStudioApi,
   PlanArtifact
 } from "@novel-studio/application";
 import type {
+  AgentComposerContextStatusControl,
+  AgentComposerModelControl,
+  AgentComposerReasoningControl,
+  AgentComposerReferenceChip,
+  AgentComposerReferenceControl,
+  AgentComposerReferenceKind,
   AgentComposerProps,
+  AgentContextPrecision,
   AgentPlanReviewProps,
   AgentRunPanelProps,
   ChangeSetReviewModel,
@@ -90,6 +104,13 @@ interface BridgeState {
   readonly rollbackDecisions: Readonly<Record<string, RollbackReviewDecision>>;
   readonly selectionPending: boolean;
   readonly errorMessage: string | undefined;
+  /** The persisted run draft backing the composer's model/reasoning choices (server-authoritative). */
+  readonly runDraft: AgentRunDraft | undefined;
+  /** The persisted context draft backing the composer's references. */
+  readonly contextDraft: ContextDraft | undefined;
+  /** The latest server-resolved budget preview for the current draft revision (never renderer-authored). */
+  readonly budgetPreview: ContextBudgetSnapshot | undefined;
+  readonly draftPending: boolean;
 }
 
 export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
@@ -111,13 +132,24 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     rollbackReviewOpen: false,
     rollbackDecisions: {},
     selectionPending: false,
-    errorMessage: undefined
+    errorMessage: undefined,
+    runDraft: undefined,
+    contextDraft: undefined,
+    budgetPreview: undefined,
+    draftPending: false
   };
   const listeners = new Set<() => void>();
   let approvalInFlight: Promise<AgentRunPanelProps> | undefined;
   let selectionInFlight: Promise<AgentRunPanelProps> | undefined;
   let undoInFlight: Promise<AgentRunPanelProps> | undefined;
   let undoInFlightAction: "request" | "resolve" | "retry" | undefined;
+  let draftInFlight: Promise<void> | undefined;
+  // Increments on every conversation switch so a slow in-flight draft load for a previous
+  // conversation can detect it is stale and drop its result instead of clobbering the new one.
+  let draftToken = 0;
+  // The Stage 5 draft/budget/compaction methods, viewed as optional: pre-Stage-5 hosts (and the
+  // test fakes) do not implement them, so the composer degrades to its flat, non-draft-backed form.
+  const draftApi = api.agentRuns as unknown as OptionalDraftApi;
 
   api.agentRuns.onEvent((event) => {
     if (context?.projectId !== event.projectId) return;
@@ -171,7 +203,9 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
 
   async function sendRun(request: string): Promise<AgentRunPanelProps> {
     state = { ...state, userRequest: request, errorMessage: undefined };
-    const profileId = selectedModelProfileId(context?.settings);
+    // The draft is the source of truth for model/reasoning/refs when the composer is draft-backed;
+    // otherwise fall back to the project's selected profile and the active chapter.
+    const profileId = state.runDraft?.modelProfileId ?? selectedModelProfileId(context?.settings);
     if (profileId === undefined) {
       state = { ...state, errorMessage: "The selected provider/model cannot start an Agent run." };
       return toProps();
@@ -189,6 +223,8 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     // capabilities, context window, or resolved document content.
     const writePolicy =
       state.operationMode === "planning" ? "write_before_confirmation" : state.writePolicy;
+    const reasoningEffort = state.runDraft?.reasoningEffort;
+    const contextRefs = state.contextDraft?.refs ?? contextDraftRefs(context);
     const prepared = await api.agentRuns.prepareStart({
       projectId: context.projectId,
       conversationId: context.conversationId,
@@ -202,7 +238,8 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         state.writePolicy === "user_preapproved_run" &&
         state.writePolicyAcknowledged,
       modelProfileId: profileId,
-      contextRefs: contextDraftRefs(context)
+      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+      contextRefs
     });
     if (!prepared.ok) {
       state = { ...state, errorMessage: prepared.error.message };
@@ -655,6 +692,339 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     };
   }
 
+  /**
+   * Load (or lazily initialize) the persisted run/context draft for the current conversation so the
+   * composer's model, reasoning, and reference controls are server-authoritative. No-ops when the
+   * host does not implement the Stage 5 draft methods, when no conversation is selected, or when the
+   * settings cannot name a model profile — the composer then keeps its flat, non-draft-backed form.
+   */
+  function loadDraft(): void {
+    const readRunDraft = draftApi.readRunDraft;
+    const ctx = context;
+    if (readRunDraft === undefined || ctx?.conversationId === undefined) return;
+    const modelProfileId = selectedModelProfileId(ctx.settings);
+    if (modelProfileId === undefined) return;
+    const projectId = ctx.projectId;
+    const conversationId = ctx.conversationId;
+    draftToken += 1;
+    const token = draftToken;
+    const initialize: AgentRunDraftInitialization = {
+      modelProfileId,
+      operationMode: state.operationMode,
+      contextMode: state.contextMode,
+      writePolicy: state.writePolicy,
+      writePolicyAcknowledged: state.writePolicyAcknowledged,
+      contextRefs: contextDraftRefs(ctx)
+    };
+    state = { ...state, draftPending: true };
+    void (async () => {
+      const result = await readRunDraft({ projectId, conversationId, initialize });
+      if (token !== draftToken) return;
+      if (!result.ok) {
+        state = { ...state, draftPending: false };
+        notify();
+        return;
+      }
+      state = {
+        ...state,
+        runDraft: result.value.runDraft,
+        contextDraft: result.value.contextDraft,
+        draftPending: false
+      };
+      notify();
+      await previewBudget(token);
+    })();
+  }
+
+  /** Refresh the server-resolved budget preview for the current draft revision. */
+  async function previewBudget(token: number): Promise<void> {
+    const previewContextBudget = draftApi.previewContextBudget;
+    const ctx = context;
+    const draft = state.runDraft;
+    if (previewContextBudget === undefined || ctx?.conversationId === undefined || draft === undefined) {
+      return;
+    }
+    const result = await previewContextBudget({
+      projectId: ctx.projectId,
+      conversationId: ctx.conversationId,
+      commandId: createCommandId("preview-budget"),
+      runDraftId: draft.runDraftId,
+      expectedDraftRevision: draft.revision,
+      runDraftChecksum: draft.checksum
+    });
+    if (token !== draftToken) return;
+    state = {
+      ...state,
+      budgetPreview: result.ok ? result.value : undefined,
+      ...(result.ok ? {} : { errorMessage: result.error.message })
+    };
+    notify();
+  }
+
+  /**
+   * Serialize draft mutations so each one applies against the latest persisted revision (a stale
+   * `expectedDraftRevision` is rejected server-side). Mirrors the `updateChangeSetSelection`
+   * in-flight guard: concurrent edits queue rather than race.
+   */
+  function queueDraftMutation(execute: () => Promise<void>): Promise<void> {
+    const previous = draftInFlight ?? Promise.resolve();
+    const next = previous.then(execute).finally(() => {
+      if (draftInFlight === next) draftInFlight = undefined;
+    });
+    draftInFlight = next;
+    state = { ...state, draftPending: true };
+    notify();
+    return next;
+  }
+
+  function updateModelDraft(modelProfileId: string): void {
+    const updateRunDraft = draftApi.updateRunDraft;
+    if (updateRunDraft === undefined) return;
+    void queueDraftMutation(async () => {
+      const ctx = context;
+      const draft = state.runDraft;
+      const token = draftToken;
+      if (ctx?.conversationId === undefined || draft === undefined) return;
+      const result = await updateRunDraft({
+        projectId: ctx.projectId,
+        conversationId: ctx.conversationId,
+        commandId: createCommandId("draft-model"),
+        expectedDraftRevision: draft.revision,
+        // A model change invalidates the old budget; the session normalizes reasoning to the new
+        // model's declared capabilities, so we deliberately send no reasoningEffort here.
+        mutation: { kind: "set_model", modelProfileId }
+      });
+      applyDraftResult(result, token);
+      // The new profile's context window changes the budget — re-preview against the new revision.
+      await previewBudget(token);
+    });
+  }
+
+  function updateReasoningDraft(reasoningEffort: ModelReasoningStrengthValue): void {
+    const updateRunDraft = draftApi.updateRunDraft;
+    if (updateRunDraft === undefined) return;
+    void queueDraftMutation(async () => {
+      const ctx = context;
+      const draft = state.runDraft;
+      const token = draftToken;
+      if (ctx?.conversationId === undefined || draft === undefined) return;
+      const result = await updateRunDraft({
+        projectId: ctx.projectId,
+        conversationId: ctx.conversationId,
+        commandId: createCommandId("draft-reasoning"),
+        expectedDraftRevision: draft.revision,
+        mutation: { kind: "set_reasoning", reasoningEffort: reasoningEffort as AgentReasoningEffort }
+      });
+      applyDraftResult(result, token);
+    });
+  }
+
+  function addReferenceDraft(refId: string): void {
+    const updateContextDraft = draftApi.updateContextDraft;
+    if (updateContextDraft === undefined) return;
+    const ref = availableReferenceRefs(context, state.contextDraft).find(
+      (candidate) => candidate.refId === refId
+    );
+    if (ref === undefined) return;
+    void queueDraftMutation(async () => {
+      const ctx = context;
+      const draft = state.contextDraft;
+      const token = draftToken;
+      if (ctx?.conversationId === undefined || draft === undefined) return;
+      const result = await updateContextDraft({
+        projectId: ctx.projectId,
+        conversationId: ctx.conversationId,
+        commandId: createCommandId("draft-add-ref"),
+        contextDraftId: draft.contextDraftId,
+        expectedDraftRevision: draft.revision,
+        mutation: { kind: "add_ref", ref }
+      });
+      applyDraftResult(result, token);
+      await previewBudget(token);
+    });
+  }
+
+  function removeReferenceDraft(refId: string): void {
+    const updateContextDraft = draftApi.updateContextDraft;
+    if (updateContextDraft === undefined) return;
+    void queueDraftMutation(async () => {
+      const ctx = context;
+      const draft = state.contextDraft;
+      const token = draftToken;
+      if (ctx?.conversationId === undefined || draft === undefined) return;
+      const result = await updateContextDraft({
+        projectId: ctx.projectId,
+        conversationId: ctx.conversationId,
+        commandId: createCommandId("draft-remove-ref"),
+        contextDraftId: draft.contextDraftId,
+        expectedDraftRevision: draft.revision,
+        mutation: { kind: "remove_ref", refId }
+      });
+      applyDraftResult(result, token);
+      await previewBudget(token);
+    });
+  }
+
+  function refreshContextDraftSources(): void {
+    const refreshContextDraft = draftApi.refreshContextDraft;
+    if (refreshContextDraft === undefined) return;
+    void queueDraftMutation(async () => {
+      const ctx = context;
+      const draft = state.contextDraft;
+      const token = draftToken;
+      if (ctx?.conversationId === undefined || draft === undefined) return;
+      const result = await refreshContextDraft({
+        projectId: ctx.projectId,
+        conversationId: ctx.conversationId,
+        commandId: createCommandId("draft-refresh"),
+        contextDraftId: draft.contextDraftId,
+        expectedDraftRevision: draft.revision
+      });
+      applyDraftResult(result, token);
+      await previewBudget(token);
+    });
+  }
+
+  /** Compact the live run's context. Only available while a run holds an active budget snapshot. */
+  function compactActiveContext(): void {
+    const compactContext = draftApi.compactContext;
+    const snapshot = state.snapshot;
+    if (
+      compactContext === undefined ||
+      snapshot === undefined ||
+      snapshot.contextBudgetSnapshotId === null
+    ) {
+      return;
+    }
+    const budgetSnapshotId = snapshot.contextBudgetSnapshotId;
+    void (async () => {
+      const result = await compactContext({
+        projectId: snapshot.projectId,
+        runId: snapshot.runId,
+        commandId: createCommandId("compact"),
+        expectedRunRevision: snapshot.runRevision,
+        contextBudgetSnapshotId: budgetSnapshotId,
+        trigger: "manual"
+      });
+      if (!result.ok) {
+        state = { ...state, errorMessage: result.error.message };
+        notify();
+        return;
+      }
+      await hydrate(snapshot.runId);
+      notify();
+    })();
+  }
+
+  function applyDraftResult(
+    result: Awaited<ReturnType<NonNullable<OptionalDraftApi["updateRunDraft"]>>>,
+    token: number
+  ): void {
+    if (token !== draftToken) return;
+    if (!result.ok) {
+      state = { ...state, errorMessage: result.error.message };
+      return;
+    }
+    state = {
+      ...state,
+      runDraft: result.value.runDraft,
+      contextDraft: result.value.contextDraft,
+      errorMessage: undefined
+    };
+  }
+
+  /**
+   * Build the composer's grouped, draft-backed controls. Returns an empty object (so the composer
+   * keeps its flat form) until a run draft is loaded — which only happens on hosts that implement
+   * the Stage 5 draft methods.
+   */
+  function composerDraftGroups(): Pick<
+    AgentComposerProps,
+    "model" | "reasoning" | "references" | "contextStatus"
+  > {
+    const runDraft = state.runDraft;
+    const contextDraft = state.contextDraft;
+    if (runDraft === undefined || contextDraft === undefined) return {};
+    const settings = context?.settings;
+    const model: AgentComposerModelControl = {
+      profiles: (settings?.profiles ?? []).map((profile) => ({
+        id: profile.id,
+        label: profile.displayName,
+        provider: profile.provider
+      })),
+      selectedProfileId: runDraft.modelProfileId,
+      onSelect: (profileId) => updateModelDraft(profileId)
+    };
+    const reasoning = reasoningControl(settings?.modelDiscovery?.reasoningStrength, runDraft);
+    const references: AgentComposerReferenceControl = {
+      chips: contextDraft.refs.map(refToChip),
+      available: availableReferenceRefs(context, contextDraft).map(refToChip),
+      onAdd: (refId) => addReferenceDraft(refId),
+      onRemove: (refId) => removeReferenceDraft(refId)
+    };
+    const contextStatus = contextStatusControl(contextDraft);
+    return { model, reasoning, references, contextStatus };
+  }
+
+  function reasoningControl(
+    control: ModelReasoningStrengthControl | undefined,
+    runDraft: AgentRunDraft
+  ): AgentComposerReasoningControl {
+    if (control === undefined || control.status !== "available") {
+      return {
+        visible: false,
+        values: [],
+        current: runDraft.reasoningEffort ?? "medium",
+        onSelect: (value) => updateReasoningDraft(value)
+      };
+    }
+    return {
+      visible: true,
+      values: control.allowedValues,
+      current: runDraft.reasoningEffort ?? control.defaultValue,
+      onSelect: (value) => updateReasoningDraft(value)
+    };
+  }
+
+  function contextStatusControl(contextDraft: ContextDraft): AgentComposerContextStatusControl {
+    const budget = state.budgetPreview;
+    const snapshot = state.snapshot;
+    const canCompact =
+      draftApi.compactContext !== undefined &&
+      snapshot !== undefined &&
+      snapshot.contextBudgetSnapshotId !== null;
+    return {
+      state: contextStatusState(),
+      usageLabel: budgetUsageLabel(budget),
+      precision: (budget?.precision ?? "unknown") as AgentContextPrecision,
+      sources: contextDraft.refs.map(refToSource),
+      ...(canCompact ? { onCompact: () => compactActiveContext() } : {}),
+      ...(draftApi.refreshContextDraft === undefined
+        ? {}
+        : { onRefresh: () => refreshContextDraftSources() }),
+      busy: state.draftPending
+    };
+  }
+
+  function contextStatusState(): AgentComposerContextStatusControl["state"] {
+    if (latestCompactionFailed(state.events)) return "compaction_failed";
+    if (
+      state.snapshot?.status === "awaiting_context_refresh" ||
+      hasPendingStaleContext(state.events)
+    ) {
+      return "needs_refresh";
+    }
+    const budget = state.budgetPreview;
+    if (
+      budget !== undefined &&
+      budget.safeInputBudget > 0 &&
+      budget.usedTokens / budget.safeInputBudget >= 0.8
+    ) {
+      return "heavy";
+    }
+    return "normal";
+  }
+
   function toComposerProps(): AgentComposerProps {
     return {
       request: state.userRequest,
@@ -663,6 +1033,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       writePolicy: state.writePolicy,
       writePolicyAcknowledged: state.writePolicyAcknowledged,
       active: state.snapshot !== undefined && !isTerminalRunStatus(state.snapshot.status),
+      ...composerDraftGroups(),
       onRequestChange: (request) => {
         state = { ...state, userRequest: request };
         notify();
@@ -732,6 +1103,11 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         (projectChanged && state.snapshot?.projectId !== nextContext.projectId)
       ) {
         state = resetRunState(state);
+      }
+      // Load (or lazily initialize) the persisted composer draft when the conversation changes so the
+      // model/reasoning/reference controls reflect the server-authoritative state, not stale memory.
+      if (conversationChanged && nextContext.conversationId !== undefined) {
+        loadDraft();
       }
       return toProps();
     },
@@ -859,7 +1235,12 @@ function resetRunState(state: BridgeState): BridgeState {
     rollbackReviewOpen: false,
     rollbackDecisions: {},
     selectionPending: false,
-    errorMessage: undefined
+    errorMessage: undefined,
+    // The composer draft is re-loaded for the new conversation by syncContext.
+    runDraft: undefined,
+    contextDraft: undefined,
+    budgetPreview: undefined,
+    draftPending: false
   };
 }
 
@@ -976,6 +1357,103 @@ function contextDraftRefs(context: AgentRunBridgeContext | undefined): ContextDr
       label: context.chapterEditor.chapter.frontmatter.title
     }
   ];
+}
+
+/** The Stage 5 draft/budget/compaction API, viewed as optional for pre-Stage-5 hosts and test fakes. */
+interface OptionalDraftApi {
+  readRunDraft?: NovelStudioApi["agentRuns"]["readRunDraft"];
+  updateRunDraft?: NovelStudioApi["agentRuns"]["updateRunDraft"];
+  updateContextDraft?: NovelStudioApi["agentRuns"]["updateContextDraft"];
+  refreshContextDraft?: NovelStudioApi["agentRuns"]["refreshContextDraft"];
+  previewContextBudget?: NovelStudioApi["agentRuns"]["previewContextBudget"];
+  compactContext?: NovelStudioApi["agentRuns"]["compactContext"];
+}
+
+const REFERENCE_KIND_LABEL: Record<AgentComposerReferenceKind, string> = {
+  chapter: "章节",
+  story_bible: "设定",
+  project_file: "文件",
+  editor_selection: "选区"
+};
+
+function refToChip(ref: ContextDraftRef): AgentComposerReferenceChip {
+  return { refId: ref.refId, label: ref.label, kind: ref.kind };
+}
+
+function refToSource(ref: ContextDraftRef): { refId: string; label: string; detail: string } {
+  return { refId: ref.refId, label: ref.label, detail: REFERENCE_KIND_LABEL[ref.kind] };
+}
+
+/**
+ * The references the user can still add: the open chapter and the open plain file, minus anything
+ * already in the draft. General-file mode drops chapter/Story-Bible candidates (writing-mode only),
+ * matching the Context Draft's own validation so the menu never offers a ref the server would reject.
+ */
+function availableReferenceRefs(
+  context: AgentRunBridgeContext | undefined,
+  contextDraft: ContextDraft | undefined
+): ContextDraftRef[] {
+  if (contextDraft === undefined) return [];
+  const present = new Set(contextDraft.refs.map((ref) => ref.refId));
+  const candidates: ContextDraftRef[] = [];
+  if (context?.activeChapterId !== undefined && context.chapterEditor !== undefined) {
+    candidates.push({
+      kind: "chapter",
+      refId: `chapter:${context.activeChapterId}`,
+      chapterId: context.activeChapterId,
+      label: context.chapterEditor.chapter.frontmatter.title
+    });
+  }
+  if (context?.fileEditor !== undefined) {
+    candidates.push({
+      kind: "project_file",
+      refId: `file:${context.fileEditor.path}`,
+      relativePath: context.fileEditor.path,
+      label: context.fileEditor.fileName
+    });
+  }
+  const allowed =
+    contextDraft.contextMode === "general_file"
+      ? candidates.filter((ref) => ref.kind !== "chapter" && ref.kind !== "story_bible")
+      : candidates;
+  return allowed.filter((ref) => !present.has(ref.refId));
+}
+
+/** True when the latest compaction event for the run is a failure (no success has superseded it). */
+function latestCompactionFailed(events: readonly AgentRunEvent[]): boolean {
+  for (const event of [...events].reverse()) {
+    if (event.type === "context_compaction_failed") return true;
+    if (event.type === "context_compaction_completed") return false;
+  }
+  return false;
+}
+
+/** True when a context source went stale and has not yet been refreshed or excluded. */
+function hasPendingStaleContext(events: readonly AgentRunEvent[]): boolean {
+  for (const event of [...events].reverse()) {
+    if (event.type === "context_stale") return true;
+    if (
+      event.type === "context_refreshed" ||
+      event.type === "context_excluded" ||
+      event.type === "context_refresh_cancelled"
+    ) {
+      return false;
+    }
+  }
+  return false;
+}
+
+function budgetUsageLabel(budget: ContextBudgetSnapshot | undefined): string {
+  if (budget === undefined) return "上下文用量未知";
+  return `${formatTokenCount(budget.usedTokens)} / ${formatTokenCount(budget.safeInputBudget)}`;
+}
+
+function formatTokenCount(tokens: number): string {
+  if (tokens >= 1000) {
+    const thousands = tokens / 1000;
+    return `${thousands >= 100 ? Math.round(thousands) : thousands.toFixed(1).replace(/\.0$/u, "")}k`;
+  }
+  return `${tokens}`;
 }
 
 function appendEvent(events: readonly AgentRunEvent[], event: AgentRunEvent): AgentRunEvent[] {

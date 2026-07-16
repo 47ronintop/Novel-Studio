@@ -165,6 +165,132 @@ describe("AgentComposer", () => {
     expect(css).toMatch(/\.ns-agent-composer-command-slot\s*\{[^}]*flex:\s*0 0 32px/s);
     expect(css).toMatch(/\.ns-agent-composer-mode-popover\s*\{[^}]*position:\s*absolute/s);
   });
+
+  test("does not render grouped controls when their sub-objects are absent", () => {
+    const { host } = renderComposer();
+    expect(host.querySelector('[aria-label^="模型："]')).toBeNull();
+    expect(host.querySelector('[aria-label^="推理强度："]')).toBeNull();
+    expect(host.querySelector('[aria-label="添加上下文引用"]')).toBeNull();
+    expect(host.querySelector(".ns-agent-context-trigger")).toBeNull();
+  });
+
+  test("selects a model profile and writes the choice through onSelect", () => {
+    const onSelect = vi.fn();
+    const { host } = renderComposer({
+      model: {
+        profiles: [
+          { id: "p1", label: "GPT-Writer", provider: "openai" },
+          { id: "p2", label: "Claude-Writer", provider: "anthropic" }
+        ],
+        selectedProfileId: "p1",
+        onSelect
+      }
+    });
+    const trigger = host.querySelector<HTMLButtonElement>('[aria-label="模型：GPT-Writer"]');
+    expect(trigger?.textContent).toContain("GPT-Writer");
+    act(() => trigger?.click());
+    act(() => host.querySelector<HTMLButtonElement>('[data-model-option="p2"]')?.click());
+    expect(onSelect).toHaveBeenCalledWith("p2");
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  test("shows the reasoning selector only when visible and reports the choice", () => {
+    const onSelect = vi.fn();
+    const hidden = renderComposer({
+      reasoning: { visible: false, values: ["low", "high"], current: "low", onSelect }
+    });
+    expect(hidden.host.querySelector('[aria-label^="推理强度："]')).toBeNull();
+
+    const onSelect2 = vi.fn();
+    const { host } = renderComposer({
+      reasoning: { visible: true, values: ["low", "medium", "high"], current: "medium", onSelect: onSelect2 }
+    });
+    const trigger = host.querySelector<HTMLButtonElement>('[aria-label="推理强度：中"]');
+    expect(trigger).not.toBeNull();
+    act(() => trigger?.click());
+    act(() => host.querySelector<HTMLButtonElement>('[data-reasoning-option="high"]')?.click());
+    expect(onSelect2).toHaveBeenCalledWith("high");
+  });
+
+  test("lists context reference chips and adds/removes through callbacks", () => {
+    const onAdd = vi.fn();
+    const onRemove = vi.fn();
+    const { host } = renderComposer({
+      references: {
+        chips: [{ refId: "chapter:ch-01", label: "第一章", kind: "chapter" }],
+        available: [{ refId: "file:notes.md", label: "notes.md", kind: "project_file" }],
+        onAdd,
+        onRemove
+      }
+    });
+    expect(host.querySelector(".ns-agent-composer-reference-chips")?.textContent).toContain(
+      "第一章"
+    );
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="添加上下文引用"]')?.click());
+    act(() => host.querySelector<HTMLButtonElement>('[data-reference-option="file:notes.md"]')?.click());
+    expect(onAdd).toHaveBeenCalledWith("file:notes.md");
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="移除引用 第一章"]')?.click());
+    expect(onRemove).toHaveBeenCalledWith("chapter:ch-01");
+  });
+
+  test("keeps the context status button quiet in the normal state", () => {
+    const { host } = renderComposer({
+      contextStatus: {
+        state: "normal",
+        usageLabel: "12k / 128k",
+        precision: "reported",
+        sources: [{ refId: "chapter:ch-01", label: "第一章", detail: "4k · 精确" }]
+      }
+    });
+    const trigger = host.querySelector<HTMLButtonElement>(".ns-agent-context-trigger");
+    expect(trigger?.textContent).toContain("上下文");
+    expect(trigger?.classList.contains("ns-agent-context-trigger-attention")).toBe(false);
+  });
+
+  test("announces heavy/failed context states and triggers compact", () => {
+    const onCompact = vi.fn();
+    const { host } = renderComposer({
+      contextStatus: {
+        state: "heavy",
+        usageLabel: "120k / 128k",
+        precision: "estimated",
+        sources: [{ refId: "file:draft.md", label: "draft.md", detail: "100k · 估算" }],
+        onCompact
+      }
+    });
+    const trigger = host.querySelector<HTMLButtonElement>(".ns-agent-context-trigger-attention");
+    expect(trigger?.textContent).toContain("上下文较多");
+    act(() => trigger?.click());
+    expect(host.querySelector('[aria-label="上下文用量"]')?.textContent).toContain("120k / 128k");
+    act(() => host.querySelector<HTMLButtonElement>(".ns-agent-context-actions button")?.click());
+    expect(onCompact).toHaveBeenCalledTimes(1);
+  });
+
+  test("locks grouped controls while a run is active", () => {
+    const { host } = renderComposer({
+      active: true,
+      model: {
+        profiles: [{ id: "p1", label: "GPT-Writer", provider: "openai" }],
+        selectedProfileId: "p1",
+        onSelect: vi.fn()
+      },
+      references: {
+        chips: [{ refId: "chapter:ch-01", label: "第一章", kind: "chapter" }],
+        available: [{ refId: "file:notes.md", label: "notes.md", kind: "project_file" }],
+        onAdd: vi.fn(),
+        onRemove: vi.fn()
+      }
+    });
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="模型：GPT-Writer"]')?.disabled).toBe(
+      true
+    );
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="添加上下文引用"]')?.disabled).toBe(
+      true
+    );
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="移除引用 第一章"]')?.disabled).toBe(
+      true
+    );
+  });
 });
 
 function renderComposer(overrides: Partial<AgentComposerProps> = {}) {
