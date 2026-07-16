@@ -368,6 +368,7 @@ export type {
   AgentRunEvent,
   AgentRunSnapshot,
   AgentRunStatus,
+  AgentRunStatusV11,
   AgentContextMode,
   AgentOperationMode,
   AgentWritePolicy,

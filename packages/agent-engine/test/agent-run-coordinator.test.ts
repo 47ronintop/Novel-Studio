@@ -133,6 +133,99 @@ describe("Agent Run Coordinator", () => {
     ]);
   });
 
+  test("authors a v1.1 snapshot and events with Stage 5 defaults", () => {
+    const coordinator = engineExports.createAgentRunCoordinator({
+      now: () => "2026-07-13T00:00:00.000Z",
+      createRunId: () => "run_v11"
+    });
+    const started = coordinator.startRun({
+      projectId: "project_01",
+      conversationId: "conv_01",
+      commandId: "command_start_v11",
+      expectedRunRevision: 0,
+      operationMode: "planning",
+      contextMode: "writing",
+      userRequest: "Author a v1.1 run.",
+      providerCapabilitySnapshot: {
+        profileId: "model_01",
+        provider: "openai-compatible",
+        modelName: "tool-model",
+        streaming: true,
+        toolCalling: true,
+        structuredArguments: true,
+        contextWindow: 32_000,
+        requiredContextTokens: 8_000
+      }
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    // The coordinator authors a complete v1.1 literal, not a v1.0 shape normalized later.
+    expect(started.value).toMatchObject({
+      schemaVersion: "1.1",
+      modelProfileId: "model_01",
+      permissionSummaryId: null,
+      contextBudgetSnapshotId: null,
+      activeCompactionId: null,
+      planExecutionId: null,
+      planExecutionRevision: null,
+      activeErrorId: null,
+      recoveryState: "none",
+      usageSummary: { inputTokens: 0, outputTokens: 0, totalTokens: 0, usageStatus: "missing" }
+    });
+    expect(coordinator.readEvents("run_v11")[0]).toMatchObject({
+      schemaVersion: "1.1",
+      type: "run_started"
+    });
+  });
+
+  test("carries a Stage 5 snapshot patch and status through recordRunEvent", () => {
+    const coordinator = engineExports.createAgentRunCoordinator({
+      now: () => "2026-07-13T00:00:00.000Z",
+      createRunId: () => "run_patch"
+    });
+    const started = coordinator.startRun({
+      projectId: "project_01",
+      conversationId: "conv_01",
+      commandId: "command_start_patch",
+      expectedRunRevision: 0,
+      operationMode: "execution",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      userRequest: "Patch Stage 5 pointers.",
+      providerCapabilitySnapshot: {
+        profileId: "model_01",
+        provider: "openai-compatible",
+        modelName: "tool-model",
+        streaming: true,
+        toolCalling: true,
+        structuredArguments: true,
+        contextWindow: 32_000,
+        requiredContextTokens: 8_000
+      }
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    const patched = coordinator.recordRunEvent({
+      runId: "run_patch",
+      status: "context_compacting",
+      type: "context_compaction_started",
+      snapshotPatch: {
+        activeCompactionId: "compaction_01",
+        contextBudgetSnapshotId: "budget_01",
+        recoveryState: "retryable"
+      }
+    });
+    expect(patched).toMatchObject({
+      ok: true,
+      value: {
+        status: "context_compacting",
+        activeCompactionId: "compaction_01",
+        contextBudgetSnapshotId: "budget_01",
+        recoveryState: "retryable"
+      }
+    });
+  });
+
   test("normalizes legacy snapshots without a conversation id to null", () => {
     const source = engineExports.createAgentRunCoordinator({
       now: () => "2026-07-13T00:00:00.000Z",

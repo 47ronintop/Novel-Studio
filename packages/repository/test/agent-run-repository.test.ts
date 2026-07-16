@@ -177,6 +177,51 @@ describe("AgentRunFileRepository", () => {
     ).toEqual(plan);
   });
 
+  test("reads v1.0 and v1.1 snapshots but rejects an unsupported schema version", async () => {
+    const Repository = (repositoryExports as unknown as Record<string, unknown>)[
+      "AgentRunFileRepository"
+    ];
+    expect(typeof Repository).toBe("function");
+    if (typeof Repository !== "function") return;
+
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-agent-run-version-"));
+    roots.push(projectRoot);
+    const repository = new (
+      Repository as new (options: { projectRoot: string }) => {
+        writeSnapshot(snapshot: Record<string, unknown>): Promise<unknown>;
+        readSnapshot(runId: string): Promise<unknown>;
+      }
+    )({ projectRoot });
+
+    const v11Snapshot = {
+      schemaVersion: "1.1",
+      runId: "run_v11",
+      projectId: "project_01",
+      status: "planning_model",
+      runRevision: 1,
+      lastSequence: 1,
+      modelProfileId: "model_01",
+      recoveryState: "none"
+    };
+    await repository.writeSnapshot(v11Snapshot);
+    expect(await repository.readSnapshot("run_v11")).toEqual({ ok: true, value: v11Snapshot });
+
+    // A future/unknown version is rejected on read rather than silently normalized as v1.0.
+    const futureSnapshot = {
+      schemaVersion: "2.0",
+      runId: "run_future",
+      projectId: "project_01",
+      status: "planning_model",
+      runRevision: 1,
+      lastSequence: 1
+    };
+    await repository.writeSnapshot(futureSnapshot);
+    expect(await repository.readSnapshot("run_future")).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUN_SNAPSHOT_VERSION_UNSUPPORTED" }
+    });
+  });
+
   test("persists immutable Change Set revisions and restores the latest checkpoint revision", async () => {
     const Repository = (repositoryExports as unknown as Record<string, unknown>)[
       "AgentRunFileRepository"

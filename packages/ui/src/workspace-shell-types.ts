@@ -3,7 +3,7 @@ import type {
   AgentContextMode,
   AgentOperationMode,
   AgentRunEvent,
-  AgentRunStatus,
+  AgentRunStatusV11,
   AgentWritePolicy,
   ApplicationCommand,
   ApplicationCommandId,
@@ -227,7 +227,7 @@ export interface AgentRunPanelProps {
   readonly operationMode: AgentOperationMode;
   readonly contextMode: AgentContextMode;
   readonly writePolicy: AgentWritePolicy;
-  readonly status: AgentRunStatus | "idle";
+  readonly status: AgentRunStatusV11 | "idle";
   readonly assistantText: string;
   readonly events: readonly AgentRunEvent[];
   readonly pendingUserInput?: AgentRunPendingUserInputProps;

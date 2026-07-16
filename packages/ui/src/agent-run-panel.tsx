@@ -187,6 +187,10 @@ function statusLabel(status: AgentRunPanelProps["status"]): string {
       return "失败";
     case "limit_reached":
       return "达到上限";
+    case "context_compacting":
+      return "正在压缩上下文";
+    case "awaiting_plan_revision":
+      return "计划待修订";
     case "created":
     case "awaiting_plan_decision":
       return "准备中";

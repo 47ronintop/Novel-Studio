@@ -436,7 +436,7 @@ function isAgentRunEvent(value: unknown): value is AgentRunEvent {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const event = value as Record<string, unknown>;
   return (
-    event["schemaVersion"] === "1.0" &&
+    (event["schemaVersion"] === "1.0" || event["schemaVersion"] === "1.1") &&
     typeof event["runId"] === "string" &&
     typeof event["projectId"] === "string" &&
     typeof event["sequence"] === "number" &&

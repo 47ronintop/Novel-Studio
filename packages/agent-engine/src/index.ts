@@ -9,12 +9,23 @@ export type {
 } from "./tool-registry.js";
 export { validateAgentRelativePath } from "./path-guard.js";
 export type { AgentRelativePath } from "./path-guard.js";
-export { createAgentContextSnapshot, findStaleContextSources } from "./context-snapshot.js";
+export {
+  createAgentContextSnapshot,
+  findStaleContextSources,
+  normalizeAgentContextSnapshot
+} from "./context-snapshot.js";
 export type {
+  AgentContextLayer,
+  AgentContextPrecision,
   AgentContextSnapshot,
+  AgentContextSnapshotV10,
+  AgentContextSnapshotV11,
   AgentContextSource,
   AgentContextSourceInput,
   AgentContextSourceKind,
+  AgentContextSourceState,
+  AgentContextSourceV10,
+  AgentContextSourceV11,
   CreateAgentContextSnapshotInput
 } from "./context-snapshot.js";
 export {
@@ -90,20 +101,34 @@ export type {
   PlanTargetRef,
   RevisePlanArtifactInput
 } from "./plan-artifact.js";
+export {
+  EMPTY_AGENT_RUN_USAGE_SUMMARY,
+  normalizeAgentRunEvent,
+  normalizeAgentRunSnapshot
+} from "./agent-run-types.js";
 export type {
   AgentContextMode,
   DecideChangeSetCommand,
   DecideAgentPlanCommand,
   AgentOperationMode,
   AgentProviderCapabilitySnapshot,
+  AgentReasoningEffort,
   AgentRunCommandResult,
   AgentRunCoordinator,
   AgentRunEvent,
   AgentRunEventType,
+  AgentRunEventTypeV11,
+  AgentRunEventV10,
+  AgentRunEventV11,
   AgentRunLimits,
+  AgentRunRecoveryState,
   AgentRunSnapshot,
   AgentRunSnapshotPatch,
+  AgentRunSnapshotV10,
+  AgentRunSnapshotV11,
   AgentRunStatus,
+  AgentRunStatusV11,
+  AgentRunUsageSummary,
   AgentWritePolicy,
   RecordAgentRunEventInput,
   RecordTerminalAgentRunAuditEventInput,

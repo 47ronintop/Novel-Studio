@@ -186,7 +186,11 @@ export class AgentRunFileRepository {
   }
 
   public async readSnapshot(runId: string): Promise<Result<JsonObject | undefined, UnifiedError>> {
-    return this.readJson(this.runPath(runId, "run.json"));
+    const read = await this.readJson(this.runPath(runId, "run.json"));
+    if (!read.ok || read.value === undefined) return read;
+    return isSupportedAgentSchemaVersion(read.value)
+      ? read
+      : this.invalidRecord("AGENT_RUN_SNAPSHOT_VERSION_UNSUPPORTED");
   }
 
   public readEvents(runId: string): Promise<Result<JsonObject[], UnifiedError>> {
@@ -345,6 +349,16 @@ function readRunId(value: JsonObject): string | undefined {
   return typeof value["runId"] === "string" && isSafeId(value["runId"])
     ? value["runId"]
     : undefined;
+}
+
+/**
+ * A persisted run snapshot is readable when its schemaVersion is a version this build understands
+ * (v1.0 or v1.1) or is absent (a minimal legacy fixture). An explicit unknown/future version is
+ * rejected so it is never silently normalized as v1.0. Reads never rewrite the file.
+ */
+function isSupportedAgentSchemaVersion(value: JsonObject): boolean {
+  const version = value["schemaVersion"];
+  return version === undefined || version === "1.0" || version === "1.1";
 }
 
 function readSafeString(value: JsonObject, key: string): string | undefined {

@@ -1,5 +1,6 @@
 import { createUnifiedError } from "@novel-studio/shared";
 
+import { EMPTY_AGENT_RUN_USAGE_SUMMARY } from "./agent-run-types.js";
 import type {
   AgentRunCommandResult,
   AgentRunCoordinator,
@@ -99,7 +100,7 @@ export function createAgentRunCoordinator(
       const timestamp = now();
       const runId = createRunId();
       const snapshot: AgentRunSnapshot = {
-        schemaVersion: "1.0",
+        schemaVersion: "1.1",
         runId,
         projectId: command.projectId,
         conversationId: command.conversationId,
@@ -117,7 +118,17 @@ export function createAgentRunCoordinator(
         pendingUserInputId: null,
         contextSnapshotId: null,
         sourcePlanId: command.sourcePlanId ?? null,
-        sourcePlanRevision: command.sourcePlanRevision ?? null
+        sourcePlanRevision: command.sourcePlanRevision ?? null,
+        modelProfileId: command.providerCapabilitySnapshot.profileId,
+        permissionSummaryId: null,
+        permissionSummaryChecksum: null,
+        contextBudgetSnapshotId: null,
+        activeCompactionId: null,
+        planExecutionId: null,
+        planExecutionRevision: null,
+        activeErrorId: null,
+        recoveryState: "none",
+        usageSummary: EMPTY_AGENT_RUN_USAGE_SUMMARY
       };
       runs.set(runId, snapshot);
       activeRunByProject.set(command.projectId, runId);
@@ -284,7 +295,7 @@ function toEvent(
   createdAt: string
 ): AgentRunEvent {
   return {
-    schemaVersion: "1.0",
+    schemaVersion: "1.1",
     runId: snapshot.runId,
     projectId: snapshot.projectId,
     sequence: snapshot.lastSequence,

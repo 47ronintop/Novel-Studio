@@ -5,6 +5,9 @@ import {
   canExecutePlanArtifact,
   findStaleContextSources,
   listAgentTools,
+  normalizeAgentContextSnapshot,
+  normalizeAgentRunEvent,
+  normalizeAgentRunSnapshot,
   validateAgentToolArguments,
   type ChangeSet,
   type ChangeSetApproval,
@@ -324,7 +327,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     const persisted = await options.repository.readCommandReceipt(runId, commandId);
     if (!persisted.ok) return { ok: false, error: persisted.error };
     if (persisted.value === undefined) return undefined;
-    const receipt = persisted.value as unknown as AgentRunCommandResult;
+    const receipt = normalizePersistedReceipt(persisted.value);
     commandReceipts.set(receiptKey, receipt);
     return receipt;
   }
@@ -392,7 +395,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       const persisted = await options.repository.readCommandReceipt(runId, commandId);
       if (!persisted.ok) return { ok: false, error: persisted.error };
       if (persisted.value === undefined) continue;
-      const receipt = persisted.value as unknown as AgentRunCommandResult;
+      const receipt = normalizePersistedReceipt(persisted.value);
       commandReceipts.set(receiptKey, receipt);
       return receipt;
     }
@@ -466,8 +469,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     if (snapshotResult.value === undefined) {
       return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
     }
-    const persistedSnapshot = snapshotResult.value as unknown as AgentRunSnapshot;
-    const events = eventsResult.value as unknown as AgentRunEvent[];
+    const persistedSnapshot = normalizeAgentRunSnapshot(snapshotResult.value);
+    const events = eventsResult.value.map(normalizeAgentRunEvent);
     const restored = coordinator.restoreRun(persistedSnapshot, events);
     if (!restored.ok) return restored;
     const snapshot = restored.value;
@@ -2701,13 +2704,32 @@ function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Normalize a persisted command receipt into the v1.1 view. Receipts embed a run snapshot in
+ * `value` (success) or `latestSnapshot` (failure); a receipt written before Stage 5 carries a
+ * v1.0 snapshot, so normalize it on replay to keep the exposed contract at v1.1.
+ */
+function normalizePersistedReceipt(value: JsonObject): AgentRunCommandResult {
+  if (value["ok"] === true && isJsonObject(value["value"])) {
+    return { ok: true, value: normalizeAgentRunSnapshot(value["value"]) };
+  }
+  if (value["ok"] === false) {
+    const error = value["error"] as unknown as UnifiedError;
+    const latest = value["latestSnapshot"];
+    return isJsonObject(latest)
+      ? { ok: false, error, latestSnapshot: normalizeAgentRunSnapshot(latest) }
+      : { ok: false, error };
+  }
+  return value as unknown as AgentRunCommandResult;
+}
+
 function parseContextSnapshot(
   value: JsonObject | undefined,
   run: AgentRunSnapshot
 ): AgentContextSnapshot | undefined {
   if (
     value === undefined ||
-    value["schemaVersion"] !== "1.0" ||
+    (value["schemaVersion"] !== "1.0" && value["schemaVersion"] !== "1.1") ||
     value["runId"] !== run.runId ||
     value["contextSnapshotId"] !== run.contextSnapshotId ||
     typeof value["createdAt"] !== "string" ||
@@ -2717,18 +2739,11 @@ function parseContextSnapshot(
   ) {
     return undefined;
   }
-  return value as unknown as AgentContextSnapshot;
+  return normalizeAgentContextSnapshot(value);
 }
 
 function asJsonObject(value: object): JsonObject {
   return value as unknown as JsonObject;
-}
-
-function normalizeAgentRunSnapshot(value: JsonObject): AgentRunSnapshot {
-  return {
-    ...value,
-    conversationId: typeof value["conversationId"] === "string" ? value["conversationId"] : null
-  } as unknown as AgentRunSnapshot;
 }
 
 function failure(code: string, message: string): AgentRunCommandResult {
