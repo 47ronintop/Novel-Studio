@@ -16,6 +16,8 @@ export type {
 export { HistoryRepository } from "./history-repository.js";
 export { AgentRunFileRepository } from "./agent-run-repository.js";
 export type { AgentRunFileRepositoryOptions } from "./agent-run-repository.js";
+export { AgentUsageFileRepository } from "./agent-usage-repository.js";
+export type { AgentUsageFileRepositoryOptions } from "./agent-usage-repository.js";
 export { AgentConversationFileRepository } from "./agent-conversation-repository.js";
 export type {
   AgentConversationFileRepositoryOptions,

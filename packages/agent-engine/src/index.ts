@@ -53,6 +53,32 @@ export type {
   ContextBudgetSnapshot,
   PreviewContextBudgetCommand
 } from "./context-budget.js";
+export { usageRecordIdempotencyKey, validateAgentUsageRecord } from "./agent-usage-record.js";
+export type {
+  AgentUsageRecord,
+  AgentUsageSink,
+  AgentUsageUnitPriceSnapshot,
+  CompactContextCommand
+} from "./agent-usage-record.js";
+export {
+  buildCompactionInputManifest,
+  createContextCompactionRevision,
+  orderEvictableSources,
+  planDeterministicEviction,
+  validateCompactionResultProgress
+} from "./context-compaction.js";
+export type {
+  BuildCompactionInputManifestInput,
+  CompactionInputManifest,
+  CompactionResultProgressInput,
+  ContextCompactionRevision,
+  CreateContextCompactionRevisionInput,
+  DeterministicEvictionInput,
+  DeterministicEvictionPlan,
+  EvictableContextSource,
+  ProtectedContextFact,
+  ProtectedContextFactKind
+} from "./context-compaction.js";
 export type {
   AgentContextLayer,
   AgentContextPrecision,

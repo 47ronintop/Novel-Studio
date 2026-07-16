@@ -58,6 +58,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         projectRoot: binding.projectRoot,
         projectId: binding.projectId,
         activeChapterId: binding.activeChapterId,
+        userDataRoot,
         projectLockOwnerId,
         pauseAutosave: agentWriteSaveCoordinator.pauseAutosave,
         resumeAutosave: agentWriteSaveCoordinator.resumeAutosave,

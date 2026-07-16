@@ -287,6 +287,111 @@ describe("AgentRunFileRepository", () => {
   });
 });
 
+describe("AgentRunFileRepository — compaction persistence + commit marker", () => {
+  function makeRepository(projectRoot: string) {
+    const Repository = (repositoryExports as unknown as Record<string, unknown>)[
+      "AgentRunFileRepository"
+    ] as new (options: { projectRoot: string }) => Record<
+      string,
+      (...args: unknown[]) => Promise<unknown>
+    >;
+    return new Repository({ projectRoot });
+  }
+
+  function v11Snapshot(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      schemaVersion: "1.1",
+      runId: "run_c1",
+      projectId: "project_01",
+      status: "executing_model",
+      runRevision: 5,
+      lastSequence: 5,
+      activeCompactionId: null,
+      ...overrides
+    };
+  }
+
+  test("writes an immutable compaction revision and rejects a divergent rewrite", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-compaction-store-"));
+    roots.push(projectRoot);
+    const repository = makeRepository(projectRoot);
+    const revision = {
+      schemaVersion: "1.0",
+      compactionId: "compaction_1",
+      runId: "run_c1",
+      status: "completed",
+      resultSnapshotId: "context_r1",
+      budgetSnapshotId: "budget_r1",
+      revision: 1
+    };
+    expect(await repository["writeCompactionRevision"]?.(revision)).toMatchObject({ ok: true });
+    // Idempotent replay.
+    expect(await repository["writeCompactionRevision"]?.(revision)).toMatchObject({ ok: true });
+    expect(
+      await repository["writeCompactionRevision"]?.({ ...revision, status: "failed" })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_COMPACTION_REVISION_CONFLICT" } });
+  });
+
+  test("honors activeCompactionId only when the revision + result + budget artifacts all exist", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-compaction-honor-"));
+    roots.push(projectRoot);
+    const repository = makeRepository(projectRoot);
+
+    // A committed pointer with no artifacts on disk must be dropped on read.
+    await repository["writeSnapshot"]?.(v11Snapshot({ activeCompactionId: "compaction_missing" }));
+    expect(await repository["readSnapshot"]?.("run_c1")).toMatchObject({
+      ok: true,
+      value: { activeCompactionId: null }
+    });
+
+    // Write the full artifact set, then the pointer is honored.
+    await repository["writeCompactionRevision"]?.({
+      schemaVersion: "1.0",
+      compactionId: "compaction_ok",
+      runId: "run_c1",
+      status: "completed",
+      resultSnapshotId: "context_ok",
+      budgetSnapshotId: "budget_ok",
+      revision: 1
+    });
+    await repository["writeContextSnapshot"]?.({
+      schemaVersion: "1.1",
+      runId: "run_c1",
+      contextSnapshotId: "context_ok",
+      sources: []
+    });
+    await repository["writeBudgetSnapshot"]?.("run_c1", {
+      schemaVersion: "1.0",
+      contextBudgetSnapshotId: "budget_ok"
+    });
+    await repository["commitCompaction"]?.(v11Snapshot({ activeCompactionId: "compaction_ok" }));
+    expect(await repository["readSnapshot"]?.("run_c1")).toMatchObject({
+      ok: true,
+      value: { activeCompactionId: "compaction_ok" }
+    });
+  });
+
+  test("commitCompaction is idempotent when the pointer already matches", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-compaction-commit-"));
+    roots.push(projectRoot);
+    const repository = makeRepository(projectRoot);
+    await repository["writeCompactionRevision"]?.({
+      schemaVersion: "1.0",
+      compactionId: "compaction_x",
+      runId: "run_c1",
+      status: "completed",
+      resultSnapshotId: null,
+      budgetSnapshotId: null,
+      revision: 1
+    });
+    const committed = v11Snapshot({ activeCompactionId: "compaction_x", runRevision: 6 });
+    await repository["commitCompaction"]?.(committed);
+    // A divergent replay (different runRevision) must return the already-committed snapshot unchanged.
+    const replay = await repository["commitCompaction"]?.({ ...committed, runRevision: 99 });
+    expect(replay).toMatchObject({ ok: true, value: { runRevision: 6 } });
+  });
+});
+
 function changeSetRecord(revision: number, checksum: string): Record<string, unknown> {
   return {
     schemaVersion: "1.0",

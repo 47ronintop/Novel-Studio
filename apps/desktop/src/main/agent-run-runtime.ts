@@ -44,6 +44,7 @@ import {
   AgentWriteTransaction,
   AgentProjectReadRepository,
   AgentRunFileRepository,
+  AgentUsageFileRepository,
   ChapterFileRepository,
   HistoryRepository,
   ProjectLockFileRepository,
@@ -62,6 +63,13 @@ export interface DesktopAgentRunSessionOptions {
   readonly projectRoot: string;
   readonly projectId: string;
   readonly activeChapterId: string;
+  /**
+   * The Electron user-data root the redacted usage sink writes under. It is app-global (not per
+   * project), so it arrives via the `createRuntime` closure in `main/index.ts`, mirroring how the
+   * preferences repository threads the same root through application composition. When omitted (demo
+   * driver, runtime tests), the usage sink is not constructed and compaction wiring stays deferred.
+   */
+  readonly userDataRoot?: string;
   readonly createRunId?: () => string;
   readonly now?: () => string;
   readonly modelDriver?: AgentRunModelDriver;
@@ -111,6 +119,11 @@ export interface DesktopAgentRuntimeServices {
   readonly agentRunSession: AgentRunSession;
   readonly agentConversationSession: AgentConversationSession;
   readonly agentRunDraftSession: AgentRunDraftSession;
+  /**
+   * The redacted usage sink, present only when `userDataRoot` was threaded in. Task 1.6 injects it as
+   * the `usageSink` port of the compaction composer; Task 1.5 only constructs and exposes it.
+   */
+  readonly agentUsageRepository?: AgentUsageFileRepository;
 }
 
 export function createDesktopAgentRunSession(
@@ -141,6 +154,13 @@ function createDesktopAgentRuntimeServices(
     projectRoot: options.projectRoot,
     traceId: "desktop-agent-run-store"
   });
+  const usageRepository =
+    options.userDataRoot === undefined
+      ? undefined
+      : new AgentUsageFileRepository({
+          userDataRoot: options.userDataRoot,
+          traceId: "desktop-agent-usage-store"
+        });
   const conversationRepository = new AgentConversationFileRepository({
     projectRoot: options.projectRoot,
     traceId: "desktop-agent-conversation-store"
@@ -369,7 +389,8 @@ function createDesktopAgentRuntimeServices(
     projectRoot: options.projectRoot,
     agentRunSession: session,
     agentConversationSession: conversationSession,
-    agentRunDraftSession: draftSession
+    agentRunDraftSession: draftSession,
+    ...(usageRepository === undefined ? {} : { agentUsageRepository: usageRepository })
   };
 }
 

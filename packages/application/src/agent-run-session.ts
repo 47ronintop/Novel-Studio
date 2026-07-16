@@ -25,6 +25,7 @@ import {
   type AgentToolName,
   type AgentToolDescriptor,
   type AgentWritePolicy,
+  type CompactContextCommand,
   type CreatePlanArtifactInput,
   type PlanArtifact,
   type PlanOpenQuestion,
@@ -270,9 +271,39 @@ export interface AgentVersionGroupExecutor {
   >;
 }
 
+/** The context-budget pressure bands that drive the 70% warning and the 85% automatic compaction. */
+export type AgentContextBudgetPressure = "ok" | "warn" | "compact";
+
+export const AGENT_CONTEXT_BUDGET_WARN_RATIO = 0.7;
+export const AGENT_CONTEXT_BUDGET_COMPACT_RATIO = 0.85;
+
+/**
+ * Classify how much of the safe input budget a run has consumed. At/above 85% the run should compact
+ * automatically; at/above 70% it should warn; below that it is fine. A non-positive budget is treated
+ * as immediate compaction pressure so a misconfigured budget never hides a full context.
+ */
+export function evaluateContextBudgetPressure(input: {
+  readonly usedTokens: number;
+  readonly safeInputBudget: number;
+}): AgentContextBudgetPressure {
+  if (!Number.isFinite(input.safeInputBudget) || input.safeInputBudget <= 0) return "compact";
+  const ratio = input.usedTokens / input.safeInputBudget;
+  if (ratio >= AGENT_CONTEXT_BUDGET_COMPACT_RATIO) return "compact";
+  if (ratio >= AGENT_CONTEXT_BUDGET_WARN_RATIO) return "warn";
+  return "ok";
+}
+
+/** Delegate that runs the cross-repository compaction commit (implemented by the context session). */
+export interface AgentRunContextCompactor {
+  compactContext(
+    command: CompactContextCommand
+  ): Promise<Result<{ readonly compactionId: string; readonly runSnapshot: JsonObject }, UnifiedError>>;
+}
+
 export interface AgentRunSession {
   startAgentRun(command: StartAgentRunCommand): Promise<AgentRunCommandResult>;
   stopAgentRun(command: StopAgentRunCommand): Promise<AgentRunCommandResult>;
+  compactContext(command: CompactContextCommand): Promise<AgentRunCommandResult>;
   answerUserInput(command: AnswerAgentUserInputCommand): Promise<AgentRunCommandResult>;
   resumeAgentRun(command: ResumeAgentRunCommand): Promise<AgentRunCommandResult>;
   retryStep(command: RetryAgentRunStepCommand): Promise<AgentRunCommandResult>;
@@ -290,6 +321,7 @@ export interface CreateAgentRunSessionOptions {
   readonly modelDriver: AgentRunModelDriver;
   readonly readToolExecutor: AgentReadToolExecutor;
   readonly startPreflight: AgentRunStartPreflightPort;
+  readonly contextCompactor?: AgentRunContextCompactor;
   readonly contextSourceReader?: AgentContextSourceReader;
   readonly changeSetSession?: ChangeSetSession;
   readonly versionGroupExecutor?: AgentVersionGroupExecutor;
@@ -1586,6 +1618,45 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       const persisted = await persistLatest(command.runId);
       if (!persisted.ok) return persisted;
       return persistCommandReceipt(command.runId, command.projectId, command.commandId, result);
+    },
+    async compactContext(command) {
+      const prior = await priorCommandReceipt(command.runId, command.projectId, command.commandId);
+      if (prior !== undefined) return prior;
+      const hydrated = await hydrateRun(command.runId);
+      if (!hydrated.ok) return hydrated;
+      const snapshot = coordinator.readSnapshot(command.runId);
+      const invalid = validateRunCommand(snapshot, command);
+      if (invalid !== undefined) return invalid;
+      if (snapshot === undefined) {
+        return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
+      }
+      if (isTerminal(snapshot.status)) {
+        return failure("AGENT_RUN_ALREADY_TERMINAL", "The Agent run has already ended.");
+      }
+      if (options.contextCompactor === undefined) {
+        return failure(
+          "AGENT_CONTEXT_COMPACTION_UNAVAILABLE",
+          "Context compaction is not available for this run."
+        );
+      }
+      // The context session runs the cross-repository commit and publishes the compaction events (wired
+      // through recordEvent), which also patches the coordinator snapshot's activeCompactionId/context
+      // pointers. Here we only guard the run and surface the latest snapshot as the command receipt.
+      const compacted = await options.contextCompactor.compactContext(command);
+      if (!compacted.ok) {
+        const latest = coordinator.readSnapshot(command.runId) ?? snapshot;
+        const result: AgentRunCommandResult = {
+          ok: false,
+          error: compacted.error,
+          latestSnapshot: latest
+        };
+        return persistCommandReceipt(command.runId, command.projectId, command.commandId, result);
+      }
+      const latest = coordinator.readSnapshot(command.runId) ?? snapshot;
+      return persistCommandReceipt(command.runId, command.projectId, command.commandId, {
+        ok: true,
+        value: latest
+      });
     },
     async answerUserInput(command) {
       const prior = await priorCommandReceipt(command.runId, command.projectId, command.commandId);

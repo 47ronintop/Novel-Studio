@@ -325,7 +325,7 @@ export type {
   WorkflowRunUsageSummary
 } from "./ai-writing-workflow-types.js";
 export { createAgentBackedAiWritingWorkflowSession } from "./ai-writing-workflow-session.js";
-export { createAgentRunSession } from "./agent-run-session.js";
+export { createAgentRunSession, evaluateContextBudgetPressure } from "./agent-run-session.js";
 export { createAgentRunDraftSession } from "./agent-run-draft-session.js";
 export { createAgentContextSession } from "./agent-context-session.js";
 export type {
@@ -334,6 +334,15 @@ export type {
   AgentContextBudgetInputsPort,
   AgentContextBudgetModelFacts,
   AgentContextSession,
+  CompactContextResult,
+  CompactContextSourcesPort,
+  CompactionArtifactRequest,
+  CompactionArtifacts,
+  CompactionEvent,
+  CompactionInputs,
+  CompactionModelAssistantPort,
+  CompactionRunRepositoryPort,
+  CompactionUsageSinkPort,
   CreateAgentContextSessionOptions
 } from "./agent-context-session.js";
 export { createChangeSetSession } from "./change-set-session.js";
@@ -369,6 +378,8 @@ export type {
   AgentRunStartFacts,
   AgentRunStartModelFacts,
   AgentRunStartPreflightPort,
+  AgentRunContextCompactor,
+  AgentContextBudgetPressure,
   AgentVersionGroupExecutor,
   AgentUserInputOption,
   AgentUserInputRequest,
@@ -404,9 +415,18 @@ export type {
   AgentWritePolicy,
   AgentTokenCount,
   AgentTokenEstimator,
+  AgentUsageRecord,
+  AgentUsageSink,
+  AgentUsageUnitPriceSnapshot,
   CalculateContextBudgetInput,
+  CompactContextCommand,
+  CompactionInputManifest,
   ContextBudgetSnapshot,
+  ContextCompactionRevision,
+  EvictableContextSource,
   PreviewContextBudgetCommand,
+  ProtectedContextFact,
+  ProtectedContextFactKind,
   PlanArtifact,
   PlanOpenQuestion
 } from "@novel-studio/agent-engine";

@@ -282,6 +282,94 @@ describe("AgentRunSession", () => {
     });
   });
 
+  test("evaluateContextBudgetPressure classifies the 70% warn and 85% compact bands", () => {
+    const evaluate = (applicationExports as unknown as Record<string, unknown>)[
+      "evaluateContextBudgetPressure"
+    ];
+    expect(typeof evaluate).toBe("function");
+    if (typeof evaluate !== "function") return;
+    const call = evaluate as (input: { usedTokens: number; safeInputBudget: number }) => string;
+    expect(call({ usedTokens: 6000, safeInputBudget: 10000 })).toBe("ok");
+    expect(call({ usedTokens: 7000, safeInputBudget: 10000 })).toBe("warn");
+    expect(call({ usedTokens: 8499, safeInputBudget: 10000 })).toBe("warn");
+    expect(call({ usedTokens: 8500, safeInputBudget: 10000 })).toBe("compact");
+    // A non-positive budget is immediate compaction pressure, never silently "ok".
+    expect(call({ usedTokens: 0, safeInputBudget: 0 })).toBe("compact");
+  });
+
+  test("compactContext delegates to the context compactor and is unavailable without one", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    if (typeof createSession !== "function") return;
+    const create = createSession as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      compactContext(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+
+    let delegatedTo: string | undefined;
+    const withCompactor = create({
+      coordinatorOptions: { createRunId: () => "run_compact" },
+      repository: memoryRepository(),
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      },
+      contextCompactor: {
+        async compactContext(command: { runId: string }) {
+          delegatedTo = command.runId;
+          return { ok: true, value: { compactionId: "compaction_1", runSnapshot: {} } };
+        }
+      }
+    });
+    await withCompactor.startAgentRun(startCommand());
+    const current = await withCompactor.readAgentRun("run_compact");
+    const revision = (current as { value: { snapshot: { runRevision: number } } }).value.snapshot
+      .runRevision;
+    const compacted = await withCompactor.compactContext({
+      projectId: "project-01",
+      runId: "run_compact",
+      commandId: "compact-01",
+      expectedRunRevision: revision,
+      contextBudgetSnapshotId: "budget_current",
+      trigger: "manual"
+    });
+    expect(compacted).toMatchObject({ ok: true });
+    expect(delegatedTo).toBe("run_compact");
+
+    const withoutCompactor = create({
+      coordinatorOptions: { createRunId: () => "run_no_compact" },
+      repository: memoryRepository(),
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      }
+    });
+    await withoutCompactor.startAgentRun({ ...startCommand(), commandId: "start-nc" });
+    const ncCurrent = await withoutCompactor.readAgentRun("run_no_compact");
+    const ncRevision = (ncCurrent as { value: { snapshot: { runRevision: number } } }).value.snapshot
+      .runRevision;
+    const unavailable = await withoutCompactor.compactContext({
+      projectId: "project-01",
+      runId: "run_no_compact",
+      commandId: "compact-02",
+      expectedRunRevision: ncRevision,
+      contextBudgetSnapshotId: "budget_current",
+      trigger: "manual"
+    });
+    expect(unavailable).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONTEXT_COMPACTION_UNAVAILABLE" }
+    });
+  });
+
   test("returns the persisted stop receipt after application reload", async () => {
     const createSession = (applicationExports as unknown as Record<string, unknown>)[
       "createAgentRunSession"

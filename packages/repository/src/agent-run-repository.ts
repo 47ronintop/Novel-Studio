@@ -188,9 +188,144 @@ export class AgentRunFileRepository {
   public async readSnapshot(runId: string): Promise<Result<JsonObject | undefined, UnifiedError>> {
     const read = await this.readJson(this.runPath(runId, "run.json"));
     if (!read.ok || read.value === undefined) return read;
-    return isSupportedAgentSchemaVersion(read.value)
-      ? read
-      : this.invalidRecord("AGENT_RUN_SNAPSHOT_VERSION_UNSUPPORTED");
+    if (!isSupportedAgentSchemaVersion(read.value)) {
+      return this.invalidRecord("AGENT_RUN_SNAPSHOT_VERSION_UNSUPPORTED");
+    }
+    // Cross-validate the compaction commit marker before honoring it: the revision must exist and be
+    // completed, and the result/budget snapshots it names must exist. A crash between writing the
+    // artifacts and rewriting run.json can leave a pointer at half-written state — do not honor it.
+    const activeCompactionId = read.value["activeCompactionId"];
+    if (typeof activeCompactionId === "string" && activeCompactionId.length > 0) {
+      const honored = await this.compactionArtifactsExist(runId, activeCompactionId);
+      if (!honored.ok) return honored;
+      if (!honored.value) {
+        return ok({ ...read.value, activeCompactionId: null });
+      }
+    }
+    return read;
+  }
+
+  public writeCompactionManifest(manifest: JsonObject): Promise<Result<JsonObject, UnifiedError>> {
+    const runId = readRunId(manifest);
+    const compactionId = readSafeString(manifest, "compactionId");
+    if (runId === undefined || compactionId === undefined) {
+      return Promise.resolve(this.invalidRecord("AGENT_COMPACTION_MANIFEST_INVALID"));
+    }
+    return this.writeJson(this.compactionPath(runId, compactionId, "manifest.json"), manifest);
+  }
+
+  public readCompactionManifest(
+    runId: string,
+    compactionId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    if (!isSafeId(compactionId)) {
+      return Promise.resolve(this.invalidRecord("AGENT_COMPACTION_MANIFEST_INVALID"));
+    }
+    return this.readJson(this.compactionPath(runId, compactionId, "manifest.json"));
+  }
+
+  public async writeCompactionRevision(
+    revision: JsonObject
+  ): Promise<Result<JsonObject, UnifiedError>> {
+    const runId = readRunId(revision);
+    const compactionId = readSafeString(revision, "compactionId");
+    if (runId === undefined || compactionId === undefined) {
+      return this.invalidRecord("AGENT_COMPACTION_REVISION_INVALID");
+    }
+    const path = this.compactionPath(runId, compactionId, "revision.json");
+    const existing = await this.readJson(path);
+    if (!existing.ok) return existing as Result<JsonObject, UnifiedError>;
+    if (existing.value !== undefined) {
+      // Immutable per compactionId: a replay with identical content is idempotent; a divergent
+      // rewrite is a conflict.
+      return JSON.stringify(existing.value) === JSON.stringify(revision)
+        ? ok(existing.value)
+        : this.invalidRecord("AGENT_COMPACTION_REVISION_CONFLICT");
+    }
+    return this.writeJson(path, revision);
+  }
+
+  public readCompactionRevision(
+    runId: string,
+    compactionId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    if (!isSafeId(compactionId)) {
+      return Promise.resolve(this.invalidRecord("AGENT_COMPACTION_REVISION_INVALID"));
+    }
+    return this.readJson(this.compactionPath(runId, compactionId, "revision.json"));
+  }
+
+  public writeBudgetSnapshot(
+    runId: string,
+    snapshot: JsonObject
+  ): Promise<Result<JsonObject, UnifiedError>> {
+    const budgetSnapshotId = readSafeString(snapshot, "contextBudgetSnapshotId");
+    if (!isSafeId(runId) || budgetSnapshotId === undefined) {
+      return Promise.resolve(this.invalidRecord("AGENT_CONTEXT_BUDGET_SNAPSHOT_INVALID"));
+    }
+    return this.writeJson(
+      this.runPath(runId, join("budget-snapshots", `${budgetSnapshotId}.json`)),
+      snapshot
+    );
+  }
+
+  public readBudgetSnapshot(
+    runId: string,
+    budgetSnapshotId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    if (!isSafeId(budgetSnapshotId)) {
+      return Promise.resolve(this.invalidRecord("AGENT_CONTEXT_BUDGET_SNAPSHOT_INVALID"));
+    }
+    return this.readJson(this.runPath(runId, join("budget-snapshots", `${budgetSnapshotId}.json`)));
+  }
+
+  /**
+   * The compaction commit marker (step 3 of the cross-repository commit). Rewrites run.json with the
+   * new `activeCompactionId`. Read-before-write idempotency: if run.json already carries this
+   * `activeCompactionId`, the commit already happened — return the stored snapshot unchanged so a
+   * replayed commit is a no-op rather than a conflicting rewrite.
+   */
+  public async commitCompaction(snapshot: JsonObject): Promise<Result<JsonObject, UnifiedError>> {
+    const runId = readRunId(snapshot);
+    const activeCompactionId = readSafeString(snapshot, "activeCompactionId");
+    if (runId === undefined || activeCompactionId === undefined) {
+      return this.invalidRecord("AGENT_COMPACTION_COMMIT_INVALID");
+    }
+    const existing = await this.readJson(this.runPath(runId, "run.json"));
+    if (!existing.ok) return existing as Result<JsonObject, UnifiedError>;
+    if (existing.value !== undefined && existing.value["activeCompactionId"] === activeCompactionId) {
+      return ok(existing.value);
+    }
+    return this.writeJson(this.runPath(runId, "run.json"), snapshot);
+  }
+
+  private async compactionArtifactsExist(
+    runId: string,
+    compactionId: string
+  ): Promise<Result<boolean, UnifiedError>> {
+    const revision = await this.readCompactionRevision(runId, compactionId);
+    if (!revision.ok) return revision as Result<boolean, UnifiedError>;
+    if (revision.value === undefined || revision.value["status"] !== "completed") return ok(false);
+    const resultSnapshotId = revision.value["resultSnapshotId"];
+    if (typeof resultSnapshotId === "string" && resultSnapshotId.length > 0) {
+      const result = await this.readContextSnapshot(runId, resultSnapshotId);
+      if (!result.ok) return result as Result<boolean, UnifiedError>;
+      if (result.value === undefined) return ok(false);
+    }
+    const budgetSnapshotId = revision.value["budgetSnapshotId"];
+    if (typeof budgetSnapshotId === "string" && budgetSnapshotId.length > 0) {
+      const budget = await this.readBudgetSnapshot(runId, budgetSnapshotId);
+      if (!budget.ok) return budget as Result<boolean, UnifiedError>;
+      if (budget.value === undefined) return ok(false);
+    }
+    return ok(true);
+  }
+
+  private compactionPath(runId: string, compactionId: string, suffix: string): string {
+    if (!isSafeId(compactionId)) {
+      throw new Error("Agent compaction ID is invalid.");
+    }
+    return this.runPath(runId, join("compactions", compactionId, suffix));
   }
 
   public readEvents(runId: string): Promise<Result<JsonObject[], UnifiedError>> {
