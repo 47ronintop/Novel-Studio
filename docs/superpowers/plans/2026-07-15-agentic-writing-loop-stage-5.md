@@ -567,11 +567,11 @@ git commit -m "feat: add unified agent run drafts"
 - Test: `apps/desktop/test/agent-run-bridge.test.ts`
 - Test: `apps/desktop/test/agent-conversation-bridge.test.ts`
 
-- [ ] **Step 1: Write failing authority and capability tests**
+- [x] **Step 1: Write failing authority and capability tests**
 
 Assert `StartAgentRunCommand` carries only `runDraftId + runDraftRevision + runDraftChecksum`, not a renderer-authored `providerCapabilitySnapshot`, scattered mode/model/context fields, or `initialContextSources`. Test unknown profile, hidden reasoning control, unsupported effort, context window below 8K, a stale run draft, and a valid supported model.
 
-- [ ] **Step 2: Change the public start command atomically**
+- [x] **Step 2: Change the public start command atomically**
 
 ```ts
 export interface StartAgentRunCommand {
@@ -596,11 +596,11 @@ Application reloads the run draft, Context Draft, editor content, model profile,
 2. **The `decidePlan` plan→execution handoff re-calls `coordinator.startRun`** (in `agent-run-session.ts`, ~lines 1817-1834) reusing the parent run's `providerCapabilitySnapshot` and context sources. Under the draft-only command this path has no run draft. Migrate it to build a `ResolvedAgentRunStartInput` **server-side** from: the approved plan's `handoffContextMode`/`handoffWritePolicy`, the parent run's model profile + reasoning (or the conversation's current draft model), and a freshly re-derived capability snapshot + context. State explicitly that an execution run started from an approved plan obtains model/reasoning/context authority from the server preflight, never from a renderer command.
 3. **Replay compatibility.** Old persisted command receipts referencing the wide `StartAgentRunCommand` remain readable (they are receipts, not replayed as new starts); add a test asserting a legacy receipt read does not attempt to re-validate against the narrowed command shape.
 
-- [ ] **Step 3: Forward reasoning to the model driver**
+- [x] **Step 3: Forward reasoning to the model driver**
 
 Extend resolved runtime parameters with the validated effort, bind model/reasoning into the run snapshot, and reject attempts to change either on resume/retry. Update IPC validators and preload guards in the same task so no intermediate build rejects the new start shape.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run:
 
@@ -611,7 +611,7 @@ npm run typecheck
 
 Expected: PASS; unsupported reasoning never reaches provider parameters.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add packages/agent-engine/src/agent-run-types.ts packages/application/src/agent-model-capabilities.ts packages/application/src/agent-run-draft-session.ts packages/application/src/agent-run-session.ts packages/application/src/agent-run-model-driver.ts packages/application/src/ipc-contract.ts apps/desktop/src/main/agent-run-runtime.ts apps/desktop/src/main/index.ts apps/desktop/src/main/ipc-handlers.ts apps/desktop/src/preload/api.ts apps/desktop/src/preload/index.cts apps/desktop/src/renderer/agent-run-bridge.ts packages/application/test/agent-model-capabilities.test.ts packages/application/test/agent-run-model-driver.test.ts packages/application/test/agent-run-session.test.ts apps/desktop/test/agent-run-ipc.test.ts apps/desktop/test/agent-run-bridge.test.ts

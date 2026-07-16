@@ -5,6 +5,7 @@ import type {
   AgentRunEvent,
   AgentRunSnapshot,
   ChangeSet,
+  ContextDraftRef,
   DecideChangeSetCommand,
   DecideAgentPlanCommand,
   RefreshAgentContextCommand,
@@ -170,9 +171,9 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
 
   async function sendRun(request: string): Promise<AgentRunPanelProps> {
     state = { ...state, userRequest: request, errorMessage: undefined };
-    const capability = buildCapabilitySnapshot(context?.settings);
-    if (!capability.ok) {
-      state = { ...state, errorMessage: capability.error.message };
+    const profileId = selectedModelProfileId(context?.settings);
+    if (profileId === undefined) {
+      state = { ...state, errorMessage: "The selected provider/model cannot start an Agent run." };
       return toProps();
     }
     if (context === undefined) {
@@ -183,23 +184,38 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       state = { ...state, errorMessage: "请先选择一个会话。" };
       return toProps();
     }
+    // Server-authoritative start: persist the user's intent as a draft, then start by reference.
+    // The renderer authors only choices (mode, model, request, context refs) — never provider,
+    // capabilities, context window, or resolved document content.
+    const writePolicy =
+      state.operationMode === "planning" ? "write_before_confirmation" : state.writePolicy;
+    const prepared = await api.agentRuns.prepareStart({
+      projectId: context.projectId,
+      conversationId: context.conversationId,
+      commandId: createCommandId("prepare"),
+      userRequest: request,
+      operationMode: state.operationMode,
+      contextMode: state.contextMode,
+      writePolicy,
+      writePolicyAcknowledged:
+        state.operationMode === "execution" &&
+        state.writePolicy === "user_preapproved_run" &&
+        state.writePolicyAcknowledged,
+      modelProfileId: profileId,
+      contextRefs: contextDraftRefs(context)
+    });
+    if (!prepared.ok) {
+      state = { ...state, errorMessage: prepared.error.message };
+      return toProps();
+    }
     const command: StartAgentRunCommand = {
       projectId: context.projectId,
       conversationId: context.conversationId,
       commandId: createCommandId("start"),
       expectedRunRevision: 0,
-      operationMode: state.operationMode,
-      contextMode: state.contextMode,
-      writePolicy:
-        state.operationMode === "planning" ? "write_before_confirmation" : state.writePolicy,
-      ...(state.operationMode === "execution" &&
-      state.writePolicy === "user_preapproved_run" &&
-      state.writePolicyAcknowledged
-        ? { writePolicyAcknowledged: true }
-        : {}),
-      userRequest: request,
-      providerCapabilitySnapshot: capability.value,
-      initialContextSources: contextSources(context)
+      runDraftId: prepared.value.runDraft.runDraftId,
+      runDraftRevision: prepared.value.runDraft.revision,
+      runDraftChecksum: prepared.value.runDraft.checksum
     };
     await applyCommandResult(await api.agentRuns.start(command));
     return toProps();
@@ -939,42 +955,27 @@ function contextSources(context: AgentRunBridgeContext | undefined): AgentContex
   ];
 }
 
-function buildCapabilitySnapshot(
+/** The user's selected model profile id — the only model choice the renderer authors. */
+function selectedModelProfileId(
   settings: ModelSettingsPanelProps | undefined
-):
-  | { readonly ok: true; readonly value: AgentProviderCapabilitySnapshot }
-  | { readonly ok: false; readonly error: { readonly message: string } } {
+): string | undefined {
   const profile = settings?.profiles.find(
     (entry) => entry.id === (settings.selectedProfileId ?? settings.defaultProfileId)
   );
-  if (profile === undefined) {
-    return unsupportedCapability();
-  }
-  const discovered = settings?.modelDiscovery?.models.find((model) => model.id === profile.modelName);
-  const contextWindow = discovered?.contextWindow ?? (profile.provider === "demo" ? 128000 : undefined);
-  if (contextWindow === undefined || !Number.isFinite(contextWindow) || contextWindow < 8000) {
-    return unsupportedCapability();
-  }
-  return {
-    ok: true,
-    value: {
-      profileId: profile.id,
-      provider: profile.provider,
-      modelName: profile.modelName,
-      streaming: true,
-      toolCalling: true,
-      structuredArguments: true,
-      contextWindow,
-      requiredContextTokens: 8000
-    }
-  };
+  return profile?.id;
 }
 
-function unsupportedCapability() {
-  return {
-    ok: false as const,
-    error: { message: "The selected provider/model cannot start an Agent run." }
-  };
+/** The active chapter as the single Context Draft ref; server reads its content at start. */
+function contextDraftRefs(context: AgentRunBridgeContext | undefined): ContextDraftRef[] {
+  if (context?.activeChapterId === undefined || context.chapterEditor === undefined) return [];
+  return [
+    {
+      kind: "chapter",
+      refId: `chapter:${context.activeChapterId}`,
+      chapterId: context.activeChapterId,
+      label: context.chapterEditor.chapter.frontmatter.title
+    }
+  ];
 }
 
 function appendEvent(events: readonly AgentRunEvent[], event: AgentRunEvent): AgentRunEvent[] {

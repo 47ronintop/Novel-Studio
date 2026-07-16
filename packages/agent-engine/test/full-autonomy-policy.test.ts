@@ -6,7 +6,7 @@ import {
   createAgentRunCoordinator,
   createChangeSetRevision,
   decideChangeSetApproval,
-  type StartAgentRunCommand
+  type ResolvedAgentRunStartInput
 } from "../src/index.js";
 
 describe("Stage 3 full-autonomy policy", () => {
@@ -28,7 +28,7 @@ describe("Stage 3 full-autonomy policy", () => {
     void _writePolicy;
 
     expect(
-      coordinator.startRun(commandWithoutPolicy as StartAgentRunCommand)
+      coordinator.startRun(commandWithoutPolicy as ResolvedAgentRunStartInput)
     ).toMatchObject({
       ok: true,
       value: {
@@ -203,7 +203,7 @@ describe("Stage 3 full-autonomy policy", () => {
   });
 });
 
-function startCommand(): StartAgentRunCommand {
+function startCommand(): ResolvedAgentRunStartInput {
   return {
     projectId: "project-01",
     conversationId: "conv-policy",

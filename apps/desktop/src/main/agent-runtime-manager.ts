@@ -2,6 +2,7 @@ import { realpath } from "node:fs/promises";
 
 import type {
   AgentConversationSession,
+  AgentRunDraftSession,
   AgentRunSession
 } from "@novel-studio/application";
 import type { AgentRunEvent, AgentRunSnapshot } from "@novel-studio/agent-engine";
@@ -18,6 +19,7 @@ export interface DesktopAgentRuntime {
   readonly projectRoot: string;
   readonly agentRunSession: AgentRunSession;
   readonly agentConversationSession: AgentConversationSession;
+  readonly agentRunDraftSession?: AgentRunDraftSession;
   dispose?(): void;
 }
 

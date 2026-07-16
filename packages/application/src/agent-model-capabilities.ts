@@ -1,5 +1,10 @@
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
+import type {
+  ModelReasoningStrengthControl,
+  ModelReasoningStrengthValue
+} from "./model-discovery-session.js";
+
 export interface AgentModelCapabilityDeclaration {
   readonly streaming?: boolean;
   readonly toolCalling?: boolean;
@@ -79,5 +84,64 @@ export function preflightAgentModelCapabilities(
     structuredArguments: true,
     contextWindow,
     requiredContextTokens: input.requiredContextTokens
+  });
+}
+
+export interface AgentReasoningEffortResolutionInput {
+  readonly profileId: string;
+  readonly modelName: string;
+  readonly reasoningStrength: ModelReasoningStrengthControl;
+  readonly requestedEffort?: ModelReasoningStrengthValue;
+}
+
+export interface AgentReasoningEffortResolution {
+  readonly reasoningEffort: ModelReasoningStrengthValue | undefined;
+}
+
+/**
+ * Decide the reasoning effort a run may actually use, server-side. The model's reasoning-strength
+ * control (derived from provider + model, not from the renderer) is authoritative: a hidden control
+ * forbids any requested effort, and an available control only permits its declared allowed values,
+ * falling back to the model default when nothing is requested. This guarantees an unsupported effort
+ * never reaches provider parameters.
+ */
+export function resolveAgentReasoningEffort(
+  input: AgentReasoningEffortResolutionInput
+): Result<AgentReasoningEffortResolution, UnifiedError> {
+  if (input.reasoningStrength.status === "hidden") {
+    if (input.requestedEffort !== undefined) {
+      return err(unsupportedReasoningEffort(input, input.reasoningStrength));
+    }
+    return ok({ reasoningEffort: undefined });
+  }
+  const { allowedValues, defaultValue } = input.reasoningStrength;
+  if (input.requestedEffort === undefined) {
+    return ok({ reasoningEffort: defaultValue });
+  }
+  if (!allowedValues.includes(input.requestedEffort)) {
+    return err(unsupportedReasoningEffort(input, input.reasoningStrength));
+  }
+  return ok({ reasoningEffort: input.requestedEffort });
+}
+
+function unsupportedReasoningEffort(
+  input: AgentReasoningEffortResolutionInput,
+  control: ModelReasoningStrengthControl
+): UnifiedError {
+  return createUnifiedError({
+    code: "AGENT_REASONING_EFFORT_UNSUPPORTED",
+    category: "UserError",
+    message: "The selected model cannot use the requested reasoning strength.",
+    recoverability: "user-action",
+    suggestedAction:
+      "Clear the reasoning strength or choose a value the selected model supports before starting the run.",
+    traceId: "agent-reasoning-effort-resolution",
+    redactedDetail: {
+      profileId: input.profileId,
+      modelName: input.modelName,
+      requestedEffort: input.requestedEffort ?? null,
+      controlStatus: control.status,
+      allowedValues: control.status === "available" ? control.allowedValues : []
+    }
   });
 }

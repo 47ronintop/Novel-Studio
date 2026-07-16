@@ -3,10 +3,12 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type {
   AgentConversationSession,
+  AgentRunDraftSession,
   AgentRunSession,
   AnswerAgentUserInputCommand,
   ApplicationIpcChannel,
-  DesktopApplication
+  DesktopApplication,
+  SyncStartDraftCommand
 } from "@novel-studio/application";
 import type {
   AgentRunEvent,
@@ -179,6 +181,8 @@ export function createApplicationIpcHandlers(
     options.agentRuntimeManager?.current()?.agentRunSession ?? options.agentRunSession;
   const currentAgentConversationSession = (): AgentConversationSession | undefined =>
     options.agentRuntimeManager?.current()?.agentConversationSession;
+  const currentAgentRunDraftSession = (): AgentRunDraftSession | undefined =>
+    options.agentRuntimeManager?.current()?.agentRunDraftSession;
 
   return {
     "application:get-shell-state": () => Promise.resolve(application.getShellState()),
@@ -439,6 +443,15 @@ export function createApplicationIpcHandlers(
       }
 
       return application.readWorkflowRun(workflowRunId);
+    },
+    "application:agent-run:prepare-start": (command: unknown) => {
+      // Persist the renderer's pre-run intent (user choices only) as the current draft, returning a
+      // reference the draft-only start command can carry. Server resolves capabilities/content later.
+      const parsed = toSyncStartDraftCommand(command);
+      const draftSession = currentAgentRunDraftSession();
+      return parsed === undefined || draftSession === undefined
+        ? Promise.resolve(agentRunUnavailable())
+        : draftSession.syncStartDraft(parsed);
     },
     "application:agent-run:start": (command: unknown) => {
       const parsed = toStartAgentRunCommand(command);
@@ -704,20 +717,19 @@ export function createApplicationIpcHandlers(
 
 function toStartAgentRunCommand(value: unknown): StartAgentRunCommand | undefined {
   if (!isRecord(value)) return undefined;
+  // Draft-only by contract: the renderer may submit only a reference to a persisted run draft. Mode,
+  // model, capabilities, the user request, and context sources are resolved server-side by the start
+  // preflight — the renderer cannot author any of them. Reject the pre-Stage-5 wide field set.
   if (
     !hasOnlyKeys(value, [
       "projectId",
       "conversationId",
       "commandId",
       "expectedRunRevision",
-      "operationMode",
-      "contextMode",
-      "writePolicy",
-      "writePolicyAcknowledged",
-      "userRequest",
-      "providerCapabilitySnapshot",
+      "runDraftId",
+      "runDraftRevision",
+      "runDraftChecksum",
       "limits",
-      "initialContextSources",
       "sourcePlanId",
       "sourcePlanRevision"
     ]) ||
@@ -725,24 +737,52 @@ function toStartAgentRunCommand(value: unknown): StartAgentRunCommand | undefine
     !isSafeId(value["conversationId"]) ||
     !isSafeId(value["commandId"]) ||
     value["expectedRunRevision"] !== 0 ||
-    (value["operationMode"] !== "planning" && value["operationMode"] !== "execution") ||
-    (value["contextMode"] !== "writing" && value["contextMode"] !== "general_file") ||
-    (value["writePolicy"] !== undefined &&
-      value["writePolicy"] !== "write_before_confirmation" &&
-      value["writePolicy"] !== "user_preapproved_run") ||
-    (value["writePolicyAcknowledged"] !== undefined &&
-      value["writePolicyAcknowledged"] !== true) ||
-    !isNonEmptyString(value["userRequest"]) ||
-    !isProviderCapabilitySnapshot(value["providerCapabilitySnapshot"]) ||
+    !isSafeId(value["runDraftId"]) ||
+    !isPositiveInteger(value["runDraftRevision"]) ||
+    !isNonEmptyString(value["runDraftChecksum"]) ||
     (value["limits"] !== undefined && !isRecord(value["limits"])) ||
-    (value["initialContextSources"] !== undefined &&
-      !Array.isArray(value["initialContextSources"])) ||
     (value["sourcePlanId"] !== undefined && !isSafeId(value["sourcePlanId"])) ||
     (value["sourcePlanRevision"] !== undefined && !isPositiveInteger(value["sourcePlanRevision"]))
   ) {
     return undefined;
   }
   return value as unknown as StartAgentRunCommand;
+}
+
+function toSyncStartDraftCommand(value: unknown): SyncStartDraftCommand | undefined {
+  if (!isRecord(value)) return undefined;
+  // Intent = user choices only. Provider, model capabilities, context window, and document content
+  // are never accepted here; the start preflight resolves them server-side from the persisted draft.
+  if (
+    !hasOnlyKeys(value, [
+      "projectId",
+      "conversationId",
+      "commandId",
+      "userRequest",
+      "operationMode",
+      "contextMode",
+      "writePolicy",
+      "writePolicyAcknowledged",
+      "modelProfileId",
+      "reasoningEffort",
+      "contextRefs"
+    ]) ||
+    !isSafeId(value["projectId"]) ||
+    !isSafeId(value["conversationId"]) ||
+    !isSafeId(value["commandId"]) ||
+    typeof value["userRequest"] !== "string" ||
+    (value["operationMode"] !== "planning" && value["operationMode"] !== "execution") ||
+    (value["contextMode"] !== "writing" && value["contextMode"] !== "general_file") ||
+    (value["writePolicy"] !== "write_before_confirmation" &&
+      value["writePolicy"] !== "user_preapproved_run") ||
+    typeof value["writePolicyAcknowledged"] !== "boolean" ||
+    !isNonEmptyString(value["modelProfileId"]) ||
+    (value["reasoningEffort"] !== undefined && typeof value["reasoningEffort"] !== "string") ||
+    !Array.isArray(value["contextRefs"])
+  ) {
+    return undefined;
+  }
+  return value as unknown as SyncStartDraftCommand;
 }
 
 function toCreateAgentConversationCommand(

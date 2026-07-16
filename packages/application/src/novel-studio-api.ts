@@ -24,6 +24,7 @@ import type {
 } from "@novel-studio/agent-engine";
 
 import type { ApplicationCommand } from "./command-registry.js";
+import type { AgentRunDraftResult, SyncStartDraftCommand } from "./agent-run-draft-session.js";
 import type {
   AiWritingSuggestion,
   AiWritingSelectionPreview,
@@ -165,6 +166,7 @@ export interface NovelStudioApi {
     readWorkflowRun(workflowRunId: string): Promise<Result<WorkflowRunRecord, UnifiedError>>;
   };
   agentRuns: {
+    prepareStart(command: SyncStartDraftCommand): Promise<AgentRunDraftResult>;
     start(command: StartAgentRunCommand): Promise<AgentRunCommandResult>;
     stop(command: StopAgentRunCommand): Promise<AgentRunCommandResult>;
     answerUserInput(command: AnswerAgentUserInputCommand): Promise<AgentRunCommandResult>;

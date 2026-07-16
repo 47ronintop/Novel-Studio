@@ -39,6 +39,14 @@ export function createLlmAgentRunModelDriver(
         }
       }));
       const requestId = `agent_${input.runId}_${input.snapshot.runRevision}`;
+      // The run snapshot's reasoning effort is server-authoritative (validated against the model at
+      // start). It overrides any static reasoning in the driver's base parameters so the value the
+      // preflight approved is exactly what reaches the provider.
+      const baseParameters = options.parameters ?? {};
+      const parameters: LlmParameters =
+        input.snapshot.reasoningEffort === undefined
+          ? baseParameters
+          : { ...baseParameters, reasoningEffort: input.snapshot.reasoningEffort };
       for await (const result of options.adapter.stream({
         schemaVersion: "1.0",
         requestId,
@@ -46,7 +54,7 @@ export function createLlmAgentRunModelDriver(
         mode: "streaming",
         modelProfile: options.modelProfile,
         messages,
-        parameters: options.parameters ?? {},
+        parameters,
         abortSignal: input.signal,
         ...(tools.length === 0 ? {} : { tools })
       })) {

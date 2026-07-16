@@ -79,20 +79,9 @@ describe("Agent Run IPC", () => {
       conversationId: "conversation-01",
       commandId: "start-01",
       expectedRunRevision: 0,
-      operationMode: "planning",
-      contextMode: "writing",
-      writePolicy: "write_before_confirmation",
-      userRequest: "制定计划",
-      providerCapabilitySnapshot: {
-        profileId: "profile-01",
-        provider: "demo",
-        modelName: "agent-demo",
-        streaming: true,
-        toolCalling: true,
-        structuredArguments: true,
-        contextWindow: 128000,
-        requiredContextTokens: 8000
-      }
+      runDraftId: "draft-01",
+      runDraftRevision: 1,
+      runDraftChecksum: "checksum-01"
     };
     expect(typeof handlers["application:agent-run:start"]).toBe("function");
     expect(typeof handlers["application:agent-run:stop"]).toBe("function");

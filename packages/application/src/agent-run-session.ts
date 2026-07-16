@@ -13,6 +13,9 @@ import {
   type ChangeSetApproval,
   type ChangeSetRange,
   type DecideChangeSetCommand,
+  type AgentContextMode,
+  type AgentOperationMode,
+  type AgentReasoningEffort,
   type AgentRunCommandResult,
   type AgentRunCoordinator,
   type AgentRunEvent,
@@ -21,6 +24,7 @@ import {
   type AgentContextSourceInput,
   type AgentToolName,
   type AgentToolDescriptor,
+  type AgentWritePolicy,
   type CreatePlanArtifactInput,
   type PlanArtifact,
   type PlanOpenQuestion,
@@ -28,6 +32,7 @@ import {
   type PlanTargetRef,
   type DecideAgentPlanCommand,
   type RefreshAgentContextCommand,
+  type ResolvedAgentRunStartInput,
   type ResumeAgentRunCommand,
   type RetryAgentRunStepCommand,
   type StartAgentRunCommand,
@@ -42,6 +47,12 @@ import {
   type Result,
   type UnifiedError
 } from "@novel-studio/shared";
+import {
+  preflightAgentModelCapabilities,
+  resolveAgentReasoningEffort,
+  type AgentModelCapabilityDeclaration
+} from "./agent-model-capabilities.js";
+import type { ModelReasoningStrengthControl } from "./model-discovery-session.js";
 import type { ChangeSetSession } from "./change-set-session.js";
 import {
   authorizeAgentRunApproval,
@@ -125,6 +136,40 @@ export interface AgentReadToolExecutor {
     readonly arguments: JsonObject;
     readonly signal: AbortSignal;
   }): Promise<Result<AgentReadToolResult, UnifiedError>>;
+}
+
+/** The model facts the preflight resolves server-side from the run draft's `modelProfileId`. */
+export interface AgentRunStartModelFacts {
+  readonly profileId: string;
+  readonly provider: string;
+  readonly modelName: string;
+  readonly capabilities: AgentModelCapabilityDeclaration;
+  readonly requiredContextTokens: number;
+  readonly reasoningStrength: ModelReasoningStrengthControl;
+}
+
+/**
+ * The server-resolved facts a run start is built from. The renderer submits only a draft reference;
+ * this port reloads the run draft + Context Draft, resolves the model profile and its capabilities,
+ * reads editor content, and resolves the Context Draft refs into concrete sources. Everything here is
+ * server authority — the renderer cannot author provider, model name, context window, capabilities,
+ * reasoning strength, mode, write policy, the user request, or document content.
+ */
+export interface AgentRunStartFacts {
+  readonly operationMode: AgentOperationMode;
+  readonly contextMode: AgentContextMode;
+  readonly writePolicy: AgentWritePolicy;
+  readonly writePolicyAcknowledged: boolean;
+  readonly userRequest: string;
+  readonly requestedReasoningEffort?: AgentReasoningEffort;
+  readonly model: AgentRunStartModelFacts;
+  readonly initialContextSources: readonly AgentContextSourceInput[];
+}
+
+export interface AgentRunStartPreflightPort {
+  resolveStart(
+    command: StartAgentRunCommand
+  ): Promise<Result<AgentRunStartFacts, UnifiedError>>;
 }
 
 export interface AgentRunPersistencePort {
@@ -238,6 +283,7 @@ export interface CreateAgentRunSessionOptions {
   readonly repository: AgentRunPersistencePort;
   readonly modelDriver: AgentRunModelDriver;
   readonly readToolExecutor: AgentReadToolExecutor;
+  readonly startPreflight: AgentRunStartPreflightPort;
   readonly contextSourceReader?: AgentContextSourceReader;
   readonly changeSetSession?: ChangeSetSession;
   readonly versionGroupExecutor?: AgentVersionGroupExecutor;
@@ -1365,6 +1411,22 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       const receiptKey = `${command.projectId}:${command.commandId}`;
       const prior = await priorStartCommandReceipt(command.projectId, command.commandId);
       if (prior !== undefined) return prior;
+      // Server-authoritative preflight: reload the run draft + Context Draft, resolve the model
+      // profile and its capabilities, read editor content, and resolve context sources. A stale or
+      // missing draft, an unknown profile, an unsupported reasoning strength, or a model that cannot
+      // meet the required context window all fail the start here — before any conversation is
+      // reserved or run is persisted.
+      const preflight = await options.startPreflight.resolveStart(command);
+      if (!preflight.ok) {
+        commandReceipts.set(receiptKey, { ok: false, error: preflight.error });
+        return { ok: false, error: preflight.error };
+      }
+      const resolvedStart = resolveStartInput(command, preflight.value);
+      if (!resolvedStart.ok) {
+        commandReceipts.set(receiptKey, { ok: false, error: resolvedStart.error });
+        return { ok: false, error: resolvedStart.error };
+      }
+      const startInput = resolvedStart.value;
       let conversationContext: readonly AgentModelMessage[] = [];
       let conversationReserved = false;
       const cancelConversationStart = async (): Promise<void> => {
@@ -1396,31 +1458,22 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         }
         conversationContext = loaded.value;
       }
-      if (!isSupportedCapabilitySnapshot(command.providerCapabilitySnapshot)) {
-        const result = failure(
-          "AGENT_MODEL_CAPABILITY_UNSUPPORTED",
-          "The selected provider/model cannot start an Agent run."
-        );
-        commandReceipts.set(receiptKey, result);
-        await cancelConversationStart();
-        return result;
-      }
       const restoredActive = await hydratePersistedActiveRun(command.projectId);
       if (restoredActive?.ok === false) {
         await cancelConversationStart();
         return restoredActive;
       }
-      const result = coordinator.startRun(command);
+      const result = coordinator.startRun(startInput);
       if (!result.ok) {
         commandReceipts.set(receiptKey, result);
         await cancelConversationStart();
         return result;
       }
-      const initialContextSources = [...(command.initialContextSources ?? [])];
+      const initialContextSources = [...(startInput.initialContextSources ?? [])];
       const runtime: RunRuntime = {
         messages: [
           ...conversationContextEnvelope(conversationContext),
-          { role: "user", content: command.userRequest },
+          { role: "user", content: startInput.userRequest },
           ...initialContextSources.map((source) => ({
             role: "system" as const,
             content: JSON.stringify({
@@ -1817,7 +1870,11 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           planningCompleted
         );
       }
-      const executionStarted = coordinator.startRun({
+      // An execution run started from an approved plan gets its model/reasoning/context authority
+      // from the server, never from a renderer command: the mode + write policy come from the plan
+      // handoff, and the capability snapshot, reasoning, and context sources are reused from the
+      // parent planning run (already server-resolved at its own start).
+      const executionStart: ResolvedAgentRunStartInput = {
         projectId: command.projectId,
         conversationId: snapshot.conversationId ?? "",
         commandId: `${command.commandId}_execution`,
@@ -1830,11 +1887,15 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           : {}),
         userRequest: `Execute approved plan ${plan.planId} revision ${plan.revision}: ${plan.goal}`,
         providerCapabilitySnapshot: snapshot.providerCapabilitySnapshot,
+        ...(snapshot.reasoningEffort === undefined
+          ? {}
+          : { reasoningEffort: snapshot.reasoningEffort }),
         limits: snapshot.limits,
         sourcePlanId: plan.planId,
         sourcePlanRevision: plan.revision,
         initialContextSources: runtime.contextSources
-      });
+      };
+      const executionStarted = coordinator.startRun(executionStart);
       if (!executionStarted.ok) {
         await cancelExecutionStart();
         return executionStarted;
@@ -2804,15 +2865,54 @@ function isTerminalStatus(status: string): boolean {
   );
 }
 
-function isSupportedCapabilitySnapshot(
-  snapshot: StartAgentRunCommand["providerCapabilitySnapshot"]
-): boolean {
-  return (
-    snapshot.streaming === true &&
-    snapshot.toolCalling === true &&
-    snapshot.structuredArguments === true &&
-    Number.isFinite(snapshot.contextWindow) &&
-    Number.isFinite(snapshot.requiredContextTokens) &&
-    snapshot.contextWindow >= snapshot.requiredContextTokens
-  );
+/**
+ * Turn a draft-only start command plus the server-resolved facts into the internal wide start input
+ * the coordinator consumes. This is where the two server-authoritative gates live: the model
+ * capability preflight (streaming / tool calls / structured arguments / context window) and the
+ * reasoning-strength validation (the model, not the renderer, decides the allowed effort).
+ */
+function resolveStartInput(
+  command: StartAgentRunCommand,
+  facts: AgentRunStartFacts
+): Result<ResolvedAgentRunStartInput, UnifiedError> {
+  const capability = preflightAgentModelCapabilities({
+    profileId: facts.model.profileId,
+    provider: facts.model.provider,
+    modelName: facts.model.modelName,
+    capabilities: facts.model.capabilities,
+    requiredContextTokens: facts.model.requiredContextTokens
+  });
+  if (!capability.ok) return err(capability.error);
+  const reasoning = resolveAgentReasoningEffort({
+    profileId: facts.model.profileId,
+    modelName: facts.model.modelName,
+    reasoningStrength: facts.model.reasoningStrength,
+    ...(facts.requestedReasoningEffort === undefined
+      ? {}
+      : { requestedEffort: facts.requestedReasoningEffort })
+  });
+  if (!reasoning.ok) return err(reasoning.error);
+  return ok({
+    projectId: command.projectId,
+    conversationId: command.conversationId,
+    commandId: command.commandId,
+    expectedRunRevision: command.expectedRunRevision,
+    operationMode: facts.operationMode,
+    contextMode: facts.contextMode,
+    writePolicy: facts.writePolicy,
+    ...(facts.writePolicy === "user_preapproved_run" && facts.writePolicyAcknowledged
+      ? { writePolicyAcknowledged: true as const }
+      : {}),
+    userRequest: facts.userRequest,
+    providerCapabilitySnapshot: capability.value,
+    ...(reasoning.value.reasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: reasoning.value.reasoningEffort }),
+    ...(command.limits === undefined ? {} : { limits: command.limits }),
+    initialContextSources: facts.initialContextSources,
+    ...(command.sourcePlanId === undefined ? {} : { sourcePlanId: command.sourcePlanId }),
+    ...(command.sourcePlanRevision === undefined
+      ? {}
+      : { sourcePlanRevision: command.sourcePlanRevision })
+  });
 }

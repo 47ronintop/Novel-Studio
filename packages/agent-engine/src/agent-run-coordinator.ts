@@ -120,6 +120,9 @@ export function createAgentRunCoordinator(
         sourcePlanId: command.sourcePlanId ?? null,
         sourcePlanRevision: command.sourcePlanRevision ?? null,
         modelProfileId: command.providerCapabilitySnapshot.profileId,
+        ...(command.reasoningEffort === undefined
+          ? {}
+          : { reasoningEffort: command.reasoningEffort }),
         permissionSummaryId: null,
         permissionSummaryChecksum: null,
         contextBudgetSnapshotId: null,

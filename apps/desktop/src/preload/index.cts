@@ -55,7 +55,9 @@ import type {
   UserPreferencesSaveInput,
   UserPreferencesSnapshot,
   WorkflowRunRecord,
-  WorkflowRunSummary
+  WorkflowRunSummary,
+  AgentRunDraftResult,
+  SyncStartDraftCommand
 } from "@novel-studio/application";
 import type {
   AgentRunCommandResult,
@@ -223,6 +225,8 @@ const api: NovelStudioApi = {
       )
   },
   agentRuns: {
+    prepareStart: (command: SyncStartDraftCommand) =>
+      invokeTyped<AgentRunDraftResult>("application:agent-run:prepare-start", command),
     start: (command: StartAgentRunCommand) =>
       invokeTyped<AgentRunCommandResult>("application:agent-run:start", command),
     stop: (command: StopAgentRunCommand) =>

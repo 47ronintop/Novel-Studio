@@ -76,6 +76,35 @@ export interface RefreshContextDraftCommand {
   readonly expectedDraftRevision: number;
 }
 
+/** A start-time reference to an already-persisted run draft revision. Verified, never initialized. */
+export interface ResolveStartDraftCommand {
+  readonly projectId: string;
+  readonly conversationId: string;
+  readonly runDraftId: string;
+  readonly runDraftRevision: number;
+  readonly runDraftChecksum: string;
+}
+
+/**
+ * The renderer's pre-run intent — the user's own choices, never resolved facts. `prepareStart`
+ * persists this as the current draft revision so the start command can carry a draft reference and
+ * the server can resolve capabilities/content from it. Context refs are the exact set the run
+ * should carry.
+ */
+export interface SyncStartDraftCommand {
+  readonly projectId: string;
+  readonly conversationId: string;
+  readonly commandId: string;
+  readonly userRequest: string;
+  readonly operationMode: AgentOperationMode;
+  readonly contextMode: AgentContextMode;
+  readonly writePolicy: AgentWritePolicy;
+  readonly writePolicyAcknowledged: boolean;
+  readonly modelProfileId: string;
+  readonly reasoningEffort?: AgentReasoningEffort;
+  readonly contextRefs: readonly ContextDraftRef[];
+}
+
 export interface AgentRunDraftView {
   readonly runDraft: AgentRunDraft;
   readonly contextDraft: ContextDraft;
@@ -88,6 +117,8 @@ export interface AgentRunDraftSession {
   updateAgentRunDraft(command: UpdateAgentRunDraftCommand): Promise<AgentRunDraftResult>;
   updateContextDraft(command: UpdateContextDraftCommand): Promise<AgentRunDraftResult>;
   refreshContextDraft(command: RefreshContextDraftCommand): Promise<AgentRunDraftResult>;
+  resolveStartDraft(command: ResolveStartDraftCommand): Promise<AgentRunDraftResult>;
+  syncStartDraft(command: SyncStartDraftCommand): Promise<AgentRunDraftResult>;
 }
 
 export interface CreateAgentRunDraftSessionOptions {
@@ -280,8 +311,108 @@ export function createAgentRunDraftSession(
         const refreshed = refreshContextDraft(view.contextDraft, now());
         return persist(rebind(view.runDraft, refreshed, now()));
       });
+    },
+
+    async resolveStartDraft(command) {
+      // Read-only: a run start references an already-persisted draft; it never initializes one.
+      const loaded = await load(command.conversationId);
+      if (!loaded.ok) return err(loaded.error);
+      if (
+        loaded.value === undefined ||
+        loaded.value.runDraft.runDraftId !== command.runDraftId
+      ) {
+        return err(
+          draftError(
+            "AGENT_RUN_DRAFT_NOT_FOUND",
+            "The referenced Agent run draft does not exist for this conversation."
+          )
+        );
+      }
+      const view = loaded.value;
+      if (view.runDraft.revision !== command.runDraftRevision) {
+        return err(revisionConflict(view));
+      }
+      if (view.runDraft.checksum !== command.runDraftChecksum) {
+        return err(
+          draftError(
+            "AGENT_RUN_DRAFT_CHECKSUM_MISMATCH",
+            "The referenced Agent run draft checksum does not match the persisted draft."
+          )
+        );
+      }
+      return ok(view);
+    },
+
+    syncStartDraft(command) {
+      return runOnce(command, async () => {
+        const loaded = await load(command.conversationId);
+        if (!loaded.ok) return err(loaded.error);
+        if (loaded.value === undefined) {
+          // No draft yet: initialize the whole state from the intent in one revision.
+          const view = initialize({
+            projectId: command.projectId,
+            conversationId: command.conversationId,
+            initialize: {
+              modelProfileId: command.modelProfileId,
+              ...(command.reasoningEffort === undefined
+                ? {}
+                : { reasoningEffort: command.reasoningEffort }),
+              operationMode: command.operationMode,
+              contextMode: command.contextMode,
+              writePolicy: command.writePolicy,
+              writePolicyAcknowledged: command.writePolicyAcknowledged,
+              contextRefs: command.contextRefs
+            }
+          });
+          const withRequest = applyAgentRunDraftMutation(
+            view.runDraft,
+            { kind: "set_request", request: command.userRequest },
+            now()
+          );
+          if (!withRequest.ok) return err(withRequest.error);
+          return persist({ runDraft: withRequest.value, contextDraft: view.contextDraft });
+        }
+        return persist(syncToIntent(loaded.value, command, now));
+      });
     }
   };
+}
+
+/**
+ * Fold the renderer intent onto an existing draft pair, producing the next revisions. Model/mode/
+ * write-policy/request are synced (they must be server-authoritative at start); the context draft is
+ * re-pointed so the run draft's checksum stays consistent. Live ref editing is Task 1.6.
+ */
+function syncToIntent(
+  view: AgentRunDraftView,
+  command: SyncStartDraftCommand,
+  now: () => string
+): AgentRunDraftView {
+  let contextDraft = view.contextDraft;
+  if (contextDraft.contextMode !== command.contextMode) {
+    contextDraft = setContextDraftMode(contextDraft, command.contextMode, now());
+  }
+  let runDraft = view.runDraft;
+  const mutations: AgentRunDraftMutation[] = [
+    { kind: "set_operation_mode", operationMode: command.operationMode },
+    { kind: "set_context_mode", contextMode: command.contextMode },
+    {
+      kind: "set_model",
+      modelProfileId: command.modelProfileId,
+      ...(command.reasoningEffort === undefined ? {} : { reasoningEffort: command.reasoningEffort })
+    },
+    {
+      kind: "set_write_policy",
+      writePolicy: command.writePolicy,
+      acknowledged: command.writePolicyAcknowledged
+    },
+    { kind: "set_request", request: command.userRequest }
+  ];
+  for (const mutation of mutations) {
+    const next = applyAgentRunDraftMutation(runDraft, mutation, now());
+    if (next.ok) runDraft = next.value;
+  }
+  return rebind(runDraft, contextDraft, now());
 }
 
 function rebind(

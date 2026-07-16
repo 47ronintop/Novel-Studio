@@ -31,6 +31,7 @@ export const APPLICATION_IPC_CHANNELS = [
   "application:ai:apply-chapter-suggestion",
   "application:ai:list-workflow-runs",
   "application:ai:read-workflow-run",
+  "application:agent-run:prepare-start",
   "application:agent-run:start",
   "application:agent-run:stop",
   "application:agent-run:answer-user-input",

@@ -68,6 +68,7 @@ import type {
   StopAgentRunCommand,
   UndoRunCommand
 } from "@novel-studio/agent-engine";
+import type { AgentRunDraftResult, SyncStartDraftCommand } from "@novel-studio/application";
 import type { AgentRunReadResult, AnswerAgentUserInputCommand } from "@novel-studio/application";
 import type {
   ChapterSummary,
@@ -258,6 +259,8 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
         )
     },
     agentRuns: {
+      prepareStart: (command: SyncStartDraftCommand) =>
+        invokeTyped<AgentRunDraftResult>(ipc, "application:agent-run:prepare-start", command),
       start: (command: StartAgentRunCommand) =>
         invokeTyped<AgentRunCommandResult>(ipc, "application:agent-run:start", command),
       stop: (command: StopAgentRunCommand) =>

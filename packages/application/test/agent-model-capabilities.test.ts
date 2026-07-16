@@ -60,3 +60,94 @@ describe("agent model capability preflight", () => {
     });
   });
 });
+
+describe("agent reasoning effort resolution", () => {
+  const resolve = (applicationExports as unknown as Record<string, unknown>)[
+    "resolveAgentReasoningEffort"
+  ] as
+    | ((input: {
+        readonly profileId: string;
+        readonly modelName: string;
+        readonly reasoningStrength: unknown;
+        readonly requestedEffort?: string;
+      }) => { readonly ok: boolean; readonly value?: unknown; readonly error?: unknown })
+    | undefined;
+
+  test("is exported", () => {
+    expect(typeof resolve).toBe("function");
+  });
+
+  test("resolves to undefined when the control is hidden and nothing is requested", () => {
+    if (resolve === undefined) return;
+    const result = resolve({
+      profileId: "p",
+      modelName: "gpt-4o",
+      reasoningStrength: { status: "hidden", reason: "not a reasoning model" }
+    });
+    expect(result).toEqual({ ok: true, value: { reasoningEffort: undefined } });
+  });
+
+  test("rejects a requested effort when the control is hidden", () => {
+    if (resolve === undefined) return;
+    const result = resolve({
+      profileId: "p",
+      modelName: "gpt-4o",
+      reasoningStrength: { status: "hidden", reason: "not a reasoning model" },
+      requestedEffort: "high"
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_REASONING_EFFORT_UNSUPPORTED" }
+    });
+  });
+
+  test("rejects an effort outside the model's allowed values", () => {
+    if (resolve === undefined) return;
+    const result = resolve({
+      profileId: "p",
+      modelName: "gpt-5",
+      reasoningStrength: {
+        status: "available",
+        providerParamName: "reasoning_effort",
+        allowedValues: ["minimal", "low", "medium", "high"],
+        defaultValue: "medium"
+      },
+      requestedEffort: "xhigh"
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_REASONING_EFFORT_UNSUPPORTED" }
+    });
+  });
+
+  test("accepts a supported effort", () => {
+    if (resolve === undefined) return;
+    const result = resolve({
+      profileId: "p",
+      modelName: "gpt-5",
+      reasoningStrength: {
+        status: "available",
+        providerParamName: "reasoning_effort",
+        allowedValues: ["minimal", "low", "medium", "high"],
+        defaultValue: "medium"
+      },
+      requestedEffort: "high"
+    });
+    expect(result).toEqual({ ok: true, value: { reasoningEffort: "high" } });
+  });
+
+  test("falls back to the model default when the control is available but nothing is requested", () => {
+    if (resolve === undefined) return;
+    const result = resolve({
+      profileId: "p",
+      modelName: "gpt-5",
+      reasoningStrength: {
+        status: "available",
+        providerParamName: "reasoning_effort",
+        allowedValues: ["minimal", "low", "medium", "high"],
+        defaultValue: "medium"
+      }
+    });
+    expect(result).toEqual({ ok: true, value: { reasoningEffort: "medium" } });
+  });
+});

@@ -75,4 +75,86 @@ describe("AgentRunModelDriver", () => {
       }
     ]);
   });
+
+  test("forwards the run snapshot's server-validated reasoning effort into provider parameters", async () => {
+    const createDriver = (applicationExports as unknown as Record<string, unknown>)[
+      "createLlmAgentRunModelDriver"
+    ];
+    if (typeof createDriver !== "function") return;
+
+    let providerRequest: Record<string, unknown> | undefined;
+    const driver = (createDriver as (options: Record<string, unknown>) => {
+      streamRound(input: Record<string, unknown>): AsyncIterable<Record<string, unknown>>;
+    })({
+      adapter: {
+        async *stream(request: Record<string, unknown>) {
+          providerRequest = request;
+          yield { ok: true, value: { type: "round_completed", finishReason: "stop" } };
+        }
+      },
+      modelProfile: { id: "profile-01", provider: "openai", displayName: "Model", modelName: "gpt-5" },
+      // Static base parameters must be overridden by the run's validated reasoning effort.
+      parameters: { temperature: 0.2, reasoningEffort: "low" }
+    });
+
+    for await (const _event of driver.streamRound({
+      runId: "run-reasoning",
+      snapshot: {
+        runRevision: 1,
+        operationMode: "execution",
+        contextMode: "writing",
+        userRequest: "write",
+        reasoningEffort: "high"
+      },
+      messages: [{ role: "user", content: "write" }],
+      tools: [],
+      signal: new AbortController().signal
+    })) {
+      void _event;
+    }
+
+    expect((providerRequest?.["parameters"] as Record<string, unknown>)["reasoningEffort"]).toBe(
+      "high"
+    );
+  });
+
+  test("omits reasoning effort when the run snapshot carries none", async () => {
+    const createDriver = (applicationExports as unknown as Record<string, unknown>)[
+      "createLlmAgentRunModelDriver"
+    ];
+    if (typeof createDriver !== "function") return;
+
+    let providerRequest: Record<string, unknown> | undefined;
+    const driver = (createDriver as (options: Record<string, unknown>) => {
+      streamRound(input: Record<string, unknown>): AsyncIterable<Record<string, unknown>>;
+    })({
+      adapter: {
+        async *stream(request: Record<string, unknown>) {
+          providerRequest = request;
+          yield { ok: true, value: { type: "round_completed", finishReason: "stop" } };
+        }
+      },
+      modelProfile: { id: "profile-01", provider: "openai", displayName: "Model", modelName: "gpt-4o" },
+      parameters: { temperature: 0.2 }
+    });
+
+    for await (const _event of driver.streamRound({
+      runId: "run-no-reasoning",
+      snapshot: {
+        runRevision: 1,
+        operationMode: "execution",
+        contextMode: "writing",
+        userRequest: "write"
+      },
+      messages: [{ role: "user", content: "write" }],
+      tools: [],
+      signal: new AbortController().signal
+    })) {
+      void _event;
+    }
+
+    expect(
+      (providerRequest?.["parameters"] as Record<string, unknown>)["reasoningEffort"]
+    ).toBeUndefined();
+  });
 });

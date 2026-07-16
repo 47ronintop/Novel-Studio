@@ -90,6 +90,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute(input: { readonly name: string }) {
           toolCalls.push(input.name);
@@ -201,6 +202,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute() {
           return { ok: true, value: { summary: "unused", data: {} } };
@@ -252,6 +254,7 @@ describe("AgentRunSession", () => {
       coordinatorOptions: { createRunId: () => "run_stop_reload" },
       repository,
       modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: { async execute() { return { ok: true, value: { summary: "unused", data: {} } }; } }
     });
     await firstSession.startAgentRun(startCommand());
@@ -268,6 +271,7 @@ describe("AgentRunSession", () => {
     const reloadedSession = create({
       repository,
       modelDriver: { streamRound: () => unexpectedModelRound("Stopped run must not resume.") },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: { async execute() { return { ok: true, value: { summary: "unused", data: {} } }; } }
     });
 
@@ -302,6 +306,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "stop" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute() {
           return {
@@ -413,6 +418,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute() {
           throw new Error("No read should be needed.");
@@ -469,6 +475,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute() {
           return { ok: true, value: { summary: "read", data: {} } };
@@ -525,6 +532,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "stop" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute() {
           return { ok: true, value: { summary: "unused", data: {} } };
@@ -555,6 +563,7 @@ describe("AgentRunSession", () => {
       coordinatorOptions: { createRunId: () => "run_start_reload" },
       repository,
       modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: { async execute() { return { ok: true, value: { summary: "unused", data: {} } }; } }
     }) as {
       startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -570,6 +579,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "stop" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: { async execute() { return { ok: true, value: { summary: "unused", data: {} } }; } }
     }) as {
       startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -595,6 +605,7 @@ describe("AgentRunSession", () => {
       coordinatorOptions: { createRunId: () => "run_active_reload" },
       repository,
       modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: { async execute() { return { ok: true, value: { summary: "unused", data: {} } }; } }
     }) as { startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>> };
     await firstSession.startAgentRun(startCommand());
@@ -609,6 +620,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "stop" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: { async execute() { return { ok: true, value: { summary: "unused", data: {} } }; } }
     }) as { startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>> };
 
@@ -648,6 +660,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute() {
           return { ok: true, value: { summary: "unused", data: {} } };
@@ -671,6 +684,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute() {
           return { ok: true, value: { summary: "unused", data: {} } };
@@ -710,6 +724,7 @@ describe("AgentRunSession", () => {
     const duplicateSession = create({
       repository,
       modelDriver: { streamRound: () => unexpectedModelRound("Duplicate answer must not resume.") },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: { async execute() { return { ok: true, value: { summary: "unused", data: {} } }; } }
     });
     expect(await duplicateSession.answerUserInput(answerCommand)).toEqual(firstAnswer);
@@ -734,6 +749,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "stop" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute() {
           return { ok: true, value: { summary: "unused", data: {} } };
@@ -769,6 +785,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "stop" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute() {
           return { ok: true, value: { summary: "unused", data: {} } };
@@ -809,6 +826,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute(input: { readonly arguments: Record<string, unknown> }) {
           executed.push(String(input.arguments["path"]));
@@ -865,6 +883,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute() {
           executions += 1;
@@ -958,6 +977,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: { async execute() { return { ok: true, value: { summary: "ok", data: {} } }; } }
     }) as {
       resumeAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -1029,6 +1049,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: { async execute() { return { ok: true, value: { summary: "ok", data: {} } }; } }
     }) as {
       startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -1137,6 +1158,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute() {
           executions += 1;
@@ -1223,6 +1245,7 @@ describe("AgentRunSession", () => {
           await never;
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute() {
           return {
@@ -1260,6 +1283,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute() {
           executions += 1;
@@ -1310,6 +1334,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute() {
           const content = sourceContent;
@@ -1411,6 +1436,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute() {
           return {
@@ -1504,6 +1530,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute() {
           return {
@@ -1603,6 +1630,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute() {
           currentBody = "dirty after";
@@ -1702,6 +1730,7 @@ describe("AgentRunSession", () => {
         }
       },
       modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute() {
           return { ok: true, value: { summary: "ok", data: {} } };
@@ -1746,6 +1775,7 @@ describe("AgentRunSession", () => {
         }
       },
       modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute() {
           return { ok: true, value: { summary: "ok", data: {} } };
@@ -1811,6 +1841,7 @@ describe("AgentRunSession", () => {
           yield { type: "round_completed", finishReason: "stop" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute() {
           return { ok: true, value: { summary: "ok", data: {} } };
@@ -1881,6 +1912,7 @@ describe("AgentRunSession", () => {
         }
       },
       modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: {
         async execute() {
           return { ok: true, value: { summary: "ok", data: {} } };
@@ -1894,6 +1926,231 @@ describe("AgentRunSession", () => {
       ok: true,
       value: [{ runId: "run_legacy_list", conversationId: null }]
     });
+  });
+});
+
+describe("AgentRunSession server-authoritative start", () => {
+  function createStartSession(
+    startPreflight: unknown,
+    createRunId = "run_authority"
+  ): {
+    startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+    readAgentRun(runId: string): Promise<Record<string, unknown>>;
+  } {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ] as (options: Record<string, unknown>) => unknown;
+    return createSession({
+      coordinatorOptions: { createRunId: () => createRunId },
+      repository: durableMemoryRepository(),
+      startPreflight,
+      modelDriver: {
+        async *streamRound() {
+          yield { type: "assistant_text_delta", delta: "ok" };
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "ok", data: {} } };
+        }
+      }
+    }) as ReturnType<typeof createStartSession>;
+  }
+
+  // The public start command carries only a draft reference; the resolved facts (mode, model,
+  // capabilities, reasoning, sources) are what the server preflight produces.
+  const draftOnlyCommand: Record<string, unknown> = {
+    projectId: "project-01",
+    conversationId: "conv-authority",
+    commandId: "start-authority",
+    expectedRunRevision: 0,
+    runDraftId: "draft_authority",
+    runDraftRevision: 3,
+    runDraftChecksum: "checksum_authority"
+  };
+
+  function facts(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      operationMode: "execution",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      userRequest: "续写第 4 章",
+      model: {
+        profileId: "profile-authority",
+        provider: "openai",
+        modelName: "gpt-5",
+        capabilities: {
+          streaming: true,
+          toolCalling: true,
+          structuredArguments: true,
+          contextWindow: 128000
+        },
+        requiredContextTokens: 8000,
+        reasoningStrength: {
+          status: "available",
+          providerParamName: "reasoning_effort",
+          allowedValues: ["minimal", "low", "medium", "high"],
+          defaultValue: "medium"
+        }
+      },
+      initialContextSources: [],
+      ...overrides
+    };
+  }
+
+  test("rejects a stale run draft surfaced by the preflight and never starts a run", async () => {
+    let coordinatorReached = false;
+    const session = createStartSession({
+      async resolveStart() {
+        return {
+          ok: false,
+          error: { code: "AGENT_RUN_DRAFT_REVISION_CONFLICT", message: "stale" }
+        };
+      }
+    });
+    const started = await session.startAgentRun({
+      ...draftOnlyCommand,
+      // A resolveStart error must short-circuit before the coordinator; prove no run is persisted.
+      __coordinatorReached: () => (coordinatorReached = true)
+    });
+    expect(started).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUN_DRAFT_REVISION_CONFLICT" }
+    });
+    expect(coordinatorReached).toBe(false);
+    expect(await session.readAgentRun("run_authority")).toMatchObject({ ok: false });
+  });
+
+  test("rejects an unknown profile whose capabilities cannot support a run", async () => {
+    const session = createStartSession({
+      async resolveStart() {
+        return {
+          ok: true,
+          value: facts({
+            model: {
+              profileId: "profile-unknown",
+              provider: "openai",
+              modelName: "text-only",
+              capabilities: {
+                streaming: true,
+                toolCalling: false,
+                structuredArguments: false,
+                contextWindow: 128000
+              },
+              requiredContextTokens: 8000,
+              reasoningStrength: { status: "hidden", reason: "not a reasoning model" }
+            }
+          })
+        };
+      }
+    });
+    expect(await session.startAgentRun(draftOnlyCommand)).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_MODEL_CAPABILITY_UNSUPPORTED" }
+    });
+  });
+
+  test("rejects a context window below the required floor", async () => {
+    const session = createStartSession({
+      async resolveStart() {
+        return {
+          ok: true,
+          value: facts({
+            model: {
+              profileId: "profile-small",
+              provider: "openai",
+              modelName: "gpt-5",
+              capabilities: {
+                streaming: true,
+                toolCalling: true,
+                structuredArguments: true,
+                contextWindow: 4000
+              },
+              requiredContextTokens: 8000,
+              reasoningStrength: { status: "hidden", reason: "n/a" }
+            }
+          })
+        };
+      }
+    });
+    expect(await session.startAgentRun(draftOnlyCommand)).toMatchObject({
+      ok: false,
+      error: {
+        code: "AGENT_MODEL_CAPABILITY_UNSUPPORTED",
+        redactedDetail: { missingCapabilities: ["contextWindow"] }
+      }
+    });
+  });
+
+  test("rejects a requested reasoning effort the model hides", async () => {
+    const session = createStartSession({
+      async resolveStart() {
+        return {
+          ok: true,
+          value: facts({
+            requestedReasoningEffort: "high",
+            model: {
+              profileId: "profile-hidden",
+              provider: "openai-compatible",
+              modelName: "custom-model",
+              capabilities: {
+                streaming: true,
+                toolCalling: true,
+                structuredArguments: true,
+                contextWindow: 128000
+              },
+              requiredContextTokens: 8000,
+              reasoningStrength: { status: "hidden", reason: "custom endpoint" }
+            }
+          })
+        };
+      }
+    });
+    expect(await session.startAgentRun(draftOnlyCommand)).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_REASONING_EFFORT_UNSUPPORTED" }
+    });
+  });
+
+  test("rejects a reasoning effort outside the model's allowed values", async () => {
+    const session = createStartSession({
+      async resolveStart() {
+        return { ok: true, value: facts({ requestedReasoningEffort: "xhigh" }) };
+      }
+    });
+    expect(await session.startAgentRun(draftOnlyCommand)).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_REASONING_EFFORT_UNSUPPORTED" }
+    });
+  });
+
+  test("binds the validated model profile and reasoning into the started run snapshot", async () => {
+    const session = createStartSession({
+      async resolveStart() {
+        return { ok: true, value: facts({ requestedReasoningEffort: "high" }) };
+      }
+    });
+    const started = await session.startAgentRun(draftOnlyCommand);
+    expect(started).toMatchObject({
+      ok: true,
+      value: {
+        modelProfileId: "profile-authority",
+        reasoningEffort: "high",
+        providerCapabilitySnapshot: { profileId: "profile-authority", modelName: "gpt-5" }
+      }
+    });
+  });
+
+  test("uses the model's default reasoning effort when the draft requests none", async () => {
+    const session = createStartSession({
+      async resolveStart() {
+        return { ok: true, value: facts() };
+      }
+    });
+    const started = await session.startAgentRun(draftOnlyCommand);
+    expect(started).toMatchObject({ ok: true, value: { reasoningEffort: "medium" } });
   });
 });
 
@@ -1922,6 +2179,9 @@ function startCommand(): Record<string, unknown> {
     conversationId: "conv-01",
     commandId: "start-01",
     expectedRunRevision: 0,
+    runDraftId: "draft_start-01",
+    runDraftRevision: 1,
+    runDraftChecksum: "checksum_start-01",
     operationMode: "execution",
     contextMode: "writing",
     writePolicy: "write_before_confirmation",
@@ -1935,6 +2195,51 @@ function startCommand(): Record<string, unknown> {
       structuredArguments: true,
       contextWindow: 128000,
       requiredContextTokens: 8000
+    }
+  };
+}
+
+/**
+ * A test double for the server-authoritative start preflight. The public start command is now
+ * draft-only, so these tests keep expressing intent (mode, sources, capability facts) on the wide
+ * command object and this stub echoes them back as resolved facts — standing in for the real
+ * reload-draft + resolve-model preflight the desktop runtime provides.
+ */
+function echoStartPreflight() {
+  return {
+    async resolveStart(command: Record<string, unknown>) {
+      const snapshot = (command["providerCapabilitySnapshot"] ?? {}) as Record<string, unknown>;
+      const reasoningStrength = command["reasoningStrength"] ?? {
+        status: "hidden",
+        reason: "demo scripted model"
+      };
+      return {
+        ok: true,
+        value: {
+          operationMode: command["operationMode"] ?? "execution",
+          contextMode: command["contextMode"] ?? "writing",
+          writePolicy: command["writePolicy"] ?? "write_before_confirmation",
+          writePolicyAcknowledged: command["writePolicyAcknowledged"] === true,
+          userRequest: command["userRequest"] ?? "",
+          ...(command["reasoningEffort"] === undefined
+            ? {}
+            : { requestedReasoningEffort: command["reasoningEffort"] }),
+          model: {
+            profileId: snapshot["profileId"] ?? "profile-01",
+            provider: snapshot["provider"] ?? "demo",
+            modelName: snapshot["modelName"] ?? "scripted-agent",
+            capabilities: {
+              streaming: snapshot["streaming"] ?? true,
+              toolCalling: snapshot["toolCalling"] ?? true,
+              structuredArguments: snapshot["structuredArguments"] ?? true,
+              contextWindow: snapshot["contextWindow"] ?? 128000
+            },
+            requiredContextTokens: snapshot["requiredContextTokens"] ?? 8000,
+            reasoningStrength
+          },
+          initialContextSources: command["initialContextSources"] ?? []
+        }
+      };
     }
   };
 }

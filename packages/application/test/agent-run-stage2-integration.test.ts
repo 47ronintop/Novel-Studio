@@ -29,6 +29,7 @@ describe("AgentRunSession Stage 2 integration", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: unusedReadExecutor(),
       changeSetSession: {
         async proposeFileWrite(input: Record<string, unknown>) {
@@ -216,6 +217,7 @@ describe("AgentRunSession Stage 2 integration", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: unusedReadExecutor(),
       changeSetSession,
       versionGroupExecutor: {
@@ -285,6 +287,7 @@ describe("AgentRunSession Stage 2 integration", () => {
       coordinatorOptions: { createRunId: () => "run_stage3_invalid_auto" },
       repository: memoryRepository(),
       modelDriver: proposalOnlyDriver(),
+      startPreflight: echoStartPreflight(),
       readToolExecutor: unusedReadExecutor(),
       changeSetSession: {
         async proposeFileWrite() {
@@ -330,6 +333,7 @@ describe("AgentRunSession Stage 2 integration", () => {
       coordinatorOptions: { createRunId: () => "run_external_source" },
       repository: memoryRepository(),
       modelDriver: proposalOnlyDriver(),
+      startPreflight: echoStartPreflight(),
       readToolExecutor: unusedReadExecutor(),
       changeSetSession: {
         async proposeFileWrite() {
@@ -438,6 +442,7 @@ describe("AgentRunSession Stage 2 integration", () => {
     const session = createSession({
       repository,
       modelDriver: proposalOnlyDriver(),
+      startPreflight: echoStartPreflight(),
       readToolExecutor: unusedReadExecutor(),
       changeSetSession: {
         async proposeFileWrite() {
@@ -519,6 +524,7 @@ describe("AgentRunSession Stage 2 integration", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: unusedReadExecutor(),
       changeSetSession: {
         async proposeFileWrite() {
@@ -641,6 +647,7 @@ describe("AgentRunSession Stage 2 integration", () => {
       coordinatorOptions: { createRunId: () => "run_stage2_receipt_failure" },
       repository,
       modelDriver: proposalOnlyDriver(),
+      startPreflight: echoStartPreflight(),
       readToolExecutor: unusedReadExecutor(),
       changeSetSession: {
         async proposeFileWrite() {
@@ -695,6 +702,7 @@ describe("AgentRunSession Stage 2 integration", () => {
       coordinatorOptions: { createRunId: () => "run_stage2_conflict" },
       repository: memoryRepository(),
       modelDriver: proposalOnlyDriver(),
+      startPreflight: echoStartPreflight(),
       readToolExecutor: unusedReadExecutor(),
       changeSetSession: {
         async proposeFileWrite() {
@@ -775,6 +783,7 @@ describe("AgentRunSession Stage 2 integration", () => {
       coordinatorOptions: { createRunId: () => "run_stage2_selection" },
       repository: memoryRepository(),
       modelDriver: proposalOnlyDriver(),
+      startPreflight: echoStartPreflight(),
       readToolExecutor: unusedReadExecutor(),
       changeSetSession: {
         async proposeFileWrite() {
@@ -865,6 +874,7 @@ describe("AgentRunSession Stage 2 integration", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: unusedReadExecutor(),
       changeSetSession: {
         async proposeFileWrite() {
@@ -983,6 +993,7 @@ describe("AgentRunSession Stage 2 integration", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: unusedReadExecutor(),
       versionGroupExecutor: {
         async apply() {
@@ -1086,6 +1097,7 @@ describe("AgentRunSession Stage 2 integration", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: unusedReadExecutor(),
       changeSetSession: {
         async proposeFileWrite() {
@@ -1216,6 +1228,7 @@ describe("AgentRunSession Stage 2 integration", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: unusedReadExecutor(),
       changeSetSession: {
         async proposeFileWrite() {
@@ -1323,6 +1336,7 @@ describe("AgentRunSession Stage 2 integration", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: unusedReadExecutor(),
       changeSetSession: {
         async proposeFileWrite() {
@@ -1361,6 +1375,7 @@ describe("AgentRunSession Stage 2 integration", () => {
       coordinatorOptions: { createRunId: () => "run_stage2_stale_context" },
       repository: memoryRepository(),
       modelDriver: proposalOnlyDriver(),
+      startPreflight: echoStartPreflight(),
       readToolExecutor: unusedReadExecutor(),
       contextSourceReader: {
         async readCurrentSources(input: {
@@ -1441,6 +1456,7 @@ describe("AgentRunSession Stage 2 integration", () => {
     const createOptions = () => ({
       repository,
       modelDriver: proposalOnlyDriver(),
+      startPreflight: echoStartPreflight(),
       readToolExecutor: unusedReadExecutor(),
       contextSourceReader: {
         async readCurrentSources(input: {
@@ -1521,6 +1537,7 @@ describe("AgentRunSession Stage 2 integration", () => {
     let applyCount = 0;
     const sharedOptions = {
       modelDriver: proposalOnlyDriver(),
+      startPreflight: echoStartPreflight(),
       readToolExecutor: unusedReadExecutor(),
       changeSetSession: {
         async proposeFileWrite() {
@@ -1628,6 +1645,7 @@ describe("AgentRunSession Stage 2 integration", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
+      startPreflight: echoStartPreflight(),
       readToolExecutor: unusedReadExecutor(),
       changeSetSession,
       versionGroupExecutor: {
@@ -1665,6 +1683,7 @@ describe("AgentRunSession Stage 2 integration", () => {
     const reloadedSession = createSession({
       repository,
       modelDriver: proposalOnlyDriver(),
+      startPreflight: echoStartPreflight(),
       readToolExecutor: unusedReadExecutor(),
       changeSetSession,
       versionGroupExecutor: unusedVersionGroupExecutor()
@@ -1732,6 +1751,7 @@ describe("AgentRunSession Stage 2 integration", () => {
             yield { type: "round_completed", finishReason: "tool_calls" };
           }
         },
+        startPreflight: echoStartPreflight(),
         readToolExecutor: unusedReadExecutor(),
         changeSetSession,
         versionGroupExecutor: unusedVersionGroupExecutor()
@@ -1763,6 +1783,7 @@ describe("AgentRunSession Stage 2 integration", () => {
       const reloaded = createSession({
         repository,
         modelDriver: proposalOnlyDriver(),
+        startPreflight: echoStartPreflight(),
         readToolExecutor: unusedReadExecutor(),
         changeSetSession,
         versionGroupExecutor: unusedVersionGroupExecutor()
@@ -1790,6 +1811,7 @@ describe("AgentRunSession Stage 2 integration", () => {
         repository,
         coordinatorOptions: { createRunId: () => runId },
         modelDriver: proposalOnlyDriver(),
+        startPreflight: echoStartPreflight(),
         readToolExecutor: unusedReadExecutor(),
         changeSetSession,
         versionGroupExecutor: {
@@ -1818,6 +1840,7 @@ describe("AgentRunSession Stage 2 integration", () => {
       const reloaded = createSession({
         repository,
         modelDriver: proposalOnlyDriver(),
+        startPreflight: echoStartPreflight(),
         readToolExecutor: unusedReadExecutor(),
         changeSetSession,
         versionGroupExecutor: {
@@ -1864,6 +1887,7 @@ describe("AgentRunSession Stage 2 integration", () => {
       repository: memoryRepository(),
       coordinatorOptions: { createRunId: () => "run_stage2_no_version_group" },
       modelDriver: proposalOnlyDriver(),
+      startPreflight: echoStartPreflight(),
       readToolExecutor: unusedReadExecutor(),
       changeSetSession: {
         async proposeFileWrite() {
@@ -1940,6 +1964,42 @@ function startCommand(): Record<string, unknown> {
       structuredArguments: true,
       contextWindow: 32_000,
       requiredContextTokens: 1_000
+    }
+  };
+}
+
+/** Echoes wide intent on the start command back as resolved facts (server-authoritative preflight stub). */
+function echoStartPreflight() {
+  return {
+    async resolveStart(command: Record<string, unknown>) {
+      const snapshot = (command["providerCapabilitySnapshot"] ?? {}) as Record<string, unknown>;
+      return {
+        ok: true,
+        value: {
+          operationMode: command["operationMode"] ?? "execution",
+          contextMode: command["contextMode"] ?? "general_file",
+          writePolicy: command["writePolicy"] ?? "write_before_confirmation",
+          writePolicyAcknowledged: command["writePolicyAcknowledged"] === true,
+          userRequest: command["userRequest"] ?? "",
+          ...(command["reasoningEffort"] === undefined
+            ? {}
+            : { requestedReasoningEffort: command["reasoningEffort"] }),
+          model: {
+            profileId: snapshot["profileId"] ?? "profile-stage2",
+            provider: snapshot["provider"] ?? "demo",
+            modelName: snapshot["modelName"] ?? "demo-stage2",
+            capabilities: {
+              streaming: snapshot["streaming"] ?? true,
+              toolCalling: snapshot["toolCalling"] ?? true,
+              structuredArguments: snapshot["structuredArguments"] ?? true,
+              contextWindow: snapshot["contextWindow"] ?? 32_000
+            },
+            requiredContextTokens: snapshot["requiredContextTokens"] ?? 1_000,
+            reasoningStrength: { status: "hidden", reason: "demo model" }
+          },
+          initialContextSources: command["initialContextSources"] ?? []
+        }
+      };
     }
   };
 }

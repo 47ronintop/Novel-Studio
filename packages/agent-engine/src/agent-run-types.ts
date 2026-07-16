@@ -231,7 +231,35 @@ export interface RecordTerminalAgentRunAuditEventInput {
   readonly detail?: JsonObject;
 }
 
+/**
+ * The public start command. Draft-only by design: the renderer submits nothing but a reference to
+ * an already-persisted Agent Run Draft revision. Operation mode, context mode, write policy, the
+ * user request, the model/reasoning selection, the provider capability snapshot, and every context
+ * source are resolved server-side by the Application preflight (see `ResolvedAgentRunStartInput`).
+ * The renderer cannot author provider, model name, context window, capabilities, or document
+ * content.
+ */
 export interface StartAgentRunCommand {
+  readonly projectId: string;
+  readonly conversationId: string;
+  readonly commandId: string;
+  readonly expectedRunRevision: 0;
+  readonly runDraftId: string;
+  readonly runDraftRevision: number;
+  readonly runDraftChecksum: string;
+  readonly limits?: Partial<AgentRunLimits>;
+  readonly sourcePlanId?: string;
+  readonly sourcePlanRevision?: number;
+}
+
+/**
+ * The internal, server-resolved start input the coordinator consumes. It is the pre-Stage-5 wide
+ * start shape minus renderer authority, plus the server-validated `reasoningEffort`. The Application
+ * preflight builds this from the reloaded run draft + Context Draft + editor content + resolved model
+ * profile; the plan→execution handoff builds it from the approved plan + parent run. It is never
+ * accepted over IPC.
+ */
+export interface ResolvedAgentRunStartInput {
   readonly projectId: string;
   readonly conversationId: string;
   readonly commandId: string;
@@ -242,6 +270,7 @@ export interface StartAgentRunCommand {
   readonly writePolicyAcknowledged?: true;
   readonly userRequest: string;
   readonly providerCapabilitySnapshot: AgentProviderCapabilitySnapshot;
+  readonly reasoningEffort?: AgentReasoningEffort;
   readonly limits?: Partial<AgentRunLimits>;
   readonly initialContextSources?: readonly AgentContextSourceInput[];
   readonly sourcePlanId?: string;
@@ -346,7 +375,7 @@ export type AgentRunCommandResult =
     };
 
 export interface AgentRunCoordinator {
-  startRun(command: StartAgentRunCommand): AgentRunCommandResult;
+  startRun(command: ResolvedAgentRunStartInput): AgentRunCommandResult;
   stopRun(command: StopAgentRunCommand): AgentRunCommandResult;
   recordRunEvent(input: RecordAgentRunEventInput): AgentRunCommandResult;
   recordTerminalAuditEvent(input: RecordTerminalAgentRunAuditEventInput): AgentRunCommandResult;

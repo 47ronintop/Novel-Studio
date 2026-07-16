@@ -17,9 +17,12 @@ export {
 } from "./ipc-contract.js";
 export {
   preflightAgentModelCapabilities,
+  resolveAgentReasoningEffort,
   type AgentModelCapabilityDeclaration,
   type AgentModelCapabilityPreflightInput,
-  type AgentModelCapabilitySnapshot
+  type AgentModelCapabilitySnapshot,
+  type AgentReasoningEffortResolution,
+  type AgentReasoningEffortResolutionInput
 } from "./agent-model-capabilities.js";
 export {
   LEGACY_AGENT_CONVERSATION_ID,
@@ -335,6 +338,8 @@ export type {
   CreateAgentRunDraftSessionOptions,
   ReadAgentRunDraftCommand,
   RefreshContextDraftCommand,
+  ResolveStartDraftCommand,
+  SyncStartDraftCommand,
   UpdateAgentRunDraftCommand,
   UpdateContextDraftCommand
 } from "./agent-run-draft-session.js";
@@ -352,6 +357,9 @@ export type {
   AgentRunPersistencePort,
   AgentRunReadResult,
   AgentRunSession,
+  AgentRunStartFacts,
+  AgentRunStartModelFacts,
+  AgentRunStartPreflightPort,
   AgentVersionGroupExecutor,
   AgentUserInputOption,
   AgentUserInputRequest,

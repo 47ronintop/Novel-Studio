@@ -15,6 +15,7 @@ import { createAgentWriteSaveCoordinator, createApplicationIpcHandlers } from ".
 import { createApplicationMenuTemplate } from "./menu.js";
 import { createDesktopModelRuntime, createEncryptedFileModelSecretStore } from "./model-runtime.js";
 import { createSecureWebPreferences } from "./security.js";
+import { reasoningStrengthForModel } from "@novel-studio/application";
 import type { DesktopApplication } from "@novel-studio/application";
 import type { LlmModelProfile, LlmProviderId } from "@novel-studio/llm-adapter";
 import { createUnifiedError } from "@novel-studio/shared";
@@ -108,6 +109,43 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
               maxTokens: profile.maxTokens,
               ...(profile.topP === undefined ? {} : { topP: profile.topP })
             }
+          };
+        },
+        resolveModelStartFacts: async (profileId) => {
+          // Server-authoritative model facts: provider/model come from the stored profile, context
+          // window + reasoning strength from discovery. The renderer never authors these.
+          const profiles = await activeDesktopApplication?.listModelProfiles();
+          if (profiles === undefined || !profiles.ok) return undefined;
+          const profile = profiles.value.profiles.find((entry) => entry.id === profileId);
+          if (profile === undefined) return undefined;
+          const discovery = await activeDesktopApplication?.discoverModelOptions(profileId);
+          const discovered =
+            discovery !== undefined && discovery.ok
+              ? discovery.value.models.find((model) => model.id === profile.modelName)
+              : undefined;
+          const contextWindow =
+            discovered?.contextWindow ?? (profile.provider === "demo" ? 128_000 : 0);
+          const reasoningStrength =
+            discovery !== undefined && discovery.ok
+              ? discovery.value.reasoningStrength
+              : reasoningStrengthForModel(
+                  profile.provider,
+                  profile.modelName,
+                  profile.baseUrl,
+                  profile.reasoningEffortEnabled
+                );
+          return {
+            profileId: profile.id,
+            provider: profile.provider,
+            modelName: profile.modelName,
+            capabilities: {
+              streaming: true,
+              toolCalling: true,
+              structuredArguments: true,
+              contextWindow
+            },
+            requiredContextTokens: 8_000,
+            reasoningStrength
           };
         }
       })

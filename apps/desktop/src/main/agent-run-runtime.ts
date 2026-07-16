@@ -1,5 +1,6 @@
 import {
   createAgentConversationSession,
+  createAgentRunDraftSession,
   createAgentRunSession,
   createChangeSetSession,
   createVersionGroupSession,
@@ -11,12 +12,25 @@ import {
   type AgentReadToolExecutor,
   type AgentRunModelDriver,
   type AgentRunSession,
+  type AgentRunStartFacts,
+  type AgentRunStartModelFacts,
+  type AgentRunStartPreflightPort,
   type AgentVersionGroupExecutor,
   type VersionGroupSessionTransactionPort,
   type VersionGroupTransactionApplyInput
 } from "@novel-studio/application";
 import type { LlmModelProfile, LlmParameters } from "@novel-studio/llm-adapter";
-import type { AgentToolName, ChangeSet, VersionGroup } from "@novel-studio/agent-engine";
+import type {
+  AgentContextSourceInput,
+  AgentToolName,
+  ChangeSet,
+  StartAgentRunCommand,
+  VersionGroup
+} from "@novel-studio/agent-engine";
+import type {
+  AgentRunDraftSession,
+  SyncStartDraftCommand
+} from "@novel-studio/application";
 import {
   createUnifiedError,
   err,
@@ -60,6 +74,9 @@ export interface DesktopAgentRunSessionOptions {
     readonly modelProfile: LlmModelProfile;
     readonly parameters?: LlmParameters;
   }) => AgentRunModelDriver;
+  readonly resolveModelStartFacts?: (
+    profileId: string
+  ) => Promise<AgentRunStartModelFacts | undefined>;
   readonly readEditorBuffer?: (refId: string) => Promise<string | undefined>;
   readonly readEditorState?: (relativePath: string) => Promise<
     | {
@@ -80,11 +97,20 @@ export interface DesktopAgentRunSessionOptions {
   readonly failAgentWriteAt?: number;
 }
 
+export interface PreparedAgentRunStart {
+  readonly runDraftId: string;
+  readonly runDraftRevision: number;
+  readonly runDraftChecksum: string;
+  readonly contextDraftId: string;
+  readonly contextDraftRevision: number;
+}
+
 export interface DesktopAgentRuntimeServices {
   readonly projectId: string;
   readonly projectRoot: string;
   readonly agentRunSession: AgentRunSession;
   readonly agentConversationSession: AgentConversationSession;
+  readonly agentRunDraftSession: AgentRunDraftSession;
 }
 
 export function createDesktopAgentRunSession(
@@ -262,10 +288,34 @@ function createDesktopAgentRuntimeServices(
       return conversationSession.noteRunTerminal(asJsonObject(snapshot));
     }
   };
+  const draftSession = createAgentRunDraftSession({
+    repository: {
+      writeRunDraft: (draft) => conversationRepository.writeRunDraft(draft),
+      readLatestRunDraft: (conversationId) =>
+        conversationRepository.readLatestRunDraft(conversationId),
+      writeContextDraft: (draft) => conversationRepository.writeContextDraft(draft),
+      readLatestContextDraft: (conversationId) =>
+        conversationRepository.readLatestContextDraft(conversationId)
+    },
+    ...(options.now === undefined ? {} : { now: options.now })
+  });
+  const startPreflight = createDesktopStartPreflight({
+    draftSession,
+    chapterRepository,
+    projectReads,
+    storyBible,
+    ...(options.readEditorBuffer === undefined
+      ? {}
+      : { readEditorBuffer: options.readEditorBuffer }),
+    ...(options.resolveModelStartFacts === undefined
+      ? {}
+      : { resolveModelStartFacts: options.resolveModelStartFacts })
+  });
   const session = createAgentRunSession({
     repository,
     modelDriver,
     readToolExecutor,
+    startPreflight,
     changeSetSession,
     ...(enforceConversationBinding ? { conversationLifecycle } : {}),
     ...(versionGroupServices === undefined
@@ -318,7 +368,8 @@ function createDesktopAgentRuntimeServices(
     projectId: options.projectId,
     projectRoot: options.projectRoot,
     agentRunSession: session,
-    agentConversationSession: conversationSession
+    agentConversationSession: conversationSession,
+    agentRunDraftSession: draftSession
   };
 }
 
@@ -815,6 +866,182 @@ function runtimeError(code: string, redactedDetail?: JsonObject): UnifiedError {
     traceId: "desktop-agent-run-runtime",
     ...(redactedDetail === undefined ? {} : { redactedDetail })
   });
+}
+
+/**
+ * The server-authoritative start preflight. Two shapes reach it:
+ *  - A draft-only command over IPC (the `toStartAgentRunCommand` guard strips wide fields): reload
+ *    the run draft + Context Draft, resolve model facts from the draft's `modelProfileId`, and turn
+ *    the Context Draft refs into concrete sources by reading chapter/editor/file/asset content.
+ *  - A resolved-intent command from an in-process caller (demo driver, runtime tests): read the
+ *    intent directly. The IPC guard makes this branch unreachable from the renderer.
+ */
+function createDesktopStartPreflight(input: {
+  readonly draftSession: AgentRunDraftSession;
+  readonly chapterRepository: ChapterFileRepository;
+  readonly projectReads: AgentProjectReadRepository;
+  readonly storyBible: StoryBibleFileRepository;
+  readonly readEditorBuffer?: NonNullable<DesktopAgentRunSessionOptions["readEditorBuffer"]>;
+  readonly resolveModelStartFacts?: NonNullable<
+    DesktopAgentRunSessionOptions["resolveModelStartFacts"]
+  >;
+}): AgentRunStartPreflightPort {
+  return {
+    async resolveStart(command) {
+      const intent = readResolvedIntent(command as StartAgentRunCommand & Record<string, unknown>);
+      if (intent !== undefined) return ok(intent);
+      return resolveStartFromDraft(command, input);
+    }
+  };
+}
+
+/**
+ * Read a start command that already carries resolved intent (wide fields). Returns undefined when
+ * the command is draft-only, deferring to the persisted-draft path.
+ */
+function readResolvedIntent(
+  command: StartAgentRunCommand & Record<string, unknown>
+): AgentRunStartFacts | undefined {
+  const snapshot = command["providerCapabilitySnapshot"];
+  if (
+    typeof command["operationMode"] !== "string" ||
+    typeof command["userRequest"] !== "string" ||
+    !isRecord(snapshot)
+  ) {
+    return undefined;
+  }
+  const sources = Array.isArray(command["initialContextSources"])
+    ? (command["initialContextSources"] as AgentContextSourceInput[])
+    : [];
+  return {
+    operationMode: command["operationMode"] as AgentRunStartFacts["operationMode"],
+    contextMode: (command["contextMode"] as AgentRunStartFacts["contextMode"]) ?? "writing",
+    writePolicy:
+      (command["writePolicy"] as AgentRunStartFacts["writePolicy"]) ??
+      "write_before_confirmation",
+    writePolicyAcknowledged: command["writePolicyAcknowledged"] === true,
+    userRequest: command["userRequest"],
+    model: {
+      profileId: String(snapshot["profileId"] ?? ""),
+      provider: String(snapshot["provider"] ?? ""),
+      modelName: String(snapshot["modelName"] ?? ""),
+      capabilities: {
+        streaming: snapshot["streaming"] === true,
+        toolCalling: snapshot["toolCalling"] === true,
+        structuredArguments: snapshot["structuredArguments"] === true,
+        contextWindow: Number(snapshot["contextWindow"] ?? 0)
+      },
+      requiredContextTokens: Number(snapshot["requiredContextTokens"] ?? 8000),
+      reasoningStrength: { status: "hidden", reason: "resolved-intent start" }
+    },
+    initialContextSources: sources
+  };
+}
+
+async function resolveStartFromDraft(
+  command: StartAgentRunCommand,
+  input: {
+    readonly draftSession: AgentRunDraftSession;
+    readonly chapterRepository: ChapterFileRepository;
+    readonly projectReads: AgentProjectReadRepository;
+    readonly storyBible: StoryBibleFileRepository;
+    readonly readEditorBuffer?: NonNullable<DesktopAgentRunSessionOptions["readEditorBuffer"]>;
+    readonly resolveModelStartFacts?: NonNullable<
+      DesktopAgentRunSessionOptions["resolveModelStartFacts"]
+    >;
+  }
+): Promise<Result<AgentRunStartFacts, UnifiedError>> {
+  const resolved = await input.draftSession.resolveStartDraft({
+    projectId: command.projectId,
+    conversationId: command.conversationId,
+    runDraftId: command.runDraftId,
+    runDraftRevision: command.runDraftRevision,
+    runDraftChecksum: command.runDraftChecksum
+  });
+  if (!resolved.ok) return err(resolved.error);
+  const { runDraft, contextDraft } = resolved.value;
+  if (input.resolveModelStartFacts === undefined) {
+    return err(runtimeError("AGENT_MODEL_CAPABILITY_UNSUPPORTED"));
+  }
+  const model = await input.resolveModelStartFacts(runDraft.modelProfileId);
+  if (model === undefined) {
+    return err(runtimeError("AGENT_MODEL_CAPABILITY_UNSUPPORTED"));
+  }
+  const sources = await resolveContextDraftSources(contextDraft.refs, input);
+  if (!sources.ok) return err(sources.error);
+  return ok({
+    operationMode: runDraft.operationMode,
+    contextMode: runDraft.contextMode,
+    writePolicy: runDraft.writePolicy,
+    writePolicyAcknowledged: runDraft.writePolicyAcknowledged,
+    userRequest: runDraft.userRequest,
+    ...(runDraft.reasoningEffort === undefined
+      ? {}
+      : { requestedReasoningEffort: runDraft.reasoningEffort }),
+    model,
+    initialContextSources: sources.value
+  });
+}
+
+/** Read the concrete content behind each Context Draft ref into an ordered source list. */
+async function resolveContextDraftSources(
+  refs: readonly {
+    readonly kind: string;
+    readonly refId: string;
+    readonly chapterId?: string;
+    readonly assetId?: string;
+    readonly relativePath?: string;
+  }[],
+  input: {
+    readonly chapterRepository: ChapterFileRepository;
+    readonly projectReads: AgentProjectReadRepository;
+    readonly storyBible: StoryBibleFileRepository;
+    readonly readEditorBuffer?: NonNullable<DesktopAgentRunSessionOptions["readEditorBuffer"]>;
+  }
+): Promise<Result<AgentContextSourceInput[], UnifiedError>> {
+  const sources: AgentContextSourceInput[] = [];
+  for (const ref of refs) {
+    if ((ref.kind === "chapter" || ref.kind === "editor_selection") && ref.chapterId !== undefined) {
+      const refId = `chapter:${ref.chapterId}`;
+      const relativePath = `chapters/${ref.chapterId}.md`;
+      const buffered = await input.readEditorBuffer?.(refId);
+      if (buffered !== undefined) {
+        sources.push({ refId, sourceKind: "editor_buffer", relativePath, content: buffered, dirty: true });
+        continue;
+      }
+      const chapter = await input.chapterRepository.readChapter(ref.chapterId);
+      if (!chapter.ok) return err(chapter.error);
+      sources.push({ refId, sourceKind: "disk_file", relativePath, content: chapter.value.body, dirty: false });
+      continue;
+    }
+    if (ref.kind === "project_file" && ref.relativePath !== undefined) {
+      const read = await input.projectReads.readText(ref.relativePath);
+      if (!read.ok) return err(read.error);
+      sources.push({
+        refId: ref.refId,
+        sourceKind: "disk_file",
+        relativePath: ref.relativePath,
+        content: read.value.content,
+        dirty: false
+      });
+      continue;
+    }
+    if (ref.kind === "story_bible" && ref.assetId !== undefined) {
+      const asset = await findStoryBibleAsset(input.storyBible, ref.assetId);
+      if (!asset.ok) return err(asset.error);
+      sources.push({
+        refId: ref.refId,
+        sourceKind: "disk_file",
+        content: JSON.stringify(asset.value),
+        dirty: false
+      });
+    }
+  }
+  return ok(sources);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function createDesktopAdaptiveAgentDriver(input: {

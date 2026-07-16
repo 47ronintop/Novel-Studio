@@ -219,4 +219,84 @@ describe("Agent Run Draft session", () => {
     expect(result.value.contextDraft.revision).toBe(2);
     expect(result.value.runDraft.contextDraftRevision).toBe(2);
   });
+
+  test("resolveStartDraft returns the draft pair for a matching reference", async () => {
+    const created = await session.readAgentRunDraft(readCommand);
+    if (!created.ok) return;
+    const resolved = await session.resolveStartDraft({
+      projectId: "project_01",
+      conversationId: "conv_01",
+      runDraftId: created.value.runDraft.runDraftId,
+      runDraftRevision: created.value.runDraft.revision,
+      runDraftChecksum: created.value.runDraft.checksum
+    });
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.value.runDraft.runDraftId).toBe(created.value.runDraft.runDraftId);
+    expect(resolved.value.contextDraft.contextDraftId).toBe(
+      created.value.contextDraft.contextDraftId
+    );
+  });
+
+  test("resolveStartDraft rejects when no draft exists", async () => {
+    const resolved = await session.resolveStartDraft({
+      projectId: "project_01",
+      conversationId: "conv_01",
+      runDraftId: "draft_missing",
+      runDraftRevision: 1,
+      runDraftChecksum: "deadbeef"
+    });
+    expect(resolved).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUN_DRAFT_NOT_FOUND" }
+    });
+  });
+
+  test("resolveStartDraft rejects a stale revision", async () => {
+    const created = await session.readAgentRunDraft(readCommand);
+    if (!created.ok) return;
+    const resolved = await session.resolveStartDraft({
+      projectId: "project_01",
+      conversationId: "conv_01",
+      runDraftId: created.value.runDraft.runDraftId,
+      runDraftRevision: 99,
+      runDraftChecksum: created.value.runDraft.checksum
+    });
+    expect(resolved).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUN_DRAFT_REVISION_CONFLICT" }
+    });
+  });
+
+  test("resolveStartDraft rejects a checksum mismatch", async () => {
+    const created = await session.readAgentRunDraft(readCommand);
+    if (!created.ok) return;
+    const resolved = await session.resolveStartDraft({
+      projectId: "project_01",
+      conversationId: "conv_01",
+      runDraftId: created.value.runDraft.runDraftId,
+      runDraftRevision: created.value.runDraft.revision,
+      runDraftChecksum: "0000"
+    });
+    expect(resolved).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUN_DRAFT_CHECKSUM_MISMATCH" }
+    });
+  });
+
+  test("resolveStartDraft rejects a run-draft id mismatch", async () => {
+    const created = await session.readAgentRunDraft(readCommand);
+    if (!created.ok) return;
+    const resolved = await session.resolveStartDraft({
+      projectId: "project_01",
+      conversationId: "conv_01",
+      runDraftId: "draft_other",
+      runDraftRevision: created.value.runDraft.revision,
+      runDraftChecksum: created.value.runDraft.checksum
+    });
+    expect(resolved).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUN_DRAFT_NOT_FOUND" }
+    });
+  });
 });

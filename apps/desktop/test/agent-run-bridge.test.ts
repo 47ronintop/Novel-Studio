@@ -138,11 +138,20 @@ describe("Agent Run renderer bridge", () => {
     expect(next.runId).toBeUndefined();
   });
 
-  test("starts with the dirty editor buffer as an explicit context source", async () => {
-    let received: unknown;
+  test("persists the active chapter as an explicit context draft ref on prepare", async () => {
+    // The renderer submits only refs + intent; the server reads the chapter's content at start.
+    let preparedCommand: Record<string, unknown> | undefined;
+    let startCommand: Record<string, unknown> | undefined;
     const api = createApi({
+      prepareStart: async (command) => {
+        preparedCommand = command as Record<string, unknown>;
+        return ok({
+          runDraft: { runDraftId: "draft-01", revision: 1, checksum: "checksum-01" },
+          contextDraft: { contextDraftId: "context-01", revision: 1 }
+        });
+      },
       start: async (command) => {
-        received = command;
+        startCommand = command as unknown as Record<string, unknown>;
         return ok(snapshot);
       }
     });
@@ -157,19 +166,22 @@ describe("Agent Run renderer bridge", () => {
 
     await bridge.send("检查当前章节");
 
-    expect(received).toMatchObject({
+    expect(preparedCommand).toMatchObject({
       projectId: "project-01",
       operationMode: "planning",
-      initialContextSources: [
-        {
-          refId: "chapter:chapter-01",
-          sourceKind: "editor_buffer",
-          relativePath: "chapters/chapter-01.md",
-          content: "dirty editor body",
-          dirty: true
-        }
-      ]
+      userRequest: "检查当前章节",
+      modelProfileId: "profile-01",
+      contextRefs: [{ kind: "chapter", refId: "chapter:chapter-01", chapterId: "chapter-01" }]
     });
+    // The start command carries only the draft reference — never resolved content.
+    expect(startCommand).toMatchObject({
+      projectId: "project-01",
+      runDraftId: "draft-01",
+      runDraftRevision: 1,
+      runDraftChecksum: "checksum-01"
+    });
+    expect(startCommand).not.toHaveProperty("initialContextSources");
+    expect(startCommand).not.toHaveProperty("providerCapabilitySnapshot");
   });
 
   test("binds execution auto-write policy to an explicit per-run acknowledgement", async () => {
@@ -180,10 +192,14 @@ describe("Agent Run renderer bridge", () => {
       writePolicy: "user_preapproved_run" as const
     };
     const api = createApi({
-      start: async (command) => {
-        received = command as unknown as Record<string, unknown>;
-        return ok(executionSnapshot);
-      }
+      prepareStart: async (command) => {
+        received = command as Record<string, unknown>;
+        return ok({
+          runDraft: { runDraftId: "draft-01", revision: 1, checksum: "checksum-01" },
+          contextDraft: { contextDraftId: "context-01", revision: 1 }
+        });
+      },
+      start: async () => ok(executionSnapshot)
     });
     const bridge = createAgentRunBridge(api);
     bridge.syncContext({
@@ -244,8 +260,15 @@ describe("Agent Run renderer bridge", () => {
     const api = {
       agentRuns: {
         onEvent: () => () => undefined,
-        start: async (command: Record<string, unknown>) => {
+        prepareStart: async (command: Record<string, unknown>) => {
+          // Intent (mode + write policy) now lives on the prepare command; record it for assertions.
           commands.push(structuredClone(command));
+          return ok({
+            runDraft: { runDraftId: `draft-0${commands.length}`, revision: 1, checksum: "cs" },
+            contextDraft: { contextDraftId: "context-01", revision: 1 }
+          });
+        },
+        start: async () => {
           current = commands.length === 1 ? automaticCompleted : manualStarted;
           return ok(current);
         },
@@ -281,9 +304,9 @@ describe("Agent Run renderer bridge", () => {
 
     expect(commands[1]).toMatchObject({
       operationMode: "execution",
-      writePolicy: "write_before_confirmation"
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false
     });
-    expect(commands[1]).not.toHaveProperty("writePolicyAcknowledged");
   });
 
   test("resets next-run auto-write authorization when a terminal event arrives", async () => {
@@ -300,6 +323,11 @@ describe("Agent Run renderer bridge", () => {
           listener = nextListener;
           return () => undefined;
         },
+        prepareStart: async () =>
+          ok({
+            runDraft: { runDraftId: "draft-01", revision: 1, checksum: "checksum-01" },
+            contextDraft: { contextDraftId: "context-01", revision: 1 }
+          }),
         start: async () => ok(activeAutomatic),
         read: async () => ok({ snapshot: activeAutomatic, events: [] })
       }
@@ -401,9 +429,19 @@ describe("Agent Run renderer bridge", () => {
     });
   });
 
-  test("rejects capability preflight before calling start", async () => {
+  test("rejects a start with no selected model profile before calling prepare/start", async () => {
+    // Capability + context-window validation is now server-authoritative; the only client-side
+    // guard is that a model profile is actually selected. Without one, neither prepare nor start run.
+    let prepared = false;
     let called = false;
     const api = createApi({
+      prepareStart: async () => {
+        prepared = true;
+        return ok({
+          runDraft: { runDraftId: "draft-01", revision: 1, checksum: "checksum-01" },
+          contextDraft: { contextDraftId: "context-01", revision: 1 }
+        });
+      },
       start: async () => {
         called = true;
         return ok(snapshot);
@@ -415,11 +453,12 @@ describe("Agent Run renderer bridge", () => {
       conversationId: "conversation-01",
       activeChapterId: "chapter-01",
       chapterEditor: editor,
-      settings: { ...settings, modelDiscovery: undefined }
+      settings: { ...settings, profiles: [], selectedProfileId: undefined, defaultProfileId: "" }
     });
 
     const props = await bridge.send("检查当前章节");
 
+    expect(prepared).toBe(false);
     expect(called).toBe(false);
     expect(props?.errorMessage).toContain("cannot start an Agent run");
   });
@@ -1025,6 +1064,7 @@ function changeSet(revision: number, checksum: string, selected: boolean): Chang
 
 function createApi(overrides: {
   start?: (command: unknown) => Promise<ReturnType<typeof ok<AgentRunSnapshot>>>;
+  prepareStart?: (command: unknown) => Promise<unknown>;
   refreshContext?: (command: {
     readonly decision: "refresh" | "exclude" | "cancel";
     readonly sourceRefs?: readonly string[];
@@ -1034,6 +1074,14 @@ function createApi(overrides: {
   const eventListeners = new Set<(event: AgentRunEvent) => void>();
   return {
     agentRuns: {
+      prepareStart: (command) =>
+        overrides.prepareStart?.(command) ??
+        Promise.resolve(
+          ok({
+            runDraft: { runDraftId: "draft-01", revision: 1, checksum: "checksum-01" },
+            contextDraft: { contextDraftId: "context-01", revision: 1 }
+          })
+        ),
       start: (command) => overrides.start?.(command) ?? Promise.resolve(ok(snapshot)),
       stop: async () => ok(snapshot),
       answerUserInput: async () => ok(snapshot),

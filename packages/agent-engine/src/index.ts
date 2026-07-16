@@ -158,6 +158,7 @@ export type {
   RecordAgentRunEventInput,
   RecordTerminalAgentRunAuditEventInput,
   RefreshAgentContextCommand,
+  ResolvedAgentRunStartInput,
   ResumeAgentRunCommand,
   RetryAgentRunStepCommand,
   StartAgentRunCommand,
