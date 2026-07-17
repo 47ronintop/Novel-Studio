@@ -10,6 +10,17 @@ export type {
 export { validateAgentRelativePath } from "./path-guard.js";
 export type { AgentRelativePath } from "./path-guard.js";
 export {
+  AGENT_FORBIDDEN_CAPABILITIES,
+  findPermissionSummaryDrift,
+  generatePermissionSummary
+} from "./permission-summary.js";
+export type {
+  AgentToolLister,
+  GeneratePermissionSummaryInput,
+  PermissionSummary,
+  PermissionSummaryFieldDrift
+} from "./permission-summary.js";
+export {
   applyAgentRunDraftMutation,
   bindContextDraft,
   checksumAgentRunDraft,

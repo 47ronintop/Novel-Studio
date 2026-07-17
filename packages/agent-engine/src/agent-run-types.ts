@@ -274,6 +274,8 @@ export interface ResolvedAgentRunStartInput {
   readonly limits?: Partial<AgentRunLimits>;
   readonly initialContextSources?: readonly AgentContextSourceInput[];
   readonly contextBudgetSnapshotId?: string;
+  readonly permissionSummaryId?: string;
+  readonly permissionSummaryChecksum?: string;
   readonly sourcePlanId?: string;
   readonly sourcePlanRevision?: number;
 }

@@ -282,6 +282,120 @@ describe("AgentRunSession", () => {
     });
   });
 
+  test("binds a server-verified permission summary onto the started run and persists it under the run", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    if (typeof createSession !== "function") return;
+    const create = createSession as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+    };
+
+    const writtenSummaries: Record<string, unknown>[] = [];
+    const session = create({
+      coordinatorOptions: { createRunId: () => "run_permission_01" },
+      repository: memoryRepository(),
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      },
+      permission: fakePermissionPort({
+        permissionSummaryId: "permission_summary_01",
+        checksum: "checksum_01",
+        toolRegistryRevision: "registry_revision_01",
+        onBind: (summary) => writtenSummaries.push(summary)
+      })
+    });
+    const started = await session.startAgentRun(startCommand());
+    expect(started).toMatchObject({
+      ok: true,
+      value: {
+        runId: "run_permission_01",
+        permissionSummaryId: "permission_summary_01",
+        permissionSummaryChecksum: "checksum_01"
+      }
+    });
+    expect(writtenSummaries).toHaveLength(1);
+    expect(writtenSummaries[0]).toMatchObject({
+      runId: "run_permission_01",
+      permissionSummaryId: "permission_summary_01"
+    });
+  });
+
+  test("blocks run creation when the permission port reports drift, and never creates a run", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    if (typeof createSession !== "function") return;
+    const create = createSession as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+
+    const session = create({
+      coordinatorOptions: { createRunId: () => "run_permission_blocked" },
+      repository: memoryRepository(),
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      },
+      permission: {
+        async verifyForStart() {
+          return {
+            ok: false,
+            error: {
+              code: "AGENT_PERMISSION_SUMMARY_STALE",
+              category: "AgentError",
+              message: "stale",
+              recoverability: "user-action",
+              suggestedAction: "retry",
+              traceId: "test"
+            }
+          };
+        },
+        async bindToRun() {
+          throw new Error("bindToRun must not be called when verification fails");
+        }
+      }
+    });
+    const started = await session.startAgentRun(startCommand());
+    expect(started).toMatchObject({ ok: false, error: { code: "AGENT_PERMISSION_SUMMARY_STALE" } });
+    const read = await session.readAgentRun("run_permission_blocked");
+    expect(read).toMatchObject({ ok: false });
+  });
+
+  test("starts a run without a permission port unaffected (permissionSummaryId stays null)", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    if (typeof createSession !== "function") return;
+    const create = createSession as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+    };
+    const session = create({
+      coordinatorOptions: { createRunId: () => "run_no_permission" },
+      repository: memoryRepository(),
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      }
+    });
+    const started = await session.startAgentRun(startCommand());
+    expect(started).toMatchObject({
+      ok: true,
+      value: { runId: "run_no_permission", permissionSummaryId: null, permissionSummaryChecksum: null }
+    });
+  });
+
   test("evaluateContextBudgetPressure classifies the 70% warn and 85% compact bands", () => {
     const evaluate = (applicationExports as unknown as Record<string, unknown>)[
       "evaluateContextBudgetPressure"
@@ -2544,6 +2658,42 @@ function echoStartPreflight() {
           initialContextSources: command["initialContextSources"] ?? []
         }
       };
+    }
+  };
+}
+
+/** A test double standing in for `createAgentPermissionSession`'s verify/bind pair (Task 2.1). */
+function fakePermissionPort(input: {
+  readonly permissionSummaryId: string;
+  readonly checksum: string;
+  readonly toolRegistryRevision: string;
+  readonly onBind?: (summary: Record<string, unknown>) => void;
+}) {
+  return {
+    async verifyForStart(facts: Record<string, unknown>) {
+      return {
+        ok: true,
+        value: {
+          schemaVersion: "1.0",
+          permissionSummaryId: input.permissionSummaryId,
+          projectId: facts["projectId"],
+          runDraftId: facts["runDraftId"],
+          contextMode: facts["contextMode"],
+          writePolicy: facts["writePolicy"],
+          toolRegistryRevision: input.toolRegistryRevision,
+          rootFingerprint: "f".repeat(64),
+          readCapabilities: [],
+          proposalCapabilities: [],
+          forbiddenCapabilities: [],
+          checksum: input.checksum,
+          generatedAt: "2026-07-17T00:00:00.000Z"
+        }
+      };
+    },
+    async bindToRun(bind: { readonly runId: string; readonly summary: Record<string, unknown> }) {
+      const bound = { ...bind.summary, runId: bind.runId };
+      input.onBind?.(bound);
+      return { ok: true, value: bound };
     }
   };
 }

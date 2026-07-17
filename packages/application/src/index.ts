@@ -351,6 +351,16 @@ export type {
   CompactionUsageSinkPort,
   CreateAgentContextSessionOptions
 } from "./agent-context-session.js";
+export { createAgentPermissionSession } from "./agent-permission-session.js";
+export type {
+  AgentPermissionRootFingerprintPort,
+  AgentPermissionSession,
+  AgentPermissionSessionRepository,
+  BindPermissionSummaryToRunInput,
+  CreateAgentPermissionSessionOptions,
+  PreparePermissionSummaryInput,
+  VerifyPermissionSummaryForStartInput
+} from "./agent-permission-session.js";
 export { createChangeSetSession } from "./change-set-session.js";
 export { createVersionGroupSession } from "./version-group-session.js";
 export type {
@@ -383,6 +393,7 @@ export type {
   AgentRunSession,
   AgentRunStartFacts,
   AgentRunStartModelFacts,
+  AgentRunStartPermissionPort,
   AgentRunStartPreflightPort,
   AgentRunContextCompactor,
   AgentContextBudgetPressure,

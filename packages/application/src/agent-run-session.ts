@@ -28,6 +28,7 @@ import {
   type CompactContextCommand,
   type CreatePlanArtifactInput,
   type PlanArtifact,
+  type PermissionSummary,
   type PlanOpenQuestion,
   type PlanStep,
   type PlanTargetRef,
@@ -62,6 +63,7 @@ import {
   formatAiWritingStyleRulesForPrompt
 } from "./ai-writing-style-rules.js";
 import type { ModelReasoningStrengthControl } from "./model-discovery-session.js";
+import type { AgentPermissionSession } from "./agent-permission-session.js";
 import type { ChangeSetSession } from "./change-set-session.js";
 import {
   authorizeAgentRunApproval,
@@ -186,6 +188,11 @@ export interface AgentRunStartFacts {
    */
   readonly contextBudgetSnapshotId?: string;
 }
+
+export type AgentRunStartPermissionPort = Pick<
+  AgentPermissionSession,
+  "verifyForStart" | "bindToRun"
+>;
 
 export interface AgentRunStartPreflightPort {
   resolveStart(
@@ -335,6 +342,13 @@ export interface CreateAgentRunSessionOptions {
   readonly modelDriver: AgentRunModelDriver;
   readonly readToolExecutor: AgentReadToolExecutor;
   readonly startPreflight: AgentRunStartPreflightPort;
+  /**
+   * Regenerates and verifies the Permission Summary at run start, and persists the bound copy once
+   * the run exists (Task 2.1). Optional so the many pre-2.1 tests that construct a session without a
+   * permission port keep working: a run started without one simply carries `permissionSummaryId:
+   * null` — untouched from Task 1.1's default, and no different from today's behavior.
+   */
+  readonly permission?: AgentRunStartPermissionPort;
   readonly contextCompactor?: AgentRunContextCompactor;
   readonly contextSourceReader?: AgentContextSourceReader;
   readonly changeSetSession?: ChangeSetSession;
@@ -1569,6 +1583,25 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         return { ok: false, error: resolvedStart.error };
       }
       const startInput = resolvedStart.value;
+      // Regenerate the Permission Summary from the current Tool Registry and canonical root, and
+      // compare it against whatever the composer last previewed for this draft (Task 2.1). Drift —
+      // a Tool Registry change, a root-fingerprint change, or a resolved write-policy change since
+      // the preview — blocks run creation before any conversation is reserved or run is persisted.
+      let verifiedPermissionSummary: PermissionSummary | undefined;
+      if (options.permission !== undefined) {
+        const verified = await options.permission.verifyForStart({
+          projectId: command.projectId,
+          runDraftId: command.runDraftId,
+          operationMode: startInput.operationMode,
+          contextMode: startInput.contextMode,
+          writePolicy: startInput.writePolicy ?? "write_before_confirmation"
+        });
+        if (!verified.ok) {
+          commandReceipts.set(receiptKey, { ok: false, error: verified.error });
+          return { ok: false, error: verified.error };
+        }
+        verifiedPermissionSummary = verified.value;
+      }
       let conversationContext: readonly AgentModelMessage[] = [];
       let conversationReserved = false;
       const cancelConversationStart = async (): Promise<void> => {
@@ -1605,7 +1638,15 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         await cancelConversationStart();
         return restoredActive;
       }
-      const result = coordinator.startRun(startInput);
+      const result = coordinator.startRun(
+        verifiedPermissionSummary === undefined
+          ? startInput
+          : {
+              ...startInput,
+              permissionSummaryId: verifiedPermissionSummary.permissionSummaryId,
+              permissionSummaryChecksum: verifiedPermissionSummary.checksum
+            }
+      );
       if (!result.ok) {
         commandReceipts.set(receiptKey, result);
         await cancelConversationStart();
@@ -1659,6 +1700,37 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         }
       }
       let startReceipt: AgentRunCommandResult = result;
+      if (options.permission !== undefined && verifiedPermissionSummary !== undefined) {
+        // Persist the summary under the now-existing run, then announce it — the event only fires
+        // once the artifact is durably on disk, never before (Task 2.1's persist-then-announce order).
+        const bound = await options.permission.bindToRun({
+          runId: result.value.runId,
+          summary: verifiedPermissionSummary
+        });
+        if (!bound.ok) {
+          await cancelConversationStart();
+          return { ok: false, error: bound.error };
+        }
+        startReceipt = await recordEvent(result.value.runId, {
+          runId: result.value.runId,
+          status: result.value.status,
+          type: "permission_summary_ready",
+          detail: {
+            permissionSummaryId: bound.value.permissionSummaryId,
+            checksum: bound.value.checksum,
+            toolRegistryRevision: bound.value.toolRegistryRevision
+          }
+        });
+        if (!startReceipt.ok) {
+          await cancelConversationStart();
+          return persistCommandReceipt(
+            result.value.runId,
+            command.projectId,
+            command.commandId,
+            startReceipt
+          );
+        }
+      }
       if (initialContextSources.length > 0) {
         const contextSnapshotId =
           options.createContextSnapshotId?.(result.value.runId) ?? `context_${result.value.runId}`;

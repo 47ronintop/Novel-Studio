@@ -279,6 +279,32 @@ export class AgentRunFileRepository {
     return this.readJson(this.runPath(runId, join("budget-snapshots", `${budgetSnapshotId}.json`)));
   }
 
+  public writePermissionSummary(
+    runId: string,
+    summary: JsonObject
+  ): Promise<Result<JsonObject, UnifiedError>> {
+    const permissionSummaryId = readSafeString(summary, "permissionSummaryId");
+    if (!isSafeId(runId) || permissionSummaryId === undefined) {
+      return Promise.resolve(this.invalidRecord("AGENT_PERMISSION_SUMMARY_INVALID"));
+    }
+    return this.writeJson(
+      this.runPath(runId, join("permission-summaries", `${permissionSummaryId}.json`)),
+      summary
+    );
+  }
+
+  public readPermissionSummary(
+    runId: string,
+    permissionSummaryId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    if (!isSafeId(permissionSummaryId)) {
+      return Promise.resolve(this.invalidRecord("AGENT_PERMISSION_SUMMARY_INVALID"));
+    }
+    return this.readJson(
+      this.runPath(runId, join("permission-summaries", `${permissionSummaryId}.json`))
+    );
+  }
+
   /**
    * The compaction commit marker (step 3 of the cross-repository commit). Rewrites run.json with the
    * new `activeCompactionId`. Read-before-write idempotency: if run.json already carries this
