@@ -73,7 +73,7 @@ export function PlanArtifactReview({
         <>
           <section className="ns-agent-write-policy" aria-label="计划执行写入策略">
             <div className="ns-agent-write-policy-heading">
-              <span>执行该计划可能修改项目文件；自动写入授权仅适用于本次执行。</span>
+              <span>执行该计划可能修改项目文件；自动修改授权仅适用于本次运行。</span>
             </div>
             <fieldset>
               <legend>执行上下文</legend>
@@ -105,7 +105,7 @@ export function PlanArtifactReview({
                   onChange={() => selectWritePolicy("write_before_confirmation")}
                   type="radio"
                 />
-                <span>写入前询问</span>
+                <span>每次修改前确认</span>
               </label>
               <label>
                 <input
@@ -114,7 +114,7 @@ export function PlanArtifactReview({
                   onChange={() => selectWritePolicy("user_preapproved_run")}
                   type="radio"
                 />
-                <span>本次运行自动写入</span>
+                <span>本次运行自动修改</span>
               </label>
             </fieldset>
             {!automaticWriteSelected ? null : (
@@ -126,7 +126,7 @@ export function PlanArtifactReview({
                   }
                   type="checkbox"
                 />
-                <span>我理解本次执行可自动修改项目文件，并会在写入前创建版本点。</span>
+                <span>我理解本次运行可自动修改项目文件，并会在写入前创建 Version Group。</span>
               </label>
             )}
           </section>

@@ -79,6 +79,7 @@ describe("AgentRunFileRepository", () => {
     expect(typeof repository["writeContextSnapshot"]).toBe("function");
     expect(typeof repository["readContextSnapshot"]).toBe("function");
     expect(typeof repository["writePlanArtifact"]).toBe("function");
+    expect(typeof repository["readPlanArtifact"]).toBe("function");
     expect(typeof repository["listSnapshots"]).toBe("function");
     expect(typeof repository["readCommandReceipt"]).toBe("function");
     expect(typeof repository["writeRetryCheckpoint"]).toBe("function");
@@ -87,6 +88,7 @@ describe("AgentRunFileRepository", () => {
       typeof repository["writeContextSnapshot"] !== "function" ||
       typeof repository["readContextSnapshot"] !== "function" ||
       typeof repository["writePlanArtifact"] !== "function" ||
+      typeof repository["readPlanArtifact"] !== "function" ||
       typeof repository["listSnapshots"] !== "function" ||
       typeof repository["readCommandReceipt"] !== "function" ||
       typeof repository["writeRetryCheckpoint"] !== "function" ||
@@ -122,6 +124,10 @@ describe("AgentRunFileRepository", () => {
     await repository["writeSnapshot"]?.(snapshot);
     await repository["writeContextSnapshot"]?.(contextSnapshot);
     await repository["writePlanArtifact"]?.(plan);
+    expect(await repository["readPlanArtifact"]?.("plan_02", 1)).toEqual({
+      ok: true,
+      value: plan
+    });
     await repository["writeCommandReceipt"]?.("run_02", "answer_02", {
       ok: true,
       value: snapshot

@@ -3,6 +3,8 @@ import { realpath } from "node:fs/promises";
 import type {
   AgentContextSession,
   AgentConversationSession,
+  AgentPermissionSession,
+  AgentPlanExecutionSession,
   AgentRunDraftSession,
   AgentRunSession
 } from "@novel-studio/application";
@@ -22,6 +24,8 @@ export interface DesktopAgentRuntime {
   readonly agentConversationSession: AgentConversationSession;
   readonly agentRunDraftSession?: AgentRunDraftSession;
   readonly agentContextSession?: AgentContextSession;
+  readonly agentPermissionSession?: AgentPermissionSession;
+  readonly agentPlanExecutionSession?: AgentPlanExecutionSession;
   dispose?(): void;
 }
 

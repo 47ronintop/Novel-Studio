@@ -55,17 +55,21 @@ export class AgentRunFileRepository {
     if (planId === undefined || !Number.isInteger(revision) || Number(revision) < 1) {
       return Promise.resolve(this.invalidRecord("AGENT_PLAN_ARTIFACT_INVALID"));
     }
-    return this.writeJson(
-      join(
-        this.options.projectRoot,
-        "history",
-        "plans",
-        planId,
-        "revisions",
-        `${String(revision)}.json`
-      ),
-      plan
-    );
+    return this.writeJson(this.planArtifactPath(planId, Number(revision)), plan);
+  }
+
+  public async readPlanArtifact(
+    planId: string,
+    revision: number
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    if (!isSafeId(planId) || !Number.isSafeInteger(revision) || revision < 1) {
+      return this.invalidRecord("AGENT_PLAN_ARTIFACT_INVALID");
+    }
+    const read = await this.readJson(this.planArtifactPath(planId, revision));
+    if (!read.ok || read.value === undefined) return read;
+    return read.value["planId"] === planId && read.value["revision"] === revision
+      ? read
+      : this.invalidRecord("AGENT_PLAN_ARTIFACT_INVALID");
   }
 
   public async writePlanExecutionRecord(
@@ -565,6 +569,17 @@ export class AgentRunFileRepository {
       "history",
       "change-sets",
       changeSetId,
+      "revisions",
+      `${String(revision)}.json`
+    );
+  }
+
+  private planArtifactPath(planId: string, revision: number): string {
+    return join(
+      this.options.projectRoot,
+      "history",
+      "plans",
+      planId,
       "revisions",
       `${String(revision)}.json`
     );

@@ -60,6 +60,8 @@ export { AgentRunPanel } from "./agent-run-panel.js";
 export { AgentActivitySummary } from "./agent-activity-summary.js";
 export { AgentComposer } from "./agent-composer.js";
 export { AgentPopover, rovePopoverOptions } from "./agent-popover.js";
+export { AgentPermissionMenu } from "./agent-permission-menu.js";
+export type { AgentPermissionMenuProps } from "./agent-permission-menu.js";
 export type {
   AgentPopoverProps,
   AgentPopoverInitialFocus,
@@ -112,6 +114,7 @@ export type {
   AgentComposerContextSourceRow,
   AgentComposerContextState,
   AgentComposerContextStatusControl,
+  AgentComposerPermissionControl,
   AgentComposerModelControl,
   AgentComposerModelOption,
   AgentComposerReasoningControl,
@@ -120,6 +123,8 @@ export type {
   AgentComposerReferenceKind,
   AgentContextPrecision,
   AgentPlanReviewProps,
+  AgentPlanExecutionControl,
+  AgentPlanRevisionRequestView,
   AgentRunPanelProps,
   AgentRunPendingUserInputProps,
   AiWorkflowBranchChoiceProps,

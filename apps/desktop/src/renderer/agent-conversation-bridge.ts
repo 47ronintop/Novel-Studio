@@ -674,6 +674,8 @@ function statusForEvent(
       return "awaiting_context_refresh";
     case "plan_ready":
       return "plan_ready";
+    case "plan_revision_requested":
+      return "awaiting_plan_revision";
     case "run_completed":
       return "completed";
     case "run_cancelled":

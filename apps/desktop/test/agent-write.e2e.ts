@@ -454,12 +454,23 @@ async function startExecution(page: Page): Promise<void> {
   await page.getByLabel("活动栏").getByRole("button", { name: "AI 工作流" }).click();
   const createConversation = page.getByRole("button", { name: "新建会话" }).first();
   if (await createConversation.isVisible()) await createConversation.click();
-  await page.getByLabel("运行模式").getByRole("button", { name: "执行" }).click();
   const composer = page.getByLabel("会话输入区");
+  await selectExecutionMode(composer);
   await composer.getByLabel("Agent 请求").fill("按候选修改章节");
   await composer.getByLabel("启动 Agent 运行").click();
   await resolveContextRefreshIfVisible(page);
   await expect(page.getByLabel("变更集差异审阅")).toBeVisible();
+}
+
+async function selectExecutionMode(composer: ReturnType<Page["getByLabel"]>): Promise<void> {
+  if ((await composer.getByRole("button", { name: /^执行 · / }).count()) > 0) return;
+  await composer
+    .getByRole("button", { name: /^(规划|执行) · (写作|通用文件)$/ })
+    .click();
+  await composer
+    .getByLabel("运行方式")
+    .getByRole("button", { name: "执行", exact: true })
+    .click();
 }
 
 async function resolveContextRefreshIfVisible(page: Page): Promise<void> {

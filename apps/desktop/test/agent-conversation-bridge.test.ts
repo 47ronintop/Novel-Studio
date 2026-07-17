@@ -66,6 +66,7 @@ describe("AgentConversationBridge", () => {
     const state = await bridge.load("project_01");
     const onSelectModel = () => undefined;
     const onAddRef = () => undefined;
+    const onOpenPermission = () => undefined;
     const composer = {
       request: "",
       operationMode: "execution" as const,
@@ -91,6 +92,11 @@ describe("AgentConversationBridge", () => {
         precision: "reported" as const,
         sources: []
       },
+      permission: {
+        loading: false,
+        approvalSource: "not_approved" as const,
+        onOpen: onOpenPermission
+      },
       onRequestChange: () => undefined,
       onOperationModeChange: () => undefined,
       onContextModeChange: () => undefined,
@@ -113,6 +119,8 @@ describe("AgentConversationBridge", () => {
     expect(workspace.view.composer).toBe(composer);
     expect(workspace.view.composer?.model?.onSelect).toBe(onSelectModel);
     expect(workspace.view.composer?.references?.onAdd).toBe(onAddRef);
+    expect(workspace.view.composer?.permission?.onOpen).toBe(onOpenPermission);
+    expect(workspace.view.agentRun).toBeUndefined();
   });
 
   test.each([
@@ -449,6 +457,33 @@ describe("AgentConversationBridge", () => {
     expect(state?.conversations.find((entry) => entry.conversationId === "conv_b")).toMatchObject({
       lastRunId: "run_b",
       lastRunStatus: "executing_read_tool"
+    });
+  });
+
+  test("projects a material plan deviation as awaiting plan revision", async () => {
+    const fixture = createApiFixture([
+      conversation("conv_01", "run_01", "executing_model", "2026-07-14T01:00:00.000Z")
+    ]);
+    const bridge = createAgentConversationBridge(fixture.api);
+    await bridge.load("project_01");
+
+    fixture.emit(
+      runEvent("run_01", "plan_revision_requested", 2, {
+        requestId: "plan-revision-request-01",
+        planExecutionId: "plan-execution-01",
+        planId: "plan-01",
+        planRevision: 2
+      })
+    );
+    await flushAsyncRouting();
+
+    expect(bridge.getProps()?.conversations[0]).toMatchObject({
+      lastRunId: "run_01",
+      lastRunStatus: "awaiting_plan_revision"
+    });
+    expect(bridge.getProps()?.selectedConversation?.runs[0]).toMatchObject({
+      runId: "run_01",
+      status: "awaiting_plan_revision"
     });
   });
 });

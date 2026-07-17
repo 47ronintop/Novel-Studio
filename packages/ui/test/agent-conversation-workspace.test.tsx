@@ -130,6 +130,19 @@ describe("Agent Conversation workspace", () => {
     const editor = host.querySelector('[aria-label="编辑区"]');
     const aiPanel = host.querySelector('[aria-label="AI 对话面板"]');
     expect(editor?.querySelector('[aria-label="Plan Artifact 审阅"]')).not.toBeNull();
+    expect(editor?.textContent).toContain("每次修改前确认");
+    expect(editor?.textContent).toContain("本次运行自动修改");
+    expect(editor?.textContent).not.toContain("写入前询问");
+    expect(editor?.textContent).not.toContain("本次运行自动写入");
+    const automaticWrite = Array.from(editor?.querySelectorAll("label") ?? [])
+      .find((label) => label.textContent?.includes("本次运行自动修改"))
+      ?.querySelector<HTMLInputElement>('input[type="radio"]');
+    act(() => automaticWrite?.click());
+    expect(editor?.textContent).toContain("Version Group");
+    const confirmedWrite = Array.from(editor?.querySelectorAll("label") ?? [])
+      .find((label) => label.textContent?.includes("每次修改前确认"))
+      ?.querySelector<HTMLInputElement>('input[type="radio"]');
+    act(() => confirmedWrite?.click());
     expect(aiPanel?.querySelector('[aria-label="Agent 会话主视图"]')).not.toBeNull();
     act(() => editor?.querySelector<HTMLButtonElement>('[aria-label="拒绝计划"]')?.click());
     act(() => editor?.querySelector<HTMLButtonElement>('[aria-label="按此方案执行"]')?.click());

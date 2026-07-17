@@ -4,6 +4,7 @@ import type {
   AgentReasoningEffort,
   AgentRunCommandResult,
   AgentRunDraft,
+  AgentRunDraftMutation,
   AgentRunEvent,
   AgentRunSnapshot,
   ChangeSet,
@@ -12,6 +13,9 @@ import type {
   ContextDraftRef,
   DecideChangeSetCommand,
   DecideAgentPlanCommand,
+  DecidePlanRevisionCommand,
+  PermissionSummary,
+  PlanExecutionRecord,
   RefreshAgentContextCommand,
   ResumeAgentRunCommand,
   RetryAgentRunStepCommand,
@@ -31,6 +35,7 @@ import type {
 import type {
   AgentComposerContextStatusControl,
   AgentComposerModelControl,
+  AgentComposerPermissionControl,
   AgentComposerReasoningControl,
   AgentComposerReferenceChip,
   AgentComposerReferenceControl,
@@ -38,6 +43,7 @@ import type {
   AgentComposerProps,
   AgentContextPrecision,
   AgentPlanReviewProps,
+  AgentPlanExecutionControl,
   AgentRunPanelProps,
   ChangeSetReviewModel,
   ChangeSetSelection,
@@ -111,6 +117,10 @@ interface BridgeState {
   /** The latest server-resolved budget preview for the current draft revision (never renderer-authored). */
   readonly budgetPreview: ContextBudgetSnapshot | undefined;
   readonly draftPending: boolean;
+  readonly permissionSummary: PermissionSummary | undefined;
+  readonly permissionPending: boolean;
+  readonly permissionError: string | undefined;
+  readonly planExecution: PlanExecutionRecord | undefined;
 }
 
 export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
@@ -136,7 +146,11 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     runDraft: undefined,
     contextDraft: undefined,
     budgetPreview: undefined,
-    draftPending: false
+    draftPending: false,
+    permissionSummary: undefined,
+    permissionPending: false,
+    permissionError: undefined,
+    planExecution: undefined
   };
   const listeners = new Set<() => void>();
   let approvalInFlight: Promise<AgentRunPanelProps> | undefined;
@@ -144,12 +158,15 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   let undoInFlight: Promise<AgentRunPanelProps> | undefined;
   let undoInFlightAction: "request" | "resolve" | "retry" | undefined;
   let draftInFlight: Promise<void> | undefined;
+  let planDecisionInFlight: Promise<AgentRunPanelProps> | undefined;
+  let permissionSummaryRequested = false;
   // Increments on every conversation switch so a slow in-flight draft load for a previous
   // conversation can detect it is stale and drop its result instead of clobbering the new one.
   let draftToken = 0;
   // The Stage 5 draft/budget/compaction methods, viewed as optional: pre-Stage-5 hosts (and the
   // test fakes) do not implement them, so the composer degrades to its flat, non-draft-backed form.
   const draftApi = api.agentRuns as unknown as OptionalDraftApi;
+  const stage5BApi = api.agentRuns as unknown as OptionalStage5BApi;
 
   api.agentRuns.onEvent((event) => {
     if (context?.projectId !== event.projectId) return;
@@ -195,7 +212,15 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       event.type === "change_set_ready" ||
       event.type === "approval_resolved" ||
       event.type === "write_applied" ||
-      event.type === "write_failed"
+      event.type === "write_failed" ||
+      event.type === "permission_summary_ready" ||
+      event.type === "plan_step_started" ||
+      event.type === "plan_step_completed" ||
+      event.type === "plan_step_blocked" ||
+      event.type === "plan_step_skipped" ||
+      event.type === "plan_deviation_recorded" ||
+      event.type === "plan_revision_requested" ||
+      event.type === "plan_decision_resolved"
     ) {
       void hydrate(event.runId).then(notify);
     }
@@ -544,6 +569,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       return;
     }
     const read = result.value;
+    const permission = await readBoundPermissionSummary(read.snapshot);
     const nextChangeSet = read.changeSet;
     const nextRollbackReview = rollbackReviewFromRead(read.rollbackReview);
     const sameRollbackReview = hasSameRollbackDecisionContext(
@@ -564,6 +590,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         .join(""),
       pendingUserInput: read.pendingUserInput,
       planArtifact: read.planArtifact,
+      planExecution: read.planExecution,
+      permissionSummary: permission.summary,
+      permissionPending: false,
+      permissionError: permission.errorMessage,
       changeSet: nextChangeSet,
       rollbackReview: nextRollbackReview,
       rollbackReviewOpen:
@@ -582,6 +612,39 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     };
   }
 
+  async function readBoundPermissionSummary(snapshot: AgentRunSnapshot): Promise<{
+    readonly summary: PermissionSummary | undefined;
+    readonly errorMessage: string | undefined;
+  }> {
+    if (snapshot.permissionSummaryId === null) {
+      return { summary: undefined, errorMessage: undefined };
+    }
+    if (
+      state.permissionSummary?.permissionSummaryId === snapshot.permissionSummaryId &&
+      state.permissionSummary?.checksum === snapshot.permissionSummaryChecksum
+    ) {
+      return { summary: state.permissionSummary, errorMessage: undefined };
+    }
+    const readPermissionSummary = stage5BApi.readPermissionSummary;
+    if (readPermissionSummary === undefined) {
+      return { summary: undefined, errorMessage: undefined };
+    }
+    const result = await readPermissionSummary({
+      kind: "run",
+      projectId: snapshot.projectId,
+      runId: snapshot.runId,
+      permissionSummaryId: snapshot.permissionSummaryId
+    });
+    if (!result.ok) return { summary: undefined, errorMessage: result.error.message };
+    if (result.value === undefined || result.value.checksum !== snapshot.permissionSummaryChecksum) {
+      return {
+        summary: undefined,
+        errorMessage: "权限摘要与当前运行绑定不一致，请重新加载。"
+      };
+    }
+    return { summary: result.value, errorMessage: undefined };
+  }
+
   function requireSnapshot(): AgentRunSnapshot | undefined {
     if (state.snapshot === undefined) {
       state = { ...state, errorMessage: "当前没有可操作的 Agent 运行。" };
@@ -590,13 +653,96 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     return state.snapshot;
   }
 
+  function planExecutionControl(): AgentPlanExecutionControl | undefined {
+    if (state.planExecution === undefined) return undefined;
+    const revisionRequest = pendingPlanRevisionRequest();
+    return {
+      record: state.planExecution,
+      ...(state.planArtifact === undefined ? {} : { plan: state.planArtifact }),
+      ...(revisionRequest === undefined ? {} : { revisionRequest }),
+      deciding: planDecisionInFlight !== undefined,
+      onDecideRevision: (decision) => void decidePendingPlanRevision(decision)
+    };
+  }
+
+  function pendingPlanRevisionRequest(): AgentPlanExecutionControl["revisionRequest"] {
+    if (state.snapshot?.status !== "awaiting_plan_revision" || state.planExecution === undefined) {
+      return undefined;
+    }
+    const requested = [...state.events]
+      .reverse()
+      .find((event) => event.type === "plan_revision_requested");
+    const detail = requested?.detail;
+    const requestId = typeof detail?.["requestId"] === "string" ? detail["requestId"] : undefined;
+    const planId = typeof detail?.["planId"] === "string" ? detail["planId"] : undefined;
+    const planRevision = detail?.["planRevision"];
+    const discovery = typeof detail?.["discovery"] === "string" ? detail["discovery"] : undefined;
+    const proposal = typeof detail?.["proposal"] === "string" ? detail["proposal"] : undefined;
+    const affectedStepIds = Array.isArray(detail?.["affectedStepIds"])
+      ? detail["affectedStepIds"].filter((stepId): stepId is string => typeof stepId === "string")
+      : [];
+    if (
+      requestId === undefined ||
+      planId !== state.planExecution.planId ||
+      !Number.isSafeInteger(planRevision) ||
+      Number(planRevision) <= state.planExecution.planRevision ||
+      discovery === undefined ||
+      proposal === undefined ||
+      affectedStepIds.length === 0
+    ) {
+      return undefined;
+    }
+    return {
+      requestId,
+      planExecutionId: state.planExecution.planExecutionId,
+      planId,
+      planRevision: Number(planRevision),
+      originalPlan: state.planArtifact?.goal ?? `${planId} v${state.planExecution.planRevision}`,
+      discovery,
+      proposal,
+      affectedStepIds
+    };
+  }
+
+  function decidePendingPlanRevision(
+    decision: "approve" | "reject"
+  ): Promise<AgentRunPanelProps> {
+    if (planDecisionInFlight !== undefined) return planDecisionInFlight;
+    const snapshot = requireSnapshot();
+    const request = pendingPlanRevisionRequest();
+    const decidePlanRevision = stage5BApi.decidePlanRevision;
+    if (snapshot === undefined || request === undefined || decidePlanRevision === undefined) {
+      return Promise.resolve(toProps());
+    }
+    const command: DecidePlanRevisionCommand = {
+      runId: snapshot.runId,
+      projectId: snapshot.projectId,
+      commandId: createCommandId("plan-revision"),
+      expectedRunRevision: snapshot.runRevision,
+      requestId: request.requestId,
+      planId: request.planId,
+      planRevision: request.planRevision,
+      decision
+    };
+    const pending = (async () => {
+      try {
+        await applyCommandResult(await decidePlanRevision(command));
+      } finally {
+        planDecisionInFlight = undefined;
+        notify();
+      }
+      return toProps();
+    })();
+    planDecisionInFlight = pending;
+    notify();
+    return pending;
+  }
+
   function toProps(): AgentRunPanelProps {
+    const planExecution = planExecutionControl();
     return {
       projectId: context?.projectId ?? state.snapshot?.projectId ?? "",
       ...(state.snapshot === undefined ? {} : { runId: state.snapshot.runId }),
-      operationMode: state.operationMode,
-      contextMode: state.contextMode,
-      writePolicy: state.writePolicy,
       status: state.snapshot?.status ?? "idle",
       assistantText: state.assistantText,
       events: state.events,
@@ -672,6 +818,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
               }
             }
           }),
+      ...(planExecution === undefined ? {} : { planExecution }),
       ...(state.operationMode === "execution"
         ? {
             canUndoRun: canUndoAppliedRun(state),
@@ -729,6 +876,12 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         ...state,
         runDraft: result.value.runDraft,
         contextDraft: result.value.contextDraft,
+        operationMode: result.value.runDraft.operationMode,
+        contextMode: result.value.runDraft.contextMode,
+        writePolicy: result.value.runDraft.writePolicy,
+        writePolicyAcknowledged: result.value.runDraft.writePolicyAcknowledged,
+        permissionSummary: undefined,
+        permissionError: undefined,
         draftPending: false
       };
       notify();
@@ -769,12 +922,38 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   function queueDraftMutation(execute: () => Promise<void>): Promise<void> {
     const previous = draftInFlight ?? Promise.resolve();
     const next = previous.then(execute).finally(() => {
-      if (draftInFlight === next) draftInFlight = undefined;
+      if (draftInFlight === next) {
+        draftInFlight = undefined;
+        state = { ...state, draftPending: false };
+        notify();
+      }
     });
     draftInFlight = next;
     state = { ...state, draftPending: true };
     notify();
     return next;
+  }
+
+  function updateRunDraftChoice(mutation: AgentRunDraftMutation, refreshBudget: boolean): void {
+    const updateRunDraft = draftApi.updateRunDraft;
+    if (updateRunDraft === undefined) return;
+    void queueDraftMutation(async () => {
+      const ctx = context;
+      const draft = state.runDraft;
+      const token = draftToken;
+      if (ctx?.conversationId === undefined || draft === undefined) return;
+      const result = await updateRunDraft({
+        projectId: ctx.projectId,
+        conversationId: ctx.conversationId,
+        commandId: createCommandId("draft-choice"),
+        expectedDraftRevision: draft.revision,
+        mutation
+      });
+      applyDraftResult(result, token);
+      if (refreshBudget) await previewBudget(token);
+    }).then(() => {
+      if (permissionSummaryRequested) void loadPermissionSummary();
+    });
   }
 
   function updateModelDraft(modelProfileId: string): void {
@@ -929,6 +1108,13 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       ...state,
       runDraft: result.value.runDraft,
       contextDraft: result.value.contextDraft,
+      operationMode: result.value.runDraft.operationMode,
+      contextMode: result.value.runDraft.contextMode,
+      writePolicy: result.value.runDraft.writePolicy,
+      writePolicyAcknowledged: result.value.runDraft.writePolicyAcknowledged,
+      permissionSummary: undefined,
+      permissionPending: false,
+      permissionError: undefined,
       errorMessage: undefined
     };
   }
@@ -1025,6 +1211,88 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     return "normal";
   }
 
+  function permissionControl(): AgentComposerPermissionControl {
+    return {
+      ...(state.permissionSummary === undefined ? {} : { summary: state.permissionSummary }),
+      loading: state.permissionPending,
+      ...(state.permissionError === undefined ? {} : { errorMessage: state.permissionError }),
+      approvalSource: permissionApprovalSource(),
+      onOpen: () => void loadPermissionSummary()
+    };
+  }
+
+  function permissionApprovalSource(): AgentComposerPermissionControl["approvalSource"] {
+    if (state.operationMode === "planning") return "not_applicable";
+    const resolved = [...state.events]
+      .reverse()
+      .find(
+        (event) =>
+          (event.type === "approval_resolved" || event.type === "change_set_auto_approved") &&
+          typeof event.detail?.["approvalSource"] === "string"
+      );
+    const source = resolved?.detail?.["approvalSource"];
+    return source === "human_confirmation" || source === "user_preapproved_run"
+      ? source
+      : "not_approved";
+  }
+
+  async function loadPermissionSummary(): Promise<void> {
+    permissionSummaryRequested = true;
+    const readPermissionSummary = stage5BApi.readPermissionSummary;
+    if (readPermissionSummary === undefined) return;
+    const snapshot = state.snapshot;
+    if (snapshot !== undefined && typeof snapshot.permissionSummaryId === "string") {
+      if (
+        state.permissionSummary?.permissionSummaryId === snapshot.permissionSummaryId &&
+        state.permissionSummary.checksum === snapshot.permissionSummaryChecksum
+      ) {
+        return;
+      }
+      state = { ...state, permissionPending: true, permissionError: undefined };
+      notify();
+      const permission = await readBoundPermissionSummary(snapshot);
+      if (
+        state.snapshot?.runId !== snapshot.runId ||
+        state.snapshot.permissionSummaryId !== snapshot.permissionSummaryId
+      ) {
+        return;
+      }
+      state = {
+        ...state,
+        permissionPending: false,
+        permissionSummary: permission.summary,
+        permissionError: permission.errorMessage
+      };
+      notify();
+      return;
+    }
+    if (draftInFlight !== undefined) await draftInFlight;
+    if (state.permissionPending) return;
+    const draft = state.runDraft;
+    const ctx = context;
+    if (draft === undefined || ctx?.conversationId === undefined) return;
+    state = { ...state, permissionPending: true, permissionError: undefined };
+    notify();
+    const result = await readPermissionSummary({
+      kind: "draft",
+      projectId: ctx.projectId,
+      conversationId: ctx.conversationId,
+      runDraftId: draft.runDraftId,
+      runDraftRevision: draft.revision,
+      runDraftChecksum: draft.checksum
+    });
+    if (state.runDraft?.runDraftId !== draft.runDraftId || state.runDraft.revision !== draft.revision) {
+      return;
+    }
+    state = {
+      ...state,
+      permissionPending: false,
+      permissionSummary: result.ok ? result.value : undefined,
+      permissionError: result.ok ? undefined : result.error.message
+    };
+    notify();
+  }
+
   function toComposerProps(): AgentComposerProps {
     return {
       request: state.userRequest,
@@ -1034,23 +1302,35 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       writePolicyAcknowledged: state.writePolicyAcknowledged,
       active: state.snapshot !== undefined && !isTerminalRunStatus(state.snapshot.status),
       ...composerDraftGroups(),
+      ...(stage5BApi.readPermissionSummary === undefined && state.permissionSummary === undefined
+        ? {}
+        : { permission: permissionControl() }),
       onRequestChange: (request) => {
         state = { ...state, userRequest: request };
         notify();
       },
       onOperationModeChange: (mode) => {
+        if (mode === "planning") permissionSummaryRequested = false;
         state = {
           ...state,
           operationMode: mode,
           ...(mode === "planning"
-            ? { writePolicy: "write_before_confirmation", writePolicyAcknowledged: false }
+            ? {
+                writePolicy: "write_before_confirmation",
+                writePolicyAcknowledged: false,
+                permissionSummary: undefined,
+                permissionPending: false,
+                permissionError: undefined
+              }
             : {})
         };
         notify();
+        updateRunDraftChoice({ kind: "set_operation_mode", operationMode: mode }, true);
       },
       onContextModeChange: (mode) => {
         state = { ...state, contextMode: mode };
         notify();
+        updateRunDraftChoice({ kind: "set_context_mode", contextMode: mode }, true);
       },
       onWritePolicyChange: (writePolicy) => {
         if (state.operationMode !== "execution") return;
@@ -1061,6 +1341,15 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
             writePolicy === "user_preapproved_run" && state.writePolicyAcknowledged
         };
         notify();
+        updateRunDraftChoice(
+          {
+            kind: "set_write_policy",
+            writePolicy,
+            acknowledged:
+              writePolicy === "user_preapproved_run" && state.writePolicyAcknowledged
+          },
+          false
+        );
       },
       onWritePolicyAcknowledgedChange: (writePolicyAcknowledged) => {
         if (
@@ -1071,6 +1360,14 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         }
         state = { ...state, writePolicyAcknowledged };
         notify();
+        updateRunDraftChoice(
+          {
+            kind: "set_write_policy",
+            writePolicy: state.writePolicy,
+            acknowledged: writePolicyAcknowledged
+          },
+          false
+        );
       },
       onSend: (request) => void sendRun(request).then(notify),
       onStop: () => void stopRun().then(notify)
@@ -1102,6 +1399,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         conversationChanged ||
         (projectChanged && state.snapshot?.projectId !== nextContext.projectId)
       ) {
+        permissionSummaryRequested = false;
         state = resetRunState(state);
       }
       // Load (or lazily initialize) the persisted composer draft when the conversation changes so the
@@ -1136,6 +1434,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     },
     async loadRun(runId) {
       if (runId === undefined) {
+        permissionSummaryRequested = false;
         state = resetRunState(state);
         notify();
         return toProps();
@@ -1240,7 +1539,11 @@ function resetRunState(state: BridgeState): BridgeState {
     runDraft: undefined,
     contextDraft: undefined,
     budgetPreview: undefined,
-    draftPending: false
+    draftPending: false,
+    permissionSummary: undefined,
+    permissionPending: false,
+    permissionError: undefined,
+    planExecution: undefined
   };
 }
 
@@ -1369,6 +1672,11 @@ interface OptionalDraftApi {
   compactContext?: NovelStudioApi["agentRuns"]["compactContext"];
 }
 
+interface OptionalStage5BApi {
+  readPermissionSummary?: NovelStudioApi["agentRuns"]["readPermissionSummary"];
+  decidePlanRevision?: NovelStudioApi["agentRuns"]["decidePlanRevision"];
+}
+
 const REFERENCE_KIND_LABEL: Record<AgentComposerReferenceKind, string> = {
   chapter: "章节",
   story_bible: "设定",
@@ -1472,6 +1780,10 @@ function eventStatus(eventType: AgentRunEvent["type"]): AgentRunSnapshot["status
       return "plan_ready";
     case "plan_execution_started":
       return "executing_model";
+    case "plan_revision_requested":
+      return "awaiting_plan_revision";
+    case "plan_decision_resolved":
+      return "executing_model";
     case "change_set_ready":
       return "awaiting_write_approval";
     case "write_started":
@@ -1491,7 +1803,12 @@ function eventStatus(eventType: AgentRunEvent["type"]): AgentRunSnapshot["status
     case "context_refreshed":
     case "context_excluded":
     case "context_refresh_cancelled":
-    case "plan_decision_resolved":
+    case "permission_summary_ready":
+    case "plan_step_started":
+    case "plan_step_completed":
+    case "plan_step_blocked":
+    case "plan_step_skipped":
+    case "plan_deviation_recorded":
     case "approval_resolved":
     case "write_applied":
     case "write_failed":

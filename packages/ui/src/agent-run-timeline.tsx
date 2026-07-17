@@ -1,15 +1,21 @@
 import { CheckCircle2, Circle, HelpCircle, LoaderCircle, XCircle } from "lucide-react";
 
 import type { AgentRunEvent } from "@novel-studio/application";
+import type { AgentPlanExecutionControl } from "./workspace-shell-types.js";
 
 export function AgentRunTimeline({
   events,
+  planExecution,
   ariaLabel = "Agent 运行时间线"
 }: {
   readonly events: readonly AgentRunEvent[];
+  readonly planExecution?: AgentPlanExecutionControl;
   readonly ariaLabel?: string;
 }) {
-  const items = timelineItems(events);
+  const items = [
+    ...(planExecution === undefined ? [] : planExecutionItems(planExecution, events)),
+    ...timelineItems(events)
+  ];
   const current = items.at(-1);
 
   if (items.length === 0) return null;
@@ -24,7 +30,12 @@ export function AgentRunTimeline({
           const expanded =
             item.status === "running" || item.status === "waiting" || item.status === "failed";
           return (
-            <li data-status={item.status} key={item.key}>
+            <li
+              data-plan-execution-id={item.planExecutionId}
+              data-plan-step-id={item.planStepId}
+              data-status={item.status}
+              key={item.key}
+            >
               <TimelineIcon status={item.status} />
               <details open={expanded}>
                 <summary>
@@ -47,6 +58,72 @@ interface TimelineItem {
   readonly detail?: string;
   readonly status: "pending" | "running" | "completed" | "failed" | "waiting";
   readonly statusLabel: string;
+  readonly planExecutionId?: string;
+  readonly planStepId?: string;
+}
+
+function planExecutionItems(
+  control: AgentPlanExecutionControl,
+  events: readonly AgentRunEvent[]
+): TimelineItem[] {
+  const record = control.record;
+  return record.steps.map((step) => {
+    const deviation = [...events]
+      .sort(compareEvents)
+      .reverse()
+      .find(
+        (event) =>
+          event.type === "plan_deviation_recorded" &&
+          event.detail?.["planExecutionId"] === record.planExecutionId &&
+          event.detail?.["stepId"] === step.stepId
+      );
+    const deviationSummary = stringDetail(deviation, "summary");
+    const detail = [
+      ...step.verification.map((entry) => `验证：${entry}`),
+      ...(step.blockedReason === null ? [] : [`阻塞：${step.blockedReason}`]),
+      ...(deviationSummary === undefined
+        ? []
+        : [
+            `${step.deviationKind === "material" ? "实质偏离" : "轻微偏离"}：${deviationSummary}`
+          ])
+    ];
+    return {
+      key: `${record.planExecutionId}:${step.stepId}`,
+      label: step.title,
+      ...(detail.length === 0 ? {} : { detail: detail.join(" · ") }),
+      status: planStepTimelineStatus(step.status),
+      statusLabel: planStepStatusLabel(step),
+      planExecutionId: record.planExecutionId,
+      planStepId: step.stepId
+    };
+  });
+}
+
+function planStepTimelineStatus(
+  status: AgentPlanExecutionControl["record"]["steps"][number]["status"]
+): TimelineItem["status"] {
+  if (status === "running") return "running";
+  if (status === "blocked") return "failed";
+  if (status === "completed" || status === "skipped") return "completed";
+  return "pending";
+}
+
+function planStepStatusLabel(
+  step: AgentPlanExecutionControl["record"]["steps"][number]
+): string {
+  if (step.deviationKind === "material") return "待修订";
+  switch (step.status) {
+    case "running":
+      return "进行中";
+    case "completed":
+      return step.verification.length > 0 ? "已完成并验证" : "已完成";
+    case "blocked":
+      return "已阻塞";
+    case "skipped":
+      return "已跳过";
+    default:
+      return "待执行";
+  }
 }
 
 function timelineItems(events: readonly AgentRunEvent[]): TimelineItem[] {
@@ -181,8 +258,8 @@ function toolActivityLabel(toolName: string | undefined): string {
   }
 }
 
-function stringDetail(event: AgentRunEvent, key: string): string | undefined {
-  const value = event.detail?.[key];
+function stringDetail(event: AgentRunEvent | undefined, key: string): string | undefined {
+  const value = event?.detail?.[key];
   return typeof value === "string" ? value : undefined;
 }
 

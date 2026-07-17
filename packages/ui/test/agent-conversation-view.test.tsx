@@ -197,9 +197,6 @@ function agentRun(): AgentRunPanelProps {
   return {
     projectId: "project-01",
     runId: "run-current",
-    operationMode: "planning",
-    contextMode: "writing",
-    writePolicy: "write_before_confirmation",
     status: "idle",
     assistantText: "",
     events: [],

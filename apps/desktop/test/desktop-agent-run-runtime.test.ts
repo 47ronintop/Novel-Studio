@@ -96,6 +96,120 @@ describe("desktop Agent Run runtime", () => {
     ).toMatchObject({ ok: false });
   });
 
+  test("treats a saved active editor as disk context during draft preflight", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-saved-editor-"));
+    roots.push(projectRoot);
+    await mkdir(join(projectRoot, "chapters"), { recursive: true });
+    const chapterId = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D2";
+    const relativePath = `chapters/${chapterId}.md`;
+    const body = "Original saved chapter body.\n";
+    await writeFile(
+      join(projectRoot, relativePath),
+      `---\nschemaVersion: "1.0"\nid: ${chapterId}\ntype: chapter\ntitle: Saved editor\norder: 1\nstatus: draft\ncreatedAt: "2026-07-17T00:00:00.000Z"\nupdatedAt: "2026-07-17T00:00:00.000Z"\n---\n\n${body}`,
+      "utf8"
+    );
+    let round = 0;
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      projectRoot,
+      projectId: "project-01",
+      activeChapterId: chapterId,
+      createRunId: () => "run-saved-editor-preflight",
+      readEditorBuffer: async (refId) =>
+        refId === `chapter:${chapterId}` ? body : undefined,
+      readEditorState: async (path) =>
+        path === relativePath ? { dirty: false, content: body } : undefined,
+      resolveModelStartFacts: async () => ({
+        profileId: "profile-saved-editor",
+        provider: "demo",
+        modelName: "saved-editor-model",
+        capabilities: {
+          streaming: true,
+          toolCalling: true,
+          structuredArguments: true,
+          contextWindow: 128000
+        },
+        requiredContextTokens: 8000,
+        reasoningStrength: { status: "hidden", reason: "test model" }
+      }),
+      modelDriver: {
+        async *streamRound() {
+          round += 1;
+          if (round === 1) {
+            yield runtimeToolCall("proposal-saved-editor", "propose_chapter_write", {
+              chapterId,
+              baseHash: sha256(body),
+              range: { unit: "character", start: 0, end: 8 },
+              replacement: "Revised"
+            });
+          } else {
+            yield runtimeToolCall("finish-saved-editor", "finish", { summary: "Finished." });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+    const conversation = await runtime.agentConversationSession.createConversation({
+      projectId: "project-01",
+      commandId: "create-saved-editor-conversation"
+    });
+    expect(conversation).toMatchObject({ ok: true });
+    if (!conversation.ok) return;
+    const prepared = await runtime.agentRunDraftSession.syncStartDraft({
+      projectId: "project-01",
+      conversationId: conversation.value.conversationId,
+      commandId: "prepare-saved-editor-run",
+      userRequest: "Revise the saved active chapter.",
+      operationMode: "execution",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      modelProfileId: "profile-saved-editor",
+      contextRefs: [
+        {
+          kind: "chapter",
+          refId: `chapter:${chapterId}`,
+          chapterId,
+          label: "Saved editor"
+        }
+      ]
+    });
+    expect(prepared).toMatchObject({ ok: true });
+    if (!prepared.ok) return;
+
+    const started = await runtime.agentRunSession.startAgentRun({
+      projectId: "project-01",
+      conversationId: conversation.value.conversationId,
+      commandId: "start-saved-editor-run",
+      expectedRunRevision: 0,
+      runDraftId: prepared.value.runDraft.runDraftId,
+      runDraftRevision: prepared.value.runDraft.revision,
+      runDraftChecksum: prepared.value.runDraft.checksum
+    });
+    expect(started).toMatchObject({ ok: true });
+    await vi.waitFor(async () => {
+      const read = await runtime.agentRunSession.readAgentRun("run-saved-editor-preflight");
+      expect(read).not.toMatchObject({
+        value: {
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_failed",
+              detail: expect.objectContaining({
+                message: "Save and refresh the dirty editor target before creating a Change Set."
+              })
+            })
+          ])
+        }
+      });
+      expect(read).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: { status: "awaiting_write_approval" },
+          changeSet: { files: [{ relativePath }] }
+        }
+      });
+    });
+  });
+
   test("injects and indexes persisted context from earlier runs in the same conversation", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-context-"));
     roots.push(projectRoot);

@@ -200,7 +200,7 @@ export interface AgentRunStartFacts {
 
 export type AgentRunStartPermissionPort = Pick<
   AgentPermissionSession,
-  "verifyForStart" | "bindToRun"
+  "verifyForStart" | "prepareForPlanHandoff" | "bindToRun" | "readForRun"
 >;
 
 export interface AgentRunStartPreflightPort {
@@ -247,6 +247,10 @@ export interface AgentRunPersistencePort {
     contextSnapshotId: string
   ): Promise<Result<JsonObject | undefined, UnifiedError>>;
   writePlanArtifact?(plan: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
+  readPlanArtifact?(
+    planId: string,
+    revision: number
+  ): Promise<Result<JsonObject | undefined, UnifiedError>>;
   writePlanExecutionRecord?(record: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
   readPlanExecutionRecord?(
     runId: string,
@@ -739,6 +743,21 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         ? parseUserInputRequest(pendingEvent.detail)
         : undefined;
     const planEvent = [...events].reverse().find((event) => event.type === "plan_ready");
+    const persistedPlanResult =
+      planEvent?.detail !== undefined ||
+      snapshot.sourcePlanId === null ||
+      snapshot.sourcePlanRevision === null ||
+      options.repository.readPlanArtifact === undefined
+        ? ok(undefined)
+        : await options.repository.readPlanArtifact(
+            snapshot.sourcePlanId,
+            snapshot.sourcePlanRevision
+          );
+    if (!persistedPlanResult.ok) {
+      return { ok: false, error: persistedPlanResult.error };
+    }
+    const restoredPlanArtifact =
+      planEvent?.detail ?? persistedPlanResult.value;
     const changeSetEvent = [...events].reverse().find((event) => event.type === "change_set_ready");
     const restoredChangeSet = isJsonObject(changeSetEvent?.detail?.["changeSet"])
       ? (changeSetEvent?.detail?.["changeSet"] as unknown as ChangeSet)
@@ -824,9 +843,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       stopRequested: false,
       ...(restoredRetryCall === undefined ? {} : { lastFailedToolCall: restoredRetryCall }),
       ...(pendingUserInput?.ok === true ? { pendingUserInput: pendingUserInput.value } : {}),
-      ...(planEvent?.detail === undefined
+      ...(restoredPlanArtifact === undefined
         ? {}
-        : { planArtifact: planEvent.detail as unknown as PlanArtifact }),
+        : { planArtifact: restoredPlanArtifact as unknown as PlanArtifact }),
       ...(restoredFinalChangeSet === undefined ? {} : { changeSet: restoredFinalChangeSet }),
       ...(restoredRollbackReview === undefined ? {} : { rollbackReview: restoredRollbackReview })
     };
@@ -1639,6 +1658,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         const verified = await options.permission.verifyForStart({
           projectId: command.projectId,
           runDraftId: command.runDraftId,
+          runDraftRevision: command.runDraftRevision,
           operationMode: startInput.operationMode,
           contextMode: startInput.contextMode,
           writePolicy: startInput.writePolicy ?? "write_before_confirmation"
@@ -2131,6 +2151,43 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           executionConversationContext = loaded.value;
         }
       }
+      let executionPermissionSummary: PermissionSummary | undefined;
+      if (command.decision === "approve" && options.permission !== undefined) {
+        if (snapshot.permissionSummaryId === null) {
+          await cancelExecutionStart();
+          return failure(
+            "AGENT_PERMISSION_SUMMARY_NOT_FOUND",
+            "The approved plan has no bound permission summary."
+          );
+        }
+        const sourcePermission = await options.permission.readForRun({
+          runId: snapshot.runId,
+          permissionSummaryId: snapshot.permissionSummaryId
+        });
+        if (!sourcePermission.ok) {
+          await cancelExecutionStart();
+          return { ok: false, error: sourcePermission.error };
+        }
+        if (sourcePermission.value === undefined) {
+          await cancelExecutionStart();
+          return failure(
+            "AGENT_PERMISSION_SUMMARY_NOT_FOUND",
+            "The approved plan's bound permission summary does not exist."
+          );
+        }
+        const preparedPermission = await options.permission.prepareForPlanHandoff({
+          projectId: command.projectId,
+          runDraftId: sourcePermission.value.runDraftId,
+          operationMode: "execution",
+          contextMode: command.executionContextMode ?? snapshot.contextMode,
+          writePolicy: command.executionWritePolicy ?? "write_before_confirmation"
+        });
+        if (!preparedPermission.ok) {
+          await cancelExecutionStart();
+          return { ok: false, error: preparedPermission.error };
+        }
+        executionPermissionSummary = preparedPermission.value;
+      }
       const decided = await recordEvent(command.runId, {
         runId: command.runId,
         status: "plan_ready",
@@ -2196,6 +2253,12 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         sourcePlanRevision: plan.revision,
         planExecutionId,
         planExecutionRevision: 1,
+        ...(executionPermissionSummary === undefined
+          ? {}
+          : {
+              permissionSummaryId: executionPermissionSummary.permissionSummaryId,
+              permissionSummaryChecksum: executionPermissionSummary.checksum
+            }),
         initialContextSources: runtime.contextSources
       };
       const executionStarted = coordinator.startRun(executionStart);
@@ -2245,10 +2308,36 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         await cancelExecutionStart();
         return persistedExecution;
       }
+      let executionSnapshotForConversation = persistedExecution.value;
+      if (options.permission !== undefined && executionPermissionSummary !== undefined) {
+        const boundPermission = await options.permission.bindToRun({
+          runId: executionStarted.value.runId,
+          summary: executionPermissionSummary
+        });
+        if (!boundPermission.ok) {
+          await cancelExecutionStart();
+          return { ok: false, error: boundPermission.error };
+        }
+        const permissionReady = await recordEvent(executionStarted.value.runId, {
+          runId: executionStarted.value.runId,
+          status: executionStarted.value.status,
+          type: "permission_summary_ready",
+          detail: {
+            permissionSummaryId: boundPermission.value.permissionSummaryId,
+            checksum: boundPermission.value.checksum,
+            toolRegistryRevision: boundPermission.value.toolRegistryRevision
+          }
+        });
+        if (!permissionReady.ok) {
+          await cancelExecutionStart();
+          return permissionReady;
+        }
+        executionSnapshotForConversation = permissionReady.value;
+      }
       if (options.conversationLifecycle !== undefined) {
         try {
           const noted = await options.conversationLifecycle.noteRunStarted(
-            persistedExecution.value
+            executionSnapshotForConversation
           );
           if (!noted.ok) await cancelExecutionStart();
           else executionConversationReserved = false;

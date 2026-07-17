@@ -1,6 +1,8 @@
 import {
   createAgentConversationSession,
   createAgentContextSession,
+  createAgentPermissionSession,
+  createAgentPlanExecutionSession,
   createAgentRunDraftSession,
   createAgentRunSession,
   createChangeSetSession,
@@ -9,6 +11,8 @@ import {
   type AgentContextBudgetInputs,
   type AgentContextBudgetInputsPort,
   type AgentContextSession,
+  type AgentPermissionSession,
+  type AgentPlanExecutionSession,
   type AgentModelRoundInput,
   type AgentModelStreamEvent,
   type AgentConversationLifecyclePort,
@@ -24,6 +28,8 @@ import {
   type VersionGroupSessionTransactionPort,
   type VersionGroupTransactionApplyInput
 } from "@novel-studio/application";
+import { createHash } from "node:crypto";
+import { realpath } from "node:fs/promises";
 import { createDesktopCompactionSources } from "./agent-compaction-composer.js";
 import type { LlmModelProfile, LlmParameters } from "@novel-studio/llm-adapter";
 import type {
@@ -126,6 +132,8 @@ export interface DesktopAgentRuntimeServices {
   readonly agentConversationSession: AgentConversationSession;
   readonly agentRunDraftSession: AgentRunDraftSession;
   readonly agentContextSession: AgentContextSession;
+  readonly agentPermissionSession: AgentPermissionSession;
+  readonly agentPlanExecutionSession: AgentPlanExecutionSession;
   /**
    * The redacted usage sink, present only when `userDataRoot` was threaded in. It is the `usageSink`
    * port of the compaction composer wired below.
@@ -334,15 +342,43 @@ function createDesktopAgentRuntimeServices(
     ...(options.readEditorBuffer === undefined
       ? {}
       : { readEditorBuffer: options.readEditorBuffer }),
+    ...(options.readEditorState === undefined
+      ? {}
+      : { readEditorState: options.readEditorState }),
     ...(options.resolveModelStartFacts === undefined
       ? {}
       : { resolveModelStartFacts: options.resolveModelStartFacts })
   });
+  const permissionSession = createAgentPermissionSession({
+    repository: {
+      writePermissionSummary: (runId, summary) =>
+        repository.writePermissionSummary(runId, summary),
+      readPermissionSummary: (runId, permissionSummaryId) =>
+        repository.readPermissionSummary(runId, permissionSummaryId)
+    },
+    rootFingerprint: {
+      async resolveRootFingerprint(projectId) {
+        if (projectId !== options.projectId) {
+          return err(permissionRootError("AGENT_PERMISSION_PROJECT_MISMATCH"));
+        }
+        try {
+          const canonicalRoot = await realpath(options.projectRoot);
+          return ok(createHash("sha256").update(canonicalRoot, "utf8").digest("hex"));
+        } catch {
+          return err(permissionRootError("AGENT_PERMISSION_PROJECT_ROOT_UNAVAILABLE"));
+        }
+      }
+    },
+    ...(options.now === undefined ? {} : { now: options.now })
+  });
+  const planExecutionSession = createAgentPlanExecutionSession({ repository });
   const session = createAgentRunSession({
     repository,
     modelDriver,
     readToolExecutor,
     startPreflight,
+    permission: permissionSession,
+    planExecutionSession,
     changeSetSession,
     ...(enforceConversationBinding ? { conversationLifecycle } : {}),
     ...(versionGroupServices === undefined
@@ -400,6 +436,9 @@ function createDesktopAgentRuntimeServices(
     ...(options.readEditorBuffer === undefined
       ? {}
       : { readEditorBuffer: options.readEditorBuffer }),
+    ...(options.readEditorState === undefined
+      ? {}
+      : { readEditorState: options.readEditorState }),
     ...(options.resolveModelStartFacts === undefined
       ? {}
       : { resolveModelStartFacts: options.resolveModelStartFacts }),
@@ -413,8 +452,21 @@ function createDesktopAgentRuntimeServices(
     agentConversationSession: conversationSession,
     agentRunDraftSession: draftSession,
     agentContextSession: contextSession,
+    agentPermissionSession: permissionSession,
+    agentPlanExecutionSession: planExecutionSession,
     ...(usageRepository === undefined ? {} : { agentUsageRepository: usageRepository })
   };
+}
+
+function permissionRootError(code: string): UnifiedError {
+  return createUnifiedError({
+    code,
+    category: "AgentError",
+    message: "The canonical Agent project root cannot be fingerprinted.",
+    recoverability: "user-action",
+    suggestedAction: "Reopen the project and retry.",
+    traceId: "desktop-agent-permission-root"
+  });
 }
 
 /**
@@ -434,6 +486,7 @@ function createDesktopAgentContextSession(input: {
   readonly projectReads: AgentProjectReadRepository;
   readonly storyBible: StoryBibleFileRepository;
   readonly readEditorBuffer?: NonNullable<DesktopAgentRunSessionOptions["readEditorBuffer"]>;
+  readonly readEditorState?: NonNullable<DesktopAgentRunSessionOptions["readEditorState"]>;
   readonly resolveModelStartFacts?: NonNullable<
     DesktopAgentRunSessionOptions["resolveModelStartFacts"]
   >;
@@ -1012,6 +1065,7 @@ function createDesktopStartPreflight(input: {
   readonly projectReads: AgentProjectReadRepository;
   readonly storyBible: StoryBibleFileRepository;
   readonly readEditorBuffer?: NonNullable<DesktopAgentRunSessionOptions["readEditorBuffer"]>;
+  readonly readEditorState?: NonNullable<DesktopAgentRunSessionOptions["readEditorState"]>;
   readonly resolveModelStartFacts?: NonNullable<
     DesktopAgentRunSessionOptions["resolveModelStartFacts"]
   >;
@@ -1076,6 +1130,7 @@ async function resolveStartFromDraft(
     readonly projectReads: AgentProjectReadRepository;
     readonly storyBible: StoryBibleFileRepository;
     readonly readEditorBuffer?: NonNullable<DesktopAgentRunSessionOptions["readEditorBuffer"]>;
+    readonly readEditorState?: NonNullable<DesktopAgentRunSessionOptions["readEditorState"]>;
     readonly resolveModelStartFacts?: NonNullable<
       DesktopAgentRunSessionOptions["resolveModelStartFacts"]
     >;
@@ -1127,6 +1182,7 @@ async function resolveContextDraftSources(
     readonly projectReads: AgentProjectReadRepository;
     readonly storyBible: StoryBibleFileRepository;
     readonly readEditorBuffer?: NonNullable<DesktopAgentRunSessionOptions["readEditorBuffer"]>;
+    readonly readEditorState?: NonNullable<DesktopAgentRunSessionOptions["readEditorState"]>;
   }
 ): Promise<Result<AgentContextSourceInput[], UnifiedError>> {
   const sources: AgentContextSourceInput[] = [];
@@ -1134,7 +1190,12 @@ async function resolveContextDraftSources(
     if ((ref.kind === "chapter" || ref.kind === "editor_selection") && ref.chapterId !== undefined) {
       const refId = `chapter:${ref.chapterId}`;
       const relativePath = `chapters/${ref.chapterId}.md`;
-      const buffered = await input.readEditorBuffer?.(refId);
+      const editorState = await input.readEditorState?.(relativePath);
+      const buffered = editorState?.dirty
+        ? editorState.content
+        : editorState === undefined
+          ? await input.readEditorBuffer?.(refId)
+          : undefined;
       if (buffered !== undefined) {
         sources.push({ refId, sourceKind: "editor_buffer", relativePath, content: buffered, dirty: true });
         continue;
@@ -1382,4 +1443,3 @@ function readRequiredId(value: JsonObject, key: string): string | undefined {
 function asJsonObject(value: object): JsonObject {
   return value as unknown as JsonObject;
 }
-import { createHash } from "node:crypto";

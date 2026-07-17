@@ -223,15 +223,28 @@ async function startAutonomousExecution(page: Page): Promise<void> {
   await page.getByLabel("活动栏").getByRole("button", { name: "AI 工作流" }).click();
   const createConversation = page.getByRole("button", { name: "新建会话" }).first();
   if (await createConversation.isVisible()) await createConversation.click();
-  await page.getByLabel("运行模式").getByRole("button", { name: "执行" }).click();
-  const policy = page.getByLabel("本次执行写入策略");
-  await policy.getByRole("radio", { name: "本次运行自动写入" }).check();
-  await expect(policy).toContainText("每次实际写入都会创建版本点并可撤销");
-  await policy.getByRole("checkbox", { name: /我理解本次执行可自动修改项目文件/ }).check();
   const composer = page.getByLabel("会话输入区");
+  await selectExecutionMode(composer);
+  await composer.getByLabel("修改权限：每次修改前确认").click();
+  const policy = composer.getByRole("dialog", { name: "修改权限与摘要" });
+  await policy.getByRole("radio", { name: "本次运行自动修改" }).check();
+  await expect(policy).toContainText("每次实际写入仍会生成差异、校验并创建版本点");
+  await policy.getByRole("checkbox", { name: "确认本次运行自动修改风险" }).check();
+  await policy.press("Escape");
   await composer.getByLabel("Agent 请求").fill("连续修改两章并完成运行");
   await composer.getByLabel("启动 Agent 运行").click();
   await resolveContextRefreshIfVisible(page);
+}
+
+async function selectExecutionMode(composer: ReturnType<Page["getByLabel"]>): Promise<void> {
+  if ((await composer.getByRole("button", { name: /^执行 · / }).count()) > 0) return;
+  await composer
+    .getByRole("button", { name: /^(规划|执行) · (写作|通用文件)$/ })
+    .click();
+  await composer
+    .getByLabel("运行方式")
+    .getByRole("button", { name: "执行", exact: true })
+    .click();
 }
 
 async function resolveContextRefreshIfVisible(page: Page): Promise<void> {

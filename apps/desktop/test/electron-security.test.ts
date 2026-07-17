@@ -81,6 +81,8 @@ describe("Electron security baseline", () => {
       "application:agent-run:resume",
       "application:agent-run:retry-step",
       "application:agent-run:decide-plan",
+      "application:agent-run:read-permission-summary",
+      "application:agent-run:decide-plan-revision",
       "application:agent-run:refresh-context",
       "application:agent-run:decide-change-set",
       "application:agent-run:undo",
@@ -121,6 +123,8 @@ describe("Electron security baseline", () => {
     expect(isApplicationIpcChannel("application:project:preview-recovery-draft")).toBe(true);
     expect(isApplicationIpcChannel("application:chapter:save")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-run:decide-change-set")).toBe(true);
+    expect(isApplicationIpcChannel("application:agent-run:read-permission-summary")).toBe(true);
+    expect(isApplicationIpcChannel("application:agent-run:decide-plan-revision")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-run:undo")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-conversation:search")).toBe(true);
     expect(isApplicationIpcChannel("application:settings:list-model-profiles")).toBe(true);

@@ -438,6 +438,188 @@ describe("Agent Run renderer bridge", () => {
     });
   });
 
+  test("projects the bound permission summary and persisted plan execution IDs, then decides a material deviation", async () => {
+    const commands: Record<string, unknown>[] = [];
+    const executionSnapshot = {
+      ...snapshot,
+      operationMode: "execution" as const,
+      status: "awaiting_plan_revision" as const,
+      runRevision: 9,
+      lastSequence: 9,
+      permissionSummaryId: "permission-summary-01",
+      permissionSummaryChecksum: "p".repeat(64),
+      planExecutionId: "plan-execution-01",
+      planExecutionRevision: 3,
+      sourcePlanId: "plan-01",
+      sourcePlanRevision: 1
+    };
+    const plan = {
+      ...readyPlanArtifact(),
+      sourceRunId: executionSnapshot.runId,
+      status: "executing" as const
+    };
+    const planExecution = {
+      schemaVersion: "1.0" as const,
+      planExecutionId: "plan-execution-01",
+      runId: executionSnapshot.runId,
+      planId: "plan-01",
+      planRevision: 1,
+      handoffContextMode: "writing" as const,
+      handoffWritePolicy: "write_before_confirmation" as const,
+      revision: 3,
+      steps: [
+        {
+          stepId: "step-01",
+          title: "修订正文",
+          status: "running" as const,
+          startedAt: "2026-07-17T00:00:00.000Z",
+          completedAt: null,
+          verification: [],
+          deviationKind: "material" as const,
+          blockedReason: null,
+          checkpointId: "checkpoint-01",
+          eventSequence: 8
+        }
+      ]
+    };
+    const permissionSummary = {
+      schemaVersion: "1.0" as const,
+      permissionSummaryId: "permission-summary-01",
+      projectId: "project-01",
+      runDraftId: "draft-01",
+      runId: executionSnapshot.runId,
+      contextMode: "writing" as const,
+      writePolicy: "write_before_confirmation" as const,
+      toolRegistryRevision: "registry-01",
+      rootFingerprint: "f".repeat(64),
+      readCapabilities: ["read_chapter"],
+      proposalCapabilities: ["propose_chapter_write"],
+      forbiddenCapabilities: ["shell", "git", "network"],
+      checksum: "p".repeat(64),
+      generatedAt: "2026-07-17T00:00:00.000Z"
+    };
+    const revisionRequested = {
+      ...event(9, "plan_revision_requested", {
+        requestId: "request-01",
+        planId: "plan-01",
+        planRevision: 2,
+        affectedStepIds: ["step-01"],
+        discovery: "发现目标还涉及第二章",
+        proposal: "把第二章纳入计划并重新核对"
+      }),
+      schemaVersion: "1.1" as const,
+      runRevision: 9
+    };
+    const api = {
+      agentRuns: {
+        onEvent: () => () => undefined,
+        list: async () => ok([executionSnapshot]),
+        read: async () =>
+          ok({
+            snapshot: executionSnapshot,
+            events: [revisionRequested],
+            planArtifact: plan,
+            planExecution
+          }),
+        readPermissionSummary: async (query: Record<string, unknown>) => {
+          expect(query).toEqual({
+            kind: "run",
+            projectId: "project-01",
+            runId: executionSnapshot.runId,
+            permissionSummaryId: "permission-summary-01"
+          });
+          return ok(permissionSummary);
+        },
+        decidePlanRevision: async (command: Record<string, unknown>) => {
+          commands.push(structuredClone(command));
+          return ok({ ...executionSnapshot, status: "executing_model" as const, runRevision: 10 });
+        }
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({ projectId: "project-01", settings });
+
+    await bridge.load("project-01");
+
+    expect(bridge.getComposerProps()?.permission?.summary).toEqual(permissionSummary);
+    expect(bridge.getProps()?.planExecution?.record).toEqual(planExecution);
+    expect(bridge.getProps()?.planExecution?.revisionRequest).toMatchObject({
+      requestId: "request-01",
+      planExecutionId: "plan-execution-01",
+      affectedStepIds: ["step-01"],
+      originalPlan: "修订当前章节",
+      discovery: "发现目标还涉及第二章",
+      proposal: "把第二章纳入计划并重新核对"
+    });
+
+    bridge.getProps()?.planExecution?.onDecideRevision("approve");
+    await vi.waitFor(() => expect(commands).toHaveLength(1));
+    expect(commands[0]).toMatchObject({
+      runId: executionSnapshot.runId,
+      expectedRunRevision: 9,
+      requestId: "request-01",
+      planId: "plan-01",
+      planRevision: 2,
+      decision: "approve"
+    });
+  });
+
+  test("retries a missing bound permission summary from run facts when the menu opens", async () => {
+    const executionSnapshot = {
+      ...snapshot,
+      operationMode: "execution" as const,
+      status: "executing_model" as const,
+      permissionSummaryId: "permission-summary-retry",
+      permissionSummaryChecksum: "r".repeat(64)
+    };
+    const permissionSummary = {
+      schemaVersion: "1.0" as const,
+      permissionSummaryId: "permission-summary-retry",
+      projectId: "project-01",
+      runDraftId: "draft-01",
+      runId: executionSnapshot.runId,
+      contextMode: "writing" as const,
+      writePolicy: "write_before_confirmation" as const,
+      toolRegistryRevision: "registry-01",
+      rootFingerprint: "f".repeat(64),
+      readCapabilities: ["read_chapter"],
+      proposalCapabilities: ["propose_chapter_write"],
+      forbiddenCapabilities: ["shell", "git", "network"],
+      checksum: "r".repeat(64),
+      generatedAt: "2026-07-17T00:00:00.000Z"
+    };
+    const permissionQueries: Record<string, unknown>[] = [];
+    const api = {
+      agentRuns: {
+        onEvent: () => () => undefined,
+        list: async () => ok([executionSnapshot]),
+        read: async () => ok({ snapshot: executionSnapshot, events: [] }),
+        readPermissionSummary: async (query: Record<string, unknown>) => {
+          permissionQueries.push(structuredClone(query));
+          return ok(permissionQueries.length === 1 ? undefined : permissionSummary);
+        }
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({ projectId: "project-01", settings });
+    await bridge.load("project-01");
+    expect(permissionQueries).toHaveLength(1);
+    expect(bridge.getComposerProps()?.permission?.summary).toBeUndefined();
+
+    bridge.getComposerProps()?.permission?.onOpen();
+
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()?.permission?.summary).toEqual(permissionSummary)
+    );
+    expect(permissionQueries).toHaveLength(2);
+    expect(permissionQueries[1]).toEqual({
+      kind: "run",
+      projectId: "project-01",
+      runId: executionSnapshot.runId,
+      permissionSummaryId: "permission-summary-retry"
+    });
+  });
+
   test("rejects a start with no selected model profile before calling prepare/start", async () => {
     // Capability + context-window validation is now server-authoritative; the only client-side
     // guard is that a model profile is actually selected. Without one, neither prepare nor start run.
@@ -1034,6 +1216,87 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     );
   });
 
+  test("refreshes an opened server permission summary after the draft policy changes", async () => {
+    const { api, permissionCalls } = createDraftApi();
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.model).toBeDefined());
+    bridge.getComposerProps()?.onOperationModeChange("execution");
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.operationMode).toBe("execution"));
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.contextStatus?.busy).toBe(false));
+
+    bridge.getComposerProps()?.permission?.onOpen();
+    await vi.waitFor(() => expect(permissionCalls).toHaveLength(1));
+    expect(bridge.getComposerProps()?.permission?.summary?.writePolicy).toBe(
+      "write_before_confirmation"
+    );
+
+    bridge.getComposerProps()?.onWritePolicyChange("user_preapproved_run");
+
+    await vi.waitFor(() => expect(permissionCalls).toHaveLength(2));
+    expect(permissionCalls[1]).toMatchObject({ runDraftRevision: 3 });
+    expect(bridge.getComposerProps()?.permission?.summary?.writePolicy).toBe(
+      "user_preapproved_run"
+    );
+    expect(bridge.getComposerProps()?.contextStatus?.busy).toBe(false);
+
+    bridge.getComposerProps()?.onOperationModeChange("planning");
+
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.operationMode).toBe("planning"));
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.contextStatus?.busy).toBe(false));
+    expect(permissionCalls).toHaveLength(2);
+    expect(bridge.getComposerProps()?.permission?.summary).toBeUndefined();
+  });
+
+  test("keeps the current permission revision when an earlier preview resolves late", async () => {
+    let releaseFirstPermissionRead: (() => void) | undefined;
+    const firstPermissionRead = new Promise<void>((resolve) => {
+      releaseFirstPermissionRead = resolve;
+    });
+    const { api, permissionCalls } = createDraftApi({ firstPermissionRead });
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.model).toBeDefined());
+    bridge.getComposerProps()?.onOperationModeChange("execution");
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.operationMode).toBe("execution"));
+
+    bridge.getComposerProps()?.permission?.onOpen();
+    await vi.waitFor(() => expect(permissionCalls).toHaveLength(1));
+    bridge.getComposerProps()?.onWritePolicyChange("user_preapproved_run");
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()?.writePolicy).toBe("user_preapproved_run")
+    );
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.contextStatus?.busy).toBe(false));
+    await vi.waitFor(() => expect(permissionCalls).toHaveLength(2));
+    expect(permissionCalls[1]).toMatchObject({ runDraftRevision: 3 });
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()?.permission).toMatchObject({
+        loading: false,
+        summary: { writePolicy: "user_preapproved_run" }
+      })
+    );
+
+    releaseFirstPermissionRead?.();
+
+    await vi.waitFor(() => expect(permissionCalls).toHaveLength(2));
+    expect(bridge.getComposerProps()?.permission).toMatchObject({
+      loading: false,
+      summary: { writePolicy: "user_preapproved_run" }
+    });
+  });
+
   test("adds and removes a context reference through the context draft", async () => {
     const { api } = createDraftApi();
     const bridge = createAgentRunBridge(api);
@@ -1113,11 +1376,13 @@ function createDraftApi(
   options: {
     readonly activeRun?: AgentRunSnapshot;
     readonly heavyRefThreshold?: number;
+    readonly firstPermissionRead?: Promise<void>;
   } = {}
 ): {
   api: NovelStudioApi;
   budgetCalls: unknown[];
   compactCalls: Record<string, unknown>[];
+  permissionCalls: Record<string, unknown>[];
 } {
   const runDrafts = new Map<string, JsonObject>();
   const contextDrafts = new Map<string, JsonObject>();
@@ -1145,12 +1410,14 @@ function createDraftApi(
   });
   const budgetCalls: unknown[] = [];
   const compactCalls: Record<string, unknown>[] = [];
+  const permissionCalls: Record<string, unknown>[] = [];
   const heavyRefThreshold = options.heavyRefThreshold ?? 2;
   const eventListeners = new Set<(event: AgentRunEvent) => void>();
   const activeRun = options.activeRun;
   return {
     budgetCalls,
     compactCalls,
+    permissionCalls,
     api: {
       agentRuns: {
         onEvent: (listener: (event: AgentRunEvent) => void) => {
@@ -1171,6 +1438,29 @@ function createDraftApi(
           const safeInputBudget = 100000;
           const usedTokens = refCount >= heavyRefThreshold ? 90000 : 20000;
           return ok(budgetSnapshot(safeInputBudget, usedTokens));
+        },
+        readPermissionSummary: async (command: Record<string, unknown>) => {
+          permissionCalls.push(structuredClone(command));
+          if (permissionCalls.length === 1 && options.firstPermissionRead !== undefined) {
+            await options.firstPermissionRead;
+          }
+          const draft = runDrafts.get(String(command["conversationId"]));
+          return ok({
+            schemaVersion: "1.0",
+            permissionSummaryId: `permission-${String(command["runDraftRevision"])}`,
+            projectId: command["projectId"],
+            runDraftId: command["runDraftId"],
+            contextMode: draft?.["contextMode"] ?? "writing",
+            writePolicy: draft?.["writePolicy"] ?? "write_before_confirmation",
+            toolRegistryRevision: "registry-01",
+            rootFingerprint: "f".repeat(64),
+            readCapabilities: ["read_chapter"],
+            proposalCapabilities:
+              draft?.["operationMode"] === "execution" ? ["propose_chapter_write"] : [],
+            forbiddenCapabilities: ["shell", "git", "network"],
+            checksum: String(command["runDraftRevision"]).padStart(64, "0"),
+            generatedAt: "2026-07-17T00:00:00.000Z"
+          });
         },
         compactContext: async (command: Record<string, unknown>) => {
           compactCalls.push(command);

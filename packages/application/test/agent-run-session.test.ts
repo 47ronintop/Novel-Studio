@@ -1294,6 +1294,28 @@ describe("AgentRunSession", () => {
     const planExecutionRecords: Record<string, unknown>[] = [];
     const planExecutionReads: unknown[][] = [];
     const planRevisionRequests = new Map<string, Record<string, unknown>>();
+    const permissionBindings: Record<string, unknown>[] = [];
+    const permissionSummary = (
+      permissionSummaryId: string,
+      runDraftId: string,
+      contextMode: string,
+      writePolicy: string
+    ) => ({
+      schemaVersion: "1.0",
+      permissionSummaryId,
+      projectId: "project-01",
+      runDraftId,
+      contextMode,
+      writePolicy,
+      toolRegistryRevision: "registry-01",
+      rootFingerprint: "f".repeat(64),
+      readCapabilities: ["read_chapter"],
+      proposalCapabilities:
+        writePolicy === "user_preapproved_run" ? ["propose_chapter_write"] : [],
+      forbiddenCapabilities: ["shell", "git", "network"],
+      checksum: permissionSummaryId.padEnd(64, "0").slice(0, 64),
+      generatedAt: "2026-07-17T00:00:00.000Z"
+    });
     const session = (createSession as (options: Record<string, unknown>) => unknown)({
       coordinatorOptions: { createRunId: () => `run_plan_${++runs}` },
       repository: {
@@ -1327,6 +1349,43 @@ describe("AgentRunSession", () => {
         },
         async noteRunTerminal() {
           return { ok: true, value: undefined };
+        }
+      },
+      permission: {
+        async verifyForStart(facts: Record<string, unknown>) {
+          return {
+            ok: true,
+            value: permissionSummary(
+              "permission-planning",
+              String(facts["runDraftId"]),
+              String(facts["contextMode"]),
+              String(facts["writePolicy"])
+            )
+          };
+        },
+        async prepareForPlanHandoff(facts: Record<string, unknown>) {
+          return {
+            ok: true,
+            value: permissionSummary(
+              "permission-execution",
+              String(facts["runDraftId"]),
+              String(facts["contextMode"]),
+              String(facts["writePolicy"])
+            )
+          };
+        },
+        async readForRun(input: Record<string, unknown>) {
+          const bound = permissionBindings.find(
+            (summary) =>
+              summary["runId"] === input["runId"] &&
+              summary["permissionSummaryId"] === input["permissionSummaryId"]
+          );
+          return { ok: true, value: bound };
+        },
+        async bindToRun(input: { runId: string; summary: Record<string, unknown> }) {
+          const bound = { ...input.summary, runId: input.runId };
+          permissionBindings.push(bound);
+          return { ok: true, value: bound };
         }
       },
       modelDriver: {
@@ -1426,6 +1485,8 @@ describe("AgentRunSession", () => {
         sourcePlanRevision: 1,
         planExecutionId: "plan_execution_plan-approve-01",
         planExecutionRevision: 1,
+        permissionSummaryId: "permission-execution",
+        permissionSummaryChecksum: "permission-execution".padEnd(64, "0").slice(0, 64),
         operationMode: "execution",
         contextMode: "general_file",
         writePolicy: "user_preapproved_run"
@@ -1443,6 +1504,19 @@ describe("AgentRunSession", () => {
     await session.readAgentRun("run_plan_2");
     expect(planExecutionReads.at(-1)).toEqual(["run_plan_2", "plan_execution_plan-approve-01", 1]);
     expect(notedRunIds).toEqual(["run_plan_1", "run_plan_2"]);
+    expect(permissionBindings).toEqual([
+      expect.objectContaining({
+        runId: "run_plan_1",
+        permissionSummaryId: "permission-planning"
+      }),
+      expect.objectContaining({
+        runId: "run_plan_2",
+        permissionSummaryId: "permission-execution",
+        runDraftId: "draft_start-01",
+        contextMode: "general_file",
+        writePolicy: "user_preapproved_run"
+      })
+    ]);
     await vi.waitFor(async () => {
       expect(await session.readAgentRun(planningRunId)).toMatchObject({
         ok: true,

@@ -36,6 +36,7 @@ import type {
   ModelProfile,
   ModelSettingsSnapshot,
   NovelStudioApi,
+  ReadAgentPermissionSummaryQuery,
   PluginSettingsSnapshot,
   ProjectDirectorySelection,
   ProjectDirectoryTreeItem,
@@ -72,6 +73,8 @@ import type {
   ContextBudgetSnapshot,
   DecideChangeSetCommand,
   DecideAgentPlanCommand,
+  DecidePlanRevisionCommand,
+  PermissionSummary,
   PreviewContextBudgetCommand,
   RefreshAgentContextCommand,
   ResumeAgentRunCommand,
@@ -265,6 +268,16 @@ const api: NovelStudioApi = {
       invokeTyped<AgentRunCommandResult>("application:agent-run:retry-step", command),
     decidePlan: (command: DecideAgentPlanCommand) =>
       invokeTyped<AgentRunCommandResult>("application:agent-run:decide-plan", command),
+    readPermissionSummary: (query: ReadAgentPermissionSummaryQuery) =>
+      invokeTyped<Result<PermissionSummary | undefined, UnifiedError>>(
+        "application:agent-run:read-permission-summary",
+        query
+      ),
+    decidePlanRevision: (command: DecidePlanRevisionCommand) =>
+      invokeTyped<AgentRunCommandResult>(
+        "application:agent-run:decide-plan-revision",
+        command
+      ),
     refreshContext: (command: RefreshAgentContextCommand) =>
       invokeTyped<AgentRunCommandResult>("application:agent-run:refresh-context", command),
     decideChangeSet: (command: DecideChangeSetCommand) =>

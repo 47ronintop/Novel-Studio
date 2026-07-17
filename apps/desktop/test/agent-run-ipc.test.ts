@@ -284,6 +284,171 @@ describe("Agent Run IPC", () => {
     ]);
   });
 
+  test("reads permission summaries from persisted draft facts or a bound run and decides plan revisions", async () => {
+    const calls: Array<{ readonly name: string; readonly value: unknown }> = [];
+    const summary = {
+      schemaVersion: "1.0",
+      permissionSummaryId: "permission-summary-01",
+      projectId: "project-01",
+      runDraftId: "draft-01",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      toolRegistryRevision: "registry-01",
+      rootFingerprint: "f".repeat(64),
+      readCapabilities: ["read_chapter"],
+      proposalCapabilities: ["propose_chapter_write"],
+      forbiddenCapabilities: ["shell", "git", "network"],
+      checksum: "c".repeat(64),
+      generatedAt: "2026-07-17T00:00:00.000Z"
+    };
+    const runtime = {
+      projectId: "project-01",
+      projectRoot: "C:/project",
+      agentRunDraftSession: {
+        async resolveStartDraft(command: Record<string, unknown>) {
+          calls.push({ name: "resolve-draft", value: structuredClone(command) });
+          return {
+            ok: true,
+            value: {
+              runDraft: {
+                runDraftId: "draft-01",
+                revision: 3,
+                checksum: "draft-checksum-03",
+                operationMode: "execution",
+                contextMode: "writing",
+                writePolicy: "write_before_confirmation"
+              },
+              contextDraft: { contextDraftId: "context-01", revision: 2 }
+            }
+          };
+        }
+      },
+      agentPermissionSession: {
+        async prepareForDraft(input: Record<string, unknown>) {
+          calls.push({ name: "prepare-permission", value: structuredClone(input) });
+          return { ok: true, value: summary };
+        },
+        async readForRun(input: Record<string, unknown>) {
+          calls.push({ name: "read-permission", value: structuredClone(input) });
+          return { ok: true, value: { ...summary, runId: "run-01" } };
+        }
+      },
+      agentRunSession: {
+        async decidePlanRevision(command: Record<string, unknown>) {
+          calls.push({ name: "decide-plan-revision", value: structuredClone(command) });
+          return { ok: true, value: snapshot("executing_model", 8, 8) };
+        },
+        subscribe: () => () => undefined
+      },
+      agentConversationSession: {}
+    };
+    const handlers = createApplicationIpcHandlers(
+      {} as DesktopApplication,
+      {
+        agentRuntimeManager: {
+          current: () => runtime,
+          currentProject: () => ({ projectId: runtime.projectId, projectRoot: runtime.projectRoot }),
+          hasActiveRun: async () => ({ ok: true, value: false }),
+          bindProject: async () => ({ ok: true, value: undefined }),
+          subscribeAgentRunEvents: () => () => undefined,
+          dispose: () => undefined
+        }
+      } as never
+    ) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+
+    const draftResult = await handlers["application:agent-run:read-permission-summary"]?.({
+      kind: "draft",
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      runDraftId: "draft-01",
+      runDraftRevision: 3,
+      runDraftChecksum: "draft-checksum-03"
+    });
+    const runResult = await handlers["application:agent-run:read-permission-summary"]?.({
+      kind: "run",
+      projectId: "project-01",
+      runId: "run-01",
+      permissionSummaryId: "permission-summary-01"
+    });
+    const decision = {
+      projectId: "project-01",
+      runId: "run-01",
+      commandId: "plan-revision-decision-01",
+      expectedRunRevision: 7,
+      requestId: "request-01",
+      planId: "plan-01",
+      planRevision: 2,
+      decision: "approve"
+    };
+    const decisionResult = await handlers["application:agent-run:decide-plan-revision"]?.(
+      structuredClone(decision)
+    );
+
+    expect(draftResult).toMatchObject({ ok: true, value: summary });
+    expect(runResult).toMatchObject({ ok: true, value: { runId: "run-01" } });
+    expect(decisionResult).toMatchObject({ ok: true });
+    expect(calls).toEqual([
+      {
+        name: "resolve-draft",
+        value: {
+          projectId: "project-01",
+          conversationId: "conversation-01",
+          runDraftId: "draft-01",
+          runDraftRevision: 3,
+          runDraftChecksum: "draft-checksum-03"
+        }
+      },
+      {
+        name: "prepare-permission",
+        value: {
+          projectId: "project-01",
+          runDraftId: "draft-01",
+          runDraftRevision: 3,
+          operationMode: "execution",
+          contextMode: "writing",
+          writePolicy: "write_before_confirmation"
+        }
+      },
+      {
+        name: "read-permission",
+        value: { runId: "run-01", permissionSummaryId: "permission-summary-01" }
+      },
+      { name: "decide-plan-revision", value: decision }
+    ]);
+  });
+
+  test("preload exposes the permission summary and plan revision channels", async () => {
+    const invoked: string[] = [];
+    const api = createNovelStudioApi({
+      async invoke(channel) {
+        invoked.push(channel);
+        return { ok: true, value: {} };
+      }
+    });
+
+    await api.agentRuns.readPermissionSummary({
+      kind: "run",
+      projectId: "project-01",
+      runId: "run-01",
+      permissionSummaryId: "permission-summary-01"
+    });
+    await api.agentRuns.decidePlanRevision({
+      projectId: "project-01",
+      runId: "run-01",
+      commandId: "decision-01",
+      expectedRunRevision: 7,
+      requestId: "request-01",
+      planId: "plan-01",
+      planRevision: 2,
+      decision: "reject"
+    });
+
+    expect(invoked).toEqual([
+      "application:agent-run:read-permission-summary",
+      "application:agent-run:decide-plan-revision"
+    ]);
+  });
+
   test("rejects malformed Change Set decisions before the session boundary", async () => {
     let called = false;
     const handlers = createApplicationIpcHandlers(

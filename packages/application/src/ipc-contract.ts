@@ -44,6 +44,8 @@ export const APPLICATION_IPC_CHANNELS = [
   "application:agent-run:resume",
   "application:agent-run:retry-step",
   "application:agent-run:decide-plan",
+  "application:agent-run:read-permission-summary",
+  "application:agent-run:decide-plan-revision",
   "application:agent-run:refresh-context",
   "application:agent-run:decide-change-set",
   "application:agent-run:undo",

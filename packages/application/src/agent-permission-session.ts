@@ -42,6 +42,7 @@ export interface AgentPermissionRootFingerprintPort {
 export interface PreparePermissionSummaryInput {
   readonly projectId: string;
   readonly runDraftId: string;
+  readonly runDraftRevision: number;
   readonly operationMode: AgentOperationMode;
   readonly contextMode: AgentContextMode;
   readonly writePolicy: AgentWritePolicy;
@@ -49,9 +50,19 @@ export interface PreparePermissionSummaryInput {
 
 export type VerifyPermissionSummaryForStartInput = PreparePermissionSummaryInput;
 
+export type PreparePermissionSummaryForPlanHandoffInput = Omit<
+  PreparePermissionSummaryInput,
+  "runDraftRevision"
+>;
+
 export interface BindPermissionSummaryToRunInput {
   readonly runId: string;
   readonly summary: PermissionSummary;
+}
+
+export interface ReadPermissionSummaryForRunInput {
+  readonly runId: string;
+  readonly permissionSummaryId: string;
 }
 
 export interface AgentPermissionSession {
@@ -74,8 +85,16 @@ export interface AgentPermissionSession {
   verifyForStart(
     input: VerifyPermissionSummaryForStartInput
   ): Promise<Result<PermissionSummary, UnifiedError>>;
+  /** Generate fresh server-owned facts for a plan handoff, without treating it as a draft preview. */
+  prepareForPlanHandoff(
+    input: PreparePermissionSummaryForPlanHandoffInput
+  ): Promise<Result<PermissionSummary, UnifiedError>>;
   /** Persist the summary under the now-existing run, stamping `runId` onto the bound copy. */
   bindToRun(input: BindPermissionSummaryToRunInput): Promise<Result<PermissionSummary, UnifiedError>>;
+  /** Read the immutable, server-persisted summary bound to an existing run. */
+  readForRun(
+    input: ReadPermissionSummaryForRunInput
+  ): Promise<Result<PermissionSummary | undefined, UnifiedError>>;
 }
 
 export interface CreateAgentPermissionSessionOptions {
@@ -92,10 +111,13 @@ export function createAgentPermissionSession(
 ): AgentPermissionSession {
   const now = options.now ?? (() => new Date().toISOString());
   const createId = options.createId ?? createDefaultPermissionSummaryId;
-  const lastPreparedByDraft = new Map<string, PermissionSummary>();
+  const lastPreparedByDraft = new Map<
+    string,
+    { readonly revision: number; readonly summary: PermissionSummary }
+  >();
 
   async function generate(
-    input: PreparePermissionSummaryInput
+    input: PreparePermissionSummaryForPlanHandoffInput
   ): Promise<Result<PermissionSummary, UnifiedError>> {
     const fingerprint = await options.rootFingerprint.resolveRootFingerprint(input.projectId);
     if (!fingerprint.ok) return err(fingerprint.error);
@@ -118,7 +140,10 @@ export function createAgentPermissionSession(
     async prepareForDraft(input) {
       const generated = await generate(input);
       if (!generated.ok) return generated;
-      lastPreparedByDraft.set(input.runDraftId, generated.value);
+      lastPreparedByDraft.set(input.runDraftId, {
+        revision: input.runDraftRevision,
+        summary: generated.value
+      });
       return generated;
     },
 
@@ -126,14 +151,17 @@ export function createAgentPermissionSession(
       const regenerated = await generate(input);
       if (!regenerated.ok) return regenerated;
       const previous = lastPreparedByDraft.get(input.runDraftId);
-      lastPreparedByDraft.set(input.runDraftId, regenerated.value);
-      if (previous === undefined) return regenerated;
-      const drift = findPermissionSummaryDrift(previous, regenerated.value);
+      if (previous === undefined || previous.revision !== input.runDraftRevision) {
+        return regenerated;
+      }
+      const drift = findPermissionSummaryDrift(previous.summary, regenerated.value);
       if (drift.length > 0) {
         return err(permissionSummaryDriftError(drift));
       }
       return regenerated;
     },
+
+    prepareForPlanHandoff: generate,
 
     async bindToRun(input) {
       const bound: PermissionSummary = { ...input.summary, runId: input.runId };
@@ -143,6 +171,20 @@ export function createAgentPermissionSession(
       );
       if (!written.ok) return err(written.error);
       return ok(bound);
+    },
+
+    async readForRun(input) {
+      if (options.repository.readPermissionSummary === undefined) {
+        return err(permissionSummaryReadUnavailable());
+      }
+      const read = await options.repository.readPermissionSummary(
+        input.runId,
+        input.permissionSummaryId
+      );
+      if (!read.ok || read.value === undefined) return read as Result<undefined, UnifiedError>;
+      return isPermissionSummary(read.value, input)
+        ? ok(read.value as unknown as PermissionSummary)
+        : err(permissionSummaryInvalid());
     }
   };
 }
@@ -161,4 +203,49 @@ function permissionSummaryDriftError(drift: readonly PermissionSummaryFieldDrift
 
 function createDefaultPermissionSummaryId(): string {
   return `permission_summary_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function isPermissionSummary(
+  value: JsonObject,
+  input: ReadPermissionSummaryForRunInput
+): boolean {
+  return (
+    value["schemaVersion"] === "1.0" &&
+    value["runId"] === input.runId &&
+    value["permissionSummaryId"] === input.permissionSummaryId &&
+    typeof value["projectId"] === "string" &&
+    typeof value["runDraftId"] === "string" &&
+    (value["contextMode"] === "writing" || value["contextMode"] === "general_file") &&
+    (value["writePolicy"] === "write_before_confirmation" ||
+      value["writePolicy"] === "user_preapproved_run") &&
+    typeof value["toolRegistryRevision"] === "string" &&
+    typeof value["rootFingerprint"] === "string" &&
+    Array.isArray(value["readCapabilities"]) &&
+    Array.isArray(value["proposalCapabilities"]) &&
+    Array.isArray(value["forbiddenCapabilities"]) &&
+    typeof value["checksum"] === "string" &&
+    typeof value["generatedAt"] === "string"
+  );
+}
+
+function permissionSummaryReadUnavailable(): UnifiedError {
+  return createUnifiedError({
+    code: "AGENT_PERMISSION_SUMMARY_READ_UNAVAILABLE",
+    category: "AgentError",
+    message: "The persisted Agent permission summary cannot be read.",
+    recoverability: "user-action",
+    suggestedAction: "Reload the run and try again.",
+    traceId: "agent-permission-session"
+  });
+}
+
+function permissionSummaryInvalid(): UnifiedError {
+  return createUnifiedError({
+    code: "AGENT_PERMISSION_SUMMARY_INVALID",
+    category: "AgentError",
+    message: "The persisted Agent permission summary is invalid.",
+    recoverability: "fatal",
+    suggestedAction: "Inspect the run history record.",
+    traceId: "agent-permission-session"
+  });
 }

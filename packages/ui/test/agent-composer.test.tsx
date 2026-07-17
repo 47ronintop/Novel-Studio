@@ -119,6 +119,7 @@ describe("AgentComposer", () => {
     const trigger = host.querySelector<HTMLButtonElement>('[aria-label="规划 · 写作"]');
     expect(host.textContent).toContain("只读规划");
     expect(host.textContent).not.toContain("每次修改前确认");
+    expect(host.querySelector('[aria-label^="修改权限："]')).toBeNull();
 
     act(() => trigger?.click());
     const popover = host.querySelector<HTMLElement>('[aria-label="运行方式与上下文"]');
@@ -129,10 +130,61 @@ describe("AgentComposer", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  test("shows the two execution write policies", () => {
-    const { host } = renderComposer();
-    expect(host.textContent).toContain("每次修改前确认");
-    expect(host.textContent).toContain("本次运行自动修改");
+  test("keeps permission details closed by default and reveals server-owned forbidden capabilities on demand", () => {
+    const onOpen = vi.fn();
+    const { host } = renderComposer({ permission: permissionControl({ onOpen }) });
+    const trigger = host.querySelector<HTMLButtonElement>(
+      '[aria-label="修改权限：每次修改前确认"]'
+    );
+
+    expect(trigger).not.toBeNull();
+    expect(host.querySelector('[aria-label="修改权限与摘要"]')).toBeNull();
+    act(() => trigger?.click());
+
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    const summary = host.querySelector<HTMLDetailsElement>('[aria-label="本次权限摘要"]');
+    expect(summary?.open).toBe(false);
+    expect(host.querySelector('[aria-label="修改权限与摘要"]')?.textContent).toContain(
+      "每次修改前确认"
+    );
+    expect(host.querySelector('[aria-label="修改权限与摘要"]')?.textContent).toContain(
+      "本次运行自动修改"
+    );
+
+    act(() => summary?.querySelector("summary")?.click());
+    expect(summary?.open).toBe(true);
+    expect(summary?.textContent).toContain("Shell");
+    expect(summary?.textContent).toContain("Git");
+    expect(summary?.textContent).toContain("网络");
+    expect(summary?.textContent).toContain("propose_chapter_write");
+  });
+
+  test("requires explicit risk acknowledgement before an automatic-modification run can start", () => {
+    const onWritePolicyAcknowledgedChange = vi.fn();
+    const { host } = renderComposer({
+      writePolicy: "user_preapproved_run",
+      writePolicyAcknowledged: false,
+      permission: permissionControl(),
+      onWritePolicyAcknowledgedChange
+    });
+
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="启动 Agent 运行"]')?.disabled).toBe(
+      true
+    );
+    act(() =>
+      host
+        .querySelector<HTMLButtonElement>('[aria-label="修改权限：本次运行自动修改"]')
+        ?.click()
+    );
+    const acknowledgement = host.querySelector<HTMLInputElement>(
+      '[aria-label="确认本次运行自动修改风险"]'
+    );
+    expect(acknowledgement).not.toBeNull();
+    expect(host.querySelector('[aria-label="修改权限与摘要"]')?.textContent).toContain(
+      "每次实际写入仍会生成差异、校验并创建版本点"
+    );
+    act(() => acknowledgement?.click());
+    expect(onWritePolicyAcknowledgedChange).toHaveBeenCalledWith(true);
   });
 
   test("closes an open mode popover when the run becomes active", () => {
@@ -322,4 +374,30 @@ function renderComposer(overrides: Partial<AgentComposerProps> = {}) {
   };
   render();
   return { host, rerender: render };
+}
+
+function permissionControl(
+  overrides: Partial<NonNullable<AgentComposerProps["permission"]>> = {}
+): NonNullable<AgentComposerProps["permission"]> {
+  return {
+    loading: false,
+    approvalSource: "not_approved",
+    onOpen: () => undefined,
+    summary: {
+      schemaVersion: "1.0",
+      permissionSummaryId: "permission-summary-01",
+      projectId: "project-01",
+      runDraftId: "draft-01",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      toolRegistryRevision: "registry-01",
+      rootFingerprint: "f".repeat(64),
+      readCapabilities: ["read_chapter", "read_project_text"],
+      proposalCapabilities: ["propose_chapter_write"],
+      forbiddenCapabilities: ["shell", "git", "network", "delete", "move", "rename", "create_directory"],
+      checksum: "c".repeat(64),
+      generatedAt: "2026-07-17T00:00:00.000Z"
+    },
+    ...overrides
+  };
 }

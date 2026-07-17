@@ -10,6 +10,9 @@ import type {
   DesktopShellState,
   ModelDiscoverySnapshot,
   ModelReasoningStrengthValue,
+  PermissionSummary,
+  PlanArtifact,
+  PlanExecutionRecord,
   ProjectSearchResultItem,
   ProjectWorkspaceHealth
 } from "@novel-studio/application";
@@ -218,6 +221,8 @@ export interface AgentComposerProps {
   readonly references?: AgentComposerReferenceControl;
   /** Quiet context-status button; surfaces heavy/stale/failed states and the compact command. */
   readonly contextStatus?: AgentComposerContextStatusControl;
+  /** Server-owned capability facts and the execution-only Change Set approval policy. */
+  readonly permission?: AgentComposerPermissionControl;
   readonly onRequestChange: (request: string) => void;
   readonly onOperationModeChange: (mode: AgentOperationMode) => void;
   readonly onContextModeChange: (mode: AgentContextMode) => void;
@@ -290,14 +295,19 @@ export interface AgentComposerContextStatusControl {
   readonly busy?: boolean | undefined;
 }
 
+export interface AgentComposerPermissionControl {
+  readonly summary?: PermissionSummary;
+  readonly loading: boolean;
+  readonly errorMessage?: string;
+  readonly approvalSource: "not_applicable" | "not_approved" | "human_confirmation" | "user_preapproved_run";
+  readonly onOpen: () => void;
+}
+
 export type AgentPlanReviewProps = PlanArtifactReviewProps;
 
 export interface AgentRunPanelProps {
   readonly projectId: string;
   readonly runId?: string;
-  readonly operationMode: AgentOperationMode;
-  readonly contextMode: AgentContextMode;
-  readonly writePolicy: AgentWritePolicy;
   readonly status: AgentRunStatusV11 | "idle";
   readonly assistantText: string;
   readonly events: readonly AgentRunEvent[];
@@ -307,12 +317,32 @@ export interface AgentRunPanelProps {
   readonly contextSourceNotice?: string;
   readonly changeSetReview?: ChangeSetReviewProps;
   readonly rollbackReview?: RollbackReviewProps;
+  readonly planExecution?: AgentPlanExecutionControl;
   readonly canUndoRun?: boolean;
   readonly onUndoRun?: () => void;
   readonly onAnswerUserInput: (answer: string) => void;
   readonly onResume: () => void;
   readonly onRetryStep: () => void;
   readonly onRefreshContext: (decision: "refresh" | "exclude" | "cancel") => void;
+}
+
+export interface AgentPlanRevisionRequestView {
+  readonly requestId: string;
+  readonly planExecutionId: string;
+  readonly planId: string;
+  readonly planRevision: number;
+  readonly originalPlan: string;
+  readonly discovery: string;
+  readonly proposal: string;
+  readonly affectedStepIds: readonly string[];
+}
+
+export interface AgentPlanExecutionControl {
+  readonly record: PlanExecutionRecord;
+  readonly plan?: PlanArtifact;
+  readonly revisionRequest?: AgentPlanRevisionRequestView;
+  readonly deciding?: boolean;
+  readonly onDecideRevision: (decision: "approve" | "reject") => void;
 }
 
 export interface AgentPlanExecutionOptions {

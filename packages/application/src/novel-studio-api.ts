@@ -17,6 +17,8 @@ import type {
   ContextBudgetSnapshot,
   DecideChangeSetCommand,
   DecideAgentPlanCommand,
+  DecidePlanRevisionCommand,
+  PermissionSummary,
   PreviewContextBudgetCommand,
   RefreshAgentContextCommand,
   ResumeAgentRunCommand,
@@ -104,6 +106,22 @@ import type {
   ReadAgentConversationQuery,
   SearchAgentConversationsQuery
 } from "./agent-conversation-session.js";
+
+export type ReadAgentPermissionSummaryQuery =
+  | {
+      readonly kind: "draft";
+      readonly projectId: string;
+      readonly conversationId: string;
+      readonly runDraftId: string;
+      readonly runDraftRevision: number;
+      readonly runDraftChecksum: string;
+    }
+  | {
+      readonly kind: "run";
+      readonly projectId: string;
+      readonly runId: string;
+      readonly permissionSummaryId: string;
+    };
 
 export interface NovelStudioApi {
   getShellState(): Promise<DesktopShellState>;
@@ -196,6 +214,10 @@ export interface NovelStudioApi {
     resume(command: ResumeAgentRunCommand): Promise<AgentRunCommandResult>;
     retryStep(command: RetryAgentRunStepCommand): Promise<AgentRunCommandResult>;
     decidePlan(command: DecideAgentPlanCommand): Promise<AgentRunCommandResult>;
+    readPermissionSummary(
+      query: ReadAgentPermissionSummaryQuery
+    ): Promise<Result<PermissionSummary | undefined, UnifiedError>>;
+    decidePlanRevision(command: DecidePlanRevisionCommand): Promise<AgentRunCommandResult>;
     refreshContext(command: RefreshAgentContextCommand): Promise<AgentRunCommandResult>;
     decideChangeSet(command: DecideChangeSetCommand): Promise<AgentRunCommandResult>;
     undoRun(command: UndoRunCommand): Promise<AgentRunCommandResult>;

@@ -1,10 +1,10 @@
-import { Play, RefreshCw, RotateCcw } from "lucide-react";
+import { Check, Play, RefreshCw, RotateCcw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { AgentActivitySummary } from "./agent-activity-summary.js";
 import { AgentRunTimeline } from "./agent-run-timeline.js";
 import { ChangeSetReview } from "./change-set-review.js";
-import type { AgentRunPanelProps } from "./workspace-shell-types.js";
+import type { AgentPlanExecutionControl, AgentRunPanelProps } from "./workspace-shell-types.js";
 
 export function AgentRunPanel(props: AgentRunPanelProps) {
   const [answer, setAnswer] = useState("");
@@ -40,7 +40,15 @@ export function AgentRunPanel(props: AgentRunPanelProps) {
         <p className="ns-agent-assistant-text">{props.assistantText}</p>
       )}
       <AgentActivitySummary events={props.events} />
-      <AgentRunTimeline ariaLabel="Agent 运行状态" events={nonToolEvents} />
+      <AgentRunTimeline
+        ariaLabel="Agent 运行状态"
+        events={nonToolEvents}
+        {...(props.planExecution === undefined ? {} : { planExecution: props.planExecution })}
+      />
+
+      {props.planExecution?.revisionRequest === undefined ? null : (
+        <PlanRevisionCard control={props.planExecution} />
+      )}
 
       {props.pendingUserInput === undefined ? null : (
         <section className="ns-agent-question" aria-label="Agent 阻塞问题">
@@ -137,9 +145,7 @@ export function AgentRunPanel(props: AgentRunPanelProps) {
             重试步骤
           </button>
         ) : null}
-        {props.operationMode === "execution" &&
-        props.canUndoRun &&
-        props.onUndoRun !== undefined ? (
+        {props.canUndoRun && props.onUndoRun !== undefined ? (
           <button
             aria-label="撤销本次运行"
             className="ns-ai-secondary-button"
@@ -150,6 +156,67 @@ export function AgentRunPanel(props: AgentRunPanelProps) {
             撤销本次运行
           </button>
         ) : null}
+      </div>
+    </section>
+  );
+}
+
+function PlanRevisionCard({ control }: { readonly control: AgentPlanExecutionControl }) {
+  const request = control.revisionRequest;
+  if (request === undefined) return null;
+  const stepTitles = request.affectedStepIds.map(
+    (stepId) => control.record.steps.find((step) => step.stepId === stepId)?.title ?? stepId
+  );
+  return (
+    <section
+      aria-label="计划修订审批"
+      className="ns-agent-plan-revision"
+      data-plan-execution-id={request.planExecutionId}
+      data-request-id={request.requestId}
+    >
+      <header>
+        <strong>计划需要修订</strong>
+        <span>v{request.planRevision}</span>
+      </header>
+      <dl>
+        <div>
+          <dt>原计划</dt>
+          <dd>{request.originalPlan}</dd>
+        </div>
+        <div>
+          <dt>新发现</dt>
+          <dd>{request.discovery}</dd>
+        </div>
+        <div>
+          <dt>建议修订</dt>
+          <dd>{request.proposal}</dd>
+        </div>
+        <div>
+          <dt>受影响步骤</dt>
+          <dd>{stepTitles.join("、")}</dd>
+        </div>
+      </dl>
+      <div className="ns-agent-inline-actions">
+        <button
+          aria-label="拒绝计划修订"
+          className="ns-ai-secondary-button"
+          disabled={control.deciding === true}
+          onClick={() => control.onDecideRevision("reject")}
+          type="button"
+        >
+          <X aria-hidden="true" size={13} />
+          拒绝并停止
+        </button>
+        <button
+          aria-label="批准计划修订"
+          className="ns-ai-send-button"
+          disabled={control.deciding === true}
+          onClick={() => control.onDecideRevision("approve")}
+          type="button"
+        >
+          <Check aria-hidden="true" size={13} />
+          批准修订
+        </button>
       </div>
     </section>
   );

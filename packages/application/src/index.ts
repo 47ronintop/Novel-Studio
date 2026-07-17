@@ -52,6 +52,7 @@ export type {
 export type {
   AiWritingSuggestionStreamOptions,
   NovelStudioApi,
+  ReadAgentPermissionSummaryQuery,
   ProjectDirectorySelection,
   ProjectDirectoryTreeItem,
   ProjectTextFileReadResult,
@@ -374,7 +375,9 @@ export type {
   AgentPermissionSessionRepository,
   BindPermissionSummaryToRunInput,
   CreateAgentPermissionSessionOptions,
+  PreparePermissionSummaryForPlanHandoffInput,
   PreparePermissionSummaryInput,
+  ReadPermissionSummaryForRunInput,
   VerifyPermissionSummaryForStartInput
 } from "./agent-permission-session.js";
 export { createChangeSetSession } from "./change-set-session.js";
@@ -469,5 +472,6 @@ export type {
   PlanExecutionStep,
   PlanExecutionStepStatus,
   PlanExecutionSummary,
-  PlanOpenQuestion
+  PlanOpenQuestion,
+  PermissionSummary
 } from "@novel-studio/agent-engine";

@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import type {
   AgentConversationSession,
   AgentContextSession,
+  AgentPermissionSession,
   AgentRunDraftSession,
   AgentRunSession,
   AnswerAgentUserInputCommand,
@@ -11,6 +12,7 @@ import type {
   CompactContextCommand,
   DesktopApplication,
   PreviewContextBudgetCommand,
+  ReadAgentPermissionSummaryQuery,
   ReadAgentRunDraftCommand,
   RefreshContextDraftCommand,
   SyncStartDraftCommand,
@@ -21,6 +23,7 @@ import type {
   AgentRunEvent,
   DecideChangeSetCommand,
   DecideAgentPlanCommand,
+  DecidePlanRevisionCommand,
   RefreshAgentContextCommand,
   ResumeAgentRunCommand,
   RetryAgentRunStepCommand,
@@ -192,6 +195,8 @@ export function createApplicationIpcHandlers(
     options.agentRuntimeManager?.current()?.agentRunDraftSession;
   const currentAgentContextSession = (): AgentContextSession | undefined =>
     options.agentRuntimeManager?.current()?.agentContextSession;
+  const currentAgentPermissionSession = (): AgentPermissionSession | undefined =>
+    options.agentRuntimeManager?.current()?.agentPermissionSession;
 
   return {
     "application:get-shell-state": () => Promise.resolve(application.getShellState()),
@@ -545,6 +550,50 @@ export function createApplicationIpcHandlers(
       return parsed === undefined || session === undefined
         ? Promise.resolve(agentRunUnavailable())
         : session.decidePlan(parsed);
+    },
+    "application:agent-run:read-permission-summary": async (query: unknown) => {
+      const parsed = toReadAgentPermissionSummaryQuery(query);
+      const runtime = options.agentRuntimeManager?.current();
+      const permissionSession = currentAgentPermissionSession();
+      if (
+        parsed === undefined ||
+        runtime === undefined ||
+        permissionSession === undefined ||
+        parsed.projectId !== runtime.projectId
+      ) {
+        return invalidAgentRunCommand();
+      }
+      if (parsed.kind === "run") {
+        return permissionSession.readForRun({
+          runId: parsed.runId,
+          permissionSummaryId: parsed.permissionSummaryId
+        });
+      }
+      const draftSession = currentAgentRunDraftSession();
+      if (draftSession === undefined) return agentRunUnavailable();
+      const draft = await draftSession.resolveStartDraft({
+        projectId: parsed.projectId,
+        conversationId: parsed.conversationId,
+        runDraftId: parsed.runDraftId,
+        runDraftRevision: parsed.runDraftRevision,
+        runDraftChecksum: parsed.runDraftChecksum
+      });
+      if (!draft.ok) return draft;
+      return permissionSession.prepareForDraft({
+        projectId: parsed.projectId,
+        runDraftId: draft.value.runDraft.runDraftId,
+        runDraftRevision: draft.value.runDraft.revision,
+        operationMode: draft.value.runDraft.operationMode,
+        contextMode: draft.value.runDraft.contextMode,
+        writePolicy: draft.value.runDraft.writePolicy
+      });
+    },
+    "application:agent-run:decide-plan-revision": (command: unknown) => {
+      const parsed = toDecidePlanRevisionCommand(command);
+      const session = currentAgentRunSession();
+      return parsed === undefined || session === undefined
+        ? Promise.resolve(invalidAgentRunCommand())
+        : session.decidePlanRevision(parsed);
     },
     "application:agent-run:refresh-context": (command: unknown) => {
       const parsed = toRefreshAgentContextCommand(command);
@@ -1132,6 +1181,65 @@ function toRetryAgentRunStepCommand(value: unknown): RetryAgentRunStepCommand | 
 
 function toDecideAgentPlanCommand(value: unknown): DecideAgentPlanCommand | undefined {
   return isRecord(value) ? (value as unknown as DecideAgentPlanCommand) : undefined;
+}
+
+function toReadAgentPermissionSummaryQuery(
+  value: unknown
+): ReadAgentPermissionSummaryQuery | undefined {
+  if (!isRecord(value) || !isSafeId(value["projectId"])) return undefined;
+  if (value["kind"] === "draft") {
+    return hasOnlyKeys(value, [
+      "kind",
+      "projectId",
+      "conversationId",
+      "runDraftId",
+      "runDraftRevision",
+      "runDraftChecksum"
+    ]) &&
+      isSafeId(value["conversationId"]) &&
+      isSafeId(value["runDraftId"]) &&
+      isPositiveInteger(value["runDraftRevision"]) &&
+      isNonEmptyString(value["runDraftChecksum"])
+      ? (value as unknown as ReadAgentPermissionSummaryQuery)
+      : undefined;
+  }
+  if (value["kind"] === "run") {
+    return hasOnlyKeys(value, [
+      "kind",
+      "projectId",
+      "runId",
+      "permissionSummaryId"
+    ]) &&
+      isSafeId(value["runId"]) &&
+      isSafeId(value["permissionSummaryId"])
+      ? (value as unknown as ReadAgentPermissionSummaryQuery)
+      : undefined;
+  }
+  return undefined;
+}
+
+function toDecidePlanRevisionCommand(value: unknown): DecidePlanRevisionCommand | undefined {
+  return isRecord(value) &&
+    hasOnlyKeys(value, [
+      "runId",
+      "projectId",
+      "commandId",
+      "expectedRunRevision",
+      "requestId",
+      "planId",
+      "planRevision",
+      "decision"
+    ]) &&
+    isSafeId(value["runId"]) &&
+    isSafeId(value["projectId"]) &&
+    isSafeId(value["commandId"]) &&
+    isNonNegativeInteger(value["expectedRunRevision"]) &&
+    isSafeId(value["requestId"]) &&
+    isSafeId(value["planId"]) &&
+    isPositiveInteger(value["planRevision"]) &&
+    (value["decision"] === "approve" || value["decision"] === "reject")
+    ? (value as unknown as DecidePlanRevisionCommand)
+    : undefined;
 }
 
 function toRefreshAgentContextCommand(value: unknown): RefreshAgentContextCommand | undefined {

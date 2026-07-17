@@ -3479,6 +3479,7 @@ textarea:focus-visible,
 
 .ns-agent-question,
 .ns-agent-context-refresh,
+.ns-agent-plan-revision,
 .ns-plan-review {
   background: color-mix(in srgb, var(--ns-surface-raised) 48%, transparent);
   border: 1px solid var(--ns-border);
@@ -3528,6 +3529,41 @@ textarea:focus-visible,
   color: var(--ns-ink);
   min-width: 0;
   padding: 8px;
+}
+
+.ns-agent-plan-revision header {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.ns-agent-plan-revision header > span {
+  color: var(--ns-warning);
+  font-size: 11px;
+}
+
+.ns-agent-plan-revision dl {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+
+.ns-agent-plan-revision dl > div {
+  display: grid;
+  gap: 3px;
+}
+
+.ns-agent-plan-revision dt {
+  color: var(--ns-muted);
+  font-size: 11px;
+}
+
+.ns-agent-plan-revision dd {
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .ns-plan-review header div,
@@ -3594,6 +3630,7 @@ textarea:focus-visible,
 }
 
 .ns-agent-composer-surface {
+  container-type: inline-size;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   position: relative;
@@ -3708,6 +3745,7 @@ textarea:focus-visible,
 .ns-agent-composer-model-popover,
 .ns-agent-composer-reasoning-popover,
 .ns-agent-composer-reference-popover,
+.ns-agent-permission-popover,
 .ns-agent-context-popover {
   background: var(--ns-surface-raised);
   border: 1px solid var(--ns-border-strong);
@@ -3724,6 +3762,157 @@ textarea:focus-visible,
 .ns-agent-composer-reference-popover {
   left: 0;
   right: auto;
+}
+
+.ns-agent-permission-trigger {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--ns-muted);
+  display: inline-flex;
+  gap: 5px;
+  max-width: 190px;
+  padding: 0 6px;
+}
+
+.ns-agent-permission-trigger:hover,
+.ns-agent-permission-trigger[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--ns-surface-raised) 76%, transparent);
+  border-color: var(--ns-border);
+  color: var(--ns-ink);
+}
+
+.ns-agent-permission-trigger > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ns-agent-permission-popover {
+  display: grid;
+  gap: 10px;
+  left: 0;
+  max-height: min(520px, 70vh);
+  overflow: auto;
+  right: auto;
+  width: min(320px, calc(100vw - 32px));
+}
+
+.ns-agent-permission-policy {
+  border: 0;
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+}
+
+.ns-agent-permission-policy legend {
+  color: var(--ns-muted);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.ns-agent-permission-policy > label {
+  align-items: start;
+  border-radius: 5px;
+  cursor: pointer;
+  display: grid;
+  gap: 7px;
+  grid-template-columns: 16px minmax(0, 1fr);
+  padding: 6px;
+}
+
+.ns-agent-permission-policy > label:hover {
+  background: color-mix(in srgb, var(--ns-surface) 72%, transparent);
+}
+
+.ns-agent-permission-policy input {
+  margin: 2px 0 0;
+}
+
+.ns-agent-permission-policy label > span,
+.ns-agent-permission-summary dl {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ns-agent-permission-policy strong {
+  font-size: 12px;
+}
+
+.ns-agent-permission-policy small,
+.ns-agent-permission-summary small,
+.ns-agent-permission-summary p {
+  color: var(--ns-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.ns-agent-permission-risk {
+  border-block: 1px solid var(--ns-border);
+  display: grid;
+  gap: 7px;
+  padding-block: 9px;
+}
+
+.ns-agent-permission-risk p {
+  color: var(--ns-warning);
+  font-size: 11px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.ns-agent-permission-risk label {
+  align-items: start;
+  display: grid;
+  font-size: 12px;
+  gap: 7px;
+  grid-template-columns: 16px minmax(0, 1fr);
+}
+
+.ns-agent-permission-risk input {
+  margin: 2px 0 0;
+}
+
+.ns-agent-permission-summary {
+  min-width: 0;
+}
+
+.ns-agent-permission-summary > summary {
+  align-items: baseline;
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.ns-agent-permission-summary > p {
+  margin: 8px 0 0;
+}
+
+.ns-agent-permission-summary dl {
+  margin: 9px 0 0;
+}
+
+.ns-agent-permission-summary dl > div {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 76px minmax(0, 1fr);
+}
+
+.ns-agent-permission-summary dt {
+  color: var(--ns-muted);
+  font-size: 11px;
+}
+
+.ns-agent-permission-summary dd {
+  font-size: 11px;
+  line-height: 1.45;
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .ns-agent-composer-option-list {
@@ -3826,6 +4015,37 @@ textarea:focus-visible,
 .ns-agent-composer-command-slot > button {
   height: 32px;
   width: 32px;
+}
+
+@container (max-width: 360px) {
+  .ns-agent-composer-toolbar-left,
+  .ns-agent-composer-toolbar-right {
+    flex-basis: 100%;
+  }
+
+  .ns-agent-composer-toolbar-right {
+    flex-wrap: nowrap;
+  }
+
+  .ns-agent-composer-toolbar-right > .ns-agent-popover {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .ns-agent-composer-toolbar-right > .ns-agent-popover > button {
+    max-width: 100%;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .ns-agent-composer-toolbar-right > .ns-agent-popover > button > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .ns-agent-composer-command-slot {
+    margin-left: auto;
+  }
 }
 
 @keyframes ns-agent-spin {

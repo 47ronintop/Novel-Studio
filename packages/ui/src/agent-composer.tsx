@@ -2,6 +2,7 @@ import { ChevronDown, Cpu, Plus, Send, Square, X, Zap } from "lucide-react";
 import { useRef, type KeyboardEvent } from "react";
 
 import { AgentContextMenu } from "./agent-context-menu.js";
+import { AgentPermissionMenu } from "./agent-permission-menu.js";
 import { AgentPopover, rovePopoverOptions } from "./agent-popover.js";
 import type { AgentComposerProps } from "./workspace-shell-types.js";
 
@@ -176,36 +177,15 @@ export function AgentComposer(props: AgentComposerProps) {
             {props.operationMode === "planning" ? (
               <span>只读规划</span>
             ) : (
-              <label>
-                <span className="ns-visually-hidden">修改权限</span>
-                <select
-                  aria-label="写入策略"
-                  disabled={draftDisabled}
-                  onChange={(event) =>
-                    props.onWritePolicyChange(
-                      event.currentTarget.value as AgentComposerProps["writePolicy"]
-                    )
-                  }
-                  value={props.writePolicy}
-                >
-                  <option value="write_before_confirmation">每次修改前确认</option>
-                  <option value="user_preapproved_run">本次运行自动修改</option>
-                </select>
-              </label>
+              <AgentPermissionMenu
+                {...(props.permission === undefined ? {} : { control: props.permission })}
+                onWritePolicyAcknowledgedChange={props.onWritePolicyAcknowledgedChange}
+                onWritePolicyChange={props.onWritePolicyChange}
+                policyDisabled={draftDisabled}
+                writePolicy={props.writePolicy}
+                writePolicyAcknowledged={props.writePolicyAcknowledged}
+              />
             )}
-            {props.operationMode === "execution" && props.writePolicy === "user_preapproved_run" ? (
-              <label className="ns-agent-write-acknowledgement">
-                <input
-                  checked={props.writePolicyAcknowledged}
-                  disabled={draftDisabled}
-                  onChange={(event) =>
-                    props.onWritePolicyAcknowledgedChange(event.currentTarget.checked)
-                  }
-                  type="checkbox"
-                />
-                <span>确认本次运行自动修改</span>
-              </label>
-            ) : null}
             {references === undefined ? null : (
               <ReferenceControls draftDisabled={draftDisabled} references={references} />
             )}

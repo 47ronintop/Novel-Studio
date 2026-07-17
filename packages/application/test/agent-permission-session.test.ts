@@ -16,6 +16,7 @@ function baseInput(
   return {
     projectId: "project_01",
     runDraftId: "run_draft_01",
+    runDraftRevision: 1,
     operationMode: "execution",
     contextMode: "writing",
     writePolicy: "write_before_confirmation",
@@ -38,6 +39,15 @@ function memoryRepository(): AgentPermissionSessionRepository & {
     async writePermissionSummary(_runId, summary) {
       written.push(summary);
       return ok(summary);
+    },
+    async readPermissionSummary(runId, permissionSummaryId) {
+      return ok(
+        written.find(
+          (summary) =>
+            summary["runId"] === runId &&
+            summary["permissionSummaryId"] === permissionSummaryId
+        )
+      );
     }
   };
 }
@@ -102,6 +112,25 @@ describe("createAgentPermissionSession.verifyForStart", () => {
     expect(verified.ok).toBe(true);
     if (!verified.ok || !prepared.ok) return;
     expect(verified.value.checksum).toBe(prepared.value.checksum);
+  });
+
+  test("ignores a preview from an older persisted draft revision", async () => {
+    const session = createAgentPermissionSession({
+      repository: memoryRepository(),
+      rootFingerprint: fakeRootFingerprint(() => "f".repeat(64))
+    });
+    const prepared = await session.prepareForDraft({
+      ...baseInput({ writePolicy: "user_preapproved_run" }),
+      runDraftRevision: 2
+    });
+    expect(prepared.ok).toBe(true);
+
+    const verified = await session.verifyForStart({
+      ...baseInput({ operationMode: "planning", writePolicy: "write_before_confirmation" }),
+      runDraftRevision: 3
+    });
+
+    expect(verified.ok).toBe(true);
   });
 
   test("blocks the run when the canonical root fingerprint changed since the summary was last previewed", async () => {
@@ -228,5 +257,34 @@ describe("createAgentPermissionSession.bindToRun", () => {
     if (!prepared.ok) return;
     const bound = await session.bindToRun({ runId: "run_01", summary: prepared.value });
     expect(bound.ok).toBe(false);
+  });
+});
+
+describe("createAgentPermissionSession.readForRun", () => {
+  test("reads and validates the server-persisted summary bound to a run", async () => {
+    const repository = memoryRepository();
+    const session = createAgentPermissionSession({
+      repository,
+      rootFingerprint: fakeRootFingerprint(() => "f".repeat(64)),
+      createId: () => "permission_summary_read"
+    });
+    const prepared = await session.prepareForDraft(baseInput());
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) return;
+    await session.bindToRun({ runId: "run_01", summary: prepared.value });
+
+    const read = await session.readForRun({
+      runId: "run_01",
+      permissionSummaryId: "permission_summary_read"
+    });
+
+    expect(read).toEqual({
+      ok: true,
+      value: expect.objectContaining({
+        runId: "run_01",
+        permissionSummaryId: "permission_summary_read",
+        checksum: prepared.value.checksum
+      })
+    });
   });
 });

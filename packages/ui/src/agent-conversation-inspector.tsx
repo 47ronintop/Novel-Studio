@@ -6,6 +6,7 @@ export function AgentConversationInspector({
   readonly view: AgentConversationViewProps;
 }) {
   const run = view.agentRun;
+  const composer = view.composer;
   return (
     <dl className="ns-meta-list" aria-label="Agent 运行检查器">
       <div>
@@ -22,15 +23,15 @@ export function AgentConversationInspector({
       </div>
       <div>
         <dt>模式</dt>
-        <dd>{run?.operationMode === "execution" ? "执行" : "规划"}</dd>
+        <dd>{composer?.operationMode === "execution" ? "执行" : "规划"}</dd>
       </div>
       <div>
         <dt>上下文</dt>
-        <dd>{run?.contextMode === "general_file" ? "通用文件" : "写作"}</dd>
+        <dd>{composer?.contextMode === "general_file" ? "通用文件" : "写作"}</dd>
       </div>
       <div>
         <dt>写入策略</dt>
-        <dd>{run?.writePolicy === "user_preapproved_run" ? "本次运行预授权" : "写入前确认"}</dd>
+        <dd>{composer?.writePolicy === "user_preapproved_run" ? "本次运行预授权" : "写入前确认"}</dd>
       </div>
     </dl>
   );

@@ -14,7 +14,7 @@ import { AgentRunPanel } from "../src/agent-run-panel.js";
 
 describe("AgentRunPanel", () => {
   test("does not own the composer, mode controls, write policy, stop, or plan decisions", () => {
-    const html = renderPanel({ operationMode: "planning", status: "planning_model" });
+    const html = renderPanel({ status: "planning_model" });
 
     const host = document.createElement("div");
     host.innerHTML = html;
@@ -28,6 +28,9 @@ describe("AgentRunPanel", () => {
     expect(panel?.querySelector('[aria-label="停止 Agent 运行"]')).toBeNull();
     expect(panel?.querySelector('[aria-label="Plan Artifact 审阅"]')).toBeNull();
     expect(html).toContain("正在读取第 3 章");
+    expect(createProps()).not.toHaveProperty("operationMode");
+    expect(createProps()).not.toHaveProperty("contextMode");
+    expect(createProps()).not.toHaveProperty("writePolicy");
   });
 
   test("renders a pending question without duplicating the composer stop action", () => {
@@ -167,6 +170,69 @@ describe("AgentRunPanel", () => {
     disposePanelHost(host);
   });
 
+  test("renders plan steps from the persisted execution record and matches deviations by execution and step IDs", () => {
+    const host = renderPanelHost({
+      status: "executing_model",
+      assistantText: "所有计划步骤都已经完成。",
+      events: [
+        planDeviationEvent("plan-execution-other", "step-completed", "错误执行记录"),
+        planDeviationEvent("plan-execution-01", "step-completed", "额外读取了人物设定")
+      ],
+      planExecution: planExecutionControl()
+    });
+    const timeline = host.querySelector('[aria-label="Agent 运行状态"]');
+    const steps = timeline?.querySelectorAll('[data-plan-execution-id="plan-execution-01"]');
+
+    expect(steps).toHaveLength(3);
+    expect(timeline?.querySelector('[data-plan-step-id="step-running"] details')?.hasAttribute("open")).toBe(true);
+    expect(timeline?.querySelector('[data-plan-step-id="step-completed"] details')?.hasAttribute("open")).toBe(false);
+    expect(timeline?.querySelector('[data-plan-step-id="step-completed"]')?.textContent).toContain(
+      "已完成并验证"
+    );
+    expect(timeline?.querySelector('[data-plan-step-id="step-completed"]')?.textContent).toContain(
+      "额外读取了人物设定"
+    );
+    expect(timeline?.textContent).not.toContain("错误执行记录");
+    expect(timeline?.textContent).not.toContain("所有计划步骤都已经完成");
+
+    disposePanelHost(host);
+  });
+
+  test("shows a material deviation card with persisted request facts and separate approve/reject decisions", () => {
+    const onDecideRevision = vi.fn();
+    const host = renderPanelHost({
+      status: "awaiting_plan_revision",
+      events: [],
+      planExecution: {
+        ...planExecutionControl(),
+        revisionRequest: {
+          requestId: "request-01",
+          planExecutionId: "plan-execution-01",
+          planId: "plan-01",
+          planRevision: 2,
+          originalPlan: "只修订当前章节",
+          discovery: "人物动机还依赖第二章中的承诺",
+          proposal: "把第二章一致性复核加入计划",
+          affectedStepIds: ["step-running"]
+        },
+        onDecideRevision
+      }
+    });
+    const card = host.querySelector<HTMLElement>('[aria-label="计划修订审批"]');
+
+    expect(card?.dataset["requestId"]).toBe("request-01");
+    expect(card?.dataset["planExecutionId"]).toBe("plan-execution-01");
+    expect(card?.textContent).toContain("只修订当前章节");
+    expect(card?.textContent).toContain("人物动机还依赖第二章中的承诺");
+    expect(card?.textContent).toContain("把第二章一致性复核加入计划");
+    expect(card?.textContent).toContain("核对人物动机");
+    act(() => card?.querySelector<HTMLButtonElement>('[aria-label="批准计划修订"]')?.click());
+    act(() => card?.querySelector<HTMLButtonElement>('[aria-label="拒绝计划修订"]')?.click());
+    expect(onDecideRevision.mock.calls).toEqual([["approve"], ["reject"]]);
+
+    disposePanelHost(host);
+  });
+
   test("renders the run as inline assistant content without another frame or scroller", () => {
     const css = readUiStyles();
     const runRule = css.match(/\.ns-agent-run\s*\{[^}]*\}/s)?.[0] ?? "";
@@ -176,11 +242,9 @@ describe("AgentRunPanel", () => {
     expect(wrapperRule).not.toMatch(/border(?:-top)?\s*:/);
   });
 
-  test("shows automatic-write risk version points and run undo only for execution", () => {
+  test("shows automatic-write version points and run undo from persisted execution facts", () => {
     const onUndoRun = vi.fn();
     const execution = renderPanel({
-      operationMode: "execution",
-      writePolicy: "user_preapproved_run",
       status: "completed",
       canUndoRun: true,
       onUndoRun,
@@ -207,23 +271,12 @@ describe("AgentRunPanel", () => {
         }
       ]
     });
-    const planning = renderPanel({
-      operationMode: "planning",
-      status: "completed",
-      canUndoRun: true,
-      onUndoRun
-    });
-
     expect(execution).toContain("版本点 versions-01");
     expect(execution).toContain('aria-label="撤销本次运行"');
-    expect(planning).not.toContain("本次运行自动写入");
-    expect(planning).not.toContain("撤销本次运行");
   });
 
   test("does not label a manually approved write as automatic", () => {
     const html = renderPanel({
-      operationMode: "execution",
-      writePolicy: "write_before_confirmation",
       status: "completed",
       events: [
         {
@@ -430,8 +483,6 @@ function createProps() {
   return {
     projectId: "project-01",
     runId: "run-01",
-    operationMode: "planning" as const,
-    contextMode: "writing" as const,
     status: "planning_model" as const,
     assistantText: "我会先核对当前章节。",
     events: [
@@ -449,7 +500,73 @@ function createProps() {
     onAnswerUserInput: () => undefined,
     onResume: () => undefined,
     onRetryStep: () => undefined,
-    onRefreshContext: () => undefined,
-    writePolicy: "write_before_confirmation" as const
+    onRefreshContext: () => undefined
+  };
+}
+
+function planExecutionControl() {
+  return {
+    record: {
+      schemaVersion: "1.0" as const,
+      planExecutionId: "plan-execution-01",
+      runId: "run-01",
+      planId: "plan-01",
+      planRevision: 1,
+      handoffContextMode: "writing" as const,
+      handoffWritePolicy: "write_before_confirmation" as const,
+      revision: 4,
+      steps: [
+        {
+          stepId: "step-completed",
+          title: "复核当前章节",
+          status: "completed" as const,
+          startedAt: "2026-07-17T00:00:00.000Z",
+          completedAt: "2026-07-17T00:01:00.000Z",
+          verification: ["已运行聚焦测试"],
+          deviationKind: "minor" as const,
+          blockedReason: null,
+          checkpointId: "checkpoint-01",
+          eventSequence: 4
+        },
+        {
+          stepId: "step-running",
+          title: "核对人物动机",
+          status: "running" as const,
+          startedAt: "2026-07-17T00:02:00.000Z",
+          completedAt: null,
+          verification: [],
+          deviationKind: "material" as const,
+          blockedReason: null,
+          checkpointId: "checkpoint-02",
+          eventSequence: 6
+        },
+        {
+          stepId: "step-pending",
+          title: "完成最终复核",
+          status: "pending" as const,
+          startedAt: null,
+          completedAt: null,
+          verification: [],
+          deviationKind: "none" as const,
+          blockedReason: null,
+          checkpointId: null,
+          eventSequence: null
+        }
+      ]
+    },
+    onDecideRevision: () => undefined
+  };
+}
+
+function planDeviationEvent(planExecutionId: string, stepId: string, summary: string) {
+  return {
+    schemaVersion: "1.1" as const,
+    runId: "run-01",
+    projectId: "project-01",
+    sequence: planExecutionId === "plan-execution-01" ? 7 : 6,
+    runRevision: planExecutionId === "plan-execution-01" ? 7 : 6,
+    type: "plan_deviation_recorded" as const,
+    createdAt: "2026-07-17T00:03:00.000Z",
+    detail: { planExecutionId, stepId, kind: "minor", summary }
   };
 }
