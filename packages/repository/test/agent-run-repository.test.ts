@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -503,6 +503,142 @@ describe("AgentRunFileRepository — compaction persistence + commit marker", ()
     const replay = await repository["commitCompaction"]?.({ ...committed, runRevision: 99 });
     expect(replay).toMatchObject({ ok: true, value: { runRevision: 6 } });
   });
+
+  test("persists immutable run and preflight error records in their separate history roots", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-agent-errors-"));
+    roots.push(projectRoot);
+    const repository = makeRepository(projectRoot);
+    const runError = errorRecord({ errorId: "err_run_01", runId: "run_01" });
+    const preflightError = errorRecord({
+      errorId: "err_draft_01",
+      runId: undefined,
+      runDraftId: "draft_01"
+    });
+
+    expect(await repository["writeRunError"]?.("run_01", runError)).toMatchObject({ ok: true });
+    expect(await repository["writePreflightError"]?.(preflightError)).toMatchObject({ ok: true });
+    expect(await repository["readRunError"]?.("run_01", "err_run_01")).toEqual({
+      ok: true,
+      value: runError
+    });
+    expect(await repository["readPreflightError"]?.("err_draft_01")).toEqual({
+      ok: true,
+      value: preflightError
+    });
+    expect(
+      await readFile(
+        join(projectRoot, "history", "agent-runs", "run_01", "errors", "err_run_01.json"),
+        "utf8"
+      )
+    ).toContain('"errorId": "err_run_01"');
+    expect(
+      await readFile(
+        join(projectRoot, "history", "agent-diagnostics", "err_draft_01.json"),
+        "utf8"
+      )
+    ).toContain('"runDraftId": "draft_01"');
+
+    expect(await repository["writeRunError"]?.("run_01", runError)).toMatchObject({ ok: true });
+    expect(
+      await repository["writeRunError"]?.("run_01", {
+        ...runError,
+        message: "divergent rewrite"
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_RUN_ERROR_RECORD_CONFLICT" } });
+
+    expect(
+      await repository["writeRunError"]?.(
+        "run_01",
+        errorRecord({
+          errorId: "err_unsafe",
+          runId: "run_01",
+          redactedDetail: { nested: { stack: "must not persist" } }
+        })
+      )
+    ).toMatchObject({ ok: false, error: { code: "AGENT_RUN_ERROR_RECORD_INVALID" } });
+    expect(await repository["readRunError"]?.("run_01", "err_unsafe")).toEqual({
+      ok: true,
+      value: undefined
+    });
+  });
+
+  test("serializes concurrent divergent writes to the same immutable error ID", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-agent-error-race-"));
+    roots.push(projectRoot);
+    const repository = makeRepository(projectRoot);
+
+    for (let index = 0; index < 8; index += 1) {
+      const errorId = `err_race_${String(index)}`;
+      const first = errorRecord({ errorId, runId: "run_race", message: "first write" });
+      const second = errorRecord({ errorId, runId: "run_race", message: "second write" });
+      const results = (await Promise.all([
+        repository["writeRunError"]?.("run_race", first),
+        repository["writeRunError"]?.("run_race", second)
+      ])) as Array<
+        | { ok: true; value: Record<string, unknown> }
+        | { ok: false; error: Record<string, unknown> }
+      >;
+      const succeeded = results.filter(
+        (result): result is { ok: true; value: Record<string, unknown> } => result.ok
+      );
+      const failed = results.filter(
+        (result): result is { ok: false; error: Record<string, unknown> } => !result.ok
+      );
+
+      expect(succeeded).toHaveLength(1);
+      expect(failed).toHaveLength(1);
+      expect(failed[0]).toMatchObject({
+        error: { code: "AGENT_RUN_ERROR_RECORD_CONFLICT" }
+      });
+      expect(await repository["readRunError"]?.("run_race", errorId)).toEqual({
+        ok: true,
+        value: succeeded[0]?.value
+      });
+    }
+  });
+
+  test("enforces both count and total-size retention for preflight diagnostics", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-preflight-retention-"));
+    roots.push(projectRoot);
+    const Repository = repositoryExports.AgentRunFileRepository as unknown as new (options: {
+      projectRoot: string;
+      preflightErrorMaxRecords: number;
+      preflightErrorMaxBytes: number;
+    }) => Record<string, (...args: unknown[]) => Promise<unknown>>;
+    const maxBytes = 1_300;
+    const repository = new Repository({
+      projectRoot,
+      preflightErrorMaxRecords: 2,
+      preflightErrorMaxBytes: maxBytes
+    });
+
+    for (let index = 1; index <= 4; index += 1) {
+      expect(
+        await repository["writePreflightError"]?.(
+          errorRecord({
+            errorId: `err_draft_0${index}`,
+            runId: undefined,
+            runDraftId: `draft_0${index}`,
+            createdAt: `2026-07-17T12:00:0${index}.000Z`,
+            redactedDetail: { summary: String(index).repeat(240) }
+          })
+        )
+      ).toMatchObject({ ok: true });
+    }
+
+    const root = join(projectRoot, "history", "agent-diagnostics");
+    const files = (await readdir(root)).filter((entry) => entry.endsWith(".json"));
+    const totalBytes = (
+      await Promise.all(files.map((file) => readFile(join(root, file))))
+    ).reduce((total, value) => total + value.byteLength, 0);
+    expect(files.length).toBeLessThanOrEqual(2);
+    expect(totalBytes).toBeLessThanOrEqual(maxBytes);
+    expect(files).toContain("err_draft_04.json");
+    expect(await repository["readPreflightError"]?.("err_draft_01")).toEqual({
+      ok: true,
+      value: undefined
+    });
+  });
 });
 
 function changeSetRecord(revision: number, checksum: string): Record<string, unknown> {
@@ -519,5 +655,25 @@ function changeSetRecord(revision: number, checksum: string): Record<string, unk
     approvalToken: checksum,
     createdAt: `2026-07-13T00:0${revision}:00.000Z`,
     files: []
+  };
+}
+
+function errorRecord(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schemaVersion: "1.0",
+    errorId: "err_01",
+    projectId: "project_01",
+    runId: "run_01",
+    sequence: 4,
+    category: "AgentError",
+    code: "AGENT_PROVIDER_DISCONNECTED",
+    message: "The provider connection was interrupted.",
+    recoverability: "retryable",
+    suggestedActions: ["Retry the interrupted model round."],
+    redactedDetail: {},
+    recoveryState: "retryable",
+    retryTargets: [{ kind: "model_round", id: "round_01" }],
+    createdAt: "2026-07-17T12:00:00.000Z",
+    ...overrides
   };
 }

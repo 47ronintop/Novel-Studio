@@ -31,6 +31,15 @@ describe("Agent Run IPC", () => {
         calls.push(`retry:${String(command["commandId"])}`);
         return { ok: true, value: snapshot("planning_model", 5, 5) };
       },
+      async retryRunTarget(command: Record<string, unknown>) {
+        const target = command["target"] as Record<string, unknown>;
+        calls.push(
+          `retry-target:${String(command["commandId"])}:${String(command["errorId"])}:${String(
+            target["kind"]
+          )}:${String(target["id"])}`
+        );
+        return { ok: true, value: snapshot("planning_model", 5, 5) };
+      },
       async decidePlan(command: Record<string, unknown>) {
         calls.push(`plan:${String(command["commandId"])}`);
         return { ok: true, value: snapshot("executing_model", 6, 6) };
@@ -88,6 +97,7 @@ describe("Agent Run IPC", () => {
     expect(typeof handlers["application:agent-run:answer-user-input"]).toBe("function");
     expect(typeof handlers["application:agent-run:resume"]).toBe("function");
     expect(typeof handlers["application:agent-run:retry-step"]).toBe("function");
+    expect(typeof handlers["application:agent-run:retry-target"]).toBe("function");
     expect(typeof handlers["application:agent-run:decide-plan"]).toBe("function");
     expect(typeof handlers["application:agent-run:refresh-context"]).toBe("function");
     expect(typeof handlers["application:agent-run:decide-change-set"]).toBe("function");
@@ -100,6 +110,7 @@ describe("Agent Run IPC", () => {
       handlers["application:agent-run:answer-user-input"] === undefined ||
       handlers["application:agent-run:resume"] === undefined ||
       handlers["application:agent-run:retry-step"] === undefined ||
+      handlers["application:agent-run:retry-target"] === undefined ||
       handlers["application:agent-run:decide-plan"] === undefined ||
       handlers["application:agent-run:refresh-context"] === undefined ||
       handlers["application:agent-run:decide-change-set"] === undefined ||
@@ -130,6 +141,45 @@ describe("Agent Run IPC", () => {
       commandId: "retry-01",
       expectedRunRevision: 4
     });
+    await handlers["application:agent-run:retry-target"]({
+      projectId: "project-01",
+      runId: "run-ipc",
+      commandId: "retry-target-01",
+      expectedRunRevision: 4,
+      errorId: "err-ipc-01",
+      target: { kind: "tool_call", id: "call:read/1" }
+    });
+    const callsAfterExplicitRetry = calls.length;
+    expect(
+      await handlers["application:agent-run:retry-target"]({
+        projectId: "project-01",
+        runId: "run-ipc",
+        commandId: "retry-target-invalid",
+        expectedRunRevision: 4,
+        errorId: "err-ipc-01",
+        target: { kind: "shell", id: "tool-ipc-01" }
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_RUN_IPC_INVALID_COMMAND" } });
+    expect(
+      await handlers["application:agent-run:retry-target"]({
+        projectId: "project-01",
+        runId: "run-ipc",
+        commandId: "retry-target-missing-error",
+        expectedRunRevision: 4,
+        target: { kind: "tool_call", id: "tool-ipc-01" }
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_RUN_IPC_INVALID_COMMAND" } });
+    expect(
+      await handlers["application:agent-run:retry-target"]({
+        projectId: "project-01",
+        runId: "run-ipc",
+        commandId: "retry-target-too-long",
+        expectedRunRevision: 4,
+        errorId: "err-ipc-01",
+        target: { kind: "tool_call", id: "x".repeat(513) }
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_RUN_IPC_INVALID_COMMAND" } });
+    expect(calls).toHaveLength(callsAfterExplicitRetry);
     await handlers["application:agent-run:decide-plan"]({
       projectId: "project-01",
       runId: "run-ipc",
@@ -198,6 +248,7 @@ describe("Agent Run IPC", () => {
       "answer:answer-01",
       "resume:resume-01",
       "retry:retry-01",
+      "retry-target:retry-target-01:err-ipc-01:tool_call:call:read/1",
       "plan:plan-01",
       "context:context-01",
       "change-set:change-set-01:4:checksum-r4",
@@ -234,6 +285,7 @@ describe("Agent Run IPC", () => {
     expect(typeof agentRuns["answerUserInput"]).toBe("function");
     expect(typeof agentRuns["resume"]).toBe("function");
     expect(typeof agentRuns["retryStep"]).toBe("function");
+    expect(typeof agentRuns["retryTarget"]).toBe("function");
     expect(typeof agentRuns["decidePlan"]).toBe("function");
     expect(typeof agentRuns["refreshContext"]).toBe("function");
     expect(typeof agentRuns["decideChangeSet"]).toBe("function");
@@ -263,6 +315,7 @@ describe("Agent Run IPC", () => {
     await agentRuns["answerUserInput"]?.({});
     await agentRuns["resume"]?.({});
     await agentRuns["retryStep"]?.({});
+    await agentRuns["retryTarget"]?.({});
     await agentRuns["decidePlan"]?.({});
     await agentRuns["refreshContext"]?.({});
     await agentRuns["decideChangeSet"]?.({});
@@ -275,6 +328,7 @@ describe("Agent Run IPC", () => {
       "application:agent-run:answer-user-input",
       "application:agent-run:resume",
       "application:agent-run:retry-step",
+      "application:agent-run:retry-target",
       "application:agent-run:decide-plan",
       "application:agent-run:refresh-context",
       "application:agent-run:decide-change-set",

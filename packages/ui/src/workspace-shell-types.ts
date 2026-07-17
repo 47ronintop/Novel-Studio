@@ -2,7 +2,9 @@ import type {
   ActivityId,
   AgentContextMode,
   AgentOperationMode,
+  AgentRunErrorRecord,
   AgentRunEvent,
+  AgentRunRetryTarget,
   AgentRunStatusV11,
   AgentWritePolicy,
   ApplicationCommand,
@@ -312,6 +314,7 @@ export interface AgentRunPanelProps {
   readonly assistantText: string;
   readonly events: readonly AgentRunEvent[];
   readonly pendingUserInput?: AgentRunPendingUserInputProps;
+  readonly diagnostic?: AgentRunErrorRecord;
   readonly errorMessage?: string;
   readonly providerLabel?: string;
   readonly contextSourceNotice?: string;
@@ -323,6 +326,7 @@ export interface AgentRunPanelProps {
   readonly onAnswerUserInput: (answer: string) => void;
   readonly onResume: () => void;
   readonly onRetryStep: () => void;
+  readonly onRetryTarget?: (target: AgentRunRetryTarget) => void;
   readonly onRefreshContext: (decision: "refresh" | "exclude" | "cancel") => void;
 }
 

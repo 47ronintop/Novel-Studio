@@ -113,6 +113,184 @@ const settings = {
 } as ModelSettingsPanelProps;
 
 describe("Agent Run renderer bridge", () => {
+  test("coalesces duplicate explicit retries and sends only the persisted target", async () => {
+    const retryableSnapshot = {
+      ...snapshot,
+      runRevision: 8,
+      lastSequence: 8,
+      activeErrorId: "err_bridge_retry",
+      recoveryState: "retryable"
+    } as AgentRunSnapshot;
+    const clearedSnapshot = {
+      ...retryableSnapshot,
+      runRevision: 9,
+      lastSequence: 9,
+      activeErrorId: null,
+      recoveryState: "none"
+    } as AgentRunSnapshot;
+    const diagnostic = {
+      schemaVersion: "1.0" as const,
+      errorId: "err_bridge_retry",
+      projectId: "project-01",
+      runId: "run-bridge",
+      sequence: 8,
+      checkpointId: "checkpoint_bridge_01",
+      category: "ModelProviderError",
+      code: "AGENT_PROVIDER_DISCONNECTED",
+      message: "The provider connection was interrupted.",
+      recoverability: "retryable" as const,
+      suggestedActions: ["Retry the model round or resume from the checkpoint."],
+      provider: "openai-compatible",
+      model: "local-model",
+      redactedDetail: { requestId: "request_bridge_01" },
+      recoveryState: "retryable" as const,
+      retryTargets: [
+        { kind: "model_round" as const, id: "model_round_bridge_01" },
+        { kind: "checkpoint" as const, id: "checkpoint_bridge_01" }
+      ],
+      createdAt: "2026-07-17T12:00:00.000Z"
+    };
+    const commands: Record<string, unknown>[] = [];
+    let legacyCalls = 0;
+    let active = true;
+    let finishRetry: (() => void) | undefined;
+    const retryPending = new Promise<void>((resolve) => {
+      finishRetry = resolve;
+    });
+    const api = {
+      agentRuns: {
+        onEvent: () => () => undefined,
+        list: async () => ok([active ? retryableSnapshot : clearedSnapshot]),
+        read: async () =>
+          ok({
+            snapshot: active ? retryableSnapshot : clearedSnapshot,
+            events: [],
+            ...(active ? { diagnostic } : {})
+          }),
+        retryTarget: async (command: Record<string, unknown>) => {
+          commands.push(structuredClone(command));
+          await retryPending;
+          active = false;
+          return ok(clearedSnapshot);
+        },
+        retryStep: async () => {
+          legacyCalls += 1;
+          return ok(clearedSnapshot);
+        }
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({ projectId: "project-01", settings });
+
+    const loaded = await bridge.load("project-01");
+    expect(loaded.diagnostic).toEqual(diagnostic);
+    const first = bridge.retryTarget({ kind: "checkpoint", id: "checkpoint_bridge_01" });
+    const duplicate = bridge.retryTarget({ kind: "checkpoint", id: "checkpoint_bridge_01" });
+
+    await vi.waitFor(() => expect(commands).toHaveLength(1));
+    finishRetry?.();
+    const [retried, duplicateResult] = await Promise.all([first, duplicate]);
+
+    expect(commands).toEqual([
+      expect.objectContaining({
+        runId: "run-bridge",
+        projectId: "project-01",
+        expectedRunRevision: 8,
+        errorId: "err_bridge_retry",
+        target: { kind: "checkpoint", id: "checkpoint_bridge_01" }
+      })
+    ]);
+    expect(legacyCalls).toBe(0);
+    expect(retried).not.toHaveProperty("diagnostic");
+    expect(duplicateResult).toEqual(retried);
+  });
+
+  test("does not project raw failure event messages before the persisted diagnostic DTO", async () => {
+    const failedSnapshot = {
+      ...snapshot,
+      runRevision: 3,
+      lastSequence: 3,
+      activeErrorId: "err_live_tool",
+      recoveryState: "retryable"
+    } as AgentRunSnapshot;
+    const diagnostic = {
+      schemaVersion: "1.0" as const,
+      errorId: "err_live_tool",
+      projectId: "project-01",
+      runId: "run-bridge",
+      sequence: 3,
+      toolCallId: "call:read/1",
+      category: "StorageError",
+      code: "AGENT_READ_FAILED",
+      message: "The safe persisted message.",
+      recoverability: "retryable" as const,
+      suggestedActions: ["Retry this tool call."],
+      redactedDetail: {},
+      recoveryState: "retryable" as const,
+      retryTargets: [{ kind: "tool_call" as const, id: "call:read/1" }],
+      createdAt: "2026-07-17T12:00:00.000Z"
+    };
+    let listener: ((event: AgentRunEvent) => void) | undefined;
+    let diagnosticReady = false;
+    const api = {
+      agentRuns: {
+        onEvent: (next: (event: AgentRunEvent) => void) => {
+          listener = next;
+          return () => undefined;
+        },
+        list: async () => ok([snapshot]),
+        read: async () =>
+          ok({
+            snapshot: diagnosticReady ? failedSnapshot : snapshot,
+            events: [],
+            ...(diagnosticReady ? { diagnostic } : {})
+          })
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({ projectId: "project-01", settings });
+    await bridge.load("project-01");
+
+    listener?.(event(2, "tool_failed", { message: "raw event fallback" }));
+    expect(bridge.getProps()?.errorMessage).toBeUndefined();
+    listener?.(event(3, "run_failed", { message: "late raw event message" }));
+    expect(bridge.getProps()?.errorMessage).toBeUndefined();
+
+    diagnosticReady = true;
+    listener?.(event(4, "error_recorded", { errorId: diagnostic.errorId }));
+    await vi.waitFor(() => expect(bridge.getProps()?.diagnostic).toEqual(diagnostic));
+    expect(bridge.getProps()?.errorMessage).toBeUndefined();
+  });
+
+  test("uses a controlled fallback when terminal diagnostic persistence fails", async () => {
+    let listener: ((event: AgentRunEvent) => void) | undefined;
+    const api = {
+      agentRuns: {
+        onEvent: (next: (event: AgentRunEvent) => void) => {
+          listener = next;
+          return () => undefined;
+        },
+        list: async () => ok([snapshot]),
+        read: async () => ok({ snapshot, events: [] })
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({ projectId: "project-01", settings });
+    await bridge.load("project-01");
+
+    listener?.(
+      event(2, "run_failed", {
+        message: "raw provider message must not render",
+        diagnosticPersistenceFailed: true
+      })
+    );
+
+    expect(bridge.getProps()?.errorMessage).toBe(
+      "Agent run failed, and diagnostic details could not be saved."
+    );
+    expect(bridge.getProps()?.errorMessage).not.toContain("raw provider message");
+  });
+
   test("clears run state and write acknowledgement when the selected conversation changes", async () => {
     const api = createApi({
       start: async () =>

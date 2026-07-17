@@ -380,6 +380,14 @@ export type {
   ReadPermissionSummaryForRunInput,
   VerifyPermissionSummaryForStartInput
 } from "./agent-permission-session.js";
+export { createAgentDiagnosticsSession } from "./agent-diagnostics-session.js";
+export type {
+  AgentDiagnosticsRepositoryPort,
+  AgentDiagnosticsSession,
+  CreateAgentDiagnosticsSessionOptions,
+  RecordAgentPreflightErrorInput,
+  RecordAgentRunErrorInput
+} from "./agent-diagnostics-session.js";
 export { createChangeSetSession } from "./change-set-session.js";
 export { createVersionGroupSession } from "./version-group-session.js";
 export type {
@@ -444,6 +452,8 @@ export type {
 export type { CreateLlmAgentRunModelDriverOptions } from "./agent-run-model-driver.js";
 export type {
   AgentRunEvent,
+  AgentRunErrorRecord,
+  AgentRunRetryTarget,
   AgentRunSnapshot,
   AgentRunStatus,
   AgentRunStatusV11,

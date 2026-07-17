@@ -57,6 +57,8 @@ export type {
 } from "./model-settings-panel.js";
 export { WorkspaceShell } from "./workspace-shell.js";
 export { AgentRunPanel } from "./agent-run-panel.js";
+export { AgentErrorCard } from "./agent-error-card.js";
+export type { AgentErrorCardProps } from "./agent-error-card.js";
 export { AgentActivitySummary } from "./agent-activity-summary.js";
 export { AgentComposer } from "./agent-composer.js";
 export { AgentPopover, rovePopoverOptions } from "./agent-popover.js";

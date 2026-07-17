@@ -80,6 +80,7 @@ describe("Electron security baseline", () => {
       "application:agent-run:answer-user-input",
       "application:agent-run:resume",
       "application:agent-run:retry-step",
+      "application:agent-run:retry-target",
       "application:agent-run:decide-plan",
       "application:agent-run:read-permission-summary",
       "application:agent-run:decide-plan-revision",

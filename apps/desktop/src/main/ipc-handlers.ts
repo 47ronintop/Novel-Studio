@@ -27,6 +27,7 @@ import type {
   RefreshAgentContextCommand,
   ResumeAgentRunCommand,
   RetryAgentRunStepCommand,
+  RetryRunTargetCommand,
   StartAgentRunCommand,
   StopAgentRunCommand,
   UndoRunCommand
@@ -543,6 +544,13 @@ export function createApplicationIpcHandlers(
       return parsed === undefined || session === undefined
         ? Promise.resolve(agentRunUnavailable())
         : session.retryStep(parsed);
+    },
+    "application:agent-run:retry-target": (command: unknown) => {
+      const parsed = toRetryRunTargetCommand(command);
+      const session = currentAgentRunSession();
+      return parsed === undefined || session === undefined
+        ? Promise.resolve(invalidAgentRunCommand())
+        : session.retryRunTarget(parsed);
     },
     "application:agent-run:decide-plan": (command: unknown) => {
       const parsed = toDecideAgentPlanCommand(command);
@@ -1179,6 +1187,36 @@ function toRetryAgentRunStepCommand(value: unknown): RetryAgentRunStepCommand | 
   return isRecord(value) ? (value as unknown as RetryAgentRunStepCommand) : undefined;
 }
 
+function toRetryRunTargetCommand(value: unknown): RetryRunTargetCommand | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      "runId",
+      "projectId",
+      "commandId",
+      "expectedRunRevision",
+      "errorId",
+      "target"
+    ]) ||
+    !isSafeId(value["runId"]) ||
+    !isSafeId(value["projectId"]) ||
+    !isSafeId(value["commandId"]) ||
+    !Number.isSafeInteger(value["expectedRunRevision"]) ||
+    Number(value["expectedRunRevision"]) < 0 ||
+    !isSafeId(value["errorId"]) ||
+    !isRecord(value["target"]) ||
+    !hasOnlyKeys(value["target"], ["kind", "id"]) ||
+    !isOpaqueRetryTargetId(value["target"]["id"]) ||
+    (value["target"]["kind"] !== "model_round" &&
+      value["target"]["kind"] !== "tool_call" &&
+      value["target"]["kind"] !== "checkpoint" &&
+      value["target"]["kind"] !== "plan_step")
+  ) {
+    return undefined;
+  }
+  return value as unknown as RetryRunTargetCommand;
+}
+
 function toDecideAgentPlanCommand(value: unknown): DecideAgentPlanCommand | undefined {
   return isRecord(value) ? (value as unknown as DecideAgentPlanCommand) : undefined;
 }
@@ -1425,6 +1463,10 @@ function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[])
 
 function isSafeId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(value);
+}
+
+function isOpaqueRetryTargetId(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= 512;
 }
 
 function isCursor(value: unknown): value is string {

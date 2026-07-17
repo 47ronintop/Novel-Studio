@@ -2,6 +2,7 @@ import { Check, Play, RefreshCw, RotateCcw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { AgentActivitySummary } from "./agent-activity-summary.js";
+import { AgentErrorCard } from "./agent-error-card.js";
 import { AgentRunTimeline } from "./agent-run-timeline.js";
 import { ChangeSetReview } from "./change-set-review.js";
 import type { AgentPlanExecutionControl, AgentRunPanelProps } from "./workspace-shell-types.js";
@@ -9,7 +10,6 @@ import type { AgentPlanExecutionControl, AgentRunPanelProps } from "./workspace-
 export function AgentRunPanel(props: AgentRunPanelProps) {
   const [answer, setAnswer] = useState("");
   const [selectedOption, setSelectedOption] = useState("");
-  const lastEvent = props.events.at(-1);
   const nonToolEvents = props.events.filter(
     (event) =>
       event.type !== "tool_started" &&
@@ -133,18 +133,14 @@ export function AgentRunPanel(props: AgentRunPanelProps) {
         </p>
       )}
 
+      {props.diagnostic === undefined ? null : (
+        <AgentErrorCard
+          diagnostic={props.diagnostic}
+          {...(props.onRetryTarget === undefined ? {} : { onRetryTarget: props.onRetryTarget })}
+        />
+      )}
+
       <div className="ns-agent-run-actions">
-        {lastEvent?.type === "tool_failed" ? (
-          <button
-            aria-label="重试失败步骤"
-            className="ns-ai-secondary-button"
-            onClick={props.onRetryStep}
-            type="button"
-          >
-            <RotateCcw aria-hidden="true" size={13} />
-            重试步骤
-          </button>
-        ) : null}
         {props.canUndoRun && props.onUndoRun !== undefined ? (
           <button
             aria-label="撤销本次运行"

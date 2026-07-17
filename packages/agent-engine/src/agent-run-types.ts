@@ -188,7 +188,8 @@ export type AgentRunEventTypeV11 =
   | "plan_step_blocked"
   | "plan_step_skipped"
   | "plan_deviation_recorded"
-  | "plan_revision_requested";
+  | "plan_revision_requested"
+  | "error_recorded";
 
 export interface AgentRunSnapshotPatch {
   readonly pendingUserInputId?: string | null;

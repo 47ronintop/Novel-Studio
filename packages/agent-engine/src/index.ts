@@ -72,6 +72,19 @@ export type {
   CompactContextCommand
 } from "./agent-usage-record.js";
 export {
+  AGENT_RUN_ERROR_DETAIL_MAX_BYTES,
+  createAgentRunErrorRecord,
+  resolveLegacyRetryTarget,
+  validateAgentRunErrorRecord
+} from "./agent-run-error.js";
+export type {
+  AgentRunErrorRecord,
+  AgentRunRetryTarget,
+  AgentRunRetryTargetKind,
+  CreateAgentRunErrorRecordInput,
+  RetryRunTargetCommand
+} from "./agent-run-error.js";
+export {
   buildCompactionInputManifest,
   createPlanExecutionProtectedFact,
   createContextCompactionRevision,

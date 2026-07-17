@@ -5,7 +5,9 @@ import type {
   AgentRunCommandResult,
   AgentRunDraft,
   AgentRunDraftMutation,
+  AgentRunErrorRecord,
   AgentRunEvent,
+  AgentRunRetryTarget,
   AgentRunSnapshot,
   ChangeSet,
   ContextBudgetSnapshot,
@@ -19,6 +21,7 @@ import type {
   RefreshAgentContextCommand,
   ResumeAgentRunCommand,
   RetryAgentRunStepCommand,
+  RetryRunTargetCommand,
   StartAgentRunCommand,
   StopAgentRunCommand
 } from "@novel-studio/agent-engine";
@@ -80,6 +83,7 @@ export interface AgentRunBridge {
   answerUserInput(answer: string): Promise<AgentRunPanelProps>;
   resume(): Promise<AgentRunPanelProps>;
   retryStep(): Promise<AgentRunPanelProps>;
+  retryTarget(target: AgentRunRetryTarget): Promise<AgentRunPanelProps>;
   refreshContext(decision: "refresh" | "exclude" | "cancel"): Promise<AgentRunPanelProps>;
   decidePlan(
     decision: "approve" | "reject",
@@ -102,6 +106,7 @@ interface BridgeState {
   readonly events: AgentRunEvent[];
   readonly assistantText: string;
   readonly pendingUserInput: AgentRunPanelProps["pendingUserInput"] | undefined;
+  readonly diagnostic: AgentRunErrorRecord | undefined;
   readonly planArtifact: PlanArtifact | undefined;
   readonly changeSet: ChangeSet | undefined;
   readonly reviewOpen: boolean;
@@ -135,6 +140,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     events: [],
     assistantText: "",
     pendingUserInput: undefined,
+    diagnostic: undefined,
     planArtifact: undefined,
     changeSet: undefined,
     reviewOpen: false,
@@ -159,6 +165,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   let undoInFlightAction: "request" | "resolve" | "retry" | undefined;
   let draftInFlight: Promise<void> | undefined;
   let planDecisionInFlight: Promise<AgentRunPanelProps> | undefined;
+  let retryTargetInFlight: Promise<AgentRunPanelProps> | undefined;
   let permissionSummaryRequested = false;
   // Increments on every conversation switch so a slow in-flight draft load for a previous
   // conversation can detect it is stale and drop its result instead of clobbering the new one.
@@ -199,8 +206,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
             ? undefined
             : state.pendingUserInput,
       errorMessage:
-        event.type === "run_failed" || event.type === "tool_failed"
-          ? stringDetail(event.detail, "message") ?? "Agent run failed."
+        event.type === "run_failed" && event.detail?.["diagnosticPersistenceFailed"] === true
+          ? "Agent run failed, and diagnostic details could not be saved."
+          : event.type === "run_failed" || event.type === "tool_failed"
+            ? undefined
           : state.errorMessage,
       planArtifact:
         event.type === "plan_ready" && event.detail !== undefined
@@ -220,6 +229,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       event.type === "plan_step_skipped" ||
       event.type === "plan_deviation_recorded" ||
       event.type === "plan_revision_requested" ||
+      event.type === "error_recorded" ||
       event.type === "plan_decision_resolved"
     ) {
       void hydrate(event.runId).then(notify);
@@ -340,6 +350,39 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       } satisfies RetryAgentRunStepCommand)
     );
     return toProps();
+  }
+
+  function retryTargetRun(target: AgentRunRetryTarget): Promise<AgentRunPanelProps> {
+    if (retryTargetInFlight !== undefined) return retryTargetInFlight;
+    const request = (async () => {
+      const snapshot = requireSnapshot();
+      const diagnostic = state.diagnostic;
+      if (snapshot === undefined || diagnostic === undefined) return toProps();
+      const persistedTarget = diagnostic.retryTargets.find(
+        (candidate) => candidate.kind === target.kind && candidate.id === target.id
+      );
+      if (persistedTarget === undefined) {
+        state = { ...state, errorMessage: "The selected retry target is no longer available." };
+        return toProps();
+      }
+      await applyCommandResult(
+        await api.agentRuns.retryTarget({
+          runId: snapshot.runId,
+          projectId: snapshot.projectId,
+          commandId: createCommandId("retry_target"),
+          expectedRunRevision: snapshot.runRevision,
+          errorId: diagnostic.errorId,
+          target: persistedTarget
+        } satisfies RetryRunTargetCommand)
+      );
+      return toProps();
+    })();
+    retryTargetInFlight = request;
+    const clear = () => {
+      if (retryTargetInFlight === request) retryTargetInFlight = undefined;
+    };
+    void request.then(clear, clear);
+    return request;
   }
 
   async function refreshRun(
@@ -589,6 +632,8 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         .map((event) => stringDetail(event.detail, "delta") ?? "")
         .join(""),
       pendingUserInput: read.pendingUserInput,
+      diagnostic: read.diagnostic,
+      errorMessage: read.diagnostic === undefined ? state.errorMessage : undefined,
       planArtifact: read.planArtifact,
       planExecution: read.planExecution,
       permissionSummary: permission.summary,
@@ -747,6 +792,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       assistantText: state.assistantText,
       events: state.events,
       ...(state.pendingUserInput === undefined ? {} : { pendingUserInput: state.pendingUserInput }),
+      ...(state.diagnostic === undefined ? {} : { diagnostic: state.diagnostic }),
       ...(state.changeSet === undefined
         ? {}
         : {
@@ -835,6 +881,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       onAnswerUserInput: (answer) => void answerRun(answer).then(notify),
       onResume: () => void resumeRun().then(notify),
       onRetryStep: () => void retryRun().then(notify),
+      onRetryTarget: (target) => void retryTargetRun(target).then(notify),
       onRefreshContext: (decision) => void refreshRun(decision).then(notify)
     };
   }
@@ -1492,6 +1539,11 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       notify();
       return next;
     },
+    async retryTarget(target) {
+      const next = await retryTargetRun(target);
+      notify();
+      return next;
+    },
     async refreshContext(decision) {
       const next = await refreshRun(decision);
       notify();
@@ -1527,6 +1579,7 @@ function resetRunState(state: BridgeState): BridgeState {
     events: [],
     assistantText: "",
     pendingUserInput: undefined,
+    diagnostic: undefined,
     planArtifact: undefined,
     changeSet: undefined,
     reviewOpen: false,

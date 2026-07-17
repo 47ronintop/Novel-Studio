@@ -553,7 +553,7 @@ describe("AgentRunSession", () => {
     )({
       coordinatorOptions: { createRunId: () => "run_context_stale" },
       createContextSnapshotId: () => "context_run_context_stale_01",
-      repository: memoryRepository(),
+      repository: durableMemoryRepository(),
       modelDriver: {
         async *streamRound() {
           rounds += 1;
@@ -601,18 +601,131 @@ describe("AgentRunSession", () => {
         value: {
           snapshot: {
             status: "awaiting_context_refresh",
-            contextSnapshotId: "context_run_context_stale_01"
+            contextSnapshotId: "context_run_context_stale_01",
+            activeErrorId: expect.any(String),
+            recoveryState: "awaiting_context_refresh"
           },
           events: [
             expect.objectContaining({ type: "run_started" }),
             expect.objectContaining({ type: "tool_started" }),
             expect.objectContaining({ type: "tool_completed" }),
-            expect.objectContaining({ type: "context_stale" })
-          ]
+            expect.objectContaining({ type: "context_stale" }),
+            expect.objectContaining({ type: "error_recorded" })
+          ],
+          diagnostic: expect.objectContaining({
+            code: "AGENT_CONTEXT_STALE",
+            recoveryState: "awaiting_context_refresh"
+          })
         }
       });
     });
     expect(rounds).toBe(1);
+  });
+
+  test("persists a retryable provider disconnect and stops the active stream", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+    const repository = durableMemoryRepository();
+    const session = (createSession as (options: Record<string, unknown>) => unknown)({
+      coordinatorOptions: { createRunId: () => "run_provider_disconnect" },
+      repository,
+      modelDriver: {
+        async *streamRound() {
+          const error = Object.assign(new Error("socket closed"), {
+            code: "AGENT_PROVIDER_DISCONNECTED",
+            recoverability: "retryable",
+            requestId: "request_disconnect_01"
+          });
+          error.stack = "provider stack must not persist";
+          throw error;
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          throw new Error("No tool should run after provider disconnect.");
+        }
+      }
+    }) as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+
+    await session.startAgentRun(startCommand());
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_provider_disconnect")).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: {
+            status: "executing_model",
+            activeErrorId: expect.any(String),
+            recoveryState: "retryable"
+          },
+          diagnostic: {
+            code: "AGENT_PROVIDER_DISCONNECTED",
+            provider: "demo",
+            model: "scripted-agent",
+            retryTargets: expect.arrayContaining([
+              expect.objectContaining({ kind: "model_round" }),
+              expect.objectContaining({ kind: "checkpoint" })
+            ])
+          }
+        }
+      });
+    });
+    const read = await session.readAgentRun("run_provider_disconnect");
+    expect(JSON.stringify(read)).not.toContain("provider stack must not persist");
+  });
+
+  test("falls back to a terminal run when retryable provider diagnostics are unavailable", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+    const session = (createSession as (options: Record<string, unknown>) => unknown)({
+      coordinatorOptions: { createRunId: () => "run_provider_without_diagnostics" },
+      repository: memoryRepository(),
+      modelDriver: {
+        async *streamRound() {
+          throw Object.assign(new Error("socket closed"), {
+            code: "AGENT_PROVIDER_DISCONNECTED",
+            recoverability: "retryable"
+          });
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          throw new Error("unused");
+        }
+      }
+    }) as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+
+    await session.startAgentRun(startCommand());
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_provider_without_diagnostics")).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: { status: "failed", activeErrorId: null, recoveryState: "terminal" },
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "run_failed",
+              detail: expect.objectContaining({
+                code: "AGENT_PROVIDER_DISCONNECTED",
+                diagnosticPersistenceFailed: true
+              })
+            })
+          ])
+        }
+      });
+    });
   });
 
   test("planning exposes no proposal tools and persists a complete immutable Plan Artifact", async () => {
@@ -1310,8 +1423,7 @@ describe("AgentRunSession", () => {
       toolRegistryRevision: "registry-01",
       rootFingerprint: "f".repeat(64),
       readCapabilities: ["read_chapter"],
-      proposalCapabilities:
-        writePolicy === "user_preapproved_run" ? ["propose_chapter_write"] : [],
+      proposalCapabilities: writePolicy === "user_preapproved_run" ? ["propose_chapter_write"] : [],
       forbiddenCapabilities: ["shell", "git", "network"],
       checksum: permissionSummaryId.padEnd(64, "0").slice(0, 64),
       generatedAt: "2026-07-17T00:00:00.000Z"
@@ -1749,7 +1861,7 @@ describe("AgentRunSession", () => {
     const never = new Promise<void>(() => undefined);
     const session = (createSession as (options: Record<string, unknown>) => unknown)({
       coordinatorOptions: { createRunId: () => "run_retry_step" },
-      repository: memoryRepository(),
+      repository: durableMemoryRepository(),
       modelDriver: {
         async *streamRound() {
           rounds += 1;
@@ -1808,8 +1920,10 @@ describe("AgentRunSession", () => {
       commandId: "retry-command-01",
       expectedRunRevision: failed.value.snapshot.runRevision
     };
-    const first = await session.retryStep(command);
-    const duplicate = await session.retryStep(command);
+    const [first, duplicate] = await Promise.all([
+      session.retryStep(command),
+      session.retryStep(command)
+    ]);
 
     expect(first).toEqual(duplicate);
     expect(executions).toBe(2);
@@ -1827,6 +1941,295 @@ describe("AgentRunSession", () => {
         (event) => event.type === "tool_retry_requested"
       )
     ).toHaveLength(1);
+  });
+
+  test("records a normalized tool error and retries only its explicit current target", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+    const repository = durableMemoryRepository();
+    let executions = 0;
+    let rounds = 0;
+    const never = new Promise<void>(() => undefined);
+    const session = (createSession as (options: Record<string, unknown>) => unknown)({
+      coordinatorOptions: { createRunId: () => "run_explicit_retry" },
+      repository,
+      modelDriver: {
+        async *streamRound() {
+          rounds += 1;
+          if (rounds === 1) {
+            yield toolCall("tool_explicit", "read_project_text", { path: "notes/retry.md" });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          await never;
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          executions += 1;
+          return executions === 1
+            ? {
+                ok: false,
+                error: {
+                  schemaVersion: "1.0",
+                  errorId: "err_explicit_retry",
+                  code: "AGENT_READ_FAILED",
+                  category: "StorageError",
+                  message: "read failed",
+                  recoverability: "retryable",
+                  suggestedAction: "Retry this tool call.",
+                  traceId: "test",
+                  createdAt: "2026-07-17T12:00:00.000Z",
+                  redactedDetail: { stack: "must not persist", path: "notes/retry.md" }
+                }
+              }
+            : { ok: true, value: { summary: "read succeeded", data: {} } };
+        }
+      }
+    }) as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      retryRunTarget(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+
+    await session.startAgentRun(startCommand());
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_explicit_retry")).toMatchObject({
+        value: {
+          snapshot: { activeErrorId: "err_explicit_retry", recoveryState: "retryable" },
+          diagnostic: {
+            errorId: "err_explicit_retry",
+            toolCallId: "tool_explicit",
+            retryTargets: [{ kind: "tool_call", id: "tool_explicit" }]
+          }
+        }
+      });
+    });
+    const failed = (await session.readAgentRun("run_explicit_retry")) as {
+      value: { snapshot: { runRevision: number }; events: Array<{ type: string }> };
+    };
+    expect(failed.value.events.map((event) => event.type)).toEqual(
+      expect.arrayContaining(["tool_failed", "error_recorded"])
+    );
+    expect(failed.value.events.findIndex((event) => event.type === "tool_failed")).toBeLessThan(
+      failed.value.events.findIndex((event) => event.type === "error_recorded")
+    );
+    const command = {
+      projectId: "project-01",
+      runId: "run_explicit_retry",
+      commandId: "retry-explicit-01",
+      expectedRunRevision: failed.value.snapshot.runRevision,
+      errorId: "err_explicit_retry",
+      target: { kind: "tool_call", id: "tool_explicit" }
+    };
+    const [first, duplicate] = await Promise.all([
+      session.retryRunTarget(command),
+      session.retryRunTarget(command)
+    ]);
+    expect(first).toEqual(duplicate);
+    expect(first).toMatchObject({
+      ok: true,
+      value: { activeErrorId: null, recoveryState: "none" }
+    });
+    expect(executions).toBe(2);
+  });
+
+  test("normalizes a thrown executor error during explicit tool retry", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+    const repository = durableMemoryRepository();
+    const never = new Promise<void>(() => undefined);
+    let executions = 0;
+    let rounds = 0;
+    const session = (createSession as (options: Record<string, unknown>) => unknown)({
+      coordinatorOptions: { createRunId: () => "run_retry_executor_throw" },
+      repository,
+      modelDriver: {
+        async *streamRound() {
+          rounds += 1;
+          if (rounds === 1) {
+            yield toolCall("tool_retry_throw", "read_project_text", { path: "notes/retry.md" });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          await never;
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          executions += 1;
+          if (executions === 1) {
+            return {
+              ok: false,
+              error: {
+                errorId: "err_retry_initial",
+                code: "AGENT_READ_FAILED",
+                category: "StorageError",
+                message: "initial read failed",
+                recoverability: "retryable",
+                suggestedAction: "Retry.",
+                traceId: "test",
+                createdAt: "2026-07-17T12:00:00.000Z"
+              }
+            };
+          }
+          throw Object.assign(new Error("retry transport failed"), {
+            errorId: "err_retry_executor_throw",
+            code: "AGENT_READ_TRANSPORT_FAILED",
+            category: "StorageError",
+            recoverability: "retryable",
+            suggestedAction: "Retry again."
+          });
+        }
+      }
+    }) as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      retryRunTarget(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+
+    await session.startAgentRun(startCommand());
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_retry_executor_throw")).toMatchObject({
+        value: { snapshot: { activeErrorId: "err_retry_initial" } }
+      });
+    });
+    const failed = (await session.readAgentRun("run_retry_executor_throw")) as {
+      value: { snapshot: { runRevision: number } };
+    };
+    await expect(
+      session.retryRunTarget({
+        projectId: "project-01",
+        runId: "run_retry_executor_throw",
+        commandId: "retry-executor-throw-01",
+        expectedRunRevision: failed.value.snapshot.runRevision,
+        errorId: "err_retry_initial",
+        target: { kind: "tool_call", id: "tool_retry_throw" }
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { activeErrorId: "err_retry_executor_throw", recoveryState: "retryable" }
+    });
+    expect(await session.readAgentRun("run_retry_executor_throw")).toMatchObject({
+      ok: true,
+      value: {
+        snapshot: { activeErrorId: "err_retry_executor_throw", recoveryState: "retryable" },
+        diagnostic: {
+          errorId: "err_retry_executor_throw",
+          code: "AGENT_READ_TRANSPORT_FAILED",
+          retryTargets: [expect.objectContaining({ kind: "tool_call" })]
+        }
+      }
+    });
+  });
+
+  test("rejects stale, mismatched, and ambiguous retry targets without side effects", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+    const repository = durableMemoryRepository();
+    let executions = 0;
+    let rounds = 0;
+    const never = new Promise<void>(() => undefined);
+    const session = (createSession as (options: Record<string, unknown>) => unknown)({
+      coordinatorOptions: { createRunId: () => "run_retry_rejections" },
+      repository,
+      modelDriver: {
+        async *streamRound() {
+          rounds += 1;
+          if (rounds === 1) {
+            yield toolCall("tool_reject", "read_project_text", { path: "notes/reject.md" });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          await never;
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          executions += 1;
+          return {
+            ok: false,
+            error: {
+              schemaVersion: "1.0",
+              errorId: "err_retry_rejections",
+              code: "AGENT_READ_FAILED",
+              category: "StorageError",
+              message: "read failed",
+              recoverability: "retryable",
+              suggestedAction: "Retry this tool call.",
+              traceId: "test",
+              createdAt: "2026-07-17T12:00:00.000Z"
+            }
+          };
+        }
+      }
+    }) as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      retryRunTarget(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      retryStep(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    await session.startAgentRun(startCommand());
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_retry_rejections")).toMatchObject({
+        value: { snapshot: { activeErrorId: "err_retry_rejections" } }
+      });
+    });
+    const read = (await session.readAgentRun("run_retry_rejections")) as {
+      value: { snapshot: { runRevision: number } };
+    };
+    const base = {
+      projectId: "project-01",
+      runId: "run_retry_rejections",
+      expectedRunRevision: read.value.snapshot.runRevision,
+      errorId: "err_retry_rejections",
+      target: { kind: "tool_call", id: "tool_reject" }
+    };
+    expect(
+      await session.retryRunTarget({ ...base, commandId: "retry-stale", expectedRunRevision: 0 })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_RUN_REVISION_CONFLICT" } });
+    expect(
+      await session.retryRunTarget({
+        ...base,
+        commandId: "retry-error-mismatch",
+        errorId: "err_old"
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_RETRY_ERROR_STALE" } });
+    expect(
+      await session.retryRunTarget({
+        ...base,
+        commandId: "retry-target-mismatch",
+        target: { kind: "checkpoint", id: "checkpoint_old" }
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_RETRY_TARGET_STALE" } });
+    await repository.writeRunError("run_retry_rejections", {
+      ...(await repository.readRunError("run_retry_rejections", "err_retry_rejections")).value,
+      retryTargets: [
+        { kind: "tool_call", id: "tool_reject" },
+        { kind: "checkpoint", id: "checkpoint_other" }
+      ]
+    });
+    expect(
+      await session.retryStep({
+        projectId: "project-01",
+        runId: "run_retry_rejections",
+        commandId: "legacy-ambiguous",
+        expectedRunRevision: read.value.snapshot.runRevision
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_RETRY_TARGET_AMBIGUOUS" } });
+    expect(executions).toBe(1);
   });
 
   test("restores the failed tool checkpoint so retry remains available after reload", async () => {
@@ -1905,8 +2308,15 @@ describe("AgentRunSession", () => {
       readAgentRun(runId: string): Promise<Record<string, unknown>>;
     };
     const reloaded = (await reloadedSession.readAgentRun("run_retry_reload")) as {
-      value: { snapshot: { runRevision: number } };
+      value: {
+        snapshot: { runRevision: number; activeErrorId: string; recoveryState: string };
+        diagnostic: { errorId: string; recoveryState: string };
+      };
     };
+    expect(reloaded.value).toMatchObject({
+      snapshot: { activeErrorId: "reload-error", recoveryState: "retryable" },
+      diagnostic: { errorId: "reload-error", recoveryState: "retryable" }
+    });
     const retried = await reloadedSession.retryStep({
       projectId: "project-01",
       runId: "run_retry_reload",
@@ -1916,6 +2326,695 @@ describe("AgentRunSession", () => {
 
     expect(retried).toMatchObject({ ok: true });
     expect(executions).toBe(1);
+  });
+
+  test("persists an apply-time base conflict and waits for context refresh", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+    const runId = "run_base_conflict";
+    const changeSet = diagnosticChangeSet(runId);
+    const repository = durableMemoryRepository();
+    const never = new Promise<void>(() => undefined);
+    let rounds = 0;
+    const session = (createSession as (options: Record<string, unknown>) => unknown)({
+      coordinatorOptions: { createRunId: () => runId },
+      repository,
+      modelDriver: {
+        async *streamRound() {
+          rounds += 1;
+          if (rounds === 1) {
+            yield toolCall("proposal_base_conflict", "propose_file_write", {
+              path: "notes/partial.md",
+              baseHash: "a".repeat(64),
+              range: { unit: "character", start: 0, end: 6 },
+              replacement: "after"
+            });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          await never;
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          throw new Error("A proposal must not use the read executor.");
+        }
+      },
+      changeSetSession: {
+        async proposeFileWrite() {
+          return { ok: true, value: changeSet };
+        },
+        async proposeChapterWrite() {
+          throw new Error("unused");
+        },
+        async selectRevision() {
+          throw new Error("unused");
+        },
+        async readChangeSet() {
+          return { ok: true, value: changeSet };
+        },
+        async decide() {
+          return {
+            ok: true,
+            value: {
+              schemaVersion: "1.0",
+              decision: "apply_selected",
+              approvalSource: "human_confirmation",
+              resolvedAt: "2026-07-17T12:00:00.000Z",
+              binding: {
+                changeSetId: "changes_partial",
+                revision: 1,
+                checksum: "checksum_partial_1",
+                approvalToken: "approval_partial_1"
+              }
+            }
+          };
+        }
+      },
+      versionGroupExecutor: {
+        async apply() {
+          return {
+            ok: false,
+            error: {
+              schemaVersion: "1.0",
+              errorId: "err_base_conflict",
+              code: "AGENT_WRITE_BASE_CONFLICT",
+              category: "ValidationError",
+              message: "Agent write base content has changed.",
+              recoverability: "user-action",
+              suggestedAction: "Review the latest file content before retrying.",
+              traceId: "test",
+              createdAt: "2026-07-17T12:00:00.000Z",
+              redactedDetail: {
+                relativePath: "notes/partial.md",
+                stack: "must not be persisted"
+              }
+            }
+          };
+        },
+        async undoRun() {
+          throw new Error("unused");
+        }
+      }
+    }) as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      decideChangeSet(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+
+    await session.startAgentRun({ ...startCommand(), contextMode: "general_file" });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun(runId)).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "awaiting_write_approval" } }
+      });
+    });
+    const pending = (await session.readAgentRun(runId)) as {
+      value: { snapshot: { runRevision: number } };
+    };
+    expect(
+      await session.decideChangeSet({
+        projectId: "project-01",
+        runId,
+        commandId: "apply-base-conflict-01",
+        expectedRunRevision: pending.value.snapshot.runRevision,
+        changeSetId: "changes_partial",
+        revision: 1,
+        checksum: "checksum_partial_1",
+        decision: "apply_selected"
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_WRITE_BASE_CONFLICT" },
+      latestSnapshot: {
+        status: "awaiting_context_refresh",
+        activeErrorId: "err_base_conflict",
+        recoveryState: "awaiting_context_refresh"
+      }
+    });
+
+    const read = (await session.readAgentRun(runId)) as {
+      value: {
+        events: Array<{ type: string }>;
+        diagnostic: Record<string, unknown>;
+      };
+    };
+    expect(read.value.diagnostic).toMatchObject({
+      errorId: "err_base_conflict",
+      code: "AGENT_WRITE_BASE_CONFLICT",
+      recoveryState: "awaiting_context_refresh",
+      redactedDetail: { relativePath: "notes/partial.md" }
+    });
+    expect(JSON.stringify(read.value.diagnostic)).not.toContain("must not be persisted");
+    expect(
+      read.value.events
+        .map((event) => event.type)
+        .filter(
+          (type) => type === "write_failed" || type === "error_recorded" || type === "run_failed"
+        )
+    ).toEqual(["write_failed", "error_recorded"]);
+  });
+
+  test("records a recovery-journal reference for partial writes without announcing write_applied", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+    const runId = "run_partial_failure";
+    const changeSet = diagnosticChangeSet(runId);
+    const repository = durableMemoryRepository();
+    let rounds = 0;
+    const never = new Promise<void>(() => undefined);
+    const session = (createSession as (options: Record<string, unknown>) => unknown)({
+      coordinatorOptions: { createRunId: () => runId },
+      repository,
+      modelDriver: {
+        async *streamRound() {
+          rounds += 1;
+          if (rounds === 1) {
+            yield toolCall("proposal_partial", "propose_file_write", {
+              path: "notes/partial.md",
+              baseHash: "a".repeat(64),
+              range: { unit: "character", start: 0, end: 6 },
+              replacement: "after"
+            });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          await never;
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          throw new Error("A proposal must not use the read executor.");
+        }
+      },
+      changeSetSession: {
+        async proposeFileWrite() {
+          return { ok: true, value: changeSet };
+        },
+        async proposeChapterWrite() {
+          throw new Error("unused");
+        },
+        async selectRevision() {
+          throw new Error("unused");
+        },
+        async readChangeSet() {
+          return { ok: true, value: changeSet };
+        },
+        async decide() {
+          return {
+            ok: true,
+            value: {
+              schemaVersion: "1.0",
+              decision: "apply_selected",
+              approvalSource: "human_confirmation",
+              resolvedAt: "2026-07-17T12:00:00.000Z",
+              binding: {
+                changeSetId: "changes_partial",
+                revision: 1,
+                checksum: "checksum_partial_1",
+                approvalToken: "approval_partial_1"
+              }
+            }
+          };
+        }
+      },
+      versionGroupExecutor: {
+        async apply() {
+          return {
+            ok: true,
+            value: {
+              schemaVersion: "1.0",
+              versionGroupId: "version_group_partial_01",
+              runId,
+              transactionStatus: "partial_failure",
+              writes: []
+            }
+          };
+        },
+        async undoRun() {
+          throw new Error("unused");
+        }
+      }
+    }) as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      decideChangeSet(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+
+    await session.startAgentRun({ ...startCommand(), contextMode: "general_file" });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun(runId)).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "awaiting_write_approval" } }
+      });
+    });
+    const pending = (await session.readAgentRun(runId)) as {
+      value: { snapshot: { runRevision: number } };
+    };
+    expect(
+      await session.decideChangeSet({
+        projectId: "project-01",
+        runId,
+        commandId: "apply-partial-01",
+        expectedRunRevision: pending.value.snapshot.runRevision,
+        changeSetId: "changes_partial",
+        revision: 1,
+        checksum: "checksum_partial_1",
+        decision: "apply_selected"
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_WRITE_PARTIAL_FAILURE" },
+      latestSnapshot: { status: "failed", recoveryState: "recovery_review" }
+    });
+
+    const read = (await session.readAgentRun(runId)) as {
+      value: {
+        events: Array<{ type: string }>;
+        diagnostic: Record<string, unknown>;
+      };
+    };
+    expect(read.value.diagnostic).toMatchObject({
+      code: "AGENT_WRITE_PARTIAL_FAILURE",
+      recoveryState: "recovery_review",
+      redactedDetail: {
+        recoveryJournal: { versionGroupId: "version_group_partial_01" }
+      }
+    });
+    const eventTypes = read.value.events.map((event) => event.type);
+    expect(
+      eventTypes.filter(
+        (type) => type === "write_failed" || type === "error_recorded" || type === "run_failed"
+      )
+    ).toEqual(["write_failed", "error_recorded", "run_failed"]);
+    expect(eventTypes).not.toContain("write_applied");
+  });
+
+  test("records and reloads the same diagnostic when startup recovery finds a partial write", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+    const runId = "run_startup_partial_failure";
+    const changeSet = diagnosticChangeSet(runId);
+    const repository = durableMemoryRepository();
+    const never = new Promise<void>(() => undefined);
+    let rounds = 0;
+    const sessionOptions = {
+      repository,
+      modelDriver: {
+        async *streamRound() {
+          rounds += 1;
+          if (rounds === 1) {
+            yield toolCall("proposal_startup_partial", "propose_file_write", {
+              path: "notes/partial.md",
+              baseHash: "a".repeat(64),
+              range: { unit: "character", start: 0, end: 6 },
+              replacement: "after"
+            });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          await never;
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          throw new Error("A proposal must not use the read executor.");
+        }
+      },
+      changeSetSession: {
+        async proposeFileWrite() {
+          return { ok: true, value: changeSet };
+        },
+        async proposeChapterWrite() {
+          throw new Error("unused");
+        },
+        async selectRevision() {
+          throw new Error("unused");
+        },
+        async readChangeSet() {
+          return { ok: true, value: changeSet };
+        },
+        async decide() {
+          return {
+            ok: true,
+            value: {
+              schemaVersion: "1.0",
+              decision: "apply_selected",
+              approvalSource: "human_confirmation",
+              resolvedAt: "2026-07-17T12:00:00.000Z",
+              binding: {
+                changeSetId: "changes_partial",
+                revision: 1,
+                checksum: "checksum_partial_1",
+                approvalToken: "approval_partial_1"
+              }
+            }
+          };
+        }
+      }
+    };
+    const interrupted = (createSession as (options: Record<string, unknown>) => unknown)({
+      ...sessionOptions,
+      coordinatorOptions: { createRunId: () => runId },
+      versionGroupExecutor: {
+        async apply() {
+          return new Promise(() => undefined);
+        },
+        async undoRun() {
+          throw new Error("unused");
+        }
+      }
+    }) as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      decideChangeSet(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+
+    await interrupted.startAgentRun({ ...startCommand(), contextMode: "general_file" });
+    await vi.waitFor(async () => {
+      expect(await interrupted.readAgentRun(runId)).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "awaiting_write_approval" } }
+      });
+    });
+    const pending = (await interrupted.readAgentRun(runId)) as {
+      value: { snapshot: { runRevision: number } };
+    };
+    void interrupted.decideChangeSet({
+      projectId: "project-01",
+      runId,
+      commandId: "apply-startup-partial-01",
+      expectedRunRevision: pending.value.snapshot.runRevision,
+      changeSetId: "changes_partial",
+      revision: 1,
+      checksum: "checksum_partial_1",
+      decision: "apply_selected"
+    });
+    await vi.waitFor(async () => {
+      expect(await interrupted.readAgentRun(runId)).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "applying_changes" } }
+      });
+    });
+
+    const recovered = (createSession as (options: Record<string, unknown>) => unknown)({
+      ...sessionOptions,
+      versionGroupExecutor: {
+        async apply() {
+          throw new Error("unused");
+        },
+        async undoRun() {
+          throw new Error("unused");
+        },
+        async recoverRun() {
+          return {
+            ok: true,
+            value: {
+              status: "partial_failure",
+              versionGroup: {
+                versionGroupId: "version_group_startup_partial_01",
+                transactionStatus: "partial_failure"
+              }
+            }
+          };
+        }
+      }
+    }) as {
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    const recoveredRead = (await recovered.readAgentRun(runId)) as {
+      value: {
+        snapshot: { activeErrorId: string; recoveryState: string; status: string };
+        diagnostic: Record<string, unknown>;
+        events: Array<{ type: string }>;
+      };
+    };
+    expect(recoveredRead.value.snapshot).toMatchObject({
+      status: "failed",
+      recoveryState: "recovery_review"
+    });
+    expect(recoveredRead.value.diagnostic).toMatchObject({
+      errorId: recoveredRead.value.snapshot.activeErrorId,
+      code: "AGENT_WRITE_PARTIAL_FAILURE",
+      recoveryState: "recovery_review",
+      redactedDetail: {
+        recoveryJournal: { versionGroupId: "version_group_startup_partial_01" }
+      }
+    });
+    expect(
+      recoveredRead.value.events
+        .map((event) => event.type)
+        .filter(
+          (type) => type === "write_failed" || type === "error_recorded" || type === "run_failed"
+        )
+    ).toEqual(["write_failed", "error_recorded", "run_failed"]);
+
+    const reloaded = (createSession as (options: Record<string, unknown>) => unknown)(
+      sessionOptions
+    ) as {
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    expect(await reloaded.readAgentRun(runId)).toMatchObject({
+      ok: true,
+      value: {
+        snapshot: {
+          activeErrorId: recoveredRead.value.snapshot.activeErrorId,
+          recoveryState: "recovery_review"
+        },
+        diagnostic: {
+          errorId: recoveredRead.value.snapshot.activeErrorId,
+          recoveryState: "recovery_review"
+        }
+      }
+    });
+  });
+
+  test("finishes startup partial recovery when diagnostic persistence fails", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+    const runId = "run_startup_diagnostic_failure";
+    const repository = durableMemoryRepository();
+    const never = new Promise<void>(() => undefined);
+    const seed = (createSession as (options: Record<string, unknown>) => unknown)({
+      coordinatorOptions: { createRunId: () => runId },
+      repository,
+      modelDriver: {
+        async *streamRound() {
+          await never;
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "ok", data: {} } };
+        }
+      }
+    }) as { startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>> };
+    const started = (await seed.startAgentRun(startCommand())) as {
+      value: Record<string, unknown>;
+    };
+    const applying = {
+      ...started.value,
+      status: "applying_changes",
+      runRevision: Number(started.value["runRevision"]) + 1,
+      lastSequence: Number(started.value["lastSequence"]) + 1
+    };
+    await repository.appendEvent({
+      schemaVersion: "1.1",
+      runId,
+      projectId: "project-01",
+      sequence: applying.lastSequence,
+      runRevision: applying.runRevision,
+      type: "write_started",
+      createdAt: "2026-07-17T12:00:00.000Z"
+    });
+    await repository.writeSnapshot(applying);
+
+    const recovered = (createSession as (options: Record<string, unknown>) => unknown)({
+      repository: {
+        ...repository,
+        async writeRunError() {
+          return {
+            ok: false,
+            error: {
+              code: "AGENT_DIAGNOSTIC_WRITE_FAILED",
+              category: "StorageError",
+              message: "diagnostic write failed",
+              recoverability: "retryable",
+              suggestedAction: "Retry.",
+              traceId: "test",
+              errorId: "err_diagnostic_write",
+              createdAt: "2026-07-17T12:00:00.000Z"
+            }
+          };
+        }
+      },
+      modelDriver: {
+        async *streamRound() {
+          await never;
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "ok", data: {} } };
+        }
+      },
+      versionGroupExecutor: {
+        async apply() {
+          throw new Error("unused");
+        },
+        async undoRun() {
+          throw new Error("unused");
+        },
+        async recoverRun() {
+          return {
+            ok: true,
+            value: {
+              status: "partial_failure",
+              versionGroup: {
+                versionGroupId: "version_group_diagnostic_failure",
+                transactionStatus: "partial_failure"
+              }
+            }
+          };
+        }
+      }
+    }) as { readAgentRun(runId: string): Promise<Record<string, unknown>> };
+
+    expect(await recovered.readAgentRun(runId)).toMatchObject({
+      ok: true,
+      value: {
+        snapshot: { status: "failed", activeErrorId: null, recoveryState: "terminal" },
+        events: expect.arrayContaining([
+          expect.objectContaining({ type: "write_failed" }),
+          expect.objectContaining({
+            type: "run_failed",
+            detail: expect.objectContaining({ diagnosticPersistenceFailed: true })
+          })
+        ])
+      }
+    });
+  });
+
+  test("single-flights concurrent startup recovery reads", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+    const runId = "run_concurrent_startup_recovery";
+    const repository = durableMemoryRepository();
+    const never = new Promise<void>(() => undefined);
+    const seed = (createSession as (options: Record<string, unknown>) => unknown)({
+      coordinatorOptions: { createRunId: () => runId },
+      repository,
+      modelDriver: {
+        async *streamRound() {
+          await never;
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "ok", data: {} } };
+        }
+      }
+    }) as { startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>> };
+    const started = (await seed.startAgentRun(startCommand())) as {
+      value: Record<string, unknown>;
+    };
+    const applying = {
+      ...started.value,
+      status: "applying_changes",
+      runRevision: Number(started.value["runRevision"]) + 1,
+      lastSequence: Number(started.value["lastSequence"]) + 1
+    };
+    await repository.appendEvent({
+      schemaVersion: "1.1",
+      runId,
+      projectId: "project-01",
+      sequence: applying.lastSequence,
+      runRevision: applying.runRevision,
+      type: "write_started",
+      createdAt: "2026-07-17T12:00:00.000Z"
+    });
+    await repository.writeSnapshot(applying);
+
+    let recoverCalls = 0;
+    let releaseRecovery: () => void = () => undefined;
+    const recoveryGate = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+    const recovered = (createSession as (options: Record<string, unknown>) => unknown)({
+      repository,
+      modelDriver: {
+        async *streamRound() {
+          await never;
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "ok", data: {} } };
+        }
+      },
+      versionGroupExecutor: {
+        async apply() {
+          throw new Error("unused");
+        },
+        async undoRun() {
+          throw new Error("unused");
+        },
+        async recoverRun() {
+          recoverCalls += 1;
+          await recoveryGate;
+          return {
+            ok: true,
+            value: {
+              status: "partial_failure",
+              versionGroup: {
+                versionGroupId: "version_group_concurrent_recovery",
+                transactionStatus: "partial_failure"
+              }
+            }
+          };
+        }
+      }
+    }) as { readAgentRun(runId: string): Promise<Record<string, unknown>> };
+
+    const firstRead = recovered.readAgentRun(runId);
+    const secondRead = recovered.readAgentRun(runId);
+    await vi.waitFor(() => expect(recoverCalls).toBeGreaterThan(0));
+    releaseRecovery();
+    const [first, second] = await Promise.all([firstRead, secondRead]);
+    expect(recoverCalls).toBe(1);
+    expect(first).toEqual(second);
+    expect(first).toMatchObject({
+      ok: true,
+      value: { snapshot: { status: "failed", recoveryState: "recovery_review" } }
+    });
+    const eventTypes = (first as { value: { events: Array<{ type: string }> } }).value.events
+      .map((event) => event.type)
+      .filter(
+        (type) => type === "write_failed" || type === "error_recorded" || type === "run_failed"
+      );
+    expect(eventTypes).toEqual(["write_failed", "error_recorded", "run_failed"]);
   });
 
   test("refreshes stale context through an explicit command", async () => {
@@ -1928,7 +3027,7 @@ describe("AgentRunSession", () => {
     const sourceContent = "before";
     const session = (createSession as (options: Record<string, unknown>) => unknown)({
       coordinatorOptions: { createRunId: () => "run_context_command" },
-      repository: memoryRepository(),
+      repository: durableMemoryRepository(),
       contextSourceReader: {
         async readCurrentSources() {
           return { ok: true, value: [{ refId: "file:notes.txt", content: "after" }] };
@@ -1987,10 +3086,17 @@ describe("AgentRunSession", () => {
       expectedRunRevision: stale.value.snapshot["runRevision"],
       decision: "refresh"
     });
-    expect(refreshed).toMatchObject({ ok: true, value: { runId } });
+    expect(refreshed).toMatchObject({
+      ok: true,
+      value: { runId, activeErrorId: null, recoveryState: "none" }
+    });
+    expect(await session.readAgentRun(runId)).toMatchObject({
+      ok: true,
+      value: { snapshot: { activeErrorId: null, recoveryState: "none" } }
+    });
   });
 
-  test("excludes stale refs, informs the next model round, and deduplicates the command", async () => {
+  test("excludes persisted stale refs when the renderer submits a mismatched target", async () => {
     const createSession = (applicationExports as unknown as Record<string, unknown>)[
       "createAgentRunSession"
     ];
@@ -2097,7 +3203,7 @@ describe("AgentRunSession", () => {
       commandId: "context-exclude-01",
       expectedRunRevision: stale.value.snapshot.runRevision,
       decision: "exclude" as const,
-      sourceRefs: ["file:notes/outline.md"]
+      sourceRefs: ["chapter:unrelated"]
     };
     const first = await session.refreshContext(command);
     const duplicate = await session.refreshContext(command);
@@ -2542,7 +3648,8 @@ describe("AgentRunSession", () => {
 describe("AgentRunSession server-authoritative start", () => {
   function createStartSession(
     startPreflight: unknown,
-    createRunId = "run_authority"
+    createRunId = "run_authority",
+    repository = durableMemoryRepository()
   ): {
     startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
     readAgentRun(runId: string): Promise<Record<string, unknown>>;
@@ -2552,7 +3659,7 @@ describe("AgentRunSession server-authoritative start", () => {
     ] as (options: Record<string, unknown>) => unknown;
     return createSession({
       coordinatorOptions: { createRunId: () => createRunId },
-      repository: durableMemoryRepository(),
+      repository,
       startPreflight,
       modelDriver: {
         async *streamRound() {
@@ -2631,6 +3738,48 @@ describe("AgentRunSession server-authoritative start", () => {
     });
     expect(coordinatorReached).toBe(false);
     expect(await session.readAgentRun("run_authority")).toMatchObject({ ok: false });
+  });
+
+  test("persists a normalized preflight diagnostic under the run draft", async () => {
+    const repository = durableMemoryRepository();
+    const session = createStartSession(
+      {
+        async resolveStart() {
+          return {
+            ok: false,
+            error: {
+              schemaVersion: "1.0",
+              errorId: "err_start_preflight",
+              code: "AGENT_MODEL_CAPABILITY_UNSUPPORTED",
+              category: "ValidationError",
+              message: "The selected model cannot run the Agent workflow.",
+              recoverability: "user-action",
+              suggestedAction: "Choose a compatible model.",
+              traceId: "test",
+              createdAt: "2026-07-17T12:00:00.000Z",
+              redactedDetail: { stack: "must not persist", missingCapabilities: ["toolCalling"] }
+            }
+          };
+        }
+      },
+      "run_preflight_diagnostic",
+      repository
+    );
+
+    expect(await session.startAgentRun(draftOnlyCommand)).toMatchObject({
+      ok: false,
+      error: { errorId: "err_start_preflight", code: "AGENT_MODEL_CAPABILITY_UNSUPPORTED" }
+    });
+    const persisted = await repository.readPreflightError("err_start_preflight");
+    expect(persisted).toMatchObject({
+      ok: true,
+      value: {
+        errorId: "err_start_preflight",
+        runDraftId: "draft_authority",
+        recoveryState: "terminal"
+      }
+    });
+    expect(JSON.stringify(persisted)).not.toContain("must not persist");
   });
 
   test("rejects an unknown profile whose capabilities cannot support a run", async () => {
@@ -3103,6 +4252,8 @@ function durableMemoryRepository() {
   const events = new Map<string, Record<string, unknown>[]>();
   const retryCheckpoints = new Map<string, Record<string, unknown>>();
   const commandReceipts = new Map<string, Record<string, unknown>>();
+  const runErrors = new Map<string, Record<string, unknown>>();
+  const preflightErrors = new Map<string, Record<string, unknown>>();
   return {
     async writeSnapshot(snapshot: Record<string, unknown>) {
       snapshots.set(String(snapshot["runId"]), structuredClone(snapshot));
@@ -3138,6 +4289,47 @@ function durableMemoryRepository() {
         ok: true,
         value: [...snapshots.values()].filter((snapshot) => snapshot["projectId"] === projectId)
       };
+    },
+    async writeRunError(runId: string, record: Record<string, unknown>) {
+      runErrors.set(`${runId}:${String(record["errorId"])}`, structuredClone(record));
+      return { ok: true, value: record };
+    },
+    async readRunError(runId: string, errorId: string) {
+      return { ok: true, value: runErrors.get(`${runId}:${errorId}`) };
+    },
+    async writePreflightError(record: Record<string, unknown>) {
+      preflightErrors.set(String(record["errorId"]), structuredClone(record));
+      return { ok: true, value: record };
+    },
+    async readPreflightError(errorId: string) {
+      return { ok: true, value: preflightErrors.get(errorId) };
     }
+  };
+}
+
+function diagnosticChangeSet(runId: string): Record<string, unknown> {
+  return {
+    schemaVersion: "1.0",
+    changeSetId: "changes_partial",
+    revision: 1,
+    runId,
+    checkpointId: "checkpoint_partial",
+    contextSnapshotId: "context_partial",
+    status: "awaiting_approval",
+    checksum: "checksum_partial_1",
+    approvalToken: "approval_partial_1",
+    files: [
+      {
+        relativePath: "notes/partial.md",
+        assetType: "text",
+        baseChecksum: "a".repeat(64),
+        candidateChecksum: "b".repeat(64),
+        baseContent: "before",
+        candidateContent: "after",
+        hunks: [],
+        validation: { valid: true, issues: [] },
+        selected: true
+      }
+    ]
   };
 }

@@ -31,6 +31,70 @@ describe("AgentRunPanel", () => {
     expect(createProps()).not.toHaveProperty("operationMode");
     expect(createProps()).not.toHaveProperty("contextMode");
     expect(createProps()).not.toHaveProperty("writePolicy");
+    expect(panel?.querySelector('[aria-label="Agent 错误"]')).toBeNull();
+  });
+
+  test("renders a recoverable inline error with closed details, stable-ID copy, and explicit targets", async () => {
+    const writeText = vi.fn(async () => undefined);
+    const previousClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText }
+    });
+    const onRetryTarget = vi.fn();
+    const diagnostic = {
+      schemaVersion: "1.0" as const,
+      errorId: "err_ui_disconnect",
+      projectId: "project-01",
+      runId: "run-01",
+      sequence: 7,
+      checkpointId: "checkpoint_ui_01",
+      category: "ModelProviderError",
+      code: "AGENT_PROVIDER_DISCONNECTED",
+      message: "模型连接已中断。",
+      recoverability: "retryable" as const,
+      suggestedActions: ["重试当前模型轮次。", "从安全检查点恢复。"],
+      provider: "openai-compatible",
+      model: "local-model",
+      redactedDetail: { requestId: "request_ui_01" },
+      recoveryState: "retryable" as const,
+      retryTargets: [
+        { kind: "model_round" as const, id: "model_round_ui_01" },
+        { kind: "checkpoint" as const, id: "checkpoint_ui_01" }
+      ],
+      createdAt: "2026-07-17T12:00:00.000Z"
+    };
+    const host = renderPanelHost({ diagnostic, onRetryTarget });
+
+    try {
+      const card = host.querySelector<HTMLElement>('[aria-label="Agent 错误"]');
+      expect(card?.textContent).toContain("模型连接已中断。");
+      expect(card?.textContent).toContain("此步骤可以重试或从安全检查点恢复。");
+      expect(card?.textContent).toContain("重试当前模型轮次。");
+      const details = card?.querySelector("details");
+      expect(details?.open).toBe(false);
+      expect(details?.textContent).toContain("err_ui_disconnect");
+      expect(details?.textContent).toContain("request_ui_01");
+
+      await act(async () => {
+        card?.querySelector<HTMLButtonElement>('[aria-label="复制错误 ID"]')?.click();
+      });
+      expect(writeText).toHaveBeenCalledWith("err_ui_disconnect");
+
+      act(() => {
+        card?.querySelector<HTMLButtonElement>('[aria-label="从检查点恢复"]')?.click();
+      });
+      expect(onRetryTarget).toHaveBeenCalledWith({
+        kind: "checkpoint",
+        id: "checkpoint_ui_01"
+      });
+    } finally {
+      disposePanelHost(host);
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: previousClipboard
+      });
+    }
   });
 
   test("renders a pending question without duplicating the composer stop action", () => {

@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir } from "node:fs/promises";
+import { mkdir, readFile, readdir, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { err, ok, type JsonObject, type Result, type UnifiedError } from "@novel-studio/shared";
@@ -9,13 +9,20 @@ import { storageError } from "./errors.js";
 export interface AgentRunFileRepositoryOptions {
   readonly projectRoot: string;
   readonly traceId?: string;
+  readonly preflightErrorMaxRecords?: number;
+  readonly preflightErrorMaxBytes?: number;
 }
 
 export class AgentRunFileRepository {
   private readonly traceId: string;
+  private readonly preflightErrorMaxRecords: number;
+  private readonly preflightErrorMaxBytes: number;
+  private readonly immutableWriteQueues = new Map<string, Promise<unknown>>();
 
   public constructor(private readonly options: AgentRunFileRepositoryOptions) {
     this.traceId = options.traceId ?? "agent-run-file-repository";
+    this.preflightErrorMaxRecords = positiveLimit(options.preflightErrorMaxRecords, 100);
+    this.preflightErrorMaxBytes = positiveLimit(options.preflightErrorMaxBytes, 1024 * 1024);
   }
 
   public writeSnapshot(snapshot: JsonObject): Promise<Result<JsonObject, UnifiedError>> {
@@ -23,6 +30,81 @@ export class AgentRunFileRepository {
     return runId === undefined
       ? Promise.resolve(this.invalidRecord("AGENT_RUN_SNAPSHOT_INVALID"))
       : this.writeJson(this.runPath(runId, "run.json"), snapshot);
+  }
+
+  public async writeRunError(
+    runId: string,
+    record: JsonObject
+  ): Promise<Result<JsonObject, UnifiedError>> {
+    const errorId = readSafeString(record, "errorId");
+    if (
+      !isSafeId(runId) ||
+      errorId === undefined ||
+      record["runId"] !== runId ||
+      record["runDraftId"] !== undefined ||
+      !isSafeDiagnosticRecord(record)
+    ) {
+      return this.invalidRecord("AGENT_RUN_ERROR_RECORD_INVALID");
+    }
+    return this.writeImmutableJson(
+      this.runPath(runId, join("errors", `${errorId}.json`)),
+      record,
+      "AGENT_RUN_ERROR_RECORD_CONFLICT"
+    );
+  }
+
+  public async readRunError(
+    runId: string,
+    errorId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    if (!isSafeId(runId) || !isSafeId(errorId)) {
+      return this.invalidRecord("AGENT_RUN_ERROR_RECORD_INVALID");
+    }
+    const read = await this.readJson(this.runPath(runId, join("errors", `${errorId}.json`)));
+    if (!read.ok || read.value === undefined) return read;
+    return read.value["errorId"] === errorId &&
+      read.value["runId"] === runId &&
+      read.value["runDraftId"] === undefined &&
+      isSafeDiagnosticRecord(read.value)
+      ? read
+      : this.invalidRecord("AGENT_RUN_ERROR_RECORD_INVALID");
+  }
+
+  public async writePreflightError(
+    record: JsonObject
+  ): Promise<Result<JsonObject, UnifiedError>> {
+    const errorId = readSafeString(record, "errorId");
+    const runDraftId = readSafeString(record, "runDraftId");
+    if (
+      errorId === undefined ||
+      runDraftId === undefined ||
+      record["runId"] !== undefined ||
+      !isSafeDiagnosticRecord(record)
+    ) {
+      return this.invalidRecord("AGENT_RUN_ERROR_RECORD_INVALID");
+    }
+    const written = await this.writeImmutableJson(
+      this.preflightErrorPath(errorId),
+      record,
+      "AGENT_RUN_ERROR_RECORD_CONFLICT"
+    );
+    if (!written.ok) return written;
+    const retained = await this.enforcePreflightErrorRetention();
+    return retained.ok ? written : retained;
+  }
+
+  public async readPreflightError(
+    errorId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    if (!isSafeId(errorId)) return this.invalidRecord("AGENT_RUN_ERROR_RECORD_INVALID");
+    const read = await this.readJson(this.preflightErrorPath(errorId));
+    if (!read.ok || read.value === undefined) return read;
+    return read.value["errorId"] === errorId &&
+      typeof read.value["runDraftId"] === "string" &&
+      read.value["runId"] === undefined &&
+      isSafeDiagnosticRecord(read.value)
+      ? read
+      : this.invalidRecord("AGENT_RUN_ERROR_RECORD_INVALID");
   }
 
   public writeContextSnapshot(snapshot: JsonObject): Promise<Result<JsonObject, UnifiedError>> {
@@ -563,6 +645,11 @@ export class AgentRunFileRepository {
     return join(this.options.projectRoot, "history", "agent-runs", runId, suffix);
   }
 
+  private preflightErrorPath(errorId: string): string {
+    if (!isSafeId(errorId)) throw new Error("Agent error ID is invalid.");
+    return join(this.options.projectRoot, "history", "agent-diagnostics", `${errorId}.json`);
+  }
+
   private changeSetPath(changeSetId: string, revision: number): string {
     return join(
       this.options.projectRoot,
@@ -642,6 +729,90 @@ export class AgentRunFileRepository {
     }
   }
 
+  private writeImmutableJson(
+    path: string,
+    value: JsonObject,
+    conflictCode: string
+  ): Promise<Result<JsonObject, UnifiedError>> {
+    const previous = this.immutableWriteQueues.get(path) ?? Promise.resolve();
+    const request = previous.then(
+      () => this.performImmutableJsonWrite(path, value, conflictCode),
+      () => this.performImmutableJsonWrite(path, value, conflictCode)
+    );
+    this.immutableWriteQueues.set(path, request);
+    const clear = () => {
+      if (this.immutableWriteQueues.get(path) === request) {
+        this.immutableWriteQueues.delete(path);
+      }
+    };
+    void request.then(clear, clear);
+    return request;
+  }
+
+  private async performImmutableJsonWrite(
+    path: string,
+    value: JsonObject,
+    conflictCode: string
+  ): Promise<Result<JsonObject, UnifiedError>> {
+    const existing = await this.readJson(path);
+    if (!existing.ok) return existing as Result<JsonObject, UnifiedError>;
+    if (existing.value !== undefined) {
+      return JSON.stringify(existing.value) === JSON.stringify(value)
+        ? ok(existing.value)
+        : this.invalidRecord(conflictCode);
+    }
+    return this.writeJson(path, value);
+  }
+
+  private async enforcePreflightErrorRetention(): Promise<Result<JsonObject, UnifiedError>> {
+    const root = join(this.options.projectRoot, "history", "agent-diagnostics");
+    try {
+      const entries = await readdir(root, { withFileTypes: true });
+      const records: Array<{
+        readonly path: string;
+        readonly errorId: string;
+        readonly createdAt: string;
+        readonly bytes: number;
+      }> = [];
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+        const errorId = entry.name.slice(0, -5);
+        if (!isSafeId(errorId)) continue;
+        const path = join(root, entry.name);
+        const content = await readFile(path);
+        let createdAt = "";
+        try {
+          const parsed = JSON.parse(content.toString("utf8")) as unknown;
+          createdAt = isJsonObject(parsed) && typeof parsed["createdAt"] === "string"
+            ? parsed["createdAt"]
+            : "";
+        } catch {
+          // Invalid records sort oldest and are removed before valid diagnostics.
+        }
+        records.push({ path, errorId, createdAt, bytes: content.byteLength });
+      }
+      records.sort((left, right) => {
+        const created = left.createdAt.localeCompare(right.createdAt);
+        return created === 0 ? left.errorId.localeCompare(right.errorId) : created;
+      });
+      let totalBytes = records.reduce((total, record) => total + record.bytes, 0);
+      while (
+        records.length > this.preflightErrorMaxRecords ||
+        totalBytes > this.preflightErrorMaxBytes
+      ) {
+        const oldest = records.shift();
+        if (oldest === undefined) break;
+        await unlink(oldest.path);
+        totalBytes -= oldest.bytes;
+      }
+      return ok({ count: records.length, totalBytes });
+    } catch (error) {
+      return isMissingFileError(error)
+        ? ok({ count: 0, totalBytes: 0 })
+        : err(this.storageFailure("AGENT_RUN_ERROR_RETENTION_FAILED", error));
+    }
+  }
+
   private async readJson(path: string): Promise<Result<JsonObject | undefined, UnifiedError>> {
     try {
       const parsed = JSON.parse(await readFile(path, "utf8")) as unknown;
@@ -717,6 +888,38 @@ function readReceiptRunId(value: string | JsonObject): string | undefined {
 
 function isSafeId(value: string): boolean {
   return /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+function positiveLimit(value: number | undefined, fallback: number): number {
+  return value === undefined || !Number.isSafeInteger(value) || value < 1 ? fallback : value;
+}
+
+const SENSITIVE_DIAGNOSTIC_KEY =
+  /^(?:stack|stacktrace|api[_-]?key|authorization|proxy-authorization|cookie|set-cookie|password|passphrase|secret|client[_-]?secret|access[_-]?token|refresh[_-]?token)$/i;
+
+function isSafeDiagnosticRecord(record: JsonObject): boolean {
+  const detail = record["redactedDetail"];
+  if (!isJsonObject(detail) || containsSensitiveDiagnosticKey(record, new WeakSet())) {
+    return false;
+  }
+  try {
+    return Buffer.byteLength(JSON.stringify(detail), "utf8") <= 8 * 1024;
+  } catch {
+    return false;
+  }
+}
+
+function containsSensitiveDiagnosticKey(value: unknown, seen: WeakSet<object>): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.some((item) => containsSensitiveDiagnosticKey(item, seen));
+  }
+  return Object.entries(value).some(
+    ([key, item]) =>
+      SENSITIVE_DIAGNOSTIC_KEY.test(key) || containsSensitiveDiagnosticKey(item, seen)
+  );
 }
 
 function isJsonObject(value: unknown): value is JsonObject {

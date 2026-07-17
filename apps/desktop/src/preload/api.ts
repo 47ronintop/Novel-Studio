@@ -70,6 +70,7 @@ import type {
   RefreshAgentContextCommand,
   ResumeAgentRunCommand,
   RetryAgentRunStepCommand,
+  RetryRunTargetCommand,
   StartAgentRunCommand,
   StopAgentRunCommand,
   UndoRunCommand
@@ -313,6 +314,8 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
         invokeTyped<AgentRunCommandResult>(ipc, "application:agent-run:resume", command),
       retryStep: (command: RetryAgentRunStepCommand) =>
         invokeTyped<AgentRunCommandResult>(ipc, "application:agent-run:retry-step", command),
+      retryTarget: (command: RetryRunTargetCommand) =>
+        invokeTyped<AgentRunCommandResult>(ipc, "application:agent-run:retry-target", command),
       decidePlan: (command: DecideAgentPlanCommand) =>
         invokeTyped<AgentRunCommandResult>(ipc, "application:agent-run:decide-plan", command),
       readPermissionSummary: (query: ReadAgentPermissionSummaryQuery) =>

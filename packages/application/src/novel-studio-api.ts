@@ -23,6 +23,7 @@ import type {
   RefreshAgentContextCommand,
   ResumeAgentRunCommand,
   RetryAgentRunStepCommand,
+  RetryRunTargetCommand,
   StartAgentRunCommand,
   StopAgentRunCommand,
   UndoRunCommand
@@ -213,6 +214,7 @@ export interface NovelStudioApi {
     answerUserInput(command: AnswerAgentUserInputCommand): Promise<AgentRunCommandResult>;
     resume(command: ResumeAgentRunCommand): Promise<AgentRunCommandResult>;
     retryStep(command: RetryAgentRunStepCommand): Promise<AgentRunCommandResult>;
+    retryTarget(command: RetryRunTargetCommand): Promise<AgentRunCommandResult>;
     decidePlan(command: DecideAgentPlanCommand): Promise<AgentRunCommandResult>;
     readPermissionSummary(
       query: ReadAgentPermissionSummaryQuery

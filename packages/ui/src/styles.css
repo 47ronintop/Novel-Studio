@@ -3479,6 +3479,7 @@ textarea:focus-visible,
 
 .ns-agent-question,
 .ns-agent-context-refresh,
+.ns-agent-error,
 .ns-agent-plan-revision,
 .ns-plan-review {
   background: color-mix(in srgb, var(--ns-surface-raised) 48%, transparent);
@@ -3491,14 +3492,81 @@ textarea:focus-visible,
 
 .ns-agent-question p,
 .ns-agent-context-refresh p,
+.ns-agent-error p,
 .ns-plan-review h3 {
   margin: 0;
 }
 
 .ns-agent-question p,
+.ns-agent-error p,
 .ns-plan-review span {
   color: var(--ns-muted);
   font-size: 12px;
+}
+
+.ns-agent-error {
+  border-color: color-mix(in oklch, var(--ns-danger) 65%, var(--ns-border));
+}
+
+.ns-agent-error ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.ns-agent-error li,
+.ns-agent-error details {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.ns-agent-error details {
+  border-top: 1px solid var(--ns-border);
+  padding-top: 8px;
+}
+
+.ns-agent-error summary {
+  color: var(--ns-muted);
+  cursor: pointer;
+}
+
+.ns-agent-error dl {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0;
+}
+
+.ns-agent-error dl > div {
+  display: grid;
+  gap: 2px;
+  grid-template-columns: 70px minmax(0, 1fr);
+}
+
+.ns-agent-error dt {
+  color: var(--ns-muted);
+}
+
+.ns-agent-error dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.ns-agent-error pre {
+  background: var(--ns-bg);
+  border: 1px solid var(--ns-border);
+  border-radius: 5px;
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ns-agent-error button {
+  align-items: center;
+  display: inline-flex;
+  gap: 5px;
 }
 
 .ns-agent-question fieldset {

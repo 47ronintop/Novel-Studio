@@ -1,6 +1,7 @@
 import {
   createAgentRunCoordinator,
   createAgentContextSnapshot,
+  resolveLegacyRetryTarget,
   createPlanExecutionRecord,
   createPlanArtifactRevision,
   canExecutePlanArtifact,
@@ -19,6 +20,7 @@ import {
   type AgentReasoningEffort,
   type AgentRunCommandResult,
   type AgentRunCoordinator,
+  type AgentRunErrorRecord,
   type AgentRunEvent,
   type AgentRunSnapshot,
   type AgentContextSnapshot,
@@ -41,6 +43,7 @@ import {
   type ResolvedAgentRunStartInput,
   type ResumeAgentRunCommand,
   type RetryAgentRunStepCommand,
+  type RetryRunTargetCommand,
   type StartAgentRunCommand,
   type StopAgentRunCommand,
   type UndoAgentRunCommand
@@ -68,6 +71,10 @@ import {
 } from "./ai-writing-style-rules.js";
 import type { ModelReasoningStrengthControl } from "./model-discovery-session.js";
 import type { AgentPermissionSession } from "./agent-permission-session.js";
+import {
+  createAgentDiagnosticsSession,
+  type AgentDiagnosticsSession
+} from "./agent-diagnostics-session.js";
 import {
   createAgentPlanExecutionSession,
   type AgentPlanExecutionRepositoryPort,
@@ -267,6 +274,13 @@ export interface AgentRunPersistencePort {
     runId: string,
     requestId: string
   ): Promise<Result<JsonObject | undefined, UnifiedError>>;
+  writeRunError?(runId: string, record: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
+  readRunError?(
+    runId: string,
+    errorId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>>;
+  writePreflightError?(record: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
+  readPreflightError?(errorId: string): Promise<Result<JsonObject | undefined, UnifiedError>>;
 }
 
 export interface AgentUserInputOption {
@@ -299,6 +313,7 @@ export interface AgentRunReadResult {
   readonly planExecution?: PlanExecutionRecord;
   readonly changeSet?: ChangeSet;
   readonly rollbackReview?: JsonObject;
+  readonly diagnostic?: AgentRunErrorRecord;
 }
 
 export interface AgentVersionGroupExecutor {
@@ -371,6 +386,7 @@ export interface AgentRunSession {
   compactContext(command: CompactContextCommand): Promise<AgentRunCommandResult>;
   answerUserInput(command: AnswerAgentUserInputCommand): Promise<AgentRunCommandResult>;
   resumeAgentRun(command: ResumeAgentRunCommand): Promise<AgentRunCommandResult>;
+  retryRunTarget(command: RetryRunTargetCommand): Promise<AgentRunCommandResult>;
   retryStep(command: RetryAgentRunStepCommand): Promise<AgentRunCommandResult>;
   decidePlan(command: DecideAgentPlanCommand): Promise<AgentRunCommandResult>;
   recordPlanDeviation(command: RecordAgentPlanDeviationCommand): Promise<AgentRunCommandResult>;
@@ -405,6 +421,7 @@ export interface CreateAgentRunSessionOptions {
   readonly createPlanExecutionId?: (commandId: string) => string;
   readonly coordinator?: AgentRunCoordinator;
   readonly coordinatorOptions?: Parameters<typeof createAgentRunCoordinator>[0];
+  readonly diagnostics?: AgentDiagnosticsSession;
 }
 
 interface RunRuntime {
@@ -525,10 +542,12 @@ function snapshotSourcesFor(runtime: RunRuntime): AgentContextSourceInput[] {
 
 export function createAgentRunSession(options: CreateAgentRunSessionOptions): AgentRunSession {
   const coordinator = options.coordinator ?? createAgentRunCoordinator(options.coordinatorOptions);
+  const diagnostics = options.diagnostics ?? diagnosticsForRepository(options.repository);
   const listeners = new Set<(event: AgentRunEvent) => void>();
   const runtimes = new Map<string, RunRuntime>();
   const commandReceipts = new Map<string, AgentRunCommandResult>();
   const inFlightCommands = new Map<string, Promise<AgentRunCommandResult>>();
+  const inFlightHydrations = new Map<string, Promise<AgentRunCommandResult>>();
   const knownRunIdsByProject = new Map<string, Set<string>>();
   const internalAutoApprovalCommands = new WeakSet<DecideChangeSetCommand>();
   const planExecutionSession =
@@ -704,7 +723,19 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     return undefined;
   }
 
-  async function hydrateRun(runId: string): Promise<AgentRunCommandResult> {
+  function hydrateRun(runId: string): Promise<AgentRunCommandResult> {
+    const active = inFlightHydrations.get(runId);
+    if (active !== undefined) return active;
+    const request = hydrateRunOnce(runId);
+    inFlightHydrations.set(runId, request);
+    const clear = () => {
+      if (inFlightHydrations.get(runId) === request) inFlightHydrations.delete(runId);
+    };
+    void request.then(clear, clear);
+    return request;
+  }
+
+  async function hydrateRunOnce(runId: string): Promise<AgentRunCommandResult> {
     const existing = coordinator.readSnapshot(runId);
     if (existing !== undefined) return { ok: true, value: existing };
     const [snapshotResult, eventsResult, retryCheckpointResult] = await Promise.all([
@@ -756,8 +787,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     if (!persistedPlanResult.ok) {
       return { ok: false, error: persistedPlanResult.error };
     }
-    const restoredPlanArtifact =
-      planEvent?.detail ?? persistedPlanResult.value;
+    const restoredPlanArtifact = planEvent?.detail ?? persistedPlanResult.value;
     const changeSetEvent = [...events].reverse().find((event) => event.type === "change_set_ready");
     const restoredChangeSet = isJsonObject(changeSetEvent?.detail?.["changeSet"])
       ? (changeSetEvent?.detail?.["changeSet"] as unknown as ChangeSet)
@@ -929,6 +959,47 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       });
       if (!failedWrite.ok) return failedWrite;
     }
+    if (recovery.value.status === "partial_failure") {
+      runtime.versionGroup = recovery.value.versionGroup;
+      const versionGroupId =
+        readString(recovery.value.versionGroup, "versionGroupId") ?? "version_group_unknown";
+      const partialError = createUnifiedError({
+        code: "AGENT_WRITE_PARTIAL_FAILURE",
+        category: "StorageError",
+        message: "The approved write only partially completed and requires recovery review.",
+        recoverability: "user-action",
+        suggestedAction: "Review the transaction recovery journal before continuing.",
+        traceId: "agent-run-session",
+        redactedDetail: { recoveryJournal: { versionGroupId } }
+      });
+      const recorded = await recordActiveError({
+        runId: snapshot.runId,
+        status: "applying_changes",
+        error: partialError,
+        recoveryState: "recovery_review",
+        ...(runtime.changeSet === undefined
+          ? {}
+          : { checkpointId: runtime.changeSet.checkpointId }),
+        retryTargets: []
+      });
+      return recordEvent(snapshot.runId, {
+        runId: snapshot.runId,
+        status: "failed",
+        type: "run_failed",
+        ...(recorded?.ok === true
+          ? {}
+          : { snapshotPatch: { activeErrorId: null, recoveryState: "terminal" } }),
+        detail: {
+          errorId: partialError.errorId,
+          code: partialError.code,
+          message: partialError.message,
+          failureKind: "partial_failure",
+          recoveredOnStartup: true,
+          versionGroupId,
+          ...(recorded?.ok === true ? {} : { diagnosticPersistenceFailed: true })
+        }
+      });
+    }
     return recordEvent(snapshot.runId, {
       runId: snapshot.runId,
       status: "failed",
@@ -987,6 +1058,107 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       await noteConversationTerminal(persisted.value);
     }
     return persisted;
+  }
+
+  async function recordActiveError(input: {
+    readonly runId: string;
+    readonly status: AgentRunSnapshot["status"];
+    readonly error: UnifiedError;
+    readonly recoveryState: AgentRunSnapshot["recoveryState"];
+    readonly checkpointId?: string;
+    readonly toolCallId?: string;
+    readonly planStepId?: string;
+    readonly detail?: JsonObject;
+    readonly retryTargets?: AgentRunErrorRecord["retryTargets"];
+  }): Promise<AgentRunCommandResult | undefined> {
+    if (diagnostics === undefined) return undefined;
+    const snapshot = coordinator.readSnapshot(input.runId);
+    if (snapshot === undefined)
+      return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
+    const recorded = await diagnostics.recordRunError({
+      projectId: snapshot.projectId,
+      runId: snapshot.runId,
+      sequence: snapshot.lastSequence + 1,
+      ...(input.checkpointId === undefined ? {} : { checkpointId: input.checkpointId }),
+      ...(input.toolCallId === undefined ? {} : { toolCallId: input.toolCallId }),
+      ...(input.planStepId === undefined ? {} : { planStepId: input.planStepId }),
+      provider: snapshot.providerCapabilitySnapshot.provider,
+      model: snapshot.providerCapabilitySnapshot.modelName,
+      error: input.error,
+      ...(input.detail === undefined ? {} : { detail: input.detail }),
+      recoveryState: input.recoveryState,
+      retryTargets: input.retryTargets ?? []
+    });
+    if (!recorded.ok) return { ok: false, error: recorded.error, latestSnapshot: snapshot };
+    return recordEvent(input.runId, {
+      runId: input.runId,
+      status: input.status,
+      type: "error_recorded",
+      snapshotPatch: {
+        activeErrorId: recorded.value.errorId,
+        recoveryState: recorded.value.recoveryState
+      },
+      detail: {
+        errorId: recorded.value.errorId,
+        code: recorded.value.code,
+        recoverability: recorded.value.recoverability,
+        recoveryState: recorded.value.recoveryState
+      }
+    });
+  }
+
+  async function readActiveDiagnostic(
+    snapshot: AgentRunSnapshot
+  ): Promise<Result<AgentRunErrorRecord, UnifiedError>> {
+    if (snapshot.activeErrorId === null || diagnostics === undefined) {
+      return err(
+        applicationError(
+          "AGENT_RETRY_ERROR_STALE",
+          "The Agent error is no longer the active recoverable error."
+        )
+      );
+    }
+    const diagnostic = await diagnostics.readRunError(snapshot.runId, snapshot.activeErrorId);
+    if (!diagnostic.ok) return err(diagnostic.error);
+    return diagnostic.value === undefined
+      ? err(
+          applicationError(
+            "AGENT_RETRY_ERROR_STALE",
+            "The active Agent error record is no longer available."
+          )
+        )
+      : ok(diagnostic.value);
+  }
+
+  async function recordPreflightFailure(
+    command: StartAgentRunCommand,
+    source: unknown,
+    model?: AgentRunStartModelFacts
+  ): Promise<AgentRunCommandResult> {
+    const normalized = normalizeDiagnosticError(source, {
+      code: readErrorString(source, "code") ?? "AGENT_RUN_PREFLIGHT_FAILED",
+      category: "ValidationError",
+      message:
+        readErrorString(source, "message") ?? "The Agent run could not pass preflight checks.",
+      recoverability: readRecoverability(source) ?? "user-action",
+      suggestedAction:
+        readErrorString(source, "suggestedAction") ??
+        "Review the Agent configuration and retry from the composer."
+    });
+    let result: AgentRunCommandResult = { ok: false, error: normalized };
+    if (diagnostics !== undefined) {
+      const recorded = await diagnostics.recordPreflightError({
+        projectId: command.projectId,
+        runDraftId: command.runDraftId,
+        error: normalized,
+        ...(model === undefined ? {} : { provider: model.provider, model: model.modelName }),
+        recoveryState: "terminal",
+        retryTargets: []
+      });
+      if (!recorded.ok) result = { ok: false, error: recorded.error };
+    }
+    commandReceipts.set(`${command.projectId}:${command.commandId}`, result);
+    return result;
   }
 
   async function noteConversationTerminal(snapshot: AgentRunSnapshot): Promise<void> {
@@ -1050,12 +1222,32 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       }
       const staleRefs = findStaleContextSources(runtime.contextSnapshot, current.value);
       if (staleRefs.length > 0) {
-        await recordEvent(runId, {
+        const stale = await recordEvent(runId, {
           runId,
           status: "awaiting_context_refresh",
           type: "context_stale",
           detail: { staleRefs }
         });
+        if (stale.ok) {
+          await recordActiveError({
+            runId,
+            status: "awaiting_context_refresh",
+            error: createUnifiedError({
+              code: "AGENT_CONTEXT_STALE",
+              category: "AgentError",
+              message: "One or more context sources changed after the run snapshot was created.",
+              recoverability: "user-action",
+              suggestedAction: "Refresh or exclude the stale context sources before continuing.",
+              traceId: "agent-run-session",
+              redactedDetail: { staleRefs }
+            }),
+            recoveryState: "awaiting_context_refresh",
+            ...(runtime.currentCheckpointId === undefined
+              ? {}
+              : { checkpointId: runtime.currentCheckpointId }),
+            detail: { staleRefs }
+          });
+        }
         return;
       }
     }
@@ -1192,13 +1384,41 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       if (isCurrent(runId, generation)) scheduleNextRound(runId, runtime);
     } catch (error) {
       if (!isCurrent(runId, generation) || runtime.controller.signal.aborted) return;
+      const providerError = normalizeProviderError(error);
+      const retryable = providerError.recoverability === "retryable";
+      const retryTargets: AgentRunErrorRecord["retryTargets"] = retryable
+        ? [
+            { kind: "model_round", id: `model_round_${runId}_${runtime.modelRounds}` },
+            ...(runtime.currentCheckpointId === undefined
+              ? []
+              : [{ kind: "checkpoint" as const, id: runtime.currentCheckpointId }])
+          ]
+        : [];
+      const currentStatus =
+        snapshot.operationMode === "planning" ? "planning_model" : "executing_model";
+      const recorded = await recordActiveError({
+        runId,
+        status: currentStatus,
+        error: providerError,
+        recoveryState: retryable ? "retryable" : "terminal",
+        ...(runtime.currentCheckpointId === undefined
+          ? {}
+          : { checkpointId: runtime.currentCheckpointId }),
+        retryTargets
+      });
+      if (retryable && recorded?.ok === true) return;
       await recordEvent(runId, {
         runId,
         status: "failed",
         type: "run_failed",
+        ...(recorded?.ok === true
+          ? {}
+          : { snapshotPatch: { activeErrorId: null, recoveryState: "terminal" } }),
         detail: {
-          code: error instanceof Error ? error.name : "AGENT_MODEL_FAILED",
-          message: error instanceof Error ? error.message : "The Agent model failed."
+          errorId: providerError.errorId,
+          code: providerError.code,
+          message: providerError.message,
+          ...(recorded?.ok === true ? {} : { diagnosticPersistenceFailed: true })
         }
       });
     }
@@ -1306,7 +1526,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           runId,
           call,
           result.error.code,
-          result.error.message
+          result.error.message,
+          result.error
         );
         runtime.messages.push({
           role: "tool",
@@ -1489,7 +1710,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           runId,
           call,
           proposed.error.code,
-          proposed.error.message
+          proposed.error.message,
+          proposed.error
         ))
           ? "terminal"
           : "continue";
@@ -1589,18 +1811,39 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     runId: string,
     call: AssembledToolCall,
     code: string,
-    message: string
+    message: string,
+    sourceError?: UnifiedError
   ): Promise<boolean> {
     const snapshot = coordinator.readSnapshot(runId);
     if (snapshot === undefined) return true;
-    await recordEvent(runId, {
+    const failed = await recordEvent(runId, {
       runId,
       status: snapshot.operationMode === "planning" ? "planning_model" : "executing_model",
       type: "tool_failed",
       detail: { toolCallId: call.toolCallId, toolName: call.name, code, message }
     });
+    if (!failed.ok) return true;
     runtime.lastFailedToolCall = { ...call };
     await persistRetryCheckpoint(runId, call);
+    const diagnosticError = normalizeDiagnosticError(sourceError, {
+      code,
+      category: sourceError?.category ?? "AgentError",
+      message,
+      recoverability: sourceError?.recoverability ?? "retryable",
+      suggestedAction: sourceError?.suggestedAction ?? "Retry this tool call or stop the run."
+    });
+    const recorded = await recordActiveError({
+      runId,
+      status: snapshot.operationMode === "planning" ? "planning_model" : "executing_model",
+      error: diagnosticError,
+      recoveryState: "retryable",
+      ...(runtime.currentCheckpointId === undefined
+        ? {}
+        : { checkpointId: runtime.currentCheckpointId }),
+      toolCallId: call.toolCallId,
+      retryTargets: [{ kind: "tool_call", id: call.toolCallId }]
+    });
+    if (recorded?.ok === false) return true;
     runtime.consecutiveToolFailures += 1;
     if (runtime.consecutiveToolFailures < snapshot.limits.maxConsecutiveToolFailures) {
       return false;
@@ -1628,6 +1871,135 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     );
   }
 
+  async function executeRetryTarget(
+    command: RetryRunTargetCommand
+  ): Promise<AgentRunCommandResult> {
+    const prior = await priorCommandReceipt(command.runId, command.projectId, command.commandId);
+    if (prior !== undefined) return prior;
+    const hydrated = await hydrateRun(command.runId);
+    if (!hydrated.ok) return hydrated;
+    const snapshot = coordinator.readSnapshot(command.runId);
+    const invalid = validateRunCommand(snapshot, command);
+    if (invalid !== undefined) return invalid;
+    const runtime = runtimes.get(command.runId);
+    if (snapshot === undefined || runtime === undefined) {
+      return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
+    }
+    if (isTerminal(snapshot.status)) {
+      return failure("AGENT_RUN_ALREADY_TERMINAL", "The Agent run has already ended.");
+    }
+    if (snapshot.activeErrorId !== command.errorId) {
+      return failure(
+        "AGENT_RETRY_ERROR_STALE",
+        "The requested error is no longer the active recoverable error."
+      );
+    }
+    const diagnostic = await readActiveDiagnostic(snapshot);
+    if (!diagnostic.ok) return { ok: false, error: diagnostic.error };
+    if (
+      diagnostic.value.recoveryState !== "retryable" ||
+      !diagnostic.value.retryTargets.some(
+        (target) => target.kind === command.target.kind && target.id === command.target.id
+      )
+    ) {
+      return failure(
+        "AGENT_RETRY_TARGET_STALE",
+        "The requested retry target is no longer available for the active error."
+      );
+    }
+
+    runtime.controller.abort();
+    runtime.controller = new AbortController();
+    runtime.generation += 1;
+    runtime.driving = false;
+    const status = snapshot.operationMode === "planning" ? "planning_model" : "executing_model";
+
+    if (command.target.kind === "tool_call") {
+      const failedCall = runtime.lastFailedToolCall;
+      if (failedCall === undefined || failedCall.toolCallId !== command.target.id) {
+        return failure(
+          "AGENT_RETRY_TARGET_STALE",
+          "The failed tool call is no longer available for retry."
+        );
+      }
+      const requested = await recordEvent(command.runId, {
+        runId: command.runId,
+        status,
+        type: "tool_retry_requested",
+        snapshotPatch: { activeErrorId: null, recoveryState: "none" },
+        detail: {
+          errorId: command.errorId,
+          targetKind: command.target.kind,
+          targetId: command.target.id,
+          toolCallId: failedCall.toolCallId,
+          toolName: failedCall.name
+        }
+      });
+      if (!requested.ok) return requested;
+      const retryCall: AssembledToolCall = {
+        ...failedCall,
+        toolCallId: `${failedCall.toolCallId}_retry_${requested.value.runRevision}`
+      };
+      let outcome: Awaited<ReturnType<typeof handleToolCall>>;
+      try {
+        outcome = await handleToolCall(command.runId, runtime, retryCall);
+      } catch (error) {
+        const normalized = normalizeDiagnosticError(error, {
+          code: "AGENT_TOOL_RETRY_FAILED",
+          category: "AgentError",
+          message: "The retried Agent tool failed.",
+          recoverability: "retryable",
+          suggestedAction: "Retry this tool call again or stop the run."
+        });
+        const limitReached = await toolFailure(
+          runtime,
+          command.runId,
+          retryCall,
+          normalized.code,
+          normalized.message,
+          normalized
+        );
+        outcome = limitReached ? "terminal" : "continue";
+      }
+      const latest: AgentRunCommandResult = {
+        ok: true,
+        value: coordinator.readSnapshot(command.runId) ?? requested.value
+      };
+      const persistedReceipt = await persistCommandReceipt(
+        command.runId,
+        command.projectId,
+        command.commandId,
+        latest
+      );
+      if (outcome === "continue") scheduleDrive(command.runId);
+      return persistedReceipt;
+    }
+
+    if (command.target.kind === "checkpoint") {
+      runtime.currentCheckpointId = command.target.id;
+    }
+    const resumed = await recordEvent(command.runId, {
+      runId: command.runId,
+      status,
+      type: "run_resumed",
+      snapshotPatch: { activeErrorId: null, recoveryState: "none" },
+      detail: {
+        reason: "retry_target",
+        errorId: command.errorId,
+        targetKind: command.target.kind,
+        targetId: command.target.id
+      }
+    });
+    const persistedReceipt = await persistCommandReceipt(
+      command.runId,
+      command.projectId,
+      command.commandId,
+      resumed
+    );
+    if (resumed.ok) scheduleDrive(command.runId);
+    return persistedReceipt;
+  }
+
   const session: AgentRunSession = {
     async startAgentRun(command) {
       const receiptKey = `${command.projectId}:${command.commandId}`;
@@ -1640,13 +2012,11 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       // reserved or run is persisted.
       const preflight = await options.startPreflight.resolveStart(command);
       if (!preflight.ok) {
-        commandReceipts.set(receiptKey, { ok: false, error: preflight.error });
-        return { ok: false, error: preflight.error };
+        return recordPreflightFailure(command, preflight.error);
       }
       const resolvedStart = resolveStartInput(command, preflight.value);
       if (!resolvedStart.ok) {
-        commandReceipts.set(receiptKey, { ok: false, error: resolvedStart.error });
-        return { ok: false, error: resolvedStart.error };
+        return recordPreflightFailure(command, resolvedStart.error, preflight.value.model);
       }
       const startInput = resolvedStart.value;
       // Regenerate the Permission Summary from the current Tool Registry and canonical root, and
@@ -1664,8 +2034,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           writePolicy: startInput.writePolicy ?? "write_before_confirmation"
         });
         if (!verified.ok) {
-          commandReceipts.set(receiptKey, { ok: false, error: verified.error });
-          return { ok: false, error: verified.error };
+          return recordPreflightFailure(command, verified.error, preflight.value.model);
         }
         verifiedPermissionSummary = verified.value;
       }
@@ -2012,52 +2381,38 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       if (resumed.ok) scheduleDrive(command.runId);
       return persistedReceipt;
     },
-    async retryStep(command) {
-      const prior = await priorCommandReceipt(command.runId, command.projectId, command.commandId);
-      if (prior !== undefined) return prior;
-      const hydrated = await hydrateRun(command.runId);
-      if (!hydrated.ok) return hydrated;
-      const snapshot = coordinator.readSnapshot(command.runId);
-      const invalid = validateRunCommand(snapshot, command);
-      if (invalid !== undefined) return invalid;
-      const runtime = runtimes.get(command.runId);
-      if (snapshot === undefined || runtime === undefined) {
-        return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
-      }
-      if (isTerminal(snapshot.status)) {
-        return failure("AGENT_RUN_ALREADY_TERMINAL", "The Agent run has already ended.");
-      }
-      const failedCall = runtime.lastFailedToolCall;
-      if (failedCall === undefined) {
-        return failure("AGENT_RETRY_STEP_NOT_AVAILABLE", "There is no failed step to retry.");
-      }
-      runtime.controller.abort();
-      runtime.controller = new AbortController();
-      runtime.generation += 1;
-      runtime.driving = false;
-      const requested = await recordEvent(command.runId, {
-        runId: command.runId,
-        status: snapshot.operationMode === "planning" ? "planning_model" : "executing_model",
-        type: "tool_retry_requested",
-        detail: { toolCallId: failedCall.toolCallId, toolName: failedCall.name }
+    retryRunTarget(command) {
+      return runCommandOnce(command, () => executeRetryTarget(command));
+    },
+    retryStep(command) {
+      return runCommandOnce(command, async () => {
+        const prior = await priorCommandReceipt(
+          command.runId,
+          command.projectId,
+          command.commandId
+        );
+        if (prior !== undefined) return prior;
+        const hydrated = await hydrateRun(command.runId);
+        if (!hydrated.ok) return hydrated;
+        const snapshot = coordinator.readSnapshot(command.runId);
+        const invalid = validateRunCommand(snapshot, command);
+        if (invalid !== undefined) return invalid;
+        if (snapshot === undefined) {
+          return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
+        }
+        if (isTerminal(snapshot.status)) {
+          return failure("AGENT_RUN_ALREADY_TERMINAL", "The Agent run has already ended.");
+        }
+        const diagnostic = await readActiveDiagnostic(snapshot);
+        if (!diagnostic.ok) return { ok: false, error: diagnostic.error };
+        const target = resolveLegacyRetryTarget(diagnostic.value);
+        if (!target.ok) return { ok: false, error: target.error };
+        return executeRetryTarget({
+          ...command,
+          errorId: diagnostic.value.errorId,
+          target: target.value
+        });
       });
-      if (!requested.ok) return requested;
-      const outcome = await handleToolCall(command.runId, runtime, {
-        ...failedCall,
-        toolCallId: `${failedCall.toolCallId}_retry_${requested.value.runRevision}`
-      });
-      const latest: AgentRunCommandResult = {
-        ok: true,
-        value: coordinator.readSnapshot(command.runId) ?? requested.value
-      };
-      const persistedReceipt = await persistCommandReceipt(
-        command.runId,
-        command.projectId,
-        command.commandId,
-        latest
-      );
-      if (outcome === "continue") scheduleDrive(command.runId);
-      return persistedReceipt;
     },
     async decidePlan(command) {
       const prior = await priorCommandReceipt(command.runId, command.projectId, command.commandId);
@@ -2556,7 +2911,12 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
             (value): value is string => typeof value === "string"
           )
         : [];
-      const selectedRefs = new Set(command.sourceRefs ?? staleRefs);
+      const staleRefSet = new Set(staleRefs);
+      const requestedRefs = command.sourceRefs?.filter((refId) => staleRefSet.has(refId));
+      // Recovery targets come from the persisted stale event; renderer refs may only narrow them.
+      const selectedRefs = new Set(
+        requestedRefs !== undefined && requestedRefs.length > 0 ? requestedRefs : staleRefs
+      );
       const refreshSources = mergeCurrentContextSources(
         runtime.contextSources,
         command.currentSources ?? []
@@ -2624,7 +2984,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         runId: command.runId,
         status: snapshot.operationMode === "planning" ? "planning_model" : "executing_model",
         type: eventType,
-        snapshotPatch: { contextSnapshotId },
+        snapshotPatch: { contextSnapshotId, activeErrorId: null, recoveryState: "none" },
         detail: { sourceRefs: [...selectedRefs] }
       });
       const refreshedReceipt = await persistCommandReceipt(
@@ -2899,6 +3259,30 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
               ...(applied.error.redactedDetail ?? {})
             }
           });
+          const baseConflict = applied.error.code === "AGENT_WRITE_BASE_CONFLICT";
+          if (baseConflict) runtime.changeSet = { ...changeSet, status: "stale" };
+          const recorded = await recordActiveError({
+            runId: command.runId,
+            status: baseConflict ? "awaiting_context_refresh" : "applying_changes",
+            error: applied.error,
+            recoveryState: baseConflict ? "awaiting_context_refresh" : "terminal",
+            checkpointId: changeSet.checkpointId,
+            retryTargets: []
+          });
+          if (recorded?.ok === false) return recorded;
+          if (baseConflict && recorded?.ok === true) {
+            const result: AgentRunCommandResult = {
+              ok: false,
+              error: applied.error,
+              latestSnapshot: recorded.value
+            };
+            return persistCommandReceipt(
+              command.runId,
+              command.projectId,
+              command.commandId,
+              result
+            );
+          }
           const failed = await recordEvent(command.runId, {
             runId: command.runId,
             status: "failed",
@@ -2914,6 +3298,60 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           });
           const result: AgentRunCommandResult = failed.ok
             ? { ok: false, error: applied.error, latestSnapshot: failed.value }
+            : failed;
+          return persistCommandReceipt(command.runId, command.projectId, command.commandId, result);
+        }
+        if (applied.value["transactionStatus"] === "partial_failure") {
+          runtime.versionGroup = applied.value;
+          const versionGroupId = readString(applied.value, "versionGroupId");
+          const partialError = createUnifiedError({
+            code: "AGENT_WRITE_PARTIAL_FAILURE",
+            category: "StorageError",
+            message: "The approved write only partially completed and requires recovery review.",
+            recoverability: "user-action",
+            suggestedAction: "Review the transaction recovery journal before continuing.",
+            traceId: "agent-run-session",
+            redactedDetail: {
+              recoveryJournal: {
+                versionGroupId: versionGroupId ?? "version_group_unknown"
+              }
+            }
+          });
+          const writeFailed = await recordEvent(command.runId, {
+            runId: command.runId,
+            status: "applying_changes",
+            type: "write_failed",
+            detail: {
+              code: partialError.code,
+              message: partialError.message,
+              transactionStatus: "partial_failure",
+              ...(versionGroupId === undefined ? {} : { versionGroupId })
+            }
+          });
+          if (!writeFailed.ok) return writeFailed;
+          const recorded = await recordActiveError({
+            runId: command.runId,
+            status: "applying_changes",
+            error: partialError,
+            recoveryState: "recovery_review",
+            checkpointId: changeSet.checkpointId,
+            retryTargets: []
+          });
+          if (recorded?.ok === false) return recorded;
+          const failed = await recordEvent(command.runId, {
+            runId: command.runId,
+            status: "failed",
+            type: "run_failed",
+            detail: {
+              errorId: partialError.errorId,
+              code: partialError.code,
+              message: partialError.message,
+              failureKind: "partial_failure",
+              ...(versionGroupId === undefined ? {} : { versionGroupId })
+            }
+          });
+          const result: AgentRunCommandResult = failed.ok
+            ? { ok: false, error: partialError, latestSnapshot: failed.value }
             : failed;
           return persistCommandReceipt(command.runId, command.projectId, command.commandId, result);
         }
@@ -3095,6 +3533,11 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
                 : { revision: snapshot.planExecutionRevision })
             });
       if (!planExecution.ok) return err(planExecution.error);
+      const diagnostic =
+        snapshot.activeErrorId === null || diagnostics === undefined
+          ? ok(undefined)
+          : await diagnostics.readRunError(runId, snapshot.activeErrorId);
+      if (!diagnostic.ok) return err(diagnostic.error);
       return ok({
         snapshot,
         events: coordinator.readEvents(runId),
@@ -3104,7 +3547,10 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         ...(runtime?.planArtifact === undefined ? {} : { planArtifact: runtime.planArtifact }),
         ...(planExecution.value === undefined ? {} : { planExecution: planExecution.value }),
         ...(runtime?.changeSet === undefined ? {} : { changeSet: runtime.changeSet }),
-        ...(runtime?.rollbackReview === undefined ? {} : { rollbackReview: runtime.rollbackReview })
+        ...(runtime?.rollbackReview === undefined
+          ? {}
+          : { rollbackReview: runtime.rollbackReview }),
+        ...(diagnostic.value === undefined ? {} : { diagnostic: diagnostic.value })
       });
     },
     async listAgentRuns(projectId) {
@@ -3385,6 +3831,27 @@ function asJsonObject(value: object): JsonObject {
   return value as unknown as JsonObject;
 }
 
+function diagnosticsForRepository(
+  repository: AgentRunPersistencePort
+): AgentDiagnosticsSession | undefined {
+  if (
+    repository.writeRunError === undefined ||
+    repository.readRunError === undefined ||
+    repository.writePreflightError === undefined ||
+    repository.readPreflightError === undefined
+  ) {
+    return undefined;
+  }
+  return createAgentDiagnosticsSession({
+    repository: {
+      writeRunError: (runId, record) => repository.writeRunError!(runId, record),
+      readRunError: (runId, errorId) => repository.readRunError!(runId, errorId),
+      writePreflightError: (record) => repository.writePreflightError!(record),
+      readPreflightError: (errorId) => repository.readPreflightError!(errorId)
+    }
+  });
+}
+
 function createPlanExecutionRepository(
   repository: AgentRunPersistencePort
 ): AgentPlanExecutionRepositoryPort {
@@ -3449,6 +3916,106 @@ function createPlanExecutionRepository(
       return ok(request?.["runId"] === runId ? request : undefined);
     }
   };
+}
+
+interface DiagnosticErrorDefaults {
+  readonly code: string;
+  readonly category: UnifiedError["category"];
+  readonly message: string;
+  readonly recoverability: UnifiedError["recoverability"];
+  readonly suggestedAction: string;
+}
+
+function normalizeProviderError(source: unknown): UnifiedError {
+  const recoverability = readRecoverability(source) ?? "unknown";
+  return normalizeDiagnosticError(source, {
+    code: readErrorString(source, "code") ?? "AGENT_MODEL_FAILED",
+    category: "ModelProviderError",
+    message:
+      source instanceof Error
+        ? source.message
+        : (readErrorString(source, "message") ?? "The Agent model failed."),
+    recoverability,
+    suggestedAction:
+      recoverability === "retryable"
+        ? "Retry the interrupted model round or resume from a safe checkpoint."
+        : "Review the provider configuration and retry the Agent run."
+  });
+}
+
+function normalizeDiagnosticError(
+  source: unknown,
+  fallback: DiagnosticErrorDefaults
+): UnifiedError {
+  const redactedDetail = readDiagnosticDetail(source);
+  const errorId = readErrorString(source, "errorId");
+  const createdAt = readErrorString(source, "createdAt") ?? readErrorString(source, "timestamp");
+  return createUnifiedError({
+    ...(errorId === undefined ? {} : { errorId }),
+    code: readErrorString(source, "code") ?? fallback.code,
+    category: readErrorCategory(source) ?? fallback.category,
+    message:
+      source instanceof Error
+        ? source.message
+        : (readErrorString(source, "message") ?? fallback.message),
+    recoverability: readRecoverability(source) ?? fallback.recoverability,
+    suggestedAction: readErrorString(source, "suggestedAction") ?? fallback.suggestedAction,
+    traceId: readErrorString(source, "traceId") ?? "agent-run-session",
+    ...(createdAt === undefined ? {} : { createdAt }),
+    ...(redactedDetail === undefined ? {} : { redactedDetail })
+  });
+}
+
+function readDiagnosticDetail(source: unknown): JsonObject | undefined {
+  if (!isJsonObject(source)) return undefined;
+  if (isJsonObject(source["redactedDetail"])) {
+    return source["redactedDetail"];
+  }
+  const detail: JsonObject = {};
+  for (const key of ["requestId", "providerRequestId", "status", "statusCode", "name"]) {
+    const value = source[key];
+    if (
+      value === null ||
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean"
+    ) {
+      detail[key] = Number.isFinite(value) || typeof value !== "number" ? value : String(value);
+    }
+  }
+  return Object.keys(detail).length === 0 ? undefined : detail;
+}
+
+function readErrorString(source: unknown, key: string): string | undefined {
+  if ((typeof source !== "object" && typeof source !== "function") || source === null) {
+    return undefined;
+  }
+  const value = (source as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function readErrorCategory(source: unknown): UnifiedError["category"] | undefined {
+  const category = readErrorString(source, "category");
+  return category === "UserError" ||
+    category === "ValidationError" ||
+    category === "StorageError" ||
+    category === "ModelProviderError" ||
+    category === "LLMAdapterError" ||
+    category === "WorkflowError" ||
+    category === "AgentError" ||
+    category === "PluginError"
+    ? category
+    : undefined;
+}
+
+function readRecoverability(source: unknown): UnifiedError["recoverability"] | undefined {
+  const recoverability = readErrorString(source, "recoverability");
+  return recoverability === "retryable" ||
+    recoverability === "user-action" ||
+    recoverability === "fatal" ||
+    recoverability === "unknown"
+    ? recoverability
+    : undefined;
 }
 
 function failure(code: string, message: string): AgentRunCommandResult {
