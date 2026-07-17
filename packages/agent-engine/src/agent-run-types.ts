@@ -28,11 +28,7 @@ export type AgentRunStatus =
 export type AgentRunStatusV11 = AgentRunStatus | "context_compacting" | "awaiting_plan_revision";
 
 export type AgentRunRecoveryState =
-  | "none"
-  | "retryable"
-  | "awaiting_context_refresh"
-  | "recovery_review"
-  | "terminal";
+  "none" | "retryable" | "awaiting_context_refresh" | "recovery_review" | "terminal";
 
 export interface AgentRunUsageSummary {
   readonly inputTokens: number;
@@ -187,6 +183,10 @@ export type AgentRunEventTypeV11 =
   | "context_compaction_failed"
   | "permission_summary_ready"
   | "usage_updated"
+  | "plan_step_started"
+  | "plan_step_completed"
+  | "plan_step_blocked"
+  | "plan_step_skipped"
   | "plan_deviation_recorded"
   | "plan_revision_requested";
 
@@ -220,10 +220,7 @@ export interface RecordAgentRunEventInput {
 }
 
 export type TerminalAgentRunAuditEventType =
-  | "run_undo_started"
-  | "run_undo_review_required"
-  | "run_undone"
-  | "run_undo_failed";
+  "run_undo_started" | "run_undo_review_required" | "run_undone" | "run_undo_failed";
 
 export interface RecordTerminalAgentRunAuditEventInput {
   readonly runId: string;
@@ -276,6 +273,8 @@ export interface ResolvedAgentRunStartInput {
   readonly contextBudgetSnapshotId?: string;
   readonly permissionSummaryId?: string;
   readonly permissionSummaryChecksum?: string;
+  readonly planExecutionId?: string;
+  readonly planExecutionRevision?: number;
   readonly sourcePlanId?: string;
   readonly sourcePlanRevision?: number;
 }
@@ -312,6 +311,17 @@ export interface DecideAgentPlanCommand {
   readonly executionContextMode?: AgentContextMode;
   readonly executionWritePolicy?: AgentWritePolicy;
   readonly executionWritePolicyAcknowledged?: true;
+}
+
+export interface DecidePlanRevisionCommand {
+  readonly runId: string;
+  readonly projectId: string;
+  readonly commandId: string;
+  readonly expectedRunRevision: number;
+  readonly requestId: string;
+  readonly planId: string;
+  readonly planRevision: number;
+  readonly decision: "approve" | "reject";
 }
 
 export interface RefreshAgentContextCommand {

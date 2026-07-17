@@ -5,10 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { createAgentContextSession } from "@novel-studio/application";
-import type {
-  AgentContextBudgetInputsPort,
-  AgentRunDraftSession
-} from "@novel-studio/application";
+import type { AgentContextBudgetInputsPort, AgentRunDraftSession } from "@novel-studio/application";
 import { AgentRunFileRepository, AgentUsageFileRepository } from "@novel-studio/repository";
 import { ok, type JsonObject } from "@novel-studio/shared";
 
@@ -96,6 +93,63 @@ describe("desktop compaction composer", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.code).toBe("AGENT_CONTEXT_COMPACTION_UNAVAILABLE");
+  });
+
+  test("loads the run's latest plan execution record as protected compaction input", async () => {
+    const { repository } = await seedRun();
+    const execution: JsonObject = {
+      schemaVersion: "1.0",
+      planExecutionId: "execution_01",
+      runId: "run_01",
+      planId: "plan_01",
+      planRevision: 2,
+      handoffContextMode: "writing",
+      handoffWritePolicy: "write_before_confirmation",
+      revision: 3,
+      steps: [
+        {
+          stepId: "step_01",
+          title: "Read chapter",
+          status: "completed",
+          startedAt: "2026-07-17T01:00:00.000Z",
+          completedAt: "2026-07-17T01:01:00.000Z",
+          verification: ["chapter_03@7"],
+          deviationKind: "none",
+          blockedReason: null,
+          checkpointId: "checkpoint_01",
+          eventSequence: 12
+        }
+      ]
+    };
+    expect(await repository.writePlanExecutionRecord(execution)).toMatchObject({ ok: true });
+    const run = await repository.readSnapshot("run_01");
+    if (!run.ok || run.value === undefined) throw new Error("seed run missing");
+    await repository.writeSnapshot({
+      ...run.value,
+      operationMode: "execution",
+      planExecutionId: "execution_01",
+      planExecutionRevision: 3
+    });
+
+    const sources = createDesktopCompactionSources({ repository });
+    const loaded = await sources.loadInputs({
+      projectId: "project_01",
+      runId: "run_01",
+      commandId: "cmd_execution",
+      expectedRunRevision: 3,
+      contextBudgetSnapshotId: "budget_target_01",
+      trigger: "manual"
+    });
+    expect(loaded).toMatchObject({
+      ok: true,
+      value: {
+        planExecutionRecord: {
+          planExecutionId: "execution_01",
+          revision: 3,
+          steps: [{ stepId: "step_01", status: "completed" }]
+        }
+      }
+    });
   });
 });
 
@@ -195,8 +249,7 @@ async function seedRun(): Promise<{
 
 function stubDraftSession(): Pick<AgentRunDraftSession, "resolveStartDraft"> {
   return {
-    resolveStartDraft: () =>
-      Promise.resolve(ok({ runDraft: {}, contextDraft: {} } as never))
+    resolveStartDraft: () => Promise.resolve(ok({ runDraft: {}, contextDraft: {} } as never))
   };
 }
 
@@ -222,4 +275,3 @@ function stubBudgetInputs(): AgentContextBudgetInputsPort {
 function checksumText(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
 }
-

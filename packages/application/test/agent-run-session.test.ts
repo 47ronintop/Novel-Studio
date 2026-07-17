@@ -392,7 +392,11 @@ describe("AgentRunSession", () => {
     const started = await session.startAgentRun(startCommand());
     expect(started).toMatchObject({
       ok: true,
-      value: { runId: "run_no_permission", permissionSummaryId: null, permissionSummaryChecksum: null }
+      value: {
+        runId: "run_no_permission",
+        permissionSummaryId: null,
+        permissionSummaryChecksum: null
+      }
     });
   });
 
@@ -468,8 +472,8 @@ describe("AgentRunSession", () => {
     });
     await withoutCompactor.startAgentRun({ ...startCommand(), commandId: "start-nc" });
     const ncCurrent = await withoutCompactor.readAgentRun("run_no_compact");
-    const ncRevision = (ncCurrent as { value: { snapshot: { runRevision: number } } }).value.snapshot
-      .runRevision;
+    const ncRevision = (ncCurrent as { value: { snapshot: { runRevision: number } } }).value
+      .snapshot.runRevision;
     const unavailable = await withoutCompactor.compactContext({
       projectId: "project-01",
       runId: "run_no_compact",
@@ -502,7 +506,11 @@ describe("AgentRunSession", () => {
       repository,
       modelDriver: { streamRound: blockedModelRound },
       startPreflight: echoStartPreflight(),
-      readToolExecutor: { async execute() { return { ok: true, value: { summary: "unused", data: {} } }; } }
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      }
     });
     await firstSession.startAgentRun(startCommand());
     const running = (await firstSession.readAgentRun("run_stop_reload")) as {
@@ -519,7 +527,11 @@ describe("AgentRunSession", () => {
       repository,
       modelDriver: { streamRound: () => unexpectedModelRound("Stopped run must not resume.") },
       startPreflight: echoStartPreflight(),
-      readToolExecutor: { async execute() { return { ok: true, value: { summary: "unused", data: {} } }; } }
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      }
     });
 
     expect(await reloadedSession.stopAgentRun(command)).toEqual(first);
@@ -811,7 +823,11 @@ describe("AgentRunSession", () => {
       repository,
       modelDriver: { streamRound: blockedModelRound },
       startPreflight: echoStartPreflight(),
-      readToolExecutor: { async execute() { return { ok: true, value: { summary: "unused", data: {} } }; } }
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      }
     }) as {
       startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
     };
@@ -827,7 +843,11 @@ describe("AgentRunSession", () => {
         }
       },
       startPreflight: echoStartPreflight(),
-      readToolExecutor: { async execute() { return { ok: true, value: { summary: "unused", data: {} } }; } }
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      }
     }) as {
       startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
       listAgentRuns(projectId: string): Promise<Record<string, unknown>>;
@@ -853,7 +873,11 @@ describe("AgentRunSession", () => {
       repository,
       modelDriver: { streamRound: blockedModelRound },
       startPreflight: echoStartPreflight(),
-      readToolExecutor: { async execute() { return { ok: true, value: { summary: "unused", data: {} } }; } }
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      }
     }) as { startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>> };
     await firstSession.startAgentRun(startCommand());
 
@@ -868,7 +892,11 @@ describe("AgentRunSession", () => {
         }
       },
       startPreflight: echoStartPreflight(),
-      readToolExecutor: { async execute() { return { ok: true, value: { summary: "unused", data: {} } }; } }
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      }
     }) as { startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>> };
 
     expect(
@@ -972,7 +1000,11 @@ describe("AgentRunSession", () => {
       repository,
       modelDriver: { streamRound: () => unexpectedModelRound("Duplicate answer must not resume.") },
       startPreflight: echoStartPreflight(),
-      readToolExecutor: { async execute() { return { ok: true, value: { summary: "unused", data: {} } }; } }
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      }
     });
     expect(await duplicateSession.answerUserInput(answerCommand)).toEqual(firstAnswer);
   });
@@ -1225,7 +1257,11 @@ describe("AgentRunSession", () => {
         }
       },
       startPreflight: echoStartPreflight(),
-      readToolExecutor: { async execute() { return { ok: true, value: { summary: "ok", data: {} } }; } }
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "ok", data: {} } };
+        }
+      }
     }) as {
       resumeAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
       readAgentRun(runId: string): Promise<Record<string, unknown>>;
@@ -1255,9 +1291,29 @@ describe("AgentRunSession", () => {
 
     let runs = 0;
     const notedRunIds: string[] = [];
+    const planExecutionRecords: Record<string, unknown>[] = [];
+    const planExecutionReads: unknown[][] = [];
+    const planRevisionRequests = new Map<string, Record<string, unknown>>();
     const session = (createSession as (options: Record<string, unknown>) => unknown)({
       coordinatorOptions: { createRunId: () => `run_plan_${++runs}` },
-      repository: memoryRepository(),
+      repository: {
+        ...memoryRepository(),
+        async writePlanExecutionRecord(record: Record<string, unknown>) {
+          planExecutionRecords.push(structuredClone(record));
+          return { ok: true, value: record };
+        },
+        async readPlanExecutionRecord(...args: unknown[]) {
+          planExecutionReads.push(args);
+          return { ok: true, value: planExecutionRecords.at(-1) };
+        },
+        async writePlanRevisionRequest(request: Record<string, unknown>) {
+          planRevisionRequests.set(String(request["requestId"]), structuredClone(request));
+          return { ok: true, value: request };
+        },
+        async readPlanRevisionRequest(_runId: string, requestId: string) {
+          return { ok: true, value: planRevisionRequests.get(requestId) };
+        }
+      },
       conversationLifecycle: {
         async assertRunMayStart() {
           return { ok: true, value: {} };
@@ -1297,7 +1353,11 @@ describe("AgentRunSession", () => {
         }
       },
       startPreflight: echoStartPreflight(),
-      readToolExecutor: { async execute() { return { ok: true, value: { summary: "ok", data: {} } }; } }
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "ok", data: {} } };
+        }
+      }
     }) as {
       startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
       decidePlan(command: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -1364,17 +1424,242 @@ describe("AgentRunSession", () => {
         conversationId: "conv-01",
         sourcePlanId: "plan-01",
         sourcePlanRevision: 1,
+        planExecutionId: "plan_execution_plan-approve-01",
+        planExecutionRevision: 1,
         operationMode: "execution",
         contextMode: "general_file",
         writePolicy: "user_preapproved_run"
       }
     });
+    expect(planExecutionRecords).toHaveLength(1);
+    expect(planExecutionRecords[0]).toMatchObject({
+      planExecutionId: "plan_execution_plan-approve-01",
+      runId: "run_plan_2",
+      planId: "plan-01",
+      planRevision: 1,
+      revision: 1,
+      steps: [{ stepId: "step-01", status: "pending", deviationKind: "none" }]
+    });
+    await session.readAgentRun("run_plan_2");
+    expect(planExecutionReads.at(-1)).toEqual(["run_plan_2", "plan_execution_plan-approve-01", 1]);
     expect(notedRunIds).toEqual(["run_plan_1", "run_plan_2"]);
     await vi.waitFor(async () => {
       expect(await session.readAgentRun(planningRunId)).toMatchObject({
         ok: true,
         value: { snapshot: { status: "completed" } }
       });
+    });
+  });
+
+  test("pauses a material plan deviation, releases the provider, and resumes an approved revision idempotently", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+
+    let runs = 0;
+    let executionSignal: AbortSignal | undefined;
+    const snapshots = new Map<string, Record<string, unknown>>();
+    const events = new Map<string, Record<string, unknown>[]>();
+    const executionRecords = new Map<string, Record<string, unknown>>();
+    const revisionRequests = new Map<string, Record<string, unknown>>();
+    const receipts = new Map<string, Record<string, unknown>>();
+    const repository = {
+      async writeSnapshot(snapshot: Record<string, unknown>) {
+        snapshots.set(String(snapshot["runId"]), structuredClone(snapshot));
+        return { ok: true, value: snapshot };
+      },
+      async appendEvent(event: Record<string, unknown>) {
+        const runId = String(event["runId"]);
+        events.set(runId, [...(events.get(runId) ?? []), structuredClone(event)]);
+        return { ok: true, value: event };
+      },
+      async writeCommandReceipt(
+        runId: string,
+        commandId: string,
+        receipt: Record<string, unknown>
+      ) {
+        receipts.set(`${runId}:${commandId}`, structuredClone(receipt));
+        return { ok: true, value: receipt };
+      },
+      async readCommandReceipt(runId: string, commandId: string) {
+        return { ok: true, value: receipts.get(`${runId}:${commandId}`) };
+      },
+      async readSnapshot(runId: string) {
+        return { ok: true, value: snapshots.get(runId) };
+      },
+      async readEvents(runId: string) {
+        return { ok: true, value: events.get(runId) ?? [] };
+      },
+      async writePlanExecutionRecord(record: Record<string, unknown>) {
+        executionRecords.set(
+          `${String(record["planExecutionId"])}:${String(record["revision"])}`,
+          structuredClone(record)
+        );
+        return { ok: true, value: record };
+      },
+      async readPlanExecutionRecord(runId: string, planExecutionId: string, revision?: number) {
+        const matches = [...executionRecords.values()].filter(
+          (record) => record["runId"] === runId && record["planExecutionId"] === planExecutionId
+        );
+        const selected =
+          revision === undefined
+            ? matches.sort((left, right) => Number(right["revision"]) - Number(left["revision"]))[0]
+            : matches.find((record) => record["revision"] === revision);
+        return { ok: true, value: selected };
+      },
+      async writePlanRevisionRequest(request: Record<string, unknown>) {
+        revisionRequests.set(String(request["requestId"]), structuredClone(request));
+        return { ok: true, value: request };
+      },
+      async readPlanRevisionRequest(_runId: string, requestId: string) {
+        return { ok: true, value: revisionRequests.get(requestId) };
+      },
+      async writePlanArtifact(plan: Record<string, unknown>) {
+        return { ok: true, value: plan };
+      }
+    };
+    const session = (createSession as (options: Record<string, unknown>) => unknown)({
+      coordinatorOptions: { createRunId: () => `run_revision_${++runs}` },
+      repository,
+      modelDriver: {
+        async *streamRound(input: {
+          readonly snapshot: Record<string, unknown>;
+          readonly signal: AbortSignal;
+        }) {
+          if (input.snapshot["operationMode"] === "planning") {
+            yield toolCall("finish_plan_revision", "finish_plan", {
+              planId: "plan-revision",
+              goal: "Fix continuity",
+              successCriteria: ["Continuity fixed"],
+              nonGoals: ["Do not edit chapter 4"],
+              facts: ["Chapter 3 is inconsistent"],
+              assumptions: [],
+              openQuestions: [],
+              targetRefs: [{ refId: "chapter:chapter-03", intent: "Fix" }],
+              steps: [{ stepId: "step-01", title: "Fix chapter 3", verification: "Re-read" }],
+              risks: [],
+              verification: ["Re-read chapter 3"],
+              sourceRefs: ["chapter:chapter-03"]
+            });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          executionSignal = input.signal;
+          await new Promise<void>((resolve) => {
+            if (input.signal.aborted) resolve();
+            else input.signal.addEventListener("abort", () => resolve(), { once: true });
+          });
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      }
+    }) as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      decidePlan(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      recordPlanDeviation(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      decidePlanRevision(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+      stopAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+    };
+
+    const planningStarted = await session.startAgentRun({
+      ...startCommand(),
+      operationMode: "planning"
+    });
+    const planningRunId = String((planningStarted as { value: { runId: string } }).value.runId);
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun(planningRunId)).toMatchObject({
+        value: { snapshot: { status: "plan_ready" } }
+      });
+    });
+    const planning = (await session.readAgentRun(planningRunId)) as {
+      value: { snapshot: Record<string, unknown> };
+    };
+    const approvedPlan = await session.decidePlan({
+      projectId: "project-01",
+      runId: planningRunId,
+      commandId: "plan-revision-approve",
+      expectedRunRevision: planning.value.snapshot["runRevision"],
+      planId: "plan-revision",
+      planRevision: 1,
+      decision: "approve"
+    });
+    const executionRunId = String((approvedPlan as { value: { runId: string } }).value.runId);
+    await vi.waitFor(() => {
+      expect(executionSignal).toBeDefined();
+    });
+    const execution = (await session.readAgentRun(executionRunId)) as {
+      value: { snapshot: Record<string, unknown> };
+    };
+    const deviated = await session.recordPlanDeviation({
+      projectId: "project-01",
+      runId: executionRunId,
+      commandId: "deviation-material",
+      expectedRunRevision: execution.value.snapshot["runRevision"],
+      requestId: "revision-request-01",
+      planRevision: 2,
+      stepId: "step-01",
+      change: "new_target",
+      summary: "Chapter 4 also needs a change.",
+      discovery: "The contradiction continues in chapter 4.",
+      proposal: "Add chapter 4 to plan revision 2."
+    });
+    expect(deviated).toMatchObject({
+      ok: true,
+      value: {
+        status: "awaiting_plan_revision",
+        planExecutionRevision: 2
+      }
+    });
+    expect(executionSignal?.aborted).toBe(true);
+    expect((events.get(executionRunId) ?? []).map((event) => event["type"])).toEqual(
+      expect.arrayContaining(["plan_deviation_recorded", "plan_revision_requested"])
+    );
+
+    const paused = (deviated as { value: Record<string, unknown> }).value;
+    const decided = await session.decidePlanRevision({
+      projectId: "project-01",
+      runId: executionRunId,
+      commandId: "revision-decide-01",
+      expectedRunRevision: paused["runRevision"],
+      requestId: "revision-request-01",
+      planId: "plan-revision",
+      planRevision: 2,
+      decision: "approve"
+    });
+    expect(decided).toMatchObject({
+      ok: true,
+      value: {
+        status: "executing_model",
+        sourcePlanRevision: 2,
+        planExecutionRevision: 3
+      }
+    });
+    expect(
+      await session.decidePlanRevision({
+        projectId: "project-01",
+        runId: executionRunId,
+        commandId: "revision-decide-01",
+        expectedRunRevision: paused["runRevision"],
+        requestId: "revision-request-01",
+        planId: "plan-revision",
+        planRevision: 2,
+        decision: "approve"
+      })
+    ).toEqual(decided);
+
+    const resumed = (decided as { value: Record<string, unknown> }).value;
+    await session.stopAgentRun({
+      projectId: "project-01",
+      runId: executionRunId,
+      commandId: "stop-revision-test",
+      expectedRunRevision: resumed["runRevision"]
     });
   });
 
@@ -1435,7 +1720,9 @@ describe("AgentRunSession", () => {
     await session.startAgentRun(startCommand());
     await vi.waitFor(async () => {
       expect(await session.readAgentRun("run_retry_step")).toMatchObject({
-        value: { events: expect.arrayContaining([expect.objectContaining({ type: "tool_failed" })]) }
+        value: {
+          events: expect.arrayContaining([expect.objectContaining({ type: "tool_failed" })])
+        }
       });
     });
     const failed = (await session.readAgentRun("run_retry_step")) as {
@@ -1517,7 +1804,9 @@ describe("AgentRunSession", () => {
     await firstSession.startAgentRun(startCommand());
     await vi.waitFor(async () => {
       expect(await firstSession.readAgentRun("run_retry_reload")).toMatchObject({
-        value: { events: expect.arrayContaining([expect.objectContaining({ type: "tool_failed" })]) }
+        value: {
+          events: expect.arrayContaining([expect.objectContaining({ type: "tool_failed" })])
+        }
       });
     });
 

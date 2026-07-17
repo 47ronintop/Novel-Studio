@@ -1,6 +1,7 @@
 import {
   createAgentRunCoordinator,
   createAgentContextSnapshot,
+  createPlanExecutionRecord,
   createPlanArtifactRevision,
   canExecutePlanArtifact,
   findStaleContextSources,
@@ -33,6 +34,9 @@ import {
   type PlanStep,
   type PlanTargetRef,
   type DecideAgentPlanCommand,
+  type DecidePlanRevisionCommand,
+  type PlanDeviationChange,
+  type PlanExecutionRecord,
   type RefreshAgentContextCommand,
   type ResolvedAgentRunStartInput,
   type ResumeAgentRunCommand,
@@ -64,6 +68,11 @@ import {
 } from "./ai-writing-style-rules.js";
 import type { ModelReasoningStrengthControl } from "./model-discovery-session.js";
 import type { AgentPermissionSession } from "./agent-permission-session.js";
+import {
+  createAgentPlanExecutionSession,
+  type AgentPlanExecutionRepositoryPort,
+  type AgentPlanExecutionSession
+} from "./agent-plan-execution-session.js";
 import type { ChangeSetSession } from "./change-set-session.js";
 import {
   authorizeAgentRunApproval,
@@ -195,9 +204,21 @@ export type AgentRunStartPermissionPort = Pick<
 >;
 
 export interface AgentRunStartPreflightPort {
-  resolveStart(
-    command: StartAgentRunCommand
-  ): Promise<Result<AgentRunStartFacts, UnifiedError>>;
+  resolveStart(command: StartAgentRunCommand): Promise<Result<AgentRunStartFacts, UnifiedError>>;
+}
+
+export interface RecordAgentPlanDeviationCommand {
+  readonly runId: string;
+  readonly projectId: string;
+  readonly commandId: string;
+  readonly expectedRunRevision: number;
+  readonly requestId: string;
+  readonly planRevision: number;
+  readonly stepId: string;
+  readonly change: PlanDeviationChange;
+  readonly summary: string;
+  readonly discovery: string;
+  readonly proposal: string;
 }
 
 export interface AgentRunPersistencePort {
@@ -226,6 +247,22 @@ export interface AgentRunPersistencePort {
     contextSnapshotId: string
   ): Promise<Result<JsonObject | undefined, UnifiedError>>;
   writePlanArtifact?(plan: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
+  writePlanExecutionRecord?(record: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
+  readPlanExecutionRecord?(
+    runId: string,
+    planExecutionId: string,
+    revision?: number
+  ): Promise<Result<JsonObject | undefined, UnifiedError>>;
+  writePlanRevisionRequest?(request: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
+  readPlanRevisionRequest?(
+    runId: string,
+    requestId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>>;
+  writePlanRevisionDecision?(decision: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
+  readPlanRevisionDecision?(
+    runId: string,
+    requestId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>>;
 }
 
 export interface AgentUserInputOption {
@@ -255,6 +292,7 @@ export interface AgentRunReadResult {
   readonly events: readonly AgentRunEvent[];
   readonly pendingUserInput?: AgentUserInputRequest;
   readonly planArtifact?: PlanArtifact;
+  readonly planExecution?: PlanExecutionRecord;
   readonly changeSet?: ChangeSet;
   readonly rollbackReview?: JsonObject;
 }
@@ -318,7 +356,9 @@ export function evaluateContextBudgetPressure(input: {
 export interface AgentRunContextCompactor {
   compactContext(
     command: CompactContextCommand
-  ): Promise<Result<{ readonly compactionId: string; readonly runSnapshot: JsonObject }, UnifiedError>>;
+  ): Promise<
+    Result<{ readonly compactionId: string; readonly runSnapshot: JsonObject }, UnifiedError>
+  >;
 }
 
 export interface AgentRunSession {
@@ -329,6 +369,8 @@ export interface AgentRunSession {
   resumeAgentRun(command: ResumeAgentRunCommand): Promise<AgentRunCommandResult>;
   retryStep(command: RetryAgentRunStepCommand): Promise<AgentRunCommandResult>;
   decidePlan(command: DecideAgentPlanCommand): Promise<AgentRunCommandResult>;
+  recordPlanDeviation(command: RecordAgentPlanDeviationCommand): Promise<AgentRunCommandResult>;
+  decidePlanRevision(command: DecidePlanRevisionCommand): Promise<AgentRunCommandResult>;
   refreshContext(command: RefreshAgentContextCommand): Promise<AgentRunCommandResult>;
   decideChangeSet(command: DecideChangeSetCommand): Promise<AgentRunCommandResult>;
   undoRun(command: UndoAgentRunCommand): Promise<AgentRunCommandResult>;
@@ -349,12 +391,14 @@ export interface CreateAgentRunSessionOptions {
    * null` — untouched from Task 1.1's default, and no different from today's behavior.
    */
   readonly permission?: AgentRunStartPermissionPort;
+  readonly planExecutionSession?: AgentPlanExecutionSession;
   readonly contextCompactor?: AgentRunContextCompactor;
   readonly contextSourceReader?: AgentContextSourceReader;
   readonly changeSetSession?: ChangeSetSession;
   readonly versionGroupExecutor?: AgentVersionGroupExecutor;
   readonly conversationLifecycle?: AgentConversationLifecyclePort;
   readonly createContextSnapshotId?: (runId: string) => string;
+  readonly createPlanExecutionId?: (commandId: string) => string;
   readonly coordinator?: AgentRunCoordinator;
   readonly coordinatorOptions?: Parameters<typeof createAgentRunCoordinator>[0];
 }
@@ -483,6 +527,13 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
   const inFlightCommands = new Map<string, Promise<AgentRunCommandResult>>();
   const knownRunIdsByProject = new Map<string, Set<string>>();
   const internalAutoApprovalCommands = new WeakSet<DecideChangeSetCommand>();
+  const planExecutionSession =
+    options.planExecutionSession ??
+    createAgentPlanExecutionSession({
+      repository: createPlanExecutionRepository(options.repository)
+    });
+  const createPlanExecutionId =
+    options.createPlanExecutionId ?? ((commandId: string) => `plan_execution_${commandId}`);
 
   function authorizeProposalIfPreapproved(input: { readonly writePolicy?: string }): boolean {
     if (input.writePolicy !== "user_preapproved_run") return false;
@@ -913,11 +964,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     const result = coordinator.recordRunEvent(input);
     if (!result.ok) return result;
     const persisted = await persistLatest(runId);
-    if (
-      persisted.ok &&
-      isTerminal(persisted.value.status) &&
-      isTerminalRunEvent(input.type)
-    ) {
+    if (persisted.ok && isTerminal(persisted.value.status) && isTerminalRunEvent(input.type)) {
       await noteConversationTerminal(persisted.value);
     }
     return persisted;
@@ -2095,8 +2142,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           ...(command.decision === "approve"
             ? {
                 executionContextMode: command.executionContextMode ?? snapshot.contextMode,
-                executionWritePolicy:
-                  command.executionWritePolicy ?? "write_before_confirmation"
+                executionWritePolicy: command.executionWritePolicy ?? "write_before_confirmation"
               }
             : {})
         }
@@ -2128,6 +2174,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       // from the server, never from a renderer command: the mode + write policy come from the plan
       // handoff, and the capability snapshot, reasoning, and context sources are reused from the
       // parent planning run (already server-resolved at its own start).
+      const planExecutionId = createPlanExecutionId(command.commandId);
       const executionStart: ResolvedAgentRunStartInput = {
         projectId: command.projectId,
         conversationId: snapshot.conversationId ?? "",
@@ -2147,12 +2194,28 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         limits: snapshot.limits,
         sourcePlanId: plan.planId,
         sourcePlanRevision: plan.revision,
+        planExecutionId,
+        planExecutionRevision: 1,
         initialContextSources: runtime.contextSources
       };
       const executionStarted = coordinator.startRun(executionStart);
       if (!executionStarted.ok) {
         await cancelExecutionStart();
         return executionStarted;
+      }
+      const planExecution = createPlanExecutionRecord({
+        planExecutionId,
+        runId: executionStarted.value.runId,
+        plan,
+        handoffContextMode: executionStart.contextMode,
+        handoffWritePolicy: executionStart.writePolicy ?? "write_before_confirmation"
+      });
+      const planExecutionWritten = await planExecutionSession.startPlanExecution({
+        record: planExecution
+      });
+      if (!planExecutionWritten.ok) {
+        await cancelExecutionStart();
+        return { ok: false, error: planExecutionWritten.error };
       }
       const executionRuntime: RunRuntime = {
         messages: [
@@ -2197,7 +2260,12 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         runId: executionStarted.value.runId,
         status: "executing_model",
         type: "plan_execution_started",
-        detail: { sourcePlanId: plan.planId, sourcePlanRevision: plan.revision }
+        detail: {
+          sourcePlanId: plan.planId,
+          sourcePlanRevision: plan.revision,
+          planExecutionId,
+          planExecutionRevision: 1
+        }
       });
       const linkedReceipt = await persistCommandReceipt(
         command.runId,
@@ -2207,6 +2275,162 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       );
       if (linked.ok) scheduleDrive(executionStarted.value.runId);
       return linkedReceipt;
+    },
+    async recordPlanDeviation(command) {
+      const prior = await priorCommandReceipt(command.runId, command.projectId, command.commandId);
+      if (prior !== undefined) return prior;
+      const hydrated = await hydrateRun(command.runId);
+      if (!hydrated.ok) return hydrated;
+      const snapshot = coordinator.readSnapshot(command.runId);
+      const invalid = validateRunCommand(snapshot, command);
+      if (invalid !== undefined) return invalid;
+      const runtime = runtimes.get(command.runId);
+      if (
+        snapshot === undefined ||
+        runtime === undefined ||
+        snapshot.planExecutionId === null ||
+        snapshot.planExecutionRevision === null
+      ) {
+        return failure("AGENT_PLAN_EXECUTION_NOT_FOUND", "The run has no plan execution record.");
+      }
+      const recorded = await planExecutionSession.recordDeviation({
+        runId: command.runId,
+        planExecutionId: snapshot.planExecutionId,
+        stepId: command.stepId,
+        requestId: command.requestId,
+        planRevision: command.planRevision,
+        change: command.change,
+        summary: command.summary,
+        discovery: command.discovery,
+        proposal: command.proposal,
+        eventSequence: snapshot.lastSequence + 1
+      });
+      if (!recorded.ok) return recorded;
+      const deviationEvent = await recordEvent(command.runId, {
+        runId: command.runId,
+        status: snapshot.status,
+        type: "plan_deviation_recorded",
+        detail: {
+          planExecutionId: snapshot.planExecutionId,
+          stepId: command.stepId,
+          kind: recorded.value.kind,
+          summary: command.summary
+        },
+        snapshotPatch: { planExecutionRevision: recorded.value.record.revision }
+      });
+      if (!deviationEvent.ok) return deviationEvent;
+      if (!recorded.value.requiresPlanRevision || recorded.value.request === undefined) {
+        return persistCommandReceipt(
+          command.runId,
+          command.projectId,
+          command.commandId,
+          deviationEvent
+        );
+      }
+      runtime.controller.abort();
+      runtime.generation += 1;
+      runtime.driving = false;
+      const requested = await recordEvent(command.runId, {
+        runId: command.runId,
+        status: "awaiting_plan_revision",
+        type: "plan_revision_requested",
+        detail: {
+          requestId: recorded.value.request.requestId,
+          planId: recorded.value.request.planId,
+          planRevision: recorded.value.request.planRevision,
+          affectedStepIds: [...recorded.value.request.affectedStepIds],
+          discovery: recorded.value.request.discovery,
+          proposal: recorded.value.request.proposal
+        },
+        snapshotPatch: { planExecutionRevision: recorded.value.record.revision }
+      });
+      return persistCommandReceipt(command.runId, command.projectId, command.commandId, requested);
+    },
+    async decidePlanRevision(command) {
+      const prior = await priorCommandReceipt(command.runId, command.projectId, command.commandId);
+      if (prior !== undefined) return prior;
+      const hydrated = await hydrateRun(command.runId);
+      if (!hydrated.ok) return hydrated;
+      const snapshot = coordinator.readSnapshot(command.runId);
+      const invalid = validateRunCommand(snapshot, command);
+      if (invalid !== undefined) return invalid;
+      const runtime = runtimes.get(command.runId);
+      if (
+        snapshot === undefined ||
+        runtime === undefined ||
+        snapshot.status !== "awaiting_plan_revision" ||
+        snapshot.planExecutionId === null ||
+        snapshot.planExecutionRevision === null
+      ) {
+        return failure(
+          "AGENT_PLAN_REVISION_NOT_PENDING",
+          "The run is not awaiting a plan revision."
+        );
+      }
+      const decided = await planExecutionSession.decidePlanRevision({
+        ...command,
+        planExecutionId: snapshot.planExecutionId,
+        expectedPlanExecutionRevision: snapshot.planExecutionRevision
+      });
+      if (!decided.ok) return decided;
+      if (command.decision === "approve") {
+        if (runtime.planArtifact !== undefined) {
+          runtime.planArtifact = Object.freeze({
+            ...runtime.planArtifact,
+            revision: command.planRevision,
+            status: "executing",
+            createdAt: new Date().toISOString()
+          });
+          if (options.repository.writePlanArtifact !== undefined) {
+            const written = await options.repository.writePlanArtifact(
+              runtime.planArtifact as unknown as JsonObject
+            );
+            if (!written.ok) return { ok: false, error: written.error };
+          }
+        }
+        runtime.controller = new AbortController();
+        runtime.generation += 1;
+        runtime.driving = false;
+        const resumed = await recordEvent(command.runId, {
+          runId: command.runId,
+          status: "executing_model",
+          type: "plan_decision_resolved",
+          detail: {
+            requestId: command.requestId,
+            planId: command.planId,
+            planRevision: command.planRevision,
+            decision: command.decision
+          },
+          snapshotPatch: {
+            sourcePlanId: command.planId,
+            sourcePlanRevision: command.planRevision,
+            planExecutionRevision: decided.value.record.revision
+          }
+        });
+        const receipt = await persistCommandReceipt(
+          command.runId,
+          command.projectId,
+          command.commandId,
+          resumed
+        );
+        if (resumed.ok) scheduleDrive(command.runId);
+        return receipt;
+      }
+      runtime.controller.abort();
+      runtime.generation += 1;
+      runtime.driving = false;
+      const stopped = await recordEvent(command.runId, {
+        runId: command.runId,
+        status: "cancelled",
+        type: "run_cancelled",
+        detail: {
+          requestId: command.requestId,
+          planId: command.planId,
+          planRevision: command.planRevision,
+          decision: command.decision
+        }
+      });
+      return persistCommandReceipt(command.runId, command.projectId, command.commandId, stopped);
     },
     async refreshContext(command) {
       const prior = await priorCommandReceipt(command.runId, command.projectId, command.commandId);
@@ -2771,6 +2995,17 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       if (snapshot === undefined)
         return err(applicationError("AGENT_RUN_NOT_FOUND", "The Agent run does not exist."));
       const runtime = runtimes.get(runId);
+      const planExecution =
+        snapshot.planExecutionId === null
+          ? ok(undefined)
+          : await planExecutionSession.readPlanExecution({
+              runId,
+              planExecutionId: snapshot.planExecutionId,
+              ...(snapshot.planExecutionRevision === null
+                ? {}
+                : { revision: snapshot.planExecutionRevision })
+            });
+      if (!planExecution.ok) return err(planExecution.error);
       return ok({
         snapshot,
         events: coordinator.readEvents(runId),
@@ -2778,6 +3013,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           ? {}
           : { pendingUserInput: runtime.pendingUserInput }),
         ...(runtime?.planArtifact === undefined ? {} : { planArtifact: runtime.planArtifact }),
+        ...(planExecution.value === undefined ? {} : { planExecution: planExecution.value }),
         ...(runtime?.changeSet === undefined ? {} : { changeSet: runtime.changeSet }),
         ...(runtime?.rollbackReview === undefined ? {} : { rollbackReview: runtime.rollbackReview })
       });
@@ -2785,9 +3021,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     async listAgentRuns(projectId) {
       if (options.repository.listSnapshots !== undefined) {
         const listed = await options.repository.listSnapshots(projectId);
-        return listed.ok
-          ? ok(listed.value.map(normalizeAgentRunSnapshot))
-          : err(listed.error);
+        return listed.ok ? ok(listed.value.map(normalizeAgentRunSnapshot)) : err(listed.error);
       }
       const snapshots = [...(knownRunIdsByProject.get(projectId) ?? [])].flatMap((runId) => {
         const snapshot = coordinator.readSnapshot(runId);
@@ -3060,6 +3294,72 @@ function parseContextSnapshot(
 
 function asJsonObject(value: object): JsonObject {
   return value as unknown as JsonObject;
+}
+
+function createPlanExecutionRepository(
+  repository: AgentRunPersistencePort
+): AgentPlanExecutionRepositoryPort {
+  if (
+    repository.writePlanExecutionRecord !== undefined &&
+    repository.readPlanExecutionRecord !== undefined &&
+    repository.writePlanRevisionRequest !== undefined &&
+    repository.readPlanRevisionRequest !== undefined
+  ) {
+    const adapted: AgentPlanExecutionRepositoryPort = {
+      writePlanExecutionRecord: (record) => repository.writePlanExecutionRecord!(record),
+      readPlanExecutionRecord: (runId, planExecutionId, revision) =>
+        repository.readPlanExecutionRecord!(runId, planExecutionId, revision),
+      writePlanRevisionRequest: (request) => repository.writePlanRevisionRequest!(request),
+      readPlanRevisionRequest: (runId, requestId) =>
+        repository.readPlanRevisionRequest!(runId, requestId)
+    };
+    if (
+      repository.writePlanRevisionDecision !== undefined &&
+      repository.readPlanRevisionDecision !== undefined
+    ) {
+      adapted.writePlanRevisionDecision = (decision) =>
+        repository.writePlanRevisionDecision!(decision);
+      adapted.readPlanRevisionDecision = (runId, requestId) =>
+        repository.readPlanRevisionDecision!(runId, requestId);
+    }
+    return adapted;
+  }
+  const records = new Map<string, JsonObject>();
+  const requests = new Map<string, JsonObject>();
+  return {
+    async writePlanExecutionRecord(record) {
+      const key = `${String(record["planExecutionId"])}:${String(record["revision"])}`;
+      const existing = records.get(key);
+      if (existing !== undefined && JSON.stringify(existing) !== JSON.stringify(record)) {
+        return err(
+          applicationError(
+            "AGENT_PLAN_EXECUTION_REVISION_CONFLICT",
+            "The plan execution revision already exists with different content."
+          )
+        );
+      }
+      records.set(key, record);
+      return ok(record);
+    },
+    async readPlanExecutionRecord(runId, planExecutionId, revision) {
+      const matches = [...records.values()].filter(
+        (record) => record["runId"] === runId && record["planExecutionId"] === planExecutionId
+      );
+      const selected =
+        revision === undefined
+          ? matches.sort((left, right) => Number(right["revision"]) - Number(left["revision"]))[0]
+          : matches.find((record) => record["revision"] === revision);
+      return ok(selected);
+    },
+    async writePlanRevisionRequest(request) {
+      requests.set(String(request["requestId"]), request);
+      return ok(request);
+    },
+    async readPlanRevisionRequest(runId, requestId) {
+      const request = requests.get(requestId);
+      return ok(request?.["runId"] === runId ? request : undefined);
+    }
+  };
 }
 
 function failure(code: string, message: string): AgentRunCommandResult {

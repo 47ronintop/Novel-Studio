@@ -73,6 +73,7 @@ export type {
 } from "./agent-usage-record.js";
 export {
   buildCompactionInputManifest,
+  createPlanExecutionProtectedFact,
   createContextCompactionRevision,
   orderEvictableSources,
   planDeterministicEviction,
@@ -88,7 +89,10 @@ export type {
   DeterministicEvictionPlan,
   EvictableContextSource,
   ProtectedContextFact,
-  ProtectedContextFactKind
+  ProtectedContextFactKind,
+  PlanExecutionProtectedFact,
+  PlanExecutionProtectedStep,
+  PlanExecutionProtectedValue
 } from "./context-compaction.js";
 export type {
   AgentContextLayer,
@@ -109,6 +113,13 @@ export {
   createPlanArtifactRevision,
   revisePlanArtifact
 } from "./plan-artifact.js";
+export {
+  classifyPlanDeviation,
+  createPlanExecutionRecord,
+  recordPlanExecutionDeviation,
+  summarizePlanExecution,
+  transitionPlanExecutionStep
+} from "./plan-execution.js";
 export {
   appendChangeSetProposal,
   checksumChangeSetText,
@@ -177,6 +188,19 @@ export type {
   PlanTargetRef,
   RevisePlanArtifactInput
 } from "./plan-artifact.js";
+export type {
+  ClassifyPlanDeviationInput,
+  CreatePlanExecutionRecordInput,
+  PlanDeviationChange,
+  PlanExecutionDeviationKind,
+  PlanExecutionDeviationResult,
+  PlanExecutionRecord,
+  PlanExecutionStep,
+  PlanExecutionStepStatus,
+  PlanExecutionSummary,
+  RecordPlanExecutionDeviationInput,
+  TransitionPlanExecutionStepInput
+} from "./plan-execution.js";
 export {
   EMPTY_AGENT_RUN_USAGE_SUMMARY,
   normalizeAgentRunEvent,
@@ -186,6 +210,7 @@ export type {
   AgentContextMode,
   DecideChangeSetCommand,
   DecideAgentPlanCommand,
+  DecidePlanRevisionCommand,
   AgentOperationMode,
   AgentProviderCapabilitySnapshot,
   AgentReasoningEffort,

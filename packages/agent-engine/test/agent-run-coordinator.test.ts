@@ -178,6 +178,42 @@ describe("Agent Run Coordinator", () => {
     });
   });
 
+  test("binds a server-created plan execution pointer at execution run start", () => {
+    const coordinator = engineExports.createAgentRunCoordinator({
+      now: () => "2026-07-17T00:00:00.000Z",
+      createRunId: () => "run_execution"
+    });
+    const started = coordinator.startRun({
+      projectId: "project_01",
+      conversationId: "conv_01",
+      commandId: "command_execution",
+      expectedRunRevision: 0,
+      operationMode: "execution",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      userRequest: "Execute an approved plan.",
+      providerCapabilitySnapshot: {
+        profileId: "model_01",
+        provider: "openai-compatible",
+        modelName: "tool-model",
+        streaming: true,
+        toolCalling: true,
+        structuredArguments: true,
+        contextWindow: 32_000,
+        requiredContextTokens: 8_000
+      },
+      sourcePlanId: "plan_01",
+      sourcePlanRevision: 2,
+      planExecutionId: "execution_01",
+      planExecutionRevision: 1
+    });
+
+    expect(started).toMatchObject({
+      ok: true,
+      value: { planExecutionId: "execution_01", planExecutionRevision: 1 }
+    });
+  });
+
   test("carries a Stage 5 snapshot patch and status through recordRunEvent", () => {
     const coordinator = engineExports.createAgentRunCoordinator({
       now: () => "2026-07-13T00:00:00.000Z",
@@ -257,10 +293,7 @@ describe("Agent Run Coordinator", () => {
 
     const restored = engineExports
       .createAgentRunCoordinator()
-      .restoreRun(
-        legacySnapshot as typeof started.value,
-        source.readEvents(started.value.runId)
-      );
+      .restoreRun(legacySnapshot as typeof started.value, source.readEvents(started.value.runId));
 
     expect(restored).toMatchObject({
       ok: true,

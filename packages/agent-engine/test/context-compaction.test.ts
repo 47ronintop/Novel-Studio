@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 
+import * as engineExports from "../src/index.js";
 import {
   buildCompactionInputManifest,
   createContextCompactionRevision,
@@ -10,6 +11,39 @@ import {
   type EvictableContextSource,
   type ProtectedContextFact
 } from "../src/index.js";
+
+function planExecutionFact(overrides: Record<string, unknown> = {}): ProtectedContextFact {
+  const create = (engineExports as unknown as Record<string, unknown>)[
+    "createPlanExecutionProtectedFact"
+  ];
+  expect(typeof create).toBe("function");
+  if (typeof create !== "function") throw new Error("createPlanExecutionProtectedFact is missing");
+  return (create as (record: Record<string, unknown>) => ProtectedContextFact)({
+    schemaVersion: "1.0",
+    planExecutionId: "execution_01",
+    runId: "run_01",
+    planId: "plan_01",
+    planRevision: 1,
+    handoffContextMode: "writing",
+    handoffWritePolicy: "write_before_confirmation",
+    revision: 3,
+    steps: [
+      {
+        stepId: "step_01",
+        title: "Read chapter",
+        status: "completed",
+        startedAt: "2026-07-17T01:00:00.000Z",
+        completedAt: "2026-07-17T01:01:00.000Z",
+        verification: ["chapter_03@7"],
+        deviationKind: "none",
+        blockedReason: null,
+        checkpointId: "checkpoint_01",
+        eventSequence: 12
+      }
+    ],
+    ...overrides
+  });
+}
 
 const goalFact: ProtectedContextFact = {
   kind: "run_goal",
@@ -69,26 +103,43 @@ describe("buildCompactionInputManifest", () => {
   test("rejects a protected fact carrying both sourceRevision and eventSequence", () => {
     const bad = { ...goalFact, sourceRevision: 3 } as unknown as ProtectedContextFact;
     const result = buildCompactionInputManifest(manifestInput({ protectedFacts: [bad] }));
-    expect(result).toMatchObject({ ok: false, error: { code: "AGENT_COMPACTION_MANIFEST_INVALID" } });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_COMPACTION_MANIFEST_INVALID" }
+    });
   });
 
   test("rejects a protected fact carrying neither provenance field", () => {
-    const bad = { kind: "run_goal", factId: "f", sourceId: "s", checksum: "d".repeat(64) } as unknown as ProtectedContextFact;
+    const bad = {
+      kind: "run_goal",
+      factId: "f",
+      sourceId: "s",
+      checksum: "d".repeat(64)
+    } as unknown as ProtectedContextFact;
     const result = buildCompactionInputManifest(manifestInput({ protectedFacts: [bad] }));
-    expect(result).toMatchObject({ ok: false, error: { code: "AGENT_COMPACTION_MANIFEST_INVALID" } });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_COMPACTION_MANIFEST_INVALID" }
+    });
   });
 
   test("rejects an empty fact checksum", () => {
     const bad = { ...goalFact, checksum: "" };
     const result = buildCompactionInputManifest(manifestInput({ protectedFacts: [bad] }));
-    expect(result).toMatchObject({ ok: false, error: { code: "AGENT_COMPACTION_MANIFEST_INVALID" } });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_COMPACTION_MANIFEST_INVALID" }
+    });
   });
 
   test("rejects an evictable source whose pointer is larger than its body", () => {
     const result = buildCompactionInputManifest(
       manifestInput({ evictableSources: [evictable({ tokenCount: 40, pointerTokenCount: 50 })] })
     );
-    expect(result).toMatchObject({ ok: false, error: { code: "AGENT_COMPACTION_MANIFEST_INVALID" } });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_COMPACTION_MANIFEST_INVALID" }
+    });
   });
 
   test("is stable: identical inputs yield identical checksums", () => {
@@ -128,10 +179,24 @@ describe("orderEvictableSources — the documented deterministic order", () => {
 describe("planDeterministicEviction", () => {
   test("evicts in order until the projected tokens reach the target", () => {
     const sources: EvictableContextSource[] = [
-      evictable({ sourceId: "s_dup", evictionReason: "duplicate", tokenCount: 500, pointerTokenCount: 0 }),
-      evictable({ sourceId: "s_raw", evictionReason: "raw_result", tokenCount: 500, pointerTokenCount: 0 })
+      evictable({
+        sourceId: "s_dup",
+        evictionReason: "duplicate",
+        tokenCount: 500,
+        pointerTokenCount: 0
+      }),
+      evictable({
+        sourceId: "s_raw",
+        evictionReason: "raw_result",
+        tokenCount: 500,
+        pointerTokenCount: 0
+      })
     ];
-    const plan = planDeterministicEviction({ evictableSources: sources, currentTokens: 2000, targetTokens: 1600 });
+    const plan = planDeterministicEviction({
+      evictableSources: sources,
+      currentTokens: 2000,
+      targetTokens: 1600
+    });
     // Evicting only the duplicate (frees 500) brings 2000 → 1500 ≤ 1600.
     expect(plan.evictedSourceIds).toEqual(["s_dup"]);
     expect(plan.projectedTokens).toBe(1500);
@@ -140,9 +205,18 @@ describe("planDeterministicEviction", () => {
 
   test("evicts everything and reports not-reached when still over target", () => {
     const sources: EvictableContextSource[] = [
-      evictable({ sourceId: "s_dup", evictionReason: "duplicate", tokenCount: 300, pointerTokenCount: 0 })
+      evictable({
+        sourceId: "s_dup",
+        evictionReason: "duplicate",
+        tokenCount: 300,
+        pointerTokenCount: 0
+      })
     ];
-    const plan = planDeterministicEviction({ evictableSources: sources, currentTokens: 5000, targetTokens: 1000 });
+    const plan = planDeterministicEviction({
+      evictableSources: sources,
+      currentTokens: 5000,
+      targetTokens: 1000
+    });
     expect(plan.evictedSourceIds).toEqual(["s_dup"]);
     expect(plan.projectedTokens).toBe(4700);
     expect(plan.reachedTarget).toBe(false);
@@ -212,6 +286,88 @@ describe("validateCompactionResultProgress — regression guard", () => {
       candidateProtectedFacts: [goalFact]
     });
     expect(result.ok).toBe(true);
+  });
+
+  test("keeps plan execution progress by source id and rejects revision or terminal-step regression", () => {
+    const prior = planExecutionFact();
+    expect(prior).toMatchObject({
+      kind: "plan_execution",
+      factId: "plan_execution:execution_01",
+      sourceId: "execution_01",
+      sourceRevision: 3,
+      planExecution: {
+        planExecutionId: "execution_01",
+        revision: 3,
+        steps: [
+          {
+            stepId: "step_01",
+            status: "completed",
+            verification: ["chapter_03@7"],
+            checkpointId: "checkpoint_01",
+            eventSequence: 12
+          }
+        ]
+      }
+    });
+
+    const revisionRegressed = planExecutionFact({ revision: 2 });
+    expect(
+      validateCompactionResultProgress({
+        candidateThroughSequence: 30,
+        candidateProtectedFacts: [revisionRegressed],
+        prior: { throughSequence: 20, protectedFacts: [prior] }
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_COMPACTION_REGRESSED" } });
+
+    const stepRegressed = planExecutionFact({
+      revision: 4,
+      steps: [
+        {
+          stepId: "step_01",
+          title: "Read chapter",
+          status: "running",
+          startedAt: "2026-07-17T01:00:00.000Z",
+          completedAt: null,
+          verification: [],
+          deviationKind: "none",
+          blockedReason: null,
+          checkpointId: "checkpoint_01",
+          eventSequence: 13
+        }
+      ]
+    });
+    expect(
+      validateCompactionResultProgress({
+        candidateThroughSequence: 30,
+        candidateProtectedFacts: [stepRegressed],
+        prior: { throughSequence: 20, protectedFacts: [prior] }
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_COMPACTION_REGRESSED" } });
+
+    const advanced = planExecutionFact({
+      revision: 4,
+      steps: [
+        {
+          stepId: "step_01",
+          title: "Read chapter",
+          status: "blocked",
+          startedAt: "2026-07-17T01:00:00.000Z",
+          completedAt: "2026-07-17T01:02:00.000Z",
+          verification: ["chapter_03@7", "blocked after external edit"],
+          deviationKind: "material",
+          blockedReason: "Target changed",
+          checkpointId: "checkpoint_01",
+          eventSequence: 13
+        }
+      ]
+    });
+    expect(
+      validateCompactionResultProgress({
+        candidateThroughSequence: 30,
+        candidateProtectedFacts: [advanced],
+        prior: { throughSequence: 20, protectedFacts: [prior] }
+      }).ok
+    ).toBe(true);
   });
 });
 

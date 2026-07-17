@@ -351,6 +351,22 @@ export type {
   CompactionUsageSinkPort,
   CreateAgentContextSessionOptions
 } from "./agent-context-session.js";
+export { createAgentPlanExecutionSession } from "./agent-plan-execution-session.js";
+export type {
+  AgentPlanExecutionRepositoryPort,
+  AgentPlanExecutionSession,
+  CreateAgentPlanExecutionSessionOptions,
+  DecidePlanExecutionRevisionCommand,
+  PlanExecutionEvent,
+  PlanRevisionDecisionRecord,
+  PlanRevisionDecisionReceipt,
+  PlanRevisionRequest,
+  ReadPlanExecutionInput,
+  RecordPlanDeviationInput,
+  RecordPlanDeviationResult,
+  StartPlanExecutionInput,
+  TransitionPlanExecutionInput
+} from "./agent-plan-execution-session.js";
 export { createAgentPermissionSession } from "./agent-permission-session.js";
 export type {
   AgentPermissionRootFingerprintPort,
@@ -401,7 +417,8 @@ export type {
   AgentUserInputOption,
   AgentUserInputRequest,
   AnswerAgentUserInputCommand,
-  CreateAgentRunSessionOptions
+  CreateAgentRunSessionOptions,
+  RecordAgentPlanDeviationCommand
 } from "./agent-run-session.js";
 export type {
   ChangeSetCandidateValidationPortInput,
@@ -444,6 +461,13 @@ export type {
   PreviewContextBudgetCommand,
   ProtectedContextFact,
   ProtectedContextFactKind,
+  DecidePlanRevisionCommand,
   PlanArtifact,
+  PlanDeviationChange,
+  PlanExecutionDeviationKind,
+  PlanExecutionRecord,
+  PlanExecutionStep,
+  PlanExecutionStepStatus,
+  PlanExecutionSummary,
   PlanOpenQuestion
 } from "@novel-studio/agent-engine";

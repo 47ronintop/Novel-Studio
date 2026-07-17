@@ -4,6 +4,7 @@ import {
   calculateContextBudget,
   createContextCompactionRevision,
   createDeterministicTokenEstimator,
+  createPlanExecutionProtectedFact,
   planDeterministicEviction,
   validateCompactionResultProgress,
   type AgentContextPrecision,
@@ -15,6 +16,7 @@ import {
   type ContextCompactionRevision,
   type ContextDraft,
   type EvictableContextSource,
+  type PlanExecutionRecord,
   type PreviewContextBudgetCommand,
   type ProtectedContextFact
 } from "@novel-studio/agent-engine";
@@ -75,6 +77,7 @@ export interface CompactionInputs {
   readonly throughSequence: number;
   readonly nextRevision: number;
   readonly protectedFacts: readonly ProtectedContextFact[];
+  readonly planExecutionRecord?: PlanExecutionRecord;
   readonly evictableSources: readonly EvictableContextSource[];
   readonly currentTokens: number;
   readonly targetTokens: number;
@@ -121,7 +124,10 @@ export interface CompactionRunRepositoryPort {
   writeCompactionManifest(manifest: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
   writeCompactionRevision(revision: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
   writeContextSnapshot(snapshot: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
-  writeBudgetSnapshot(runId: string, snapshot: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
+  writeBudgetSnapshot(
+    runId: string,
+    snapshot: JsonObject
+  ): Promise<Result<JsonObject, UnifiedError>>;
   commitCompaction(snapshot: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
 }
 
@@ -148,13 +154,21 @@ export interface CompactionModelAssistantPort {
 }
 
 export type CompactionEvent =
-  | { readonly type: "context_compaction_started"; readonly compactionId: string; readonly trigger: string }
+  | {
+      readonly type: "context_compaction_started";
+      readonly compactionId: string;
+      readonly trigger: string;
+    }
   | {
       readonly type: "context_compaction_completed";
       readonly compactionId: string;
       readonly revision: ContextCompactionRevision;
     }
-  | { readonly type: "context_compaction_failed"; readonly compactionId: string; readonly code: string };
+  | {
+      readonly type: "context_compaction_failed";
+      readonly compactionId: string;
+      readonly code: string;
+    };
 
 export interface CompactContextResult {
   readonly compactionId: string;
@@ -227,6 +241,16 @@ export function createAgentContextSession(
     const loaded = await sources.loadInputs(command);
     if (!loaded.ok) return err(loaded.error);
     const inputs = loaded.value;
+    if (
+      inputs.planExecutionRecord !== undefined &&
+      inputs.planExecutionRecord.runId !== command.runId
+    ) {
+      return err(compactionPlanExecutionMismatch());
+    }
+    const protectedFacts =
+      inputs.planExecutionRecord === undefined
+        ? inputs.protectedFacts
+        : mergePlanExecutionFact(inputs.protectedFacts, inputs.planExecutionRecord);
 
     const compactionId = createCompactionId();
     const manifestResult = buildCompactionInputManifest({
@@ -234,7 +258,7 @@ export function createAgentContextSession(
       runId: command.runId,
       sourceSnapshotId: inputs.sourceSnapshotId,
       throughSequence: inputs.throughSequence,
-      protectedFacts: inputs.protectedFacts,
+      protectedFacts,
       evictableSources: inputs.evictableSources,
       createdAt: now()
     });
@@ -253,7 +277,9 @@ export function createAgentContextSession(
       trigger: command.trigger
     });
 
-    const failed = async (error: UnifiedError): Promise<Result<CompactContextResult, UnifiedError>> => {
+    const failed = async (
+      error: UnifiedError
+    ): Promise<Result<CompactContextResult, UnifiedError>> => {
       // A failed or cancelled compaction never commits; the last committed snapshot/budget stand.
       await emitCompaction({ type: "context_compaction_failed", compactionId, code: error.code });
       return err(error);
@@ -410,6 +436,31 @@ function compactionUnavailable(): UnifiedError {
     suggestedAction: "Retry once the compaction services are configured for this project.",
     traceId: "agent-context-session"
   });
+}
+
+function compactionPlanExecutionMismatch(): UnifiedError {
+  return createUnifiedError({
+    code: "AGENT_COMPACTION_PLAN_EXECUTION_MISMATCH",
+    category: "AgentError",
+    message: "The plan execution record does not belong to the run being compacted.",
+    recoverability: "user-action",
+    suggestedAction: "Reload the run and its latest plan execution record before compacting.",
+    traceId: "agent-context-session"
+  });
+}
+
+function mergePlanExecutionFact(
+  facts: readonly ProtectedContextFact[],
+  record: PlanExecutionRecord
+): readonly ProtectedContextFact[] {
+  const latest = createPlanExecutionProtectedFact(record);
+  let replaced = false;
+  const merged = facts.map((fact) => {
+    if (fact.kind !== "plan_execution" || fact.sourceId !== latest.sourceId) return fact;
+    replaced = true;
+    return latest;
+  });
+  return replaced ? merged : [...merged, latest];
 }
 
 function createDefaultBudgetSnapshotId(): string {

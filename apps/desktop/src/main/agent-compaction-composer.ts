@@ -6,7 +6,9 @@ import {
   type AgentContextLayer,
   type AgentContextSnapshot,
   type AgentContextSource,
-  type ContextBudgetSnapshot
+  type ContextBudgetSnapshot,
+  type PlanExecutionRecord,
+  type PlanExecutionStepStatus
 } from "@novel-studio/agent-engine";
 import type {
   CompactContextSourcesPort,
@@ -67,8 +69,15 @@ export function createDesktopCompactionSources(
       const loaded = await readRunContext(repository, command.runId);
       if (!loaded.ok) return err(loaded.error);
       const { run, snapshot } = loaded.value;
+      const planExecution = await readPlanExecution(repository, run);
+      if (!planExecution.ok) return err(planExecution.error);
       const classified = classifySources(snapshot.sources);
-      const budget = recomputeBudget(run, command.contextBudgetSnapshotId, currentTokens(run, snapshot), now());
+      const budget = recomputeBudget(
+        run,
+        command.contextBudgetSnapshotId,
+        currentTokens(run, snapshot),
+        now()
+      );
       if (!budget.ok) return err(budget.error);
       const nextRevision = snapshot.compactionRevision + 1;
       const inputs: CompactionInputs = {
@@ -76,6 +85,7 @@ export function createDesktopCompactionSources(
         throughSequence: readNonNegative(run["lastSequence"]),
         nextRevision,
         protectedFacts: classified.protectedFacts,
+        ...(planExecution.value === undefined ? {} : { planExecutionRecord: planExecution.value }),
         evictableSources: classified.evictableSources,
         currentTokens: currentTokens(run, snapshot),
         targetTokens: Math.floor(budget.value.safeInputBudget * COMPACTION_TARGET_RATIO)
@@ -115,6 +125,32 @@ async function readRunContext(
     return err(composerError("AGENT_CONTEXT_COMPACTION_NO_SNAPSHOT"));
   }
   return ok({ run: run.value, snapshot: normalizeAgentContextSnapshot(stored.value) });
+}
+
+async function readPlanExecution(
+  repository: AgentRunFileRepository,
+  run: JsonObject
+): Promise<Result<PlanExecutionRecord | undefined, UnifiedError>> {
+  const planExecutionId = run["planExecutionId"];
+  const planExecutionRevision = run["planExecutionRevision"];
+  if (planExecutionId === null && planExecutionRevision === null) return ok(undefined);
+  if (
+    typeof planExecutionId !== "string" ||
+    !Number.isSafeInteger(planExecutionRevision) ||
+    Number(planExecutionRevision) < 1
+  ) {
+    return err(composerError("AGENT_CONTEXT_COMPACTION_PLAN_EXECUTION_INVALID"));
+  }
+  const stored = await repository.readPlanExecutionRecord(
+    String(run["runId"]),
+    planExecutionId,
+    Number(planExecutionRevision)
+  );
+  if (!stored.ok) return err(stored.error);
+  if (stored.value === undefined || !isPlanExecutionRecord(stored.value)) {
+    return err(composerError("AGENT_CONTEXT_COMPACTION_PLAN_EXECUTION_NOT_FOUND"));
+  }
+  return ok(stored.value as unknown as PlanExecutionRecord);
 }
 
 interface ClassifiedSources {
@@ -195,7 +231,10 @@ async function readPriorProtected(
 ): Promise<CompactionInputs["prior"]> {
   const activeCompactionId = run["activeCompactionId"];
   if (typeof activeCompactionId !== "string") return undefined;
-  const manifest = await repository.readCompactionManifest(String(run["runId"]), activeCompactionId);
+  const manifest = await repository.readCompactionManifest(
+    String(run["runId"]),
+    activeCompactionId
+  );
   if (!manifest.ok || manifest.value === undefined) return undefined;
   const priorFacts = manifest.value["protectedFacts"];
   return {
@@ -235,8 +274,7 @@ function buildArtifacts(
   };
 
   const afterTokens = resultSources.reduce(
-    (total, source) =>
-      source.state === "excluded" ? total : total + (source.tokenCount ?? 0),
+    (total, source) => (source.state === "excluded" ? total : total + (source.tokenCount ?? 0)),
     0
   );
   const budget = recomputeBudget(run, budgetSnapshotId, afterTokens, createdAt);
@@ -331,6 +369,41 @@ function isRecord(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isPlanExecutionRecord(value: JsonObject): boolean {
+  const steps = value["steps"];
+  return (
+    value["schemaVersion"] === "1.0" &&
+    typeof value["planExecutionId"] === "string" &&
+    typeof value["runId"] === "string" &&
+    typeof value["planId"] === "string" &&
+    Number.isSafeInteger(value["planRevision"]) &&
+    Number(value["planRevision"]) > 0 &&
+    Number.isSafeInteger(value["revision"]) &&
+    Number(value["revision"]) > 0 &&
+    Array.isArray(steps) &&
+    steps.every((step: unknown) => {
+      if (!isRecord(step)) return false;
+      return (
+        typeof step["stepId"] === "string" &&
+        typeof step["title"] === "string" &&
+        isPlanExecutionStepStatus(step["status"]) &&
+        Array.isArray(step["verification"]) &&
+        (step["verification"] as unknown[]).every((item) => typeof item === "string")
+      );
+    })
+  );
+}
+
+function isPlanExecutionStepStatus(value: unknown): value is PlanExecutionStepStatus {
+  return (
+    value === "pending" ||
+    value === "running" ||
+    value === "completed" ||
+    value === "blocked" ||
+    value === "skipped"
+  );
+}
+
 function composerError(code: string): UnifiedError {
   return createUnifiedError({
     code,
@@ -341,5 +414,3 @@ function composerError(code: string): UnifiedError {
     traceId: "desktop-agent-compaction-composer"
   });
 }
-
-

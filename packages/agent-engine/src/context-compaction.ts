@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
 import type { AgentContextLayer, AgentContextPrecision } from "./context-snapshot.js";
+import type { PlanExecutionRecord, PlanExecutionStepStatus } from "./plan-execution.js";
 
 /** The categories of fact that must survive compaction unchanged (never summarized or evicted). */
 export type ProtectedContextFactKind =
@@ -21,12 +22,37 @@ interface ProtectedContextFactBase {
   readonly factId: string;
   readonly sourceId: string;
   readonly checksum: string;
+  readonly planExecution?: PlanExecutionProtectedValue;
+}
+
+export interface PlanExecutionProtectedStep {
+  readonly stepId: string;
+  readonly status: PlanExecutionStepStatus;
+  readonly verification: readonly string[];
+  readonly checkpointId: string | null;
+  readonly eventSequence: number | null;
+}
+
+export interface PlanExecutionProtectedValue {
+  readonly planExecutionId: string;
+  readonly revision: number;
+  readonly steps: readonly PlanExecutionProtectedStep[];
 }
 
 /** A protected fact carries exactly one provenance: a source revision OR an event sequence. */
 export type ProtectedContextFact =
   | (ProtectedContextFactBase & { readonly sourceRevision: number; readonly eventSequence?: never })
-  | (ProtectedContextFactBase & { readonly sourceRevision?: never; readonly eventSequence: number });
+  | (ProtectedContextFactBase & {
+      readonly sourceRevision?: never;
+      readonly eventSequence: number;
+    });
+
+export type PlanExecutionProtectedFact = ProtectedContextFact & {
+  readonly kind: "plan_execution";
+  readonly sourceRevision: number;
+  readonly eventSequence?: never;
+  readonly planExecution: PlanExecutionProtectedValue;
+};
 
 /** A context source the deterministic/model-assisted pass may replace with a pointer. */
 export interface EvictableContextSource {
@@ -96,6 +122,30 @@ const EVICTION_ORDER: Record<EvictableContextSource["evictionReason"], number> =
 
 const CHECKSUM = /^[0-9a-f]{64}$/;
 
+export function createPlanExecutionProtectedFact(
+  record: PlanExecutionRecord
+): PlanExecutionProtectedFact {
+  const planExecution: PlanExecutionProtectedValue = {
+    planExecutionId: record.planExecutionId,
+    revision: record.revision,
+    steps: record.steps.map((step) => ({
+      stepId: step.stepId,
+      status: step.status,
+      verification: [...step.verification],
+      checkpointId: step.checkpointId,
+      eventSequence: step.eventSequence
+    }))
+  };
+  return deepFreeze({
+    kind: "plan_execution",
+    factId: `plan_execution:${record.planExecutionId}`,
+    sourceId: record.planExecutionId,
+    sourceRevision: record.revision,
+    checksum: checksumText(stableSerialize(planExecution)),
+    planExecution
+  });
+}
+
 /**
  * Build the compaction input manifest from canonical stores before any deterministic pass or provider
  * call. Every protected fact must carry exactly one provenance (source revision xor event sequence)
@@ -115,14 +165,27 @@ export function buildCompactionInputManifest(
     if (hasRevision === hasSequence) {
       return err(manifestInvalid(`protectedFact:${fact.factId}:provenance`));
     }
-    if (hasRevision && (!Number.isSafeInteger(fact.sourceRevision) || (fact.sourceRevision ?? -1) < 0)) {
+    if (
+      hasRevision &&
+      (!Number.isSafeInteger(fact.sourceRevision) || (fact.sourceRevision ?? -1) < 0)
+    ) {
       return err(manifestInvalid(`protectedFact:${fact.factId}:sourceRevision`));
     }
-    if (hasSequence && (!Number.isSafeInteger(fact.eventSequence) || (fact.eventSequence ?? -1) < 0)) {
+    if (
+      hasSequence &&
+      (!Number.isSafeInteger(fact.eventSequence) || (fact.eventSequence ?? -1) < 0)
+    ) {
       return err(manifestInvalid(`protectedFact:${fact.factId}:eventSequence`));
     }
     if (typeof fact.checksum !== "string" || !CHECKSUM.test(fact.checksum)) {
       return err(manifestInvalid(`protectedFact:${fact.factId}:checksum`));
+    }
+    if (fact.kind === "plan_execution") {
+      if (!isPlanExecutionProtectedFact(fact)) {
+        return err(manifestInvalid(`protectedFact:${fact.factId}:planExecution`));
+      }
+    } else if (fact.planExecution !== undefined) {
+      return err(manifestInvalid(`protectedFact:${fact.factId}:planExecutionKind`));
     }
   }
   for (const source of input.evictableSources) {
@@ -170,7 +233,8 @@ export function orderEvictableSources(
   return sources
     .map((source, index) => ({ source, index }))
     .sort((left, right) => {
-      const byReason = EVICTION_ORDER[left.source.evictionReason] - EVICTION_ORDER[right.source.evictionReason];
+      const byReason =
+        EVICTION_ORDER[left.source.evictionReason] - EVICTION_ORDER[right.source.evictionReason];
       return byReason !== 0 ? byReason : left.index - right.index;
     })
     .map((entry) => entry.source);
@@ -236,12 +300,18 @@ export function validateCompactionResultProgress(
   if (input.candidateThroughSequence < input.prior.throughSequence) {
     return err(regressed("throughSequence"));
   }
-  const candidateById = new Map(
-    input.candidateProtectedFacts.map((fact) => [fact.factId, fact.checksum])
-  );
+  const candidateById = new Map(input.candidateProtectedFacts.map((fact) => [fact.factId, fact]));
   for (const fact of input.prior.protectedFacts) {
-    const candidateChecksum = candidateById.get(fact.factId);
-    if (candidateChecksum === undefined || candidateChecksum !== fact.checksum) {
+    if (fact.kind === "plan_execution") {
+      const candidate = input.candidateProtectedFacts.find(
+        (entry) => entry.kind === "plan_execution" && entry.sourceId === fact.sourceId
+      );
+      const regression = validatePlanExecutionProgress(fact, candidate);
+      if (regression !== undefined) return err(regressed(regression));
+      continue;
+    }
+    const candidate = candidateById.get(fact.factId);
+    if (candidate === undefined || candidate.checksum !== fact.checksum) {
       return err(regressed(`protectedFact:${fact.factId}`));
     }
   }
@@ -300,7 +370,8 @@ function manifestInvalid(field: string): UnifiedError {
     category: "ValidationError",
     message: "The context compaction manifest could not be built from the canonical stores.",
     recoverability: "user-action",
-    suggestedAction: "Rebuild the compaction manifest from valid protected facts and evictable sources.",
+    suggestedAction:
+      "Rebuild the compaction manifest from valid protected facts and evictable sources.",
     traceId: "context-compaction",
     redactedDetail: { field }
   });
@@ -316,6 +387,96 @@ function regressed(field: string): UnifiedError {
     traceId: "context-compaction",
     redactedDetail: { field }
   });
+}
+
+function validatePlanExecutionProgress(
+  prior: ProtectedContextFact,
+  candidate: ProtectedContextFact | undefined
+): string | undefined {
+  if (!isPlanExecutionProtectedFact(prior) || !isPlanExecutionProtectedFact(candidate)) {
+    return `planExecution:${prior.sourceId}:missing`;
+  }
+  if (
+    candidate.planExecution.planExecutionId !== prior.planExecution.planExecutionId ||
+    candidate.planExecution.revision < prior.planExecution.revision ||
+    candidate.sourceRevision < prior.sourceRevision
+  ) {
+    return `planExecution:${prior.sourceId}:revision`;
+  }
+  const candidateSteps = new Map(candidate.planExecution.steps.map((step) => [step.stepId, step]));
+  for (const priorStep of prior.planExecution.steps) {
+    const candidateStep = candidateSteps.get(priorStep.stepId);
+    if (
+      candidateStep === undefined ||
+      stepProgress(candidateStep.status) < stepProgress(priorStep.status)
+    ) {
+      return `planExecution:${prior.sourceId}:step:${priorStep.stepId}:status`;
+    }
+    if (priorStep.verification.some((evidence) => !candidateStep.verification.includes(evidence))) {
+      return `planExecution:${prior.sourceId}:step:${priorStep.stepId}:verification`;
+    }
+    if (
+      priorStep.eventSequence !== null &&
+      (candidateStep.eventSequence === null ||
+        candidateStep.eventSequence < priorStep.eventSequence)
+    ) {
+      return `planExecution:${prior.sourceId}:step:${priorStep.stepId}:eventSequence`;
+    }
+    if (priorStep.checkpointId !== null && candidateStep.checkpointId === null) {
+      return `planExecution:${prior.sourceId}:step:${priorStep.stepId}:checkpointId`;
+    }
+  }
+  return undefined;
+}
+
+function isPlanExecutionProtectedFact(
+  fact: ProtectedContextFact | undefined
+): fact is PlanExecutionProtectedFact {
+  if (
+    fact === undefined ||
+    fact.kind !== "plan_execution" ||
+    fact.sourceRevision === undefined ||
+    fact.planExecution === undefined ||
+    fact.planExecution.planExecutionId !== fact.sourceId ||
+    fact.planExecution.revision !== fact.sourceRevision ||
+    !Number.isSafeInteger(fact.planExecution.revision) ||
+    fact.planExecution.revision < 1 ||
+    !Array.isArray(fact.planExecution.steps)
+  ) {
+    return false;
+  }
+  const stepIds = new Set<string>();
+  return fact.planExecution.steps.every((step) => {
+    if (
+      typeof step.stepId !== "string" ||
+      step.stepId.length === 0 ||
+      stepIds.has(step.stepId) ||
+      !isPlanExecutionStepStatus(step.status) ||
+      !Array.isArray(step.verification) ||
+      !step.verification.every((value: unknown) => typeof value === "string") ||
+      (step.checkpointId !== null && typeof step.checkpointId !== "string") ||
+      (step.eventSequence !== null &&
+        (!Number.isSafeInteger(step.eventSequence) || step.eventSequence < 0))
+    ) {
+      return false;
+    }
+    stepIds.add(step.stepId);
+    return true;
+  });
+}
+
+function isPlanExecutionStepStatus(value: string): value is PlanExecutionStepStatus {
+  return ["pending", "running", "completed", "blocked", "skipped"].includes(value);
+}
+
+function stepProgress(status: PlanExecutionStepStatus): number {
+  return status === "pending" ? 0 : status === "running" ? 1 : 2;
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
+  for (const nested of Object.values(value)) deepFreeze(nested);
+  return Object.freeze(value);
 }
 
 function checksumText(content: string): string {

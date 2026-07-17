@@ -177,6 +177,121 @@ describe("AgentRunFileRepository", () => {
     ).toEqual(plan);
   });
 
+  test("persists immutable plan execution revisions and revision requests", async () => {
+    const Repository = (repositoryExports as unknown as Record<string, unknown>)[
+      "AgentRunFileRepository"
+    ];
+    expect(typeof Repository).toBe("function");
+    if (typeof Repository !== "function") return;
+
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-plan-execution-store-"));
+    roots.push(projectRoot);
+    const repository = new (
+      Repository as new (options: {
+        projectRoot: string;
+      }) => Record<string, (...args: unknown[]) => Promise<unknown>>
+    )({ projectRoot });
+    expect(typeof repository["writePlanExecutionRecord"]).toBe("function");
+    expect(typeof repository["readPlanExecutionRecord"]).toBe("function");
+    expect(typeof repository["writePlanRevisionRequest"]).toBe("function");
+    expect(typeof repository["readPlanRevisionRequest"]).toBe("function");
+    expect(typeof repository["writePlanRevisionDecision"]).toBe("function");
+    expect(typeof repository["readPlanRevisionDecision"]).toBe("function");
+    if (
+      typeof repository["writePlanExecutionRecord"] !== "function" ||
+      typeof repository["readPlanExecutionRecord"] !== "function" ||
+      typeof repository["writePlanRevisionRequest"] !== "function" ||
+      typeof repository["readPlanRevisionRequest"] !== "function" ||
+      typeof repository["writePlanRevisionDecision"] !== "function" ||
+      typeof repository["readPlanRevisionDecision"] !== "function"
+    )
+      return;
+
+    const revision1 = {
+      schemaVersion: "1.0",
+      planExecutionId: "execution_01",
+      runId: "run_01",
+      planId: "plan_01",
+      planRevision: 1,
+      revision: 1,
+      steps: [{ stepId: "step_01", status: "pending" }]
+    };
+    const revision2 = {
+      ...revision1,
+      revision: 2,
+      steps: [{ stepId: "step_01", status: "running" }]
+    };
+    expect(await repository["writePlanExecutionRecord"](revision1)).toMatchObject({ ok: true });
+    expect(await repository["writePlanExecutionRecord"](revision2)).toMatchObject({ ok: true });
+    expect(await repository["readPlanExecutionRecord"]("run_01", "execution_01")).toEqual({
+      ok: true,
+      value: revision2
+    });
+    expect(await repository["readPlanExecutionRecord"]("run_01", "execution_01", 1)).toEqual({
+      ok: true,
+      value: revision1
+    });
+    expect(
+      await repository["writePlanExecutionRecord"]({
+        ...revision2,
+        steps: [{ stepId: "step_01", status: "completed" }]
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_PLAN_EXECUTION_REVISION_CONFLICT" } });
+
+    const request = {
+      schemaVersion: "1.0",
+      requestId: "request_01",
+      runId: "run_01",
+      planExecutionId: "execution_01",
+      planId: "plan_01",
+      planRevision: 2,
+      affectedStepIds: ["step_01"],
+      discovery: "A new target is required.",
+      proposal: "Revise the plan.",
+      createdAt: "2026-07-17T02:00:00.000Z"
+    };
+    expect(await repository["writePlanRevisionRequest"](request)).toMatchObject({ ok: true });
+    expect(await repository["readPlanRevisionRequest"]("run_01", "request_01")).toEqual({
+      ok: true,
+      value: request
+    });
+    const decision = {
+      schemaVersion: "1.0",
+      requestId: "request_01",
+      runId: "run_01",
+      planExecutionId: "execution_01",
+      planId: "plan_01",
+      planRevision: 2,
+      commandId: "decide_01",
+      decision: "approve",
+      planExecutionRevision: 3,
+      decidedAt: "2026-07-17T02:01:00.000Z"
+    };
+    expect(await repository["writePlanRevisionDecision"](decision)).toMatchObject({ ok: true });
+    expect(await repository["readPlanRevisionDecision"]("run_01", "request_01")).toEqual({
+      ok: true,
+      value: decision
+    });
+    expect(
+      await repository["writePlanRevisionDecision"]({ ...decision, decision: "reject" })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_PLAN_REVISION_DECISION_CONFLICT" } });
+    expect(
+      await readFile(
+        join(
+          projectRoot,
+          "history",
+          "agent-runs",
+          "run_01",
+          "plan-executions",
+          "execution_01",
+          "revisions",
+          "2.json"
+        ),
+        "utf8"
+      )
+    ).toContain('"status": "running"');
+  });
+
   test("reads v1.0 and v1.1 snapshots but rejects an unsupported schema version", async () => {
     const Repository = (repositoryExports as unknown as Record<string, unknown>)[
       "AgentRunFileRepository"
@@ -272,14 +387,7 @@ describe("AgentRunFileRepository", () => {
     expect(
       JSON.parse(
         await readFile(
-          join(
-            projectRoot,
-            "history",
-            "change-sets",
-            "changes_01",
-            "revisions",
-            "1.json"
-          ),
+          join(projectRoot, "history", "change-sets", "changes_01", "revisions", "1.json"),
           "utf8"
         )
       )
@@ -291,10 +399,9 @@ describe("AgentRunFileRepository — compaction persistence + commit marker", ()
   function makeRepository(projectRoot: string) {
     const Repository = (repositoryExports as unknown as Record<string, unknown>)[
       "AgentRunFileRepository"
-    ] as new (options: { projectRoot: string }) => Record<
-      string,
-      (...args: unknown[]) => Promise<unknown>
-    >;
+    ] as new (options: {
+      projectRoot: string;
+    }) => Record<string, (...args: unknown[]) => Promise<unknown>>;
     return new Repository({ projectRoot });
   }
 

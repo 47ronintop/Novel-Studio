@@ -60,13 +60,8 @@ export function createAgentRunCoordinator(
         return result;
       }
       const writePolicy: unknown =
-        command.writePolicy === undefined
-          ? "write_before_confirmation"
-          : command.writePolicy;
-      if (
-        writePolicy !== "write_before_confirmation" &&
-        writePolicy !== "user_preapproved_run"
-      ) {
+        command.writePolicy === undefined ? "write_before_confirmation" : command.writePolicy;
+      if (writePolicy !== "write_before_confirmation" && writePolicy !== "user_preapproved_run") {
         const result = failure(
           "AGENT_WRITE_POLICY_INVALID",
           "The requested Agent write policy is not supported."
@@ -74,10 +69,7 @@ export function createAgentRunCoordinator(
         commandReceipts.set(receiptKey, result);
         return result;
       }
-      if (
-        writePolicy === "user_preapproved_run" &&
-        command.operationMode !== "execution"
-      ) {
+      if (writePolicy === "user_preapproved_run" && command.operationMode !== "execution") {
         const result = failure(
           "AGENT_WRITE_POLICY_NOT_AVAILABLE",
           "Automatic writes are available only for execution runs."
@@ -85,10 +77,7 @@ export function createAgentRunCoordinator(
         commandReceipts.set(receiptKey, result);
         return result;
       }
-      if (
-        writePolicy === "user_preapproved_run" &&
-        command.writePolicyAcknowledged !== true
-      ) {
+      if (writePolicy === "user_preapproved_run" && command.writePolicyAcknowledged !== true) {
         const result = failure(
           "AGENT_WRITE_POLICY_ACK_REQUIRED",
           "Automatic writes require an explicit acknowledgement for this run."
@@ -127,8 +116,8 @@ export function createAgentRunCoordinator(
         permissionSummaryChecksum: command.permissionSummaryChecksum ?? null,
         contextBudgetSnapshotId: command.contextBudgetSnapshotId ?? null,
         activeCompactionId: null,
-        planExecutionId: null,
-        planExecutionRevision: null,
+        planExecutionId: command.planExecutionId ?? null,
+        planExecutionRevision: command.planExecutionRevision ?? null,
         activeErrorId: null,
         recoveryState: "none",
         usageSummary: EMPTY_AGENT_RUN_USAGE_SUMMARY

@@ -16,7 +16,13 @@ import {
   createAgentRunDraftSession,
   type AgentRunDraftSession
 } from "../src/agent-run-draft-session.js";
-import type { CompactContextCommand, EvictableContextSource, ProtectedContextFact } from "@novel-studio/agent-engine";
+import {
+  createPlanExecutionProtectedFact,
+  type CompactContextCommand,
+  type EvictableContextSource,
+  type PlanExecutionRecord,
+  type ProtectedContextFact
+} from "@novel-studio/agent-engine";
 
 const goalFact: ProtectedContextFact = {
   kind: "run_goal",
@@ -52,9 +58,42 @@ function inputs(overrides: Partial<CompactionInputs> = {}): CompactionInputs {
   };
 }
 
+function executionRecord(overrides: Partial<PlanExecutionRecord> = {}): PlanExecutionRecord {
+  return {
+    schemaVersion: "1.0",
+    planExecutionId: "execution_01",
+    runId: "run_01",
+    planId: "plan_01",
+    planRevision: 1,
+    handoffContextMode: "writing",
+    handoffWritePolicy: "write_before_confirmation",
+    revision: 3,
+    steps: [
+      {
+        stepId: "step_01",
+        title: "Read chapter",
+        status: "completed",
+        startedAt: "2026-07-17T01:00:00.000Z",
+        completedAt: "2026-07-17T01:01:00.000Z",
+        verification: ["chapter_03@7"],
+        deviationKind: "none",
+        blockedReason: null,
+        checkpointId: "checkpoint_01",
+        eventSequence: 12
+      }
+    ],
+    ...overrides
+  };
+}
+
 function artifacts(): CompactionArtifacts {
   return {
-    resultSnapshot: { schemaVersion: "1.1", runId: "run_01", contextSnapshotId: "context_result", sources: [] },
+    resultSnapshot: {
+      schemaVersion: "1.1",
+      runId: "run_01",
+      contextSnapshotId: "context_result",
+      sources: []
+    },
     budgetSnapshot: { schemaVersion: "1.0", contextBudgetSnapshotId: "budget_result" },
     usageRecord: { schemaVersion: "1.0", usageId: "usage_result", runId: "run_01" },
     runSnapshot: { schemaVersion: "1.1", runId: "run_01", activeCompactionId: "compaction_1" }
@@ -204,7 +243,12 @@ describe("compactContext — cross-repository commit ordering", () => {
     const modelAssistant: CompactionModelAssistantPort = {
       async summarizeEvictable() {
         summarized = true;
-        return ok({ summaryChecksum: "d".repeat(64), inputTokens: 500, outputTokens: 120, precision: "estimated" });
+        return ok({
+          summaryChecksum: "d".repeat(64),
+          inputTokens: 500,
+          outputTokens: 120,
+          precision: "estimated"
+        });
       }
     };
     const session = makeSession(
@@ -259,7 +303,13 @@ describe("compactContext — cross-repository commit ordering", () => {
             prior: {
               throughSequence: 10,
               protectedFacts: [
-                { kind: "approved_plan", factId: "fact_dropped", sourceId: "s", checksum: "b".repeat(64), sourceRevision: 1 }
+                {
+                  kind: "approved_plan",
+                  factId: "fact_dropped",
+                  sourceId: "s",
+                  checksum: "b".repeat(64),
+                  sourceRevision: 1
+                }
               ]
             }
           })
@@ -272,6 +322,66 @@ describe("compactContext — cross-repository commit ordering", () => {
     const result = await session.compactContext(command());
     expect(result).toMatchObject({ ok: false, error: { code: "AGENT_COMPACTION_REGRESSED" } });
     expect(order).toEqual(["manifest"]);
+  });
+
+  test("replaces a stale execution fact with the latest completed step before compaction", async () => {
+    const staleRecord = executionRecord({
+      revision: 1,
+      steps: [
+        {
+          ...executionRecord().steps[0]!,
+          status: "running",
+          completedAt: null,
+          verification: [],
+          eventSequence: 10
+        }
+      ]
+    });
+    const staleFact = createPlanExecutionProtectedFact(staleRecord);
+    const latestRecord = executionRecord();
+    let writtenManifest: JsonObject | undefined;
+    const repository: CompactionRunRepositoryPort = {
+      ...recordingRepository([]),
+      async writeCompactionManifest(manifest) {
+        writtenManifest = manifest;
+        return ok(manifest);
+      }
+    };
+    const loaded = inputs({
+      protectedFacts: [goalFact, staleFact],
+      prior: { throughSequence: 10, protectedFacts: [goalFact, staleFact] },
+      ...({ planExecutionRecord: latestRecord } as unknown as Partial<CompactionInputs>)
+    });
+    const session = makeSession({
+      compactionSources: sourcesPort(loaded),
+      runRepository: repository,
+      usageSink: recordingUsageSink([])
+    });
+
+    const result = await session.compactContext(command());
+    expect(result.ok).toBe(true);
+    const protectedFacts = writtenManifest?.["protectedFacts"] as JsonObject[] | undefined;
+    expect(protectedFacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "plan_execution",
+          sourceId: "execution_01",
+          sourceRevision: 3,
+          planExecution: expect.objectContaining({
+            revision: 3,
+            steps: [
+              expect.objectContaining({
+                stepId: "step_01",
+                status: "completed",
+                verification: ["chapter_03@7"],
+                checkpointId: "checkpoint_01",
+                eventSequence: 12
+              })
+            ]
+          })
+        })
+      ])
+    );
   });
 
   test("is unavailable without the compaction ports", async () => {

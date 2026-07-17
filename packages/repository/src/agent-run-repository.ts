@@ -68,6 +68,144 @@ export class AgentRunFileRepository {
     );
   }
 
+  public async writePlanExecutionRecord(
+    record: JsonObject
+  ): Promise<Result<JsonObject, UnifiedError>> {
+    const runId = readRunId(record);
+    const planExecutionId = readSafeString(record, "planExecutionId");
+    const revision = record["revision"];
+    if (
+      runId === undefined ||
+      planExecutionId === undefined ||
+      !Number.isSafeInteger(revision) ||
+      Number(revision) < 1
+    ) {
+      return this.invalidRecord("AGENT_PLAN_EXECUTION_INVALID");
+    }
+    const existing = await this.readPlanExecutionRecord(runId, planExecutionId, Number(revision));
+    if (!existing.ok) return existing;
+    if (existing.value !== undefined) {
+      return JSON.stringify(existing.value) === JSON.stringify(record)
+        ? ok(existing.value)
+        : this.invalidRecord("AGENT_PLAN_EXECUTION_REVISION_CONFLICT");
+    }
+    return this.writeJson(this.planExecutionPath(runId, planExecutionId, Number(revision)), record);
+  }
+
+  public async readPlanExecutionRecord(
+    runId: string,
+    planExecutionId: string,
+    revision?: number
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    if (
+      !isSafeId(runId) ||
+      !isSafeId(planExecutionId) ||
+      (revision !== undefined && (!Number.isSafeInteger(revision) || revision < 1))
+    ) {
+      return this.invalidRecord("AGENT_PLAN_EXECUTION_INVALID");
+    }
+    const resolvedRevision =
+      revision ?? (await this.latestPlanExecutionRevision(runId, planExecutionId));
+    if (resolvedRevision === undefined) return ok(undefined);
+    const read = await this.readJson(
+      this.planExecutionPath(runId, planExecutionId, resolvedRevision)
+    );
+    if (!read.ok || read.value === undefined) return read;
+    return read.value["runId"] === runId &&
+      read.value["planExecutionId"] === planExecutionId &&
+      read.value["revision"] === resolvedRevision
+      ? read
+      : this.invalidRecord("AGENT_PLAN_EXECUTION_INVALID");
+  }
+
+  public async writePlanRevisionRequest(
+    request: JsonObject
+  ): Promise<Result<JsonObject, UnifiedError>> {
+    const runId = readRunId(request);
+    const requestId = readSafeString(request, "requestId");
+    const planExecutionId = readSafeString(request, "planExecutionId");
+    const planId = readSafeString(request, "planId");
+    const planRevision = request["planRevision"];
+    if (
+      runId === undefined ||
+      requestId === undefined ||
+      planExecutionId === undefined ||
+      planId === undefined ||
+      !Number.isSafeInteger(planRevision) ||
+      Number(planRevision) < 1
+    ) {
+      return this.invalidRecord("AGENT_PLAN_REVISION_REQUEST_INVALID");
+    }
+    const existing = await this.readPlanRevisionRequest(runId, requestId);
+    if (!existing.ok) return existing;
+    if (existing.value !== undefined) {
+      return JSON.stringify(existing.value) === JSON.stringify(request)
+        ? ok(existing.value)
+        : this.invalidRecord("AGENT_PLAN_REVISION_REQUEST_CONFLICT");
+    }
+    return this.writeJson(
+      this.runPath(runId, join("plan-revision-requests", `${requestId}.json`)),
+      request
+    );
+  }
+
+  public readPlanRevisionRequest(
+    runId: string,
+    requestId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    if (!isSafeId(runId) || !isSafeId(requestId)) {
+      return Promise.resolve(this.invalidRecord("AGENT_PLAN_REVISION_REQUEST_INVALID"));
+    }
+    return this.readJson(this.runPath(runId, join("plan-revision-requests", `${requestId}.json`)));
+  }
+
+  public async writePlanRevisionDecision(
+    decision: JsonObject
+  ): Promise<Result<JsonObject, UnifiedError>> {
+    const runId = readRunId(decision);
+    const requestId = readSafeString(decision, "requestId");
+    const planExecutionId = readSafeString(decision, "planExecutionId");
+    const planId = readSafeString(decision, "planId");
+    const commandId = readSafeString(decision, "commandId");
+    const planRevision = decision["planRevision"];
+    const planExecutionRevision = decision["planExecutionRevision"];
+    if (
+      runId === undefined ||
+      requestId === undefined ||
+      planExecutionId === undefined ||
+      planId === undefined ||
+      commandId === undefined ||
+      !Number.isSafeInteger(planRevision) ||
+      Number(planRevision) < 1 ||
+      !Number.isSafeInteger(planExecutionRevision) ||
+      Number(planExecutionRevision) < 1 ||
+      (decision["decision"] !== "approve" && decision["decision"] !== "reject")
+    ) {
+      return this.invalidRecord("AGENT_PLAN_REVISION_DECISION_INVALID");
+    }
+    const existing = await this.readPlanRevisionDecision(runId, requestId);
+    if (!existing.ok) return existing;
+    if (existing.value !== undefined) {
+      return JSON.stringify(existing.value) === JSON.stringify(decision)
+        ? ok(existing.value)
+        : this.invalidRecord("AGENT_PLAN_REVISION_DECISION_CONFLICT");
+    }
+    return this.writeJson(
+      this.runPath(runId, join("plan-revision-decisions", `${requestId}.json`)),
+      decision
+    );
+  }
+
+  public readPlanRevisionDecision(
+    runId: string,
+    requestId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    if (!isSafeId(runId) || !isSafeId(requestId)) {
+      return Promise.resolve(this.invalidRecord("AGENT_PLAN_REVISION_DECISION_INVALID"));
+    }
+    return this.readJson(this.runPath(runId, join("plan-revision-decisions", `${requestId}.json`)));
+  }
+
   public async writeChangeSet(changeSet: JsonObject): Promise<Result<JsonObject, UnifiedError>> {
     const changeSetId = readSafeString(changeSet, "changeSetId");
     const revision = changeSet["revision"];
@@ -93,7 +231,10 @@ export class AgentRunFileRepository {
     changeSetId: string,
     revision?: number
   ): Promise<Result<JsonObject | undefined, UnifiedError>> {
-    if (!isSafeId(changeSetId) || (revision !== undefined && (!Number.isSafeInteger(revision) || revision < 1))) {
+    if (
+      !isSafeId(changeSetId) ||
+      (revision !== undefined && (!Number.isSafeInteger(revision) || revision < 1))
+    ) {
       return this.invalidRecord("AGENT_CHANGE_SET_INVALID");
     }
     const resolvedRevision = revision ?? (await this.latestChangeSetRevision(changeSetId));
@@ -319,7 +460,10 @@ export class AgentRunFileRepository {
     }
     const existing = await this.readJson(this.runPath(runId, "run.json"));
     if (!existing.ok) return existing as Result<JsonObject, UnifiedError>;
-    if (existing.value !== undefined && existing.value["activeCompactionId"] === activeCompactionId) {
+    if (
+      existing.value !== undefined &&
+      existing.value["activeCompactionId"] === activeCompactionId
+    ) {
       return ok(existing.value);
     }
     return this.writeJson(this.runPath(runId, "run.json"), snapshot);
@@ -377,9 +521,7 @@ export class AgentRunFileRepository {
       : this.writeJson(this.runPath(runId, "retry-checkpoint.json"), checkpoint);
   }
 
-  public readRetryCheckpoint(
-    runId: string
-  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+  public readRetryCheckpoint(runId: string): Promise<Result<JsonObject | undefined, UnifiedError>> {
     return this.readJson(this.runPath(runId, "retry-checkpoint.json"));
   }
 
@@ -426,6 +568,31 @@ export class AgentRunFileRepository {
       "revisions",
       `${String(revision)}.json`
     );
+  }
+
+  private planExecutionPath(runId: string, planExecutionId: string, revision: number): string {
+    return this.runPath(
+      runId,
+      join("plan-executions", planExecutionId, "revisions", `${String(revision)}.json`)
+    );
+  }
+
+  private async latestPlanExecutionRevision(
+    runId: string,
+    planExecutionId: string
+  ): Promise<number | undefined> {
+    try {
+      const entries = await readdir(
+        this.runPath(runId, join("plan-executions", planExecutionId, "revisions"))
+      );
+      return entries
+        .map((entry) => (/^[1-9][0-9]*\.json$/.test(entry) ? Number(entry.slice(0, -5)) : 0))
+        .sort((left, right) => right - left)
+        .find((revision) => revision > 0);
+    } catch (error) {
+      if (isMissingFileError(error)) return undefined;
+      throw error;
+    }
   }
 
   private async latestChangeSetRevision(changeSetId: string): Promise<number | undefined> {
