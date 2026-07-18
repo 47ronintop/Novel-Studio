@@ -7,8 +7,21 @@ import {
   createMockProvider,
   createProviderRouter,
   type LlmProvider,
+  type LlmUsage,
   type LlmRequest
 } from "../src/index.js";
+
+const usageWithOptionalBreakdown: LlmUsage = {
+  inputTokens: 12,
+  outputTokens: 10,
+  cachedTokens: 4,
+  reasoningTokens: 3,
+  totalTokens: 22,
+  usageStatus: "actual",
+  cost: { amount: 0, currency: "", status: "unknown" }
+};
+
+void usageWithOptionalBreakdown;
 
 const request = {
   schemaVersion: "1.0",

@@ -15,7 +15,7 @@ import { createAgentWriteSaveCoordinator, createApplicationIpcHandlers } from ".
 import { createApplicationMenuTemplate } from "./menu.js";
 import { createDesktopModelRuntime, createEncryptedFileModelSecretStore } from "./model-runtime.js";
 import { createSecureWebPreferences } from "./security.js";
-import { reasoningStrengthForModel } from "@novel-studio/application";
+import { createAgentPricingRegistry, reasoningStrengthForModel } from "@novel-studio/application";
 import type { DesktopApplication } from "@novel-studio/application";
 import type { LlmModelProfile, LlmProviderId } from "@novel-studio/llm-adapter";
 import { createUnifiedError } from "@novel-studio/shared";
@@ -40,6 +40,10 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
   });
   const projectLockOwnerId = createProjectLockOwnerId();
   const agentWriteSaveCoordinator = createAgentWriteSaveCoordinator();
+  const agentPricingRegistry = createAgentPricingRegistry({
+    version: "stage-5-2026-07-15",
+    entries: []
+  });
   const bootstrapped = await createBootstrappedDefaultDesktopApplicationWithSnapshot({
     projectRoot,
     userDataRoot,
@@ -59,6 +63,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         projectId: binding.projectId,
         activeChapterId: binding.activeChapterId,
         userDataRoot,
+        pricingRegistry: agentPricingRegistry,
         projectLockOwnerId,
         pauseAutosave: agentWriteSaveCoordinator.pauseAutosave,
         resumeAutosave: agentWriteSaveCoordinator.resumeAutosave,

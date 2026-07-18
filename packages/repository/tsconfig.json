@@ -5,5 +5,5 @@
     "outDir": "dist"
   },
   "include": ["src/**/*.ts", "test/**/*.ts"],
-  "references": [{ "path": "../shared" }, { "path": "../schemas" }]
+  "references": [{ "path": "../agent-engine" }, { "path": "../shared" }, { "path": "../schemas" }]
 }

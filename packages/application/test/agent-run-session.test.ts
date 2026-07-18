@@ -3,6 +3,273 @@ import { describe, expect, test, vi } from "vitest";
 import * as applicationExports from "../src/index.js";
 
 describe("AgentRunSession", () => {
+  test("publishes partial usage and persists one priced final record when the round completes", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+
+    const written: Record<string, unknown>[] = [];
+    const events: Record<string, unknown>[] = [];
+    const session = (
+      createSession as (options: Record<string, unknown>) => {
+        startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+        readAgentRun(runId: string): Promise<Record<string, unknown>>;
+        subscribe(listener: (event: Record<string, unknown>) => void): () => void;
+      }
+    )({
+      coordinatorOptions: { createRunId: () => "run_usage_round" },
+      repository: memoryRepository(),
+      modelDriver: {
+        async *streamRound() {
+          yield {
+            type: "usage",
+            usage: {
+              inputTokens: 80,
+              outputTokens: 10,
+              totalTokens: 90,
+              usageStatus: "estimated",
+              cost: { amount: 0, currency: "", status: "unknown" }
+            }
+          };
+          yield {
+            type: "usage",
+            usage: {
+              inputTokens: 120,
+              outputTokens: 30,
+              cachedTokens: 40,
+              reasoningTokens: 10,
+              totalTokens: 150,
+              usageStatus: "actual",
+              cost: { amount: 0, currency: "", status: "unknown" }
+            }
+          };
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      },
+      usageSink: {
+        async writeFinal(record: Record<string, unknown>) {
+          written.push(record);
+          return { ok: true, value: record };
+        }
+      },
+      pricingRegistry: {
+        price() {
+          return {
+            pricingVersion: "pricing-2026-07",
+            unitPrices: {
+              inputPerMillion: 2,
+              outputPerMillion: 8,
+              cachedPerMillion: 1,
+              reasoningPerMillion: 4,
+              currency: "USD"
+            },
+            cost: { amount: 0.00056, currency: "USD", status: "estimated" }
+          };
+        }
+      },
+      usageTime: () => ({
+        timestamp: "2026-11-01T05:30:00.000Z",
+        localDate: "2026-11-01",
+        timezone: "America/New_York",
+        utcOffsetMinutes: -240
+      }),
+      usageBudgetResolver: async () => ({
+        ok: true,
+        value: { contextWindow: 128000, safeInputBudget: 100000 }
+      })
+    });
+    session.subscribe((event) => events.push(event));
+
+    await session.startAgentRun(startCommand());
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_usage_round")).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: {
+            status: "completed",
+            usageSummary: {
+              inputTokens: 120,
+              outputTokens: 30,
+              cachedTokens: 40,
+              reasoningTokens: 10,
+              totalTokens: 150,
+              usageStatus: "actual"
+            }
+          }
+        }
+      });
+    });
+
+    const usageEvents = events.filter((event) => event["type"] === "usage_updated");
+    expect(usageEvents).toHaveLength(2);
+    const finalSequence = usageEvents.at(-1)?.["sequence"];
+    expect(written).toEqual([
+      expect.objectContaining({
+        schemaVersion: "1.0",
+        usageId: `run_usage_round:model_round_run_usage_round_1:${String(finalSequence)}`,
+        runId: "run_usage_round",
+        conversationId: "conv-01",
+        projectId: "project-01",
+        roundId: "model_round_run_usage_round_1",
+        finalSequence,
+        provider: "demo",
+        model: "scripted-agent",
+        inputTokens: 120,
+        outputTokens: 30,
+        cachedTokens: 40,
+        reasoningTokens: 10,
+        totalTokens: 150,
+        usageStatus: "actual",
+        precision: "reported",
+        pricingVersion: "pricing-2026-07",
+        unitPrices: expect.objectContaining({ currency: "USD" }),
+        cost: { amount: 0.00056, currency: "USD", status: "estimated" },
+        contextWindow: 128000,
+        safeInputBudget: 100000,
+        terminationReason: "stop",
+        timestamp: "2026-11-01T05:30:00.000Z",
+        localDate: "2026-11-01",
+        timezone: "America/New_York",
+        utcOffsetMinutes: -240
+      })
+    ]);
+    expect(JSON.stringify(usageEvents)).not.toMatch(
+      /cost|pricing|authorization|prompt|body|frame/i
+    );
+  });
+
+  test("does not persist partial usage when the provider fails before round completion", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ] as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    const written: Record<string, unknown>[] = [];
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_partial_usage" },
+      repository: memoryRepository(),
+      modelDriver: {
+        async *streamRound() {
+          yield {
+            type: "usage",
+            usage: {
+              inputTokens: 12,
+              outputTokens: 3,
+              totalTokens: 15,
+              usageStatus: "actual",
+              cost: { amount: 0.001, currency: "USD", status: "actual" }
+            }
+          };
+          throw new Error("provider disconnected before round completion");
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      },
+      usageSink: {
+        async writeFinal(record: Record<string, unknown>) {
+          written.push(record);
+          return { ok: true, value: record };
+        }
+      }
+    });
+
+    await session.startAgentRun(startCommand());
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_partial_usage")).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: {
+            usageSummary: {
+              inputTokens: 0,
+              outputTokens: 0,
+              totalTokens: 0,
+              usageStatus: "missing"
+            }
+          },
+          events: expect.arrayContaining([expect.objectContaining({ type: "usage_updated" })])
+        }
+      });
+    });
+    expect(written).toEqual([]);
+  });
+
+  test("persists missing usage for a completed round when the provider reports none", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ] as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    const written: Record<string, unknown>[] = [];
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_missing_usage" },
+      repository: memoryRepository(),
+      modelDriver: {
+        async *streamRound() {
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      },
+      usageSink: {
+        async writeFinal(record: Record<string, unknown>) {
+          written.push(record);
+          return { ok: true, value: record };
+        }
+      },
+      usageBudgetResolver: async () => ({
+        ok: true,
+        value: { contextWindow: 128000, safeInputBudget: 100000 }
+      })
+    });
+
+    await session.startAgentRun(startCommand());
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_missing_usage")).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: { status: "completed", usageSummary: { usageStatus: "missing" } },
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "usage_updated",
+              detail: expect.objectContaining({ usageStatus: "missing", totalTokens: 0 })
+            })
+          ])
+        }
+      });
+    });
+    expect(written).toEqual([
+      expect.objectContaining({
+        runId: "run_missing_usage",
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        usageStatus: "missing",
+        precision: "unknown",
+        pricingVersion: null,
+        unitPrices: null,
+        cost: { amount: 0, currency: "", status: "unknown" }
+      })
+    ]);
+  });
+
   test("streams three reads, pauses for user input, and resumes the same run to completion", async () => {
     const createSession = (applicationExports as unknown as Record<string, unknown>)[
       "createAgentRunSession"

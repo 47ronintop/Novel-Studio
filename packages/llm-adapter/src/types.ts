@@ -101,6 +101,8 @@ export interface LlmCost {
 export interface LlmUsage {
   readonly inputTokens: number;
   readonly outputTokens: number;
+  readonly cachedTokens?: number;
+  readonly reasoningTokens?: number;
   readonly totalTokens: number;
   readonly usageStatus: LlmUsageStatus;
   readonly cost: LlmCost;

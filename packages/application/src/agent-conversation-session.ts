@@ -219,6 +219,7 @@ export function createAgentConversationSession(
   const now = options.now ?? (() => new Date().toISOString());
   const createConversationId = options.createConversationId ?? defaultConversationId;
   const mutationTails = new Map<string, Promise<void>>();
+  const summaryRefreshes = new Map<string, Promise<Result<JsonObject | undefined, UnifiedError>>>();
   const startReservations = new Set<string>();
   const knownRuns = new Map<string, Map<string, JsonObject>>();
 
@@ -300,6 +301,22 @@ export function createAgentConversationSession(
   }
 
   async function refreshSummary(
+    conversationId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    const active = summaryRefreshes.get(conversationId);
+    if (active !== undefined) return active;
+    const request = computeSummary(conversationId);
+    summaryRefreshes.set(conversationId, request);
+    const clear = () => {
+      if (summaryRefreshes.get(conversationId) === request) {
+        summaryRefreshes.delete(conversationId);
+      }
+    };
+    void request.then(clear, clear);
+    return request;
+  }
+
+  async function computeSummary(
     conversationId: string
   ): Promise<Result<JsonObject | undefined, UnifiedError>> {
     const record = await options.repository.readConversation(conversationId);

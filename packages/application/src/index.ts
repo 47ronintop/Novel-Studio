@@ -326,6 +326,29 @@ export type {
   WorkflowRunUsageSummary
 } from "./ai-writing-workflow-types.js";
 export { createAgentBackedAiWritingWorkflowSession } from "./ai-writing-workflow-session.js";
+export { createAgentPricingRegistry } from "./agent-pricing-registry.js";
+export type {
+  AgentPricingEntry,
+  AgentPricingRegistry,
+  AgentPricingTable,
+  AgentUsagePricing,
+  AgentUsagePricingInput
+} from "./agent-pricing-registry.js";
+export { createAgentUsageSession } from "./agent-usage-session.js";
+export type {
+  AgentUsageRepositoryPort,
+  AgentUsageSession,
+  CreateAgentUsageSessionOptions
+} from "./agent-usage-session.js";
+export type {
+  AgentUsageCostTotal,
+  AgentUsageDailyBucket,
+  AgentUsageDateRange,
+  AgentUsageQuery,
+  AgentUsageReport,
+  AgentUsageRunSummary,
+  ClearAgentUsageCommand
+} from "./agent-usage-types.js";
 export {
   createAgentRunSession,
   evaluateContextBudgetPressure,
@@ -424,6 +447,8 @@ export type {
   AgentRunStartPreflightPort,
   AgentRunContextCompactor,
   AgentContextBudgetPressure,
+  AgentUsageBudgetFacts,
+  AgentUsageTimeFacts,
   AgentVersionGroupExecutor,
   AgentUserInputOption,
   AgentUserInputRequest,

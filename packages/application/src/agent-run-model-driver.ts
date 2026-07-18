@@ -28,9 +28,7 @@ export function createLlmAgentRunModelDriver(
       // The per-round, mode-specific guidance the session computes wins over any static base prompt.
       const systemPrompt = input.systemPrompt ?? options.systemPrompt;
       const messages: LlmMessage[] = [
-        ...(systemPrompt === undefined
-          ? []
-          : [{ role: "system" as const, content: systemPrompt }]),
+        ...(systemPrompt === undefined ? [] : [{ role: "system" as const, content: systemPrompt }]),
         ...input.messages.map(toLlmMessage)
       ];
       const tools: LlmToolDefinition[] = input.tools.map((tool) => ({
@@ -72,6 +70,8 @@ export function createLlmAgentRunModelDriver(
               ? {}
               : { argumentsDelta: result.value.argumentsDelta })
           };
+        } else if (result.value.type === "usage") {
+          yield { type: "usage", usage: result.value.usage };
         } else if (result.value.type === "round_completed") {
           yield result.value;
         }

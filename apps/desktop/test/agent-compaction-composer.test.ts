@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
-import { createAgentContextSession } from "@novel-studio/application";
+import { createAgentContextSession, createAgentPricingRegistry } from "@novel-studio/application";
 import type { AgentContextBudgetInputsPort, AgentRunDraftSession } from "@novel-studio/application";
 import { AgentRunFileRepository, AgentUsageFileRepository } from "@novel-studio/repository";
 import { ok, type JsonObject } from "@novel-studio/shared";
@@ -25,7 +25,7 @@ describe("desktop compaction composer", () => {
       budgetInputs: stubBudgetInputs(),
       compactionSources: createDesktopCompactionSources({
         repository,
-        now: () => "2026-07-16T00:00:00.000Z"
+        now: () => "2026-07-17T00:00:00.000Z"
       }),
       runRepository: {
         writeCompactionManifest: (manifest) => repository.writeCompactionManifest(manifest),
@@ -66,15 +66,99 @@ describe("desktop compaction composer", () => {
     expect(resultSnapshot.ok).toBe(true);
     if (!resultSnapshot.ok || resultSnapshot.value === undefined) return;
     const sources = resultSnapshot.value["sources"] as { refId: string; state: string }[];
+    expect(resultSnapshot.value["createdAt"]).toBe("2026-07-16T00:00:00.000Z");
     expect(sources.find((s) => s.refId === "chapter:ch-01")?.state).toBe("active");
     expect(sources.find((s) => s.refId === "file:draft-notes.md")?.state).toBe("excluded");
 
     // A redacted usage record for the compaction round was written under the user-data root.
-    const usage = await usageRepository.readById("usage_compaction_01");
+    const usage = await usageRepository.readById("run_01:compaction_01:7");
     expect(usage.ok).toBe(true);
     if (!usage.ok) return;
     expect(usage.value?.["terminationReason"]).toBe("context_compaction");
     expect(usage.value?.["compactionAfterTokens"]).toBe(4000);
+  });
+
+  test("prices model-assisted compaction and captures the production local-time bucket", async () => {
+    const { repository, usageRepository } = await seedRun({
+      chapterTokens: 20_000,
+      noteTokens: 1_000
+    });
+    const session = createAgentContextSession({
+      draftSession: stubDraftSession(),
+      budgetInputs: stubBudgetInputs(),
+      compactionSources: createDesktopCompactionSources({
+        repository,
+        pricingRegistry: createAgentPricingRegistry({
+          version: "pricing-2026-11",
+          entries: [
+            {
+              provider: "demo",
+              model: "demo-model",
+              unitPrices: {
+                inputPerMillion: 2,
+                outputPerMillion: 8,
+                currency: "USD"
+              }
+            }
+          ]
+        }),
+        usageTime: () => ({
+          timestamp: "2026-11-01T06:30:00.000Z",
+          localDate: "2026-11-01",
+          timezone: "America/New_York",
+          utcOffsetMinutes: -300
+        }),
+        now: () => "2026-11-01T06:30:00.000Z"
+      }),
+      modelAssistant: {
+        summarizeEvictable: () =>
+          Promise.resolve(
+            ok({
+              summaryChecksum: "e".repeat(64),
+              inputTokens: 100,
+              outputTokens: 25,
+              precision: "reported" as const
+            })
+          )
+      },
+      runRepository: {
+        writeCompactionManifest: (manifest) => repository.writeCompactionManifest(manifest),
+        writeCompactionRevision: (revision) => repository.writeCompactionRevision(revision),
+        writeContextSnapshot: (snapshot) => repository.writeContextSnapshot(snapshot),
+        writeBudgetSnapshot: (runId, snapshot) => repository.writeBudgetSnapshot(runId, snapshot),
+        commitCompaction: (snapshot) => repository.commitCompaction(snapshot)
+      },
+      usageSink: { writeFinal: (record) => usageRepository.writeFinal(record) },
+      createCompactionId: () => "compaction_02",
+      now: () => "2026-11-01T06:30:00.000Z"
+    });
+
+    expect(
+      await session.compactContext({
+        projectId: "project_01",
+        runId: "run_01",
+        commandId: "cmd_model_compaction",
+        expectedRunRevision: 3,
+        contextBudgetSnapshotId: "budget_target_02",
+        trigger: "manual"
+      })
+    ).toMatchObject({ ok: true, value: { revision: { strategy: "model_assisted" } } });
+
+    const usage = await usageRepository.readById("run_01:compaction_02:7");
+    expect(usage).toMatchObject({
+      ok: true,
+      value: {
+        usageStatus: "estimated",
+        precision: "reported",
+        pricingVersion: "pricing-2026-11",
+        unitPrices: { inputPerMillion: 2, outputPerMillion: 8, currency: "USD" },
+        cost: { amount: 0.0004, currency: "USD", status: "estimated" },
+        timestamp: "2026-11-01T06:30:00.000Z",
+        localDate: "2026-11-01",
+        timezone: "America/New_York",
+        utcOffsetMinutes: -300
+      }
+    });
   });
 
   test("returns the unavailable guard when compaction ports are absent", async () => {
@@ -153,7 +237,9 @@ describe("desktop compaction composer", () => {
   });
 });
 
-async function seedRun(): Promise<{
+async function seedRun(
+  options: { readonly chapterTokens?: number; readonly noteTokens?: number } = {}
+): Promise<{
   repository: AgentRunFileRepository;
   usageRepository: AgentUsageFileRepository;
   projectRoot: string;
@@ -190,8 +276,12 @@ async function seedRun(): Promise<{
     createdAt: "2026-07-15T00:00:00.000Z",
     compactionRevision: 0,
     sources: [
-      source("chapter:ch-01", "explicit_ref", 4000, { relativePath: "chapters/ch-01.md" }),
-      source("file:draft-notes.md", "tool_result", 20000, { relativePath: "draft-notes.md" })
+      source("chapter:ch-01", "explicit_ref", options.chapterTokens ?? 4000, {
+        relativePath: "chapters/ch-01.md"
+      }),
+      source("file:draft-notes.md", "tool_result", options.noteTokens ?? 20000, {
+        relativePath: "draft-notes.md"
+      })
     ],
     excludedSources: []
   };

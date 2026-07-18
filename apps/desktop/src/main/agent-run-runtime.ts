@@ -1,10 +1,12 @@
 import {
   createAgentConversationSession,
   createAgentContextSession,
+  createAgentPricingRegistry,
   createAgentPermissionSession,
   createAgentPlanExecutionSession,
   createAgentRunDraftSession,
   createAgentRunSession,
+  createAgentUsageSession,
   createChangeSetSession,
   createVersionGroupSession,
   estimateAgentSystemReserveTokens,
@@ -24,6 +26,9 @@ import {
   type AgentRunStartFacts,
   type AgentRunStartModelFacts,
   type AgentRunStartPreflightPort,
+  type AgentPricingRegistry,
+  type AgentUsageTimeFacts,
+  type AgentUsageSession,
   type AgentVersionGroupExecutor,
   type VersionGroupSessionTransactionPort,
   type VersionGroupTransactionApplyInput
@@ -34,15 +39,15 @@ import { createDesktopCompactionSources } from "./agent-compaction-composer.js";
 import type { LlmModelProfile, LlmParameters } from "@novel-studio/llm-adapter";
 import type {
   AgentContextSourceInput,
+  AgentRunSnapshot,
+  AgentUsageRecord,
   AgentToolName,
   ChangeSet,
   StartAgentRunCommand,
   VersionGroup
 } from "@novel-studio/agent-engine";
-import type {
-  AgentRunDraftSession,
-  SyncStartDraftCommand
-} from "@novel-studio/application";
+import { calculateContextBudget } from "@novel-studio/agent-engine";
+import type { AgentRunDraftSession, SyncStartDraftCommand } from "@novel-studio/application";
 import {
   createUnifiedError,
   err,
@@ -82,6 +87,8 @@ export interface DesktopAgentRunSessionOptions {
    * driver, runtime tests), the usage sink is not constructed and compaction wiring stays deferred.
    */
   readonly userDataRoot?: string;
+  readonly pricingRegistry?: AgentPricingRegistry;
+  readonly usageTime?: () => AgentUsageTimeFacts;
   readonly createRunId?: () => string;
   readonly now?: () => string;
   readonly modelDriver?: AgentRunModelDriver;
@@ -134,11 +141,8 @@ export interface DesktopAgentRuntimeServices {
   readonly agentContextSession: AgentContextSession;
   readonly agentPermissionSession: AgentPermissionSession;
   readonly agentPlanExecutionSession: AgentPlanExecutionSession;
-  /**
-   * The redacted usage sink, present only when `userDataRoot` was threaded in. It is the `usageSink`
-   * port of the compaction composer wired below.
-   */
-  readonly agentUsageRepository?: AgentUsageFileRepository;
+  /** Present only when the Electron user-data usage store is configured. */
+  readonly agentUsageSession?: AgentUsageSession;
 }
 
 export function createDesktopAgentRunSession(
@@ -176,6 +180,19 @@ function createDesktopAgentRuntimeServices(
           userDataRoot: options.userDataRoot,
           traceId: "desktop-agent-usage-store"
         });
+  const usageSession =
+    usageRepository === undefined
+      ? undefined
+      : createAgentUsageSession({
+          repository: usageRepository,
+          now: () => desktopUsageTime(options).timestamp,
+          todayLocalDate: () => desktopUsageTime(options).localDate
+        });
+  if (usageRepository !== undefined) {
+    void usageRepository
+      .enforceRetention(desktopUsageTime(options).localDate)
+      .catch(() => undefined);
+  }
   const conversationRepository = new AgentConversationFileRepository({
     projectRoot: options.projectRoot,
     traceId: "desktop-agent-conversation-store"
@@ -342,17 +359,14 @@ function createDesktopAgentRuntimeServices(
     ...(options.readEditorBuffer === undefined
       ? {}
       : { readEditorBuffer: options.readEditorBuffer }),
-    ...(options.readEditorState === undefined
-      ? {}
-      : { readEditorState: options.readEditorState }),
+    ...(options.readEditorState === undefined ? {} : { readEditorState: options.readEditorState }),
     ...(options.resolveModelStartFacts === undefined
       ? {}
       : { resolveModelStartFacts: options.resolveModelStartFacts })
   });
   const permissionSession = createAgentPermissionSession({
     repository: {
-      writePermissionSummary: (runId, summary) =>
-        repository.writePermissionSummary(runId, summary),
+      writePermissionSummary: (runId, summary) => repository.writePermissionSummary(runId, summary),
       readPermissionSummary: (runId, permissionSummaryId) =>
         repository.readPermissionSummary(runId, permissionSummaryId)
     },
@@ -380,6 +394,24 @@ function createDesktopAgentRuntimeServices(
     permission: permissionSession,
     planExecutionSession,
     changeSetSession,
+    ...(usageRepository === undefined
+      ? {}
+      : {
+          usageSink: {
+            async writeFinal(record: AgentUsageRecord) {
+              const written = await usageRepository.writeFinal(record as unknown as JsonObject);
+              return written.ok
+                ? ok(written.value as unknown as AgentUsageRecord)
+                : err(written.error);
+            }
+          },
+          pricingRegistry:
+            options.pricingRegistry ??
+            createAgentPricingRegistry({ version: "stage-5-default", entries: [] }),
+          ...(options.usageTime === undefined ? {} : { usageTime: options.usageTime }),
+          usageBudgetResolver: (snapshot: AgentRunSnapshot) =>
+            resolveDesktopUsageBudget(repository, snapshot, options.now)
+        }),
     ...(enforceConversationBinding ? { conversationLifecycle } : {}),
     ...(versionGroupServices === undefined
       ? {}
@@ -433,12 +465,12 @@ function createDesktopAgentRuntimeServices(
     chapterRepository,
     projectReads,
     storyBible,
+    ...(options.pricingRegistry === undefined ? {} : { pricingRegistry: options.pricingRegistry }),
+    ...(options.usageTime === undefined ? {} : { usageTime: options.usageTime }),
     ...(options.readEditorBuffer === undefined
       ? {}
       : { readEditorBuffer: options.readEditorBuffer }),
-    ...(options.readEditorState === undefined
-      ? {}
-      : { readEditorState: options.readEditorState }),
+    ...(options.readEditorState === undefined ? {} : { readEditorState: options.readEditorState }),
     ...(options.resolveModelStartFacts === undefined
       ? {}
       : { resolveModelStartFacts: options.resolveModelStartFacts }),
@@ -454,8 +486,66 @@ function createDesktopAgentRuntimeServices(
     agentContextSession: contextSession,
     agentPermissionSession: permissionSession,
     agentPlanExecutionSession: planExecutionSession,
-    ...(usageRepository === undefined ? {} : { agentUsageRepository: usageRepository })
+    ...(usageSession === undefined ? {} : { agentUsageSession: usageSession })
   };
+}
+
+function desktopUsageTime(options: DesktopAgentRunSessionOptions): AgentUsageTimeFacts {
+  if (options.usageTime !== undefined) return options.usageTime();
+  const current = new Date(options.now?.() ?? new Date().toISOString());
+  const year = String(current.getFullYear()).padStart(4, "0");
+  const month = String(current.getMonth() + 1).padStart(2, "0");
+  const day = String(current.getDate()).padStart(2, "0");
+  return {
+    timestamp: current.toISOString(),
+    localDate: `${year}-${month}-${day}`,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+    utcOffsetMinutes: -current.getTimezoneOffset()
+  };
+}
+
+async function resolveDesktopUsageBudget(
+  repository: AgentRunFileRepository,
+  snapshot: AgentRunSnapshot,
+  now?: () => string
+) {
+  if (snapshot.contextBudgetSnapshotId !== null) {
+    const stored = await repository.readBudgetSnapshot(
+      snapshot.runId,
+      snapshot.contextBudgetSnapshotId
+    );
+    if (!stored.ok) return err(stored.error);
+    if (stored.value !== undefined) {
+      const contextWindow = readUsageTokenCount(stored.value["contextWindow"]);
+      const safeInputBudget = readUsageTokenCount(stored.value["safeInputBudget"]);
+      if (contextWindow !== undefined && safeInputBudget !== undefined) {
+        return ok({ contextWindow, safeInputBudget });
+      }
+    }
+  }
+  const capability = snapshot.providerCapabilitySnapshot;
+  const calculated = calculateContextBudget({
+    contextBudgetSnapshotId: `usage_budget_${snapshot.runId}_${snapshot.lastSequence}`,
+    provider: capability.provider,
+    model: capability.modelName,
+    contextWindow: capability.contextWindow,
+    toolReserve: 0,
+    systemReserve: estimateAgentSystemReserveTokens(snapshot.contextMode),
+    requiredContextTokens: capability.requiredContextTokens,
+    usedTokens: 0,
+    precision: "unknown",
+    calculatedAt: now?.() ?? new Date().toISOString()
+  });
+  return calculated.ok
+    ? ok({
+        contextWindow: calculated.value.contextWindow,
+        safeInputBudget: calculated.value.safeInputBudget
+      })
+    : err(calculated.error);
+}
+
+function readUsageTokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 function permissionRootError(code: string): UnifiedError {
@@ -485,6 +575,8 @@ function createDesktopAgentContextSession(input: {
   readonly chapterRepository: ChapterFileRepository;
   readonly projectReads: AgentProjectReadRepository;
   readonly storyBible: StoryBibleFileRepository;
+  readonly pricingRegistry?: AgentPricingRegistry;
+  readonly usageTime?: () => AgentUsageTimeFacts;
   readonly readEditorBuffer?: NonNullable<DesktopAgentRunSessionOptions["readEditorBuffer"]>;
   readonly readEditorState?: NonNullable<DesktopAgentRunSessionOptions["readEditorState"]>;
   readonly resolveModelStartFacts?: NonNullable<
@@ -531,6 +623,10 @@ function createDesktopAgentContextSession(input: {
       : {
           compactionSources: createDesktopCompactionSources({
             repository,
+            ...(input.pricingRegistry === undefined
+              ? {}
+              : { pricingRegistry: input.pricingRegistry }),
+            ...(input.usageTime === undefined ? {} : { usageTime: input.usageTime }),
             ...(input.now === undefined ? {} : { now: input.now })
           }),
           runRepository: {
@@ -542,7 +638,14 @@ function createDesktopAgentContextSession(input: {
               repository.writeContextSnapshot(snapshot),
             writeBudgetSnapshot: (runId: string, snapshot: JsonObject) =>
               repository.writeBudgetSnapshot(runId, snapshot),
-            commitCompaction: (snapshot: JsonObject) => repository.commitCompaction(snapshot)
+            commitCompaction: (snapshot: JsonObject) => repository.commitCompaction(snapshot),
+            writeCommandReceipt: (runId: string, commandId: string, receipt: JsonObject) =>
+              repository.writeCommandReceipt(runId, commandId, receipt),
+            readCommandReceipt: (runId: string, commandId: string) =>
+              repository.readCommandReceipt(runId, commandId),
+            readSnapshot: (runId: string) => repository.readSnapshot(runId),
+            readCompactionRevision: (runId: string, compactionId: string) =>
+              repository.readCompactionRevision(runId, compactionId)
           },
           usageSink: {
             writeFinal: (record: JsonObject) => usageRepository.writeFinal(record)
@@ -734,9 +837,7 @@ function createDesktopVersionGroupServices(input: {
             : { expectedDirtyChecksum: editor.expectedDirtyChecksum })
         });
       },
-      ...(input.readEditorState === undefined
-        ? {}
-        : { readEditorState: input.readEditorState }),
+      ...(input.readEditorState === undefined ? {} : { readEditorState: input.readEditorState }),
       async preserveDirtyBuffers(relativePaths) {
         await input.preserveDirtyBuffers?.(relativePaths);
       },
@@ -849,9 +950,7 @@ function recoveredVersionGroup(
     changeSetRevision: journal.changeSetRevision,
     changeSetChecksum: journal.changeSetChecksum,
     ...(journal.writePolicy === undefined ? {} : { writePolicy: journal.writePolicy }),
-    ...(journal.approvalSource === undefined
-      ? {}
-      : { approvalSource: journal.approvalSource }),
+    ...(journal.approvalSource === undefined ? {} : { approvalSource: journal.approvalSource }),
     transactionStatus,
     writes: journal.entries.map((entry) => ({
       writeId: entry.writeId,
@@ -1101,8 +1200,7 @@ function readResolvedIntent(
     operationMode: command["operationMode"] as AgentRunStartFacts["operationMode"],
     contextMode: (command["contextMode"] as AgentRunStartFacts["contextMode"]) ?? "writing",
     writePolicy:
-      (command["writePolicy"] as AgentRunStartFacts["writePolicy"]) ??
-      "write_before_confirmation",
+      (command["writePolicy"] as AgentRunStartFacts["writePolicy"]) ?? "write_before_confirmation",
     writePolicyAcknowledged: command["writePolicyAcknowledged"] === true,
     userRequest: command["userRequest"],
     model: {
@@ -1187,7 +1285,10 @@ async function resolveContextDraftSources(
 ): Promise<Result<AgentContextSourceInput[], UnifiedError>> {
   const sources: AgentContextSourceInput[] = [];
   for (const ref of refs) {
-    if ((ref.kind === "chapter" || ref.kind === "editor_selection") && ref.chapterId !== undefined) {
+    if (
+      (ref.kind === "chapter" || ref.kind === "editor_selection") &&
+      ref.chapterId !== undefined
+    ) {
       const refId = `chapter:${ref.chapterId}`;
       const relativePath = `chapters/${ref.chapterId}.md`;
       const editorState = await input.readEditorState?.(relativePath);
@@ -1197,12 +1298,24 @@ async function resolveContextDraftSources(
           ? await input.readEditorBuffer?.(refId)
           : undefined;
       if (buffered !== undefined) {
-        sources.push({ refId, sourceKind: "editor_buffer", relativePath, content: buffered, dirty: true });
+        sources.push({
+          refId,
+          sourceKind: "editor_buffer",
+          relativePath,
+          content: buffered,
+          dirty: true
+        });
         continue;
       }
       const chapter = await input.chapterRepository.readChapter(ref.chapterId);
       if (!chapter.ok) return err(chapter.error);
-      sources.push({ refId, sourceKind: "disk_file", relativePath, content: chapter.value.body, dirty: false });
+      sources.push({
+        refId,
+        sourceKind: "disk_file",
+        relativePath,
+        content: chapter.value.body,
+        dirty: false
+      });
       continue;
     }
     if (ref.kind === "project_file" && ref.relativePath !== undefined) {

@@ -3,6 +3,71 @@ import { describe, expect, test } from "vitest";
 import * as applicationExports from "../src/index.js";
 
 describe("AgentRunModelDriver", () => {
+  test("forwards structured usage events without exposing provider frames", async () => {
+    const createDriver = (applicationExports as unknown as Record<string, unknown>)[
+      "createLlmAgentRunModelDriver"
+    ];
+    expect(typeof createDriver).toBe("function");
+    if (typeof createDriver !== "function") return;
+
+    const usage = {
+      inputTokens: 120,
+      outputTokens: 30,
+      cachedTokens: 40,
+      reasoningTokens: 10,
+      totalTokens: 150,
+      usageStatus: "actual",
+      cost: { amount: 0.0042, currency: "USD", status: "actual" }
+    };
+    const driver = (
+      createDriver as (options: Record<string, unknown>) => {
+        streamRound(input: Record<string, unknown>): AsyncIterable<Record<string, unknown>>;
+      }
+    )({
+      adapter: {
+        async *stream() {
+          yield {
+            ok: true,
+            value: {
+              type: "usage",
+              usage,
+              providerFrame: { authorization: "Bearer must-not-cross-boundary" }
+            }
+          };
+          yield { ok: true, value: { type: "round_completed", finishReason: "stop" } };
+        }
+      },
+      modelProfile: {
+        id: "profile-usage",
+        provider: "openai",
+        displayName: "Usage model",
+        modelName: "gpt-5"
+      }
+    });
+
+    const events: Record<string, unknown>[] = [];
+    for await (const event of driver.streamRound({
+      runId: "run-usage",
+      snapshot: {
+        runRevision: 1,
+        operationMode: "execution",
+        contextMode: "writing",
+        userRequest: "write"
+      },
+      messages: [{ role: "user", content: "write" }],
+      tools: [],
+      signal: new AbortController().signal
+    })) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      { type: "usage", usage },
+      { type: "round_completed", finishReason: "stop" }
+    ]);
+    expect(JSON.stringify(events)).not.toContain("must-not-cross-boundary");
+  });
+
   test("maps provider stream tool-call increments without treating ordinary text as a tool", async () => {
     const createDriver = (applicationExports as unknown as Record<string, unknown>)[
       "createLlmAgentRunModelDriver"
@@ -11,21 +76,61 @@ describe("AgentRunModelDriver", () => {
     if (typeof createDriver !== "function") return;
 
     let providerRequest: Record<string, unknown> | undefined;
-    const driver = (createDriver as (options: Record<string, unknown>) => {
-      streamRound(input: Record<string, unknown>): AsyncIterable<Record<string, unknown>>;
-    })({
+    const driver = (
+      createDriver as (options: Record<string, unknown>) => {
+        streamRound(input: Record<string, unknown>): AsyncIterable<Record<string, unknown>>;
+      }
+    )({
       adapter: {
         async *stream(request: Record<string, unknown>) {
           providerRequest = request;
-          yield { ok: true, value: { type: "start", requestId: "r", provider: "openai-compatible", modelName: "m", createdAt: "now" } };
+          yield {
+            ok: true,
+            value: {
+              type: "start",
+              requestId: "r",
+              provider: "openai-compatible",
+              modelName: "m",
+              createdAt: "now"
+            }
+          };
           yield { ok: true, value: { type: "delta", value: "plain text" } };
-          yield { ok: true, value: { type: "tool_call_delta", toolCallId: "call-1", name: "read_chapter", argumentsDelta: "{\"chapter" } };
-          yield { ok: true, value: { type: "tool_call_delta", toolCallId: "call-1", argumentsDelta: "Id\":\"chapter-03\"}" } };
+          yield {
+            ok: true,
+            value: {
+              type: "tool_call_delta",
+              toolCallId: "call-1",
+              name: "read_chapter",
+              argumentsDelta: '{"chapter'
+            }
+          };
+          yield {
+            ok: true,
+            value: {
+              type: "tool_call_delta",
+              toolCallId: "call-1",
+              argumentsDelta: 'Id":"chapter-03"}'
+            }
+          };
           yield { ok: true, value: { type: "round_completed", finishReason: "tool_calls" } };
-          yield { ok: true, value: { type: "done", requestId: "r", provider: "openai-compatible", modelName: "m", createdAt: "now" } };
+          yield {
+            ok: true,
+            value: {
+              type: "done",
+              requestId: "r",
+              provider: "openai-compatible",
+              modelName: "m",
+              createdAt: "now"
+            }
+          };
         }
       },
-      modelProfile: { id: "profile-01", provider: "openai-compatible", displayName: "Model", modelName: "model" },
+      modelProfile: {
+        id: "profile-01",
+        provider: "openai-compatible",
+        displayName: "Model",
+        modelName: "model"
+      },
       parameters: { temperature: 0.2 }
     });
 
@@ -56,8 +161,13 @@ describe("AgentRunModelDriver", () => {
 
     expect(events).toEqual([
       { type: "assistant_text_delta", delta: "plain text" },
-      { type: "tool_call_delta", toolCallId: "call-1", name: "read_chapter", argumentsDelta: "{\"chapter" },
-      { type: "tool_call_delta", toolCallId: "call-1", argumentsDelta: "Id\":\"chapter-03\"}" },
+      {
+        type: "tool_call_delta",
+        toolCallId: "call-1",
+        name: "read_chapter",
+        argumentsDelta: '{"chapter'
+      },
+      { type: "tool_call_delta", toolCallId: "call-1", argumentsDelta: 'Id":"chapter-03"}' },
       { type: "round_completed", finishReason: "tool_calls" }
     ]);
     expect(providerRequest?.["tools"]).toEqual([
@@ -83,16 +193,23 @@ describe("AgentRunModelDriver", () => {
     if (typeof createDriver !== "function") return;
 
     let providerRequest: Record<string, unknown> | undefined;
-    const driver = (createDriver as (options: Record<string, unknown>) => {
-      streamRound(input: Record<string, unknown>): AsyncIterable<Record<string, unknown>>;
-    })({
+    const driver = (
+      createDriver as (options: Record<string, unknown>) => {
+        streamRound(input: Record<string, unknown>): AsyncIterable<Record<string, unknown>>;
+      }
+    )({
       adapter: {
         async *stream(request: Record<string, unknown>) {
           providerRequest = request;
           yield { ok: true, value: { type: "round_completed", finishReason: "stop" } };
         }
       },
-      modelProfile: { id: "profile-01", provider: "openai", displayName: "Model", modelName: "gpt-5" },
+      modelProfile: {
+        id: "profile-01",
+        provider: "openai",
+        displayName: "Model",
+        modelName: "gpt-5"
+      },
       // Static base parameters must be overridden by the run's validated reasoning effort.
       parameters: { temperature: 0.2, reasoningEffort: "low" }
     });
@@ -125,16 +242,23 @@ describe("AgentRunModelDriver", () => {
     if (typeof createDriver !== "function") return;
 
     let providerRequest: Record<string, unknown> | undefined;
-    const driver = (createDriver as (options: Record<string, unknown>) => {
-      streamRound(input: Record<string, unknown>): AsyncIterable<Record<string, unknown>>;
-    })({
+    const driver = (
+      createDriver as (options: Record<string, unknown>) => {
+        streamRound(input: Record<string, unknown>): AsyncIterable<Record<string, unknown>>;
+      }
+    )({
       adapter: {
         async *stream(request: Record<string, unknown>) {
           providerRequest = request;
           yield { ok: true, value: { type: "round_completed", finishReason: "stop" } };
         }
       },
-      modelProfile: { id: "profile-01", provider: "openai", displayName: "Model", modelName: "gpt-4o" },
+      modelProfile: {
+        id: "profile-01",
+        provider: "openai",
+        displayName: "Model",
+        modelName: "gpt-4o"
+      },
       parameters: { temperature: 0.2 }
     });
 
@@ -165,16 +289,23 @@ describe("AgentRunModelDriver", () => {
     if (typeof createDriver !== "function") return;
 
     let providerRequest: Record<string, unknown> | undefined;
-    const driver = (createDriver as (options: Record<string, unknown>) => {
-      streamRound(input: Record<string, unknown>): AsyncIterable<Record<string, unknown>>;
-    })({
+    const driver = (
+      createDriver as (options: Record<string, unknown>) => {
+        streamRound(input: Record<string, unknown>): AsyncIterable<Record<string, unknown>>;
+      }
+    )({
       adapter: {
         async *stream(request: Record<string, unknown>) {
           providerRequest = request;
           yield { ok: true, value: { type: "round_completed", finishReason: "stop" } };
         }
       },
-      modelProfile: { id: "profile-01", provider: "openai", displayName: "Model", modelName: "gpt-5" },
+      modelProfile: {
+        id: "profile-01",
+        provider: "openai",
+        displayName: "Model",
+        modelName: "gpt-5"
+      },
       // A static creation-time prompt must be overridden by the per-round, mode-specific guidance the
       // session computes from the run's context mode.
       systemPrompt: "static base prompt"

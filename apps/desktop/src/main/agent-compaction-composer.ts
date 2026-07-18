@@ -3,9 +3,12 @@ import { createHash } from "node:crypto";
 import {
   calculateContextBudget,
   normalizeAgentContextSnapshot,
+  usageRecordIdempotencyKey,
+  validateAgentUsageRecord,
   type AgentContextLayer,
   type AgentContextSnapshot,
   type AgentContextSource,
+  type AgentUsageRecord,
   type ContextBudgetSnapshot,
   type PlanExecutionRecord,
   type PlanExecutionStepStatus
@@ -15,6 +18,8 @@ import type {
   CompactionArtifactRequest,
   CompactionArtifacts,
   CompactionInputs,
+  AgentPricingRegistry,
+  AgentUsageTimeFacts,
   EvictableContextSource,
   ProtectedContextFact
 } from "@novel-studio/application";
@@ -49,6 +54,8 @@ const PROTECTED_FACT_KIND: Partial<Record<AgentContextLayer, ProtectedContextFac
 export interface DesktopCompactionComposerOptions {
   readonly repository: AgentRunFileRepository;
   readonly now?: () => string;
+  readonly pricingRegistry?: AgentPricingRegistry;
+  readonly usageTime?: () => AgentUsageTimeFacts;
 }
 
 /**
@@ -97,7 +104,14 @@ export function createDesktopCompactionSources(
     async buildArtifacts(request) {
       const loaded = await readRunContext(repository, request.command.runId);
       if (!loaded.ok) return err(loaded.error);
-      return buildArtifacts(loaded.value, request, now());
+      const createdAt = request.manifest.createdAt;
+      return buildArtifacts(
+        loaded.value,
+        request,
+        createdAt,
+        options.pricingRegistry,
+        options.usageTime?.() ?? usageTimeFor(createdAt)
+      );
     }
   };
 }
@@ -249,7 +263,9 @@ async function readPriorProtected(
 function buildArtifacts(
   context: RunContext,
   request: CompactionArtifactRequest,
-  createdAt: string
+  createdAt: string,
+  pricingRegistry: AgentPricingRegistry | undefined,
+  usageTime: AgentUsageTimeFacts
 ): Result<CompactionArtifacts, UnifiedError> {
   const { run, snapshot } = context;
   const evicted = new Set(request.evictedSourceIds);
@@ -287,8 +303,10 @@ function buildArtifacts(
     budget: budget.value,
     beforeTokens,
     afterTokens,
-    createdAt
+    ...(pricingRegistry === undefined ? {} : { pricingRegistry }),
+    usageTime
   });
+  if (!usageRecord.ok) return err(usageRecord.error);
 
   const runSnapshot: JsonObject = {
     ...run,
@@ -301,7 +319,7 @@ function buildArtifacts(
   return ok({
     resultSnapshot,
     budgetSnapshot: budget.value as unknown as JsonObject,
-    usageRecord,
+    usageRecord: usageRecord.value as unknown as JsonObject,
     runSnapshot
   });
 }
@@ -313,43 +331,75 @@ function buildUsageRecord(input: {
   readonly budget: ContextBudgetSnapshot;
   readonly beforeTokens: number;
   readonly afterTokens: number;
-  readonly createdAt: string;
-}): JsonObject {
+  readonly pricingRegistry?: AgentPricingRegistry;
+  readonly usageTime: AgentUsageTimeFacts;
+}): Result<AgentUsageRecord, UnifiedError> {
   const { run, request, budget } = input;
   const capability = isRecord(run["providerCapabilitySnapshot"])
     ? run["providerCapabilitySnapshot"]
     : {};
   const compactionId = request.manifest.compactionId;
-  const date = new Date(input.createdAt);
+  const runId = String(run["runId"]);
+  const finalSequence = readNonNegative(run["lastSequence"]);
   const inputTokens = readNonNegative(request.inputTokens);
   const outputTokens = readNonNegative(request.outputTokens);
-  return {
+  const usageStatus = request.strategy === "model_assisted" ? "estimated" : "missing";
+  const pricing = input.pricingRegistry?.price({
+    provider: String(capability["provider"] ?? ""),
+    model: String(capability["modelName"] ?? ""),
+    usage: {
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+      usageStatus,
+      cost: { amount: 0, currency: "", status: "unknown" }
+    }
+  }) ?? {
+    pricingVersion: null,
+    unitPrices: null,
+    cost: { amount: 0, currency: "", status: "unknown" as const }
+  };
+  const record: AgentUsageRecord = {
     schemaVersion: "1.0",
-    usageId: `usage_${compactionId}`,
-    runId: String(run["runId"]),
+    usageId: usageRecordIdempotencyKey({ runId, roundId: compactionId, finalSequence }),
+    runId,
     conversationId: String(run["conversationId"] ?? ""),
     projectId: String(run["projectId"]),
     roundId: compactionId,
-    finalSequence: readNonNegative(run["lastSequence"]),
+    finalSequence,
     provider: String(capability["provider"] ?? ""),
     model: String(capability["modelName"] ?? ""),
     inputTokens,
     outputTokens,
     totalTokens: inputTokens + outputTokens,
-    usageStatus: request.strategy === "model_assisted" ? "estimated" : "missing",
+    usageStatus,
     precision: request.precision,
-    pricingVersion: null,
-    unitPrices: null,
-    cost: { amount: 0, currency: "", status: "unknown" },
+    pricingVersion: pricing.pricingVersion,
+    unitPrices: pricing.unitPrices,
+    cost: pricing.cost,
     contextWindow: budget.contextWindow,
     safeInputBudget: budget.safeInputBudget,
     compactionBeforeTokens: input.beforeTokens,
     compactionAfterTokens: input.afterTokens,
     terminationReason: "context_compaction",
-    timestamp: input.createdAt,
-    localDate: input.createdAt.slice(0, 10),
-    timezone: "UTC",
-    utcOffsetMinutes: Number.isNaN(date.getTime()) ? 0 : 0
+    timestamp: input.usageTime.timestamp,
+    localDate: input.usageTime.localDate,
+    timezone: input.usageTime.timezone,
+    utcOffsetMinutes: input.usageTime.utcOffsetMinutes
+  };
+  return validateAgentUsageRecord(record);
+}
+
+function usageTimeFor(timestamp: string): AgentUsageTimeFacts {
+  const current = new Date(timestamp);
+  const year = String(current.getFullYear()).padStart(4, "0");
+  const month = String(current.getMonth() + 1).padStart(2, "0");
+  const day = String(current.getDate()).padStart(2, "0");
+  return {
+    timestamp: current.toISOString(),
+    localDate: `${year}-${month}-${day}`,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+    utcOffsetMinutes: -current.getTimezoneOffset()
   };
 }
 

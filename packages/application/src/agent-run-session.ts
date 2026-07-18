@@ -1,6 +1,8 @@
 import {
   createAgentRunCoordinator,
   createAgentContextSnapshot,
+  usageRecordIdempotencyKey,
+  validateAgentUsageRecord,
   resolveLegacyRetryTarget,
   createPlanExecutionRecord,
   createPlanArtifactRevision,
@@ -23,6 +25,9 @@ import {
   type AgentRunErrorRecord,
   type AgentRunEvent,
   type AgentRunSnapshot,
+  type AgentRunUsageSummary,
+  type AgentUsageRecord,
+  type AgentUsageSink,
   type AgentContextSnapshot,
   type AgentContextSourceInput,
   type AgentToolName,
@@ -48,6 +53,7 @@ import {
   type StopAgentRunCommand,
   type UndoAgentRunCommand
 } from "@novel-studio/agent-engine";
+import type { LlmUsage } from "@novel-studio/llm-adapter";
 import {
   createUnifiedError,
   err,
@@ -71,6 +77,7 @@ import {
 } from "./ai-writing-style-rules.js";
 import type { ModelReasoningStrengthControl } from "./model-discovery-session.js";
 import type { AgentPermissionSession } from "./agent-permission-session.js";
+import type { AgentPricingRegistry } from "./agent-pricing-registry.js";
 import {
   createAgentDiagnosticsSession,
   type AgentDiagnosticsSession
@@ -120,6 +127,7 @@ export interface AgentConversationLifecyclePort {
 
 export type AgentModelStreamEvent =
   | { readonly type: "assistant_text_delta"; readonly delta: string }
+  | { readonly type: "usage"; readonly usage: LlmUsage }
   | {
       readonly type: "tool_call_delta";
       readonly toolCallId: string;
@@ -422,6 +430,25 @@ export interface CreateAgentRunSessionOptions {
   readonly coordinator?: AgentRunCoordinator;
   readonly coordinatorOptions?: Parameters<typeof createAgentRunCoordinator>[0];
   readonly diagnostics?: AgentDiagnosticsSession;
+  /** Final, redacted usage is written only after a provider round completes. */
+  readonly usageSink?: AgentUsageSink;
+  readonly pricingRegistry?: AgentPricingRegistry;
+  readonly usageTime?: () => AgentUsageTimeFacts;
+  readonly usageBudgetResolver?: (
+    snapshot: AgentRunSnapshot
+  ) => Promise<Result<AgentUsageBudgetFacts, UnifiedError>>;
+}
+
+export interface AgentUsageTimeFacts {
+  readonly timestamp: string;
+  readonly localDate: string;
+  readonly timezone: string;
+  readonly utcOffsetMinutes: number;
+}
+
+export interface AgentUsageBudgetFacts {
+  readonly contextWindow: number;
+  readonly safeInputBudget: number;
 }
 
 interface RunRuntime {
@@ -1204,6 +1231,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       return;
     }
     runtime.modelRounds += 1;
+    const roundId = `model_round_${runId}_${runtime.modelRounds}`;
+    const usageSummaryBeforeRound = snapshot.usageSummary;
     runtime.currentCheckpointId = `checkpoint_${runId}_r${snapshot.runRevision + 1}`;
 
     if (runtime.contextSnapshot !== undefined && options.contextSourceReader !== undefined) {
@@ -1254,6 +1283,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
 
     const toolCalls = new Map<string, AssembledToolCall>();
     let assistantText = "";
+    let pendingUsage: LlmUsage | undefined;
+    let finishReason: "tool_calls" | "stop" | undefined;
     try {
       const availableTools = listAgentTools({
         operationMode: snapshot.operationMode,
@@ -1285,6 +1316,20 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           snapshot = coordinator.readSnapshot(runId) ?? snapshot;
           continue;
         }
+        if (modelEvent.type === "usage") {
+          if (pendingUsage !== undefined) {
+            const partial = await recordEvent(runId, {
+              runId,
+              status: snapshot.operationMode === "planning" ? "planning_model" : "executing_model",
+              type: "usage_updated",
+              detail: usageUpdatedDetail(roundId, pendingUsage)
+            });
+            if (!partial.ok) return;
+            snapshot = partial.value;
+          }
+          pendingUsage = modelEvent.usage;
+          continue;
+        }
         if (modelEvent.type === "tool_call_delta") {
           const existing = toolCalls.get(modelEvent.toolCallId) ?? {
             toolCallId: modelEvent.toolCallId,
@@ -1296,9 +1341,54 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
             existing.argumentsText += modelEvent.argumentsDelta;
           }
           toolCalls.set(modelEvent.toolCallId, existing);
+          continue;
+        }
+        if (modelEvent.type === "round_completed") {
+          finishReason = modelEvent.finishReason;
         }
       }
       if (!isCurrent(runId, generation)) return;
+      if (finishReason !== undefined && options.usageSink !== undefined) {
+        const finalUsage = pendingUsage ?? missingRoundUsage();
+        const finalSequence = snapshot.lastSequence + 1;
+        const usageWritten = await writeFinalRoundUsage({
+          snapshot,
+          roundId,
+          finalSequence,
+          usage: finalUsage,
+          finishReason
+        });
+        if (!usageWritten.ok) {
+          await recordEvent(runId, {
+            runId,
+            status: "failed",
+            type: "run_failed",
+            detail: {
+              code: usageWritten.error.code,
+              message: "The completed model round usage could not be persisted."
+            }
+          });
+          return;
+        }
+        const finalized = await recordEvent(runId, {
+          runId,
+          status: snapshot.operationMode === "planning" ? "planning_model" : "executing_model",
+          type: "usage_updated",
+          snapshotPatch: { usageSummary: addRoundUsage(usageSummaryBeforeRound, finalUsage) },
+          detail: usageUpdatedDetail(roundId, finalUsage)
+        });
+        if (!finalized.ok) return;
+        snapshot = finalized.value;
+      } else if (pendingUsage !== undefined) {
+        const partial = await recordEvent(runId, {
+          runId,
+          status: snapshot.operationMode === "planning" ? "planning_model" : "executing_model",
+          type: "usage_updated",
+          detail: usageUpdatedDetail(roundId, pendingUsage)
+        });
+        if (!partial.ok) return;
+        snapshot = partial.value;
+      }
       if (assistantText.length > 0) {
         await recordEvent(runId, {
           runId,
@@ -1384,6 +1474,15 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       if (isCurrent(runId, generation)) scheduleNextRound(runId, runtime);
     } catch (error) {
       if (!isCurrent(runId, generation) || runtime.controller.signal.aborted) return;
+      if (pendingUsage !== undefined) {
+        const partial = await recordEvent(runId, {
+          runId,
+          status: snapshot.operationMode === "planning" ? "planning_model" : "executing_model",
+          type: "usage_updated",
+          detail: usageUpdatedDetail(roundId, pendingUsage)
+        });
+        if (partial.ok) snapshot = partial.value;
+      }
       const providerError = normalizeProviderError(error);
       const retryable = providerError.recoverability === "retryable";
       const retryTargets: AgentRunErrorRecord["retryTargets"] = retryable
@@ -1422,6 +1521,85 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         }
       });
     }
+  }
+
+  async function writeFinalRoundUsage(input: {
+    readonly snapshot: AgentRunSnapshot;
+    readonly roundId: string;
+    readonly finalSequence: number;
+    readonly usage: LlmUsage;
+    readonly finishReason: "tool_calls" | "stop";
+  }): Promise<Result<AgentUsageRecord, UnifiedError>> {
+    if (options.usageSink === undefined) {
+      return err(
+        applicationError("AGENT_USAGE_SINK_UNAVAILABLE", "Agent usage storage is unavailable.")
+      );
+    }
+    if (options.usageBudgetResolver === undefined) {
+      return err(
+        applicationError(
+          "AGENT_USAGE_BUDGET_UNAVAILABLE",
+          "The server-authoritative context budget is unavailable."
+        )
+      );
+    }
+    const budget = await options.usageBudgetResolver(input.snapshot);
+    if (!budget.ok) return err(budget.error);
+    const pricing = priceRoundUsage(input.snapshot, input.usage);
+    const time = (options.usageTime ?? currentAgentUsageTime)();
+    const record: AgentUsageRecord = {
+      schemaVersion: "1.0",
+      usageId: usageRecordIdempotencyKey({
+        runId: input.snapshot.runId,
+        roundId: input.roundId,
+        finalSequence: input.finalSequence
+      }),
+      runId: input.snapshot.runId,
+      conversationId: input.snapshot.conversationId ?? "",
+      projectId: input.snapshot.projectId,
+      roundId: input.roundId,
+      finalSequence: input.finalSequence,
+      provider: input.snapshot.providerCapabilitySnapshot.provider,
+      model: input.snapshot.providerCapabilitySnapshot.modelName,
+      inputTokens: input.usage.inputTokens,
+      outputTokens: input.usage.outputTokens,
+      ...(input.usage.cachedTokens === undefined ? {} : { cachedTokens: input.usage.cachedTokens }),
+      ...(input.usage.reasoningTokens === undefined
+        ? {}
+        : { reasoningTokens: input.usage.reasoningTokens }),
+      totalTokens: input.usage.totalTokens,
+      usageStatus: input.usage.usageStatus,
+      precision: usagePrecision(input.usage.usageStatus),
+      pricingVersion: pricing.pricingVersion,
+      unitPrices: pricing.unitPrices,
+      cost: pricing.cost,
+      contextWindow: budget.value.contextWindow,
+      safeInputBudget: budget.value.safeInputBudget,
+      terminationReason: input.finishReason,
+      timestamp: time.timestamp,
+      localDate: time.localDate,
+      timezone: time.timezone,
+      utcOffsetMinutes: time.utcOffsetMinutes
+    };
+    const validated = validateAgentUsageRecord(record);
+    return validated.ok ? options.usageSink.writeFinal(validated.value) : err(validated.error);
+  }
+
+  function priceRoundUsage(snapshot: AgentRunSnapshot, usage: LlmUsage) {
+    if (options.pricingRegistry !== undefined) {
+      return options.pricingRegistry.price({
+        provider: snapshot.providerCapabilitySnapshot.provider,
+        model: snapshot.providerCapabilitySnapshot.modelName,
+        usage
+      });
+    }
+    return usage.cost.status === "actual"
+      ? { pricingVersion: null, unitPrices: null, cost: usage.cost }
+      : {
+          pricingVersion: null,
+          unitPrices: null,
+          cost: { amount: 0, currency: "", status: "unknown" as const }
+        };
   }
 
   function scheduleNextRound(runId: string, runtime: RunRuntime): void {
@@ -4016,6 +4194,73 @@ function readRecoverability(source: unknown): UnifiedError["recoverability"] | u
     recoverability === "unknown"
     ? recoverability
     : undefined;
+}
+
+function addRoundUsage(base: AgentRunUsageSummary, usage: LlmUsage): AgentRunUsageSummary {
+  const hasPriorUsage = base.inputTokens > 0 || base.outputTokens > 0 || base.totalTokens > 0;
+  const cachedTokens = (base.cachedTokens ?? 0) + (usage.cachedTokens ?? 0);
+  const reasoningTokens = (base.reasoningTokens ?? 0) + (usage.reasoningTokens ?? 0);
+  return {
+    inputTokens: base.inputTokens + usage.inputTokens,
+    outputTokens: base.outputTokens + usage.outputTokens,
+    ...(base.cachedTokens === undefined && usage.cachedTokens === undefined
+      ? {}
+      : { cachedTokens }),
+    ...(base.reasoningTokens === undefined && usage.reasoningTokens === undefined
+      ? {}
+      : { reasoningTokens }),
+    totalTokens: base.totalTokens + usage.totalTokens,
+    usageStatus: hasPriorUsage
+      ? leastPreciseUsageStatus(base.usageStatus, usage.usageStatus)
+      : usage.usageStatus
+  };
+}
+
+function usageUpdatedDetail(roundId: string, usage: LlmUsage): JsonObject {
+  return {
+    roundId,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    totalTokens: usage.totalTokens,
+    usageStatus: usage.usageStatus,
+    ...(usage.cachedTokens === undefined ? {} : { cachedTokens: usage.cachedTokens }),
+    ...(usage.reasoningTokens === undefined ? {} : { reasoningTokens: usage.reasoningTokens })
+  };
+}
+
+function missingRoundUsage(): LlmUsage {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    usageStatus: "missing",
+    cost: { amount: 0, currency: "", status: "unknown" }
+  };
+}
+
+function leastPreciseUsageStatus(
+  left: AgentRunUsageSummary["usageStatus"],
+  right: AgentRunUsageSummary["usageStatus"]
+): AgentRunUsageSummary["usageStatus"] {
+  if (left === "missing" || right === "missing") return "missing";
+  return left === "estimated" || right === "estimated" ? "estimated" : "actual";
+}
+
+function usagePrecision(status: LlmUsage["usageStatus"]): AgentUsageRecord["precision"] {
+  return status === "actual" ? "reported" : status === "estimated" ? "estimated" : "unknown";
+}
+
+function currentAgentUsageTime(): AgentUsageTimeFacts {
+  const current = new Date();
+  const year = String(current.getFullYear()).padStart(4, "0");
+  const month = String(current.getMonth() + 1).padStart(2, "0");
+  const day = String(current.getDate()).padStart(2, "0");
+  return {
+    timestamp: current.toISOString(),
+    localDate: `${year}-${month}-${day}`,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+    utcOffsetMinutes: -current.getTimezoneOffset()
+  };
 }
 
 function failure(code: string, message: string): AgentRunCommandResult {

@@ -15,6 +15,7 @@
     "typecheck": "tsc -b"
   },
   "dependencies": {
+    "@novel-studio/agent-engine": "0.1.0",
     "@novel-studio/schemas": "0.1.0",
     "@novel-studio/shared": "0.1.0",
     "js-yaml": "^4.1.1"

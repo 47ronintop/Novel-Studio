@@ -64,7 +64,11 @@ export type {
   ContextBudgetSnapshot,
   PreviewContextBudgetCommand
 } from "./context-budget.js";
-export { usageRecordIdempotencyKey, validateAgentUsageRecord } from "./agent-usage-record.js";
+export {
+  calculateAgentUsageEstimatedCost,
+  usageRecordIdempotencyKey,
+  validateAgentUsageRecord
+} from "./agent-usage-record.js";
 export type {
   AgentUsageRecord,
   AgentUsageSink,

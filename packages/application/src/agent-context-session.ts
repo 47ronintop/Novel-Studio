@@ -129,6 +129,20 @@ export interface CompactionRunRepositoryPort {
     snapshot: JsonObject
   ): Promise<Result<JsonObject, UnifiedError>>;
   commitCompaction(snapshot: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
+  writeCommandReceipt?(
+    runId: string,
+    commandId: string,
+    receipt: JsonObject
+  ): Promise<Result<JsonObject, UnifiedError>>;
+  readCommandReceipt?(
+    runId: string,
+    commandId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>>;
+  readSnapshot?(runId: string): Promise<Result<JsonObject | undefined, UnifiedError>>;
+  readCompactionRevision?(
+    runId: string,
+    compactionId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>>;
 }
 
 export interface CompactionUsageSinkPort {
@@ -199,6 +213,41 @@ export interface CreateAgentContextSessionOptions {
   readonly onCompactionEvent?: (event: CompactionEvent) => Promise<void> | void;
 }
 
+interface PendingCompactionReceipt {
+  readonly schemaVersion: "1.0";
+  readonly kind: "context_compaction";
+  readonly status: "pending";
+  readonly projectId: string;
+  readonly runId: string;
+  readonly commandId: string;
+  readonly expectedRunRevision: number;
+  readonly contextBudgetSnapshotId: string;
+  readonly trigger: CompactContextCommand["trigger"];
+  readonly compactionId: string;
+  readonly startedAt: string;
+}
+
+interface CompactionModelResult {
+  readonly summaryChecksum: string;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly precision: AgentContextPrecision;
+}
+
+interface ModelCompletedCompactionReceipt extends Omit<PendingCompactionReceipt, "status"> {
+  readonly status: "model_completed";
+  readonly modelResult: CompactionModelResult;
+}
+
+interface CompletedCompactionReceipt extends Omit<PendingCompactionReceipt, "status"> {
+  readonly status: "completed";
+  readonly modelResult?: CompactionModelResult;
+  readonly result: CompactContextResult;
+}
+
+type InProgressCompactionReceipt = PendingCompactionReceipt | ModelCompletedCompactionReceipt;
+type CompactionCommandReceipt = InProgressCompactionReceipt | CompletedCompactionReceipt;
+
 export function createAgentContextSession(
   options: CreateAgentContextSessionOptions
 ): AgentContextSession {
@@ -206,6 +255,11 @@ export function createAgentContextSession(
   const now = options.now ?? (() => new Date().toISOString());
   const createBudgetSnapshotId = options.createBudgetSnapshotId ?? createDefaultBudgetSnapshotId;
   const receipts = new Map<string, Result<ContextBudgetSnapshot, UnifiedError>>();
+  const compactionReceipts = new Map<string, CompactionCommandReceipt>();
+  const inFlightCompactions = new Map<
+    string,
+    Promise<Result<CompactContextResult, UnifiedError>>
+  >();
 
   const createCompactionId = options.createCompactionId ?? createDefaultCompactionId;
 
@@ -219,8 +273,17 @@ export function createAgentContextSession(
       return result;
     },
 
-    async compactContext(command) {
-      return compact(command);
+    compactContext(command) {
+      const key = compactionReceiptKey(command);
+      const active = inFlightCompactions.get(key);
+      if (active !== undefined) return active;
+      const request = compact(command);
+      inFlightCompactions.set(key, request);
+      const clear = () => {
+        if (inFlightCompactions.get(key) === request) inFlightCompactions.delete(key);
+      };
+      void request.then(clear, clear);
+      return request;
     }
   };
 
@@ -238,6 +301,28 @@ export function createAgentContextSession(
     const runRepository = options.runRepository;
     const usageSink = options.usageSink;
 
+    const prior = await readCompactionReceipt(runRepository, command);
+    if (!prior.ok) return err(prior.error);
+    if (prior.value !== undefined && !receiptMatchesCommand(prior.value, command)) {
+      return err(compactionCommandConflict());
+    }
+    if (prior.value?.status === "completed") return ok(prior.value.result);
+    if (prior.value !== undefined) {
+      const recovered = await recoverCommittedCompaction(runRepository, prior.value);
+      if (!recovered.ok) return err(recovered.error);
+      if (recovered.value !== undefined) {
+        return persistCompletedCompactionReceipt(runRepository, prior.value, recovered.value);
+      }
+    }
+    let inProgress: InProgressCompactionReceipt =
+      prior.value !== undefined
+        ? prior.value
+        : createPendingCompactionReceipt(command, createCompactionId(), now());
+    if (prior.value === undefined) {
+      const persisted = await persistCompactionReceipt(runRepository, inProgress);
+      if (!persisted.ok) return err(persisted.error);
+    }
+
     const loaded = await sources.loadInputs(command);
     if (!loaded.ok) return err(loaded.error);
     const inputs = loaded.value;
@@ -252,7 +337,7 @@ export function createAgentContextSession(
         ? inputs.protectedFacts
         : mergePlanExecutionFact(inputs.protectedFacts, inputs.planExecutionRecord);
 
-    const compactionId = createCompactionId();
+    const compactionId = inProgress.compactionId;
     const manifestResult = buildCompactionInputManifest({
       compactionId,
       runId: command.runId,
@@ -260,7 +345,7 @@ export function createAgentContextSession(
       throughSequence: inputs.throughSequence,
       protectedFacts,
       evictableSources: inputs.evictableSources,
-      createdAt: now()
+      createdAt: inProgress.startedAt
     });
     if (!manifestResult.ok) return err(manifestResult.error);
     const manifest = manifestResult.value;
@@ -295,17 +380,33 @@ export function createAgentContextSession(
     let outputTokens = 0;
     let precision: AgentContextPrecision = "estimated";
     let summaryChecksum = "";
-    if (!plan.reachedTarget && options.modelAssistant !== undefined) {
+    if (!plan.reachedTarget && inProgress.status === "model_completed") {
+      strategy = "model_assisted";
+      inputTokens = inProgress.modelResult.inputTokens;
+      outputTokens = inProgress.modelResult.outputTokens;
+      precision = inProgress.modelResult.precision;
+      summaryChecksum = inProgress.modelResult.summaryChecksum;
+    } else if (!plan.reachedTarget && options.modelAssistant !== undefined) {
       const summarized = await options.modelAssistant.summarizeEvictable({
         runId: command.runId,
         evictableSources: inputs.evictableSources
       });
       if (!summarized.ok) return failed(summarized.error);
+      const modelResult = parseCompactionModelResult(summarized.value);
+      if (modelResult === undefined) return failed(compactionModelResultInvalid());
+      const modelCompleted: ModelCompletedCompactionReceipt = {
+        ...inProgress,
+        status: "model_completed",
+        modelResult
+      };
+      const persisted = await persistCompactionReceipt(runRepository, modelCompleted);
+      if (!persisted.ok) return failed(persisted.error);
+      inProgress = modelCompleted;
       strategy = "model_assisted";
-      inputTokens = summarized.value.inputTokens;
-      outputTokens = summarized.value.outputTokens;
-      precision = summarized.value.precision;
-      summaryChecksum = summarized.value.summaryChecksum;
+      inputTokens = modelCompleted.modelResult.inputTokens;
+      outputTokens = modelCompleted.modelResult.outputTokens;
+      precision = modelCompleted.modelResult.precision;
+      summaryChecksum = modelCompleted.modelResult.summaryChecksum;
     }
 
     // Regression guard runs regardless of strategy: protected facts and throughSequence may never go
@@ -343,7 +444,7 @@ export function createAgentContextSession(
       precision,
       summaryChecksum,
       status: "completed",
-      createdAt: now()
+      createdAt: inProgress.startedAt
     });
 
     // The cross-repository commit, in strict order. A crash at any point before the final commit
@@ -365,7 +466,58 @@ export function createAgentContextSession(
     if (!committed.ok) return failed(committed.error);
 
     await emitCompaction({ type: "context_compaction_completed", compactionId, revision });
-    return ok({ compactionId, revision, runSnapshot: committed.value });
+    return persistCompletedCompactionReceipt(runRepository, inProgress, {
+      compactionId,
+      revision,
+      runSnapshot: committed.value
+    });
+  }
+
+  async function readCompactionReceipt(
+    repository: CompactionRunRepositoryPort,
+    command: CompactContextCommand
+  ): Promise<Result<CompactionCommandReceipt | undefined, UnifiedError>> {
+    const key = compactionReceiptKey(command);
+    const cached = compactionReceipts.get(key);
+    if (cached !== undefined) return ok(cached);
+    if (repository.readCommandReceipt === undefined) return ok(undefined);
+    const stored = await repository.readCommandReceipt(command.runId, command.commandId);
+    if (!stored.ok) return err(stored.error);
+    if (stored.value === undefined) return ok(undefined);
+    const parsed = parseCompactionReceipt(stored.value);
+    if (parsed === undefined) return err(compactionCommandConflict());
+    compactionReceipts.set(key, parsed);
+    return ok(parsed);
+  }
+
+  async function persistCompactionReceipt(
+    repository: CompactionRunRepositoryPort,
+    receipt: CompactionCommandReceipt
+  ): Promise<Result<CompactionCommandReceipt, UnifiedError>> {
+    if (repository.writeCommandReceipt !== undefined) {
+      const written = await repository.writeCommandReceipt(
+        receipt.runId,
+        receipt.commandId,
+        receipt as unknown as JsonObject
+      );
+      if (!written.ok) return err(written.error);
+    }
+    compactionReceipts.set(`${receipt.runId}:${receipt.commandId}`, receipt);
+    return ok(receipt);
+  }
+
+  async function persistCompletedCompactionReceipt(
+    repository: CompactionRunRepositoryPort,
+    inProgress: InProgressCompactionReceipt,
+    result: CompactContextResult
+  ): Promise<Result<CompactContextResult, UnifiedError>> {
+    const receipt: CompletedCompactionReceipt = {
+      ...inProgress,
+      status: "completed",
+      result
+    };
+    const persisted = await persistCompactionReceipt(repository, receipt);
+    return persisted.ok ? ok(result) : err(persisted.error);
   }
 
   async function emitCompaction(event: CompactionEvent): Promise<void> {
@@ -422,6 +574,170 @@ export function createAgentContextSession(
   }
 }
 
+function compactionReceiptKey(command: Pick<CompactContextCommand, "runId" | "commandId">): string {
+  return `${command.runId}:${command.commandId}`;
+}
+
+function createPendingCompactionReceipt(
+  command: CompactContextCommand,
+  compactionId: string,
+  startedAt: string
+): PendingCompactionReceipt {
+  return {
+    schemaVersion: "1.0",
+    kind: "context_compaction",
+    status: "pending",
+    projectId: command.projectId,
+    runId: command.runId,
+    commandId: command.commandId,
+    expectedRunRevision: command.expectedRunRevision,
+    contextBudgetSnapshotId: command.contextBudgetSnapshotId,
+    trigger: command.trigger,
+    compactionId,
+    startedAt
+  };
+}
+
+function receiptMatchesCommand(
+  receipt: CompactionCommandReceipt,
+  command: CompactContextCommand
+): boolean {
+  return (
+    receipt.projectId === command.projectId &&
+    receipt.runId === command.runId &&
+    receipt.commandId === command.commandId &&
+    receipt.expectedRunRevision === command.expectedRunRevision &&
+    receipt.contextBudgetSnapshotId === command.contextBudgetSnapshotId &&
+    receipt.trigger === command.trigger
+  );
+}
+
+function parseCompactionReceipt(value: JsonObject): CompactionCommandReceipt | undefined {
+  if (
+    value["schemaVersion"] !== "1.0" ||
+    value["kind"] !== "context_compaction" ||
+    (value["status"] !== "pending" &&
+      value["status"] !== "model_completed" &&
+      value["status"] !== "completed") ||
+    typeof value["projectId"] !== "string" ||
+    typeof value["runId"] !== "string" ||
+    typeof value["commandId"] !== "string" ||
+    !Number.isSafeInteger(value["expectedRunRevision"]) ||
+    typeof value["contextBudgetSnapshotId"] !== "string" ||
+    (value["trigger"] !== "manual" &&
+      value["trigger"] !== "automatic" &&
+      value["trigger"] !== "recovery") ||
+    typeof value["compactionId"] !== "string" ||
+    typeof value["startedAt"] !== "string"
+  ) {
+    return undefined;
+  }
+  const base: PendingCompactionReceipt = {
+    schemaVersion: "1.0",
+    kind: "context_compaction",
+    status: "pending",
+    projectId: value["projectId"],
+    runId: value["runId"],
+    commandId: value["commandId"],
+    expectedRunRevision: Number(value["expectedRunRevision"]),
+    contextBudgetSnapshotId: value["contextBudgetSnapshotId"],
+    trigger: value["trigger"],
+    compactionId: value["compactionId"],
+    startedAt: value["startedAt"]
+  };
+  if (value["status"] === "pending") return base;
+  const modelResult = parseCompactionModelResult(value["modelResult"]);
+  if (value["status"] === "model_completed") {
+    return modelResult === undefined
+      ? undefined
+      : { ...base, status: "model_completed", modelResult };
+  }
+  const result = parseCompactContextResult(value["result"], base.compactionId);
+  if (result === undefined || (value["modelResult"] !== undefined && modelResult === undefined)) {
+    return undefined;
+  }
+  return {
+    ...base,
+    status: "completed",
+    ...(modelResult === undefined ? {} : { modelResult }),
+    result
+  };
+}
+
+function parseCompactionModelResult(value: unknown): CompactionModelResult | undefined {
+  if (!isJsonObject(value)) return undefined;
+  const precision = value["precision"];
+  if (
+    typeof value["summaryChecksum"] !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(value["summaryChecksum"]) ||
+    !isNonNegativeInteger(value["inputTokens"]) ||
+    !isNonNegativeInteger(value["outputTokens"]) ||
+    (precision !== "reported" && precision !== "estimated" && precision !== "unknown")
+  ) {
+    return undefined;
+  }
+  return {
+    summaryChecksum: value["summaryChecksum"],
+    inputTokens: value["inputTokens"],
+    outputTokens: value["outputTokens"],
+    precision
+  };
+}
+
+function parseCompactContextResult(
+  value: unknown,
+  compactionId: string
+): CompactContextResult | undefined {
+  if (!isJsonObject(value) || value["compactionId"] !== compactionId) return undefined;
+  const revision = value["revision"];
+  const runSnapshot = value["runSnapshot"];
+  if (
+    !isJsonObject(revision) ||
+    revision["compactionId"] !== compactionId ||
+    revision["status"] !== "completed" ||
+    !isJsonObject(runSnapshot) ||
+    runSnapshot["activeCompactionId"] !== compactionId
+  ) {
+    return undefined;
+  }
+  return {
+    compactionId,
+    revision: revision as unknown as ContextCompactionRevision,
+    runSnapshot
+  };
+}
+
+async function recoverCommittedCompaction(
+  repository: CompactionRunRepositoryPort,
+  receipt: InProgressCompactionReceipt
+): Promise<Result<CompactContextResult | undefined, UnifiedError>> {
+  if (repository.readSnapshot === undefined || repository.readCompactionRevision === undefined) {
+    return ok(undefined);
+  }
+  const snapshot = await repository.readSnapshot(receipt.runId);
+  if (!snapshot.ok) return err(snapshot.error);
+  if (snapshot.value?.["activeCompactionId"] !== receipt.compactionId) return ok(undefined);
+  const revision = await repository.readCompactionRevision(receipt.runId, receipt.compactionId);
+  if (!revision.ok) return err(revision.error);
+  const result = parseCompactContextResult(
+    {
+      compactionId: receipt.compactionId,
+      revision: revision.value,
+      runSnapshot: snapshot.value
+    },
+    receipt.compactionId
+  );
+  return result === undefined ? err(compactionRecoveryInvalid()) : ok(result);
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
 function readId(value: JsonObject, key: string): string | null {
   const candidate = value[key];
   return typeof candidate === "string" && candidate.length > 0 ? candidate : null;
@@ -445,6 +761,39 @@ function compactionPlanExecutionMismatch(): UnifiedError {
     message: "The plan execution record does not belong to the run being compacted.",
     recoverability: "user-action",
     suggestedAction: "Reload the run and its latest plan execution record before compacting.",
+    traceId: "agent-context-session"
+  });
+}
+
+function compactionCommandConflict(): UnifiedError {
+  return createUnifiedError({
+    code: "AGENT_CONTEXT_COMPACTION_COMMAND_CONFLICT",
+    category: "ValidationError",
+    message: "The compaction command ID is already bound to different inputs.",
+    recoverability: "user-action",
+    suggestedAction: "Refresh the run and submit a new compaction command ID.",
+    traceId: "agent-context-session"
+  });
+}
+
+function compactionRecoveryInvalid(): UnifiedError {
+  return createUnifiedError({
+    code: "AGENT_CONTEXT_COMPACTION_RECOVERY_INVALID",
+    category: "AgentError",
+    message: "The committed compaction could not be reconstructed from persisted artifacts.",
+    recoverability: "user-action",
+    suggestedAction: "Reload the run before retrying context compaction.",
+    traceId: "agent-context-session"
+  });
+}
+
+function compactionModelResultInvalid(): UnifiedError {
+  return createUnifiedError({
+    code: "AGENT_CONTEXT_COMPACTION_MODEL_RESULT_INVALID",
+    category: "ValidationError",
+    message: "The model-assisted compaction result is invalid.",
+    recoverability: "user-action",
+    suggestedAction: "Retry context compaction with a valid model result.",
     traceId: "agent-context-session"
   });
 }

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { ProjectLockFileRepository } from "@novel-studio/repository";
+import { AgentUsageFileRepository, ProjectLockFileRepository } from "@novel-studio/repository";
 
 import * as runtimeExports from "../src/main/agent-run-runtime.js";
 
@@ -18,6 +18,125 @@ afterEach(async () => {
 });
 
 describe("desktop Agent Run runtime", () => {
+  test("exposes the usage session and enforces retention under the user-data root at startup", async () => {
+    const projectRoot = await mkdtemp(
+      join(tmpdir(), "novel-studio-desktop-usage-session-project-")
+    );
+    const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-usage-session-data-"));
+    roots.push(projectRoot, userDataRoot);
+    const usageRepository = new AgentUsageFileRepository({ userDataRoot });
+    const expired = desktopUsageRecord("expired_round", "2026-06-17", 1);
+    const retained = desktopUsageRecord("retained_round", "2026-06-18", 2);
+    expect((await usageRepository.writeFinal(expired)).ok).toBe(true);
+    expect((await usageRepository.writeFinal(retained)).ok).toBe(true);
+
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      projectRoot,
+      userDataRoot,
+      projectId: "project-01",
+      activeChapterId: "chapter-unused",
+      usageTime: () => ({
+        timestamp: "2026-07-17T12:00:00.000Z",
+        localDate: "2026-07-17",
+        timezone: "UTC",
+        utcOffsetMinutes: 0
+      })
+    });
+    const usageSession = (
+      runtime as unknown as {
+        agentUsageSession?: {
+          listAgentUsage(query: Record<string, unknown>): Promise<Record<string, unknown>>;
+        };
+      }
+    ).agentUsageSession;
+
+    expect(usageSession).toBeDefined();
+    await vi.waitFor(async () => {
+      expect((await usageRepository.readById(String(expired["usageId"]))).value).toBeUndefined();
+    });
+    expect((await usageRepository.readById(String(retained["usageId"]))).value).toBeDefined();
+    expect(
+      await usageSession?.listAgentUsage({
+        range: { fromLocalDate: "2026-06-18", toLocalDate: "2026-06-18" }
+      })
+    ).toMatchObject({
+      ok: true,
+      value: { days: [expect.objectContaining({ localDate: "2026-06-18" })] }
+    });
+  });
+
+  test("persists completed model-round usage under the Electron user-data root", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-usage-project-"));
+    const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-usage-data-"));
+    roots.push(projectRoot, userDataRoot);
+    const session = createDesktopRuntime({
+      projectRoot,
+      userDataRoot,
+      projectId: "project-01",
+      activeChapterId: "chapter-unused",
+      createRunId: () => "run-desktop-usage",
+      usageTime: () => ({
+        timestamp: "2026-11-01T06:30:00.000Z",
+        localDate: "2026-11-01",
+        timezone: "America/New_York",
+        utcOffsetMinutes: -300
+      }),
+      modelDriver: {
+        async *streamRound() {
+          yield {
+            type: "usage",
+            usage: {
+              inputTokens: 20,
+              outputTokens: 5,
+              totalTokens: 25,
+              usageStatus: "actual",
+              cost: { amount: 0.001, currency: "USD", status: "actual" }
+            }
+          };
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      }
+    });
+
+    await session.startAgentRun(executionCommand());
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run-desktop-usage")).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+
+    const detailDirectory = join(userDataRoot, "agent-usage", "details");
+    const detailFiles = await readdir(detailDirectory);
+    expect(detailFiles).toHaveLength(1);
+    const record = JSON.parse(
+      await readFile(join(detailDirectory, detailFiles[0]!), "utf8")
+    ) as Record<string, unknown>;
+    expect(record).toMatchObject({
+      runId: "run-desktop-usage",
+      projectId: "project-01",
+      provider: "demo",
+      model: "desktop-scripted-agent",
+      inputTokens: 20,
+      outputTokens: 5,
+      totalTokens: 25,
+      pricingVersion: null,
+      unitPrices: null,
+      cost: { amount: 0.001, currency: "USD", status: "actual" },
+      contextWindow: 128000,
+      timestamp: "2026-11-01T06:30:00.000Z",
+      localDate: "2026-11-01",
+      timezone: "America/New_York",
+      utcOffsetMinutes: -300
+    });
+    expect(record["usageId"]).toBe(
+      `run-desktop-usage:model_round_run-desktop-usage_1:${String(record["finalSequence"])}`
+    );
+    expect(record["safeInputBudget"]).toEqual(expect.any(Number));
+    expect(record["safeInputBudget"]).toBeGreaterThan(0);
+    expect(JSON.stringify(record)).not.toMatch(/prompt|body|authorization|providerFrame/i);
+  });
+
   test("binds strict Conversation and Run persistence to the selected project root", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-conversation-"));
     roots.push(projectRoot);
@@ -114,8 +233,7 @@ describe("desktop Agent Run runtime", () => {
       projectId: "project-01",
       activeChapterId: chapterId,
       createRunId: () => "run-saved-editor-preflight",
-      readEditorBuffer: async (refId) =>
-        refId === `chapter:${chapterId}` ? body : undefined,
+      readEditorBuffer: async (refId) => (refId === `chapter:${chapterId}` ? body : undefined),
       readEditorState: async (path) =>
         path === relativePath ? { dirty: false, content: body } : undefined,
       resolveModelStartFacts: async () => ({
@@ -242,12 +360,13 @@ describe("desktop Agent Run runtime", () => {
     expect(created).toMatchObject({ ok: true });
     if (!created.ok) return;
 
-    await runtime.agentRunSession.startAgentRun({
+    const firstStarted = await runtime.agentRunSession.startAgentRun({
       ...executionCommand("general_file"),
       conversationId: created.value.conversationId,
       commandId: "start-context-first",
       userRequest: "Remember the lantern clue."
     });
+    expect(firstStarted).toMatchObject({ ok: true });
     await vi.waitFor(async () => {
       expect(await runtime.agentRunSession.readAgentRun("run-context-first")).toMatchObject({
         ok: true,
@@ -255,12 +374,13 @@ describe("desktop Agent Run runtime", () => {
       });
     });
 
-    await runtime.agentRunSession.startAgentRun({
+    const secondStarted = await runtime.agentRunSession.startAgentRun({
       ...executionCommand("general_file"),
       conversationId: created.value.conversationId,
       commandId: "start-context-second",
       userRequest: "Continue from the clue."
     });
+    expect(secondStarted).toMatchObject({ ok: true });
     await vi.waitFor(() => expect(roundMessages).toHaveLength(2), { timeout: 5_000 });
 
     expect(roundMessages[1]).toEqual(
@@ -892,6 +1012,39 @@ function createDesktopRuntime(options: Record<string, unknown>) {
       readAgentRun(runId: string): Promise<Record<string, unknown>>;
     }
   )(options);
+}
+
+function desktopUsageRecord(
+  roundId: string,
+  localDate: string,
+  finalSequence: number
+): Record<string, unknown> {
+  return {
+    schemaVersion: "1.0",
+    usageId: `run_desktop:${roundId}:${String(finalSequence)}`,
+    runId: "run_desktop",
+    conversationId: "conversation_desktop",
+    projectId: "project-01",
+    roundId,
+    finalSequence,
+    provider: "demo",
+    model: "desktop-model",
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    usageStatus: "missing",
+    precision: "unknown",
+    pricingVersion: null,
+    unitPrices: null,
+    cost: { amount: 0, currency: "", status: "unknown" },
+    contextWindow: 128000,
+    safeInputBudget: 100000,
+    terminationReason: "stop",
+    timestamp: `${localDate}T12:00:00.000Z`,
+    localDate,
+    timezone: "UTC",
+    utcOffsetMinutes: 0
+  };
 }
 
 function runtimeToolCall(toolCallId: string, name: string, value: Record<string, unknown>) {

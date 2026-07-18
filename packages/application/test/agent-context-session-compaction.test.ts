@@ -197,6 +197,231 @@ function makeSession(
 }
 
 describe("compactContext — cross-repository commit ordering", () => {
+  test("coalesces concurrent duplicate commands into one compaction", async () => {
+    const order: string[] = [];
+    let loadCalls = 0;
+    let releaseInputs: (() => void) | undefined;
+    const inputsReady = new Promise<void>((resolve) => {
+      releaseInputs = resolve;
+    });
+    const source: CompactContextSourcesPort = {
+      async loadInputs() {
+        loadCalls += 1;
+        await inputsReady;
+        return ok(inputs());
+      },
+      async buildArtifacts() {
+        return ok(artifacts());
+      }
+    };
+    const session = makeSession({
+      compactionSources: source,
+      runRepository: recordingRepository(order),
+      usageSink: recordingUsageSink(order)
+    });
+
+    const first = session.compactContext(command());
+    const duplicate = session.compactContext(command());
+    releaseInputs?.();
+    const [firstResult, duplicateResult] = await Promise.all([first, duplicate]);
+
+    expect(firstResult).toEqual(duplicateResult);
+    expect(loadCalls).toBe(1);
+    expect(order.filter((step) => step === "usage")).toHaveLength(1);
+    expect(order.filter((step) => step === "commit")).toHaveLength(1);
+  });
+
+  test("reuses the model result, compaction, and usage target after a post-usage commit failure", async () => {
+    let compactionIds = 0;
+    let commitAttempts = 0;
+    let summarizerCalls = 0;
+    const usageIds: string[] = [];
+    const receipts: JsonObject[] = [];
+    const repository: CompactionRunRepositoryPort = {
+      ...recordingRepository([]),
+      async writeCommandReceipt(_runId, _commandId, receipt) {
+        receipts.push(structuredClone(receipt));
+        return ok(receipt);
+      },
+      async commitCompaction(snapshot) {
+        commitAttempts += 1;
+        return commitAttempts === 1
+          ? err({ code: "COMPACTION_COMMIT_INTERRUPTED" } as unknown as UnifiedError)
+          : ok(snapshot);
+      }
+    };
+    const source: CompactContextSourcesPort = {
+      async loadInputs() {
+        return ok(inputs({ currentTokens: 100000, targetTokens: 1000 }));
+      },
+      async buildArtifacts(request) {
+        const compactionId = request.manifest.compactionId;
+        return ok({
+          ...artifacts(),
+          usageRecord: {
+            schemaVersion: "1.0",
+            usageId: `run_01:${compactionId}:20`,
+            runId: "run_01"
+          },
+          runSnapshot: {
+            schemaVersion: "1.1",
+            runId: "run_01",
+            activeCompactionId: compactionId
+          }
+        });
+      }
+    };
+    const session = makeSession({
+      createCompactionId: () => `compaction_${String(++compactionIds)}`,
+      compactionSources: source,
+      runRepository: repository,
+      modelAssistant: {
+        async summarizeEvictable() {
+          summarizerCalls += 1;
+          return ok({
+            summaryChecksum: "d".repeat(64),
+            inputTokens: 500,
+            outputTokens: 120,
+            precision: "reported",
+            body: "must not persist",
+            providerFrame: { authorization: "Bearer must-not-persist" }
+          });
+        }
+      },
+      usageSink: {
+        async writeFinal(record) {
+          usageIds.push(String(record["usageId"]));
+          return ok(record);
+        }
+      }
+    });
+
+    expect(await session.compactContext(command())).toMatchObject({
+      ok: false,
+      error: { code: "COMPACTION_COMMIT_INTERRUPTED" }
+    });
+    const retried = await session.compactContext(command());
+
+    expect(retried).toMatchObject({ ok: true, value: { compactionId: "compaction_1" } });
+    expect(compactionIds).toBe(1);
+    expect(summarizerCalls).toBe(1);
+    expect(new Set(usageIds)).toEqual(new Set(["run_01:compaction_1:20"]));
+    expect(
+      receipts.find((receipt) => receipt["status"] === "model_completed")?.["modelResult"]
+    ).toEqual({
+      summaryChecksum: "d".repeat(64),
+      inputTokens: 500,
+      outputTokens: 120,
+      precision: "reported"
+    });
+    expect(JSON.stringify(receipts)).not.toMatch(/must not persist|providerFrame|authorization/i);
+  });
+
+  test("rejects an invalid model result before persisting usage or artifacts", async () => {
+    const order: string[] = [];
+    const session = makeSession({
+      compactionSources: sourcesPort(inputs({ currentTokens: 100000, targetTokens: 1000 })),
+      runRepository: recordingRepository(order),
+      usageSink: recordingUsageSink(order),
+      modelAssistant: {
+        async summarizeEvictable() {
+          return ok({
+            summaryChecksum: "not-a-checksum",
+            inputTokens: 500,
+            outputTokens: 120,
+            precision: "reported" as const
+          });
+        }
+      }
+    });
+
+    expect(await session.compactContext(command())).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONTEXT_COMPACTION_MODEL_RESULT_INVALID" }
+    });
+    expect(order).toEqual(["manifest"]);
+  });
+
+  test("recovers a committed compaction after reload when the completed receipt write was interrupted", async () => {
+    let receipt: JsonObject | undefined;
+    let committedSnapshot: JsonObject | undefined;
+    let storedRevision: JsonObject | undefined;
+    let failCompletedReceipt = true;
+    let compactionIds = 0;
+    let usageWrites = 0;
+    const repository = {
+      ...recordingRepository([]),
+      async writeCommandReceipt(_runId: string, _commandId: string, value: JsonObject) {
+        if (value["status"] === "completed" && failCompletedReceipt) {
+          failCompletedReceipt = false;
+          return err({ code: "RECEIPT_WRITE_INTERRUPTED" } as unknown as UnifiedError);
+        }
+        receipt = value;
+        return ok(value);
+      },
+      async readCommandReceipt() {
+        return ok(receipt);
+      },
+      async readSnapshot() {
+        return ok(committedSnapshot);
+      },
+      async readCompactionRevision() {
+        return ok(storedRevision);
+      },
+      async writeCompactionRevision(value: JsonObject) {
+        storedRevision = value;
+        return ok(value);
+      },
+      async commitCompaction(value: JsonObject) {
+        committedSnapshot = value;
+        return ok(value);
+      }
+    } as unknown as CompactionRunRepositoryPort;
+    const source: CompactContextSourcesPort = {
+      async loadInputs() {
+        return ok(inputs());
+      },
+      async buildArtifacts(request) {
+        const compactionId = request.manifest.compactionId;
+        return ok({
+          ...artifacts(),
+          usageRecord: {
+            schemaVersion: "1.0",
+            usageId: `run_01:${compactionId}:20`,
+            runId: "run_01"
+          },
+          runSnapshot: {
+            schemaVersion: "1.1",
+            runId: "run_01",
+            activeCompactionId: compactionId
+          }
+        });
+      }
+    };
+    const makeReloadableSession = () =>
+      makeSession({
+        createCompactionId: () => `compaction_${String(++compactionIds)}`,
+        compactionSources: source,
+        runRepository: repository,
+        usageSink: {
+          async writeFinal(value) {
+            usageWrites += 1;
+            return ok(value);
+          }
+        }
+      });
+
+    expect(await makeReloadableSession().compactContext(command())).toMatchObject({
+      ok: false,
+      error: { code: "RECEIPT_WRITE_INTERRUPTED" }
+    });
+    const recovered = await makeReloadableSession().compactContext(command());
+
+    expect(recovered).toMatchObject({ ok: true, value: { compactionId: "compaction_1" } });
+    expect(compactionIds).toBe(1);
+    expect(usageWrites).toBe(1);
+  });
+
   test("commits usage → revision → result → budget → run marker, after the manifest and started event", async () => {
     const order: string[] = [];
     const events: CompactionEvent[] = [];
