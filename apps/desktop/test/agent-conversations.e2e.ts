@@ -77,18 +77,26 @@ test("isolates multi-run conversation context and restores project-scoped conver
 
     await selectPlanningWritingMode(page);
     await expect(page.getByRole("button", { name: "规划 · 写作" })).toHaveCount(1);
-    await expect(page.getByLabel("写入策略")).toHaveCount(0);
+    await expect(page.getByLabel("会话输入区").getByLabel(/^修改权限：/)).toHaveCount(0);
     await expect(page.getByLabel("运行方式")).toHaveCount(0);
-    await expect(page.getByLabel("上下文")).toHaveCount(0);
+    await expect(
+      page.getByLabel("会话输入区").getByRole("group", { name: "上下文" })
+    ).toHaveCount(0);
     await selectExecutionMode(page);
-    const policy = page.getByLabel("写入策略");
-    await policy.selectOption("user_preapproved_run");
-    await page.getByText("确认本次运行自动修改", { exact: true }).click();
+    const composer = page.getByLabel("会话输入区");
+    await composer.getByLabel("修改权限：每次修改前确认").click();
+    const permissionMenu = composer.getByRole("dialog", { name: "修改权限与摘要" });
+    await expect(permissionMenu.locator('details[aria-label="本次权限摘要"]')).toContainText(
+      "服务端事实"
+    );
+    await permissionMenu.getByRole("radio", { name: "本次运行自动修改" }).check();
+    await permissionMenu.getByRole("checkbox", { name: "确认本次运行自动修改风险" }).check();
+    await permissionMenu.press("Escape");
 
     await sendConversationRequest(page, "Remember the alpha lantern clue.");
     await waitForRunCount(page, 1);
     await waitForLatestRunStatus(page, "completed");
-    await expect(policy).toHaveValue("write_before_confirmation");
+    await expect(composer.getByLabel("修改权限：每次修改前确认")).toBeVisible();
     const firstRunId = await latestRunId(page);
     await expect(page.locator(`[data-run-id="${firstRunId}"]`)).toHaveCount(1);
     await expect(
@@ -106,7 +114,9 @@ test("isolates multi-run conversation context and restores project-scoped conver
     const conversationB = await createConversation(page);
     expect(conversationB).not.toBe(conversationA);
     await selectExecutionMode(page);
-    await expect(page.getByLabel("写入策略")).toHaveValue("write_before_confirmation");
+    await expect(
+      page.getByLabel("会话输入区").getByLabel("修改权限：每次修改前确认")
+    ).toBeVisible();
     await sendConversationRequest(page, "Hold beta without alpha context.");
     await expect(page.locator(".ns-agent-assistant-text")).toContainText("Holding beta run");
     const conversationView = page.getByLabel("Agent 会话主视图");

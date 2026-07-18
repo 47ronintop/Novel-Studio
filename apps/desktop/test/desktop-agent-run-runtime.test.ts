@@ -109,8 +109,10 @@ describe("desktop Agent Run runtime", () => {
     const detailDirectory = join(userDataRoot, "agent-usage", "details");
     const detailFiles = await readdir(detailDirectory);
     expect(detailFiles).toHaveLength(1);
+    const [detailFile] = detailFiles;
+    if (detailFile === undefined) throw new Error("Expected one persisted usage detail file");
     const record = JSON.parse(
-      await readFile(join(detailDirectory, detailFiles[0]!), "utf8")
+      await readFile(join(detailDirectory, detailFile), "utf8")
     ) as Record<string, unknown>;
     expect(record).toMatchObject({
       runId: "run-desktop-usage",

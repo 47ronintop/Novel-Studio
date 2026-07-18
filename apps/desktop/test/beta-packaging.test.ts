@@ -5,6 +5,8 @@ import { describe, expect, test } from "vitest";
 
 import { withBuildGateLock } from "./build-gate-lock";
 
+const packageCheckTimeoutMs = 240_000;
+
 describe("M10 beta packaging", () => {
   test("declares renderer bundling and installer-grade packaging scripts", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
@@ -68,5 +70,17 @@ describe("M10 beta packaging", () => {
     expect(existsSync(join(process.cwd(), "apps", "desktop", "electron-builder.config.cjs"))).toBe(
       true
     );
-  }, 90000);
+  }, packageCheckTimeoutMs);
+
+  test("keeps the build gate lock alive beyond the package check timeout", () => {
+    const lockSource = readFileSync(
+      join(process.cwd(), "apps", "desktop", "test", "build-gate-lock.ts"),
+      "utf8"
+    );
+    const staleLockMatch = /const staleLockMs = ([\d_]+);/.exec(lockSource);
+    expect(staleLockMatch).not.toBeNull();
+    const staleLockMs = Number(staleLockMatch?.[1]?.replaceAll("_", ""));
+
+    expect(staleLockMs).toBeGreaterThan(packageCheckTimeoutMs);
+  });
 });

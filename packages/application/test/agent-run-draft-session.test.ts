@@ -35,7 +35,8 @@ function createMemoryRepository() {
   ): Result<JsonObject | undefined, UnifiedError> {
     const byRevision = store.get(conversationId);
     if (byRevision === undefined || byRevision.size === 0) return ok(undefined);
-    const latest = [...byRevision.keys()].sort((left, right) => right - left)[0]!;
+    const latest = [...byRevision.keys()].sort((left, right) => right - left).at(0);
+    if (latest === undefined) return ok(undefined);
     return ok(byRevision.get(latest));
   }
 

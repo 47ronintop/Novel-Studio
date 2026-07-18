@@ -136,7 +136,10 @@ export function transitionPlanExecutionStep(
 ): Result<PlanExecutionRecord, UnifiedError> {
   const stepIndex = record.steps.findIndex((step) => step.stepId === input.stepId);
   if (stepIndex < 0) return err(planExecutionError("AGENT_PLAN_STEP_NOT_FOUND", "stepId"));
-  const current = record.steps[stepIndex]!;
+  const current = record.steps[stepIndex];
+  if (current === undefined) {
+    return err(planExecutionError("AGENT_PLAN_STEP_NOT_FOUND", "stepId"));
+  }
   const legal =
     (current.status === "pending" && input.status === "running") ||
     (current.status === "running" && input.status !== "running");
@@ -213,7 +216,10 @@ export function recordPlanExecutionDeviation(
     return err(planExecutionError("AGENT_PLAN_DEVIATION_INVALID", "deviation"));
   }
   const kind = classifyPlanDeviation(input);
-  const current = record.steps[stepIndex]!;
+  const current = record.steps[stepIndex];
+  if (current === undefined) {
+    return err(planExecutionError("AGENT_PLAN_STEP_NOT_FOUND", "stepId"));
+  }
   const deviationKind =
     current.deviationKind === "material" || kind === "material" ? "material" : "minor";
   const next = nextRecord(record, stepIndex, {

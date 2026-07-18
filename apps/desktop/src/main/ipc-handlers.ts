@@ -1471,22 +1471,6 @@ function isCursor(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9_-]{1,2048}$/u.test(value);
 }
 
-function isProviderCapabilitySnapshot(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    isSafeId(value["profileId"]) &&
-    isNonEmptyString(value["provider"]) &&
-    isNonEmptyString(value["modelName"]) &&
-    value["streaming"] === true &&
-    value["toolCalling"] === true &&
-    value["structuredArguments"] === true &&
-    typeof value["contextWindow"] === "number" &&
-    Number.isFinite(value["contextWindow"]) &&
-    typeof value["requiredContextTokens"] === "number" &&
-    Number.isFinite(value["requiredContextTokens"])
-  );
-}
-
 async function bindAgentRuntime(
   manager: DesktopAgentRuntimeManager | undefined,
   result: Result<ProjectWorkspaceSnapshot, UnifiedError>

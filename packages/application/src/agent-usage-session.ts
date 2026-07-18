@@ -126,11 +126,18 @@ function isSafeFilter(value: unknown): value is string {
     value.length <= 128 &&
     value.trim() === value &&
     value.length > 0 &&
-    !/[\u0000-\u001f\\]/.test(value) &&
+    !hasDisallowedFilterCharacter(value) &&
     !/^[A-Za-z]:/.test(value) &&
     !value.startsWith("/") &&
     !value.includes("..")
   );
+}
+
+function hasDisallowedFilterCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x5c);
+  });
 }
 
 function localDateToday(): string {

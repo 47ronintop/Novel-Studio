@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 const lockPath = join(process.cwd(), ".vitest-build-gate.lock");
-const staleLockMs = 120_000;
+const staleLockMs = 300_000;
 
 export async function withBuildGateLock<T>(operation: () => T | Promise<T>): Promise<T> {
   const lock = await acquireBuildGateLock();

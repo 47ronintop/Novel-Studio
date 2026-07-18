@@ -9,6 +9,7 @@ module.exports = {
   files: [
     "apps/desktop/dist/**",
     "packages/*/dist/**",
+    "!packages/*/dist/test{,/**}",
     "packages/schemas/schema/**",
     "package.json",
     "package-lock.json"

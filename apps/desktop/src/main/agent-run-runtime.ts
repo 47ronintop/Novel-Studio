@@ -47,7 +47,7 @@ import type {
   VersionGroup
 } from "@novel-studio/agent-engine";
 import { calculateContextBudget } from "@novel-studio/agent-engine";
-import type { AgentRunDraftSession, SyncStartDraftCommand } from "@novel-studio/application";
+import type { AgentRunDraftSession } from "@novel-studio/application";
 import {
   createUnifiedError,
   err,

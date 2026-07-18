@@ -209,7 +209,10 @@ export function createAgentPlanExecutionSession(
       if (!transitioned.ok) return transitioned;
       const written = await write(transitioned.value);
       if (!written.ok) return written;
-      const step = written.value.steps.find((candidate) => candidate.stepId === input.stepId)!;
+      const step = written.value.steps.find((candidate) => candidate.stepId === input.stepId);
+      if (step === undefined) {
+        return err(planExecutionSessionError("AGENT_PLAN_STEP_NOT_FOUND"));
+      }
       await emit({
         type: transitionEventType(input.status),
         runId: input.runId,
@@ -249,11 +252,13 @@ export function createAgentPlanExecutionSession(
           record: written.value
         });
       }
+      const discovery = input.discovery;
+      const proposal = input.proposal;
       if (
         input.planRevision === undefined ||
         input.planRevision <= loaded.value.planRevision ||
-        !isNonEmpty(input.discovery) ||
-        !isNonEmpty(input.proposal)
+        !isNonEmpty(discovery) ||
+        !isNonEmpty(proposal)
       ) {
         return err(planExecutionSessionError("AGENT_PLAN_REVISION_REQUEST_INVALID"));
       }
@@ -265,8 +270,8 @@ export function createAgentPlanExecutionSession(
         planId: loaded.value.planId,
         planRevision: input.planRevision,
         affectedStepIds: Object.freeze([input.stepId]),
-        discovery: input.discovery!,
-        proposal: input.proposal!,
+        discovery,
+        proposal,
         createdAt: now()
       });
       const requestWritten = await options.repository.writePlanRevisionRequest(

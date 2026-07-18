@@ -550,11 +550,13 @@ describe("compactContext — cross-repository commit ordering", () => {
   });
 
   test("replaces a stale execution fact with the latest completed step before compaction", async () => {
+    const [baseStep] = executionRecord().steps;
+    if (baseStep === undefined) throw new Error("Expected one plan execution step fixture");
     const staleRecord = executionRecord({
       revision: 1,
       steps: [
         {
-          ...executionRecord().steps[0]!,
+          ...baseStep,
           status: "running",
           completedAt: null,
           verification: [],

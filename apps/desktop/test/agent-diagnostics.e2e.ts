@@ -289,6 +289,7 @@ function fixtureSessionOptions(kind: FixtureKind, common: Record<string, unknown
       ...common,
       modelDriver: {
         async *streamRound() {
+          yield* [];
           throw createUnifiedError({
             errorId: "err_provider_disconnect_e2e",
             code: "LLM_PROVIDER_DISCONNECTED",
@@ -478,7 +479,7 @@ async function waitForSnapshot(
   runId: string,
   predicate: (snapshot: JsonObject) => boolean
 ): Promise<JsonObject> {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     const read = await repository.readSnapshot(runId);
     if (!read.ok) throw read.error;

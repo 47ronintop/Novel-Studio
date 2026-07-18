@@ -7,6 +7,12 @@ import * as repositoryExports from "../src/index.js";
 
 const roots: string[] = [];
 
+function latestRoot(): string {
+  const root = roots.at(-1);
+  if (root === undefined) throw new Error("Expected a created usage repository root");
+  return root;
+}
+
 // Mirrors @novel-studio/agent-engine's AgentUsageRecord. The repository is a sibling layer that does
 // not import agent-engine, so tests describe the record shape structurally.
 interface AgentUsageRecord {
@@ -138,10 +144,10 @@ type UsageRepository = {
   clearUsage(command: {
     commandId: string;
     range: { fromLocalDate: string; toLocalDate: string };
-  }): Promise<{ ok: boolean; value?: void; error?: { code: string } }>;
+  }): Promise<{ ok: boolean; value?: undefined; error?: { code: string } }>;
   enforceRetention(
     referenceLocalDate: string
-  ): Promise<{ ok: boolean; value?: void; error?: { code: string } }>;
+  ): Promise<{ ok: boolean; value?: undefined; error?: { code: string } }>;
 };
 
 async function createRepository(existingRoot?: string): Promise<UsageRepository> {
@@ -174,7 +180,7 @@ describe("AgentUsageFileRepository", () => {
 
   test("is first-wins across repository instances and does not lose concurrent daily totals", async () => {
     const firstRepository = await createRepository();
-    const userDataRoot = roots[roots.length - 1]!;
+    const userDataRoot = latestRoot();
     const secondRepository = await createRepository(userDataRoot);
     const firstRecord = baseRecord();
     const competingRecord = baseRecord({ outputTokens: 400, totalTokens: 1400 });
@@ -203,7 +209,7 @@ describe("AgentUsageFileRepository", () => {
 
   test("maintains a daily aggregate keyed by localDate and does not double-count replays", async () => {
     const repository = await createRepository();
-    const userDataRoot = roots[roots.length - 1]!;
+    const userDataRoot = latestRoot();
     await repository.writeFinal(baseRecord({ roundId: "r1", finalSequence: 1 }));
     await repository.writeFinal(baseRecord({ roundId: "r2", finalSequence: 2 }));
     // Replay of u1's round key must not add to the aggregate again.
@@ -338,7 +344,7 @@ describe("AgentUsageFileRepository", () => {
 
   test("retains details for 30 days and daily aggregates for 365 days without mutating survivors", async () => {
     const repository = await createRepository();
-    const userDataRoot = roots[roots.length - 1]!;
+    const userDataRoot = latestRoot();
     await repository.writeFinal(
       baseRecord({
         roundId: "detail_expired",
@@ -390,7 +396,7 @@ describe("AgentUsageFileRepository", () => {
 
   test("uses a redacted receipt after detail retention without recreating or replacing detail", async () => {
     const repository = await createRepository();
-    const userDataRoot = roots[roots.length - 1]!;
+    const userDataRoot = latestRoot();
     const record = baseRecord({ roundId: "retained_replay", localDate: "2026-06-16" });
     await repository.writeFinal(record);
     await repository.enforceRetention("2026-07-17");
@@ -428,7 +434,7 @@ describe("AgentUsageFileRepository", () => {
 
   test("clearUsage prevents an expired detail replay from restoring its cleared aggregate", async () => {
     const repository = await createRepository();
-    const userDataRoot = roots[roots.length - 1]!;
+    const userDataRoot = latestRoot();
     const record = baseRecord({ roundId: "cleared_retained_replay", localDate: "2026-06-16" });
     await repository.writeFinal(record);
     await repository.enforceRetention("2026-07-17");
@@ -492,7 +498,7 @@ describe("AgentUsageFileRepository", () => {
     "repairs detail, key, and aggregate after the %s write stage is interrupted",
     async (blockedStage) => {
       const repository = await createRepository();
-      const userDataRoot = roots[roots.length - 1]!;
+      const userDataRoot = latestRoot();
       const usageRoot = join(userDataRoot, "agent-usage");
       await mkdir(usageRoot, { recursive: true });
       const blocker = join(usageRoot, blockedStage);
@@ -512,7 +518,7 @@ describe("AgentUsageFileRepository", () => {
 
   test("repairs a detail-only record before querying aggregates without replaying writeFinal", async () => {
     const repository = await createRepository();
-    const userDataRoot = roots[roots.length - 1]!;
+    const userDataRoot = latestRoot();
     const usageRoot = join(userDataRoot, "agent-usage");
     await mkdir(usageRoot, { recursive: true });
     const blocker = join(usageRoot, "keys");
@@ -540,7 +546,7 @@ describe("AgentUsageFileRepository", () => {
 
   test("repairs a detail-only record before retention deletes old details", async () => {
     const repository = await createRepository();
-    const userDataRoot = roots[roots.length - 1]!;
+    const userDataRoot = latestRoot();
     const usageRoot = join(userDataRoot, "agent-usage");
     await mkdir(usageRoot, { recursive: true });
     const blocker = join(usageRoot, "aggregates");
@@ -563,7 +569,7 @@ describe("AgentUsageFileRepository", () => {
 
   test("rejects a tampered detail before repair can write outside the usage root", async () => {
     const repository = await createRepository();
-    const userDataRoot = roots[roots.length - 1]!;
+    const userDataRoot = latestRoot();
     const detailsRoot = join(userDataRoot, "agent-usage", "details");
     const escapedKeyPath = join(userDataRoot, "..", "repair-key-escape__tampered_round__12.json");
     const escapedAggregatePath = join(userDataRoot, "..", "repair-aggregate-escape.json");
@@ -597,7 +603,7 @@ describe("AgentUsageFileRepository", () => {
 
   test("clearUsage deletes only usage artifacts inside the inclusive date range", async () => {
     const repository = await createRepository();
-    const userDataRoot = roots[roots.length - 1]!;
+    const userDataRoot = latestRoot();
     await repository.writeFinal(baseRecord({ roundId: "clear_me" }));
     await repository.writeFinal(
       baseRecord({
@@ -623,7 +629,7 @@ describe("AgentUsageFileRepository", () => {
 
   test("resumes a pending clear before allowing new usage in its date range", async () => {
     const repository = await createRepository();
-    const userDataRoot = roots[roots.length - 1]!;
+    const userDataRoot = latestRoot();
     const localDate = "2026-07-16";
     const command = {
       commandId: "clear_pending",

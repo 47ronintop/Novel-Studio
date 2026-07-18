@@ -22,6 +22,8 @@ const table: AgentPricingTable = {
     }
   ]
 };
+const [defaultEntry] = table.entries;
+if (defaultEntry === undefined) throw new Error("Expected one pricing entry fixture");
 
 describe("AgentPricingRegistry", () => {
   test("captures an exact versioned price snapshot and computes an estimate", () => {
@@ -155,8 +157,9 @@ describe("AgentPricingRegistry", () => {
   test.each(["inputPerMillion", "outputPerMillion"] as const)(
     "rejects a pricing table missing required %s",
     (missingField) => {
-      const unitPrices = { ...table.entries[0]!.unitPrices } as Record<string, unknown>;
-      delete unitPrices[missingField];
+      const unitPrices = Object.fromEntries(
+        Object.entries(defaultEntry.unitPrices).filter(([key]) => key !== missingField)
+      );
       const invalidTable = {
         version: "v1",
         entries: [{ provider: "openai", model: "gpt-5", unitPrices }]
@@ -168,18 +171,18 @@ describe("AgentPricingRegistry", () => {
 
   test.each([
     { version: "", entries: [] },
-    { version: "v1", entries: [{ ...table.entries[0]!, provider: "*" }] },
-    { version: "v1", entries: [{ ...table.entries[0]!, model: "gpt-*" }] },
+    { version: "v1", entries: [{ ...defaultEntry, provider: "*" }] },
+    { version: "v1", entries: [{ ...defaultEntry, model: "gpt-*" }] },
     {
       version: "v1",
       entries: [
         {
-          ...table.entries[0]!,
-          unitPrices: { ...table.entries[0]!.unitPrices, inputPerMillion: -1 }
+          ...defaultEntry,
+          unitPrices: { ...defaultEntry.unitPrices, inputPerMillion: -1 }
         }
       ]
     },
-    { version: "v1", entries: [{ ...table.entries[0]! }, { ...table.entries[0]! }] }
+    { version: "v1", entries: [{ ...defaultEntry }, { ...defaultEntry }] }
   ] as const)("rejects invalid or ambiguous tables", (invalidTable) => {
     expect(() => createAgentPricingRegistry(invalidTable)).toThrow();
   });

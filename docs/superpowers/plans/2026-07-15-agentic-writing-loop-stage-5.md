@@ -1531,11 +1531,11 @@ git commit -m "feat: add agent usage settings"
 - Modify: `scripts/package-check.mjs`
 - Modify: `docs/superpowers/plans/2026-07-15-agentic-writing-loop-stage-5.md` only to mark completed checkboxes during execution
 
-- [ ] **Step 1: Add release readiness assertions**
+- [x] **Step 1: Add release readiness assertions**
 
 Require the Stage 5.0 single-composer suite, v1.0/v1.1 contract suite, 5A context suite, 5B permission/plan suite, 5C diagnostics/usage suite, and all existing Agent write/undo/conversation E2Es. Assert package output contains no API keys, prompt bodies, file bodies, or raw provider frames in usage/diagnostic fixtures.
 
-- [ ] **Step 2: Run the full static and unit gate**
+- [x] **Step 2: Run the full static and unit gate**
 
 Run:
 
@@ -1549,7 +1549,7 @@ npm run package:check
 
 Expected: every command exits `0`.
 
-- [ ] **Step 3: Run all Agent Electron E2E tests**
+- [x] **Step 3: Run all Agent Electron E2E tests**
 
 Run:
 
@@ -1559,7 +1559,7 @@ npx playwright test apps/desktop/test/agent-conversations.e2e.ts apps/desktop/te
 
 Expected: PASS with no page errors, one composer, one assistant projection, and all write/undo safety assertions intact.
 
-- [ ] **Step 4: Repeat the complete Agent Electron set once**
+- [x] **Step 4: Repeat the complete Agent Electron set once**
 
 Run:
 
@@ -1569,7 +1569,7 @@ npx playwright test apps/desktop/test/agent-conversations.e2e.ts apps/desktop/te
 
 Expected: PASS again, detecting no event-order or reload timing instability.
 
-- [ ] **Step 5: Commit the release gate**
+- [x] **Step 5: Commit the release gate**
 
 ```powershell
 git add apps/desktop/test/m98-v1-ship-readiness.test.ts scripts/package-check.mjs docs/superpowers/plans/2026-07-15-agentic-writing-loop-stage-5.md
@@ -1578,11 +1578,11 @@ git commit -m "test: complete stage 5 acceptance gate"
 
 ## Final Plan Self-Review
 
-- [ ] Verify every Stage 5 v1.3 requirement maps to a task: one right-side composer, one lower-left grouped mode popover, no duplicate assistant/run projection or nested chat surface, model/reasoning placement, explicit refs, context modes, provider-aware budget, manifest-backed three-stage compaction, permission checksum, existing Plan Mode regression, plan execution/deviation, inline recoverable errors, redacted usage, and settings daily analytics.
-- [ ] Verify the pre-implementation decisions are captured and non-contradictory: `AgentRunSnapshotV10` alias/rename + Application-boundary normalize-before-write (Task 1.1); `ResolvedAgentRunStartInput` internal type + `decidePlan` server-side handoff migration (Task 1.3); conversation-repository ownership of run/context drafts with its path guard (Task 1.2); cross-repository, Application-orchestrated compaction commit with pointer-last marker (Task 1.5); grouped composer sub-objects + shared `agent-popover.tsx` primitive (Tasks 1.6/2.3); 5A `writeFinal` maintains the daily aggregate (Task 1.5).
-- [ ] Verify Task 1.7 makes writing vs general-file two real context-engineering profiles (mode-specific guidance, writing style-pack injection, minimal tool-pulled initial context) without adding a search tool or a user-writable conventions file — both explicitly deferred to P1.
-- [ ] Search this plan for `TBD`, `TODO`, `implement later`, `fill in`, and vague “add tests” language; none may remain.
-- [ ] Verify type names remain consistent across tasks: `AgentRunDraft`, `AgentReasoningEffort`, `ContextDraft`, `ContextBudgetSnapshot`, `ContextCompactionRevision`, `PermissionSummary`, `PlanExecutionRecord`, `AgentRunErrorRecord`, `AgentUsageUnitPriceSnapshot`, `AgentUsageRecord`, and `RetryRunTargetCommand`.
-- [ ] Verify no task adds Shell, Git, MCP, browser, network research, plugins, multi-Agent execution, or another file-write path.
-- [ ] Verify every UI task preserves keyboard operation, one composer, narrow-panel layout, and Playwright-only Electron acceptance.
-- [ ] Verify every real write and undo test still runs through the existing Change Set, Version Group, transaction journal, conflict, and recovery implementation.
+- [x] Verify every Stage 5 v1.3 requirement maps to a task: one right-side composer, one lower-left grouped mode popover, no duplicate assistant/run projection or nested chat surface, model/reasoning placement, explicit refs, context modes, provider-aware budget, manifest-backed three-stage compaction, permission checksum, existing Plan Mode regression, plan execution/deviation, inline recoverable errors, redacted usage, and settings daily analytics.
+- [x] Verify the pre-implementation decisions are captured and non-contradictory: `AgentRunSnapshotV10` alias/rename + Application-boundary normalize-before-write (Task 1.1); `ResolvedAgentRunStartInput` internal type + `decidePlan` server-side handoff migration (Task 1.3); conversation-repository ownership of run/context drafts with its path guard (Task 1.2); cross-repository, Application-orchestrated compaction commit with pointer-last marker (Task 1.5); grouped composer sub-objects + shared `agent-popover.tsx` primitive (Tasks 1.6/2.3); 5A `writeFinal` maintains the daily aggregate (Task 1.5).
+- [x] Verify Task 1.7 makes writing vs general-file two real context-engineering profiles (mode-specific guidance, writing style-pack injection, minimal tool-pulled initial context) without adding a search tool or a user-writable conventions file — both explicitly deferred to P1.
+- [x] Search this plan for `TBD`, `TODO`, `implement later`, `fill in`, and vague “add tests” language; none may remain.
+- [x] Verify type names remain consistent across tasks: `AgentRunDraft`, `AgentReasoningEffort`, `ContextDraft`, `ContextBudgetSnapshot`, `ContextCompactionRevision`, `PermissionSummary`, `PlanExecutionRecord`, `AgentRunErrorRecord`, `AgentUsageUnitPriceSnapshot`, `AgentUsageRecord`, and `RetryRunTargetCommand`.
+- [x] Verify no task adds Shell, Git, MCP, browser, network research, plugins, multi-Agent execution, or another file-write path.
+- [x] Verify every UI task preserves keyboard operation, one composer, narrow-panel layout, and Playwright-only Electron acceptance.
+- [x] Verify every real write and undo test still runs through the existing Change Set, Version Group, transaction journal, conflict, and recovery implementation.

@@ -113,6 +113,10 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
   const projectRoot = join(tempRoot, "Default Project");
   const requests: Array<{ readonly body: Record<string, unknown>; readonly userRequest: string }> =
     [];
+  let releaseChapterToolCall: (() => void) | undefined;
+  const chapterToolCallGate = new Promise<void>((resolve) => {
+    releaseChapterToolCall = resolve;
+  });
   let releaseQuestion: (() => void) | undefined;
   const questionGate = new Promise<void>((resolve) => {
     releaseQuestion = resolve;
@@ -202,6 +206,7 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
       return;
     }
     if (toolCount === 1) {
+      await chapterToolCallGate;
       sendToolCall(
         response,
         "chapter",
@@ -239,13 +244,15 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
     const activitySummary = page.getByLabel("Agent 活动摘要");
     await expect(activitySummary).toBeVisible();
     await expect(activitySummary).not.toHaveAttribute("open", "");
-    await expect(activitySummary.locator(":scope > summary")).toContainText("已读取 2 项");
+    await expect(activitySummary.locator(":scope > summary")).toContainText("已读取 1 项");
     await expect(
       activitySummary.locator("ol").getByText(/已列出 chapters 的 1 个条目/)
     ).not.toBeVisible();
     await expect(
       activitySummary.locator("ol").getByText(`已读取章节 ${activeChapterId}`, { exact: true })
     ).not.toBeVisible();
+    releaseChapterToolCall?.();
+    await expect(activitySummary.locator("ol > li")).toHaveCount(2);
 
     await page.getByLabel("活动栏").getByRole("button", { name: "工作区" }).click();
     await replaceChapterText(page, "运行中发生变化");
@@ -318,6 +325,8 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
     expect(chapterFiles).not.toContain("未保存的开头");
     expect(chapterFiles).not.toContain("运行中发生变化");
   } finally {
+    releaseChapterToolCall?.();
+    releaseQuestion?.();
     await electronApp.close();
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve()))

@@ -984,6 +984,79 @@ describe("Agent Run renderer bridge", () => {
     expect(props.changeSetReview?.baseHashConflictPaths).toEqual(["chapters/ch_03.md"]);
   });
 
+  test("prefers a persisted diagnostic over duplicate command feedback after failed apply", async () => {
+    const awaitingSnapshot = {
+      ...snapshot,
+      operationMode: "execution" as const,
+      status: "awaiting_write_approval" as const,
+      runRevision: 14,
+      lastSequence: 14
+    };
+    const failedSnapshot = {
+      ...awaitingSnapshot,
+      status: "failed" as const,
+      runRevision: 16,
+      lastSequence: 16,
+      activeErrorId: "error-partial-failure",
+      recoveryState: "recovery_review" as const
+    };
+    const diagnostic = {
+      schemaVersion: "1.0" as const,
+      errorId: "error-partial-failure",
+      projectId: "project-01",
+      runId: "run-bridge",
+      sequence: 16,
+      category: "StorageError",
+      code: "AGENT_WRITE_PARTIAL_FAILURE",
+      message: "Agent writing failed and applied files were rolled back.",
+      recoverability: "user-action" as const,
+      suggestedActions: ["Open recovery review."],
+      redactedDetail: { recoveryJournal: { versionGroupId: "version-group-partial" } },
+      recoveryState: "recovery_review" as const,
+      retryTargets: [],
+      createdAt: "2026-07-17T12:00:00.000Z"
+    };
+    let readCount = 0;
+    const api = {
+      agentRuns: {
+        onEvent: () => () => undefined,
+        list: async () => ok([awaitingSnapshot]),
+        read: async () => {
+          readCount += 1;
+          return ok({
+            snapshot: readCount === 1 ? awaitingSnapshot : failedSnapshot,
+            events: [],
+            changeSet: changeSet(4, "change-set-checksum-r4", true),
+            ...(readCount === 1 ? {} : { diagnostic })
+          });
+        },
+        decideChangeSet: async () => ({
+          ok: false as const,
+          error: {
+            schemaVersion: "1.0" as const,
+            errorId: "error-partial-failure",
+            code: "AGENT_WRITE_PARTIAL_FAILURE",
+            category: "StorageError" as const,
+            message: "Agent writing failed and applied files were rolled back.",
+            recoverability: "user-action" as const,
+            suggestedAction: "Open recovery review.",
+            traceId: "agent-run-bridge-test",
+            createdAt: "2026-07-17T12:00:00.000Z"
+          },
+          latestSnapshot: failedSnapshot
+        })
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({ projectId: "project-01", settings });
+    await bridge.load("project-01");
+
+    const props = await bridge.applyChangeSet();
+
+    expect(props.diagnostic).toEqual(diagnostic);
+    expect(props.errorMessage).toBeUndefined();
+  });
+
   test.each([
     {
       label: "a write failure with only code and relativePath",
@@ -1299,10 +1372,12 @@ describe("Agent Run renderer bridge", () => {
 });
 
 describe("Agent Run renderer bridge — draft-backed composer", () => {
+  const [defaultProfile] = settings.profiles;
+  if (defaultProfile === undefined) throw new Error("Expected a default model profile fixture");
   const draftSettings = {
     ...settings,
     profiles: [
-      settings.profiles[0]!,
+      defaultProfile,
       {
         id: "profile-02",
         provider: "anthropic",

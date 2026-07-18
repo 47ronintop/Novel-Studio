@@ -256,14 +256,26 @@ describe("M22 settings bridge", () => {
     expect(queries).toHaveLength(3);
     expect(queries[1]?.projectId).toBe("project_02");
     expect(queries[2]).toMatchObject({ projectId: "project_02", detailLocalDate: "2026-07-17" });
+    const [rangeQuery, filterQuery, detailQuery] = queries;
+    const [rangePending, filterPending, detailPending] = pending;
+    if (
+      rangeQuery === undefined ||
+      filterQuery === undefined ||
+      detailQuery === undefined ||
+      rangePending === undefined ||
+      filterPending === undefined ||
+      detailPending === undefined
+    ) {
+      throw new Error("Expected three queued usage requests");
+    }
 
-    pending[2]!.resolve(ok(usageReport(queries[2]!, "newest")));
+    detailPending.resolve(ok(usageReport(detailQuery, "newest")));
     await detailRequest;
-    pending[0]!.resolve(ok(usageReport(queries[0]!, "stale-range")));
-    pending[1]!.resolve(ok(usageReport(queries[1]!, "stale-filter")));
+    rangePending.resolve(ok(usageReport(rangeQuery, "stale-range")));
+    filterPending.resolve(ok(usageReport(filterQuery, "stale-filter")));
     await Promise.all([rangeRequest, filterRequest]);
 
-    expect(bridge.getProps().usage?.report?.query).toEqual(queries[2]);
+    expect(bridge.getProps().usage?.report?.query).toEqual(detailQuery);
     expect(bridge.getProps().usage?.report?.generatedAt).toBe("newest");
   });
 
@@ -353,7 +365,8 @@ describe("M22 settings bridge", () => {
       await bridge.clearAgentUsage();
       const commandIds = calls
         .filter((call) => call.startsWith("settings.clearAgentUsage:"))
-        .map((call) => call.split(":")[1]!);
+        .map((call) => call.split(":")[1])
+        .filter((id): id is string => id !== undefined);
 
       expect(commandIds).toHaveLength(2);
       expect(new Set(commandIds).size).toBe(2);

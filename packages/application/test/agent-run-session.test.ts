@@ -901,6 +901,7 @@ describe("AgentRunSession", () => {
       repository,
       modelDriver: {
         async *streamRound() {
+          yield* [];
           const error = Object.assign(new Error("socket closed"), {
             code: "AGENT_PROVIDER_DISCONNECTED",
             recoverability: "retryable",
@@ -958,6 +959,7 @@ describe("AgentRunSession", () => {
       repository: memoryRepository(),
       modelDriver: {
         async *streamRound() {
+          yield* [];
           throw Object.assign(new Error("socket closed"), {
             code: "AGENT_PROVIDER_DISCONNECTED",
             recoverability: "retryable"
@@ -3083,6 +3085,7 @@ describe("AgentRunSession", () => {
       modelDriver: {
         async *streamRound() {
           await never;
+          yield* [];
         }
       },
       startPreflight: echoStartPreflight(),
@@ -3134,6 +3137,7 @@ describe("AgentRunSession", () => {
       modelDriver: {
         async *streamRound() {
           await never;
+          yield* [];
         }
       },
       startPreflight: echoStartPreflight(),
@@ -3194,6 +3198,7 @@ describe("AgentRunSession", () => {
       modelDriver: {
         async *streamRound() {
           await never;
+          yield* [];
         }
       },
       startPreflight: echoStartPreflight(),
@@ -3233,6 +3238,7 @@ describe("AgentRunSession", () => {
       modelDriver: {
         async *streamRound() {
           await never;
+          yield* [];
         }
       },
       startPreflight: echoStartPreflight(),

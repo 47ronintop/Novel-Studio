@@ -1,6 +1,5 @@
 import type {
   AgentContextSourceInput,
-  AgentProviderCapabilitySnapshot,
   AgentReasoningEffort,
   AgentRunCommandResult,
   AgentRunDraft,
@@ -588,7 +587,6 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       };
       if (result.latestSnapshot !== undefined) {
         await hydrate(result.latestSnapshot.runId);
-        state = { ...state, errorMessage };
       }
       notify();
       return;

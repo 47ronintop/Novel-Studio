@@ -805,10 +805,6 @@ function numberField(value: JsonObject, key: string): number {
   return typeof candidate === "number" && Number.isFinite(candidate) ? candidate : 0;
 }
 
-function isTokenCount(value: unknown): boolean {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
 function hasOnlyFields(value: object, allowed: ReadonlySet<string>): boolean {
   return Object.keys(value).every((field) => allowed.has(field));
 }
@@ -876,8 +872,15 @@ function isBoundedScalar(value: unknown, allowEmpty: boolean): value is string {
     typeof value === "string" &&
     value.length <= 256 &&
     (allowEmpty || value.length > 0) &&
-    !/[\u0000-\u001f\u007f]/u.test(value)
+    !hasAsciiControlCharacter(value)
   );
+}
+
+function hasAsciiControlCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f);
+  });
 }
 
 function isBoundedIdentifier(value: unknown, allowEmpty: boolean): value is string {

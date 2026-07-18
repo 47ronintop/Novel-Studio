@@ -4012,20 +4012,24 @@ function asJsonObject(value: object): JsonObject {
 function diagnosticsForRepository(
   repository: AgentRunPersistencePort
 ): AgentDiagnosticsSession | undefined {
+  const writeRunError = repository.writeRunError?.bind(repository);
+  const readRunError = repository.readRunError?.bind(repository);
+  const writePreflightError = repository.writePreflightError?.bind(repository);
+  const readPreflightError = repository.readPreflightError?.bind(repository);
   if (
-    repository.writeRunError === undefined ||
-    repository.readRunError === undefined ||
-    repository.writePreflightError === undefined ||
-    repository.readPreflightError === undefined
+    writeRunError === undefined ||
+    readRunError === undefined ||
+    writePreflightError === undefined ||
+    readPreflightError === undefined
   ) {
     return undefined;
   }
   return createAgentDiagnosticsSession({
     repository: {
-      writeRunError: (runId, record) => repository.writeRunError!(runId, record),
-      readRunError: (runId, errorId) => repository.readRunError!(runId, errorId),
-      writePreflightError: (record) => repository.writePreflightError!(record),
-      readPreflightError: (errorId) => repository.readPreflightError!(errorId)
+      writeRunError: (runId, record) => writeRunError(runId, record),
+      readRunError: (runId, errorId) => readRunError(runId, errorId),
+      writePreflightError: (record) => writePreflightError(record),
+      readPreflightError: (errorId) => readPreflightError(errorId)
     }
   });
 }
@@ -4033,28 +4037,33 @@ function diagnosticsForRepository(
 function createPlanExecutionRepository(
   repository: AgentRunPersistencePort
 ): AgentPlanExecutionRepositoryPort {
+  const writePlanExecutionRecord = repository.writePlanExecutionRecord?.bind(repository);
+  const readPlanExecutionRecord = repository.readPlanExecutionRecord?.bind(repository);
+  const writePlanRevisionRequest = repository.writePlanRevisionRequest?.bind(repository);
+  const readPlanRevisionRequest = repository.readPlanRevisionRequest?.bind(repository);
   if (
-    repository.writePlanExecutionRecord !== undefined &&
-    repository.readPlanExecutionRecord !== undefined &&
-    repository.writePlanRevisionRequest !== undefined &&
-    repository.readPlanRevisionRequest !== undefined
+    writePlanExecutionRecord !== undefined &&
+    readPlanExecutionRecord !== undefined &&
+    writePlanRevisionRequest !== undefined &&
+    readPlanRevisionRequest !== undefined
   ) {
     const adapted: AgentPlanExecutionRepositoryPort = {
-      writePlanExecutionRecord: (record) => repository.writePlanExecutionRecord!(record),
+      writePlanExecutionRecord: (record) => writePlanExecutionRecord(record),
       readPlanExecutionRecord: (runId, planExecutionId, revision) =>
-        repository.readPlanExecutionRecord!(runId, planExecutionId, revision),
-      writePlanRevisionRequest: (request) => repository.writePlanRevisionRequest!(request),
+        readPlanExecutionRecord(runId, planExecutionId, revision),
+      writePlanRevisionRequest: (request) => writePlanRevisionRequest(request),
       readPlanRevisionRequest: (runId, requestId) =>
-        repository.readPlanRevisionRequest!(runId, requestId)
+        readPlanRevisionRequest(runId, requestId)
     };
+    const writePlanRevisionDecision = repository.writePlanRevisionDecision?.bind(repository);
+    const readPlanRevisionDecision = repository.readPlanRevisionDecision?.bind(repository);
     if (
-      repository.writePlanRevisionDecision !== undefined &&
-      repository.readPlanRevisionDecision !== undefined
+      writePlanRevisionDecision !== undefined &&
+      readPlanRevisionDecision !== undefined
     ) {
-      adapted.writePlanRevisionDecision = (decision) =>
-        repository.writePlanRevisionDecision!(decision);
+      adapted.writePlanRevisionDecision = (decision) => writePlanRevisionDecision(decision);
       adapted.readPlanRevisionDecision = (runId, requestId) =>
-        repository.readPlanRevisionDecision!(runId, requestId);
+        readPlanRevisionDecision(runId, requestId);
     }
     return adapted;
   }

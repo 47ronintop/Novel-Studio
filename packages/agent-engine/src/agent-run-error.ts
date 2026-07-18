@@ -142,7 +142,8 @@ export function validateAgentRunErrorRecord(
 export function resolveLegacyRetryTarget(
   record: AgentRunErrorRecord
 ): Result<AgentRunRetryTarget, UnifiedError> {
-  if (record.retryTargets.length === 1) return ok(record.retryTargets[0]!);
+  const [target] = record.retryTargets;
+  if (record.retryTargets.length === 1 && target !== undefined) return ok(target);
   return err(
     error(
       record.retryTargets.length === 0
