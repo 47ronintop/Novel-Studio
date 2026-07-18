@@ -1,7 +1,10 @@
 # 项目导航信息架构重设计
 
+> [!IMPORTANT]
+> **状态：已被合并取代，不得单独实施。** 仍有效的项目创建、写作/故事资料 Navigator、导航编排和失败原子性条款已合并到 `docs/superpowers/specs/2026-07-18-unified-workbench-project-navigation-design.md`。本文中“拒绝普通工程工作区”“有效项目永不显示文件树”“保留独立 AI Activity”等与用户后续决定冲突的条款已经失效。
+
 **日期：** 2026-07-18
-**状态：** 用户授权采用推荐方案，等待书面规范复核
+**状态：** 已被统一工作台规范取代，仅保留为历史设计记录
 **范围：** Novel Studio 桌面端 Activity Bar、项目 Navigator、项目创建入口、Navigator 偏好与既有主视图跳转
 
 ## 1. 背景与问题
