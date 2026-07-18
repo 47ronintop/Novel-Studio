@@ -13,6 +13,8 @@ import { createContext, useContext, useState, type MouseEvent, type ReactNode } 
 import type { ModelDiscoverySnapshot } from "@novel-studio/application";
 import type { UserAppearancePreferences } from "@novel-studio/shared";
 import type { EditorPreferences } from "./editor-toolbar.js";
+import { AgentUsageSettings, type AgentUsageSettingsProps } from "./agent-usage-settings.js";
+export type { AgentUsageSettingsProps } from "./agent-usage-settings.js";
 import {
   SettingsPanelTabs,
   type SettingsPanelActiveSection,
@@ -134,8 +136,7 @@ export interface ModelSettingsAppearancePreferences extends UserAppearancePrefer
 export interface ModelSettingsPanelProps {
   readonly activeSection?: SettingsPanelSection;
   readonly appearanceFeedback?:
-    | { readonly kind: "info" | "error"; readonly message: string }
-    | undefined;
+    { readonly kind: "info" | "error"; readonly message: string } | undefined;
   readonly appearancePreferences?: ModelSettingsAppearancePreferences;
   readonly editorPreferences?: EditorPreferences;
   readonly defaultProfileId: string;
@@ -147,6 +148,7 @@ export interface ModelSettingsPanelProps {
   readonly providerOptions?: readonly ModelProviderOption[];
   readonly modelDiscovery?: ModelDiscoverySnapshot;
   readonly plugins?: PluginSettingsPanelProps;
+  readonly usage?: AgentUsageSettingsProps | undefined;
   readonly feedback?: { readonly kind: "info" | "error"; readonly message: string };
   readonly onSelectProfile?: (profileId: string) => void;
   readonly onDraftChange?: (draft: Partial<ModelSettingsDraft>) => void;
@@ -157,8 +159,7 @@ export interface ModelSettingsPanelProps {
   readonly onDiscoverModelOptions?: (profileId: string) => void;
   readonly onEditorPreferencesChange?: (preferences: EditorPreferences) => void;
   readonly onAppearancePreferencesChange?:
-    | ((preferences: Omit<ModelSettingsAppearancePreferences, "editor">) => void)
-    | undefined;
+    ((preferences: Omit<ModelSettingsAppearancePreferences, "editor">) => void) | undefined;
   readonly onSectionSelect?: (section: SettingsPanelSection) => void;
 }
 
@@ -176,6 +177,7 @@ export function ModelSettingsPanel({
   providerOptions,
   modelDiscovery,
   plugins,
+  usage,
   feedback,
   onSelectProfile,
   onDraftChange,
@@ -270,8 +272,9 @@ export function ModelSettingsPanel({
               />
             ) : null}
 
-            {effectiveSection === "plugins" ? (
-              <PluginSettingsSection plugins={plugins} />
+            {effectiveSection === "plugins" ? <PluginSettingsSection plugins={plugins} /> : null}
+            {effectiveSection === "usage" ? (
+              <AgentUsageSettings {...(usage ?? defaultUsageProps)} />
             ) : null}
           </SettingsSearchQueryContext.Provider>
         </div>
@@ -709,7 +712,9 @@ function AppearanceSettingsSection({
             aria-label="外观编辑器字体"
             className="model-settings-select"
             onChange={(event) =>
-              updateEditor({ fontFamily: event.currentTarget.value as EditorPreferences["fontFamily"] })
+              updateEditor({
+                fontFamily: event.currentTarget.value as EditorPreferences["fontFamily"]
+              })
             }
             value={editor.fontFamily}
           >
@@ -747,6 +752,12 @@ function AppearanceSettingsSection({
     </section>
   );
 }
+
+const defaultUsageProps: AgentUsageSettingsProps = {
+  status: "idle",
+  rangePreset: "7d",
+  filters: { provider: "", model: "", projectId: "" }
+};
 
 function PluginSettingsSection({
   plugins

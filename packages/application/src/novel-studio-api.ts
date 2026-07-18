@@ -38,9 +38,7 @@ import type {
   UpdateAgentRunDraftCommand,
   UpdateContextDraftCommand
 } from "./agent-run-draft-session.js";
-import type {
-  CompactContextResult
-} from "./agent-context-session.js";
+import type { CompactContextResult } from "./agent-context-session.js";
 import type {
   AiWritingSuggestion,
   AiWritingSelectionPreview,
@@ -96,6 +94,11 @@ import type {
   UserPreferencesSnapshot
 } from "./user-preferences-session.js";
 import type { AgentRunReadResult, AnswerAgentUserInputCommand } from "./agent-run-session.js";
+import type {
+  AgentUsageQuery,
+  AgentUsageReport,
+  ClearAgentUsageCommand
+} from "./agent-usage-types.js";
 import type {
   AgentConversationCommandResult,
   AgentConversationListPage,
@@ -228,16 +231,20 @@ export interface NovelStudioApi {
     onEvent(listener: (event: AgentRunEvent) => void): () => void;
   };
   agentConversations: {
-    create(command: CreateAgentConversationCommand): Promise<
-      Result<AgentConversationListPage["items"][number], UnifiedError>
-    >;
-    list(query: ListAgentConversationsQuery): Promise<Result<AgentConversationListPage, UnifiedError>>;
-    read(query: ReadAgentConversationQuery): Promise<Result<AgentConversationReadResult, UnifiedError>>;
+    create(
+      command: CreateAgentConversationCommand
+    ): Promise<Result<AgentConversationListPage["items"][number], UnifiedError>>;
+    list(
+      query: ListAgentConversationsQuery
+    ): Promise<Result<AgentConversationListPage, UnifiedError>>;
+    read(
+      query: ReadAgentConversationQuery
+    ): Promise<Result<AgentConversationReadResult, UnifiedError>>;
     archive(command: ChangeAgentConversationStatusCommand): Promise<AgentConversationCommandResult>;
     restore(command: ChangeAgentConversationStatusCommand): Promise<AgentConversationCommandResult>;
-    search(query: SearchAgentConversationsQuery): Promise<
-      Result<AgentConversationSearchPage, UnifiedError>
-    >;
+    search(
+      query: SearchAgentConversationsQuery
+    ): Promise<Result<AgentConversationSearchPage, UnifiedError>>;
   };
   search: {
     rebuildIndex(): Promise<Result<ProjectSearchIndex, UnifiedError>>;
@@ -265,6 +272,10 @@ export interface NovelStudioApi {
     testModelProfileConnection(
       profileId: string
     ): Promise<Result<ModelConnectionResult, UnifiedError>>;
+    listAgentUsage(query: AgentUsageQuery): Promise<Result<AgentUsageReport, UnifiedError>>;
+    clearAgentUsage(
+      command: ClearAgentUsageCommand
+    ): Promise<Result<AgentUsageReport, UnifiedError>>;
   };
   plugins: {
     loadRegistry(): Promise<Result<PluginSettingsSnapshot, UnifiedError>>;

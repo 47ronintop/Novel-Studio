@@ -107,6 +107,8 @@ describe("Electron security baseline", () => {
       "application:settings:save-model-profile",
       "application:settings:save-model-secret",
       "application:settings:test-model-profile",
+      "application:settings:list-agent-usage",
+      "application:settings:clear-agent-usage",
       "application:plugins:load-registry",
       "application:plugins:set-enabled",
       "application:story-bible:load",
@@ -130,6 +132,7 @@ describe("Electron security baseline", () => {
     expect(isApplicationIpcChannel("application:agent-conversation:search")).toBe(true);
     expect(isApplicationIpcChannel("application:settings:list-model-profiles")).toBe(true);
     expect(isApplicationIpcChannel("application:settings:discover-models")).toBe(true);
+    expect(isApplicationIpcChannel("application:settings:list-agent-usage")).toBe(true);
     expect(isApplicationIpcChannel("application:story-bible:load")).toBe(true);
     expect(isApplicationIpcChannel("application:studio:save-config-asset")).toBe(true);
     expect(isApplicationIpcChannel("application:preferences:load")).toBe(true);
@@ -199,6 +202,13 @@ describe("Electron security baseline", () => {
       timeoutMs: 60000
     });
     await api.settings.testModelProfileConnection("model_default");
+    await api.settings.listAgentUsage({
+      range: { fromLocalDate: "2026-07-11", toLocalDate: "2026-07-17" }
+    });
+    await api.settings.clearAgentUsage({
+      commandId: "clear_usage_security",
+      range: { fromLocalDate: "2026-07-11", toLocalDate: "2026-07-17" }
+    });
     await api.plugins.loadRegistry();
     await api.plugins.setEnabled("novel.timeline-tools", false);
     await api.storyBible.load();
@@ -273,6 +283,8 @@ describe("Electron security baseline", () => {
       "application:settings:discover-models",
       "application:settings:save-model-profile",
       "application:settings:test-model-profile",
+      "application:settings:list-agent-usage",
+      "application:settings:clear-agent-usage",
       "application:plugins:load-registry",
       "application:plugins:set-enabled",
       "application:story-bible:load",
@@ -323,6 +335,14 @@ describe("Electron security baseline", () => {
     ).resolves.toMatchObject({
       ok: false,
       error: { code: "MODEL_SETTINGS_UNAVAILABLE" }
+    });
+    await expect(
+      handlers["application:settings:list-agent-usage"]({
+        range: { fromLocalDate: "2026-07-11", toLocalDate: "2026-07-17" }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_USAGE_UNAVAILABLE" }
     });
     await expect(handlers["application:plugins:load-registry"]()).resolves.toMatchObject({
       ok: false,

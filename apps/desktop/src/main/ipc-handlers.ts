@@ -7,6 +7,8 @@ import type {
   AgentPermissionSession,
   AgentRunDraftSession,
   AgentRunSession,
+  AgentUsageQuery,
+  ClearAgentUsageCommand,
   AnswerAgentUserInputCommand,
   ApplicationIpcChannel,
   CompactContextCommand,
@@ -757,6 +759,10 @@ export function createApplicationIpcHandlers(
 
       return application.testModelProfileConnection(profileId);
     },
+    "application:settings:list-agent-usage": (query: unknown) =>
+      application.listAgentUsage(query as AgentUsageQuery),
+    "application:settings:clear-agent-usage": (command: unknown) =>
+      application.clearAgentUsage(command as ClearAgentUsageCommand),
     "application:plugins:load-registry": () => application.loadPluginRegistry(),
     "application:plugins:set-enabled": (pluginId: unknown, enabled: unknown) => {
       if (typeof pluginId !== "string" || typeof enabled !== "boolean") {
@@ -1050,8 +1056,7 @@ function isAgentRunDraftMutation(value: unknown): boolean {
     case "set_model":
       return (
         isNonEmptyString(value["modelProfileId"]) &&
-        (value["reasoningEffort"] === undefined ||
-          typeof value["reasoningEffort"] === "string") &&
+        (value["reasoningEffort"] === undefined || typeof value["reasoningEffort"] === "string") &&
         hasOnlyKeys(value, ["kind", "modelProfileId", "reasoningEffort"])
       );
     case "set_reasoning":
@@ -1091,9 +1096,7 @@ function toCreateAgentConversationCommand(
     : undefined;
 }
 
-function toListAgentConversationsQuery(
-  value: unknown
-): ListAgentConversationsQuery | undefined {
+function toListAgentConversationsQuery(value: unknown): ListAgentConversationsQuery | undefined {
   if (
     !isRecord(value) ||
     !hasOnlyKeys(value, ["projectId", "includeArchived", "cursor", "limit"]) ||
@@ -1115,9 +1118,7 @@ function toListAgentConversationsQuery(
   };
 }
 
-function toReadAgentConversationQuery(
-  value: unknown
-): ReadAgentConversationQuery | undefined {
+function toReadAgentConversationQuery(value: unknown): ReadAgentConversationQuery | undefined {
   return isRecord(value) &&
     hasOnlyKeys(value, ["projectId", "conversationId"]) &&
     isSafeId(value["projectId"]) &&
@@ -1242,12 +1243,7 @@ function toReadAgentPermissionSummaryQuery(
       : undefined;
   }
   if (value["kind"] === "run") {
-    return hasOnlyKeys(value, [
-      "kind",
-      "projectId",
-      "runId",
-      "permissionSummaryId"
-    ]) &&
+    return hasOnlyKeys(value, ["kind", "projectId", "runId", "permissionSummaryId"]) &&
       isSafeId(value["runId"]) &&
       isSafeId(value["permissionSummaryId"])
       ? (value as unknown as ReadAgentPermissionSummaryQuery)
@@ -1365,7 +1361,8 @@ function toChangeSetFileSelections(value: unknown) {
 
 function toUndoAgentRunCommand(value: unknown): UndoRunCommand | undefined {
   if (!isRecord(value)) return undefined;
-  if (!isNonEmptyString(value["runId"]) ||
+  if (
+    !isNonEmptyString(value["runId"]) ||
     !isNonEmptyString(value["projectId"]) ||
     !isNonEmptyString(value["commandId"]) ||
     !isNonNegativeInteger(value["expectedRunRevision"]) ||
@@ -1381,8 +1378,7 @@ function toUndoAgentRunCommand(value: unknown): UndoRunCommand | undefined {
   };
   if (value["action"] === "request") {
     return Object.keys(value).some(
-      (key) =>
-        !["action", "runId", "projectId", "commandId", "expectedRunRevision"].includes(key)
+      (key) => !["action", "runId", "projectId", "commandId", "expectedRunRevision"].includes(key)
     )
       ? undefined
       : { ...base, action: "request" };
@@ -1421,7 +1417,9 @@ function toUndoAgentRunCommand(value: unknown): UndoRunCommand | undefined {
 
 function toRollbackReviewDecisions(
   value: unknown
-): { readonly relativePath: string; readonly decision: "keep_current" | "restore_baseline" }[] | undefined {
+):
+  | { readonly relativePath: string; readonly decision: "keep_current" | "restore_baseline" }[]
+  | undefined {
   if (value === undefined) return [];
   if (!Array.isArray(value)) return undefined;
   const decisions: {

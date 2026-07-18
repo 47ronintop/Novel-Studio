@@ -21,7 +21,7 @@ export interface AgentUsageRepositoryPort {
 
 export interface AgentUsageSession {
   listAgentUsage(query: AgentUsageQuery): Promise<Result<AgentUsageReport, UnifiedError>>;
-  clearAgentUsage(command: ClearAgentUsageCommand): Promise<Result<void, UnifiedError>>;
+  clearAgentUsage(command: ClearAgentUsageCommand): Promise<Result<AgentUsageReport, UnifiedError>>;
 }
 
 export interface CreateAgentUsageSessionOptions {
@@ -40,21 +40,23 @@ export function createAgentUsageSession(
     return options.repository.enforceRetention(todayLocalDate());
   }
 
+  const listAgentUsage: AgentUsageSession["listAgentUsage"] = async (query) => {
+    if (!isValidQuery(query)) return err(usageError("AGENT_USAGE_QUERY_INVALID"));
+    const retained = await enforceRetention();
+    if (!retained.ok) return err(retained.error);
+    const days = await options.repository.queryDailyAggregates(query);
+    if (!days.ok) return err(days.error);
+    let runs: readonly AgentUsageRunSummary[] = [];
+    if (query.detailLocalDate !== undefined) {
+      const details = await options.repository.queryDetails(query);
+      if (!details.ok) return err(details.error);
+      runs = details.value;
+    }
+    return ok({ query, days: days.value, runs, generatedAt: now() });
+  };
+
   return {
-    async listAgentUsage(query) {
-      if (!isValidQuery(query)) return err(usageError("AGENT_USAGE_QUERY_INVALID"));
-      const retained = await enforceRetention();
-      if (!retained.ok) return err(retained.error);
-      const days = await options.repository.queryDailyAggregates(query);
-      if (!days.ok) return err(days.error);
-      let runs: readonly AgentUsageRunSummary[] = [];
-      if (query.detailLocalDate !== undefined) {
-        const details = await options.repository.queryDetails(query);
-        if (!details.ok) return err(details.error);
-        runs = details.value;
-      }
-      return ok({ query, days: days.value, runs, generatedAt: now() });
-    },
+    listAgentUsage,
 
     async clearAgentUsage(command) {
       if (
@@ -65,7 +67,10 @@ export function createAgentUsageSession(
         return err(usageError("AGENT_USAGE_CLEAR_INVALID"));
       }
       const retained = await enforceRetention();
-      return retained.ok ? options.repository.clearUsage(command) : err(retained.error);
+      if (!retained.ok) return err(retained.error);
+      const cleared = await options.repository.clearUsage(command);
+      if (!cleared.ok) return err(cleared.error);
+      return listAgentUsage({ range: command.range });
     }
   };
 }

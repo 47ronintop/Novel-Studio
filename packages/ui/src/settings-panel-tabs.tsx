@@ -1,4 +1,4 @@
-export type SettingsPanelSection = "models" | "appearance" | "plugins";
+export type SettingsPanelSection = "models" | "appearance" | "plugins" | "usage";
 export type SettingsPanelActiveSection = SettingsPanelSection;
 
 export interface SettingsPanelTabsProps {
@@ -9,7 +9,8 @@ export interface SettingsPanelTabsProps {
 const settingsSections = [
   { id: "models", label: "模型" },
   { id: "appearance", label: "外观" },
-  { id: "plugins", label: "插件" }
+  { id: "plugins", label: "插件" },
+  { id: "usage", label: "Agent 用量" }
 ] as const satisfies readonly {
   readonly id: SettingsPanelSection;
   readonly label: string;

@@ -38,6 +38,12 @@ import type {
   ModelSettingsSnapshot
 } from "./model-settings-session.js";
 import type { ModelDiscoverySnapshot } from "./model-discovery-session.js";
+import type { AgentUsageSession } from "./agent-usage-session.js";
+import type {
+  AgentUsageQuery,
+  AgentUsageReport,
+  ClearAgentUsageCommand
+} from "./agent-usage-types.js";
 import { pluginRegistryUnavailable } from "./plugin-settings-session.js";
 import type { PluginSettingsSession, PluginSettingsSnapshot } from "./plugin-settings-session.js";
 import type { PluginRuntimeSession } from "./plugin-runtime-session.js";
@@ -190,6 +196,8 @@ export interface DesktopApplication {
   testModelProfileConnection(
     profileId: string
   ): Promise<Result<ModelConnectionResult, UnifiedError>>;
+  listAgentUsage(query: AgentUsageQuery): Promise<Result<AgentUsageReport, UnifiedError>>;
+  clearAgentUsage(command: ClearAgentUsageCommand): Promise<Result<AgentUsageReport, UnifiedError>>;
   loadPluginRegistry(): Promise<Result<PluginSettingsSnapshot, UnifiedError>>;
   setPluginEnabled(
     pluginId: string,
@@ -213,6 +221,7 @@ export interface DesktopApplicationOptions {
   readonly chapterEditorSession?: ChapterEditorSession;
   readonly projectWorkspaceSession?: ProjectWorkspaceSession;
   readonly modelSettingsSession?: ModelSettingsSession;
+  readonly agentUsageSession?: AgentUsageSession;
   readonly pluginSettingsSession?: PluginSettingsSession;
   readonly pluginRuntimeSession?: PluginRuntimeSession;
   readonly configStudioSession?: ConfigStudioSession;
@@ -277,6 +286,7 @@ export function createDesktopApplication(
   const chapterEditorSession = options.chapterEditorSession;
   const projectWorkspaceSession = options.projectWorkspaceSession;
   const modelSettingsSession = options.modelSettingsSession;
+  const agentUsageSession = options.agentUsageSession;
   const pluginSettingsSession = options.pluginSettingsSession;
   const pluginRuntimeSession = options.pluginRuntimeSession;
   const configStudioSession = options.configStudioSession;
@@ -636,6 +646,14 @@ export function createDesktopApplication(
 
       return modelSettingsSession.testModelProfileConnection(profileId);
     },
+    async listAgentUsage(query) {
+      if (agentUsageSession === undefined) return agentUsageUnavailable();
+      return agentUsageSession.listAgentUsage(query);
+    },
+    async clearAgentUsage(command) {
+      if (agentUsageSession === undefined) return agentUsageUnavailable();
+      return agentUsageSession.clearAgentUsage(command);
+    },
     async loadPluginRegistry() {
       if (pluginSettingsSession === undefined) {
         return pluginRegistryUnavailable();
@@ -843,6 +861,19 @@ function configStudioUnavailable<T>(): Result<T, UnifiedError> {
       recoverability: "user-action",
       suggestedAction: "Open a project with Studio support before editing configuration assets.",
       traceId: "application-config-studio"
+    })
+  );
+}
+
+function agentUsageUnavailable<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "AGENT_USAGE_UNAVAILABLE",
+      category: "StorageError",
+      message: "Agent usage data is unavailable.",
+      recoverability: "retryable",
+      suggestedAction: "Restart the desktop application and try again.",
+      traceId: "application-agent-usage"
     })
   );
 }

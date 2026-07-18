@@ -7,6 +7,9 @@ import type {
   AgentConversationReadResult,
   AgentConversationSearchPage,
   AgentConversationSummary,
+  AgentUsageQuery,
+  AgentUsageReport,
+  ClearAgentUsageCommand,
   AiWritingSuggestion,
   AiWritingSelectionPreview,
   AiWritingSelectionPreviewRequest,
@@ -333,11 +336,7 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
       refreshContext: (command: RefreshAgentContextCommand) =>
         invokeTyped<AgentRunCommandResult>(ipc, "application:agent-run:refresh-context", command),
       decideChangeSet: (command: DecideChangeSetCommand) =>
-        invokeTyped<AgentRunCommandResult>(
-          ipc,
-          "application:agent-run:decide-change-set",
-          command
-        ),
+        invokeTyped<AgentRunCommandResult>(ipc, "application:agent-run:decide-change-set", command),
       undoRun: (command: UndoRunCommand) =>
         invokeTyped<AgentRunCommandResult>(ipc, "application:agent-run:undo", command),
       read: (runId: string) =>
@@ -476,6 +475,18 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           ipc,
           "application:settings:test-model-profile",
           profileId
+        ),
+      listAgentUsage: (query: AgentUsageQuery) =>
+        invokeTyped<Result<AgentUsageReport, UnifiedError>>(
+          ipc,
+          "application:settings:list-agent-usage",
+          query
+        ),
+      clearAgentUsage: (command: ClearAgentUsageCommand) =>
+        invokeTyped<Result<AgentUsageReport, UnifiedError>>(
+          ipc,
+          "application:settings:clear-agent-usage",
+          command
         )
     },
     plugins: {

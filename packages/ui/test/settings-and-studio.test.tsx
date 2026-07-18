@@ -392,6 +392,97 @@ describe("M8 Settings and Studio UI", () => {
     expect(pluginHtml).not.toContain('aria-label="模型配置"');
   });
 
+  test("renders server-authoritative Agent usage trends, costs, filters, and private run summaries", () => {
+    const html = renderToStaticMarkup(
+      <ModelSettingsPanel
+        {...createModelSettingsPanelProps()}
+        activeSection="usage"
+        usage={{
+          status: "loaded",
+          rangePreset: "7d",
+          filters: { provider: "", model: "", projectId: "" },
+          report: {
+            query: {
+              range: { fromLocalDate: "2026-07-11", toLocalDate: "2026-07-17" },
+              detailLocalDate: "2026-07-16"
+            },
+            days: [
+              {
+                localDate: "2026-07-16",
+                inputTokens: 1200,
+                outputTokens: 300,
+                cachedTokens: 400,
+                reasoningTokens: 0,
+                totalTokens: 1500,
+                costs: [
+                  { currency: "USD", actualAmount: 0.04, estimatedAmount: 0.02 },
+                  { currency: "EUR", actualAmount: 0, estimatedAmount: 0.03 }
+                ],
+                hasUnknownCost: true
+              }
+            ],
+            runs: [
+              {
+                usageId: "run_01:round_02:7",
+                runId: "run_01",
+                conversationId: "conversation_01",
+                projectId: "project_01",
+                provider: "openai",
+                model: "gpt-5",
+                totalTokens: 1500,
+                usageStatus: "actual",
+                cost: { status: "actual", amount: 0.04, currency: "USD" },
+                timestamp: "2026-07-16T08:00:00.000Z"
+              }
+            ],
+            generatedAt: "2026-07-17T12:00:00.000Z"
+          }
+        }}
+      />
+    );
+
+    expect(html).toContain("Agent 用量");
+    expect(html).toContain('aria-label="用量日期范围"');
+    expect(html).toContain("今日");
+    expect(html).toContain("近 7 天");
+    expect(html).toContain("近 30 天");
+    expect(html).toContain('aria-label="Provider 筛选"');
+    expect(html).toContain('aria-label="Token 用量趋势"');
+    expect(html.match(/<circle[^>]+data-series=/g)).toHaveLength(3);
+    expect(html.match(/<circle[^>]+r="3.5"/g)).toHaveLength(3);
+    expect(html).toContain("Input");
+    expect(html).toContain("Output");
+    expect(html).toContain("Cached");
+    expect(html).toContain("实际费用");
+    expect(html).toContain("估算费用");
+    expect(html).toContain("未知费用");
+    expect(html).toContain("USD");
+    expect(html).toContain("EUR");
+    expect(html).toContain('aria-label="每日 Agent 用量明细"');
+    expect(html).toContain("run_01");
+    expect(html).toContain("已报告");
+    expect(html).not.toMatch(/prompt|request|正文内容|filesystem|node:|fs\./i);
+
+    const emptyHtml = renderToStaticMarkup(
+      <ModelSettingsPanel
+        {...createModelSettingsPanelProps()}
+        activeSection="usage"
+        usage={{
+          status: "loaded",
+          rangePreset: "today",
+          filters: { provider: "", model: "", projectId: "" },
+          report: {
+            query: { range: { fromLocalDate: "2026-07-17", toLocalDate: "2026-07-17" } },
+            days: [],
+            runs: [],
+            generatedAt: "2026-07-17T12:00:00.000Z"
+          }
+        }}
+      />
+    );
+    expect(emptyHtml).toContain("所选范围暂无 Agent 用量记录");
+  });
+
   test("lays out model fields as separated rows with field-level actions", async () => {
     const discoverCalls: string[] = [];
     const testConnectionCalls: string[] = [];

@@ -70,6 +70,8 @@ export const APPLICATION_IPC_CHANNELS = [
   "application:settings:save-model-profile",
   "application:settings:save-model-secret",
   "application:settings:test-model-profile",
+  "application:settings:list-agent-usage",
+  "application:settings:clear-agent-usage",
   "application:plugins:load-registry",
   "application:plugins:set-enabled",
   "application:story-bible:load",

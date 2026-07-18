@@ -4,6 +4,7 @@ import {
   createAgentUsageSession,
   type AgentUsageRepositoryPort
 } from "../src/agent-usage-session.js";
+import { createDesktopApplication } from "../src/desktop-application.js";
 import type {
   AgentUsageDailyBucket,
   AgentUsageQuery,
@@ -181,21 +182,51 @@ describe("AgentUsageSession", () => {
     expect(repository.calls).toEqual([]);
   });
 
-  test("validates clear commands and delegates idempotency to the repository", async () => {
+  test("returns the authoritative report for the cleared range", async () => {
     const { repository, session } = createSession();
     const command: ClearAgentUsageCommand = {
       commandId: "clear_usage_01",
       range: { fromLocalDate: "2026-07-01", toLocalDate: "2026-07-17" }
     };
 
-    expect(await session.clearAgentUsage(command)).toEqual({ ok: true, value: undefined });
-    expect(await session.clearAgentUsage(command)).toEqual({ ok: true, value: undefined });
+    expect(await session.clearAgentUsage(command)).toEqual({
+      ok: true,
+      value: {
+        query: { range: command.range },
+        days: [daily()],
+        runs: [],
+        generatedAt: "2026-07-17T12:00:00.000Z"
+      }
+    });
     expect(repository.calls).toEqual([
       "retain:2026-07-17",
       "clear:clear_usage_01",
       "retain:2026-07-17",
-      "clear:clear_usage_01"
+      "days:2026-07-01:2026-07-17"
     ]);
+  });
+
+  test("keeps clear callable when detached from the session object", async () => {
+    const { session } = createSession();
+    const { clearAgentUsage } = session;
+
+    await expect(
+      clearAgentUsage({
+        commandId: "clear_usage_detached",
+        range: { fromLocalDate: "2026-07-01", toLocalDate: "2026-07-17" }
+      })
+    ).resolves.toMatchObject({ ok: true, value: { runs: [], query: { range: {} } } });
+  });
+
+  test("exposes list and clear through the desktop application facade", async () => {
+    const { session } = createSession();
+    const application = createDesktopApplication({ agentUsageSession: session });
+    const range = { fromLocalDate: "2026-07-01", toLocalDate: "2026-07-17" };
+
+    await expect(application.listAgentUsage({ range })).resolves.toMatchObject({ ok: true });
+    await expect(
+      application.clearAgentUsage({ commandId: "clear_usage_facade", range })
+    ).resolves.toMatchObject({ ok: true, value: { query: { range } } });
   });
 
   test.each(["", "../clear", "clear usage", "x".repeat(129)])(

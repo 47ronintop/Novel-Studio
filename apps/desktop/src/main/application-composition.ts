@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import {
   createAgentBackedAiWritingWorkflowSession,
+  createAgentUsageSession,
   createChapterEditorSession,
   createConfigStudioSession,
   createDesktopApplication,
@@ -26,6 +27,7 @@ import type {
 import { createLlmAdapter, type LlmProvider } from "@novel-studio/llm-adapter";
 import {
   ChapterFileRepository,
+  AgentUsageFileRepository,
   ConfigAssetRepository,
   HistoryRepository,
   PluginRegistryFileRepository,
@@ -157,6 +159,16 @@ export function createProjectDesktopApplication(
         ? {}
         : { discoveryPort: options.modelDiscoveryPort })
     }),
+    ...(options.userDataRoot === undefined
+      ? {}
+      : {
+          agentUsageSession: createAgentUsageSession({
+            repository: new AgentUsageFileRepository({
+              userDataRoot: options.userDataRoot,
+              traceId: "trace_desktop_agent_usage_repository"
+            })
+          })
+        }),
     pluginSettingsSession: createPluginSettingsSession({
       pluginRegistryPort: {
         readPluginSettings: () => createPluginRegistryRepository().readPluginSettings(),

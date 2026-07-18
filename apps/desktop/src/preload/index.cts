@@ -7,6 +7,9 @@ import type {
   AgentConversationReadResult,
   AgentConversationSearchPage,
   AgentConversationSummary,
+  AgentUsageQuery,
+  AgentUsageReport,
+  ClearAgentUsageCommand,
   AgentRunReadResult,
   AnswerAgentUserInputCommand,
   AiWritingSelectionPreview,
@@ -277,10 +280,7 @@ const api: NovelStudioApi = {
         query
       ),
     decidePlanRevision: (command: DecidePlanRevisionCommand) =>
-      invokeTyped<AgentRunCommandResult>(
-        "application:agent-run:decide-plan-revision",
-        command
-      ),
+      invokeTyped<AgentRunCommandResult>("application:agent-run:decide-plan-revision", command),
     refreshContext: (command: RefreshAgentContextCommand) =>
       invokeTyped<AgentRunCommandResult>("application:agent-run:refresh-context", command),
     decideChangeSet: (command: DecideChangeSetCommand) =>
@@ -396,6 +396,16 @@ const api: NovelStudioApi = {
       invokeTyped<Result<ModelConnectionResult, UnifiedError>>(
         "application:settings:test-model-profile",
         profileId
+      ),
+    listAgentUsage: (query: AgentUsageQuery) =>
+      invokeTyped<Result<AgentUsageReport, UnifiedError>>(
+        "application:settings:list-agent-usage",
+        query
+      ),
+    clearAgentUsage: (command: ClearAgentUsageCommand) =>
+      invokeTyped<Result<AgentUsageReport, UnifiedError>>(
+        "application:settings:clear-agent-usage",
+        command
       )
   },
   plugins: {

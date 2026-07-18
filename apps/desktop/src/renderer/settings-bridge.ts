@@ -1,5 +1,6 @@
 import { createPluginSecurityAuditReport, MODEL_PROVIDER_CATALOG } from "@novel-studio/application";
 import type {
+  AgentUsageQuery,
   ModelDiscoverySnapshot,
   ModelProfile,
   NovelStudioApi,
@@ -15,12 +16,21 @@ import type {
 
 export interface SettingsBridgeOptions {
   readonly createProfileId?: () => string;
+  readonly todayLocalDate?: () => string;
+  readonly createUsageCommandId?: () => string;
 }
+
+type UsageProps = NonNullable<ModelSettingsPanelProps["usage"]>;
 
 export interface SettingsBridge {
   getProps(): ModelSettingsPanelProps;
   load(): Promise<ModelSettingsPanelProps>;
   loadPlugins(): Promise<ModelSettingsPanelProps>;
+  loadAgentUsage(): Promise<ModelSettingsPanelProps>;
+  setAgentUsageRange(preset: UsageProps["rangePreset"]): Promise<ModelSettingsPanelProps>;
+  setAgentUsageFilters(filters: Partial<UsageProps["filters"]>): Promise<ModelSettingsPanelProps>;
+  selectAgentUsageDay(localDate: string): Promise<ModelSettingsPanelProps>;
+  clearAgentUsage(): Promise<ModelSettingsPanelProps>;
   setPluginEnabled(pluginId: string, enabled: boolean): Promise<ModelSettingsPanelProps>;
   selectSection(section: SettingsPanelSection): ModelSettingsPanelProps;
   selectProfile(profileId: string): ModelSettingsPanelProps;
@@ -39,6 +49,14 @@ export function createSettingsBridge(
   options: SettingsBridgeOptions = {}
 ): SettingsBridge {
   const createProfileId = options.createProfileId ?? (() => `model_${Date.now().toString(36)}`);
+  const todayLocalDate = options.todayLocalDate ?? localDateToday;
+  let usageCommandSequence = 0;
+  const createUsageCommandId =
+    options.createUsageCommandId ??
+    (() => {
+      usageCommandSequence += 1;
+      return `clear_usage_${Date.now().toString(36)}_${usageCommandSequence.toString(36)}`;
+    });
   let defaultProfileId = "";
   let profiles: readonly ModelProfile[] = [];
   let selectedProfileId: string | undefined;
@@ -53,6 +71,14 @@ export function createSettingsBridge(
     feedback: { kind: "info", message: "插件注册表尚未加载。" }
   };
   let feedback: ModelSettingsPanelProps["feedback"] | undefined;
+  let usage: UsageProps = {
+    status: "idle",
+    rangePreset: "7d",
+    filters: { provider: "", model: "", projectId: "" }
+  };
+  let usageGeneration = 0;
+  let usageQueryPending = false;
+  let clearInFlight: Promise<ModelSettingsPanelProps> | undefined;
 
   return {
     getProps: () => toProps(),
@@ -79,6 +105,29 @@ export function createSettingsBridge(
     async loadPlugins() {
       await loadPlugins();
       return toProps();
+    },
+    async loadAgentUsage() {
+      return loadUsage();
+    },
+    async setAgentUsageRange(preset) {
+      usage = { ...usage, rangePreset: preset };
+      return loadUsage();
+    },
+    async setAgentUsageFilters(filters) {
+      usage = { ...usage, filters: { ...usage.filters, ...filters } };
+      return loadUsage();
+    },
+    async selectAgentUsageDay(localDate) {
+      return loadUsage(localDate);
+    },
+    clearAgentUsage() {
+      if (clearInFlight !== undefined) return clearInFlight;
+      const pending = clearUsage();
+      clearInFlight = pending;
+      void pending.finally(() => {
+        if (clearInFlight === pending) clearInFlight = undefined;
+      });
+      return pending;
     },
     async setPluginEnabled(pluginId, enabled) {
       plugins = {
@@ -310,6 +359,13 @@ export function createSettingsBridge(
         onRefresh: () => undefined,
         onSetEnabled: () => undefined
       },
+      usage: {
+        ...usage,
+        onRangePresetChange: () => undefined,
+        onFiltersChange: () => undefined,
+        onSelectDay: () => undefined,
+        onClear: () => undefined
+      },
       ...(feedback === undefined ? {} : { feedback }),
       onSelectProfile: () => undefined,
       onDraftChange: () => undefined,
@@ -332,6 +388,92 @@ export function createSettingsBridge(
 
     modelDiscovery = result.value;
   }
+
+  async function loadUsage(detailLocalDate?: string): Promise<ModelSettingsPanelProps> {
+    const generation = ++usageGeneration;
+    usageQueryPending = true;
+    const rangePreset = usage.rangePreset;
+    const filters = usage.filters;
+    usage = {
+      status: "loading",
+      rangePreset,
+      filters,
+      feedback: { kind: "info", message: "正在读取 Agent 用量..." }
+    };
+    const query: AgentUsageQuery = {
+      range: rangeForPreset(rangePreset, todayLocalDate()),
+      ...(filters.provider.trim() === "" ? {} : { provider: filters.provider.trim() }),
+      ...(filters.model.trim() === "" ? {} : { model: filters.model.trim() }),
+      ...(filters.projectId.trim() === "" ? {} : { projectId: filters.projectId.trim() }),
+      ...(detailLocalDate === undefined ? {} : { detailLocalDate })
+    };
+    const result = await api.settings.listAgentUsage(query);
+    if (generation !== usageGeneration) return toProps();
+    usageQueryPending = false;
+    usage = result.ok
+      ? { ...usage, status: "loaded", report: result.value, feedback: undefined }
+      : { ...usage, status: "error", feedback: { kind: "error", message: result.error.message } };
+    return toProps();
+  }
+
+  async function clearUsage(): Promise<ModelSettingsPanelProps> {
+    if (usageQueryPending) {
+      usage = {
+        ...usage,
+        feedback: { kind: "error", message: "请等待当前 Agent 用量查询完成后再清除。" }
+      };
+      return toProps();
+    }
+    const range = usage.report?.query.range;
+    if (range === undefined) {
+      usage = {
+        ...usage,
+        status: "error",
+        feedback: { kind: "error", message: "请先加载 Agent 用量。" }
+      };
+      return toProps();
+    }
+    const generation = ++usageGeneration;
+    usage = {
+      ...usage,
+      status: "loading",
+      feedback: { kind: "info", message: "正在清除所选范围用量..." }
+    };
+    const result = await api.settings.clearAgentUsage({
+      commandId: createUsageCommandId(),
+      range
+    });
+    if (generation !== usageGeneration) return toProps();
+    usage = result.ok
+      ? {
+          status: "loaded",
+          rangePreset: presetForRange(result.value.query.range) ?? usage.rangePreset,
+          filters: { provider: "", model: "", projectId: "" },
+          report: result.value,
+          feedback: { kind: "info", message: "所选范围用量已清除。" }
+        }
+      : { ...usage, status: "error", feedback: { kind: "error", message: result.error.message } };
+    return toProps();
+  }
+}
+
+function rangeForPreset(preset: UsageProps["rangePreset"], today: string) {
+  const days = preset === "today" ? 1 : preset === "7d" ? 7 : 30;
+  const date = new Date(`${today}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() - days + 1);
+  return { fromLocalDate: date.toISOString().slice(0, 10), toLocalDate: today };
+}
+
+function presetForRange(range: AgentUsageQuery["range"]): UsageProps["rangePreset"] | undefined {
+  const from = Date.parse(`${range.fromLocalDate}T00:00:00.000Z`);
+  const to = Date.parse(`${range.toLocalDate}T00:00:00.000Z`);
+  const days = Math.floor((to - from) / 86_400_000) + 1;
+  return days === 1 ? "today" : days === 7 ? "7d" : days === 30 ? "30d" : undefined;
+}
+
+function localDateToday(): string {
+  const current = new Date();
+  return `${current.getFullYear().toString().padStart(4, "0")}-${(current.getMonth() + 1).toString().padStart(2, "0")}-${current.getDate().toString().padStart(2, "0")}`;
 }
 
 function toPluginProps(

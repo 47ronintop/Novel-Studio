@@ -48,6 +48,7 @@ import { useRendererAppEffects } from "./renderer-app-effects.js";
 import { RendererWorkspaceShell } from "./renderer-workspace-shell.js";
 import { useProjectWorkflowActions } from "./project-workflow-actions.js";
 import { useAiWritingWorkflowActions } from "./ai-writing-workflow-actions.js";
+import { useAgentUsageSettingsActions } from "./agent-usage-settings-actions.js";
 
 export function App() {
   const [api] = useState(() => getNovelStudioApi());
@@ -673,6 +674,11 @@ export function App() {
       }
 
       setSettings(settingsBridge.selectSection(section));
+      if (section === "usage") {
+        const pending = settingsBridge.loadAgentUsage();
+        setSettings(settingsBridge.getProps());
+        void pending.then(setSettings);
+      }
     },
     [settingsBridge]
   );
@@ -756,6 +762,8 @@ export function App() {
     },
     [settingsBridge]
   );
+
+  const agentUsageSettingsActions = useAgentUsageSettingsActions(settingsBridge, setSettings);
 
   const handleStudioAssetSelect = useCallback<NonNullable<ConfigStudioPanelProps["onAssetSelect"]>>(
     (assetType, assetId) => {
@@ -919,7 +927,14 @@ export function App() {
           onEditorPreferencesChange: (preferences: EditorPreferences) => {
             setEditorPreferences(preferences);
             persistUserPreferences({ editor: preferences });
-          }
+          },
+          usage:
+            settings.usage === undefined
+              ? undefined
+              : {
+                  ...settings.usage,
+                  ...agentUsageSettingsActions
+                }
         };
   const onboarding = createOnboardingProps({
     dismissed: onboardingDismissed,

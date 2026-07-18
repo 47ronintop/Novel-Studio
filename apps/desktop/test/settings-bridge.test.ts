@@ -1,11 +1,13 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import type {
   ModelConnectionResult,
   ModelDiscoverySnapshot,
   ModelProfile,
   ModelSettingsSnapshot,
-  NovelStudioApi
+  NovelStudioApi,
+  AgentUsageReport,
+  AgentUsageQuery
 } from "@novel-studio/application";
 import { ok } from "@novel-studio/shared";
 
@@ -191,6 +193,176 @@ describe("M22 settings bridge", () => {
     expect(appearance.activeSection).toBe("appearance");
     expect(plugins.activeSection).toBe("plugins");
     expect(calls.filter((call) => call === "settings.listModelProfiles")).toHaveLength(1);
+  });
+
+  test("loads usage lazily and sends only bounded filters, day detail, and clear commands", async () => {
+    const calls: string[] = [];
+    const bridge = createSettingsBridge(createApi(calls), {
+      todayLocalDate: () => "2026-07-17",
+      createUsageCommandId: () => "clear_usage_test"
+    });
+
+    await bridge.load();
+    expect(calls.some((call) => call.startsWith("settings.listAgentUsage"))).toBe(false);
+
+    bridge.selectSection("usage");
+    const loaded = await bridge.loadAgentUsage();
+    expect(loaded.usage?.report?.query.range).toEqual({
+      fromLocalDate: "2026-07-11",
+      toLocalDate: "2026-07-17"
+    });
+    expect(calls.at(-1)).toBe("settings.listAgentUsage:2026-07-11:2026-07-17::::");
+
+    await bridge.setAgentUsageRange("today");
+    expect(calls.at(-1)).toBe("settings.listAgentUsage:2026-07-17:2026-07-17::::");
+    await bridge.setAgentUsageRange("30d");
+    expect(calls.at(-1)).toBe("settings.listAgentUsage:2026-06-18:2026-07-17::::");
+    await bridge.setAgentUsageRange("7d");
+    await bridge.setAgentUsageFilters({
+      provider: "openai",
+      model: "gpt-5",
+      projectId: "project_01"
+    });
+    const detail = await bridge.selectAgentUsageDay("2026-07-16");
+    expect(calls.at(-1)).toBe(
+      "settings.listAgentUsage:2026-07-11:2026-07-17:openai:gpt-5:project_01:2026-07-16"
+    );
+    expect(detail.usage?.report?.runs[0]?.runId).toBe("run_01");
+
+    const cleared = await bridge.clearAgentUsage();
+    expect(calls.at(-1)).toBe("settings.clearAgentUsage:clear_usage_test:2026-07-11:2026-07-17");
+    expect(cleared.usage?.report?.days).toEqual([]);
+    expect(JSON.stringify(cleared.usage)).not.toMatch(/path|prompt|request|body|正文/i);
+  });
+
+  test("keeps only the newest range, filter, and detail response when requests finish out of order", async () => {
+    const calls: string[] = [];
+    const api = createApi(calls);
+    const pending: Array<
+      Deferred<Awaited<ReturnType<NovelStudioApi["settings"]["listAgentUsage"]>>>
+    > = [];
+    const queries: AgentUsageQuery[] = [];
+    api.settings.listAgentUsage = async (query) => {
+      queries.push(query);
+      const request = deferred<Awaited<ReturnType<NovelStudioApi["settings"]["listAgentUsage"]>>>();
+      pending.push(request);
+      return request.promise;
+    };
+    const bridge = createSettingsBridge(api, { todayLocalDate: () => "2026-07-17" });
+
+    const rangeRequest = bridge.setAgentUsageRange("today");
+    const filterRequest = bridge.setAgentUsageFilters({ projectId: "project_02" });
+    const detailRequest = bridge.selectAgentUsageDay("2026-07-17");
+    expect(queries).toHaveLength(3);
+    expect(queries[1]?.projectId).toBe("project_02");
+    expect(queries[2]).toMatchObject({ projectId: "project_02", detailLocalDate: "2026-07-17" });
+
+    pending[2]!.resolve(ok(usageReport(queries[2]!, "newest")));
+    await detailRequest;
+    pending[0]!.resolve(ok(usageReport(queries[0]!, "stale-range")));
+    pending[1]!.resolve(ok(usageReport(queries[1]!, "stale-filter")));
+    await Promise.all([rangeRequest, filterRequest]);
+
+    expect(bridge.getProps().usage?.report?.query).toEqual(queries[2]);
+    expect(bridge.getProps().usage?.report?.generatedAt).toBe("newest");
+  });
+
+  test("blocks clear while a usage query is pending", async () => {
+    const calls: string[] = [];
+    const api = createApi(calls);
+    const bridge = createSettingsBridge(api, { todayLocalDate: () => "2026-07-17" });
+    await bridge.loadAgentUsage();
+    const request = deferred<Awaited<ReturnType<NovelStudioApi["settings"]["listAgentUsage"]>>>();
+    api.settings.listAgentUsage = async () => request.promise;
+
+    const pending = bridge.setAgentUsageRange("30d");
+    expect(bridge.getProps().usage?.status).toBe("loading");
+    const blocked = await bridge.clearAgentUsage();
+    expect(calls.some((call) => call.startsWith("settings.clearAgentUsage:"))).toBe(false);
+    expect(blocked.usage?.feedback?.kind).toBe("error");
+    request.resolve(
+      ok(
+        usageReport({ range: { fromLocalDate: "2026-07-11", toLocalDate: "2026-07-17" } }, "loaded")
+      )
+    );
+    await pending;
+  });
+
+  test("coalesces repeated clear while one clear command is in flight", async () => {
+    const calls: string[] = [];
+    const api = createApi(calls);
+    const bridge = createSettingsBridge(api, {
+      todayLocalDate: () => "2026-07-17",
+      createUsageCommandId: () => "clear_usage_once"
+    });
+    await bridge.loadAgentUsage();
+    const request = deferred<Awaited<ReturnType<NovelStudioApi["settings"]["clearAgentUsage"]>>>();
+    api.settings.clearAgentUsage = async (command) => {
+      calls.push(`deferred-clear:${command.commandId}`);
+      return request.promise;
+    };
+
+    const first = bridge.clearAgentUsage();
+    const second = bridge.clearAgentUsage();
+    expect(calls.filter((call) => call === "deferred-clear:clear_usage_once")).toHaveLength(1);
+    request.resolve(
+      ok({
+        query: { range: { fromLocalDate: "2026-07-11", toLocalDate: "2026-07-17" } },
+        days: [],
+        runs: [],
+        generatedAt: "cleared"
+      })
+    );
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(firstResult.usage?.report).toEqual(secondResult.usage?.report);
+  });
+
+  test("removes stale report on query failure and resets filters after range-only clear", async () => {
+    const calls: string[] = [];
+    const api = createApi(calls);
+    const bridge = createSettingsBridge(api, {
+      todayLocalDate: () => "2026-07-17",
+      createUsageCommandId: () => "clear_usage_consistent"
+    });
+    await bridge.loadAgentUsage();
+    await bridge.setAgentUsageFilters({ projectId: "project_01" });
+    const cleared = await bridge.clearAgentUsage();
+    expect(cleared.usage?.filters).toEqual({ provider: "", model: "", projectId: "" });
+    expect(cleared.usage?.report?.query).toEqual({
+      range: { fromLocalDate: "2026-07-11", toLocalDate: "2026-07-17" }
+    });
+
+    api.settings.listAgentUsage = async () => ({
+      ok: false,
+      error: { message: "query failed" } as never
+    });
+    const failed = await bridge.setAgentUsageRange("30d");
+    expect(failed.usage?.status).toBe("error");
+    expect(failed.usage?.report).toBeUndefined();
+  });
+
+  test("creates distinct bounded clear command ids within the same millisecond", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1234);
+    try {
+      const calls: string[] = [];
+      const bridge = createSettingsBridge(createApi(calls), {
+        todayLocalDate: () => "2026-07-17"
+      });
+      await bridge.loadAgentUsage();
+      await bridge.clearAgentUsage();
+      await bridge.clearAgentUsage();
+      const commandIds = calls
+        .filter((call) => call.startsWith("settings.clearAgentUsage:"))
+        .map((call) => call.split(":")[1]!);
+
+      expect(commandIds).toHaveLength(2);
+      expect(new Set(commandIds).size).toBe(2);
+      expect(
+        commandIds.every((id) => id.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id))
+      ).toBe(true);
+    } finally {
+      now.mockRestore();
+    }
   });
 
   test("refreshes plugin registry through the preload API without blocking model settings", async () => {
@@ -399,6 +571,56 @@ function createApi(
           }
         };
         return ok(result);
+      },
+      listAgentUsage: async (query) => {
+        calls.push(
+          `settings.listAgentUsage:${query.range.fromLocalDate}:${query.range.toLocalDate}:${query.provider ?? ""}:${query.model ?? ""}:${query.projectId ?? ""}:${query.detailLocalDate ?? ""}`
+        );
+        const report: AgentUsageReport = {
+          query,
+          days: [
+            {
+              localDate: "2026-07-16",
+              inputTokens: 100,
+              outputTokens: 20,
+              cachedTokens: 10,
+              reasoningTokens: 0,
+              totalTokens: 120,
+              costs: [{ currency: "USD", actualAmount: 0.01, estimatedAmount: 0.02 }],
+              hasUnknownCost: true
+            }
+          ],
+          runs:
+            query.detailLocalDate === undefined
+              ? []
+              : [
+                  {
+                    usageId: "run_01:round_01:1",
+                    runId: "run_01",
+                    conversationId: "conversation_01",
+                    projectId: "project_01",
+                    provider: "openai",
+                    model: "gpt-5",
+                    totalTokens: 120,
+                    usageStatus: "actual",
+                    cost: { status: "actual", amount: 0.01, currency: "USD" },
+                    timestamp: "2026-07-16T08:00:00.000Z"
+                  }
+                ],
+          generatedAt: "2026-07-17T12:00:00.000Z"
+        };
+        return ok(report);
+      },
+      clearAgentUsage: async (command) => {
+        calls.push(
+          `settings.clearAgentUsage:${command.commandId}:${command.range.fromLocalDate}:${command.range.toLocalDate}`
+        );
+        return ok({
+          query: { range: command.range },
+          days: [],
+          runs: [],
+          generatedAt: "2026-07-17T12:01:00.000Z"
+        });
       }
     },
     plugins: {
@@ -469,5 +691,38 @@ function pluginSnapshot(enabled: boolean) {
         }
       }
     ]
+  };
+}
+
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
+function usageReport(query: AgentUsageQuery, generatedAt: string): AgentUsageReport {
+  return {
+    query,
+    days: [
+      {
+        localDate: query.range.toLocalDate,
+        inputTokens: 1,
+        outputTokens: 1,
+        cachedTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: 2,
+        costs: [],
+        hasUnknownCost: true
+      }
+    ],
+    runs: [],
+    generatedAt
   };
 }
