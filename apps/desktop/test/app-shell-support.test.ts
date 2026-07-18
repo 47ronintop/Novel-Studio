@@ -1,14 +1,23 @@
 import { describe, expect, test } from "vitest";
 
 import { createDefaultUserPreferences } from "@novel-studio/application";
-import { createUnifiedError, err, ok } from "@novel-studio/shared";
+import {
+  DEFAULT_USER_SHELL_PREFERENCES,
+  EMPTY_WORKSPACE_CONTEXT,
+  createUnifiedError,
+  err,
+  ok
+} from "@novel-studio/shared";
 import type { ChapterEditorProps } from "@novel-studio/ui";
 
 import {
   createChapterEditorRuntime,
   createChapterEditorSelectionCommand,
+  applyShellPreferences,
   persistAppearancePreferences,
-  resolveActivityTransition
+  rendererShellState,
+  resolveActivityTransition,
+  shellPreferencesFromState
 } from "../src/renderer/app-shell-support.js";
 
 const chapterEditor = {
@@ -31,6 +40,31 @@ const chapterEditor = {
 } satisfies ChapterEditorProps;
 
 describe("renderer app shell editor runtime support", () => {
+  test("uses the shared shell preference defaults", () => {
+    expect(rendererShellState).toMatchObject({
+      workspaceContext: EMPTY_WORKSPACE_CONTEXT,
+      ...DEFAULT_USER_SHELL_PREFERENCES
+    });
+    expect(shellPreferencesFromState(rendererShellState)).toEqual(DEFAULT_USER_SHELL_PREFERENCES);
+  });
+
+  test("round-trips explicit empty engineering expansion state", () => {
+    const applied = applyShellPreferences(
+      {
+        ...rendererShellState,
+        engineeringExpandedPathIds: ["src"]
+      },
+      {
+        engineeringExpandedPathIds: [],
+        navigatorExpandedSectionIds: []
+      }
+    );
+
+    expect(applied.engineeringExpandedPathIds).toEqual([]);
+    expect(applied.navigatorExpandedSectionIds).toEqual([]);
+    expect(shellPreferencesFromState(applied)).not.toHaveProperty("workspaceContext");
+  });
+
   test("restores the last non-settings activity after settings closes", () => {
     expect(resolveActivityTransition("search", "workspace", "settings")).toEqual({
       activeActivity: "settings",

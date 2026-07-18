@@ -5,7 +5,11 @@
   NovelStudioApi,
   UserPreferencesSaveInput
 } from "@novel-studio/application";
-import type { UserAppearancePreferences } from "@novel-studio/shared";
+import {
+  DEFAULT_USER_SHELL_PREFERENCES,
+  EMPTY_WORKSPACE_CONTEXT,
+  type UserAppearancePreferences
+} from "@novel-studio/shared";
 import type {
   ChapterEditorProps,
   ChapterEditorRuntimeProps,
@@ -27,34 +31,11 @@ declare global {
   }
 }
 
-const DEFAULT_NAVIGATOR_EXPANDED_SECTION_IDS = [
-  "novel-studio",
-  "chapters",
-  "characters",
-  "world",
-  "outline",
-  "timeline",
-  "memories",
-  "prompts",
-  "agents",
-  "workflows"
-] as const;
-
 export const rendererShellState: DesktopShellState = {
   projectTitle: "未打开项目",
   activeActivity: "workspace",
-  navigatorCollapsed: false,
-  navigatorExpandedSectionIds: DEFAULT_NAVIGATOR_EXPANDED_SECTION_IDS,
-  inspectorCollapsed: true,
-  bottomPanelVisible: false,
-  activeBottomPanelTab: "工作流运行",
-  focusMode: false,
-  workspaceLayout: {
-    splitView: false,
-    navigatorWidth: 260,
-    inspectorWidth: 320,
-    bottomPanelHeight: 180
-  },
+  workspaceContext: EMPTY_WORKSPACE_CONTEXT,
+  ...DEFAULT_USER_SHELL_PREFERENCES,
   commandPaletteOpen: false,
   saveStatus: "Saved",
   navigatorSections: [
@@ -247,9 +228,14 @@ export function shellPreferencesFromState(
   shellState: DesktopShellState
 ): NonNullable<UserPreferencesSaveInput["shell"]> {
   return {
+    workbenchMode: shellState.workbenchMode,
+    creativeNavigatorMode: shellState.creativeNavigatorMode,
+    engineeringExpandedPathIds: shellState.engineeringExpandedPathIds,
     navigatorCollapsed: shellState.navigatorCollapsed,
     navigatorExpandedSectionIds:
-      shellState.navigatorExpandedSectionIds ?? DEFAULT_NAVIGATOR_EXPANDED_SECTION_IDS,
+      shellState.navigatorExpandedSectionIds ??
+      DEFAULT_USER_SHELL_PREFERENCES.navigatorExpandedSectionIds ??
+      [],
     inspectorCollapsed: shellState.inspectorCollapsed,
     bottomPanelVisible: shellState.bottomPanelVisible,
     activeBottomPanelTab: shellState.activeBottomPanelTab,
@@ -264,6 +250,15 @@ export function applyShellPreferences(
 ): DesktopShellState {
   return {
     ...shellState,
+    ...(preferences.workbenchMode === undefined
+      ? {}
+      : { workbenchMode: preferences.workbenchMode }),
+    ...(preferences.creativeNavigatorMode === undefined
+      ? {}
+      : { creativeNavigatorMode: preferences.creativeNavigatorMode }),
+    ...(preferences.engineeringExpandedPathIds === undefined
+      ? {}
+      : { engineeringExpandedPathIds: preferences.engineeringExpandedPathIds }),
     ...(preferences.navigatorCollapsed === undefined
       ? {}
       : { navigatorCollapsed: preferences.navigatorCollapsed }),

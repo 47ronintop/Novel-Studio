@@ -78,6 +78,15 @@ export type {
   SaveStatus,
   WorkspaceLayoutState
 } from "./desktop-application.js";
+export type {
+  CreativeNavigatorMode,
+  WorkbenchMode,
+  WorkspaceCapability,
+  WorkspaceContextDto
+} from "@novel-studio/shared";
+export { EMPTY_WORKSPACE_CONTEXT, resolveWorkbenchModeForContext } from "@novel-studio/shared";
+export type { WorkspaceActivationContext } from "./workspace-activation-context.js";
+export { toWorkspaceContextDto } from "./workspace-activation-context.js";
 export { createProjectSearchSession } from "./project-search-session.js";
 export type {
   UserEditorPreferences,

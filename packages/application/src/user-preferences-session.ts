@@ -1,4 +1,9 @@
-import { ok, type Result, type UnifiedError } from "@novel-studio/shared";
+import {
+  DEFAULT_USER_SHELL_PREFERENCES,
+  ok,
+  type Result,
+  type UnifiedError
+} from "@novel-studio/shared";
 import type {
   UserAppearancePreferences,
   UserEditorPreferences,
@@ -52,7 +57,7 @@ export function createUserPreferencesSession(
         return baseResult;
       }
 
-      const next: UserPreferencesSnapshot = {
+      const next = normalizeUserPreferences({
         schemaVersion: "1.0",
         onboarding: {
           ...baseResult.value.onboarding,
@@ -74,7 +79,7 @@ export function createUserPreferencesSession(
             ...input.shell?.workspaceLayout
           }
         }
-      };
+      });
       const written = await options.preferencesPort.writeUserPreferences(next);
       if (!written.ok) {
         return written;
@@ -110,53 +115,57 @@ export function createDefaultUserPreferences(): UserPreferencesSnapshot {
       theme: "dark",
       accentColor: "teal"
     },
-    shell: {
-      navigatorCollapsed: false,
-      navigatorExpandedSectionIds: defaultNavigatorExpandedSectionIds(),
-      inspectorCollapsed: true,
-      bottomPanelVisible: false,
-      activeBottomPanelTab: "工作流运行",
-      focusMode: false,
-      workspaceLayout: {
-        splitView: false,
-        navigatorWidth: 260,
-        inspectorWidth: 320,
-        bottomPanelHeight: 180
-      }
-    }
+    shell: DEFAULT_USER_SHELL_PREFERENCES
   };
 }
 
 function normalizeUserPreferences(preferences: UserPreferencesSnapshot): UserPreferencesSnapshot {
-  const normalized: UserPreferencesSnapshot = {
+  const shell = preferences.shell as UserPreferencesSnapshot["shell"] | undefined;
+  return {
     ...preferences,
     editor: normalizeEditorPreferences(preferences.editor ?? createDefaultUserPreferences().editor),
     appearance: normalizeAppearancePreferences(preferences.appearance as AppearancePreferenceInput),
-    shell: {
-      ...preferences.shell,
-      navigatorExpandedSectionIds: normalizeNavigatorExpandedSectionIds(
-        preferences.shell.navigatorExpandedSectionIds
-      ),
-      focusMode: preferences.shell.focusMode ?? false
-    }
+    shell: normalizeShellPreferences(shell)
   };
+}
 
-  if (!isLegacyExpandedDefaultLayout(normalized.shell)) {
-    return normalized;
-  }
+function normalizeShellPreferences(
+  preferences: UserPreferencesSnapshot["shell"] | undefined
+): UserPreferencesSnapshot["shell"] {
+  const legacyShell =
+    preferences === undefined ||
+    !Object.prototype.hasOwnProperty.call(preferences, "workbenchMode");
 
   return {
-    ...normalized,
-    shell: {
-      ...normalized.shell,
-      inspectorCollapsed: true,
-      bottomPanelVisible: false,
-      workspaceLayout: {
-        ...normalized.shell.workspaceLayout,
-        bottomPanelHeight: 180
-      }
+    workbenchMode: normalizeWorkbenchMode(preferences?.workbenchMode),
+    creativeNavigatorMode: normalizeCreativeNavigatorMode(preferences?.creativeNavigatorMode),
+    engineeringExpandedPathIds: normalizeStringArray(preferences?.engineeringExpandedPathIds),
+    navigatorCollapsed:
+      preferences?.navigatorCollapsed ?? DEFAULT_USER_SHELL_PREFERENCES.navigatorCollapsed,
+    navigatorExpandedSectionIds: normalizeStringArray(preferences?.navigatorExpandedSectionIds),
+    inspectorCollapsed: legacyShell
+      ? false
+      : (preferences.inspectorCollapsed ?? DEFAULT_USER_SHELL_PREFERENCES.inspectorCollapsed),
+    bottomPanelVisible:
+      preferences?.bottomPanelVisible ?? DEFAULT_USER_SHELL_PREFERENCES.bottomPanelVisible,
+    activeBottomPanelTab:
+      preferences?.activeBottomPanelTab ?? DEFAULT_USER_SHELL_PREFERENCES.activeBottomPanelTab,
+    focusMode: preferences?.focusMode ?? DEFAULT_USER_SHELL_PREFERENCES.focusMode,
+    workspaceLayout: {
+      ...DEFAULT_USER_SHELL_PREFERENCES.workspaceLayout,
+      ...preferences?.workspaceLayout
     }
   };
+}
+
+function normalizeWorkbenchMode(value: unknown): UserPreferencesSnapshot["shell"]["workbenchMode"] {
+  return value === "engineering" ? "engineering" : "creative";
+}
+
+function normalizeCreativeNavigatorMode(
+  value: unknown
+): UserPreferencesSnapshot["shell"]["creativeNavigatorMode"] {
+  return value === "story" ? "story" : "writing";
 }
 
 function normalizeAppearancePreferences(
@@ -185,27 +194,12 @@ function normalizeEditorPreferences(preferences: UserEditorPreferences): UserEdi
   };
 }
 
-function normalizeNavigatorExpandedSectionIds(value: unknown): readonly string[] {
+function normalizeStringArray(value: unknown): readonly string[] {
   if (!Array.isArray(value)) {
-    return defaultNavigatorExpandedSectionIds();
+    return [];
   }
 
-  const ids = [...new Set(value.filter((item): item is string => typeof item === "string"))];
-  return ids.length === 0 ? defaultNavigatorExpandedSectionIds() : ids;
-}
-
-function defaultNavigatorExpandedSectionIds(): readonly string[] {
-  return [
-    "chapters",
-    "characters",
-    "world",
-    "outline",
-    "timeline",
-    "memories",
-    "prompts",
-    "agents",
-    "workflows"
-  ];
+  return [...new Set(value.filter((item): item is string => typeof item === "string"))];
 }
 
 function clampNumber(value: number, min: number, max: number): number {
@@ -214,17 +208,4 @@ function clampNumber(value: number, min: number, max: number): number {
   }
 
   return Math.min(max, Math.max(min, value));
-}
-
-function isLegacyExpandedDefaultLayout(shell: UserPreferencesSnapshot["shell"]): boolean {
-  return (
-    shell.navigatorCollapsed === false &&
-    shell.inspectorCollapsed === false &&
-    shell.bottomPanelVisible === true &&
-    shell.activeBottomPanelTab === "工作流运行" &&
-    shell.workspaceLayout.splitView === false &&
-    shell.workspaceLayout.navigatorWidth === 260 &&
-    shell.workspaceLayout.inspectorWidth === 320 &&
-    shell.workspaceLayout.bottomPanelHeight === 220
-  );
 }

@@ -1,6 +1,12 @@
 import { describe, expect, test } from "vitest";
 
-import { isErr, isOk, ok } from "@novel-studio/shared";
+import {
+  DEFAULT_USER_SHELL_PREFERENCES,
+  EMPTY_WORKSPACE_CONTEXT,
+  isErr,
+  isOk,
+  ok
+} from "@novel-studio/shared";
 import type {
   ChapterDocument,
   ChapterDraftRepositoryPort,
@@ -10,6 +16,7 @@ import type {
 import { createChapterEditorSession } from "../src/chapter-editor-session.js";
 import { createDesktopApplication } from "../src/desktop-application.js";
 import { DEFAULT_APPLICATION_COMMANDS, isSafeCommand } from "../src/command-registry.js";
+import { resolveWorkbenchModeForContext, toWorkspaceContextDto } from "../src/index.js";
 import { createPluginRuntimeSession } from "../src/plugin-runtime-session.js";
 
 interface PluginSettingsSnapshot {
@@ -78,19 +85,41 @@ describe("desktop application command bridge", () => {
     expect(application.getShellState()).toMatchObject({
       projectTitle: "未打开项目",
       activeActivity: "workspace",
-      navigatorCollapsed: false,
-      inspectorCollapsed: true,
-      bottomPanelVisible: false,
-      activeBottomPanelTab: "工作流运行",
-      focusMode: false,
-      workspaceLayout: {
-        splitView: false,
-        navigatorWidth: 260,
-        inspectorWidth: 320,
-        bottomPanelHeight: 180
-      },
+      workspaceContext: EMPTY_WORKSPACE_CONTEXT,
+      ...DEFAULT_USER_SHELL_PREFERENCES,
       saveStatus: "Saved"
     });
+  });
+
+  test("forces engineering workspaces into the engineering workbench", () => {
+    expect(
+      resolveWorkbenchModeForContext("creative", {
+        kind: "engineeringWorkspace",
+        workspaceId: "ws_01",
+        displayName: "example",
+        capabilities: ["engineeringWorkbench", "generalFileContext"]
+      })
+    ).toBe("engineering");
+  });
+
+  test("converts activation state to a renderer-safe workspace DTO", () => {
+    const dto = toWorkspaceContextDto({
+      kind: "engineeringWorkspace",
+      workspaceId: "ws_01",
+      displayName: "example",
+      contentRoot: "D:/code/example",
+      stateRoot: "C:/user-data/workspaces/ws_01",
+      capabilities: ["engineeringWorkbench", "generalFileContext"]
+    });
+
+    expect(dto).toEqual({
+      kind: "engineeringWorkspace",
+      workspaceId: "ws_01",
+      displayName: "example",
+      capabilities: ["engineeringWorkbench", "generalFileContext"]
+    });
+    expect(dto).not.toHaveProperty("contentRoot");
+    expect(dto).not.toHaveProperty("stateRoot");
   });
 
   test("registers only safe M4 commands with risk levels", () => {

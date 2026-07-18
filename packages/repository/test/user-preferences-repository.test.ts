@@ -40,6 +40,9 @@ describe("UserPreferencesFileRepository", () => {
         accentColor: "amber"
       },
       shell: {
+        workbenchMode: "creative",
+        creativeNavigatorMode: "writing",
+        engineeringExpandedPathIds: [],
         navigatorCollapsed: true,
         navigatorExpandedSectionIds: ["chapters", "prompts"],
         inspectorCollapsed: false,

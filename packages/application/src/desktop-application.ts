@@ -1,4 +1,10 @@
-import { createUnifiedError, err, ok } from "@novel-studio/shared";
+import {
+  DEFAULT_USER_SHELL_PREFERENCES,
+  EMPTY_WORKSPACE_CONTEXT,
+  createUnifiedError,
+  err,
+  ok
+} from "@novel-studio/shared";
 import type {
   ChapterSummary,
   CreateChapterInput,
@@ -8,7 +14,10 @@ import type {
   ChapterVersionSummary,
   RenameChapterInput,
   Result,
-  UnifiedError
+  UnifiedError,
+  WorkspaceContextDto,
+  WorkbenchMode,
+  CreativeNavigatorMode
 } from "@novel-studio/shared";
 
 import {
@@ -108,6 +117,10 @@ export interface WorkspaceLayoutState {
 export interface DesktopShellState {
   readonly projectTitle: string;
   readonly activeActivity: ActivityId;
+  readonly workspaceContext: WorkspaceContextDto;
+  readonly workbenchMode: WorkbenchMode;
+  readonly creativeNavigatorMode: CreativeNavigatorMode;
+  readonly engineeringExpandedPathIds: readonly string[];
   readonly navigatorCollapsed: boolean;
   readonly navigatorExpandedSectionIds?: readonly string[];
   readonly inspectorCollapsed: boolean;
@@ -240,30 +253,8 @@ export interface DesktopApplicationOptions {
 const DEFAULT_SHELL_STATE: DesktopShellState = {
   projectTitle: "未打开项目",
   activeActivity: "workspace",
-  navigatorCollapsed: false,
-  navigatorExpandedSectionIds: [
-    "files",
-    "novel-studio",
-    "chapters",
-    "characters",
-    "world",
-    "outline",
-    "timeline",
-    "memories",
-    "prompts",
-    "agents",
-    "workflows"
-  ],
-  inspectorCollapsed: true,
-  bottomPanelVisible: false,
-  activeBottomPanelTab: "工作流运行",
-  focusMode: false,
-  workspaceLayout: {
-    splitView: false,
-    navigatorWidth: 260,
-    inspectorWidth: 320,
-    bottomPanelHeight: 180
-  },
+  workspaceContext: EMPTY_WORKSPACE_CONTEXT,
+  ...DEFAULT_USER_SHELL_PREFERENCES,
   commandPaletteOpen: false,
   saveStatus: "Saved",
   navigatorSections: [

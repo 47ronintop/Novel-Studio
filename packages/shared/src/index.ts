@@ -43,5 +43,13 @@ export type {
   UserShellPreferences,
   UserWorkspaceLayoutPreferences
 } from "./user-preferences.js";
+export { DEFAULT_USER_SHELL_PREFERENCES } from "./user-preferences.js";
+export type {
+  CreativeNavigatorMode,
+  WorkbenchMode,
+  WorkspaceCapability,
+  WorkspaceContextDto
+} from "./workspace-context.js";
+export { EMPTY_WORKSPACE_CONTEXT, resolveWorkbenchModeForContext } from "./workspace-context.js";
 export type { Err, Ok, Result } from "./result.js";
 export { err, isErr, isOk, ok, unwrapOr } from "./result.js";
