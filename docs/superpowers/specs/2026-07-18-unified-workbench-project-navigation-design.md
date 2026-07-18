@@ -3,7 +3,6 @@
 **日期：** 2026-07-18
 **状态：** 规划基线，待实施
 **实现基线：** `25a9006f41ee7cd8e836885314bfb6a5d2b68021`
-**取代：** `docs/superpowers/specs/2026-07-18-project-navigator-redesign-design.md`
 **实施计划：** `docs/superpowers/plans/2026-07-18-unified-workbench-project-navigation.md`
 **范围：** 桌面 Shell、创作/工程工作台、项目与工作区生命周期、Navigator、唯一右侧 Agent、导航编排、偏好迁移、视觉与验收
 
