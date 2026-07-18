@@ -41,6 +41,8 @@ export type {
   AgentProjectReadRepositoryOptions,
   AgentProjectTextReadResult
 } from "./agent-project-read-repository.js";
+export { EngineeringWorkspaceFileRepository } from "./engineering-workspace-repository.js";
+export type { EngineeringWorkspaceFileRepositoryOptions } from "./engineering-workspace-repository.js";
 export type {
   AssetType,
   AgentTransactionJournal,

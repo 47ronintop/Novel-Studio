@@ -87,6 +87,20 @@ export type {
 export { EMPTY_WORKSPACE_CONTEXT, resolveWorkbenchModeForContext } from "@novel-studio/shared";
 export type { WorkspaceActivationContext } from "./workspace-activation-context.js";
 export { toWorkspaceContextDto } from "./workspace-activation-context.js";
+export {
+  createEngineeringWorkspaceSession,
+  type CreateEngineeringWorkspaceSessionOptions,
+  type EngineeringTextFileSaveResult,
+  type EngineeringTextFileSnapshot,
+  type EngineeringWorkspaceActivation,
+  type EngineeringWorkspaceLockPort,
+  type EngineeringWorkspaceRepositoryPort,
+  type EngineeringWorkspaceSession,
+  type EngineeringWorkspaceSnapshot,
+  type EngineeringWorkspaceStatePort,
+  type EngineeringWorkspaceTreeNode,
+  type EngineeringWorkspaceTreeSnapshot
+} from "./engineering-workspace-session.js";
 export { createProjectSearchSession } from "./project-search-session.js";
 export type {
   UserEditorPreferences,
