@@ -356,6 +356,7 @@ describe("Agent Run IPC", () => {
       generatedAt: "2026-07-17T00:00:00.000Z"
     };
     const runtime = {
+      workspaceId: "project-01",
       projectId: "project-01",
       projectRoot: "C:/project",
       agentRunDraftSession: {
@@ -401,9 +402,13 @@ describe("Agent Run IPC", () => {
       {
         agentRuntimeManager: {
           current: () => runtime,
-          currentProject: () => ({ projectId: runtime.projectId, projectRoot: runtime.projectRoot }),
+          currentWorkspace: () => ({
+            workspaceId: runtime.workspaceId,
+            contentRoot: runtime.projectRoot,
+            stateRoot: runtime.projectRoot
+          }),
           hasActiveRun: async () => ({ ok: true, value: false }),
-          bindProject: async () => ({ ok: true, value: undefined }),
+          bindWorkspace: async () => ({ ok: true, value: undefined }),
           subscribeAgentRunEvents: () => () => undefined,
           dispose: () => undefined
         }
@@ -587,6 +592,7 @@ describe("Agent Run IPC", () => {
   test("routes strict Conversation commands through the currently bound runtime", async () => {
     const calls: string[] = [];
     const createRuntime = (projectId: string) => ({
+      workspaceId: projectId,
       projectId,
       projectRoot: `C:/${projectId}`,
       agentRunSession: {},
@@ -634,12 +640,13 @@ describe("Agent Run IPC", () => {
       {
         agentRuntimeManager: {
           current: () => current,
-          currentProject: () => ({
-            projectId: current.projectId,
-            projectRoot: current.projectRoot
+          currentWorkspace: () => ({
+            workspaceId: current.workspaceId,
+            contentRoot: current.projectRoot,
+            stateRoot: current.projectRoot
           }),
           hasActiveRun: async () => ({ ok: true, value: false }),
-          bindProject: async () => ({ ok: true, value: undefined }),
+          bindWorkspace: async () => ({ ok: true, value: undefined }),
           subscribeAgentRunEvents: () => () => undefined,
           dispose: () => undefined
         }
@@ -742,10 +749,12 @@ describe("Agent Run IPC", () => {
     const handlers = createApplicationIpcHandlers(application, {
       agentRuntimeManager: {
         current: () => undefined,
-        currentProject: () => undefined,
+        currentWorkspace: () => undefined,
         hasActiveRun: async () => ({ ok: true, value: active }),
-        async bindProject(binding: Record<string, unknown>) {
-          calls.push(`bind:${String(binding["projectId"])}:${String(binding["activeChapterId"])}`);
+        async bindWorkspace(binding: Record<string, unknown>) {
+          calls.push(
+            `bind:${String(binding["workspaceId"])}:${String(binding["activeChapterId"])}`
+          );
           return { ok: true, value: undefined };
         },
         subscribeAgentRunEvents: () => () => undefined,
@@ -799,6 +808,7 @@ describe("Agent Run IPC", () => {
     const calls: string[] = [];
     const draftView = { ok: true, value: { runDraft: {}, contextDraft: {} } };
     const runtime = {
+      workspaceId: "project-01",
       projectId: "project-01",
       projectRoot: "C:/project-01",
       agentRunSession: {},
@@ -809,9 +819,7 @@ describe("Agent Run IPC", () => {
         },
         async updateAgentRunDraft(command: Record<string, unknown>) {
           calls.push(
-            `update-run-draft:${String(
-              (command["mutation"] as Record<string, unknown>)["kind"]
-            )}`
+            `update-run-draft:${String((command["mutation"] as Record<string, unknown>)["kind"])}`
           );
           return draftView;
         },
@@ -844,9 +852,13 @@ describe("Agent Run IPC", () => {
       {
         agentRuntimeManager: {
           current: () => runtime,
-          currentProject: () => ({ projectId: runtime.projectId, projectRoot: runtime.projectRoot }),
+          currentWorkspace: () => ({
+            workspaceId: runtime.workspaceId,
+            contentRoot: runtime.projectRoot,
+            stateRoot: runtime.projectRoot
+          }),
           hasActiveRun: async () => ({ ok: true, value: false }),
-          bindProject: async () => ({ ok: true, value: undefined }),
+          bindWorkspace: async () => ({ ok: true, value: undefined }),
           subscribeAgentRunEvents: () => () => undefined,
           dispose: () => undefined
         }
@@ -951,8 +963,7 @@ describe("Agent Run IPC", () => {
       on: () => () => undefined
     }) as unknown as Record<string, unknown>;
     const agentRuns = api["agentRuns"] as
-      | Record<string, (...args: unknown[]) => Promise<unknown>>
-      | undefined;
+      Record<string, (...args: unknown[]) => Promise<unknown>> | undefined;
     expect(agentRuns).toBeDefined();
     if (agentRuns === undefined) return;
 

@@ -14,6 +14,10 @@ describe("Agent project path guard", () => {
       ok: true,
       value: { relativePath: "chapters/ch_01.md" }
     });
+    expect(validate("src/index.ts")).toEqual({
+      ok: true,
+      value: { relativePath: "src/index.ts" }
+    });
     for (const path of [
       "",
       "../outside.md",

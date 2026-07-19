@@ -7,6 +7,7 @@ import {
   createChapterEditorSession,
   createConfigStudioSession,
   createDesktopApplication,
+  createEngineeringWorkspaceSession,
   createModelSettingsSession,
   createPluginSettingsSession,
   createProjectSearchSession,
@@ -18,6 +19,7 @@ import {
 import type {
   ChapterEditorSession,
   DesktopApplication,
+  EngineeringWorkspaceSession,
   ModelConnectionTester,
   ModelDiscoveryPort,
   ProjectWorkspaceSnapshot,
@@ -29,6 +31,7 @@ import {
   ChapterFileRepository,
   AgentUsageFileRepository,
   ConfigAssetRepository,
+  EngineeringWorkspaceFileRepository,
   HistoryRepository,
   PluginRegistryFileRepository,
   ProjectFileRepository,
@@ -37,8 +40,10 @@ import {
   RecoveryRepository,
   SearchIndexFileRepository,
   StoryBibleFileRepository,
-  UserPreferencesFileRepository
+  UserPreferencesFileRepository,
+  WorkspaceStateFileRepository
 } from "@novel-studio/repository";
+import { err, ok } from "@novel-studio/shared";
 
 export const DEFAULT_FIXTURE_CHAPTER_ID = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D0";
 const DEFAULT_PROJECT_TITLE = "未命名长篇项目";
@@ -77,6 +82,45 @@ export interface BootstrappedDefaultDesktopApplication {
 
 export interface DesktopAiProviderFactoryInput {
   readonly chapterEditorSession: ChapterEditorSession;
+}
+
+export interface DesktopEngineeringWorkspaceSessionOptions {
+  readonly userDataRoot: string;
+  readonly projectLockOwnerId: string;
+  readonly now?: () => string;
+}
+
+export function createDesktopEngineeringWorkspaceSession(
+  options: DesktopEngineeringWorkspaceSessionOptions
+): EngineeringWorkspaceSession {
+  return createEngineeringWorkspaceSession({
+    createRepository: (contentRoot) =>
+      new EngineeringWorkspaceFileRepository({
+        contentRoot,
+        traceId: "trace_desktop_engineering_workspace_repository"
+      }),
+    createStatePort: () =>
+      new WorkspaceStateFileRepository({
+        userDataRoot: options.userDataRoot,
+        traceId: "trace_desktop_workspace_state_repository"
+      }),
+    createLockPort: (stateRoot) => {
+      const lock = new ProjectLockFileRepository({
+        projectRoot: stateRoot,
+        ownerId: options.projectLockOwnerId,
+        traceId: "trace_desktop_engineering_workspace_lock",
+        ...(options.now === undefined ? {} : { now: options.now })
+      });
+      return {
+        async acquireWorkspaceLock() {
+          const acquired = await lock.acquireProjectLock();
+          return acquired.ok ? ok(undefined) : err(acquired.error);
+        },
+        releaseWorkspaceLock: () => lock.releaseProjectLock()
+      };
+    },
+    ...(options.now === undefined ? {} : { now: options.now })
+  });
 }
 
 export function createProjectDesktopApplication(

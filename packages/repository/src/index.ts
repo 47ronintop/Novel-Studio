@@ -131,6 +131,8 @@ export type {
   StoryBibleRepositoryPort,
   StoryBibleSnapshot
 } from "./story-bible-repository.js";
+export { WorkspaceStateFileRepository } from "./workspace-state-repository.js";
+export type { WorkspaceStateFileRepositoryOptions } from "./workspace-state-repository.js";
 export { SearchIndexFileRepository } from "./search-index-repository.js";
 export { validateWithSchema } from "./schema-validation.js";
 export { UserPreferencesFileRepository } from "./user-preferences-repository.js";

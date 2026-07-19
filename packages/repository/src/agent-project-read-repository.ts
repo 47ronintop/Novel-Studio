@@ -23,7 +23,7 @@ export interface AgentProjectReadRepositoryOptions {
   readonly traceId?: string;
 }
 
-const allowedExtensions = new Set([".md", ".txt", ".json", ".yaml", ".yml", ".toml"]);
+const allowedExtensions = new Set([".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".ts"]);
 const blockedRoots = new Set([
   ".git",
   ".novel-studio",

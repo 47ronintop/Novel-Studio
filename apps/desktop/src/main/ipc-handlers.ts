@@ -569,7 +569,7 @@ export function createApplicationIpcHandlers(
         parsed === undefined ||
         runtime === undefined ||
         permissionSession === undefined ||
-        parsed.projectId !== runtime.projectId
+        parsed.projectId !== runtime.workspaceId
       ) {
         return invalidAgentRunCommand();
       }
@@ -1478,9 +1478,11 @@ async function bindAgentRuntime(
   if (!result.ok || manager === undefined) return result;
   const activeChapterId =
     result.value.activeChapterId ?? result.value.chapters[0]?.id ?? "chapter_unselected";
-  const bound = await manager.bindProject({
-    projectId: result.value.project.projectId,
-    projectRoot: result.value.projectRoot,
+  const bound = await manager.bindWorkspace({
+    kind: "creativeProject",
+    workspaceId: result.value.project.projectId,
+    contentRoot: result.value.projectRoot,
+    stateRoot: result.value.projectRoot,
     activeChapterId
   });
   return bound.ok ? result : err(bound.error);

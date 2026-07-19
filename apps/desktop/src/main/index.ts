@@ -59,9 +59,13 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
   const agentRuntimeManager = createDesktopAgentRuntimeManager({
     createRuntime: (binding) =>
       createDesktopAgentRuntime({
-        projectRoot: binding.projectRoot,
-        projectId: binding.projectId,
-        activeChapterId: binding.activeChapterId,
+        workspaceKind: binding.kind,
+        projectId: binding.workspaceId,
+        contentRoot: binding.contentRoot,
+        stateRoot: binding.stateRoot,
+        ...(binding.activeChapterId === undefined
+          ? {}
+          : { activeChapterId: binding.activeChapterId }),
         userDataRoot,
         pricingRegistry: agentPricingRegistry,
         projectLockOwnerId,
@@ -156,9 +160,11 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         }
       })
   });
-  const initialBinding = await agentRuntimeManager.bindProject({
-    projectId: bootstrapped.workspace.project.projectId,
-    projectRoot: bootstrapped.workspace.projectRoot,
+  const initialBinding = await agentRuntimeManager.bindWorkspace({
+    kind: "creativeProject",
+    workspaceId: bootstrapped.workspace.project.projectId,
+    contentRoot: bootstrapped.workspace.projectRoot,
+    stateRoot: bootstrapped.workspace.projectRoot,
     activeChapterId:
       bootstrapped.workspace.activeChapterId ??
       bootstrapped.workspace.chapters[0]?.id ??

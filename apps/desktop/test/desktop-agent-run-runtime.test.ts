@@ -31,9 +31,11 @@ describe("desktop Agent Run runtime", () => {
     expect((await usageRepository.writeFinal(retained)).ok).toBe(true);
 
     const runtime = runtimeExports.createDesktopAgentRuntime({
-      projectRoot,
+      workspaceKind: "creativeProject",
       userDataRoot,
       projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
       activeChapterId: "chapter-unused",
       usageTime: () => ({
         timestamp: "2026-07-17T12:00:00.000Z",
@@ -42,6 +44,7 @@ describe("desktop Agent Run runtime", () => {
         utcOffsetMinutes: 0
       })
     });
+    expect(await runtime.prepare()).toMatchObject({ ok: true });
     const usageSession = (
       runtime as unknown as {
         agentUsageSession?: {
@@ -70,9 +73,11 @@ describe("desktop Agent Run runtime", () => {
     const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-usage-data-"));
     roots.push(projectRoot, userDataRoot);
     const session = createDesktopRuntime({
-      projectRoot,
+      workspaceKind: "creativeProject",
       userDataRoot,
       projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
       activeChapterId: "chapter-unused",
       createRunId: () => "run-desktop-usage",
       usageTime: () => ({
@@ -111,9 +116,10 @@ describe("desktop Agent Run runtime", () => {
     expect(detailFiles).toHaveLength(1);
     const [detailFile] = detailFiles;
     if (detailFile === undefined) throw new Error("Expected one persisted usage detail file");
-    const record = JSON.parse(
-      await readFile(join(detailDirectory, detailFile), "utf8")
-    ) as Record<string, unknown>;
+    const record = JSON.parse(await readFile(join(detailDirectory, detailFile), "utf8")) as Record<
+      string,
+      unknown
+    >;
     expect(record).toMatchObject({
       runId: "run-desktop-usage",
       projectId: "project-01",
@@ -150,8 +156,10 @@ describe("desktop Agent Run runtime", () => {
       "utf8"
     );
     const runtime = runtimeExports.createDesktopAgentRuntime({
-      projectRoot,
+      workspaceKind: "creativeProject",
       projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
       activeChapterId: chapterId,
       createRunId: () => "run-strict-conversation"
     });
@@ -231,8 +239,10 @@ describe("desktop Agent Run runtime", () => {
     );
     let round = 0;
     const runtime = runtimeExports.createDesktopAgentRuntime({
-      projectRoot,
+      workspaceKind: "creativeProject",
       projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
       activeChapterId: chapterId,
       createRunId: () => "run-saved-editor-preflight",
       readEditorBuffer: async (refId) => (refId === `chapter:${chapterId}` ? body : undefined),
@@ -337,8 +347,10 @@ describe("desktop Agent Run runtime", () => {
     const roundMessages: Array<readonly { readonly role: string; readonly content: string }[]> = [];
     let round = 0;
     const runtime = runtimeExports.createDesktopAgentRuntime({
-      projectRoot,
+      workspaceKind: "creativeProject",
       projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
       activeChapterId: "chapter-unused",
       createRunId: () => runIds.shift() ?? "run-context-extra",
       modelDriver: {
@@ -420,8 +432,10 @@ describe("desktop Agent Run runtime", () => {
     );
     let round = 0;
     const session = createDesktopRuntime({
-      projectRoot,
+      workspaceKind: "creativeProject",
       projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
       activeChapterId: chapterId,
       createRunId: () => "run-desktop-read-propose",
       modelDriver: {
@@ -484,8 +498,10 @@ describe("desktop Agent Run runtime", () => {
         readAgentRun(runId: string): Promise<Record<string, unknown>>;
       }
     )({
-      projectRoot,
+      workspaceKind: "creativeProject",
       projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
       activeChapterId: chapterId,
       createRunId: () => "run-desktop-plan"
     });
@@ -570,8 +586,10 @@ describe("desktop Agent Run runtime", () => {
         readAgentRun(runId: string): Promise<Record<string, unknown>>;
       }
     )({
-      projectRoot,
+      workspaceKind: "creativeProject",
       projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
       activeChapterId: chapterId,
       projectLockOwnerId: lockOwnerId,
       createRunId: () => "run-desktop-write",
@@ -677,8 +695,10 @@ describe("desktop Agent Run runtime", () => {
     const operations: string[] = [];
     let round = 0;
     const session = createDesktopRuntime({
-      projectRoot,
+      workspaceKind: "creativeProject",
       projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
       activeChapterId: chapterId,
       projectLockOwnerId: lockOwnerId,
       createRunId: () => "run-desktop-conflict",
@@ -770,8 +790,10 @@ describe("desktop Agent Run runtime", () => {
     const syncOptions: (string | undefined)[] = [];
     let round = 0;
     const session = createDesktopRuntime({
-      projectRoot,
+      workspaceKind: "creativeProject",
       projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
       activeChapterId: chapterId,
       projectLockOwnerId: lockOwnerId,
       createRunId: () => "run-desktop-dirty-undo",
@@ -908,8 +930,10 @@ describe("desktop Agent Run runtime", () => {
     await writeFile(notesPath, notes, "utf8");
     let round = 0;
     const session = createDesktopRuntime({
-      projectRoot,
+      workspaceKind: "creativeProject",
       projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
       activeChapterId: "chapter-unused",
       createRunId: () => "run-desktop-text-validation",
       modelDriver: {
@@ -961,8 +985,10 @@ describe("desktop Agent Run runtime", () => {
     await writeFile(settingsPath, settings, "utf8");
     let round = 0;
     const session = createDesktopRuntime({
-      projectRoot,
+      workspaceKind: "creativeProject",
       projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
       activeChapterId: "chapter-unused",
       createRunId: () => "run-desktop-settings-schema",
       modelDriver: {

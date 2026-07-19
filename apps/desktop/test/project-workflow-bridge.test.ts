@@ -474,7 +474,7 @@ function createApi(options: {
   >["fileTree"];
   readonly recovery?: ProjectWorkspaceSnapshot["recovery"];
 }): NovelStudioApi {
-  let currentProjectRoot = emptySnapshot.projectRoot;
+  let activeProjectRoot = emptySnapshot.projectRoot;
 
   return {
     getShellState: async () => ({
@@ -552,7 +552,7 @@ function createApi(options: {
             }
           };
         }
-        currentProjectRoot = projectRoot;
+        activeProjectRoot = projectRoot;
         return ok({
           ...emptySnapshot,
           projectRoot,
@@ -562,7 +562,7 @@ function createApi(options: {
       },
       create: async (input) => {
         options.record.push(`project.create:${input.projectId}:${input.title}`);
-        currentProjectRoot = input.projectRoot;
+        activeProjectRoot = input.projectRoot;
         return ok({ ...emptySnapshot, projectRoot: input.projectRoot, chapters: [] });
       },
       listChapters: async () => ok(options.getChapters()),
@@ -581,7 +581,7 @@ function createApi(options: {
         options.setChapters(nextChapters);
         return ok({
           ...emptySnapshot,
-          projectRoot: currentProjectRoot,
+          projectRoot: activeProjectRoot,
           chapters: nextChapters,
           activeChapterId: input.chapterId
         });
@@ -598,7 +598,7 @@ function createApi(options: {
         options.setChapters(nextChapters);
         return ok({
           ...emptySnapshot,
-          projectRoot: currentProjectRoot,
+          projectRoot: activeProjectRoot,
           chapters: nextChapters,
           activeChapterId: input.chapterId
         });
@@ -623,7 +623,7 @@ function createApi(options: {
         options.setChapters(nextChapters);
         return ok({
           ...emptySnapshot,
-          projectRoot: currentProjectRoot,
+          projectRoot: activeProjectRoot,
           chapters: nextChapters,
           activeChapterId: input.chapterId
         });
@@ -636,7 +636,7 @@ function createApi(options: {
         options.setChapters(nextChapters);
         return ok({
           ...emptySnapshot,
-          projectRoot: currentProjectRoot,
+          projectRoot: activeProjectRoot,
           chapters: nextChapters,
           activeChapterId: nextChapters[0]?.id
         });
@@ -645,7 +645,7 @@ function createApi(options: {
         options.record.push(`project.selectChapter:${chapterId}`);
         return ok({
           ...emptySnapshot,
-          projectRoot: currentProjectRoot,
+          projectRoot: activeProjectRoot,
           chapters: options.getChapters(),
           activeChapterId: chapterId
         });
@@ -665,7 +665,7 @@ function createApi(options: {
         return ok({
           workspace: {
             ...emptySnapshot,
-            projectRoot: currentProjectRoot,
+            projectRoot: activeProjectRoot,
             chapters: options.getChapters(),
             recovery: {
               availableItems: []
@@ -686,7 +686,7 @@ function createApi(options: {
         options.record.push(`project.discardRecoveryDraft:${sessionId}`);
         return ok({
           ...emptySnapshot,
-          projectRoot: currentProjectRoot,
+          projectRoot: activeProjectRoot,
           chapters: options.getChapters(),
           recovery: {
             availableItems: []

@@ -77,9 +77,11 @@ import {
 } from "@novel-studio/repository";
 
 export interface DesktopAgentRunSessionOptions {
-  readonly projectRoot: string;
+  readonly workspaceKind: "creativeProject" | "engineeringWorkspace";
   readonly projectId: string;
-  readonly activeChapterId: string;
+  readonly contentRoot: string;
+  readonly stateRoot: string;
+  readonly activeChapterId?: string;
   /**
    * The Electron user-data root the redacted usage sink writes under. It is app-global (not per
    * project), so it arrives via the `createRuntime` closure in `main/index.ts`, mirroring how the
@@ -133,8 +135,9 @@ export interface PreparedAgentRunStart {
 }
 
 export interface DesktopAgentRuntimeServices {
-  readonly projectId: string;
-  readonly projectRoot: string;
+  readonly workspaceId: string;
+  readonly contentRoot: string;
+  readonly stateRoot: string;
   readonly agentRunSession: AgentRunSession;
   readonly agentConversationSession: AgentConversationSession;
   readonly agentRunDraftSession: AgentRunDraftSession;
@@ -143,6 +146,7 @@ export interface DesktopAgentRuntimeServices {
   readonly agentPlanExecutionSession: AgentPlanExecutionSession;
   /** Present only when the Electron user-data usage store is configured. */
   readonly agentUsageSession?: AgentUsageSession;
+  readonly prepare: () => Promise<Result<void, UnifiedError>>;
 }
 
 export function createDesktopAgentRunSession(
@@ -162,15 +166,18 @@ function createDesktopAgentRuntimeServices(
   enforceConversationBinding: boolean
 ): DesktopAgentRuntimeServices {
   const projectReads = new AgentProjectReadRepository({
-    projectRoot: options.projectRoot,
+    projectRoot: options.contentRoot,
     traceId: "desktop-agent-project-read"
   });
-  const storyBible = new StoryBibleFileRepository({
-    projectRoot: options.projectRoot,
-    traceId: "desktop-agent-story-bible"
-  });
+  const storyBible =
+    options.workspaceKind === "creativeProject"
+      ? new StoryBibleFileRepository({
+          projectRoot: options.contentRoot,
+          traceId: "desktop-agent-story-bible"
+        })
+      : undefined;
   const repository = new AgentRunFileRepository({
-    projectRoot: options.projectRoot,
+    projectRoot: options.stateRoot,
     traceId: "desktop-agent-run-store"
   });
   const usageRepository =
@@ -188,19 +195,17 @@ function createDesktopAgentRuntimeServices(
           now: () => desktopUsageTime(options).timestamp,
           todayLocalDate: () => desktopUsageTime(options).localDate
         });
-  if (usageRepository !== undefined) {
-    void usageRepository
-      .enforceRetention(desktopUsageTime(options).localDate)
-      .catch(() => undefined);
-  }
   const conversationRepository = new AgentConversationFileRepository({
-    projectRoot: options.projectRoot,
+    projectRoot: options.stateRoot,
     traceId: "desktop-agent-conversation-store"
   });
-  const chapterRepository = new ChapterFileRepository({
-    projectRoot: options.projectRoot,
-    traceId: "desktop-agent-chapter"
-  });
+  const chapterRepository =
+    options.workspaceKind === "creativeProject"
+      ? new ChapterFileRepository({
+          projectRoot: options.contentRoot,
+          traceId: "desktop-agent-chapter"
+        })
+      : undefined;
   const readToolExecutor = createDesktopReadToolExecutor(
     projectReads,
     chapterRepository,
@@ -209,7 +214,7 @@ function createDesktopAgentRuntimeServices(
   const changeSetSession = createDesktopChangeSetSession({
     projectId: options.projectId,
     projectReads,
-    chapterRepository,
+    ...(chapterRepository === undefined ? {} : { chapterRepository }),
     repository,
     ...(options.readEditorState === undefined ? {} : { readEditorState: options.readEditorState })
   });
@@ -217,11 +222,12 @@ function createDesktopAgentRuntimeServices(
     options.projectLockOwnerId === undefined
       ? undefined
       : createDesktopVersionGroupServices({
-          projectRoot: options.projectRoot,
+          contentRoot: options.contentRoot,
+          stateRoot: options.stateRoot,
           projectId: options.projectId,
           projectLockOwnerId: options.projectLockOwnerId,
           projectReads,
-          chapterRepository,
+          ...(chapterRepository === undefined ? {} : { chapterRepository }),
           ...(options.readEditorState === undefined
             ? {}
             : { readEditorState: options.readEditorState }),
@@ -352,10 +358,11 @@ function createDesktopAgentRuntimeServices(
     ...(options.now === undefined ? {} : { now: options.now })
   });
   const startPreflight = createDesktopStartPreflight({
+    workspaceKind: options.workspaceKind,
     draftSession,
-    chapterRepository,
+    ...(chapterRepository === undefined ? {} : { chapterRepository }),
     projectReads,
-    storyBible,
+    ...(storyBible === undefined ? {} : { storyBible }),
     ...(options.readEditorBuffer === undefined
       ? {}
       : { readEditorBuffer: options.readEditorBuffer }),
@@ -376,7 +383,7 @@ function createDesktopAgentRuntimeServices(
           return err(permissionRootError("AGENT_PERMISSION_PROJECT_MISMATCH"));
         }
         try {
-          const canonicalRoot = await realpath(options.projectRoot);
+          const canonicalRoot = await realpath(options.contentRoot);
           return ok(createHash("sha256").update(canonicalRoot, "utf8").digest("hex"));
         } catch {
           return err(permissionRootError("AGENT_PERMISSION_PROJECT_ROOT_UNAVAILABLE"));
@@ -429,7 +436,7 @@ function createDesktopAgentRuntimeServices(
             continue;
           }
           if (source.relativePath !== undefined) {
-            if (source.refId.startsWith("chapter:")) {
+            if (source.refId.startsWith("chapter:") && chapterRepository !== undefined) {
               const chapter = await chapterRepository.readChapter(
                 source.refId.slice("chapter:".length)
               );
@@ -443,7 +450,7 @@ function createDesktopAgentRuntimeServices(
             current.push({ refId: source.refId, content: read.value.content });
             continue;
           }
-          if (source.assetId !== undefined) {
+          if (source.assetId !== undefined && storyBible !== undefined) {
             const asset = await findStoryBibleAsset(storyBible, source.assetId);
             if (!asset.ok) return asset;
             current.push({ refId: source.refId, content: JSON.stringify(asset.value) });
@@ -462,9 +469,9 @@ function createDesktopAgentRuntimeServices(
     draftSession,
     repository,
     ...(usageRepository === undefined ? {} : { usageRepository }),
-    chapterRepository,
+    ...(chapterRepository === undefined ? {} : { chapterRepository }),
     projectReads,
-    storyBible,
+    ...(storyBible === undefined ? {} : { storyBible }),
     ...(options.pricingRegistry === undefined ? {} : { pricingRegistry: options.pricingRegistry }),
     ...(options.usageTime === undefined ? {} : { usageTime: options.usageTime }),
     ...(options.readEditorBuffer === undefined
@@ -476,17 +483,33 @@ function createDesktopAgentRuntimeServices(
       : { resolveModelStartFacts: options.resolveModelStartFacts }),
     ...(options.now === undefined ? {} : { now: options.now })
   });
-  void versionGroupServices?.recoverOnStartup();
+  let prepareResult: Promise<Result<void, UnifiedError>> | undefined;
+  const prepare = () =>
+    (prepareResult ??= (async () => {
+      if (usageRepository !== undefined) {
+        const retained = await usageRepository.enforceRetention(
+          desktopUsageTime(options).localDate
+        );
+        if (!retained.ok) return retained;
+      }
+      if (versionGroupServices !== undefined) {
+        const recovered = await versionGroupServices.recoverOnStartup();
+        if (!recovered.ok) return err(recovered.error);
+      }
+      return ok(undefined);
+    })());
   return {
-    projectId: options.projectId,
-    projectRoot: options.projectRoot,
+    workspaceId: options.projectId,
+    contentRoot: options.contentRoot,
+    stateRoot: options.stateRoot,
     agentRunSession: session,
     agentConversationSession: conversationSession,
     agentRunDraftSession: draftSession,
     agentContextSession: contextSession,
     agentPermissionSession: permissionSession,
     agentPlanExecutionSession: planExecutionSession,
-    ...(usageSession === undefined ? {} : { agentUsageSession: usageSession })
+    ...(usageSession === undefined ? {} : { agentUsageSession: usageSession }),
+    prepare
   };
 }
 
@@ -572,9 +595,9 @@ function createDesktopAgentContextSession(input: {
   readonly draftSession: AgentRunDraftSession;
   readonly repository: AgentRunFileRepository;
   readonly usageRepository?: AgentUsageFileRepository;
-  readonly chapterRepository: ChapterFileRepository;
+  readonly chapterRepository?: ChapterFileRepository;
   readonly projectReads: AgentProjectReadRepository;
-  readonly storyBible: StoryBibleFileRepository;
+  readonly storyBible?: StoryBibleFileRepository;
   readonly pricingRegistry?: AgentPricingRegistry;
   readonly usageTime?: () => AgentUsageTimeFacts;
   readonly readEditorBuffer?: NonNullable<DesktopAgentRunSessionOptions["readEditorBuffer"]>;
@@ -662,7 +685,7 @@ function createDesktopAgentContextSession(input: {
 function createDesktopChangeSetSession(input: {
   readonly projectId: string;
   readonly projectReads: AgentProjectReadRepository;
-  readonly chapterRepository: ChapterFileRepository;
+  readonly chapterRepository?: ChapterFileRepository;
   readonly repository: AgentRunFileRepository;
   readonly readEditorState?: DesktopAgentRunSessionOptions["readEditorState"];
 }) {
@@ -670,6 +693,9 @@ function createDesktopChangeSetSession(input: {
     port: {
       async readChapterTarget({ projectId, chapterId }) {
         if (projectId !== input.projectId) return err(runtimeError("CHANGE_SET_PROJECT_MISMATCH"));
+        if (input.chapterRepository === undefined) {
+          return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
+        }
         const chapter = await input.chapterRepository.readChapter(chapterId);
         if (!chapter.ok) return chapter;
         const relativePath = `chapters/${chapterId}.md`;
@@ -700,6 +726,9 @@ function createDesktopChangeSetSession(input: {
       },
       async validateCandidate(candidate) {
         if (candidate.assetType === "chapter") {
+          if (input.chapterRepository === undefined) {
+            return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
+          }
           if (candidate.assetId === undefined) {
             return err(runtimeError("CHANGE_SET_CHAPTER_ID_MISSING"));
           }
@@ -771,11 +800,12 @@ function schemaNameForProjectText(relativePath: string): string | undefined {
 }
 
 function createDesktopVersionGroupServices(input: {
-  readonly projectRoot: string;
+  readonly contentRoot: string;
+  readonly stateRoot: string;
   readonly projectId: string;
   readonly projectLockOwnerId: string;
   readonly projectReads: AgentProjectReadRepository;
-  readonly chapterRepository: ChapterFileRepository;
+  readonly chapterRepository?: ChapterFileRepository;
   readonly readEditorState?: DesktopAgentRunSessionOptions["readEditorState"];
   readonly pauseAutosave?: DesktopAgentRunSessionOptions["pauseAutosave"];
   readonly resumeAutosave?: DesktopAgentRunSessionOptions["resumeAutosave"];
@@ -788,18 +818,18 @@ function createDesktopVersionGroupServices(input: {
   readonly recoverOnStartup: () => Promise<Result<readonly VersionGroup[], UnifiedError>>;
 } {
   const recoveryRepository = new RecoveryRepository({
-    projectRoot: input.projectRoot,
+    projectRoot: input.stateRoot,
     traceId: "desktop-agent-recovery"
   });
   const transaction = new AgentWriteTransaction({
-    projectRoot: input.projectRoot,
+    projectRoot: input.contentRoot,
     projectLock: new ProjectLockFileRepository({
-      projectRoot: input.projectRoot,
+      projectRoot: input.stateRoot,
       ownerId: input.projectLockOwnerId,
       traceId: "desktop-agent-project-lock"
     }),
     historyRepository: new HistoryRepository({
-      projectRoot: input.projectRoot,
+      projectRoot: input.stateRoot,
       traceId: "desktop-agent-history"
     }),
     recoveryRepository,
@@ -842,6 +872,7 @@ function createDesktopVersionGroupServices(input: {
         await input.preserveDirtyBuffers?.(relativePaths);
       },
       async markRecoveryClean(relativePaths) {
+        if (input.chapterRepository === undefined) return;
         await markRecoveryRecordsClean(
           recoveryRepository,
           input.chapterRepository,
@@ -969,7 +1000,7 @@ async function prepareTransactionInput(
   input: VersionGroupTransactionApplyInput,
   services: {
     readonly projectReads: AgentProjectReadRepository;
-    readonly chapterRepository: ChapterFileRepository;
+    readonly chapterRepository?: ChapterFileRepository;
   }
 ): Promise<Result<AgentWriteTransactionInput, UnifiedError>> {
   const files: AgentWriteTransactionInput["files"][number][] = [];
@@ -980,6 +1011,9 @@ async function prepareTransactionInput(
     }
     if (file.assetId === undefined) {
       return err(runtimeError("AGENT_WRITE_CHAPTER_ID_MISSING"));
+    }
+    if (services.chapterRepository === undefined) {
+      return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
     }
     const chapter = await services.chapterRepository.readChapter(file.assetId);
     if (!chapter.ok) return chapter;
@@ -1159,10 +1193,11 @@ function runtimeError(code: string, redactedDetail?: JsonObject): UnifiedError {
  *    intent directly. The IPC guard makes this branch unreachable from the renderer.
  */
 function createDesktopStartPreflight(input: {
+  readonly workspaceKind: DesktopAgentRunSessionOptions["workspaceKind"];
   readonly draftSession: AgentRunDraftSession;
-  readonly chapterRepository: ChapterFileRepository;
+  readonly chapterRepository?: ChapterFileRepository;
   readonly projectReads: AgentProjectReadRepository;
-  readonly storyBible: StoryBibleFileRepository;
+  readonly storyBible?: StoryBibleFileRepository;
   readonly readEditorBuffer?: NonNullable<DesktopAgentRunSessionOptions["readEditorBuffer"]>;
   readonly readEditorState?: NonNullable<DesktopAgentRunSessionOptions["readEditorState"]>;
   readonly resolveModelStartFacts?: NonNullable<
@@ -1172,7 +1207,11 @@ function createDesktopStartPreflight(input: {
   return {
     async resolveStart(command) {
       const intent = readResolvedIntent(command as StartAgentRunCommand & Record<string, unknown>);
-      if (intent !== undefined) return ok(intent);
+      if (intent !== undefined) {
+        return input.workspaceKind === "engineeringWorkspace" && intent.contextMode === "writing"
+          ? err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"))
+          : ok(intent);
+      }
       return resolveStartFromDraft(command, input);
     }
   };
@@ -1223,10 +1262,11 @@ function readResolvedIntent(
 async function resolveStartFromDraft(
   command: StartAgentRunCommand,
   input: {
+    readonly workspaceKind: DesktopAgentRunSessionOptions["workspaceKind"];
     readonly draftSession: AgentRunDraftSession;
-    readonly chapterRepository: ChapterFileRepository;
+    readonly chapterRepository?: ChapterFileRepository;
     readonly projectReads: AgentProjectReadRepository;
-    readonly storyBible: StoryBibleFileRepository;
+    readonly storyBible?: StoryBibleFileRepository;
     readonly readEditorBuffer?: NonNullable<DesktopAgentRunSessionOptions["readEditorBuffer"]>;
     readonly readEditorState?: NonNullable<DesktopAgentRunSessionOptions["readEditorState"]>;
     readonly resolveModelStartFacts?: NonNullable<
@@ -1243,6 +1283,9 @@ async function resolveStartFromDraft(
   });
   if (!resolved.ok) return err(resolved.error);
   const { runDraft, contextDraft } = resolved.value;
+  if (input.workspaceKind === "engineeringWorkspace" && runDraft.contextMode === "writing") {
+    return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
+  }
   if (input.resolveModelStartFacts === undefined) {
     return err(runtimeError("AGENT_MODEL_CAPABILITY_UNSUPPORTED"));
   }
@@ -1276,9 +1319,9 @@ async function resolveContextDraftSources(
     readonly relativePath?: string;
   }[],
   input: {
-    readonly chapterRepository: ChapterFileRepository;
+    readonly chapterRepository?: ChapterFileRepository;
     readonly projectReads: AgentProjectReadRepository;
-    readonly storyBible: StoryBibleFileRepository;
+    readonly storyBible?: StoryBibleFileRepository;
     readonly readEditorBuffer?: NonNullable<DesktopAgentRunSessionOptions["readEditorBuffer"]>;
     readonly readEditorState?: NonNullable<DesktopAgentRunSessionOptions["readEditorState"]>;
   }
@@ -1289,6 +1332,9 @@ async function resolveContextDraftSources(
       (ref.kind === "chapter" || ref.kind === "editor_selection") &&
       ref.chapterId !== undefined
     ) {
+      if (input.chapterRepository === undefined) {
+        return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
+      }
       const refId = `chapter:${ref.chapterId}`;
       const relativePath = `chapters/${ref.chapterId}.md`;
       const editorState = await input.readEditorState?.(relativePath);
@@ -1331,6 +1377,9 @@ async function resolveContextDraftSources(
       continue;
     }
     if (ref.kind === "story_bible" && ref.assetId !== undefined) {
+      if (input.storyBible === undefined) {
+        return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
+      }
       const asset = await findStoryBibleAsset(input.storyBible, ref.assetId);
       if (!asset.ok) return err(asset.error);
       sources.push({
@@ -1375,8 +1424,8 @@ function createDesktopAdaptiveAgentDriver(input: {
 
 function createDesktopReadToolExecutor(
   projectReads: AgentProjectReadRepository,
-  chapterRepository: ChapterFileRepository,
-  storyBible: StoryBibleFileRepository
+  chapterRepository: ChapterFileRepository | undefined,
+  storyBible: StoryBibleFileRepository | undefined
 ): AgentReadToolExecutor {
   return {
     async execute(input) {
@@ -1391,6 +1440,9 @@ function createDesktopReadToolExecutor(
           : listed;
       }
       if (input.name === "read_chapter") {
+        if (chapterRepository === undefined) {
+          return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
+        }
         const chapterId = readRequiredId(input.arguments, "chapterId");
         if (chapterId === undefined) return invalidToolArguments(input.name);
         const relativePath = `chapters/${chapterId}.md`;
@@ -1431,6 +1483,9 @@ function createDesktopReadToolExecutor(
           : read;
       }
       if (input.name === "read_story_bible") {
+        if (storyBible === undefined) {
+          return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
+        }
         const assetId = readRequiredId(input.arguments, "assetId");
         if (assetId === undefined) return invalidToolArguments(input.name);
         const asset = await findStoryBibleAsset(storyBible, assetId);
@@ -1453,7 +1508,9 @@ function createDesktopReadToolExecutor(
   };
 }
 
-function createDesktopScriptedAgentDriver(activeChapterId: string): AgentRunModelDriver {
+function createDesktopScriptedAgentDriver(
+  activeChapterId: string | undefined
+): AgentRunModelDriver {
   return {
     async *streamRound(input: AgentModelRoundInput): AsyncIterable<AgentModelStreamEvent> {
       const toolResultCount = input.messages.filter((message) => message.role === "tool").length;
@@ -1463,12 +1520,20 @@ function createDesktopScriptedAgentDriver(activeChapterId: string): AgentRunMode
         yield { type: "round_completed", finishReason: "tool_calls" };
         return;
       }
-      if (toolResultCount === 1 && input.snapshot.contextMode === "writing") {
+      if (
+        toolResultCount === 1 &&
+        input.snapshot.contextMode === "writing" &&
+        activeChapterId !== undefined
+      ) {
         yield toolCall("desktop_read_chapter", "read_chapter", { chapterId: activeChapterId });
         yield { type: "round_completed", finishReason: "tool_calls" };
         return;
       }
       if (input.snapshot.operationMode === "planning") {
+        const targetRefs =
+          activeChapterId === undefined
+            ? []
+            : [{ refId: `chapter:${activeChapterId}`, intent: "按用户目标规划修订" }];
         yield toolCall("desktop_finish_plan", "finish_plan", {
           planId: `plan_${input.runId}`,
           goal: input.snapshot.userRequest,
@@ -1477,7 +1542,7 @@ function createDesktopScriptedAgentDriver(activeChapterId: string): AgentRunMode
           facts: ["已读取项目结构和当前章节"],
           assumptions: [],
           openQuestions: [],
-          targetRefs: [{ refId: `chapter:${activeChapterId}`, intent: "按用户目标规划修订" }],
+          targetRefs,
           steps: [
             {
               stepId: "step_review_chapter",
@@ -1487,7 +1552,7 @@ function createDesktopScriptedAgentDriver(activeChapterId: string): AgentRunMode
           ],
           risks: ["执行前上下文可能变化"],
           verification: ["执行前刷新 Context Snapshot"],
-          sourceRefs: [`chapter:${activeChapterId}`]
+          sourceRefs: targetRefs.map((target) => target.refId)
         });
       } else {
         yield toolCall("desktop_finish", "finish", { summary: "只读 Agent run 已完成。" });
