@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import {
   CacheRepository,
@@ -81,6 +81,42 @@ describe("atomic write", () => {
 
     expect(result.ok).toBe(true);
     expect(await readFile(targetPath, "utf8")).toBe("new chapter body");
+  });
+
+  test("creates an unpredictable temporary file exclusively", async () => {
+    const projectRoot = await createTempProject();
+    const targetPath = join(projectRoot, "chapters", "ch_exclusive.md");
+    let temporaryPath = "";
+    let writeOptions: unknown;
+    const fileSystem: AtomicWriteFileSystem = {
+      async mkdir(path) {
+        await mkdir(path, { recursive: true });
+      },
+      async writeFile(path: string, data: string, options?: unknown) {
+        temporaryPath = path;
+        writeOptions = options;
+        await writeFile(path, data, "utf8");
+      },
+      async rename(oldPath, newPath) {
+        const { rename } = await import("node:fs/promises");
+        await rename(oldPath, newPath);
+      },
+      async rm(path) {
+        await rm(path, { force: true });
+      }
+    };
+
+    const result = await writeTextAtomically({
+      targetPath,
+      content: "exclusive temporary content",
+      fileSystem
+    });
+
+    expect(result).toEqual({ ok: true, value: undefined });
+    expect(basename(temporaryPath)).toMatch(
+      /^ch_exclusive\.md\.tmp-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+    );
+    expect(writeOptions).toEqual({ encoding: "utf8", flag: "wx" });
   });
 
   test("keeps the previous target content when rename fails", async () => {

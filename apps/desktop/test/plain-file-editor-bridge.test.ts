@@ -68,9 +68,38 @@ describe("plain file editor bridge", () => {
     });
     expect(bridge.getProps()?.conflict).toBeUndefined();
   });
+
+  test("rechecks the acknowledged disk checksum when a kept draft is saved again", async () => {
+    const calls: unknown[] = [];
+    const bridge = createPlainFileEditorBridge(createApi(calls, true));
+    await bridge.openFile("notes/scene.md");
+    bridge.updateContent("My draft\n");
+    const conflicted = await bridge.save();
+
+    conflicted?.onKeepDraft?.();
+    expect(bridge.getProps()).toMatchObject({
+      content: "My draft\n",
+      dirty: true,
+      saveStatus: "Unsaved"
+    });
+    expect(bridge.getProps()?.conflict).toBeUndefined();
+
+    const saved = await bridge.save();
+
+    expect(saved).toMatchObject({ content: "My draft\n", dirty: false, saveStatus: "Saved" });
+    expect(calls.at(-1)).toEqual([
+      "save",
+      {
+        path: "notes/scene.md",
+        content: "My draft\n",
+        expectedChecksum: "sha256:disk"
+      }
+    ]);
+  });
 });
 
 function createApi(calls: unknown[], conflict = false): NovelStudioApi {
+  let conflictPending = conflict;
   return {
     workspace: {
       async readTextFile(path) {
@@ -84,26 +113,28 @@ function createApi(calls: unknown[], conflict = false): NovelStudioApi {
       },
       async saveTextFile(input) {
         calls.push(["save", input]);
-        return conflict
-          ? ok({
-              kind: "conflict" as const,
-              current: {
-                path: input.path,
-                content: "Changed elsewhere\n",
-                checksum: "sha256:disk",
-                byteLength: 18
-              },
-              attemptedContent: input.content
-            })
-          : ok({
-              kind: "saved" as const,
-              document: {
-                path: input.path,
-                content: input.content,
-                checksum: "sha256:two",
-                byteLength: input.content.length
-              }
-            });
+        if (conflictPending) {
+          conflictPending = false;
+          return ok({
+            kind: "conflict" as const,
+            current: {
+              path: input.path,
+              content: "Changed elsewhere\n",
+              checksum: "sha256:disk",
+              byteLength: 18
+            },
+            attemptedContent: input.content
+          });
+        }
+        return ok({
+          kind: "saved" as const,
+          document: {
+            path: input.path,
+            content: input.content,
+            checksum: "sha256:two",
+            byteLength: input.content.length
+          }
+        });
       }
     }
   } as unknown as NovelStudioApi;

@@ -277,12 +277,13 @@ export function createProjectWorkspaceSession(
       try {
         acquiredLock = await acquireWorkspaceLock(created.value.projectRoot);
       } catch (error) {
-        await cleanupCreatedProjectBestEffort(created.value.projectRoot);
-        return unexpectedProjectActivationFailure(error);
+        return cleanupCreatedProjectAfterFailure(
+          created.value.projectRoot,
+          unexpectedProjectActivationFailure(error)
+        );
       }
       if (!acquiredLock.ok) {
-        await cleanupCreatedProjectBestEffort(created.value.projectRoot);
-        return acquiredLock;
+        return cleanupCreatedProjectAfterFailure(created.value.projectRoot, acquiredLock);
       }
 
       let activated: Result<ProjectWorkspaceSnapshot, UnifiedError>;
@@ -296,14 +297,16 @@ export function createProjectWorkspaceSession(
         if (state?.projectRoot !== created.value.projectRoot) {
           await releaseProjectLockBestEffort(acquiredLock.value.repository);
         }
-        await cleanupCreatedProjectBestEffort(created.value.projectRoot);
-        return unexpectedProjectActivationFailure(error);
+        return cleanupCreatedProjectAfterFailure(
+          created.value.projectRoot,
+          unexpectedProjectActivationFailure(error)
+        );
       }
       if (!activated.ok) {
         if (state?.projectRoot !== created.value.projectRoot) {
           await releaseProjectLockBestEffort(acquiredLock.value.repository);
         }
-        await cleanupCreatedProjectBestEffort(created.value.projectRoot);
+        return cleanupCreatedProjectAfterFailure(created.value.projectRoot, activated);
       }
       return activated;
     },
@@ -798,12 +801,45 @@ export function createProjectWorkspaceSession(
     return options.now?.() ?? new Date().toISOString();
   }
 
-  async function cleanupCreatedProjectBestEffort(projectRoot: string): Promise<void> {
+  async function cleanupCreatedProjectAfterFailure<T>(
+    projectRoot: string,
+    primaryFailure: Result<T, UnifiedError>
+  ): Promise<Result<T, UnifiedError>> {
+    if (primaryFailure.ok) return primaryFailure;
+
+    let cleanupFailure: UnifiedError | undefined;
     try {
-      await options.projectCreationRepository.cleanupCreatedProject(projectRoot);
-    } catch {
-      // Preserve the primary lock or activation failure.
+      const cleaned = await options.projectCreationRepository.cleanupCreatedProject(projectRoot);
+      if (!cleaned.ok) cleanupFailure = cleaned.error;
+    } catch (error) {
+      cleanupFailure = createUnifiedError({
+        code: "PROJECT_CREATE_CLEANUP_FAILED",
+        category: "StorageError",
+        message: "The incomplete project child directory could not be removed.",
+        recoverability: "retryable",
+        suggestedAction: "Inspect and remove only the incomplete project folder.",
+        traceId: "application-project-workspace-cleanup",
+        redactedDetail: {
+          reason: error instanceof Error ? error.message : "Unknown cleanup error"
+        }
+      });
     }
+
+    if (cleanupFailure === undefined) return primaryFailure;
+    return err(
+      createUnifiedError({
+        code: "PROJECT_CREATE_CLEANUP_FAILED",
+        category: "StorageError",
+        message: "Project activation failed and the incomplete child directory remains.",
+        recoverability: "user-action",
+        suggestedAction: "Inspect and remove only the incomplete project folder before retrying.",
+        traceId: "application-project-workspace-cleanup",
+        redactedDetail: {
+          primaryErrorCode: primaryFailure.error.code,
+          cleanupErrorCode: cleanupFailure.code
+        }
+      })
+    );
   }
 
   async function releaseProjectLockBestEffort(

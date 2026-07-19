@@ -128,6 +128,7 @@ export function createProjectDesktopApplication(
   options: ProjectDesktopApplicationOptions
 ): DesktopApplication {
   const lockOwnerId = options.projectLockOwnerId ?? createProjectLockOwnerId();
+  let activeProjectRoot: string | undefined = options.projectRoot;
   const chapterRepository = new ChapterFileRepository({
     projectRoot: options.projectRoot,
     traceId: "trace_desktop_chapter_repository"
@@ -198,18 +199,22 @@ export function createProjectDesktopApplication(
     readSettings: () => createSettingsRepository().readSettings(),
     writeSettings: (settings: ProjectSettings) => createSettingsRepository().writeSettings(settings)
   };
+  const engineeringUserDataRoot = options.userDataRoot;
 
   return createDesktopApplication({
     chapterEditorSession,
     projectWorkspaceSession,
     createProjectWorkspaceSession: createWorkspaceSession,
+    onActiveProjectRootChange: (projectRoot) => {
+      activeProjectRoot = projectRoot;
+    },
     projectCreationRepository,
-    ...(options.userDataRoot === undefined
+    ...(engineeringUserDataRoot === undefined
       ? {}
       : {
           createEngineeringWorkspaceSession: () =>
             createDesktopEngineeringWorkspaceSession({
-              userDataRoot: options.userDataRoot!,
+              userDataRoot: engineeringUserDataRoot,
               projectLockOwnerId: lockOwnerId,
               ...(options.now === undefined ? {} : { now: options.now })
             })
@@ -320,40 +325,58 @@ export function createProjectDesktopApplication(
 
   function createSettingsRepository(): ProjectSettingsRepository {
     return new ProjectSettingsRepository({
-      projectRoot: projectWorkspaceSession.getSnapshot()?.projectRoot ?? options.projectRoot,
+      projectRoot: requireActiveProjectRoot(),
       traceId: "trace_desktop_settings_repository"
     });
   }
 
   function createPluginRegistryRepository(): PluginRegistryFileRepository {
     return new PluginRegistryFileRepository({
-      projectRoot: projectWorkspaceSession.getSnapshot()?.projectRoot ?? options.projectRoot,
+      projectRoot: requireActiveProjectRoot(),
       traceId: "trace_desktop_plugin_registry_repository"
     });
   }
 
   function createStoryBibleRepository(): StoryBibleFileRepository {
     return new StoryBibleFileRepository({
-      projectRoot: projectWorkspaceSession.getSnapshot()?.projectRoot ?? options.projectRoot,
+      projectRoot: requireActiveProjectRoot(),
       traceId: "trace_desktop_story_bible_repository"
     });
   }
 
   function createConfigAssetRepository(): ConfigAssetRepository {
+    const projectRoot = requireActiveProjectRoot();
     return new ConfigAssetRepository({
-      projectRoot: projectWorkspaceSession.getSnapshot()?.projectRoot ?? options.projectRoot,
+      projectRoot,
       traceId: "trace_desktop_config_asset_repository",
-      historyRepository
+      historyRepository: createActiveHistoryRepository(
+        projectRoot,
+        "trace_desktop_config_asset_history_repository"
+      )
     });
   }
 
   function createWorkflowRunHistoryRepository(): HistoryRepository {
+    return createActiveHistoryRepository(
+      requireActiveProjectRoot(),
+      "trace_desktop_workflow_run_history_repository"
+    );
+  }
+
+  function createActiveHistoryRepository(projectRoot: string, traceId: string): HistoryRepository {
     return new HistoryRepository({
-      projectRoot: projectWorkspaceSession.getSnapshot()?.projectRoot ?? options.projectRoot,
-      traceId: "trace_desktop_workflow_run_history_repository",
+      projectRoot,
+      traceId,
       ...(options.now === undefined ? {} : { now: options.now }),
       ...(options.createVersionId === undefined ? {} : { createVersionId: options.createVersionId })
     });
+  }
+
+  function requireActiveProjectRoot(): string {
+    if (activeProjectRoot === undefined) {
+      throw new Error("No creative project is active.");
+    }
+    return activeProjectRoot;
   }
 }
 

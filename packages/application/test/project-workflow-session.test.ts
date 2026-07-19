@@ -199,6 +199,63 @@ describe("M12 project workflow session", () => {
     }
   );
 
+  test("reports candidate cleanup failure instead of hiding it behind a lock failure", async () => {
+    const parentDirectory = await createTempRoot();
+    const fileRepository = new ProjectCreationFileRepository({
+      now: () => "2026-07-19T00:00:00.000Z"
+    });
+    const lockFailure = createUnifiedError({
+      code: "TEST_PROJECT_LOCK_FAILED",
+      category: "StorageError",
+      message: "Lock failed.",
+      recoverability: "retryable",
+      suggestedAction: "Retry the lock.",
+      traceId: "test-project-lock"
+    });
+    const cleanupFailure = createUnifiedError({
+      code: "TEST_PROJECT_CLEANUP_FAILED",
+      category: "StorageError",
+      message: "Cleanup failed.",
+      recoverability: "retryable",
+      suggestedAction: "Inspect the candidate folder.",
+      traceId: "test-project-cleanup"
+    });
+    const session = createProjectWorkspaceSession({
+      projectCreationRepository: {
+        previewProjectInParent: (input) => fileRepository.previewProjectInParent(input),
+        createProjectInParent: (input) => fileRepository.createProjectInParent(input),
+        cleanupCreatedProject: async () => err(cleanupFailure)
+      },
+      createProjectRepository: (root) => new ProjectFileRepository({ projectRoot: root }),
+      createChapterRepository: (root) => new ChapterFileRepository({ projectRoot: root }),
+      createHistoryRepository: (root) => new HistoryRepository({ projectRoot: root }),
+      createRecoveryRepository: () => emptyRecoveryRepository(),
+      createProjectLockRepository: () => ({
+        acquireProjectLock: async () => err(lockFailure),
+        releaseProjectLock: async () => ok(undefined)
+      })
+    });
+
+    const created = await session.createProjectInParent({
+      parentDirectory,
+      folderName: "cleanup-failure",
+      projectId: "prj_cleanup_failure",
+      title: "Cleanup Failure",
+      language: "en"
+    });
+
+    expect(created).toMatchObject({
+      ok: false,
+      error: {
+        code: "PROJECT_CREATE_CLEANUP_FAILED",
+        redactedDetail: {
+          primaryErrorCode: "TEST_PROJECT_LOCK_FAILED",
+          cleanupErrorCode: "TEST_PROJECT_CLEANUP_FAILED"
+        }
+      }
+    });
+  });
+
   test("keeps the active workspace when the creation repository rejects the request", async () => {
     const existingRoot = await createTempRoot();
     const parentDirectory = await createTempRoot();

@@ -3,7 +3,8 @@ import {
   EMPTY_WORKSPACE_CONTEXT,
   createUnifiedError,
   err,
-  ok
+  ok,
+  resolveWorkbenchModeForContext
 } from "@novel-studio/shared";
 import type {
   ChapterSummary,
@@ -243,9 +244,7 @@ export interface DesktopApplication {
   applyRecoveryDraft(sessionId: string): Promise<Result<ProjectRecoveryApplyResult, UnifiedError>>;
   discardRecoveryDraft(sessionId: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   refreshEngineeringTree(): Promise<Result<EngineeringWorkspaceSnapshot, UnifiedError>>;
-  readEngineeringTextFile(
-    path: string
-  ): Promise<Result<EngineeringTextFileSnapshot, UnifiedError>>;
+  readEngineeringTextFile(path: string): Promise<Result<EngineeringTextFileSnapshot, UnifiedError>>;
   saveEngineeringTextFile(input: {
     readonly path: string;
     readonly content: string;
@@ -329,6 +328,7 @@ export interface DesktopApplicationOptions {
   readonly engineeringWorkspaceSession?: EngineeringWorkspaceSession;
   readonly createEngineeringWorkspaceSession?: () => EngineeringWorkspaceSession;
   readonly createWorkspaceActivationId?: () => string;
+  readonly onActiveProjectRootChange?: (projectRoot: string | undefined) => void;
   readonly modelSettingsSession?: ModelSettingsSession;
   readonly agentUsageSession?: AgentUsageSession;
   readonly pluginSettingsSession?: PluginSettingsSession;
@@ -400,6 +400,19 @@ export function createDesktopApplication(
   let dynamicAiChapterEditorSession: ChapterEditorSession | undefined;
   let shellState = createInitialShellState(options);
 
+  const refreshProjectScopedBindings = (projectRoot: string | undefined): void => {
+    try {
+      options.onActiveProjectRootChange?.(projectRoot);
+    } catch {
+      // The project transition already succeeded; binding hooks are best-effort only.
+    }
+    try {
+      storyBibleSession?.clearSnapshot?.();
+    } catch {
+      // The project transition already succeeded; cache invalidation is best-effort only.
+    }
+  };
+
   return {
     async shutdown() {
       let firstError: UnifiedError | undefined;
@@ -415,7 +428,11 @@ export function createDesktopApplication(
         firstError = releasedProject.error;
       }
       const releasedEngineering = await activeEngineeringWorkspaceSession?.releaseWorkspaceLock();
-      if (releasedEngineering !== undefined && !releasedEngineering.ok && firstError === undefined) {
+      if (
+        releasedEngineering !== undefined &&
+        !releasedEngineering.ok &&
+        firstError === undefined
+      ) {
         firstError = releasedEngineering.error;
       }
       return firstError === undefined ? ok(undefined) : err(firstError);
@@ -516,11 +533,13 @@ export function createDesktopApplication(
       shellState = {
         ...shellState,
         workspaceContext: dto.context,
+        workbenchMode: resolveWorkbenchModeForContext(shellState.workbenchMode, dto.context),
         projectTitle:
           "creativeProject" in record.activation
             ? record.activation.creativeProject.project.title
             : record.activation.engineeringWorkspace.displayName
       };
+      refreshProjectScopedBindings(activeProjectWorkspaceSession?.getSnapshot()?.projectRoot);
       return dto;
     },
     async discardWorkspaceActivation(activationId) {
@@ -539,14 +558,22 @@ export function createDesktopApplication(
         return projectWorkspaceUnavailable();
       }
 
-      return activeProjectWorkspaceSession.openProject(projectRoot);
+      const opened = await activeProjectWorkspaceSession.openProject(projectRoot);
+      if (opened.ok) {
+        refreshProjectScopedBindings(opened.value.projectRoot);
+      }
+      return opened;
     },
     async createProjectInParent(input) {
       if (activeProjectWorkspaceSession === undefined) {
         return projectWorkspaceUnavailable();
       }
 
-      return activeProjectWorkspaceSession.createProjectInParent(input);
+      const created = await activeProjectWorkspaceSession.createProjectInParent(input);
+      if (created.ok) {
+        refreshProjectScopedBindings(created.value.projectRoot);
+      }
+      return created;
     },
     async listProjectChapters() {
       if (activeProjectWorkspaceSession === undefined) {
@@ -646,35 +673,35 @@ export function createDesktopApplication(
       return searchSession.search(input);
     },
     async loadStoryBible() {
-      if (storyBibleSession === undefined) {
+      if (storyBibleSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
         return storyBibleUnavailable();
       }
 
       return storyBibleSession.loadStoryBible();
     },
     async saveStoryBibleAsset(asset) {
-      if (storyBibleSession === undefined) {
+      if (storyBibleSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
         return storyBibleUnavailable();
       }
 
       return storyBibleSession.saveStoryAsset(asset);
     },
     async saveStoryBibleMemory(memory) {
-      if (storyBibleSession === undefined) {
+      if (storyBibleSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
         return storyBibleUnavailable();
       }
 
       return storyBibleSession.saveMemory(memory);
     },
     async buildStoryBibleConsistencyReport() {
-      if (storyBibleSession === undefined) {
+      if (storyBibleSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
         return storyBibleUnavailable();
       }
 
       return storyBibleSession.buildConsistencyReport();
     },
     async buildStoryBibleContextCandidates(options) {
-      if (storyBibleSession === undefined) {
+      if (storyBibleSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
         return storyBibleUnavailable();
       }
 
@@ -722,14 +749,20 @@ export function createDesktopApplication(
       return activeAiWritingWorkflowSession.applyChapterSuggestion(suggestionId);
     },
     async listWorkflowRuns() {
-      if (options.workflowRunHistory === undefined) {
+      if (
+        options.workflowRunHistory === undefined ||
+        activeEngineeringWorkspaceSession !== undefined
+      ) {
         return workflowRunHistoryUnavailable();
       }
 
       return options.workflowRunHistory.listWorkflowRuns();
     },
     async readWorkflowRun(workflowRunId) {
-      if (options.workflowRunHistory === undefined) {
+      if (
+        options.workflowRunHistory === undefined ||
+        activeEngineeringWorkspaceSession !== undefined
+      ) {
         return workflowRunHistoryUnavailable();
       }
 
@@ -819,28 +852,28 @@ export function createDesktopApplication(
       return ok(activeChapterEditorSession.previewSuggestionDiff(nextBody));
     },
     async listModelProfiles() {
-      if (modelSettingsSession === undefined) {
+      if (modelSettingsSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
         return modelSettingsUnavailable();
       }
 
       return modelSettingsSession.listModelProfiles();
     },
     async discoverModelOptions(profileId) {
-      if (modelSettingsSession === undefined) {
+      if (modelSettingsSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
         return modelSettingsUnavailable();
       }
 
       return modelSettingsSession.discoverModelOptions(profileId);
     },
     async saveModelProfile(profile, saveOptions) {
-      if (modelSettingsSession === undefined) {
+      if (modelSettingsSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
         return modelSettingsUnavailable();
       }
 
       return modelSettingsSession.saveModelProfile(profile, saveOptions);
     },
     async testModelProfileConnection(profileId) {
-      if (modelSettingsSession === undefined) {
+      if (modelSettingsSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
         return modelSettingsUnavailable();
       }
 
@@ -855,35 +888,35 @@ export function createDesktopApplication(
       return agentUsageSession.clearAgentUsage(command);
     },
     async loadPluginRegistry() {
-      if (pluginSettingsSession === undefined) {
+      if (pluginSettingsSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
         return pluginRegistryUnavailable();
       }
 
       return pluginSettingsSession.load();
     },
     async setPluginEnabled(pluginId, enabled) {
-      if (pluginSettingsSession === undefined) {
+      if (pluginSettingsSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
         return pluginRegistryUnavailable();
       }
 
       return pluginSettingsSession.setEnabled(pluginId, enabled);
     },
     async loadConfigAsset(assetType, assetId) {
-      if (configStudioSession === undefined) {
+      if (configStudioSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
         return configStudioUnavailable();
       }
 
       return configStudioSession.loadConfigAsset(assetType, assetId);
     },
     async saveConfigAsset(input) {
-      if (configStudioSession === undefined) {
+      if (configStudioSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
         return configStudioUnavailable();
       }
 
       return configStudioSession.saveConfigAsset(input);
     },
     async restoreConfigAssetVersion(input) {
-      if (configStudioSession === undefined) {
+      if (configStudioSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
         return configStudioUnavailable();
       }
 
@@ -985,22 +1018,14 @@ export function createDesktopApplication(
     createdProjectRoot?: string
   ): Result<PreparedWorkspaceActivation, UnifiedError> {
     const activationId = createActivationId();
-    const context: Extract<
-      WorkspaceActivationContext,
-      { readonly kind: "creativeProject" }
-    > = {
+    const context: Extract<WorkspaceActivationContext, { readonly kind: "creativeProject" }> = {
       kind: "creativeProject",
       workspaceId: snapshot.project.projectId,
       projectId: snapshot.project.projectId,
       displayName: snapshot.project.title,
       contentRoot: snapshot.projectRoot,
       stateRoot: snapshot.projectRoot,
-      capabilities: [
-        "creativeWorkbench",
-        "writingContext",
-        "creativeSearch",
-        "creativeStudio"
-      ],
+      capabilities: ["creativeWorkbench", "writingContext", "creativeSearch", "creativeStudio"],
       ...(snapshot.activeChapterId === undefined
         ? {}
         : { activeChapterId: snapshot.activeChapterId })
@@ -1028,6 +1053,9 @@ export function createDesktopApplication(
   }
 
   function getActiveChapterEditorSession(): ChapterEditorSession | undefined {
+    if (activeEngineeringWorkspaceSession !== undefined) {
+      return undefined;
+    }
     return activeProjectWorkspaceSession?.getActiveChapterEditorSession() ?? chapterEditorSession;
   }
 
@@ -1150,27 +1178,27 @@ function withProjectWorkspaceState(
         case "characters":
           return {
             ...section,
-            itemCount: storyBibleSnapshot?.characters.length ?? section.itemCount
+            itemCount: storyBibleSnapshot?.characters.length ?? 0
           };
         case "world":
           return {
             ...section,
-            itemCount: storyBibleSnapshot?.worldAssets.length ?? section.itemCount
+            itemCount: storyBibleSnapshot?.worldAssets.length ?? 0
           };
         case "outline":
           return {
             ...section,
-            itemCount: storyBibleSnapshot?.outline === undefined ? section.itemCount : 1
+            itemCount: storyBibleSnapshot?.outline === undefined ? 0 : 1
           };
         case "timeline":
           return {
             ...section,
-            itemCount: storyBibleSnapshot?.timeline === undefined ? section.itemCount : 1
+            itemCount: storyBibleSnapshot?.timeline === undefined ? 0 : 1
           };
         case "memories":
           return {
             ...section,
-            itemCount: storyBibleSnapshot?.memories.length ?? section.itemCount
+            itemCount: storyBibleSnapshot?.memories.length ?? 0
           };
         default:
           return section;

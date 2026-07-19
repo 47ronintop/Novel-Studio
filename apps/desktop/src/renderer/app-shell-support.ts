@@ -8,6 +8,7 @@
 import {
   DEFAULT_USER_SHELL_PREFERENCES,
   EMPTY_WORKSPACE_CONTEXT,
+  resolveWorkbenchModeForContext,
   type UserAppearancePreferences
 } from "@novel-studio/shared";
 import type {
@@ -248,11 +249,13 @@ export function applyShellPreferences(
   shellState: DesktopShellState,
   preferences: NonNullable<UserPreferencesSaveInput["shell"]>
 ): DesktopShellState {
+  const preferredWorkbenchMode = preferences.workbenchMode ?? shellState.workbenchMode;
   return {
     ...shellState,
-    ...(preferences.workbenchMode === undefined
-      ? {}
-      : { workbenchMode: preferences.workbenchMode }),
+    workbenchMode: resolveWorkbenchModeForContext(
+      preferredWorkbenchMode,
+      shellState.workspaceContext
+    ),
     ...(preferences.creativeNavigatorMode === undefined
       ? {}
       : { creativeNavigatorMode: preferences.creativeNavigatorMode }),

@@ -3,11 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 
-import type {
-  DesktopApplication,
-  NovelStudioApi,
-  ProjectWorkspaceSnapshot
-} from "@novel-studio/application";
+import type { DesktopApplication, ProjectWorkspaceSnapshot } from "@novel-studio/application";
 import { ok } from "@novel-studio/shared";
 
 import { createApplicationIpcHandlers } from "../src/main/ipc-handlers.js";

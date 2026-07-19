@@ -17,7 +17,10 @@ import {
   createDesktopApplication,
   toProjectWorkspaceSnapshotDto
 } from "../src/desktop-application.js";
+import type { ChapterEditorSession } from "../src/chapter-editor-session.js";
+import type { EngineeringWorkspaceSession } from "../src/engineering-workspace-session.js";
 import { createProjectWorkspaceSession } from "../src/project-workspace-session.js";
+import type { StoryBibleSession } from "../src/story-bible-session.js";
 import type {
   ProjectCreationRepositoryPort,
   ProjectWorkspaceSession,
@@ -89,6 +92,125 @@ describe("M12 desktop project workflow", () => {
     expect(await application.listProjectChapters()).toEqual(ok(candidateSnapshot.chapters));
   });
 
+  test("forces engineering mode and disables creative chapter workflows after engineering commit", async () => {
+    const oldSnapshot = projectSnapshot("D:/Novel/Old", "prj_old", "Old Project");
+    const legacyChapterCalls: string[] = [];
+    const aiFactoryCalls: string[] = [];
+    const application = createDesktopApplication({
+      projectWorkspaceSession: fakeProjectSession(oldSnapshot),
+      chapterEditorSession: {
+        async load() {
+          legacyChapterCalls.push("load");
+          throw new Error("legacy chapter editor must not be used in engineering context");
+        }
+      } as unknown as ChapterEditorSession,
+      createAiWritingWorkflowSession() {
+        aiFactoryCalls.push("create");
+        throw new Error("creative AI workflow must not be created in engineering context");
+      },
+      createEngineeringWorkspaceSession: () => fakeEngineeringWorkspaceSession(),
+      createWorkspaceActivationId: () => "activation_engineering"
+    });
+
+    const prepared = await application.prepareOpenEngineeringWorkspace("D:/Source");
+    if (!prepared.ok) throw new Error(prepared.error.message);
+    application.commitWorkspaceActivation(prepared.value.activationId);
+
+    expect(application.getShellState()).toMatchObject({
+      workspaceContext: { kind: "engineeringWorkspace", workspaceId: "ws_source" },
+      workbenchMode: "engineering"
+    });
+    await expect(application.loadActiveChapter()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "CHAPTER_EDITOR_UNAVAILABLE" }
+    });
+    await expect(
+      application.generateActiveChapterSuggestion({ instruction: "Continue." })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AI_WRITING_WORKFLOW_UNAVAILABLE" }
+    });
+    expect(legacyChapterCalls).toEqual([]);
+    expect(aiFactoryCalls).toEqual([]);
+  });
+
+  test("commits the complete creative activation when cache invalidation hooks throw", async () => {
+    const oldSnapshot = projectSnapshot("D:/Novel/Old", "prj_old", "Old Project");
+    const candidateSnapshot = projectSnapshot("D:/Novel/New", "prj_new", "New Project");
+    const candidateSession = fakeProjectSession(candidateSnapshot);
+    const application = createDesktopApplication({
+      projectWorkspaceSession: fakeProjectSession(oldSnapshot),
+      createProjectWorkspaceSession: () => candidateSession,
+      projectCreationRepository: fakeCreationRepository(),
+      createWorkspaceActivationId: () => "activation_hook_failure",
+      onActiveProjectRootChange() {
+        throw new Error("root hook failed");
+      },
+      storyBibleSession: {
+        getSnapshot: () => undefined,
+        clearSnapshot() {
+          throw new Error("cache reset failed");
+        }
+      } as unknown as StoryBibleSession
+    });
+
+    const prepared = await application.prepareOpenCreativeProject("D:/Novel/New");
+    if (!prepared.ok) throw new Error(prepared.error.message);
+
+    expect(() => application.commitWorkspaceActivation(prepared.value.activationId)).not.toThrow();
+    expect(application.getShellState()).toMatchObject({
+      workspaceContext: { kind: "creativeProject", workspaceId: "prj_new" },
+      projectTitle: "New Project"
+    });
+    await expect(application.listProjectChapters()).resolves.toEqual(
+      ok(candidateSnapshot.chapters)
+    );
+  });
+
+  test("refreshes project-scoped bindings after legacy open and create operations", async () => {
+    const openedSnapshot = projectSnapshot("D:/Novel/Opened", "prj_opened", "Opened Project");
+    const createdSnapshot = projectSnapshot("D:/Novel/Created", "prj_created", "Created Project");
+    let activeSnapshot = projectSnapshot("D:/Novel/Old", "prj_old", "Old Project");
+    const activeRoots: Array<string | undefined> = [];
+    let cacheClearCount = 0;
+    const projectSession = {
+      getSnapshot: () => activeSnapshot,
+      getActiveChapterEditorSession: () => undefined,
+      async openProject() {
+        activeSnapshot = openedSnapshot;
+        return ok(openedSnapshot);
+      },
+      async createProjectInParent() {
+        activeSnapshot = createdSnapshot;
+        return ok(createdSnapshot);
+      }
+    } as unknown as ProjectWorkspaceSession;
+    const application = createDesktopApplication({
+      projectWorkspaceSession: projectSession,
+      onActiveProjectRootChange: (projectRoot) => activeRoots.push(projectRoot),
+      storyBibleSession: {
+        getSnapshot: () => undefined,
+        clearSnapshot: () => {
+          cacheClearCount += 1;
+        }
+      } as unknown as StoryBibleSession
+    });
+
+    await expect(application.openProject("D:/Novel/Opened")).resolves.toEqual(ok(openedSnapshot));
+    await expect(
+      application.createProjectInParent({
+        parentDirectory: "D:/Novel",
+        folderName: "Created",
+        projectId: "prj_created",
+        title: "Created Project",
+        language: "en"
+      })
+    ).resolves.toEqual(ok(createdSnapshot));
+
+    expect(activeRoots).toEqual(["D:/Novel/Opened", "D:/Novel/Created"]);
+    expect(cacheClearCount).toBe(2);
+  });
+
   test("discards a created creative candidate by releasing its lock before child cleanup", async () => {
     const oldSnapshot = projectSnapshot("D:/Novel/Old", "prj_old", "Old Project");
     const candidateSnapshot = projectSnapshot(
@@ -118,9 +240,7 @@ describe("M12 desktop project workflow", () => {
       throw new Error(prepared.error.message);
     }
 
-    const discarded = await application.discardWorkspaceActivation(
-      prepared.value.activationId
-    );
+    const discarded = await application.discardWorkspaceActivation(prepared.value.activationId);
 
     expect(discarded).toEqual(ok(undefined));
     expect(order).toEqual([
@@ -449,11 +569,42 @@ function fakeCreationRepository(
   };
 }
 
+function fakeEngineeringWorkspaceSession(): EngineeringWorkspaceSession {
+  const activation = {
+    context: {
+      kind: "engineeringWorkspace" as const,
+      workspaceId: "ws_source",
+      displayName: "Source",
+      contentRoot: "D:/Source",
+      stateRoot: "C:/State/ws_source",
+      capabilities: ["engineeringWorkbench", "generalFileContext"] as const
+    },
+    snapshot: {
+      workspaceId: "ws_source",
+      displayName: "Source",
+      tree: { nodes: [], truncated: false }
+    }
+  };
+  return {
+    getActivation: () => activation,
+    getSnapshot: () => activation.snapshot,
+    async openEngineeringWorkspace() {
+      return ok(activation);
+    },
+    async releaseWorkspaceLock() {
+      return ok(undefined);
+    }
+  } as unknown as EngineeringWorkspaceSession;
+}
+
 function hasForbiddenRootKey(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(hasForbiddenRootKey);
   if (value === null || typeof value !== "object") return false;
   return Object.entries(value).some(
     ([key, entry]) =>
-      key === "projectRoot" || key === "contentRoot" || key === "stateRoot" || hasForbiddenRootKey(entry)
+      key === "projectRoot" ||
+      key === "contentRoot" ||
+      key === "stateRoot" ||
+      hasForbiddenRootKey(entry)
   );
 }

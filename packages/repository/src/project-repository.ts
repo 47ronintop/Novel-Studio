@@ -10,7 +10,11 @@ import type {
 } from "./ports.js";
 import { storageError, validationError } from "./errors.js";
 import { validateWithSchema } from "./schema-validation.js";
-import { writeTextAtomically } from "./atomic-write.js";
+import {
+  verifyProjectStoragePath,
+  writeTextAtomically,
+  type ProjectPathGuard
+} from "./atomic-write.js";
 
 interface PluginRegistryFile extends JsonObject {
   schemaVersion: "1.0";
@@ -21,6 +25,7 @@ export interface ProjectFileRepositoryOptions {
   projectRoot: string;
   traceId?: string;
   now?: () => string;
+  pathGuard?: ProjectPathGuard;
 }
 
 export class ProjectFileRepository implements ProjectRepositoryPort {
@@ -187,8 +192,13 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
       }
     }
 
+    const initialRootCheck = await this.verifyCreateRoot();
+    if (!initialRootCheck.ok) return initialRootCheck;
+
     try {
       await mkdir(this.options.projectRoot, { recursive: true });
+      const createdRootCheck = await this.verifyCreateRoot();
+      if (!createdRootCheck.ok) return createdRootCheck;
       const conflict = await findExistingProjectCreateTarget(this.options.projectRoot, [
         "project.json",
         "settings.json",
@@ -209,25 +219,31 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
           })
         );
       }
-      await Promise.all(
-        [
-          "chapters",
-          "characters",
-          "world",
-          "outline",
-          "timeline",
-          "memories",
-          "prompts",
-          "agents",
-          "workflow",
-          "workflows",
-          "plugins",
-          "history",
-          join("history", "chapters"),
-          join("history", "recovery"),
-          "cache"
-        ].map((directory) => mkdir(join(this.options.projectRoot, directory), { recursive: true }))
-      );
+      const managedDirectories = [
+        "chapters",
+        "characters",
+        "world",
+        "outline",
+        "timeline",
+        "memories",
+        "prompts",
+        "agents",
+        "workflow",
+        "workflows",
+        "plugins",
+        "history",
+        join("history", "chapters"),
+        join("history", "recovery"),
+        "cache"
+      ];
+      for (const directory of managedDirectories) {
+        const directoryPath = join(this.options.projectRoot, directory);
+        const beforeCreateCheck = await this.verifyCreatePath(directoryPath);
+        if (!beforeCreateCheck.ok) return beforeCreateCheck;
+        await mkdir(directoryPath, { recursive: true });
+        const createdDirectoryCheck = await this.verifyCreatePath(directoryPath);
+        if (!createdDirectoryCheck.ok) return createdDirectoryCheck;
+      }
     } catch (error) {
       return err(
         storageError({
@@ -245,7 +261,8 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
     const projectWrite = await writeJsonFile(
       join(this.options.projectRoot, "project.json"),
       project,
-      this.traceId
+      this.traceId,
+      this.options.pathGuard
     );
     if (!projectWrite.ok) {
       return projectWrite;
@@ -254,7 +271,8 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
     const settingsWrite = await writeJsonFile(
       join(this.options.projectRoot, "settings.json"),
       settings,
-      this.traceId
+      this.traceId,
+      this.options.pathGuard
     );
     if (!settingsWrite.ok) {
       return settingsWrite;
@@ -263,7 +281,8 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
     const pluginRegistryWrite = await writeJsonFile(
       join(this.options.projectRoot, "plugins", "plugins.json"),
       pluginRegistry,
-      this.traceId
+      this.traceId,
+      this.options.pathGuard
     );
     if (!pluginRegistryWrite.ok) {
       return pluginRegistryWrite;
@@ -273,7 +292,8 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
       const write = await writeJsonFile(
         join(this.options.projectRoot, asset.relativePath),
         asset.content,
-        this.traceId
+        this.traceId,
+        this.options.pathGuard
       );
       if (!write.ok) {
         return write;
@@ -281,6 +301,16 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
     }
 
     return ok({ project, settings });
+  }
+
+  private verifyCreateRoot(): Promise<Result<void, UnifiedError>> {
+    return this.verifyCreatePath(join(this.options.projectRoot, ".project-create-root-check"));
+  }
+
+  private verifyCreatePath(targetPath: string): Promise<Result<void, UnifiedError>> {
+    return this.options.pathGuard === undefined
+      ? Promise.resolve(ok(undefined))
+      : verifyProjectStoragePath(this.options.pathGuard, targetPath, this.traceId);
   }
 
   private async readAndValidate<T>(
@@ -335,12 +365,14 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
 async function writeJsonFile(
   targetPath: string,
   content: JsonObject,
-  traceId: string
+  traceId: string,
+  pathGuard?: ProjectPathGuard
 ): Promise<Result<void, UnifiedError>> {
   return writeTextAtomically({
     targetPath,
     content: `${JSON.stringify(content, null, 2)}\n`,
-    traceId
+    traceId,
+    ...(pathGuard === undefined ? {} : { pathGuard })
   });
 }
 

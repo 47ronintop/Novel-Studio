@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { lstat, mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
@@ -5,7 +6,11 @@ import { storageError } from "./errors.js";
 
 export interface AtomicWriteFileSystem {
   mkdir(path: string): Promise<void>;
-  writeFile(path: string, data: string): Promise<void>;
+  writeFile(
+    path: string,
+    data: string,
+    options: { readonly encoding: "utf8"; readonly flag: "wx" }
+  ): Promise<void>;
   rename(oldPath: string, newPath: string): Promise<void>;
   rm(path: string): Promise<void>;
 }
@@ -22,14 +27,24 @@ export interface AtomicWriteInput {
 export interface ProjectPathGuard {
   readonly projectRoot: string;
   readonly canonicalRoot: Promise<string>;
+  readonly expectedRootIdentity?: ProjectRootIdentity;
+}
+
+export interface ProjectRootIdentity {
+  readonly device: bigint;
+  readonly inode: bigint;
 }
 
 const defaultFileSystem: AtomicWriteFileSystem = {
   async mkdir(path: string): Promise<void> {
     await mkdir(path, { recursive: true });
   },
-  async writeFile(path: string, data: string): Promise<void> {
-    await writeFile(path, data, "utf8");
+  async writeFile(
+    path: string,
+    data: string,
+    options: { readonly encoding: "utf8"; readonly flag: "wx" }
+  ): Promise<void> {
+    await writeFile(path, data, options);
   },
   async rename(oldPath: string, newPath: string): Promise<void> {
     await rename(oldPath, newPath);
@@ -39,8 +54,15 @@ const defaultFileSystem: AtomicWriteFileSystem = {
   }
 };
 
-export function createProjectPathGuard(projectRoot: string): ProjectPathGuard {
-  return Object.freeze({ projectRoot, canonicalRoot: realpath(projectRoot) });
+export function createProjectPathGuard(
+  projectRoot: string,
+  expectedRootIdentity?: ProjectRootIdentity
+): ProjectPathGuard {
+  return Object.freeze({
+    projectRoot,
+    canonicalRoot: realpath(projectRoot),
+    ...(expectedRootIdentity === undefined ? {} : { expectedRootIdentity })
+  });
 }
 
 export async function verifyProjectStoragePath(
@@ -57,6 +79,17 @@ export async function verifyProjectStoragePath(
     }
 
     const canonicalRoot = await guard.canonicalRoot;
+    if (guard.expectedRootIdentity !== undefined) {
+      const rootStats = await lstat(guard.projectRoot, { bigint: true });
+      if (
+        !rootStats.isDirectory() ||
+        rootStats.isSymbolicLink() ||
+        rootStats.dev !== guard.expectedRootIdentity.device ||
+        rootStats.ino !== guard.expectedRootIdentity.inode
+      ) {
+        throw new Error("Project root identity changed.");
+      }
+    }
     const currentRoot = await realpath(guard.projectRoot);
     if (!samePath(currentRoot, canonicalRoot)) {
       throw new Error("Project root identity changed.");
@@ -100,7 +133,7 @@ export async function writeTextAtomically(
   const fileSystem = input.fileSystem ?? defaultFileSystem;
   const traceId = input.traceId ?? "trace_repository_atomic_write";
   const parentDir = dirname(input.targetPath);
-  const tempPath = `${input.targetPath}.tmp-${process.pid}-${Date.now()}`;
+  const tempPath = `${input.targetPath}.tmp-${randomUUID()}`;
 
   try {
     const initialPathCheck = await verifyAtomicWritePath(input, traceId);
@@ -108,7 +141,7 @@ export async function writeTextAtomically(
     await fileSystem.mkdir(parentDir);
     const createdPathCheck = await verifyAtomicWritePath(input, traceId);
     if (!createdPathCheck.ok) return createdPathCheck;
-    await fileSystem.writeFile(tempPath, input.content);
+    await fileSystem.writeFile(tempPath, input.content, { encoding: "utf8", flag: "wx" });
     const finalVerification = await input.beforeReplace?.();
     if (finalVerification !== undefined && !finalVerification.ok) {
       await cleanupTempFile(fileSystem, tempPath);
@@ -156,9 +189,7 @@ function isContainedRelativePath(relativePath: string): boolean {
 }
 
 function samePath(left: string, right: string): boolean {
-  return process.platform === "win32"
-    ? left.toLowerCase() === right.toLowerCase()
-    : left === right;
+  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
 }
 
 function isMissingPathError(error: unknown): boolean {

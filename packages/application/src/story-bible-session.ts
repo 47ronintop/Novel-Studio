@@ -100,6 +100,7 @@ export interface StoryBibleContextCandidateOptions {
 
 export interface StoryBibleSession {
   getSnapshot(): StoryBibleSnapshot | undefined;
+  clearSnapshot?(): void;
   loadStoryBible(): Promise<Result<StoryBibleSnapshot, UnifiedError>>;
   saveStoryAsset(asset: StoryBibleAsset): Promise<Result<StoryBibleAsset, UnifiedError>>;
   saveMemory(memory: MemoryRecord): Promise<Result<MemoryRecord, UnifiedError>>;
@@ -114,6 +115,9 @@ export function createStoryBibleSession(options: StoryBibleSessionOptions = {}):
 
   return {
     getSnapshot: () => snapshot,
+    clearSnapshot() {
+      snapshot = undefined;
+    },
     async loadStoryBible() {
       if (options.repository === undefined) {
         return storyBibleUnavailable();

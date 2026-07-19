@@ -65,6 +65,27 @@ describe("renderer app shell editor runtime support", () => {
     expect(shellPreferencesFromState(applied)).not.toHaveProperty("workspaceContext");
   });
 
+  test("does not restore a creative preference into an engineering workspace", () => {
+    const applied = applyShellPreferences(
+      {
+        ...rendererShellState,
+        workspaceContext: {
+          kind: "engineeringWorkspace",
+          workspaceId: "ws_source",
+          displayName: "Source",
+          capabilities: ["engineeringWorkbench", "generalFileContext"]
+        },
+        workbenchMode: "engineering"
+      },
+      {
+        ...DEFAULT_USER_SHELL_PREFERENCES,
+        workbenchMode: "creative"
+      }
+    );
+
+    expect(applied.workbenchMode).toBe("engineering");
+  });
+
   test("restores the last non-settings activity after settings closes", () => {
     expect(resolveActivityTransition("search", "workspace", "settings")).toEqual({
       activeActivity: "settings",

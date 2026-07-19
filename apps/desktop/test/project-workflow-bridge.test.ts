@@ -90,6 +90,37 @@ describe("project workflow bridge", () => {
     });
   });
 
+  test("passes the raw edited folder name to Repository-backed preview and creation", async () => {
+    const previewCreativeProject = vi.fn(async (input) =>
+      ok({
+        folderName: input.folderName,
+        parentDisplayName: "Books",
+        targetDisplayName: input.folderName
+      })
+    );
+    const createCreativeProject = vi.fn(async () => ok(creativeActivation("prj_raw", "Raw")));
+    const bridge = createProjectWorkflowBridge(
+      createApi({ previewCreativeProject, createCreativeProject }),
+      { createProjectId: () => "prj_raw" }
+    );
+    bridge.setProjectTitleInput("Raw Folder Project");
+    bridge.setProjectFolderNameInput("Novel. ");
+
+    await bridge.chooseCreateParentDirectory();
+    await bridge.createProject();
+
+    expect(previewCreativeProject).toHaveBeenLastCalledWith({
+      parentSelectionId: "selection_parent",
+      folderName: "Novel. "
+    });
+    expect(createCreativeProject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentSelectionId: "selection_parent",
+        folderName: "Novel. "
+      })
+    );
+  });
+
   test("ignores a stale preview response after the folder name changes", async () => {
     const first = deferred<ReturnType<typeof ok>>();
     const second = deferred<ReturnType<typeof ok>>();
@@ -165,10 +196,7 @@ function createApi(overrides: Record<string, unknown> = {}): NovelStudioApi {
   return { project } as unknown as NovelStudioApi;
 }
 
-function creativeActivation(
-  projectId = "prj_m12",
-  title = "M12"
-): WorkspaceActivationDto {
+function creativeActivation(projectId = "prj_m12", title = "M12"): WorkspaceActivationDto {
   const creativeProject = creativeSnapshot(projectId, title);
   return {
     context: {
@@ -182,10 +210,7 @@ function creativeActivation(
   };
 }
 
-function creativeSnapshot(
-  projectId = "prj_m12",
-  title = "M12"
-): ProjectWorkspaceSnapshotDto {
+function creativeSnapshot(projectId = "prj_m12", title = "M12"): ProjectWorkspaceSnapshotDto {
   return {
     project: {
       schemaVersion: "1.0",

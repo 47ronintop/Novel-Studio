@@ -1,7 +1,4 @@
-import type {
-  NovelStudioApi,
-  ProjectWorkspaceSnapshotDto
-} from "@novel-studio/application";
+import type { NovelStudioApi, ProjectWorkspaceSnapshotDto } from "@novel-studio/application";
 import type { ChapterEditorProps, ProjectWorkflowProps } from "@novel-studio/ui";
 
 import { toChapterEditorProps } from "./chapter-editor-bridge.js";
@@ -121,9 +118,9 @@ export function createProjectWorkflowBridge(
         status = snapshot === undefined ? "idle" : "ready";
         return toProps();
       }
-      const folderName = projectFolderNameInput.trim();
+      const folderName = projectFolderNameInput;
       const title = projectTitleInput.trim();
-      if (folderName.length === 0 || title.length === 0) {
+      if (folderName.trim().length === 0 || title.length === 0) {
         status = snapshot === undefined ? "idle" : "ready";
         return fail("Project title and folder name are required.", status);
       }
@@ -277,9 +274,9 @@ export function createProjectWorkflowBridge(
   async function updateCreationPreview(): Promise<void> {
     const revision = ++previewRevision;
     creationPreview = undefined;
-    const folderName = projectFolderNameInput.trim();
+    const folderName = projectFolderNameInput;
     const parentSelectionId = selectedParentSelectionId;
-    if (parentSelectionId === undefined || folderName.length === 0) return;
+    if (parentSelectionId === undefined || folderName.trim().length === 0) return;
     const preview = await api.project.previewCreativeProject({
       parentSelectionId,
       folderName

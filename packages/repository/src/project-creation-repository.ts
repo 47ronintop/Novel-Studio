@@ -1,11 +1,29 @@
-import { lstat, mkdir, realpath, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { lstat, mkdir, realpath, rename, rm } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 
 import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
 import { storageError, validationError } from "./errors.js";
+import { createProjectPathGuard } from "./atomic-write.js";
 import type { ProjectSnapshot, ProjectType } from "./ports.js";
-import { ProjectFileRepository } from "./project-repository.js";
+import { ProjectFileRepository, type ProjectFileRepositoryOptions } from "./project-repository.js";
+
+export interface ProjectCreationFileSystem {
+  readonly lstat: typeof lstat;
+  readonly mkdir: typeof mkdir;
+  readonly realpath: typeof realpath;
+  readonly rename: typeof rename;
+  readonly rm: typeof rm;
+}
+
+const DEFAULT_PROJECT_CREATION_FILE_SYSTEM: ProjectCreationFileSystem = {
+  lstat,
+  mkdir,
+  realpath,
+  rename,
+  rm
+};
 
 export interface CreateCreativeProjectInput {
   readonly parentDirectory: string;
@@ -33,6 +51,10 @@ export interface ProjectCreationPreview {
 export interface ProjectCreationFileRepositoryOptions {
   readonly traceId?: string;
   readonly now?: () => string;
+  readonly fileSystem?: ProjectCreationFileSystem;
+  readonly createProjectRepository?: (
+    options: ProjectFileRepositoryOptions
+  ) => Pick<ProjectFileRepository, "createProject">;
 }
 
 interface ValidatedProjectTarget {
@@ -55,10 +77,12 @@ interface CreatedProjectDirectory {
 
 export class ProjectCreationFileRepository {
   private readonly traceId: string;
+  private readonly fileSystem: ProjectCreationFileSystem;
   private readonly createdProjectDirectories = new Map<string, CreatedProjectDirectory>();
 
   public constructor(private readonly options: ProjectCreationFileRepositoryOptions = {}) {
     this.traceId = options.traceId ?? "trace_repository_project_creation";
+    this.fileSystem = options.fileSystem ?? DEFAULT_PROJECT_CREATION_FILE_SYSTEM;
   }
 
   public async previewProjectInParent(input: {
@@ -88,8 +112,13 @@ export class ProjectCreationFileRepository {
       return validated;
     }
 
+    const parentIdentityCheck = await this.verifyParentIdentity(validated.value);
+    if (!parentIdentityCheck.ok) {
+      return parentIdentityCheck;
+    }
+
     try {
-      await mkdir(validated.value.projectRoot, { recursive: false });
+      await this.fileSystem.mkdir(validated.value.projectRoot, { recursive: false });
     } catch (error) {
       if (isNodeErrorWithCode(error, "EEXIST")) {
         return this.targetExists();
@@ -114,8 +143,15 @@ export class ProjectCreationFileRepository {
     }
     this.createdProjectDirectories.set(validated.value.projectRoot, ownership.value);
 
-    const projectRepository = new ProjectFileRepository({
+    const projectRepository = (
+      this.options.createProjectRepository ??
+      ((options: ProjectFileRepositoryOptions) => new ProjectFileRepository(options))
+    )({
       projectRoot: validated.value.projectRoot,
+      pathGuard: createProjectPathGuard(
+        validated.value.projectRoot,
+        ownership.value.projectIdentity
+      ),
       ...(this.options.traceId === undefined ? {} : { traceId: this.options.traceId }),
       ...(this.options.now === undefined ? {} : { now: this.options.now })
     });
@@ -132,8 +168,8 @@ export class ProjectCreationFileRepository {
         ...(input.targetWordCount === undefined ? {} : { targetWordCount: input.targetWordCount })
       });
     } catch (error) {
-      await this.cleanupOwnedCreatedProject(validated.value.projectRoot);
-      return err(
+      return this.cleanupAfterInitializationFailure(
+        validated.value.projectRoot,
         storageError({
           code: "PROJECT_CREATE_FAILED",
           message: "The project could not be initialized in its child directory.",
@@ -147,8 +183,7 @@ export class ProjectCreationFileRepository {
     }
 
     if (!created.ok) {
-      await this.cleanupOwnedCreatedProject(validated.value.projectRoot);
-      return created;
+      return this.cleanupAfterInitializationFailure(validated.value.projectRoot, created.error);
     }
 
     return ok({
@@ -171,20 +206,20 @@ export class ProjectCreationFileRepository {
     }
 
     try {
-      const targetStat = await lstat(resolvedProjectRoot, { bigint: true }).catch(
-        (error: unknown) => {
+      const targetStat = await this.fileSystem
+        .lstat(resolvedProjectRoot, { bigint: true })
+        .catch((error: unknown) => {
           if (isNodeErrorWithCode(error, "ENOENT")) {
             return undefined;
           }
           throw error;
-        }
-      );
+        });
       if (targetStat === undefined) {
         this.createdProjectDirectories.delete(resolvedProjectRoot);
         return ok(undefined);
       }
 
-      const parentStat = await lstat(ownership.canonicalParent, { bigint: true });
+      const parentStat = await this.fileSystem.lstat(ownership.canonicalParent, { bigint: true });
       if (
         !parentStat.isDirectory() ||
         parentStat.isSymbolicLink() ||
@@ -196,7 +231,35 @@ export class ProjectCreationFileRepository {
         return this.cleanupRejected("The created project path changed before cleanup.");
       }
 
-      await rm(resolvedProjectRoot, { recursive: true, force: true });
+      const quarantineRoot = resolve(
+        ownership.canonicalParent,
+        `.${basename(resolvedProjectRoot)}.cleanup-${randomUUID()}`
+      );
+      await this.fileSystem.rename(resolvedProjectRoot, quarantineRoot);
+      const currentParentStat = await this.fileSystem.lstat(ownership.canonicalParent, {
+        bigint: true
+      });
+      const quarantineStat = await this.fileSystem.lstat(quarantineRoot, { bigint: true });
+      const parentMatches =
+        currentParentStat.isDirectory() &&
+        !currentParentStat.isSymbolicLink() &&
+        sameDirectoryIdentity(identityOf(currentParentStat), ownership.parentIdentity);
+      const quarantineMatches =
+        quarantineStat.isDirectory() &&
+        !quarantineStat.isSymbolicLink() &&
+        sameDirectoryIdentity(identityOf(quarantineStat), ownership.projectIdentity);
+      if (!parentMatches || !quarantineMatches) {
+        if (parentMatches && !quarantineMatches) {
+          await this.restoreQuarantinedDirectory(
+            quarantineRoot,
+            resolvedProjectRoot,
+            identityOf(quarantineStat)
+          );
+        }
+        return this.cleanupRejected("The created project path changed during cleanup.");
+      }
+
+      await this.fileSystem.rm(quarantineRoot, { recursive: true, force: false });
       this.createdProjectDirectories.delete(resolvedProjectRoot);
       return ok(undefined);
     } catch (error) {
@@ -211,6 +274,49 @@ export class ProjectCreationFileRepository {
           }
         })
       );
+    }
+  }
+
+  private async cleanupAfterInitializationFailure(
+    projectRoot: string,
+    primaryError: UnifiedError
+  ): Promise<Result<never, UnifiedError>> {
+    const cleaned = await this.cleanupOwnedCreatedProject(projectRoot);
+    if (cleaned.ok) {
+      return err(primaryError);
+    }
+
+    return err(
+      storageError({
+        code: "PROJECT_CREATE_CLEANUP_FAILED",
+        message: "Project initialization failed and the incomplete child directory remains.",
+        suggestedAction: "Inspect and remove only the incomplete project folder before retrying.",
+        traceId: this.traceId,
+        redactedDetail: {
+          primaryErrorCode: primaryError.code,
+          cleanupErrorCode: cleaned.error.code
+        }
+      })
+    );
+  }
+
+  private async restoreQuarantinedDirectory(
+    quarantineRoot: string,
+    projectRoot: string,
+    quarantineIdentity: DirectoryIdentity
+  ): Promise<void> {
+    try {
+      try {
+        await this.fileSystem.lstat(projectRoot);
+        return;
+      } catch (error) {
+        if (!isNodeErrorWithCode(error, "ENOENT")) return;
+      }
+      const quarantineStat = await this.fileSystem.lstat(quarantineRoot, { bigint: true });
+      if (!sameDirectoryIdentity(identityOf(quarantineStat), quarantineIdentity)) return;
+      await this.fileSystem.rename(quarantineRoot, projectRoot);
+    } catch {
+      // Preserve both paths for inspection rather than risk deleting an unrelated replacement.
     }
   }
 
@@ -239,8 +345,8 @@ export class ProjectCreationFileRepository {
     let canonicalParent: string;
     let parentIdentity: DirectoryIdentity;
     try {
-      canonicalParent = await realpath(input.parentDirectory);
-      const parentStat = await lstat(canonicalParent, { bigint: true });
+      canonicalParent = await this.fileSystem.realpath(input.parentDirectory);
+      const parentStat = await this.fileSystem.lstat(canonicalParent, { bigint: true });
       if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) {
         return this.invalidParent();
       }
@@ -255,7 +361,7 @@ export class ProjectCreationFileRepository {
     }
 
     try {
-      await lstat(projectRoot);
+      await this.fileSystem.lstat(projectRoot);
       return this.targetExists();
     } catch (error) {
       if (!isNodeErrorWithCode(error, "ENOENT")) {
@@ -285,8 +391,8 @@ export class ProjectCreationFileRepository {
     target: ValidatedProjectTarget
   ): Promise<Result<CreatedProjectDirectory, UnifiedError>> {
     try {
-      const parentStat = await lstat(target.canonicalParent, { bigint: true });
-      const projectStat = await lstat(target.projectRoot, { bigint: true });
+      const parentStat = await this.fileSystem.lstat(target.canonicalParent, { bigint: true });
+      const projectStat = await this.fileSystem.lstat(target.projectRoot, { bigint: true });
       if (
         !parentStat.isDirectory() ||
         parentStat.isSymbolicLink() ||
@@ -302,6 +408,24 @@ export class ProjectCreationFileRepository {
         parentIdentity: target.parentIdentity,
         projectIdentity: identityOf(projectStat)
       });
+    } catch (error) {
+      return this.createdTargetChanged(error);
+    }
+  }
+
+  private async verifyParentIdentity(
+    target: ValidatedProjectTarget
+  ): Promise<Result<void, UnifiedError>> {
+    try {
+      const parentStat = await this.fileSystem.lstat(target.canonicalParent, { bigint: true });
+      if (
+        !parentStat.isDirectory() ||
+        parentStat.isSymbolicLink() ||
+        !sameDirectoryIdentity(identityOf(parentStat), target.parentIdentity)
+      ) {
+        return this.createdTargetChanged();
+      }
+      return ok(undefined);
     } catch (error) {
       return this.createdTargetChanged(error);
     }
