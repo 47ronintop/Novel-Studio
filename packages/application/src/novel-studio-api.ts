@@ -62,7 +62,18 @@ import type {
   ConfigAssetType,
   ConfigVersionSummary
 } from "./config-studio-session.js";
-import type { DesktopShellState } from "./desktop-application.js";
+import type {
+  DesktopShellState,
+  ProjectCreationPreviewDto,
+  ProjectRecoveryApplyResultDto,
+  ProjectWorkspaceSnapshotDto,
+  WorkspaceActivationDto
+} from "./desktop-application.js";
+import type {
+  EngineeringTextFileSaveResult,
+  EngineeringTextFileSnapshot,
+  EngineeringWorkspaceSnapshot
+} from "./engineering-workspace-session.js";
 import type { ModelDiscoverySnapshot } from "./model-discovery-session.js";
 import type {
   ModelConnectionResult,
@@ -70,12 +81,7 @@ import type {
   ModelSettingsSnapshot
 } from "./model-settings-session.js";
 import type { PluginSettingsSnapshot } from "./plugin-settings-session.js";
-import type {
-  CreateProjectInput,
-  ProjectRecoveryApplyResult,
-  ProjectRecoveryDraftPreview,
-  ProjectWorkspaceSnapshot
-} from "./project-workspace-session.js";
+import type { ProjectRecoveryDraftPreview } from "./project-workspace-session.js";
 import type {
   ProjectSearchIndex,
   ProjectSearchQuery,
@@ -134,45 +140,54 @@ export interface NovelStudioApi {
     execute(commandId: string): Promise<Result<DesktopShellState, UnifiedError>>;
   };
   project: {
-    chooseOpenDirectory(): Promise<Result<ProjectDirectorySelection, UnifiedError>>;
-    chooseCreateDirectory(): Promise<Result<ProjectDirectorySelection, UnifiedError>>;
-    open(projectRoot: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
-    readDirectory(projectRoot: string): Promise<Result<ProjectDirectoryTreeItem[], UnifiedError>>;
-    create(input: CreateProjectInput): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+    chooseOpenCreativeDirectory(): Promise<Result<ProjectDirectorySelectionDto, UnifiedError>>;
+    chooseCreateParentDirectory(): Promise<Result<ProjectDirectorySelectionDto, UnifiedError>>;
+    openCreativeProject(
+      selectionId: string
+    ): Promise<Result<WorkspaceActivationDto, UnifiedError>>;
+    previewCreativeProject(input: {
+      readonly parentSelectionId: string;
+      readonly folderName: string;
+    }): Promise<Result<ProjectCreationPreviewDto, UnifiedError>>;
+    createCreativeProject(
+      input: CreateCreativeProjectRequest
+    ): Promise<Result<WorkspaceActivationDto, UnifiedError>>;
     listChapters(): Promise<Result<readonly ChapterSummary[], UnifiedError>>;
     createChapter(
       input: CreateChapterInput
-    ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+    ): Promise<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>;
     renameChapter(
       input: RenameChapterInput
-    ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+    ): Promise<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>;
     duplicateChapter(
       input: DuplicateChapterInput
-    ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+    ): Promise<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>;
     deleteChapter(
       input: DeleteChapterInput
-    ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
-    selectChapter(chapterId: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+    ): Promise<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>;
+    selectChapter(chapterId: string): Promise<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>;
     previewRecoveryDraft(
       sessionId: string
     ): Promise<Result<ProjectRecoveryDraftPreview, UnifiedError>>;
     applyRecoveryDraft(
       sessionId: string
-    ): Promise<Result<ProjectRecoveryApplyResult, UnifiedError>>;
+    ): Promise<Result<ProjectRecoveryApplyResultDto, UnifiedError>>;
     discardRecoveryDraft(
       sessionId: string
-    ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+    ): Promise<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>;
   };
-  file: {
-    readText(
-      projectRoot: string,
-      path: string
-    ): Promise<Result<ProjectTextFileReadResult, UnifiedError>>;
-    writeText(
-      projectRoot: string,
-      path: string,
-      content: string
-    ): Promise<Result<ProjectTextFileWriteResult, UnifiedError>>;
+  workspace: {
+    chooseEngineeringDirectory(): Promise<Result<ProjectDirectorySelectionDto, UnifiedError>>;
+    openEngineeringWorkspace(
+      selectionId: string
+    ): Promise<Result<WorkspaceActivationDto, UnifiedError>>;
+    refreshEngineeringTree(): Promise<Result<EngineeringWorkspaceSnapshot, UnifiedError>>;
+    readTextFile(path: string): Promise<Result<EngineeringTextFileSnapshot, UnifiedError>>;
+    saveTextFile(input: {
+      readonly path: string;
+      readonly content: string;
+      readonly expectedChecksum: string;
+    }): Promise<Result<EngineeringTextFileSaveResult, UnifiedError>>;
   };
   ai: {
     generateChapterSuggestion(
@@ -315,24 +330,18 @@ export interface AiWritingSuggestionStreamOptions {
   readonly signal?: AbortSignal;
 }
 
-export interface ProjectDirectorySelection {
+export interface ProjectDirectorySelectionDto {
   readonly canceled: boolean;
-  readonly projectRoot?: string;
+  readonly selectionId?: string;
+  readonly displayName?: string;
 }
 
-export interface ProjectDirectoryTreeItem {
-  readonly id: string;
-  readonly name: string;
-  readonly kind: "directory" | "file";
-  readonly path: string;
-  readonly children?: ProjectDirectoryTreeItem[];
-}
-
-export interface ProjectTextFileReadResult {
-  readonly path: string;
-  readonly content: string;
-}
-
-export interface ProjectTextFileWriteResult {
-  readonly path: string;
+export interface CreateCreativeProjectRequest {
+  readonly parentSelectionId: string;
+  readonly folderName: string;
+  readonly projectId: string;
+  readonly title: string;
+  readonly language: string;
+  readonly projectType?: string;
+  readonly targetWordCount?: number;
 }

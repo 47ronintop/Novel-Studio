@@ -26,7 +26,7 @@ import type {
   ConfigAssetSnapshot,
   ConfigAssetType,
   ConfigVersionSummary,
-  CreateProjectInput,
+  CreateCreativeProjectRequest,
   CreateAgentConversationCommand,
   ChangeAgentConversationStatusCommand,
   ListAgentConversationsQuery,
@@ -41,16 +41,18 @@ import type {
   NovelStudioApi,
   ReadAgentPermissionSummaryQuery,
   PluginSettingsSnapshot,
-  ProjectDirectorySelection,
-  ProjectDirectoryTreeItem,
-  ProjectTextFileReadResult,
-  ProjectTextFileWriteResult,
-  ProjectRecoveryApplyResult,
+  ProjectDirectorySelectionDto,
+  ProjectCreationPreviewDto,
+  ProjectRecoveryApplyResultDto,
   ProjectRecoveryDraftPreview,
   ProjectSearchIndex,
   ProjectSearchQuery,
   ProjectSearchResults,
-  ProjectWorkspaceSnapshot,
+  ProjectWorkspaceSnapshotDto,
+  WorkspaceActivationDto,
+  EngineeringTextFileSaveResult,
+  EngineeringTextFileSnapshot,
+  EngineeringWorkspaceSnapshot,
   StoryBibleAsset,
   StoryBibleConsistencyReport,
   StoryBibleContextCandidate,
@@ -107,27 +109,30 @@ const api: NovelStudioApi = {
       invokeTyped<Result<DesktopShellState, UnifiedError>>("application:execute-command", commandId)
   },
   project: {
-    chooseOpenDirectory: () =>
-      invokeTyped<Result<ProjectDirectorySelection, UnifiedError>>(
-        "application:project:choose-open-directory"
+    chooseOpenCreativeDirectory: () =>
+      invokeTyped<Result<ProjectDirectorySelectionDto, UnifiedError>>(
+        "application:project:choose-open-creative-directory"
       ),
-    chooseCreateDirectory: () =>
-      invokeTyped<Result<ProjectDirectorySelection, UnifiedError>>(
-        "application:project:choose-create-directory"
+    chooseCreateParentDirectory: () =>
+      invokeTyped<Result<ProjectDirectorySelectionDto, UnifiedError>>(
+        "application:project:choose-create-parent-directory"
       ),
-    open: (projectRoot: string) =>
-      invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
-        "application:project:open",
-        projectRoot
+    openCreativeProject: (selectionId: string) =>
+      invokeTyped<Result<WorkspaceActivationDto, UnifiedError>>(
+        "application:project:open-creative-project",
+        selectionId
       ),
-    readDirectory: (projectRoot: string) =>
-      invokeTyped<Result<ProjectDirectoryTreeItem[], UnifiedError>>(
-        "application:project:read-directory",
-        projectRoot
+    previewCreativeProject: (input: {
+      readonly parentSelectionId: string;
+      readonly folderName: string;
+    }) =>
+      invokeTyped<Result<ProjectCreationPreviewDto, UnifiedError>>(
+        "application:project:preview-creative-project",
+        input
       ),
-    create: (input: CreateProjectInput) =>
-      invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
-        "application:project:create",
+    createCreativeProject: (input: CreateCreativeProjectRequest) =>
+      invokeTyped<Result<WorkspaceActivationDto, UnifiedError>>(
+        "application:project:create-creative-project",
         input
       ),
     listChapters: () =>
@@ -135,27 +140,27 @@ const api: NovelStudioApi = {
         "application:project:list-chapters"
       ),
     createChapter: (input: CreateChapterInput) =>
-      invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
+      invokeTyped<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>(
         "application:project:create-chapter",
         input
       ),
     renameChapter: (input: RenameChapterInput) =>
-      invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
+      invokeTyped<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>(
         "application:project:rename-chapter",
         input
       ),
     duplicateChapter: (input: DuplicateChapterInput) =>
-      invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
+      invokeTyped<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>(
         "application:project:duplicate-chapter",
         input
       ),
     deleteChapter: (input: DeleteChapterInput) =>
-      invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
+      invokeTyped<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>(
         "application:project:delete-chapter",
         input
       ),
     selectChapter: (chapterId: string) =>
-      invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
+      invokeTyped<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>(
         "application:project:select-chapter",
         chapterId
       ),
@@ -165,29 +170,43 @@ const api: NovelStudioApi = {
         sessionId
       ),
     applyRecoveryDraft: (sessionId: string) =>
-      invokeTyped<Result<ProjectRecoveryApplyResult, UnifiedError>>(
+      invokeTyped<Result<ProjectRecoveryApplyResultDto, UnifiedError>>(
         "application:project:apply-recovery-draft",
         sessionId
       ),
     discardRecoveryDraft: (sessionId: string) =>
-      invokeTyped<Result<ProjectWorkspaceSnapshot, UnifiedError>>(
+      invokeTyped<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>(
         "application:project:discard-recovery-draft",
         sessionId
       )
   },
-  file: {
-    readText: (projectRoot: string, path: string) =>
-      invokeTyped<Result<ProjectTextFileReadResult, UnifiedError>>(
-        "application:file:read-text",
-        projectRoot,
+  workspace: {
+    chooseEngineeringDirectory: () =>
+      invokeTyped<Result<ProjectDirectorySelectionDto, UnifiedError>>(
+        "application:workspace:choose-engineering-directory"
+      ),
+    openEngineeringWorkspace: (selectionId: string) =>
+      invokeTyped<Result<WorkspaceActivationDto, UnifiedError>>(
+        "application:workspace:open-engineering-workspace",
+        selectionId
+      ),
+    refreshEngineeringTree: () =>
+      invokeTyped<Result<EngineeringWorkspaceSnapshot, UnifiedError>>(
+        "application:workspace:refresh-engineering-tree"
+      ),
+    readTextFile: (path: string) =>
+      invokeTyped<Result<EngineeringTextFileSnapshot, UnifiedError>>(
+        "application:workspace:read-text-file",
         path
       ),
-    writeText: (projectRoot: string, path: string, content: string) =>
-      invokeTyped<Result<ProjectTextFileWriteResult, UnifiedError>>(
-        "application:file:write-text",
-        projectRoot,
-        path,
-        content
+    saveTextFile: (input: {
+      readonly path: string;
+      readonly content: string;
+      readonly expectedChecksum: string;
+    }) =>
+      invokeTyped<Result<EngineeringTextFileSaveResult, UnifiedError>>(
+        "application:workspace:save-text-file",
+        input
       )
   },
   ai: {

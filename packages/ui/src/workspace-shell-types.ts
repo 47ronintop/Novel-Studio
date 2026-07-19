@@ -75,21 +75,28 @@ export interface AgentConversationWorkspaceShellProps {
 
 export interface ProjectWorkflowProps {
   readonly projectId?: string;
-  readonly projectRootInput: string;
+  readonly projectTitleInput?: string;
+  readonly projectFolderNameInput?: string;
+  readonly selectedParentSelectionId?: string;
+  readonly selectedParentDisplayName?: string;
+  readonly creationPreview?: {
+    readonly folderName: string;
+    readonly parentDisplayName: string;
+    readonly targetDisplayName: string;
+  };
   readonly status?: ProjectWorkflowStatus;
   readonly feedback?: ProjectWorkflowFeedback;
-  readonly fileTree?: readonly ProjectFileTreeItemProps[];
-  readonly canInitializeProject?: boolean;
   readonly chapters: readonly ChapterSummary[];
   readonly activeChapterId?: string;
   readonly openChapterTabIds?: readonly string[];
   readonly dirtyChapterIds?: readonly string[];
   readonly recovery?: ProjectWorkflowRecoveryProps;
   readonly health?: ProjectWorkspaceHealth;
-  readonly onProjectRootChange: (projectRoot: string) => void;
+  readonly onProjectTitleChange?: ((title: string) => void) | undefined;
+  readonly onProjectFolderNameChange?: ((folderName: string) => void) | undefined;
+  readonly onChooseCreateParentDirectory?: (() => void) | undefined;
   readonly onOpenProject: () => void;
   readonly onCreateProject: () => void;
-  readonly onInitializeProject?: (() => void) | undefined;
   readonly onCreateChapter: () => void;
   readonly onOpenFile?: ((path: string) => void) | undefined;
   readonly onRenameChapter?: (chapterId: string, title: string) => void;
@@ -109,10 +116,17 @@ export interface PlainFileEditorProps {
   readonly dirty: boolean;
   readonly saveStatus: "Saved" | "Saving" | "Unsaved";
   readonly feedback?: ProjectWorkflowFeedback | undefined;
+  readonly conflict?: {
+    readonly diskContent: string;
+    readonly draftContent: string;
+    readonly diskChecksum: string;
+  };
   readonly editorPreferences?: EditorPreferences | undefined;
   readonly onContentChange?: ((content: string) => void) | undefined;
   readonly onSave?: (() => void) | undefined;
   readonly onClose?: (() => void) | undefined;
+  readonly onReloadFromDisk?: (() => void) | undefined;
+  readonly onKeepDraft?: (() => void) | undefined;
   readonly onEditorPreferencesChange?: ((preferences: EditorPreferences) => void) | undefined;
   readonly onFocusModeToggle?: (() => void) | undefined;
 }
@@ -149,7 +163,7 @@ export interface ProjectWorkflowRecoveryDraftPreviewProps {
   readonly body: string;
 }
 
-export type ProjectWorkflowStatus = "idle" | "opening" | "creating";
+export type ProjectWorkflowStatus = "idle" | "opening" | "creating" | "ready";
 
 export interface ProjectWorkflowFeedback {
   readonly kind: "info" | "error";

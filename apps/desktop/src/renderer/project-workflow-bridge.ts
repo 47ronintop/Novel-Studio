@@ -1,6 +1,9 @@
+import type {
+  NovelStudioApi,
+  ProjectWorkspaceSnapshotDto
+} from "@novel-studio/application";
 import type { ChapterEditorProps, ProjectWorkflowProps } from "@novel-studio/ui";
-import type { NovelStudioApi, ProjectWorkspaceSnapshot } from "@novel-studio/application";
-import type { Result, UnifiedError } from "@novel-studio/shared";
+
 import { toChapterEditorProps } from "./chapter-editor-bridge.js";
 
 export interface ProjectWorkflowBridgeOptions {
@@ -10,10 +13,11 @@ export interface ProjectWorkflowBridgeOptions {
 
 export interface ProjectWorkflowBridge {
   getProps(): ProjectWorkflowProps;
-  setProjectRootInput(projectRoot: string): ProjectWorkflowProps;
+  setProjectTitleInput(title: string): ProjectWorkflowProps;
+  setProjectFolderNameInput(folderName: string): ProjectWorkflowProps;
+  chooseCreateParentDirectory(): Promise<ProjectWorkflowProps>;
   openProject(): Promise<ProjectWorkflowProps>;
   createProject(): Promise<ProjectWorkflowProps>;
-  initializeProject(): Promise<ProjectWorkflowProps>;
   createExampleProject(): Promise<ProjectWorkflowProps>;
   createChapter(): Promise<ProjectWorkflowProps>;
   renameChapter(chapterId: string, title: string): Promise<ProjectWorkflowProps>;
@@ -31,229 +35,160 @@ export interface ProjectWorkflowRecoveryApplyBridgeResult {
   readonly chapterEditor?: ChapterEditorProps;
 }
 
-const EXAMPLE_PROJECT_TITLE = "示例小说项目";
-const EXAMPLE_CHAPTER_TITLE = "示例章节";
-const EXAMPLE_CHAPTER_BODY =
-  "这是一个本地示例章节。\n\n你可以直接改写这一段，也可以打开 AI 工作流生成建议。所有内容默认保存在本地项目文件夹中。\n";
-
 export function createProjectWorkflowBridge(
   api: NovelStudioApi,
   options: ProjectWorkflowBridgeOptions = {}
 ): ProjectWorkflowBridge {
   const createProjectId = options.createProjectId ?? (() => `prj_${Date.now().toString(36)}`);
   const createChapterId = options.createChapterId ?? (() => `ch_${Date.now().toString(36)}`);
-  let projectRootInput = "";
-  let snapshot: ProjectWorkspaceSnapshot | undefined;
+  let snapshot: ProjectWorkspaceSnapshotDto | undefined;
+  let projectTitleInput = "";
+  let projectFolderNameInput = "";
+  let folderNameEdited = false;
+  let selectedParentSelectionId: string | undefined;
+  let selectedParentDisplayName: string | undefined;
+  let creationPreview: ProjectWorkflowProps["creationPreview"] | undefined;
+  let previewRevision = 0;
   let status: ProjectWorkflowProps["status"] = "idle";
   let feedback: ProjectWorkflowProps["feedback"] | undefined;
-  let fileTree: ProjectWorkflowProps["fileTree"] | undefined;
-  let canInitializeProject = false;
   let openChapterTabIds: string[] = [];
   let recoveryReview: NonNullable<ProjectWorkflowProps["recovery"]>["review"] | undefined;
 
-  return {
-    getProps: () => toProps(),
-    setProjectRootInput(projectRoot) {
-      projectRootInput = projectRoot;
+  const bridge: ProjectWorkflowBridge = {
+    getProps: toProps,
+    setProjectTitleInput(title) {
+      projectTitleInput = title;
+      if (!folderNameEdited) projectFolderNameInput = title;
       feedback = undefined;
+      schedulePreview();
+      return toProps();
+    },
+    setProjectFolderNameInput(folderName) {
+      projectFolderNameInput = folderName;
+      folderNameEdited = true;
+      feedback = undefined;
+      schedulePreview();
+      return toProps();
+    },
+    async chooseCreateParentDirectory() {
+      const selected = await api.project.chooseCreateParentDirectory();
+      if (!selected.ok) return fail(selected.error.message);
+      if (selected.value.canceled || selected.value.selectionId === undefined) {
+        feedback = { kind: "info", message: "Project creation was canceled." };
+        return toProps();
+      }
+      selectedParentSelectionId = selected.value.selectionId;
+      selectedParentDisplayName = selected.value.displayName;
+      feedback = undefined;
+      await updateCreationPreview();
       return toProps();
     },
     async openProject() {
-      return runProjectOperation("opening", async () => {
-        const selectedProjectRoot = await resolveProjectRoot(
-          () => api.project.chooseOpenDirectory(),
-          "已取消打开项目。",
-          true
-        );
-        if (selectedProjectRoot === undefined) {
-          return;
-        }
-
-        const opened = await api.project.open(selectedProjectRoot);
-        if (!opened.ok) {
-          const directory = await api.project.readDirectory(selectedProjectRoot);
-          if (directory.ok) {
-            snapshot = undefined;
-            fileTree = directory.value;
-            canInitializeProject = true;
-            projectRootInput = selectedProjectRoot;
-            openChapterTabIds = [];
-            feedback = {
-              kind: "info",
-              message: "已作为普通文件夹打开。可浏览文件，初始化后启用 Novel Studio 项目功能。"
-            };
-            return;
-          }
-
-          feedback = { kind: "error", message: opened.error.message };
-          return;
-        }
-
-        snapshot = opened.value;
-        const directory = await api.project.readDirectory(snapshot.projectRoot);
-        fileTree = directory.ok ? directory.value : undefined;
-        canInitializeProject = false;
-        projectRootInput = snapshot.projectRoot;
-        openChapterTabIds =
-          snapshot.activeChapterId === undefined ? [] : [snapshot.activeChapterId];
-      });
+      const previousStatus = snapshot === undefined ? "idle" : "ready";
+      status = "opening";
+      feedback = undefined;
+      const selected = await api.project.chooseOpenCreativeDirectory();
+      if (!selected.ok) {
+        status = previousStatus;
+        return fail(selected.error.message, previousStatus);
+      }
+      if (selected.value.canceled || selected.value.selectionId === undefined) {
+        status = previousStatus;
+        feedback = { kind: "info", message: "Project opening was canceled." };
+        return toProps();
+      }
+      const opened = await api.project.openCreativeProject(selected.value.selectionId);
+      if (!opened.ok) {
+        status = previousStatus;
+        return fail(opened.error.message, previousStatus);
+      }
+      if (!("creativeProject" in opened.value)) {
+        status = previousStatus;
+        return fail("The selected directory is not a creative project.", previousStatus);
+      }
+      adoptSnapshot(opened.value.creativeProject);
+      status = "ready";
+      feedback = undefined;
+      return toProps();
     },
     async createProject() {
-      return runProjectOperation("creating", async () => {
-        const selectedProjectRoot = await resolveProjectRoot(
-          () => api.project.chooseCreateDirectory(),
-          "已取消创建项目。",
-          shouldUseTypedCreateRoot()
-        );
-        if (selectedProjectRoot === undefined) {
-          return;
-        }
-
-        const created = await api.project.create({
-          projectRoot: selectedProjectRoot,
-          projectId: createProjectId(),
-          title: projectTitleFromRoot(selectedProjectRoot),
-          language: "zh-CN"
-        });
-        if (!created.ok) {
-          feedback = { kind: "error", message: created.error.message };
-          return;
-        }
-
-        snapshot = created.value;
-        fileTree = undefined;
-        canInitializeProject = false;
-        projectRootInput = snapshot.projectRoot;
-        openChapterTabIds =
-          snapshot.activeChapterId === undefined ? [] : [snapshot.activeChapterId];
+      status = "creating";
+      feedback = undefined;
+      if (selectedParentSelectionId === undefined) {
+        await bridge.chooseCreateParentDirectory();
+      }
+      if (selectedParentSelectionId === undefined) {
+        status = snapshot === undefined ? "idle" : "ready";
+        return toProps();
+      }
+      const folderName = projectFolderNameInput.trim();
+      const title = projectTitleInput.trim();
+      if (folderName.length === 0 || title.length === 0) {
+        status = snapshot === undefined ? "idle" : "ready";
+        return fail("Project title and folder name are required.", status);
+      }
+      const created = await api.project.createCreativeProject({
+        parentSelectionId: selectedParentSelectionId,
+        folderName,
+        projectId: createProjectId(),
+        title,
+        language: "zh-CN"
       });
-    },
-    async initializeProject() {
-      return runProjectOperation("creating", async () => {
-        const selectedProjectRoot = projectRootInput.trim();
-        if (selectedProjectRoot.length === 0) {
-          feedback = {
-            kind: "error",
-            message: "请先打开或输入一个本地文件夹。"
-          };
-          return;
-        }
-
-        const existingFileTree = fileTree;
-        const created = await api.project.create({
-          projectRoot: selectedProjectRoot,
-          projectId: createProjectId(),
-          title: projectTitleFromRoot(selectedProjectRoot),
-          language: "zh-CN"
-        });
-        if (!created.ok) {
-          feedback = { kind: "error", message: created.error.message };
-          return;
-        }
-
-        snapshot = created.value;
-        fileTree = existingFileTree;
-        canInitializeProject = false;
-        projectRootInput = snapshot.projectRoot;
-        openChapterTabIds =
-          snapshot.activeChapterId === undefined ? [] : [snapshot.activeChapterId];
-        feedback = {
-          kind: "info",
-          message: "已初始化为 Novel Studio 项目。普通文件仍保留在文件视图中。"
-        };
-      });
+      if (!created.ok) {
+        status = snapshot === undefined ? "idle" : "ready";
+        return fail(created.error.message, status);
+      }
+      if (!("creativeProject" in created.value)) {
+        status = snapshot === undefined ? "idle" : "ready";
+        return fail("The project could not be activated as a creative project.", status);
+      }
+      adoptSnapshot(created.value.creativeProject);
+      status = "ready";
+      feedback = undefined;
+      return toProps();
     },
     async createExampleProject() {
-      return runProjectOperation("creating", async () => {
-        const selectedProjectRoot = await resolveProjectRoot(
-          () => api.project.chooseCreateDirectory(),
-          "已取消创建示例项目。",
-          shouldUseTypedCreateRoot()
-        );
-        if (selectedProjectRoot === undefined) {
-          return;
-        }
-
-        const created = await api.project.create({
-          projectRoot: selectedProjectRoot,
-          projectId: createProjectId(),
-          title: EXAMPLE_PROJECT_TITLE,
-          language: "zh-CN"
-        });
-        if (!created.ok) {
-          feedback = { kind: "error", message: created.error.message };
-          return;
-        }
-
-        const createdChapter = await api.project.createChapter({
-          chapterId: createChapterId(),
-          title: EXAMPLE_CHAPTER_TITLE,
-          order: 1,
-          body: EXAMPLE_CHAPTER_BODY
-        });
-        if (!createdChapter.ok) {
-          feedback = { kind: "error", message: createdChapter.error.message };
-          snapshot = created.value;
-          fileTree = undefined;
-          canInitializeProject = false;
-          projectRootInput = snapshot.projectRoot;
-          openChapterTabIds =
-            snapshot.activeChapterId === undefined ? [] : [snapshot.activeChapterId];
-          return;
-        }
-
-        snapshot = createdChapter.value;
-        fileTree = undefined;
-        canInitializeProject = false;
-        projectRootInput = snapshot.projectRoot;
-        openChapterTabIds =
-          snapshot.activeChapterId === undefined ? [] : [snapshot.activeChapterId];
-      });
+      projectTitleInput = "Example Project";
+      if (!folderNameEdited) projectFolderNameInput = "Example Project";
+      return bridge.createProject();
     },
     async createChapter() {
       const nextOrder = (snapshot?.chapters.length ?? 0) + 1;
-      snapshot = await unwrap(
+      await applySnapshot(
         api.project.createChapter({
           chapterId: createChapterId(),
-          title: `未命名章节 ${nextOrder}`,
+          title: `Untitled Chapter ${nextOrder}`,
           order: nextOrder,
           body: ""
         })
       );
-      projectRootInput = snapshot.projectRoot;
-      addOpenChapterTab(snapshot.activeChapterId);
+      addOpenChapterTab(snapshot?.activeChapterId);
       return toProps();
     },
     async renameChapter(chapterId, title) {
-      snapshot = await unwrap(api.project.renameChapter({ chapterId, title }));
-      projectRootInput = snapshot.projectRoot;
+      await applySnapshot(api.project.renameChapter({ chapterId, title }));
       return toProps();
     },
     async duplicateChapter(chapterId) {
       const source = snapshot?.chapters.find((chapter) => chapter.id === chapterId);
-      const nextTitle = `${source?.title ?? "未命名章节"} 副本`;
-      const nextChapterId = createChapterId();
-      snapshot = await unwrap(
+      await applySnapshot(
         api.project.duplicateChapter({
           sourceChapterId: chapterId,
-          chapterId: nextChapterId,
-          title: nextTitle
+          chapterId: createChapterId(),
+          title: `${source?.title ?? "Untitled Chapter"} Copy`
         })
       );
-      projectRootInput = snapshot.projectRoot;
-      addOpenChapterTab(snapshot.activeChapterId);
+      addOpenChapterTab(snapshot?.activeChapterId);
       return toProps();
     },
     async deleteChapter(chapterId) {
-      snapshot = await unwrap(api.project.deleteChapter({ chapterId }));
-      projectRootInput = snapshot.projectRoot;
-      openChapterTabIds = openChapterTabIds.filter((openChapterId) => openChapterId !== chapterId);
-      addOpenChapterTab(snapshot.activeChapterId);
+      await applySnapshot(api.project.deleteChapter({ chapterId }));
+      openChapterTabIds = openChapterTabIds.filter((id) => id !== chapterId);
+      addOpenChapterTab(snapshot?.activeChapterId);
       return toProps();
     },
     async selectChapter(chapterId) {
-      snapshot = await unwrap(api.project.selectChapter(chapterId));
-      projectRootInput = snapshot.projectRoot;
+      await applySnapshot(api.project.selectChapter(chapterId));
       addOpenChapterTab(chapterId);
       return toProps();
     },
@@ -261,38 +196,26 @@ export function createProjectWorkflowBridge(
       if (!openChapterTabIds.includes(chapterId) || openChapterTabIds.length <= 1) {
         return toProps();
       }
-
       const closingIndex = openChapterTabIds.indexOf(chapterId);
-      const nextOpenChapterTabIds = openChapterTabIds.filter(
-        (openChapterId) => openChapterId !== chapterId
-      );
-      openChapterTabIds = nextOpenChapterTabIds;
-
+      const remaining = openChapterTabIds.filter((id) => id !== chapterId);
+      openChapterTabIds = remaining;
       if (snapshot?.activeChapterId === chapterId) {
-        const nextActiveChapterId =
-          nextOpenChapterTabIds[Math.min(closingIndex, nextOpenChapterTabIds.length - 1)];
-        if (nextActiveChapterId !== undefined) {
-          snapshot = await unwrap(api.project.selectChapter(nextActiveChapterId));
-          projectRootInput = snapshot.projectRoot;
-          openChapterTabIds = nextOpenChapterTabIds;
+        const next = remaining[Math.min(closingIndex, remaining.length - 1)];
+        if (next !== undefined) {
+          await applySnapshot(api.project.selectChapter(next));
+          openChapterTabIds = remaining;
         }
       }
-
       return toProps();
     },
     async previewRecoveryDraft(sessionId) {
       recoveryReview = { status: "previewing" };
       const preview = await api.project.previewRecoveryDraft(sessionId);
       if (!preview.ok) {
-        feedback = { kind: "error", message: preview.error.message };
         recoveryReview = { status: "idle" };
-        return toProps();
+        return fail(preview.error.message);
       }
-
-      recoveryReview = {
-        status: "idle",
-        selectedDraft: preview.value
-      };
+      recoveryReview = { status: "idle", selectedDraft: preview.value };
       feedback = undefined;
       return toProps();
     },
@@ -300,14 +223,10 @@ export function createProjectWorkflowBridge(
       recoveryReview = { ...recoveryReview, status: "applying" };
       const applied = await api.project.applyRecoveryDraft(sessionId);
       if (!applied.ok) {
-        feedback = { kind: "error", message: applied.error.message };
         recoveryReview = { ...recoveryReview, status: "idle" };
-        return { projectWorkflow: toProps() };
+        return { projectWorkflow: fail(applied.error.message) };
       }
-
-      snapshot = applied.value.workspace;
-      projectRootInput = snapshot.projectRoot;
-      addOpenChapterTab(snapshot.activeChapterId);
+      adoptSnapshot(applied.value.workspace);
       recoveryReview = undefined;
       feedback = undefined;
       return {
@@ -319,62 +238,68 @@ export function createProjectWorkflowBridge(
       recoveryReview = { ...recoveryReview, status: "discarding" };
       const discarded = await api.project.discardRecoveryDraft(sessionId);
       if (!discarded.ok) {
-        feedback = { kind: "error", message: discarded.error.message };
         recoveryReview = { ...recoveryReview, status: "idle" };
-        return toProps();
+        return fail(discarded.error.message);
       }
-
-      snapshot = discarded.value;
-      projectRootInput = snapshot.projectRoot;
+      adoptSnapshot(discarded.value);
       recoveryReview = undefined;
       feedback = undefined;
       return toProps();
     }
   };
 
-  async function runProjectOperation(
-    nextStatus: NonNullable<ProjectWorkflowProps["status"]>,
-    operation: () => Promise<void>
-  ): Promise<ProjectWorkflowProps> {
-    status = nextStatus;
+  return bridge;
+
+  async function applySnapshot(
+    resultPromise: Promise<
+      | { readonly ok: true; readonly value: ProjectWorkspaceSnapshotDto }
+      | { readonly ok: false; readonly error: { readonly message: string } }
+    >
+  ): Promise<void> {
+    const result = await resultPromise;
+    if (!result.ok) {
+      feedback = { kind: "error", message: result.error.message };
+      return;
+    }
+    adoptSnapshot(result.value);
     feedback = undefined;
-    try {
-      await operation();
-    } finally {
-      status = "idle";
+  }
+
+  function adoptSnapshot(next: ProjectWorkspaceSnapshotDto): void {
+    snapshot = next;
+    addOpenChapterTab(next.activeChapterId);
+  }
+
+  function schedulePreview(): void {
+    void updateCreationPreview();
+  }
+
+  async function updateCreationPreview(): Promise<void> {
+    const revision = ++previewRevision;
+    creationPreview = undefined;
+    const folderName = projectFolderNameInput.trim();
+    const parentSelectionId = selectedParentSelectionId;
+    if (parentSelectionId === undefined || folderName.length === 0) return;
+    const preview = await api.project.previewCreativeProject({
+      parentSelectionId,
+      folderName
+    });
+    if (revision !== previewRevision) return;
+    if (!preview.ok) {
+      feedback = { kind: "error", message: preview.error.message };
+      return;
     }
+    creationPreview = preview.value;
+    feedback = undefined;
+  }
+
+  function fail(
+    message: string,
+    nextStatus: ProjectWorkflowProps["status"] = status
+  ): ProjectWorkflowProps {
+    status = nextStatus;
+    feedback = { kind: "error", message };
     return toProps();
-  }
-
-  async function resolveProjectRoot(
-    chooseDirectory: () => Promise<
-      Result<{ readonly canceled: boolean; readonly projectRoot?: string }, UnifiedError>
-    >,
-    canceledMessage: string,
-    useTypedProjectRoot: boolean
-  ): Promise<string | undefined> {
-    const typedProjectRoot = projectRootInput.trim();
-    if (useTypedProjectRoot && typedProjectRoot.length > 0) {
-      return typedProjectRoot;
-    }
-
-    const selection = await chooseDirectory();
-    if (!selection.ok) {
-      feedback = { kind: "error", message: selection.error.message };
-      return undefined;
-    }
-    if (selection.value.canceled || selection.value.projectRoot === undefined) {
-      feedback = { kind: "info", message: canceledMessage };
-      return undefined;
-    }
-
-    projectRootInput = selection.value.projectRoot;
-    return selection.value.projectRoot;
-  }
-
-  function shouldUseTypedCreateRoot(): boolean {
-    const typedProjectRoot = projectRootInput.trim();
-    return typedProjectRoot.length > 0 && typedProjectRoot !== snapshot?.projectRoot;
   }
 
   function toProps(): ProjectWorkflowProps {
@@ -385,15 +310,16 @@ export function createProjectWorkflowBridge(
             ...(snapshot?.recovery ?? { availableItems: [] }),
             ...(recoveryReview === undefined ? {} : { review: recoveryReview })
           };
-
     return {
-      ...(snapshot?.project.projectId === undefined ? {} : { projectId: snapshot.project.projectId }),
-      projectRootInput,
-      ...(status === undefined ? {} : { status }),
+      ...(snapshot === undefined ? {} : { projectId: snapshot.project.projectId }),
+      projectTitleInput,
+      projectFolderNameInput,
+      ...(selectedParentSelectionId === undefined ? {} : { selectedParentSelectionId }),
+      ...(selectedParentDisplayName === undefined ? {} : { selectedParentDisplayName }),
+      ...(creationPreview === undefined ? {} : { creationPreview }),
+      status: status ?? "idle",
       ...(feedback === undefined ? {} : { feedback }),
       chapters: snapshot?.chapters ?? [],
-      ...(fileTree === undefined ? {} : { fileTree }),
-      ...(canInitializeProject ? { canInitializeProject: true } : {}),
       openChapterTabIds,
       dirtyChapterIds: snapshot?.recovery.availableItems.map((item) => item.chapterId) ?? [],
       ...(recovery === undefined ? {} : { recovery }),
@@ -401,40 +327,28 @@ export function createProjectWorkflowBridge(
       ...(snapshot?.activeChapterId === undefined
         ? {}
         : { activeChapterId: snapshot.activeChapterId }),
-      onProjectRootChange: () => undefined,
-      onOpenProject: () => undefined,
-      onCreateProject: () => undefined,
-      onInitializeProject: () => undefined,
-      onCreateChapter: () => undefined,
-      onOpenFile: () => undefined,
-      onRenameChapter: () => undefined,
-      onDuplicateChapter: () => undefined,
-      onDeleteChapter: () => undefined,
-      onSelectChapter: () => undefined,
-      onCloseChapterTab: () => undefined
+      onProjectTitleChange: (title) => bridge.setProjectTitleInput(title),
+      onProjectFolderNameChange: (folderName) => bridge.setProjectFolderNameInput(folderName),
+      onChooseCreateParentDirectory: () => {
+        void bridge.chooseCreateParentDirectory();
+      },
+      onOpenProject: () => {
+        void bridge.openProject();
+      },
+      onCreateProject: () => {
+        void bridge.createProject();
+      },
+      onCreateChapter: () => {
+        void bridge.createChapter();
+      },
+      onSelectChapter: (chapterId) => {
+        void bridge.selectChapter(chapterId);
+      }
     };
   }
 
   function addOpenChapterTab(chapterId: string | undefined): void {
-    if (chapterId === undefined || openChapterTabIds.includes(chapterId)) {
-      return;
-    }
-
+    if (chapterId === undefined || openChapterTabIds.includes(chapterId)) return;
     openChapterTabIds = [...openChapterTabIds, chapterId];
   }
-}
-
-async function unwrap<T>(promise: Promise<Result<T, UnifiedError>>): Promise<T> {
-  const result = await promise;
-  if (result.ok) {
-    return result.value;
-  }
-
-  throw new Error(result.error.message);
-}
-
-function projectTitleFromRoot(projectRoot: string): string {
-  const normalized = projectRoot.replace(/\\/g, "/").replace(/\/$/, "");
-  const title = normalized.split("/").filter(Boolean).at(-1);
-  return title === undefined || title.length === 0 ? "未命名项目" : title;
 }

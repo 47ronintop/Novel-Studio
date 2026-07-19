@@ -3,7 +3,7 @@ import type { PlainFileEditorProps } from "@novel-studio/ui";
 
 export interface PlainFileEditorBridge {
   getProps(): PlainFileEditorProps | undefined;
-  openFile(projectRoot: string, path: string): Promise<PlainFileEditorProps>;
+  openFile(path: string): Promise<PlainFileEditorProps>;
   updateContent(content: string): PlainFileEditorProps | undefined;
   beginSave(): PlainFileEditorProps | undefined;
   save(): Promise<PlainFileEditorProps | undefined>;
@@ -11,13 +11,18 @@ export interface PlainFileEditorBridge {
 }
 
 interface PlainFileEditorState {
-  readonly projectRoot: string;
   readonly path: string;
   readonly fileName: string;
   readonly content: string;
   readonly persistedContent: string;
+  readonly checksum: string;
   readonly saveStatus: PlainFileEditorProps["saveStatus"];
   readonly feedback?: PlainFileEditorProps["feedback"];
+  readonly conflict?: {
+    readonly diskContent: string;
+    readonly draftContent: string;
+    readonly diskChecksum: string;
+  } | undefined;
 }
 
 export function createPlainFileEditorBridge(api: NovelStudioApi): PlainFileEditorBridge {
@@ -25,15 +30,15 @@ export function createPlainFileEditorBridge(api: NovelStudioApi): PlainFileEdito
 
   return {
     getProps: () => toProps(),
-    async openFile(projectRoot, path) {
-      const read = await api.file.readText(projectRoot, path);
+    async openFile(path) {
+      const read = await api.workspace.readTextFile(path);
       if (!read.ok) {
         state = {
-          projectRoot,
           path,
           fileName: fileNameFromPath(path),
           content: "",
           persistedContent: "",
+          checksum: "",
           saveStatus: "Saved",
           feedback: {
             kind: "error",
@@ -44,11 +49,11 @@ export function createPlainFileEditorBridge(api: NovelStudioApi): PlainFileEdito
       }
 
       state = {
-        projectRoot,
         path: read.value.path,
         fileName: fileNameFromPath(read.value.path),
         content: read.value.content,
         persistedContent: read.value.content,
+        checksum: read.value.checksum,
         saveStatus: "Saved"
       };
       return toRequiredProps();
@@ -62,7 +67,10 @@ export function createPlainFileEditorBridge(api: NovelStudioApi): PlainFileEdito
         ...state,
         content,
         saveStatus: content === state.persistedContent ? "Saved" : "Unsaved",
-        feedback: undefined
+        feedback: undefined,
+        ...(state.conflict === undefined
+          ? {}
+          : { conflict: { ...state.conflict, draftContent: content } })
       };
       return toProps();
     },
@@ -83,11 +91,11 @@ export function createPlainFileEditorBridge(api: NovelStudioApi): PlainFileEdito
       }
 
       const savingState = state;
-      const written = await api.file.writeText(
-        savingState.projectRoot,
-        savingState.path,
-        savingState.content
-      );
+      const written = await api.workspace.saveTextFile({
+        path: savingState.path,
+        content: savingState.content,
+        expectedChecksum: savingState.checksum
+      });
       if (!written.ok) {
         state = {
           ...savingState,
@@ -100,13 +108,30 @@ export function createPlainFileEditorBridge(api: NovelStudioApi): PlainFileEdito
         return toProps();
       }
 
+      if (written.value.kind === "conflict") {
+        state = {
+          ...savingState,
+          saveStatus: "Unsaved",
+          feedback: undefined,
+          conflict: {
+            diskContent: written.value.current.content,
+            draftContent: savingState.content,
+            diskChecksum: written.value.current.checksum
+          }
+        };
+        return toProps();
+      }
+
       state = {
         ...savingState,
-        path: written.value.path,
-        fileName: fileNameFromPath(written.value.path),
-        persistedContent: savingState.content,
+        path: written.value.document.path,
+        fileName: fileNameFromPath(written.value.document.path),
+        content: written.value.document.content,
+        persistedContent: written.value.document.content,
+        checksum: written.value.document.checksum,
         saveStatus: "Saved",
-        feedback: undefined
+        feedback: undefined,
+        conflict: undefined
       };
       return toProps();
     },
@@ -134,7 +159,41 @@ export function createPlainFileEditorBridge(api: NovelStudioApi): PlainFileEdito
       content: state.content,
       dirty: state.content !== state.persistedContent,
       saveStatus: state.saveStatus,
-      ...(state.feedback === undefined ? {} : { feedback: state.feedback })
+      ...(state.feedback === undefined ? {} : { feedback: state.feedback }),
+      ...(state.conflict === undefined
+        ? {}
+        : {
+            conflict: state.conflict,
+            onReloadFromDisk: reloadFromDisk,
+            onKeepDraft: keepDraft
+          })
+    };
+  }
+
+  function reloadFromDisk(): void {
+    if (state?.conflict === undefined) return;
+    const conflict = state.conflict;
+    state = {
+      ...state,
+      content: conflict.diskContent,
+      persistedContent: conflict.diskContent,
+      checksum: conflict.diskChecksum,
+      saveStatus: "Saved",
+      conflict: undefined,
+      feedback: undefined
+    };
+  }
+
+  function keepDraft(): void {
+    if (state?.conflict === undefined) return;
+    const conflict = state.conflict;
+    state = {
+      ...state,
+      persistedContent: conflict.diskContent,
+      checksum: conflict.diskChecksum,
+      saveStatus: "Unsaved",
+      conflict: undefined,
+      feedback: undefined
     };
   }
 }

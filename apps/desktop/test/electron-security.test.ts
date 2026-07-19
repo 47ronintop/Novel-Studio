@@ -39,13 +39,16 @@ describe("Electron security baseline", () => {
       "application:get-shell-state",
       "application:list-commands",
       "application:execute-command",
-      "application:project:choose-open-directory",
-      "application:project:choose-create-directory",
-      "application:project:open",
-      "application:project:read-directory",
-      "application:file:read-text",
-      "application:file:write-text",
-      "application:project:create",
+      "application:project:choose-open-creative-directory",
+      "application:project:choose-create-parent-directory",
+      "application:project:open-creative-project",
+      "application:project:preview-creative-project",
+      "application:project:create-creative-project",
+      "application:workspace:choose-engineering-directory",
+      "application:workspace:open-engineering-workspace",
+      "application:workspace:refresh-engineering-tree",
+      "application:workspace:read-text-file",
+      "application:workspace:save-text-file",
       "application:project:list-chapters",
       "application:project:create-chapter",
       "application:project:rename-chapter",
@@ -152,8 +155,9 @@ describe("Electron security baseline", () => {
     await api.getShellState();
     await api.commands.list();
     await api.commands.execute("workspace.toggle-navigator");
-    await api.project.chooseOpenDirectory();
-    await api.project.chooseCreateDirectory();
+    await api.project.chooseOpenCreativeDirectory();
+    await api.project.chooseCreateParentDirectory();
+    await api.workspace.chooseEngineeringDirectory();
     await api.project.renameChapter({ chapterId: "ch_opening", title: "Opening" });
     await api.project.duplicateChapter({
       sourceChapterId: "ch_opening",
@@ -256,8 +260,9 @@ describe("Electron security baseline", () => {
       "application:get-shell-state",
       "application:list-commands",
       "application:execute-command",
-      "application:project:choose-open-directory",
-      "application:project:choose-create-directory",
+      "application:project:choose-open-creative-directory",
+      "application:project:choose-create-parent-directory",
+      "application:workspace:choose-engineering-directory",
       "application:project:rename-chapter",
       "application:project:duplicate-chapter",
       "application:project:delete-chapter",

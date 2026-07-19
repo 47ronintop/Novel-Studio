@@ -151,46 +151,49 @@ export function createProjectDesktopApplication(
     sessionId: `session_${DEFAULT_PROJECT_ID}_${options.chapterId}`,
     ...(options.now === undefined ? {} : { now: options.now })
   });
-  const projectWorkspaceSession = createProjectWorkspaceSession({
-    ...(options.now === undefined ? {} : { now: options.now }),
-    projectCreationRepository: new ProjectCreationFileRepository({
-      traceId: "trace_desktop_project_creation_repository",
-      ...(options.now === undefined ? {} : { now: options.now })
-    }),
-    createProjectRepository: (projectRoot) =>
-      new ProjectFileRepository({
-        projectRoot,
-        traceId: "trace_desktop_project_repository",
-        ...(options.now === undefined ? {} : { now: options.now })
-      }),
-    createChapterRepository: (projectRoot) =>
-      new ChapterFileRepository({
-        projectRoot,
-        traceId: "trace_desktop_project_chapter_repository",
-        ...(options.now === undefined ? {} : { now: options.now })
-      }),
-    createHistoryRepository: (projectRoot) =>
-      new HistoryRepository({
-        projectRoot,
-        traceId: "trace_desktop_project_history_repository",
-        ...(options.now === undefined ? {} : { now: options.now }),
-        ...(options.createVersionId === undefined
-          ? {}
-          : { createVersionId: options.createVersionId })
-      }),
-    createRecoveryRepository: (projectRoot) =>
-      new RecoveryRepository({
-        projectRoot,
-        traceId: "trace_desktop_project_recovery_repository"
-      }),
-    createProjectLockRepository: (projectRoot) =>
-      new ProjectLockFileRepository({
-        projectRoot,
-        ownerId: lockOwnerId,
-        traceId: "trace_desktop_project_lock_repository",
-        ...(options.now === undefined ? {} : { now: options.now })
-      })
+  const projectCreationRepository = new ProjectCreationFileRepository({
+    traceId: "trace_desktop_project_creation_repository",
+    ...(options.now === undefined ? {} : { now: options.now })
   });
+  const createWorkspaceSession = () =>
+    createProjectWorkspaceSession({
+      ...(options.now === undefined ? {} : { now: options.now }),
+      projectCreationRepository,
+      createProjectRepository: (projectRoot) =>
+        new ProjectFileRepository({
+          projectRoot,
+          traceId: "trace_desktop_project_repository",
+          ...(options.now === undefined ? {} : { now: options.now })
+        }),
+      createChapterRepository: (projectRoot) =>
+        new ChapterFileRepository({
+          projectRoot,
+          traceId: "trace_desktop_project_chapter_repository",
+          ...(options.now === undefined ? {} : { now: options.now })
+        }),
+      createHistoryRepository: (projectRoot) =>
+        new HistoryRepository({
+          projectRoot,
+          traceId: "trace_desktop_project_history_repository",
+          ...(options.now === undefined ? {} : { now: options.now }),
+          ...(options.createVersionId === undefined
+            ? {}
+            : { createVersionId: options.createVersionId })
+        }),
+      createRecoveryRepository: (projectRoot) =>
+        new RecoveryRepository({
+          projectRoot,
+          traceId: "trace_desktop_project_recovery_repository"
+        }),
+      createProjectLockRepository: (projectRoot) =>
+        new ProjectLockFileRepository({
+          projectRoot,
+          ownerId: lockOwnerId,
+          traceId: "trace_desktop_project_lock_repository",
+          ...(options.now === undefined ? {} : { now: options.now })
+        })
+    });
+  const projectWorkspaceSession = createWorkspaceSession();
   const settingsPort: ProjectSettingsPort = {
     readSettings: () => createSettingsRepository().readSettings(),
     writeSettings: (settings: ProjectSettings) => createSettingsRepository().writeSettings(settings)
@@ -199,6 +202,18 @@ export function createProjectDesktopApplication(
   return createDesktopApplication({
     chapterEditorSession,
     projectWorkspaceSession,
+    createProjectWorkspaceSession: createWorkspaceSession,
+    projectCreationRepository,
+    ...(options.userDataRoot === undefined
+      ? {}
+      : {
+          createEngineeringWorkspaceSession: () =>
+            createDesktopEngineeringWorkspaceSession({
+              userDataRoot: options.userDataRoot!,
+              projectLockOwnerId: lockOwnerId,
+              ...(options.now === undefined ? {} : { now: options.now })
+            })
+        }),
     modelSettingsSession: createModelSettingsSession({
       settingsPort,
       ...(options.modelConnectionTester === undefined

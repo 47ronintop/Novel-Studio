@@ -140,6 +140,7 @@ export type {
   ProjectWorkflowRecoveryProps,
   ProjectWorkflowRecoveryReviewProps,
   ProjectWorkflowProps,
+  ProjectWorkflowFeedback,
   StoryBibleConsistencyIssueProps,
   StoryBibleConsistencyProps,
   StoryBibleConsistencyRefProps,

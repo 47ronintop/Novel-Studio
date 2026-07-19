@@ -70,12 +70,25 @@ import type {
 } from "./ai-writing-workflow-session.js";
 import type {
   CreateCreativeProjectInput,
-  CreateProjectInput,
+  ProjectCreationPreview,
+  ProjectCreationRepositoryPort,
   ProjectRecoveryApplyResult,
   ProjectRecoveryDraftPreview,
+  ProjectWorkspaceHealth,
+  ProjectWorkspaceRecoverySummary,
   ProjectWorkspaceSession,
-  ProjectWorkspaceSnapshot
+  ProjectWorkspaceSnapshot,
+  ProjectMetadata,
+  WorkspaceProjectSettings
 } from "./project-workspace-session.js";
+import type {
+  EngineeringTextFileSaveResult,
+  EngineeringTextFileSnapshot,
+  EngineeringWorkspaceSession,
+  EngineeringWorkspaceSnapshot
+} from "./engineering-workspace-session.js";
+import type { WorkspaceActivationContext } from "./workspace-activation-context.js";
+import { toWorkspaceContextDto } from "./workspace-activation-context.js";
 import type {
   ProjectSearchIndex,
   ProjectSearchQuery,
@@ -115,6 +128,56 @@ export interface WorkspaceLayoutState {
   readonly bottomPanelHeight: number;
 }
 
+export interface ProjectWorkspaceSnapshotDto {
+  readonly project: ProjectMetadata;
+  readonly settings: WorkspaceProjectSettings;
+  readonly chapters: readonly ChapterSummary[];
+  readonly recovery: ProjectWorkspaceRecoverySummary;
+  readonly health: ProjectWorkspaceHealth;
+  readonly lock?: {
+    readonly schemaVersion: "1.0";
+    readonly ownerId: string;
+    readonly acquiredAt: string;
+  };
+  readonly activeChapterId?: string;
+}
+
+export interface ProjectRecoveryApplyResultDto {
+  readonly workspace: ProjectWorkspaceSnapshotDto;
+  readonly chapterEditor: ChapterEditorSnapshot;
+}
+
+export interface ProjectCreationPreviewDto {
+  readonly folderName: string;
+  readonly parentDisplayName: string;
+  readonly targetDisplayName: string;
+}
+
+export type PreparedWorkspaceActivation =
+  | {
+      readonly activationId: string;
+      readonly context: Extract<WorkspaceActivationContext, { readonly kind: "creativeProject" }>;
+      readonly creativeProject: ProjectWorkspaceSnapshot;
+    }
+  | {
+      readonly activationId: string;
+      readonly context: Extract<
+        WorkspaceActivationContext,
+        { readonly kind: "engineeringWorkspace" }
+      >;
+      readonly engineeringWorkspace: EngineeringWorkspaceSnapshot;
+    };
+
+export type WorkspaceActivationDto =
+  | {
+      readonly context: Extract<WorkspaceContextDto, { readonly kind: "creativeProject" }>;
+      readonly creativeProject: ProjectWorkspaceSnapshotDto;
+    }
+  | {
+      readonly context: Extract<WorkspaceContextDto, { readonly kind: "engineeringWorkspace" }>;
+      readonly engineeringWorkspace: EngineeringWorkspaceSnapshot;
+    };
+
 export interface DesktopShellState {
   readonly projectTitle: string;
   readonly activeActivity: ActivityId;
@@ -140,8 +203,23 @@ export interface DesktopApplication {
   getShellState(): DesktopShellState;
   listCommands(): readonly ApplicationCommand[];
   executeCommand(commandId: string): Result<DesktopShellState, UnifiedError>;
+  prepareOpenCreativeProject(
+    projectRoot: string
+  ): Promise<Result<PreparedWorkspaceActivation, UnifiedError>>;
+  prepareCreateCreativeProject(
+    input: CreateCreativeProjectInput
+  ): Promise<Result<PreparedWorkspaceActivation, UnifiedError>>;
+  prepareOpenEngineeringWorkspace(
+    contentRoot: string
+  ): Promise<Result<PreparedWorkspaceActivation, UnifiedError>>;
+  commitWorkspaceActivation(activationId: string): WorkspaceActivationDto;
+  discardWorkspaceActivation(activationId: string): Promise<Result<void, UnifiedError>>;
+  finalizeWorkspaceActivation(activationId: string): Promise<Result<void, UnifiedError>>;
+  previewCreativeProject(input: {
+    readonly parentDirectory: string;
+    readonly folderName: string;
+  }): Promise<Result<ProjectCreationPreviewDto, UnifiedError>>;
   openProject(projectRoot: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
-  createProject(input: CreateProjectInput): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   createProjectInParent(
     input: CreateCreativeProjectInput
   ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
@@ -164,6 +242,15 @@ export interface DesktopApplication {
   ): Promise<Result<ProjectRecoveryDraftPreview, UnifiedError>>;
   applyRecoveryDraft(sessionId: string): Promise<Result<ProjectRecoveryApplyResult, UnifiedError>>;
   discardRecoveryDraft(sessionId: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  refreshEngineeringTree(): Promise<Result<EngineeringWorkspaceSnapshot, UnifiedError>>;
+  readEngineeringTextFile(
+    path: string
+  ): Promise<Result<EngineeringTextFileSnapshot, UnifiedError>>;
+  saveEngineeringTextFile(input: {
+    readonly path: string;
+    readonly content: string;
+    readonly expectedChecksum: string;
+  }): Promise<Result<EngineeringTextFileSaveResult, UnifiedError>>;
   rebuildProjectSearchIndex(): Promise<Result<ProjectSearchIndex, UnifiedError>>;
   searchProject(input: ProjectSearchQuery): Promise<Result<ProjectSearchResults, UnifiedError>>;
   loadStoryBible(): Promise<Result<StoryBibleSnapshot, UnifiedError>>;
@@ -237,6 +324,11 @@ export interface DesktopApplication {
 export interface DesktopApplicationOptions {
   readonly chapterEditorSession?: ChapterEditorSession;
   readonly projectWorkspaceSession?: ProjectWorkspaceSession;
+  readonly createProjectWorkspaceSession?: () => ProjectWorkspaceSession;
+  readonly projectCreationRepository?: ProjectCreationRepositoryPort;
+  readonly engineeringWorkspaceSession?: EngineeringWorkspaceSession;
+  readonly createEngineeringWorkspaceSession?: () => EngineeringWorkspaceSession;
+  readonly createWorkspaceActivationId?: () => string;
   readonly modelSettingsSession?: ModelSettingsSession;
   readonly agentUsageSession?: AgentUsageSession;
   readonly pluginSettingsSession?: PluginSettingsSession;
@@ -252,6 +344,16 @@ export interface DesktopApplicationOptions {
   ) => AiWritingWorkflowSession;
   readonly projectTitle?: string;
   readonly navigatorSections?: readonly NavigatorSection[];
+}
+
+interface PreparedWorkspaceActivationRecord {
+  readonly activation: PreparedWorkspaceActivation;
+  projectSession?: ProjectWorkspaceSession | undefined;
+  engineeringSession?: EngineeringWorkspaceSession | undefined;
+  createdProjectRoot?: string | undefined;
+  previousProjectSession?: ProjectWorkspaceSession | undefined;
+  previousEngineeringSession?: EngineeringWorkspaceSession | undefined;
+  state: "prepared" | "committed";
 }
 
 const DEFAULT_SHELL_STATE: DesktopShellState = {
@@ -279,7 +381,11 @@ export function createDesktopApplication(
   options: DesktopApplicationOptions = {}
 ): DesktopApplication {
   const chapterEditorSession = options.chapterEditorSession;
-  const projectWorkspaceSession = options.projectWorkspaceSession;
+  let activeProjectWorkspaceSession = options.projectWorkspaceSession;
+  let activeEngineeringWorkspaceSession = options.engineeringWorkspaceSession;
+  const activationRecords = new Map<string, PreparedWorkspaceActivationRecord>();
+  const projectCreationRepository = options.projectCreationRepository;
+  let activationSequence = 0;
   const modelSettingsSession = options.modelSettingsSession;
   const agentUsageSession = options.agentUsageSession;
   const pluginSettingsSession = options.pluginSettingsSession;
@@ -296,17 +402,29 @@ export function createDesktopApplication(
 
   return {
     async shutdown() {
-      if (projectWorkspaceSession === undefined) {
-        return ok(undefined);
+      let firstError: UnifiedError | undefined;
+      for (const [activationId, record] of [...activationRecords]) {
+        const cleaned =
+          record.state === "prepared"
+            ? await discardPreparedActivation(activationId)
+            : await finalizeCommittedActivation(activationId);
+        if (!cleaned.ok && firstError === undefined) firstError = cleaned.error;
       }
-
-      return projectWorkspaceSession.releaseProjectLock();
+      const releasedProject = await activeProjectWorkspaceSession?.releaseProjectLock();
+      if (releasedProject !== undefined && !releasedProject.ok && firstError === undefined) {
+        firstError = releasedProject.error;
+      }
+      const releasedEngineering = await activeEngineeringWorkspaceSession?.releaseWorkspaceLock();
+      if (releasedEngineering !== undefined && !releasedEngineering.ok && firstError === undefined) {
+        firstError = releasedEngineering.error;
+      }
+      return firstError === undefined ? ok(undefined) : err(firstError);
     },
     getShellState: () =>
       withChapterSaveStatus(
         withProjectWorkspaceState(
           shellState,
-          projectWorkspaceSession?.getSnapshot(),
+          activeProjectWorkspaceSession?.getSnapshot(),
           storyBibleSession?.getSnapshot()
         ),
         getActiveChapterEditorSession()?.getState()
@@ -347,89 +465,169 @@ export function createDesktopApplication(
         })
       );
     },
-    async openProject(projectRoot) {
-      if (projectWorkspaceSession === undefined) {
-        return projectWorkspaceUnavailable();
-      }
-
-      return projectWorkspaceSession.openProject(projectRoot);
+    async prepareOpenCreativeProject(projectRoot) {
+      const session = createProjectCandidateSession();
+      if (session === undefined) return projectWorkspaceUnavailable();
+      const opened = await session.openProject(projectRoot);
+      if (!opened.ok) return opened;
+      return storeCreativeActivation(session, opened.value);
     },
-    async createProject(input) {
-      if (projectWorkspaceSession === undefined) {
+    async prepareCreateCreativeProject(input) {
+      const session = createProjectCandidateSession();
+      if (session === undefined) return projectWorkspaceUnavailable();
+      const created = await session.createProjectInParent(input);
+      if (!created.ok) return created;
+      return storeCreativeActivation(session, created.value, created.value.projectRoot);
+    },
+    async prepareOpenEngineeringWorkspace(contentRoot) {
+      const session = createEngineeringCandidateSession();
+      if (session === undefined) return engineeringWorkspaceUnavailable();
+      const opened = await session.openEngineeringWorkspace(contentRoot);
+      if (!opened.ok) return opened;
+      const activationId = createActivationId();
+      const activation: PreparedWorkspaceActivation = {
+        activationId,
+        context: opened.value.context,
+        engineeringWorkspace: opened.value.snapshot
+      };
+      activationRecords.set(activationId, {
+        activation,
+        engineeringSession: session,
+        state: "prepared"
+      });
+      return ok(activation);
+    },
+    commitWorkspaceActivation(activationId) {
+      const record = activationRecords.get(activationId);
+      if (record === undefined || record.state !== "prepared") {
+        throw new Error(`Unknown workspace activation: ${activationId}`);
+      }
+      record.state = "committed";
+      record.previousProjectSession = activeProjectWorkspaceSession;
+      record.previousEngineeringSession = activeEngineeringWorkspaceSession;
+      if ("creativeProject" in record.activation) {
+        activeProjectWorkspaceSession = record.projectSession;
+        activeEngineeringWorkspaceSession = undefined;
+      } else {
+        activeProjectWorkspaceSession = undefined;
+        activeEngineeringWorkspaceSession = record.engineeringSession;
+      }
+      const dto = toWorkspaceActivationDto(record.activation);
+      shellState = {
+        ...shellState,
+        workspaceContext: dto.context,
+        projectTitle:
+          "creativeProject" in record.activation
+            ? record.activation.creativeProject.project.title
+            : record.activation.engineeringWorkspace.displayName
+      };
+      return dto;
+    },
+    async discardWorkspaceActivation(activationId) {
+      return discardPreparedActivation(activationId);
+    },
+    async finalizeWorkspaceActivation(activationId) {
+      return finalizeCommittedActivation(activationId);
+    },
+    async previewCreativeProject(input) {
+      if (projectCreationRepository === undefined) return projectWorkspaceUnavailable();
+      const preview = await projectCreationRepository.previewProjectInParent(input);
+      return preview.ok ? ok(toProjectCreationPreviewDto(preview.value)) : preview;
+    },
+    async openProject(projectRoot) {
+      if (activeProjectWorkspaceSession === undefined) {
         return projectWorkspaceUnavailable();
       }
 
-      return projectWorkspaceSession.createProject(input);
+      return activeProjectWorkspaceSession.openProject(projectRoot);
     },
     async createProjectInParent(input) {
-      if (projectWorkspaceSession === undefined) {
+      if (activeProjectWorkspaceSession === undefined) {
         return projectWorkspaceUnavailable();
       }
 
-      return projectWorkspaceSession.createProjectInParent(input);
+      return activeProjectWorkspaceSession.createProjectInParent(input);
     },
     async listProjectChapters() {
-      if (projectWorkspaceSession === undefined) {
+      if (activeProjectWorkspaceSession === undefined) {
         return projectWorkspaceUnavailable();
       }
 
-      return projectWorkspaceSession.listChapters();
+      return activeProjectWorkspaceSession.listChapters();
     },
     async createProjectChapter(input) {
-      if (projectWorkspaceSession === undefined) {
+      if (activeProjectWorkspaceSession === undefined) {
         return projectWorkspaceUnavailable();
       }
 
-      return projectWorkspaceSession.createChapter(input);
+      return activeProjectWorkspaceSession.createChapter(input);
     },
     async renameProjectChapter(input) {
-      if (projectWorkspaceSession === undefined) {
+      if (activeProjectWorkspaceSession === undefined) {
         return projectWorkspaceUnavailable();
       }
 
-      return projectWorkspaceSession.renameChapter(input);
+      return activeProjectWorkspaceSession.renameChapter(input);
     },
     async duplicateProjectChapter(input) {
-      if (projectWorkspaceSession === undefined) {
+      if (activeProjectWorkspaceSession === undefined) {
         return projectWorkspaceUnavailable();
       }
 
-      return projectWorkspaceSession.duplicateChapter(input);
+      return activeProjectWorkspaceSession.duplicateChapter(input);
     },
     async deleteProjectChapter(input) {
-      if (projectWorkspaceSession === undefined) {
+      if (activeProjectWorkspaceSession === undefined) {
         return projectWorkspaceUnavailable();
       }
 
-      return projectWorkspaceSession.deleteChapter(input);
+      return activeProjectWorkspaceSession.deleteChapter(input);
     },
     async selectProjectChapter(chapterId) {
-      if (projectWorkspaceSession === undefined) {
+      if (activeProjectWorkspaceSession === undefined) {
         return projectWorkspaceUnavailable();
       }
 
-      return projectWorkspaceSession.selectChapter(chapterId);
+      return activeProjectWorkspaceSession.selectChapter(chapterId);
     },
     async previewRecoveryDraft(sessionId) {
-      if (projectWorkspaceSession === undefined) {
+      if (activeProjectWorkspaceSession === undefined) {
         return projectWorkspaceUnavailable();
       }
 
-      return projectWorkspaceSession.previewRecoveryDraft(sessionId);
+      return activeProjectWorkspaceSession.previewRecoveryDraft(sessionId);
     },
     async applyRecoveryDraft(sessionId) {
-      if (projectWorkspaceSession === undefined) {
+      if (activeProjectWorkspaceSession === undefined) {
         return projectWorkspaceUnavailable();
       }
 
-      return projectWorkspaceSession.applyRecoveryDraft(sessionId);
+      return activeProjectWorkspaceSession.applyRecoveryDraft(sessionId);
     },
     async discardRecoveryDraft(sessionId) {
-      if (projectWorkspaceSession === undefined) {
+      if (activeProjectWorkspaceSession === undefined) {
         return projectWorkspaceUnavailable();
       }
 
-      return projectWorkspaceSession.discardRecoveryDraft(sessionId);
+      return activeProjectWorkspaceSession.discardRecoveryDraft(sessionId);
+    },
+    async refreshEngineeringTree() {
+      if (activeEngineeringWorkspaceSession === undefined) {
+        return engineeringWorkspaceUnavailable();
+      }
+      return activeEngineeringWorkspaceSession.refreshWorkspace();
+    },
+    async readEngineeringTextFile(path) {
+      if (activeEngineeringWorkspaceSession === undefined) {
+        return engineeringWorkspaceUnavailable();
+      }
+      return activeEngineeringWorkspaceSession.readTextFile(path);
+    },
+    async saveEngineeringTextFile(input) {
+      if (activeEngineeringWorkspaceSession === undefined) {
+        return engineeringWorkspaceUnavailable();
+      }
+      return activeEngineeringWorkspaceSession.saveTextFile(input);
     },
     async rebuildProjectSearchIndex() {
       const searchSession = getProjectSearchSession();
@@ -707,8 +905,130 @@ export function createDesktopApplication(
     }
   };
 
+  async function discardPreparedActivation(
+    activationId: string
+  ): Promise<Result<void, UnifiedError>> {
+    const record = activationRecords.get(activationId);
+    if (record === undefined || record.state !== "prepared") return ok(undefined);
+    let firstError: UnifiedError | undefined;
+    if (record.projectSession !== undefined) {
+      const released = await record.projectSession.releaseProjectLock();
+      if (released.ok) record.projectSession = undefined;
+      else firstError = released.error;
+    }
+    if (record.engineeringSession !== undefined) {
+      const released = await record.engineeringSession.releaseWorkspaceLock();
+      if (released.ok) record.engineeringSession = undefined;
+      else if (firstError === undefined) firstError = released.error;
+    }
+    if (record.createdProjectRoot !== undefined && projectCreationRepository !== undefined) {
+      const cleaned = await projectCreationRepository.cleanupCreatedProject(
+        record.createdProjectRoot
+      );
+      if (cleaned.ok) record.createdProjectRoot = undefined;
+      else if (firstError === undefined) firstError = cleaned.error;
+    }
+    if (
+      record.projectSession === undefined &&
+      record.engineeringSession === undefined &&
+      record.createdProjectRoot === undefined
+    ) {
+      activationRecords.delete(activationId);
+    }
+    return firstError === undefined ? ok(undefined) : err(firstError);
+  }
+
+  async function finalizeCommittedActivation(
+    activationId: string
+  ): Promise<Result<void, UnifiedError>> {
+    const record = activationRecords.get(activationId);
+    if (record === undefined || record.state !== "committed") return ok(undefined);
+    let firstError: UnifiedError | undefined;
+    if (record.previousProjectSession !== undefined) {
+      const released = await record.previousProjectSession.releaseProjectLock();
+      if (released.ok) record.previousProjectSession = undefined;
+      else firstError = released.error;
+    }
+    if (record.previousEngineeringSession !== undefined) {
+      const released = await record.previousEngineeringSession.releaseWorkspaceLock();
+      if (released.ok) record.previousEngineeringSession = undefined;
+      else if (firstError === undefined) firstError = released.error;
+    }
+    if (
+      record.previousProjectSession === undefined &&
+      record.previousEngineeringSession === undefined
+    ) {
+      activationRecords.delete(activationId);
+    }
+    return firstError === undefined ? ok(undefined) : err(firstError);
+  }
+
+  function createProjectCandidateSession(): ProjectWorkspaceSession | undefined {
+    try {
+      return options.createProjectWorkspaceSession?.();
+    } catch {
+      return undefined;
+    }
+  }
+
+  function createEngineeringCandidateSession(): EngineeringWorkspaceSession | undefined {
+    try {
+      return options.createEngineeringWorkspaceSession?.();
+    } catch {
+      return undefined;
+    }
+  }
+
+  function storeCreativeActivation(
+    session: ProjectWorkspaceSession,
+    snapshot: ProjectWorkspaceSnapshot,
+    createdProjectRoot?: string
+  ): Result<PreparedWorkspaceActivation, UnifiedError> {
+    const activationId = createActivationId();
+    const context: Extract<
+      WorkspaceActivationContext,
+      { readonly kind: "creativeProject" }
+    > = {
+      kind: "creativeProject",
+      workspaceId: snapshot.project.projectId,
+      projectId: snapshot.project.projectId,
+      displayName: snapshot.project.title,
+      contentRoot: snapshot.projectRoot,
+      stateRoot: snapshot.projectRoot,
+      capabilities: [
+        "creativeWorkbench",
+        "writingContext",
+        "creativeSearch",
+        "creativeStudio"
+      ],
+      ...(snapshot.activeChapterId === undefined
+        ? {}
+        : { activeChapterId: snapshot.activeChapterId })
+    };
+    const activation: PreparedWorkspaceActivation = {
+      activationId,
+      context,
+      creativeProject: snapshot
+    };
+    activationRecords.set(activationId, {
+      activation,
+      projectSession: session,
+      ...(createdProjectRoot === undefined ? {} : { createdProjectRoot }),
+      state: "prepared"
+    });
+    return ok(activation);
+  }
+
+  function createActivationId(): string {
+    activationSequence += 1;
+    return (
+      options.createWorkspaceActivationId?.() ??
+      `workspace_activation_${Date.now()}_${activationSequence}`
+    );
+  }
+
   function getActiveChapterEditorSession(): ChapterEditorSession | undefined {
-    return projectWorkspaceSession?.getActiveChapterEditorSession() ?? chapterEditorSession;
+    return activeProjectWorkspaceSession?.getActiveChapterEditorSession() ?? chapterEditorSession;
   }
 
   function getAiWritingWorkflowSession(): AiWritingWorkflowSession | undefined {
@@ -732,13 +1052,59 @@ export function createDesktopApplication(
   }
 
   function getProjectSearchSession(): ProjectSearchSession | undefined {
-    const projectRoot = projectWorkspaceSession?.getSnapshot()?.projectRoot;
+    const projectRoot = activeProjectWorkspaceSession?.getSnapshot()?.projectRoot;
     if (projectRoot === undefined || createProjectSearchSession === undefined) {
       return undefined;
     }
 
     return createProjectSearchSession(projectRoot);
   }
+}
+
+export function toProjectCreationPreviewDto(
+  preview: ProjectCreationPreview
+): ProjectCreationPreviewDto {
+  return {
+    folderName: preview.folderName,
+    parentDisplayName: preview.parentDisplayName,
+    targetDisplayName: preview.targetDisplayName
+  };
+}
+
+export function toProjectWorkspaceSnapshotDto(
+  snapshot: ProjectWorkspaceSnapshot
+): ProjectWorkspaceSnapshotDto {
+  return {
+    project: snapshot.project,
+    settings: snapshot.settings,
+    chapters: snapshot.chapters,
+    recovery: snapshot.recovery,
+    health: snapshot.health,
+    ...(snapshot.lock === undefined
+      ? {}
+      : {
+          lock: {
+            schemaVersion: snapshot.lock.schemaVersion,
+            ownerId: snapshot.lock.ownerId,
+            acquiredAt: snapshot.lock.acquiredAt
+          }
+        }),
+    ...(snapshot.activeChapterId === undefined ? {} : { activeChapterId: snapshot.activeChapterId })
+  };
+}
+
+export function toWorkspaceActivationDto(
+  activation: PreparedWorkspaceActivation
+): WorkspaceActivationDto {
+  return "creativeProject" in activation
+    ? {
+        context: toWorkspaceContextDto(activation.context),
+        creativeProject: toProjectWorkspaceSnapshotDto(activation.creativeProject)
+      }
+    : {
+        context: toWorkspaceContextDto(activation.context),
+        engineeringWorkspace: activation.engineeringWorkspace
+      };
 }
 
 function createInitialShellState(options: DesktopApplicationOptions): DesktopShellState {
@@ -902,6 +1268,19 @@ function projectWorkspaceUnavailable<T>(): Result<T, UnifiedError> {
       recoverability: "user-action",
       suggestedAction: "Create or open a project before using project workflow commands.",
       traceId: "application-project-workspace"
+    })
+  );
+}
+
+function engineeringWorkspaceUnavailable<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "ENGINEERING_WORKSPACE_UNAVAILABLE",
+      category: "UserError",
+      message: "No engineering workspace session is available.",
+      recoverability: "user-action",
+      suggestedAction: "Choose an engineering folder before using workspace commands.",
+      traceId: "application-engineering-workspace"
     })
   );
 }

@@ -1,6 +1,10 @@
-import { createDesktopApplication } from "@novel-studio/application";
-import { readFile, readdir, stat } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import {
+  createDesktopApplication,
+  toProjectWorkspaceSnapshotDto
+} from "@novel-studio/application";
+import { realpath } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { basename } from "node:path";
 import type {
   AgentConversationSession,
   AgentContextSession,
@@ -13,6 +17,8 @@ import type {
   ApplicationIpcChannel,
   CompactContextCommand,
   DesktopApplication,
+  ProjectCreationPreviewDto,
+  WorkspaceActivationDto,
   PreviewContextBudgetCommand,
   ReadAgentPermissionSummaryQuery,
   ReadAgentRunDraftCommand,
@@ -35,7 +41,6 @@ import type {
   UndoRunCommand
 } from "@novel-studio/agent-engine";
 import { ok, type JsonObject, type JsonValue } from "@novel-studio/shared";
-import { writeTextAtomically } from "@novel-studio/repository";
 import type {
   AiWritingSuggestionStreamEvent,
   ConfigAssetRestoreInput,
@@ -43,7 +48,6 @@ import type {
   ConfigAssetType,
   ChangeAgentConversationStatusCommand,
   CreateAgentConversationCommand,
-  CreateProjectInput,
   AiWritingSelectionPreviewRequest,
   AiWritingSuggestionRequest,
   AiWritingSuggestionStreamPushEvent,
@@ -55,7 +59,6 @@ import type {
   SearchAgentConversationsQuery,
   ProjectSearchQuery,
   ProjectWorkspaceSnapshot,
-  ProjectDirectoryTreeItem,
   StoryBibleAsset,
   StoryBibleContextCandidateOptions,
   UserPreferencesSaveInput
@@ -71,6 +74,7 @@ import type {
 import { createUnifiedError, err } from "@novel-studio/shared";
 import type { ModelSecretStore } from "./model-runtime.js";
 import type { DesktopAgentRuntimeManager } from "./agent-runtime-manager.js";
+import type { WorkspaceActivationCoordinator } from "./workspace-activation.js";
 
 export type ApplicationIpcHandlers = {
   readonly [Channel in ApplicationIpcChannel]: (...args: readonly unknown[]) => Promise<unknown>;
@@ -79,6 +83,8 @@ export type ApplicationIpcHandlers = {
 export interface ApplicationIpcHandlerOptions {
   readonly chooseOpenProjectDirectory?: () => Promise<string | undefined>;
   readonly chooseCreateProjectDirectory?: () => Promise<string | undefined>;
+  readonly chooseEngineeringDirectory?: () => Promise<string | undefined>;
+  readonly workspaceActivationCoordinator?: WorkspaceActivationCoordinator;
   readonly modelSecretStore?: ModelSecretStore;
   readonly publishAiSuggestionStreamEvent?: (event: AiWritingSuggestionStreamPushEvent) => void;
   readonly agentRunSession?: AgentRunSession;
@@ -99,6 +105,13 @@ interface SavePathState {
   pauseCount: number;
   activeSaveCount: number;
   readonly drainWaiters: Set<() => void>;
+}
+
+interface DirectorySelection {
+  readonly path: string;
+  readonly purpose: "creative-open" | "creative-create-parent" | "engineering-open";
+  readonly displayName: string;
+  readonly expiresAt: number;
 }
 
 export function createAgentWriteSaveCoordinator(): AgentWriteSaveCoordinator {
@@ -180,6 +193,7 @@ export function createApplicationIpcHandlers(
 ): ApplicationIpcHandlers {
   const activeAiSuggestionStreams = new Map<string, ActiveAiSuggestionStream>();
   const activeAiSuggestionPushStreams = new Map<string, ActiveAiSuggestionPushStream>();
+  const directorySelections = new Map<string, DirectorySelection>();
   let nextAiSuggestionStreamId = 0;
   const publishAgentRunEvent = (event: AgentRunEvent): void => {
     try {
@@ -201,6 +215,49 @@ export function createApplicationIpcHandlers(
   const currentAgentPermissionSession = (): AgentPermissionSession | undefined =>
     options.agentRuntimeManager?.current()?.agentPermissionSession;
 
+  async function chooseDirectory(
+    purpose: DirectorySelection["purpose"],
+    choose: (() => Promise<string | undefined>) | undefined
+  ): Promise<Result<{
+    readonly canceled: boolean;
+    readonly selectionId?: string;
+    readonly displayName?: string;
+  }, UnifiedError>> {
+    const selected = await choose?.();
+    if (selected === undefined) return ok({ canceled: true });
+    try {
+      const canonicalPath = await realpath(selected);
+      const selectionId = `selection_${randomUUID().replaceAll("-", "")}`;
+      const displayName = basename(canonicalPath);
+      directorySelections.set(selectionId, {
+        path: canonicalPath,
+        purpose,
+        displayName,
+        expiresAt: Date.now() + 10 * 60 * 1000
+      });
+      return ok({ canceled: false, selectionId, displayName });
+    } catch {
+      return err(directorySelectionFailed());
+    }
+  }
+
+  function resolveDirectorySelection(
+    selectionId: unknown,
+    purpose: DirectorySelection["purpose"]
+  ): Result<DirectorySelection, UnifiedError> {
+    if (typeof selectionId !== "string") return err(directorySelectionInvalid());
+    const selection = directorySelections.get(selectionId);
+    if (
+      selection === undefined ||
+      selection.purpose !== purpose ||
+      selection.expiresAt <= Date.now()
+    ) {
+      directorySelections.delete(selectionId);
+      return err(directorySelectionInvalid());
+    }
+    return ok(selection);
+  }
+
   return {
     "application:get-shell-state": () => Promise.resolve(application.getShellState()),
     "application:list-commands": () => Promise.resolve(application.listCommands()),
@@ -211,96 +268,105 @@ export function createApplicationIpcHandlers(
 
       return Promise.resolve(application.executeCommand(commandId));
     },
-    "application:project:choose-open-directory": async () => {
-      const projectRoot = await options.chooseOpenProjectDirectory?.();
-
-      return ok(projectRoot === undefined ? { canceled: true } : { canceled: false, projectRoot });
-    },
-    "application:project:choose-create-directory": async () => {
-      const projectRoot = await options.chooseCreateProjectDirectory?.();
-
-      return ok(projectRoot === undefined ? { canceled: true } : { canceled: false, projectRoot });
-    },
-    "application:project:open": async (projectRoot: unknown) => {
-      if (typeof projectRoot !== "string") {
-        return application.openProject("");
+    "application:project:choose-open-creative-directory": () =>
+      chooseDirectory("creative-open", options.chooseOpenProjectDirectory),
+    "application:project:choose-create-parent-directory": () =>
+      chooseDirectory("creative-create-parent", options.chooseCreateProjectDirectory),
+    "application:project:open-creative-project": async (selectionId: unknown) => {
+      const selection = resolveDirectorySelection(selectionId, "creative-open");
+      if (!selection.ok) return selection;
+      if (options.workspaceActivationCoordinator === undefined) {
+        return workspaceActivationUnavailable<WorkspaceActivationDto>();
       }
-
-      const active = await options.agentRuntimeManager?.hasActiveRun();
-      if (active?.ok === false) return active;
-      if (active?.value === true) return err(agentRuntimeSwitchBlocked());
-      const opened = await application.openProject(projectRoot);
-      return bindAgentRuntime(options.agentRuntimeManager, opened);
+      return options.workspaceActivationCoordinator.openCreativeProject(selection.value.path);
     },
-    "application:project:read-directory": (projectRoot: unknown) => {
-      if (typeof projectRoot !== "string") {
-        return readProjectDirectory("");
-      }
-
-      return readProjectDirectory(projectRoot);
+    "application:project:preview-creative-project": async (input: unknown) => {
+      const request = toCreativePreviewRequest(input);
+      if (request === undefined) return invalidWorkspaceRequest<ProjectCreationPreviewDto>();
+      const selection = resolveDirectorySelection(request.parentSelectionId, "creative-create-parent");
+      if (!selection.ok) return selection;
+      return application.previewCreativeProject({
+        parentDirectory: selection.value.path,
+        folderName: request.folderName
+      });
     },
-    "application:file:read-text": (projectRoot: unknown, path: unknown) => {
-      if (typeof projectRoot !== "string" || typeof path !== "string") {
-        return readProjectTextFile("", "");
+    "application:project:create-creative-project": async (input: unknown) => {
+      const request = toCreateCreativeProjectRequest(input);
+      if (request === undefined) return invalidWorkspaceRequest<WorkspaceActivationDto>();
+      const selection = resolveDirectorySelection(
+        request.parentSelectionId,
+        "creative-create-parent"
+      );
+      if (!selection.ok) return selection;
+      if (options.workspaceActivationCoordinator === undefined) {
+        return workspaceActivationUnavailable<WorkspaceActivationDto>();
       }
-
-      return readProjectTextFile(projectRoot, path);
+      return options.workspaceActivationCoordinator.createCreativeProject({
+        parentDirectory: selection.value.path,
+        folderName: request.folderName,
+        projectId: request.projectId,
+        title: request.title,
+        language: request.language,
+        ...(request.projectType === undefined ? {} : { projectType: request.projectType }),
+        ...(request.targetWordCount === undefined
+          ? {}
+          : { targetWordCount: request.targetWordCount })
+      });
     },
-    "application:file:write-text": (projectRoot: unknown, path: unknown, content: unknown) => {
-      if (
-        typeof projectRoot !== "string" ||
-        typeof path !== "string" ||
-        typeof content !== "string"
-      ) {
-        return writeProjectTextFile("", "", "");
+    "application:workspace:choose-engineering-directory": () =>
+      chooseDirectory("engineering-open", options.chooseEngineeringDirectory),
+    "application:workspace:open-engineering-workspace": async (selectionId: unknown) => {
+      const selection = resolveDirectorySelection(selectionId, "engineering-open");
+      if (!selection.ok) return selection;
+      if (options.workspaceActivationCoordinator === undefined) {
+        return workspaceActivationUnavailable<WorkspaceActivationDto>();
       }
-
-      return writeProjectTextFile(projectRoot, path, content);
+      return options.workspaceActivationCoordinator.openEngineeringWorkspace(selection.value.path);
     },
-    "application:project:create": async (input: unknown) => {
-      const createInput = toCreateProjectInput(input);
-      if (createInput === undefined) {
-        return application.createProject({
-          projectRoot: "",
-          projectId: "",
-          title: "",
-          language: ""
-        });
-      }
-
-      const active = await options.agentRuntimeManager?.hasActiveRun();
-      if (active?.ok === false) return active;
-      if (active?.value === true) return err(agentRuntimeSwitchBlocked());
-      const created = await application.createProject(createInput);
-      return bindAgentRuntime(options.agentRuntimeManager, created);
+    "application:workspace:refresh-engineering-tree": () => application.refreshEngineeringTree(),
+    "application:workspace:read-text-file": (path: unknown) =>
+      typeof path === "string"
+        ? application.readEngineeringTextFile(path)
+        : Promise.resolve(invalidWorkspaceRequest()),
+    "application:workspace:save-text-file": (input: unknown) => {
+      const request = toEngineeringTextFileSaveRequest(input);
+      return request === undefined
+        ? Promise.resolve(invalidWorkspaceRequest())
+        : application.saveEngineeringTextFile(request);
     },
     "application:project:list-chapters": () => application.listProjectChapters(),
-    "application:project:create-chapter": (input: unknown) => {
+    "application:project:create-chapter": async (input: unknown) => {
       const createInput = toCreateChapterInput(input);
       if (createInput === undefined) {
-        return application.createProjectChapter({
+        return projectSnapshotResultToDto(await application.createProjectChapter({
           chapterId: "",
           title: ""
-        });
+        }));
       }
 
-      return application.createProjectChapter(createInput);
+      return projectSnapshotResultToDto(await application.createProjectChapter(createInput));
     },
-    "application:project:rename-chapter": (input: unknown) => {
-      return application.renameProjectChapter(toRenameChapterInput(input));
+    "application:project:rename-chapter": async (input: unknown) => {
+      return projectSnapshotResultToDto(
+        await application.renameProjectChapter(toRenameChapterInput(input))
+      );
     },
-    "application:project:duplicate-chapter": (input: unknown) => {
-      return application.duplicateProjectChapter(toDuplicateChapterInput(input));
+    "application:project:duplicate-chapter": async (input: unknown) => {
+      return projectSnapshotResultToDto(
+        await application.duplicateProjectChapter(toDuplicateChapterInput(input))
+      );
     },
-    "application:project:delete-chapter": (input: unknown) => {
-      return application.deleteProjectChapter(toDeleteChapterInput(input));
+    "application:project:delete-chapter": async (input: unknown) => {
+      return projectSnapshotResultToDto(
+        await application.deleteProjectChapter(toDeleteChapterInput(input))
+      );
     },
-    "application:project:select-chapter": (chapterId: unknown) => {
+    "application:project:select-chapter": async (chapterId: unknown) => {
       if (typeof chapterId !== "string") {
-        return application.selectProjectChapter("");
+        return projectSnapshotResultToDto(await application.selectProjectChapter(""));
       }
 
-      return application.selectProjectChapter(chapterId);
+      return projectSnapshotResultToDto(await application.selectProjectChapter(chapterId));
     },
     "application:project:preview-recovery-draft": (sessionId: unknown) => {
       if (typeof sessionId !== "string") {
@@ -309,19 +375,21 @@ export function createApplicationIpcHandlers(
 
       return application.previewRecoveryDraft(sessionId);
     },
-    "application:project:apply-recovery-draft": (sessionId: unknown) => {
-      if (typeof sessionId !== "string") {
-        return application.applyRecoveryDraft("");
-      }
-
-      return application.applyRecoveryDraft(sessionId);
+    "application:project:apply-recovery-draft": async (sessionId: unknown) => {
+      const applied = await application.applyRecoveryDraft(
+        typeof sessionId === "string" ? sessionId : ""
+      );
+      return applied.ok
+        ? ok({
+            workspace: toProjectWorkspaceSnapshotDto(applied.value.workspace),
+            chapterEditor: applied.value.chapterEditor
+          })
+        : applied;
     },
-    "application:project:discard-recovery-draft": (sessionId: unknown) => {
-      if (typeof sessionId !== "string") {
-        return application.discardRecoveryDraft("");
-      }
-
-      return application.discardRecoveryDraft(sessionId);
+    "application:project:discard-recovery-draft": async (sessionId: unknown) => {
+      return projectSnapshotResultToDto(
+        await application.discardRecoveryDraft(typeof sessionId === "string" ? sessionId : "")
+      );
     },
     "application:search:rebuild-index": () => application.rebuildProjectSearchIndex(),
     "application:search:query": (input: unknown) => application.searchProject(toSearchQuery(input)),
@@ -1471,32 +1539,10 @@ function isCursor(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9_-]{1,2048}$/u.test(value);
 }
 
-async function bindAgentRuntime(
-  manager: DesktopAgentRuntimeManager | undefined,
+function projectSnapshotResultToDto(
   result: Result<ProjectWorkspaceSnapshot, UnifiedError>
-): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>> {
-  if (!result.ok || manager === undefined) return result;
-  const activeChapterId =
-    result.value.activeChapterId ?? result.value.chapters[0]?.id ?? "chapter_unselected";
-  const bound = await manager.bindWorkspace({
-    kind: "creativeProject",
-    workspaceId: result.value.project.projectId,
-    contentRoot: result.value.projectRoot,
-    stateRoot: result.value.projectRoot,
-    activeChapterId
-  });
-  return bound.ok ? result : err(bound.error);
-}
-
-function agentRuntimeSwitchBlocked(): UnifiedError {
-  return createUnifiedError({
-    code: "AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED",
-    category: "AgentError",
-    message: "The current project still has an active Agent run.",
-    recoverability: "user-action",
-    suggestedAction: "Stop the active run before switching projects.",
-    traceId: "desktop-agent-runtime-manager"
-  });
+): Result<ReturnType<typeof toProjectWorkspaceSnapshotDto>, UnifiedError> {
+  return result.ok ? ok(toProjectWorkspaceSnapshotDto(result.value)) : result;
 }
 
 function agentConversationUnavailable(): UnifiedError {
@@ -1735,250 +1781,6 @@ function readThrownStreamErrorDetail(error: unknown): JsonObject {
   return detail;
 }
 
-const DIRECTORY_READ_MAX_DEPTH = 4;
-const DIRECTORY_READ_MAX_ITEMS = 300;
-const TEXT_FILE_READ_MAX_BYTES = 5 * 1024 * 1024;
-const SKIPPED_DIRECTORY_NAMES = new Set([".git", "node_modules", "dist", "release"]);
-
-async function readProjectDirectory(
-  projectRoot: string
-): Promise<Result<ProjectDirectoryTreeItem[], UnifiedError>> {
-  if (projectRoot.trim().length === 0) {
-    return err(
-      createUnifiedError({
-        code: "PROJECT_DIRECTORY_READ_FAILED",
-        category: "StorageError",
-        message: "Project directory could not be read.",
-        recoverability: "user-action",
-        suggestedAction: "Choose a folder that exists on this computer.",
-        traceId: "project-directory-tree"
-      })
-    );
-  }
-
-  try {
-    let count = 0;
-    const items = await readDirectoryChildren(projectRoot, projectRoot, 0, () => {
-      count += 1;
-      return count <= DIRECTORY_READ_MAX_ITEMS;
-    });
-    return ok(items);
-  } catch (error) {
-    return err(
-      createUnifiedError({
-        code: "PROJECT_DIRECTORY_READ_FAILED",
-        category: "StorageError",
-        message: "Project directory could not be read.",
-        recoverability: "user-action",
-        suggestedAction: "Choose a folder that exists on this computer.",
-        traceId: "project-directory-tree",
-        redactedDetail: {
-          reason: error instanceof Error ? error.message : "Unknown directory read error"
-        }
-      })
-    );
-  }
-}
-
-async function readDirectoryChildren(
-  root: string,
-  directory: string,
-  depth: number,
-  canReadMore: () => boolean
-): Promise<ProjectDirectoryTreeItem[]> {
-  if (depth > DIRECTORY_READ_MAX_DEPTH || !canReadMore()) {
-    return [];
-  }
-
-  const entries = await readdir(directory, { withFileTypes: true });
-  const visibleEntries = entries
-    .filter((entry) => !entry.name.startsWith(".") || entry.name === ".novel-studio")
-    .filter((entry) => !(entry.isDirectory() && SKIPPED_DIRECTORY_NAMES.has(entry.name)))
-    .sort((left, right) => {
-      if (left.isDirectory() !== right.isDirectory()) {
-        return left.isDirectory() ? -1 : 1;
-      }
-
-      return left.name.localeCompare(right.name);
-    });
-
-  const items: ProjectDirectoryTreeItem[] = [];
-  for (const entry of visibleEntries) {
-    if (!canReadMore()) {
-      break;
-    }
-
-    const absolutePath = join(directory, entry.name);
-    const relativePath = relative(root, absolutePath).replace(/\\/g, "/");
-    if (entry.isDirectory()) {
-      items.push({
-        id: `folder:${relativePath}`,
-        name: entry.name,
-        kind: "directory",
-        path: relativePath,
-        children: await readDirectoryChildren(root, absolutePath, depth + 1, canReadMore)
-      });
-      continue;
-    }
-
-    if (entry.isFile()) {
-      items.push({
-        id: `file:${relativePath}`,
-        name: entry.name,
-        kind: "file",
-        path: relativePath
-      });
-    }
-  }
-
-  return items;
-}
-
-async function readProjectTextFile(
-  projectRoot: string,
-  filePath: string
-): Promise<Result<{ readonly path: string; readonly content: string }, UnifiedError>> {
-  const resolved = resolveProjectFilePath(projectRoot, filePath);
-  if (!resolved.ok) {
-    return resolved;
-  }
-
-  try {
-    const fileStats = await stat(resolved.value.absolutePath);
-    if (!fileStats.isFile()) {
-      return fileOperationFailed({
-        code: "FILE_READ_FAILED",
-        message: "Text file could not be read.",
-        suggestedAction: "Choose a text file inside the opened folder.",
-        reason: "Target path is not a file."
-      });
-    }
-    if (fileStats.size > TEXT_FILE_READ_MAX_BYTES) {
-      return fileOperationFailed({
-        code: "FILE_TOO_LARGE",
-        message: "Text file is too large to open in the editor.",
-        suggestedAction: "Open a smaller text file.",
-        reason: `File size ${fileStats.size} exceeds ${TEXT_FILE_READ_MAX_BYTES} bytes.`
-      });
-    }
-
-    return ok({
-      path: resolved.value.relativePath,
-      content: await readFile(resolved.value.absolutePath, "utf8")
-    });
-  } catch (error) {
-    return fileOperationFailed({
-      code: "FILE_READ_FAILED",
-      message: "Text file could not be read.",
-      suggestedAction: "Choose a readable text file inside the opened folder.",
-      reason: error instanceof Error ? error.message : "Unknown file read error"
-    });
-  }
-}
-
-async function writeProjectTextFile(
-  projectRoot: string,
-  filePath: string,
-  content: string
-): Promise<Result<{ readonly path: string }, UnifiedError>> {
-  const resolved = resolveProjectFilePath(projectRoot, filePath);
-  if (!resolved.ok) {
-    return resolved;
-  }
-
-  try {
-    const fileStats = await stat(resolved.value.absolutePath);
-    if (!fileStats.isFile()) {
-      return fileOperationFailed({
-        code: "FILE_WRITE_FAILED",
-        message: "Text file could not be written.",
-        suggestedAction: "Choose a text file inside the opened folder.",
-        reason: "Target path is not a file."
-      });
-    }
-  } catch (error) {
-    return fileOperationFailed({
-      code: "FILE_WRITE_FAILED",
-      message: "Text file could not be written.",
-      suggestedAction: "Choose an existing writable text file inside the opened folder.",
-      reason: error instanceof Error ? error.message : "Unknown file stat error"
-    });
-  }
-
-  const written = await writeTextAtomically({
-    targetPath: resolved.value.absolutePath,
-    content,
-    traceId: "project-text-file"
-  });
-  if (!written.ok) {
-    return written;
-  }
-
-  return ok({ path: resolved.value.relativePath });
-}
-
-function resolveProjectFilePath(
-  projectRoot: string,
-  filePath: string
-): Result<{ readonly absolutePath: string; readonly relativePath: string }, UnifiedError> {
-  const trimmedRoot = projectRoot.trim();
-  const trimmedPath = filePath.trim();
-  if (trimmedRoot.length === 0 || trimmedPath.length === 0 || isAbsolute(trimmedPath)) {
-    return filePathOutsideProject(filePath);
-  }
-
-  const root = resolve(trimmedRoot);
-  const absolutePath = resolve(root, trimmedPath);
-  const relativePath = relative(root, absolutePath).replace(/\\/g, "/");
-  if (
-    relativePath.length === 0 ||
-    relativePath === ".." ||
-    relativePath.startsWith("../") ||
-    isAbsolute(relativePath)
-  ) {
-    return filePathOutsideProject(filePath);
-  }
-
-  return ok({ absolutePath, relativePath });
-}
-
-function filePathOutsideProject<T>(filePath: string): Result<T, UnifiedError> {
-  return err(
-    createUnifiedError({
-      code: "FILE_PATH_OUTSIDE_PROJECT",
-      category: "StorageError",
-      message: "File path is outside the opened folder.",
-      recoverability: "user-action",
-      suggestedAction: "Choose a file from the opened folder tree.",
-      traceId: "project-text-file",
-      redactedDetail: {
-        path: filePath
-      }
-    })
-  );
-}
-
-function fileOperationFailed<T>(input: {
-  readonly code: string;
-  readonly message: string;
-  readonly suggestedAction: string;
-  readonly reason: string;
-}): Result<T, UnifiedError> {
-  return err(
-    createUnifiedError({
-      code: input.code,
-      category: "StorageError",
-      message: input.message,
-      recoverability: "user-action",
-      suggestedAction: input.suggestedAction,
-      traceId: "project-text-file",
-      redactedDetail: {
-        reason: input.reason
-      }
-    })
-  );
-}
-
 function toStoryBibleAsset(value: unknown): StoryBibleAsset | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -2064,6 +1866,135 @@ function toStoryBibleContextCandidateOptions(
   };
 }
 
+function toCreativePreviewRequest(value: unknown):
+  | { readonly parentSelectionId: string; readonly folderName: string }
+  | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["parentSelectionId", "folderName"]) ||
+    !isNonEmptyString(value["parentSelectionId"]) ||
+    !isNonEmptyString(value["folderName"])
+  ) {
+    return undefined;
+  }
+  return {
+    parentSelectionId: value["parentSelectionId"],
+    folderName: value["folderName"]
+  };
+}
+
+function toCreateCreativeProjectRequest(value: unknown):
+  | {
+      readonly parentSelectionId: string;
+      readonly folderName: string;
+      readonly projectId: string;
+      readonly title: string;
+      readonly language: string;
+      readonly projectType?: string;
+      readonly targetWordCount?: number;
+    }
+  | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      "parentSelectionId",
+      "folderName",
+      "projectId",
+      "title",
+      "language",
+      "projectType",
+      "targetWordCount"
+    ]) ||
+    !isNonEmptyString(value["parentSelectionId"]) ||
+    !isNonEmptyString(value["folderName"]) ||
+    !isSafeId(value["projectId"]) ||
+    !isNonEmptyString(value["title"]) ||
+    !isNonEmptyString(value["language"]) ||
+    (value["projectType"] !== undefined && !isNonEmptyString(value["projectType"])) ||
+    (value["targetWordCount"] !== undefined && !isNonNegativeInteger(value["targetWordCount"]))
+  ) {
+    return undefined;
+  }
+  return {
+    parentSelectionId: value["parentSelectionId"],
+    folderName: value["folderName"],
+    projectId: value["projectId"],
+    title: value["title"],
+    language: value["language"],
+    ...(value["projectType"] === undefined ? {} : { projectType: value["projectType"] }),
+    ...(value["targetWordCount"] === undefined
+      ? {}
+      : { targetWordCount: value["targetWordCount"] })
+  };
+}
+
+function toEngineeringTextFileSaveRequest(value: unknown):
+  | { readonly path: string; readonly content: string; readonly expectedChecksum: string }
+  | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["path", "content", "expectedChecksum"]) ||
+    !isNonEmptyString(value["path"]) ||
+    typeof value["content"] !== "string" ||
+    !isNonEmptyString(value["expectedChecksum"])
+  ) {
+    return undefined;
+  }
+  return {
+    path: value["path"],
+    content: value["content"],
+    expectedChecksum: value["expectedChecksum"]
+  };
+}
+
+function invalidWorkspaceRequest<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "WORKSPACE_REQUEST_INVALID",
+      category: "ValidationError",
+      message: "The workspace request is invalid.",
+      recoverability: "user-action",
+      suggestedAction: "Review the workspace selection and try again.",
+      traceId: "desktop-workspace-ipc"
+    })
+  );
+}
+
+function workspaceActivationUnavailable<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "WORKSPACE_ACTIVATION_UNAVAILABLE",
+      category: "StorageError",
+      message: "Workspace activation is unavailable.",
+      recoverability: "retryable",
+      suggestedAction: "Restart Novel Studio and try again.",
+      traceId: "desktop-workspace-ipc"
+    })
+  );
+}
+
+function directorySelectionFailed(): UnifiedError {
+  return createUnifiedError({
+    code: "DIRECTORY_SELECTION_FAILED",
+    category: "StorageError",
+    message: "The selected directory could not be resolved.",
+    recoverability: "user-action",
+    suggestedAction: "Choose an existing directory and try again.",
+    traceId: "desktop-directory-selection"
+  });
+}
+
+function directorySelectionInvalid(): UnifiedError {
+  return createUnifiedError({
+    code: "DIRECTORY_SELECTION_INVALID",
+    category: "ValidationError",
+    message: "The directory selection has expired or is invalid.",
+    recoverability: "user-action",
+    suggestedAction: "Choose the directory again.",
+    traceId: "desktop-directory-selection"
+  });
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -2138,31 +2069,6 @@ function toConfigAssetSaveInput(value: unknown): ConfigAssetSaveInput | undefine
     assetId: value.assetId,
     content: value.content,
     ...(value.createdBy === undefined ? {} : { createdBy: value.createdBy })
-  };
-}
-
-function toCreateProjectInput(value: unknown): CreateProjectInput | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  if (
-    typeof value.projectRoot !== "string" ||
-    typeof value.projectId !== "string" ||
-    typeof value.title !== "string" ||
-    typeof value.language !== "string" ||
-    !isOptionalString(value.projectType) ||
-    !isOptionalNumber(value.targetWordCount)
-  ) {
-    return undefined;
-  }
-
-  return {
-    projectRoot: value.projectRoot,
-    projectId: value.projectId,
-    title: value.title,
-    language: value.language,
-    ...(value.projectType === undefined ? {} : { projectType: value.projectType }),
-    ...(value.targetWordCount === undefined ? {} : { targetWordCount: value.targetWordCount })
   };
 }
 

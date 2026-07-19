@@ -51,12 +51,10 @@ export type {
 } from "./agent-conversation-session.js";
 export type {
   AiWritingSuggestionStreamOptions,
+  CreateCreativeProjectRequest,
   NovelStudioApi,
   ReadAgentPermissionSummaryQuery,
-  ProjectDirectorySelection,
-  ProjectDirectoryTreeItem,
-  ProjectTextFileReadResult,
-  ProjectTextFileWriteResult
+  ProjectDirectorySelectionDto,
 } from "./novel-studio-api.js";
 export type {
   ChapterEditorSaveStatus,
@@ -75,7 +73,12 @@ export type {
   DesktopApplicationOptions,
   DesktopShellState,
   NavigatorSection,
+  PreparedWorkspaceActivation,
+  ProjectCreationPreviewDto,
+  ProjectRecoveryApplyResultDto,
+  ProjectWorkspaceSnapshotDto,
   SaveStatus,
+  WorkspaceActivationDto,
   WorkspaceLayoutState
 } from "./desktop-application.js";
 export type {
@@ -128,10 +131,15 @@ export type {
   ProjectSearchSessionOptions,
   ProjectSearchSourceRef
 } from "./project-search-session.js";
-export { createDesktopApplication } from "./desktop-application.js";
+export {
+  createDesktopApplication,
+  toProjectCreationPreviewDto,
+  toProjectWorkspaceSnapshotDto,
+  toWorkspaceActivationDto
+} from "./desktop-application.js";
 export type {
   CreateCreativeProjectInput,
-  CreateProjectInput,
+  ProjectInitializationInput,
   DeleteChapterInput,
   DuplicateChapterInput,
   ProjectChapterRepositoryPort,

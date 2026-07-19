@@ -89,12 +89,23 @@ export function useProjectWorkflowActions({
     ]
   );
 
-  const handleProjectRootChange = useCallback(
-    (projectRoot: string) => {
-      setProjectWorkflow(projectWorkflowBridge?.setProjectRootInput(projectRoot));
+  const handleProjectTitleChange = useCallback(
+    (title: string) => {
+      setProjectWorkflow(projectWorkflowBridge?.setProjectTitleInput(title));
     },
     [projectWorkflowBridge, setProjectWorkflow]
   );
+
+  const handleProjectFolderNameChange = useCallback(
+    (folderName: string) => {
+      setProjectWorkflow(projectWorkflowBridge?.setProjectFolderNameInput(folderName));
+    },
+    [projectWorkflowBridge, setProjectWorkflow]
+  );
+
+  const handleChooseCreateParentDirectory = useCallback(() => {
+    void projectWorkflowBridge?.chooseCreateParentDirectory().then(setProjectWorkflow);
+  }, [projectWorkflowBridge, setProjectWorkflow]);
 
   const handleOpenProject = useCallback(() => {
     if (projectWorkflowBridge === undefined) {
@@ -112,15 +123,6 @@ export function useProjectWorkflowActions({
 
     setProjectWorkflow({ ...projectWorkflowBridge.getProps(), status: "creating" });
     void projectWorkflowBridge.createProject().then(refreshProjectWorkflow);
-  }, [projectWorkflowBridge, refreshProjectWorkflow, setProjectWorkflow]);
-
-  const handleInitializeProject = useCallback(() => {
-    if (projectWorkflowBridge === undefined) {
-      return;
-    }
-
-    setProjectWorkflow({ ...projectWorkflowBridge.getProps(), status: "creating" });
-    void projectWorkflowBridge.initializeProject().then(refreshProjectWorkflow);
   }, [projectWorkflowBridge, refreshProjectWorkflow, setProjectWorkflow]);
 
   const handleCreateExampleProject = useCallback(() => {
@@ -206,10 +208,11 @@ export function useProjectWorkflowActions({
 
   return {
     refreshProjectWorkflow,
-    handleProjectRootChange,
+    handleProjectTitleChange,
+    handleProjectFolderNameChange,
+    handleChooseCreateParentDirectory,
     handleOpenProject,
     handleCreateProject,
-    handleInitializeProject,
     handleCreateExampleProject,
     handleCreateChapter,
     handleRenameChapter,

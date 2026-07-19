@@ -8,6 +8,7 @@ export type WorkspaceActivationContext =
       readonly displayName: string;
       readonly contentRoot: string;
       readonly stateRoot: string;
+      readonly activeChapterId?: string;
       readonly capabilities: readonly WorkspaceCapability[];
     }
   | {
@@ -19,7 +20,15 @@ export type WorkspaceActivationContext =
       readonly capabilities: readonly WorkspaceCapability[];
     };
 
-export function toWorkspaceContextDto(context: WorkspaceActivationContext): WorkspaceContextDto {
+export function toWorkspaceContextDto(
+  context: Extract<WorkspaceActivationContext, { readonly kind: "creativeProject" }>
+): Extract<WorkspaceContextDto, { readonly kind: "creativeProject" }>;
+export function toWorkspaceContextDto(
+  context: Extract<WorkspaceActivationContext, { readonly kind: "engineeringWorkspace" }>
+): Extract<WorkspaceContextDto, { readonly kind: "engineeringWorkspace" }>;
+export function toWorkspaceContextDto(
+  context: WorkspaceActivationContext
+): WorkspaceContextDto {
   return context.kind === "creativeProject"
     ? {
         kind: context.kind,

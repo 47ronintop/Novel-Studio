@@ -47,7 +47,7 @@ export interface ProjectSnapshot {
   settings: WorkspaceProjectSettings;
 }
 
-export interface CreateProjectInput {
+export interface ProjectInitializationInput {
   projectRoot: string;
   projectId: string;
   title: string;
@@ -150,7 +150,7 @@ export interface ProjectWorkspaceHealthIssue extends JsonObject {
 export interface ProjectRepositoryPort {
   openProject(): Promise<Result<ProjectSnapshot, UnifiedError>>;
   createProject(
-    input: Omit<CreateProjectInput, "projectRoot">
+    input: Omit<ProjectInitializationInput, "projectRoot">
   ): Promise<Result<ProjectSnapshot, UnifiedError>>;
 }
 
@@ -188,7 +188,9 @@ export interface ProjectWorkspaceSession {
   getSnapshot(): ProjectWorkspaceSnapshot | undefined;
   getActiveChapterEditorSession(): ChapterEditorSession | undefined;
   openProject(projectRoot: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
-  createProject(input: CreateProjectInput): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  createProject(
+    input: ProjectInitializationInput
+  ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   createProjectInParent(
     input: CreateCreativeProjectInput
   ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;

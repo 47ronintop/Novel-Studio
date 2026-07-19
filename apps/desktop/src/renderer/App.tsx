@@ -271,13 +271,13 @@ export function App() {
     },
     [chapterBridge]
   );
-
   const {
     refreshProjectWorkflow,
-    handleProjectRootChange,
+    handleProjectTitleChange,
+    handleProjectFolderNameChange,
+    handleChooseCreateParentDirectory,
     handleOpenProject,
     handleCreateProject,
-    handleInitializeProject,
     handleCreateExampleProject,
     handleCreateChapter,
     handleRenameChapter,
@@ -464,6 +464,14 @@ export function App() {
             void chapterBridge.load().then(setChapterEditor);
           }
         },
+        onReloadFromDisk: () => {
+          nextFileEditor.onReloadFromDisk?.();
+          setFileEditor(decorateFileEditor(plainFileBridge?.getProps()));
+        },
+        onKeepDraft: () => {
+          nextFileEditor.onKeepDraft?.();
+          setFileEditor(decorateFileEditor(plainFileBridge?.getProps()));
+        },
         onEditorPreferencesChange: (preferences: EditorPreferences) => {
           setEditorPreferences(preferences);
           persistUserPreferences({ editor: preferences });
@@ -483,12 +491,11 @@ export function App() {
 
   const handleOpenFile = useCallback(
     (path: string) => {
-      const projectRoot = projectWorkflowBridge?.getProps().projectRootInput.trim();
-      if (plainFileBridge === undefined || projectRoot === undefined || projectRoot.length === 0) {
+      if (plainFileBridge === undefined) {
         return;
       }
 
-      void plainFileBridge.openFile(projectRoot, path).then((nextFileEditor) => {
+      void plainFileBridge.openFile(path).then((nextFileEditor) => {
         setFileEditor(decorateFileEditor(nextFileEditor));
         setChapterEditor(undefined);
         setShellState((current) => ({
@@ -497,7 +504,7 @@ export function App() {
         }));
       });
     },
-    [decorateFileEditor, plainFileBridge, projectWorkflowBridge]
+    [decorateFileEditor, plainFileBridge]
   );
 
   const handleSearchQueryChange = useCallback(
@@ -982,10 +989,11 @@ export function App() {
       onRejectSelectionReview={handleRejectSelectionReview}
       onUndoSelectionReview={handleUndoSelectionReview}
       onCancelAiStreaming={handleCancelAiStreaming}
-      onProjectRootChange={handleProjectRootChange}
+      onProjectTitleChange={handleProjectTitleChange}
+      onProjectFolderNameChange={handleProjectFolderNameChange}
+      onChooseCreateParentDirectory={handleChooseCreateParentDirectory}
       onOpenProject={handleOpenProject}
       onCreateProject={handleCreateProject}
-      onInitializeProject={handleInitializeProject}
       onCreateChapter={handleCreateChapter}
       onOpenFile={handleOpenFile}
       onRenameChapter={handleRenameChapter}

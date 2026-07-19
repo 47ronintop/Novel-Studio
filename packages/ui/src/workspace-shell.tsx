@@ -267,7 +267,6 @@ function WorkspaceShellContent({
             activeActivity={shellState.activeActivity}
             collapsed={focusMode || shellState.navigatorCollapsed}
             expandedSectionIds={shellState.navigatorExpandedSectionIds}
-            fileTree={projectWorkflow?.fileTree}
             focusHidden={focusMode}
             onActivitySelect={onActivitySelect}
             onExpandedSectionIdsChange={onNavigatorExpandedSectionIdsChange}
@@ -773,13 +772,26 @@ function PlainFileEditor({
     "--ns-editor-font-size": `${editorPreferences.fontSize}px`,
     "--ns-editor-line-height": String(editorPreferences.lineHeight)
   } as CSSProperties;
-
   return (
     <section className="ns-editor-layout ns-file-editor-layout" aria-label="普通文件编辑器">
       {editor.feedback === undefined ? null : (
         <p className="ns-project-feedback" data-kind={editor.feedback.kind} role="status">
           {editor.feedback.message}
         </p>
+      )}
+      {editor.conflict === undefined ? null : (
+        <section className="ns-project-feedback" data-kind="error" aria-label="文件保存冲突">
+          <p>磁盘文件已更改，请检查后选择重新加载或保留当前草稿。</p>
+          <pre>{editor.conflict.diskContent}</pre>
+          <div className="ns-project-actions">
+            <button type="button" onClick={editor.onReloadFromDisk}>
+              从磁盘重新加载
+            </button>
+            <button type="button" onClick={editor.onKeepDraft}>
+              保留草稿
+            </button>
+          </div>
+        </section>
       )}
       <EditorFindReplace
         body={editor.content}

@@ -1,291 +1,163 @@
-import { describe, expect, test } from "vitest";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, test, vi } from "vitest";
 
-import { ok, type ChapterDocument, type Result, type UnifiedError } from "@novel-studio/shared";
 import type {
-  ApplicationCommand,
   DesktopApplication,
-  DesktopShellState,
-  ProjectRecoveryDraftPreview,
+  NovelStudioApi,
   ProjectWorkspaceSnapshot
 } from "@novel-studio/application";
+import { ok } from "@novel-studio/shared";
 
 import { createApplicationIpcHandlers } from "../src/main/ipc-handlers.js";
 import { createNovelStudioApi } from "../src/preload/api.js";
 
-const shellState: DesktopShellState = {
-  projectTitle: "M12",
-  activeActivity: "workspace",
-  navigatorCollapsed: false,
-  inspectorCollapsed: false,
-  bottomPanelVisible: true,
-  activeBottomPanelTab: "Logs",
-  workspaceLayout: {
-    splitView: false,
-    navigatorWidth: 260,
-    inspectorWidth: 320,
-    bottomPanelHeight: 220
-  },
-  commandPaletteOpen: false,
-  saveStatus: "Saved",
-  navigatorSections: [{ id: "chapters", title: "Chapters", itemCount: 1 }],
-  bottomPanelTabs: ["Logs"]
-};
-
-const workspaceSnapshot: ProjectWorkspaceSnapshot = {
-  projectRoot: "D:/Novel/M12",
-  project: {
-    schemaVersion: "1.0",
-    projectId: "prj_m12",
-    title: "M12",
-    projectType: "novel",
-    language: "zh-CN",
-    createdAt: "2026-07-04T00:00:00.000Z",
-    updatedAt: "2026-07-04T00:00:00.000Z"
-  },
-  settings: {
-    schemaVersion: "1.0",
-    autosave: {},
-    history: {},
-    models: {}
-  },
-  chapters: [
-    {
-      id: "ch_opening",
-      title: "开篇",
-      order: 1,
-      status: "draft",
-      updatedAt: "2026-07-04T00:00:00.000Z"
-    }
-  ],
-  recovery: {
-    availableItems: []
-  },
-  activeChapterId: "ch_opening"
-};
-
-const recoveryPreview: ProjectRecoveryDraftPreview = {
-  sessionId: "session_prj_m49_ch_opening",
-  chapterId: "ch_opening",
-  chapterTitle: "开篇",
-  updatedAt: "2026-07-06T00:05:00.000Z",
-  body: "恢复草稿正文\n"
-};
-
-const recoveredChapter: ChapterDocument = {
-  frontmatter: {
-    schemaVersion: "1.0",
-    id: "ch_opening",
-    title: "开篇",
-    order: 1,
-    status: "draft",
-    createdAt: "2026-07-04T00:00:00.000Z",
-    updatedAt: "2026-07-06T00:05:00.000Z"
-  },
-  body: "恢复草稿正文\n"
-};
-
-const recoveryApplyResult = {
-  workspace: workspaceSnapshot,
-  chapterEditor: {
-    state: {
-      chapter: recoveredChapter,
-      dirty: true,
-      saveStatus: "Unsaved" as const
-    },
-    versions: []
-  }
-};
-
-describe("M12 project workflow IPC", () => {
-  test("exposes project workflow commands through preload without renderer filesystem access", async () => {
-    const calls: string[] = [];
+describe("Task 5 explicit workspace IPC", () => {
+  test("exposes only opaque project/workspace operations through preload", async () => {
+    const calls: Array<{ channel: string; args: readonly unknown[] }> = [];
     const api = createNovelStudioApi({
       async invoke(channel, ...args) {
-        calls.push(`${channel}:${args.length}`);
-        return ok(workspaceSnapshot);
+        calls.push({ channel, args });
+        return ok({ canceled: false, selectionId: "selection_1", displayName: "Novel" });
       }
     });
 
-    await api.project.open("D:/Novel/M12");
-    await api.project.readDirectory("D:/Novel/M12");
-    await api.file.readText("D:/Novel/M12", "notes/scene.md");
-    await api.file.writeText("D:/Novel/M12", "notes/scene.md", "Scene\n");
-    await api.project.create({
-      projectRoot: "D:/Novel/M12",
-      projectId: "prj_m12",
-      title: "M12",
-      language: "zh-CN"
+    await api.project.chooseOpenCreativeDirectory();
+    await api.project.openCreativeProject("selection_1");
+    await api.project.chooseCreateParentDirectory();
+    await api.project.previewCreativeProject({
+      parentSelectionId: "selection_1",
+      folderName: "new-book"
     });
-    await api.project.createChapter({
-      chapterId: "ch_opening",
-      title: "开篇"
+    await api.project.createCreativeProject({
+      parentSelectionId: "selection_1",
+      folderName: "new-book",
+      projectId: "prj_new",
+      title: "New Book",
+      language: "en"
     });
-    await api.project.selectChapter("ch_opening");
-    await api.project.previewRecoveryDraft("session_prj_m49_ch_opening");
-    await api.project.applyRecoveryDraft("session_prj_m49_ch_opening");
-    await api.project.discardRecoveryDraft("session_prj_m49_ch_opening");
+    await api.workspace.chooseEngineeringDirectory();
+    await api.workspace.openEngineeringWorkspace("selection_1");
+    await api.workspace.refreshEngineeringTree();
+    await api.workspace.readTextFile("notes/scene.md");
+    await api.workspace.saveTextFile({
+      path: "notes/scene.md",
+      content: "updated",
+      expectedChecksum: "sha256:old"
+    });
 
-    expect(calls).toEqual([
-      "application:project:open:1",
-      "application:project:read-directory:1",
-      "application:file:read-text:2",
-      "application:file:write-text:3",
-      "application:project:create:1",
-      "application:project:create-chapter:1",
-      "application:project:select-chapter:1",
-      "application:project:preview-recovery-draft:1",
-      "application:project:apply-recovery-draft:1",
-      "application:project:discard-recovery-draft:1"
+    expect(calls.map(({ channel }) => channel)).toEqual([
+      "application:project:choose-open-creative-directory",
+      "application:project:open-creative-project",
+      "application:project:choose-create-parent-directory",
+      "application:project:preview-creative-project",
+      "application:project:create-creative-project",
+      "application:workspace:choose-engineering-directory",
+      "application:workspace:open-engineering-workspace",
+      "application:workspace:refresh-engineering-tree",
+      "application:workspace:read-text-file",
+      "application:workspace:save-text-file"
     ]);
   });
 
-  test("routes project workflow IPC channels to the Application layer", async () => {
-    const application = createFakeApplication();
-    const handlers = createApplicationIpcHandlers(application);
-
-    await expect(handlers["application:project:open"]("D:/Novel/M12")).resolves.toEqual(
-      ok(workspaceSnapshot)
-    );
-    await expect(
-      handlers["application:project:create"]({
-        projectRoot: "D:/Novel/M12",
-        projectId: "prj_m12",
-        title: "M12",
-        language: "zh-CN"
-      })
-    ).resolves.toEqual(ok(workspaceSnapshot));
-    await expect(
-      handlers["application:project:create-chapter"]({
-        chapterId: "ch_opening",
-        title: "开篇"
-      })
-    ).resolves.toEqual(ok(workspaceSnapshot));
-    await expect(handlers["application:project:select-chapter"]("ch_opening")).resolves.toEqual(
-      ok(workspaceSnapshot)
-    );
-    await expect(
-      handlers["application:project:preview-recovery-draft"]("session_prj_m49_ch_opening")
-    ).resolves.toEqual(ok(recoveryPreview));
-    await expect(
-      handlers["application:project:apply-recovery-draft"]("session_prj_m49_ch_opening")
-    ).resolves.toEqual(ok(recoveryApplyResult));
-    await expect(
-      handlers["application:project:discard-recovery-draft"]("session_prj_m49_ch_opening")
-    ).resolves.toEqual(ok(workspaceSnapshot));
-  });
-
-  test("reads ordinary folder trees through the project directory IPC channel", async () => {
-    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-folder-"));
+  test("keeps canonical directory paths in main-only selection tokens", async () => {
+    const root = await mkdtemp(join(tmpdir(), "novel-studio-selection-"));
     try {
-      await mkdir(join(projectRoot, "notes"));
-      await writeFile(join(projectRoot, "INDEX.md"), "# Index\n", "utf8");
-      await writeFile(join(projectRoot, "notes", "scene.md"), "Scene\n", "utf8");
+      const canonicalRoot = await realpath(root);
+      const coordinator = {
+        openCreativeProject: vi.fn(async (path: string) => ok({ path })),
+        createCreativeProject: vi.fn(async () => ok({})),
+        openEngineeringWorkspace: vi.fn(async (path: string) => ok({ path }))
+      };
+      const handlers = createApplicationIpcHandlers(undefined, {
+        chooseOpenProjectDirectory: async () => root,
+        chooseCreateProjectDirectory: async () => root,
+        chooseEngineeringDirectory: async () => root,
+        workspaceActivationCoordinator: coordinator as never
+      }) as Record<string, (...args: readonly unknown[]) => Promise<unknown>>;
 
-      const handlers = createApplicationIpcHandlers(createFakeApplication());
-      const result = await handlers["application:project:read-directory"](projectRoot);
-
-      expect(result).toEqual(
-        ok([
-          {
-            id: "folder:notes",
-            name: "notes",
-            kind: "directory",
-            path: "notes",
-            children: [
-              {
-                id: "file:notes/scene.md",
-                name: "scene.md",
-                kind: "file",
-                path: "notes/scene.md"
-              }
-            ]
-          },
-          {
-            id: "file:INDEX.md",
-            name: "INDEX.md",
-            kind: "file",
-            path: "INDEX.md"
-          }
-        ])
-      );
-    } finally {
-      await rm(projectRoot, { recursive: true, force: true });
-    }
-  });
-
-  test("reads and writes ordinary text files only inside the selected folder", async () => {
-    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-files-"));
-    const outsideRoot = await mkdtemp(join(tmpdir(), "novel-studio-outside-"));
-    try {
-      await mkdir(join(projectRoot, "notes"));
-      await writeFile(join(projectRoot, "notes", "scene.md"), "Scene one\n", "utf8");
-      await writeFile(join(outsideRoot, "secret.md"), "Secret\n", "utf8");
-
-      const handlers = createApplicationIpcHandlers(createFakeApplication());
-      const readResult = await handlers["application:file:read-text"](
-        projectRoot,
-        "notes/scene.md"
-      );
-      const writeResult = await handlers["application:file:write-text"](
-        projectRoot,
-        "notes/scene.md",
-        "Scene two\n"
-      );
-      const traversalRead = await handlers["application:file:read-text"](
-        projectRoot,
-        "../secret.md"
-      );
-
-      expect(readResult).toEqual(ok({ path: "notes/scene.md", content: "Scene one\n" }));
-      expect(writeResult).toEqual(ok({ path: "notes/scene.md" }));
-      expect(await readFile(join(projectRoot, "notes", "scene.md"), "utf8")).toBe("Scene two\n");
-      expect(traversalRead).toMatchObject({
-        ok: false,
-        error: {
-          code: "FILE_PATH_OUTSIDE_PROJECT"
-        }
+      const selected = await handlers["application:project:choose-open-creative-directory"]();
+      expect(selected).toMatchObject({
+        ok: true,
+        value: { canceled: false, displayName: expect.any(String) }
       });
+      expect(JSON.stringify(selected)).not.toContain(canonicalRoot);
+      const selectionId = (selected as { value: { selectionId: string } }).value.selectionId;
+
+      await handlers["application:project:open-creative-project"](selectionId);
+      expect(coordinator.openCreativeProject).toHaveBeenCalledWith(canonicalRoot);
     } finally {
-      await rm(projectRoot, { recursive: true, force: true });
-      await rm(outsideRoot, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true });
     }
+  });
+
+  test("projects chapter and recovery results before crossing IPC", async () => {
+    const snapshot = projectSnapshot();
+    const handlers = createApplicationIpcHandlers({
+      createProjectChapter: async () => ok(snapshot),
+      applyRecoveryDraft: async () =>
+        ok({
+          workspace: snapshot,
+          chapterEditor: {
+            state: {
+              chapter: {
+                frontmatter: {
+                  schemaVersion: "1.0",
+                  id: "chapter_1",
+                  title: "One",
+                  order: 1,
+                  status: "draft",
+                  createdAt: "2026-07-19T00:00:00.000Z",
+                  updatedAt: "2026-07-19T00:00:00.000Z"
+                },
+                body: "Draft"
+              },
+              dirty: true,
+              saveStatus: "Unsaved"
+            },
+            versions: []
+          }
+        })
+    } as unknown as DesktopApplication);
+
+    const chapter = await handlers["application:project:create-chapter"]({
+      chapterId: "chapter_1",
+      title: "One"
+    });
+    const recovered = await handlers["application:project:apply-recovery-draft"]("recovery_1");
+
+    expect(JSON.stringify(chapter)).not.toContain("projectRoot");
+    expect(JSON.stringify(recovered)).not.toContain("projectRoot");
   });
 });
 
-function createFakeApplication(): DesktopApplication {
+function projectSnapshot(): ProjectWorkspaceSnapshot {
   return {
-    getShellState: () => shellState,
-    listCommands: (): readonly ApplicationCommand[] => [],
-    executeCommand: () => ok(shellState),
-    openProject: () => Promise.resolve(ok(workspaceSnapshot)),
-    createProject: () => Promise.resolve(ok(workspaceSnapshot)),
-    listProjectChapters: () => Promise.resolve(ok(workspaceSnapshot.chapters)),
-    createProjectChapter: () => Promise.resolve(ok(workspaceSnapshot)),
-    selectProjectChapter: () => Promise.resolve(ok(workspaceSnapshot)),
-    previewRecoveryDraft: () => Promise.resolve(ok(recoveryPreview)),
-    applyRecoveryDraft: () => Promise.resolve(ok(recoveryApplyResult)),
-    discardRecoveryDraft: () => Promise.resolve(ok(workspaceSnapshot)),
-    loadActiveChapter: unsupported,
-    editActiveChapter: unsupported,
-    saveActiveChapter: unsupported,
-    listActiveChapterVersions: unsupported,
-    previewActiveChapterVersion: unsupported,
-    restoreActiveChapterVersion: unsupported,
-    previewActiveChapterSuggestionDiff: () => ok({ title: "AI suggestion", changes: [] }),
-    listModelProfiles: unsupported,
-    saveModelProfile: unsupported,
-    testModelProfileConnection: unsupported,
-    loadConfigAsset: unsupported,
-    saveConfigAsset: unsupported,
-    restoreConfigAssetVersion: unsupported,
-    loadUserPreferences: unsupported,
-    saveUserPreferences: unsupported
+    projectRoot: "D:/Novel/Secret",
+    project: {
+      schemaVersion: "1.0",
+      projectId: "prj_secret",
+      title: "Secret",
+      projectType: "novel",
+      language: "en",
+      createdAt: "2026-07-19T00:00:00.000Z",
+      updatedAt: "2026-07-19T00:00:00.000Z"
+    },
+    settings: { schemaVersion: "1.0", autosave: {}, history: {}, models: {} },
+    chapters: [],
+    recovery: { availableItems: [] },
+    health: {
+      status: "healthy",
+      checkedAt: "2026-07-19T00:00:00.000Z",
+      summary: { errorCount: 0, warningCount: 0, infoCount: 0 },
+      issues: []
+    },
+    lock: {
+      schemaVersion: "1.0",
+      ownerId: "window_test",
+      projectRoot: "D:/Novel/Secret",
+      acquiredAt: "2026-07-19T00:00:00.000Z"
+    }
   };
-}
-
-async function unsupported<T>(): Promise<Result<T, UnifiedError>> {
-  throw new Error("Not used by this test.");
 }

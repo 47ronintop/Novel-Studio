@@ -43,7 +43,7 @@ describe("WorkspaceNavigator", () => {
     expect(html).toContain('data-active="true"');
   });
 
-  test("renders ordinary folder files before collapsible Novel Studio asset groups", () => {
+  test("renders engineering workspace files before collapsible Novel Studio asset groups", () => {
     const html = renderToStaticMarkup(
       <WorkspaceNavigator
         {...createNavigatorProps({
@@ -129,33 +129,10 @@ describe("WorkspaceNavigator", () => {
     ]);
   });
 
-  test("renders an initialize action for ordinary folders", () => {
-    const calls: string[] = [];
-    const baseProjectWorkflow = createNavigatorProps().projectWorkflow;
-    if (baseProjectWorkflow === undefined) {
-      throw new Error("Expected default project workflow props.");
-    }
-    const tree = WorkspaceNavigator(
-      createNavigatorProps({
-        projectWorkflow: {
-          ...baseProjectWorkflow,
-          fileTree: [
-            {
-              id: "file:notes.md",
-              name: "notes.md",
-              kind: "file",
-              path: "notes.md"
-            }
-          ],
-          canInitializeProject: true,
-          onInitializeProject: () => calls.push("initialize")
-        }
-      })
-    );
+  test("does not expose in-place project initialization for ordinary folders", () => {
+    const tree = WorkspaceNavigator(createNavigatorProps());
 
-    findElementByAriaLabel(tree, "初始化为 Novel Studio 项目")?.props.onClick?.();
-
-    expect(calls).toEqual(["initialize"]);
+    expect(findElementByAriaLabel(tree, "初始化为 Novel Studio 项目")).toBeUndefined();
   });
 
   test("wires section collapse, search, chapter actions, and guarded delete", () => {
@@ -234,7 +211,8 @@ function createNavigatorProps(
     searchQuery: "",
     fileTree: undefined,
     projectWorkflow: {
-      projectRootInput: "D:/Novel/VUI06",
+      projectTitleInput: "VUI06",
+      projectFolderNameInput: "VUI06",
       chapters: [
         {
           id: "ch_opening",
@@ -254,7 +232,8 @@ function createNavigatorProps(
       ],
       activeChapterId: "ch_opening",
       dirtyChapterIds: ["ch_opening"],
-      onProjectRootChange: () => undefined,
+      onProjectTitleChange: () => undefined,
+      onProjectFolderNameChange: () => undefined,
       onOpenProject: () => undefined,
       onCreateProject: () => undefined,
       onCreateChapter: () => undefined,

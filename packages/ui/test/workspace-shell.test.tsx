@@ -163,7 +163,7 @@ describe("WorkspaceShell", () => {
     expect(html).not.toContain('aria-label="状态栏"');
     expect(html).toContain('aria-label="Navigator resize handle"');
     expect(html).toContain('aria-label="AI panel resize handle"');
-    expect(html).toContain('aria-label="章节 分组"');
+    expect(html).toContain('aria-label="Novel Studio asset groups"');
     expect(html).toContain('aria-label="AI 写作工作流"');
     expect(html).not.toContain("Markdown");
   });
@@ -533,7 +533,8 @@ describe("WorkspaceShell", () => {
         commands={application.listCommands()}
         commandPaletteOpen={false}
         projectWorkflow={{
-          projectRootInput: "D:/Novel",
+          projectTitleInput: "Novel",
+          projectFolderNameInput: "Novel",
           chapters: [],
           health: {
             status: "blocked",
@@ -562,7 +563,8 @@ describe("WorkspaceShell", () => {
               }
             ]
           },
-          onProjectRootChange: () => undefined,
+          onProjectTitleChange: () => undefined,
+          onProjectFolderNameChange: () => undefined,
           onOpenProject: () => undefined,
           onCreateProject: () => undefined,
           onCreateChapter: () => undefined,
@@ -763,11 +765,15 @@ describe("WorkspaceShell", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
-        shellState={application.getShellState()}
+        shellState={{
+          ...application.getShellState(),
+          navigatorExpandedSectionIds: ["novel-studio", "chapters"]
+        }}
         commands={application.listCommands()}
         commandPaletteOpen={false}
         projectWorkflow={{
-          projectRootInput: "D:/Novel/M12",
+          projectTitleInput: "M12",
+          projectFolderNameInput: "m12",
           status: "creating",
           feedback: {
             kind: "error",
@@ -783,7 +789,8 @@ describe("WorkspaceShell", () => {
             }
           ],
           activeChapterId: "ch_opening",
-          onProjectRootChange: () => undefined,
+          onProjectTitleChange: () => undefined,
+          onProjectFolderNameChange: () => undefined,
           onOpenProject: () => undefined,
           onCreateProject: () => undefined,
           onCreateChapter: () => undefined,
@@ -792,7 +799,9 @@ describe("WorkspaceShell", () => {
       />
     );
 
-    expect(html).toContain('aria-label="项目路径"');
+    expect(html).toContain('aria-label="项目标题"');
+    expect(html).toContain('aria-label="项目文件夹名称"');
+    expect(html).toContain('aria-label="选择项目父文件夹"');
     expect(html).toContain('aria-label="打开项目"');
     expect(html).toContain('aria-label="创建项目"');
     expect(html).toContain('aria-label="新建章节"');
@@ -811,9 +820,11 @@ describe("WorkspaceShell", () => {
       commands: application.listCommands(),
       commandPaletteOpen: false,
       projectWorkflow: {
-        projectRootInput: "D:/Novel/Example",
+        projectTitleInput: "Example",
+        projectFolderNameInput: "Example",
         chapters: [],
-        onProjectRootChange: () => undefined,
+        onProjectTitleChange: () => undefined,
+        onProjectFolderNameChange: () => undefined,
         onOpenProject: () => calls.push("open"),
         onCreateProject: () => calls.push("create"),
         onCreateChapter: () => calls.push("chapter"),
@@ -1009,7 +1020,8 @@ describe("WorkspaceShell", () => {
       commands: application.listCommands(),
       commandPaletteOpen: false,
       projectWorkflow: {
-        projectRootInput: "D:/Novel/M34",
+        projectTitleInput: "M34",
+        projectFolderNameInput: "M34",
         chapters: [
           {
             id: "ch_opening",
@@ -1028,7 +1040,8 @@ describe("WorkspaceShell", () => {
         ],
         openChapterTabIds: ["ch_opening", "ch_second"],
         activeChapterId: "ch_opening",
-        onProjectRootChange: () => undefined,
+        onProjectTitleChange: () => undefined,
+        onProjectFolderNameChange: () => undefined,
         onOpenProject: () => undefined,
         onCreateProject: () => undefined,
         onCreateChapter: () => undefined,
@@ -1126,7 +1139,8 @@ describe("WorkspaceShell", () => {
       commands: application.listCommands(),
       commandPaletteOpen: false,
       projectWorkflow: {
-        projectRootInput: "D:/Novel/M37",
+        projectTitleInput: "M37",
+        projectFolderNameInput: "M37",
         chapters: [
           {
             id: "ch_opening",
@@ -1153,7 +1167,8 @@ describe("WorkspaceShell", () => {
         openChapterTabIds: ["ch_opening", "ch_second"],
         dirtyChapterIds: ["ch_second"],
         activeChapterId: "ch_opening",
-        onProjectRootChange: () => undefined,
+        onProjectTitleChange: () => undefined,
+        onProjectFolderNameChange: () => undefined,
         onOpenProject: () => undefined,
         onCreateProject: () => undefined,
         onCreateChapter: () => undefined,
@@ -1179,7 +1194,8 @@ describe("WorkspaceShell", () => {
   test("renders only explicitly opened chapter documents with markdown labels", () => {
     const application = createDesktopApplication();
     const projectWorkflow = {
-      projectRootInput: "D:/Novel/M37",
+      projectTitleInput: "M37",
+      projectFolderNameInput: "M37",
       chapters: [
         {
           id: "ch_opening",
@@ -1204,7 +1220,8 @@ describe("WorkspaceShell", () => {
         }
       ],
       activeChapterId: "ch_opening",
-      onProjectRootChange: () => undefined,
+      onProjectTitleChange: () => undefined,
+      onProjectFolderNameChange: () => undefined,
       onOpenProject: () => undefined,
       onCreateProject: () => undefined,
       onCreateChapter: () => undefined,
@@ -1241,11 +1258,13 @@ describe("WorkspaceShell", () => {
         commands={application.listCommands()}
         commandPaletteOpen={false}
         projectWorkflow={{
-          projectRootInput: "D:/Novel/Startup",
+          projectTitleInput: "Startup",
+          projectFolderNameInput: "Startup",
           chapters: [],
           openChapterTabIds: [],
           activeChapterId: "ch_first",
-          onProjectRootChange: () => undefined,
+          onProjectTitleChange: () => undefined,
+          onProjectFolderNameChange: () => undefined,
           onOpenProject: () => undefined,
           onCreateProject: () => undefined,
           onCreateChapter: () => undefined,
@@ -1284,7 +1303,8 @@ describe("WorkspaceShell", () => {
         commands={application.listCommands()}
         commandPaletteOpen={false}
         projectWorkflow={{
-          projectRootInput: "D:/Novel/M38",
+          projectTitleInput: "M38",
+          projectFolderNameInput: "M38",
           chapters: [
             {
               id: "ch_opening",
@@ -1306,7 +1326,8 @@ describe("WorkspaceShell", () => {
               }
             ]
           },
-          onProjectRootChange: () => undefined,
+          onProjectTitleChange: () => undefined,
+          onProjectFolderNameChange: () => undefined,
           onOpenProject: () => undefined,
           onCreateProject: () => undefined,
           onCreateChapter: () => undefined,
@@ -1329,7 +1350,8 @@ describe("WorkspaceShell", () => {
       commands: application.listCommands(),
       commandPaletteOpen: false,
       projectWorkflow: {
-        projectRootInput: "D:/Novel/M49",
+        projectTitleInput: "M49",
+        projectFolderNameInput: "M49",
         chapters: [
           {
             id: "ch_opening",
@@ -1361,7 +1383,8 @@ describe("WorkspaceShell", () => {
             }
           }
         },
-        onProjectRootChange: () => undefined,
+        onProjectTitleChange: () => undefined,
+        onProjectFolderNameChange: () => undefined,
         onOpenProject: () => undefined,
         onCreateProject: () => undefined,
         onCreateChapter: () => undefined,

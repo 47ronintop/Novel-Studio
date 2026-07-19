@@ -192,7 +192,7 @@ export function createOnboardingProps(input: {
 }): OnboardingProps {
   const hasProject =
     input.shellState.projectTitle !== "未打开项目" ||
-    (input.projectWorkflow?.projectRootInput.trim().length ?? 0) > 0;
+    input.projectWorkflow?.projectId !== undefined;
   const hasChapter =
     input.chapterEditor !== undefined || (input.projectWorkflow?.chapters.length ?? 0) > 0;
 

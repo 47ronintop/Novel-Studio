@@ -12,6 +12,7 @@ import { createDesktopAgentRuntime } from "./agent-run-runtime.js";
 import { createDesktopAgentRuntimeManager } from "./agent-runtime-manager.js";
 import type { DesktopAgentRuntimeManager } from "./agent-runtime-manager.js";
 import { createAgentWriteSaveCoordinator, createApplicationIpcHandlers } from "./ipc-handlers.js";
+import { createWorkspaceActivationCoordinator } from "./workspace-activation.js";
 import { createApplicationMenuTemplate } from "./menu.js";
 import { createDesktopModelRuntime, createEncryptedFileModelSecretStore } from "./model-runtime.js";
 import { createSecureWebPreferences } from "./security.js";
@@ -177,9 +178,21 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     throw new Error(initialBinding.error.message);
   }
   activeAgentRuntimeManager = agentRuntimeManager;
+  const workspaceActivationCoordinator = createWorkspaceActivationCoordinator({
+    application: bootstrapped.application,
+    runtimeManager: agentRuntimeManager,
+    reportCleanupFailure: (error) => {
+      process.emitWarning(error.message, {
+        code: error.code,
+        detail: `Workspace cleanup will be retried during shutdown (${error.traceId}).`
+      });
+    }
+  });
   const handlers = createApplicationIpcHandlers(activeDesktopApplication, {
     chooseOpenProjectDirectory: () => chooseProjectDirectory("Open Novel Studio project"),
     chooseCreateProjectDirectory: () => chooseProjectDirectory("Create Novel Studio project"),
+    chooseEngineeringDirectory: () => chooseProjectDirectory("Open engineering workspace"),
+    workspaceActivationCoordinator,
     modelSecretStore,
     publishAiSuggestionStreamEvent: (event) => {
       for (const window of BrowserWindow.getAllWindows()) {

@@ -17,6 +17,68 @@ afterEach(async () => {
 });
 
 describe("DesktopAgentRuntimeManager", () => {
+  test("prepares a runtime without replacing the current workspace until commit", async () => {
+    const rootA = await createRoot("atomic-a");
+    const rootB = await createRoot("atomic-b");
+    const runtimes = new Map<string, ReturnType<typeof fakeRuntime>>();
+    const manager = createDesktopAgentRuntimeManager({
+      createRuntime(binding) {
+        const runtime = fakeRuntime(binding.workspaceId, binding.contentRoot, binding.stateRoot);
+        runtimes.set(binding.workspaceId, runtime);
+        return runtime as unknown as DesktopAgentRuntime;
+      }
+    });
+    const seen: string[] = [];
+    manager.subscribeAgentRunEvents((event) => seen.push(event.runId));
+    await manager.bindWorkspace(engineeringBinding("ws_atomic_a", rootA));
+
+    const prepared = await manager.prepareWorkspace(engineeringBinding("ws_atomic_b", rootB));
+
+    expect(prepared).toMatchObject({ ok: true });
+    expect(manager.currentWorkspace()?.workspaceId).toBe("ws_atomic_a");
+    expect(runtimes.get("ws_atomic_a")).toMatchObject({ disposeCalls: 0, unsubscribeCalls: 0 });
+    expect(runtimes.get("ws_atomic_b")).toMatchObject({ prepareCalls: 1, subscribeCalls: 1 });
+    runtimes.get("ws_atomic_b")?.emit({ runId: "run_before_commit" });
+    expect(seen).toEqual([]);
+    if (!prepared.ok) {
+      throw new Error(prepared.error.message);
+    }
+
+    manager.commitPreparedWorkspace(prepared.value);
+    runtimes.get("ws_atomic_a")?.emit({ runId: "run_stale" });
+    runtimes.get("ws_atomic_b")?.emit({ runId: "run_after_commit" });
+
+    expect(manager.currentWorkspace()?.workspaceId).toBe("ws_atomic_b");
+    expect(runtimes.get("ws_atomic_a")).toMatchObject({ disposeCalls: 1, unsubscribeCalls: 1 });
+    expect(seen).toEqual(["run_after_commit"]);
+  });
+
+  test("discards only a prepared runtime and leaves the current workspace untouched", async () => {
+    const rootA = await createRoot("discard-a");
+    const rootB = await createRoot("discard-b");
+    const runtimes = new Map<string, ReturnType<typeof fakeRuntime>>();
+    const manager = createDesktopAgentRuntimeManager({
+      createRuntime(binding) {
+        const runtime = fakeRuntime(binding.workspaceId, binding.contentRoot, binding.stateRoot);
+        runtimes.set(binding.workspaceId, runtime);
+        return runtime as unknown as DesktopAgentRuntime;
+      }
+    });
+    await manager.bindWorkspace(engineeringBinding("ws_discard_a", rootA));
+    const prepared = await manager.prepareWorkspace(engineeringBinding("ws_discard_b", rootB));
+    expect(prepared).toMatchObject({ ok: true });
+    if (!prepared.ok) {
+      throw new Error(prepared.error.message);
+    }
+
+    manager.discardPreparedWorkspace(prepared.value);
+    manager.discardPreparedWorkspace(prepared.value);
+
+    expect(manager.currentWorkspace()?.workspaceId).toBe("ws_discard_a");
+    expect(runtimes.get("ws_discard_a")).toMatchObject({ disposeCalls: 0, unsubscribeCalls: 0 });
+    expect(runtimes.get("ws_discard_b")).toMatchObject({ disposeCalls: 1, unsubscribeCalls: 1 });
+  });
+
   test("preserves creative project identity and binds canonical content/state roots", async () => {
     const root = await createRoot("creative");
     const created: DesktopAgentWorkspaceBinding[] = [];

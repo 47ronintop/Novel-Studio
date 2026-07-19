@@ -730,49 +730,6 @@ describe("Agent Run IPC", () => {
     ]);
   });
 
-  test("rebinds the Agent runtime after project open and blocks switching during an active run", async () => {
-    const calls: string[] = [];
-    let active = false;
-    const application = {
-      async openProject(projectRoot: string) {
-        calls.push(`open:${projectRoot}`);
-        return {
-          ok: true,
-          value: {
-            projectRoot,
-            project: { projectId: "project-02" },
-            chapters: [{ id: "chapter-02" }]
-          }
-        };
-      }
-    } as unknown as DesktopApplication;
-    const handlers = createApplicationIpcHandlers(application, {
-      agentRuntimeManager: {
-        current: () => undefined,
-        currentWorkspace: () => undefined,
-        hasActiveRun: async () => ({ ok: true, value: active }),
-        async bindWorkspace(binding: Record<string, unknown>) {
-          calls.push(
-            `bind:${String(binding["workspaceId"])}:${String(binding["activeChapterId"])}`
-          );
-          return { ok: true, value: undefined };
-        },
-        subscribeAgentRunEvents: () => () => undefined,
-        dispose: () => undefined
-      }
-    } as never) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
-
-    expect(await handlers["application:project:open"]?.("C:/Project-Two")).toMatchObject({
-      ok: true
-    });
-    active = true;
-    expect(await handlers["application:project:open"]?.("C:/Project-Three")).toMatchObject({
-      ok: false,
-      error: { code: "AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED" }
-    });
-    expect(calls).toEqual(["open:C:/Project-Two", "bind:project-02:chapter-02"]);
-  });
-
   test("preload exposes all Conversation commands on allowlisted channels", async () => {
     const invoked: string[] = [];
     const api = createNovelStudioApi({

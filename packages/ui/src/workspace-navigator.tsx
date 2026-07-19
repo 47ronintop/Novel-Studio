@@ -268,26 +268,33 @@ function ProjectWorkflowControls({
   return (
     <div className="ns-project-workflow">
       <input
-        aria-label="项目路径"
+        aria-label="项目标题"
         className="ns-project-path"
-        onChange={(event) => projectWorkflow.onProjectRootChange(event.currentTarget.value)}
-        placeholder="选择或输入项目文件夹"
-        value={projectWorkflow.projectRootInput}
+        onChange={(event) => projectWorkflow.onProjectTitleChange?.(event.currentTarget.value)}
+        placeholder="项目标题"
+        value={projectWorkflow.projectTitleInput ?? ""}
+      />
+      <input
+        aria-label="项目文件夹名称"
+        className="ns-project-path"
+        onChange={(event) =>
+          projectWorkflow.onProjectFolderNameChange?.(event.currentTarget.value)
+        }
+        placeholder="文件夹名称"
+        value={projectWorkflow.projectFolderNameInput ?? ""}
       />
       <div className="ns-project-actions">
-        {projectWorkflow.canInitializeProject === true ? (
-          <button
-            aria-label="初始化为 Novel Studio 项目"
-            className="ns-icon-text-button"
-            disabled={isProjectWorkflowBusy(projectWorkflow)}
-            onClick={projectWorkflow.onInitializeProject}
-            title="初始化为 Novel Studio 项目"
-            type="button"
-          >
-            <ListTree aria-hidden="true" size={14} />
-            初始化为 Novel Studio 项目
-          </button>
-        ) : null}
+        <button
+          aria-label="选择项目父文件夹"
+          className="ns-icon-text-button"
+          disabled={isProjectWorkflowBusy(projectWorkflow)}
+          onClick={projectWorkflow.onChooseCreateParentDirectory}
+          title="选择父文件夹"
+          type="button"
+        >
+          <FolderOpen aria-hidden="true" size={14} />
+          {projectWorkflow.selectedParentDisplayName ?? "选择父文件夹"}
+        </button>
         <button
           aria-label="打开项目"
           className="ns-icon-text-button"
@@ -322,6 +329,12 @@ function ProjectWorkflowControls({
           新建章节
         </button>
       </div>
+      {projectWorkflow.creationPreview === undefined ? null : (
+        <p className="ns-project-feedback" role="status">
+          {projectWorkflow.creationPreview.parentDisplayName} /{" "}
+          {projectWorkflow.creationPreview.targetDisplayName}
+        </p>
+      )}
       {projectWorkflow.feedback === undefined ? null : (
         <p className="ns-project-feedback" data-kind={projectWorkflow.feedback.kind} role="status">
           {projectWorkflow.feedback.message}

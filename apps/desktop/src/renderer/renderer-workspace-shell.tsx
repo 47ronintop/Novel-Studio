@@ -51,10 +51,13 @@ export interface RendererWorkspaceShellProps {
   readonly onRejectSelectionReview: NonNullable<AiWritingWorkflowProps["onRejectSelectionReview"]>;
   readonly onUndoSelectionReview: NonNullable<AiWritingWorkflowProps["onUndoSelectionReview"]>;
   readonly onCancelAiStreaming: AiWritingWorkflowProps["onCancelStreaming"];
-  readonly onProjectRootChange: ProjectWorkflowProps["onProjectRootChange"];
+  readonly onProjectTitleChange: ProjectWorkflowProps["onProjectTitleChange"];
+  readonly onProjectFolderNameChange: ProjectWorkflowProps["onProjectFolderNameChange"];
+  readonly onChooseCreateParentDirectory: NonNullable<
+    ProjectWorkflowProps["onChooseCreateParentDirectory"]
+  >;
   readonly onOpenProject: ProjectWorkflowProps["onOpenProject"];
   readonly onCreateProject: ProjectWorkflowProps["onCreateProject"];
-  readonly onInitializeProject: NonNullable<ProjectWorkflowProps["onInitializeProject"]>;
   readonly onCreateChapter: ProjectWorkflowProps["onCreateChapter"];
   readonly onOpenFile: NonNullable<ProjectWorkflowProps["onOpenFile"]>;
   readonly onRenameChapter: NonNullable<ProjectWorkflowProps["onRenameChapter"]>;
@@ -156,10 +159,11 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
         : {
             projectWorkflow: {
               ...props.projectWorkflow,
-              onProjectRootChange: props.onProjectRootChange,
+              onProjectTitleChange: props.onProjectTitleChange,
+              onProjectFolderNameChange: props.onProjectFolderNameChange,
+              onChooseCreateParentDirectory: props.onChooseCreateParentDirectory,
               onOpenProject: props.onOpenProject,
               onCreateProject: props.onCreateProject,
-              onInitializeProject: props.onInitializeProject,
               onCreateChapter: props.onCreateChapter,
               onOpenFile: props.onOpenFile,
               onRenameChapter: props.onRenameChapter,

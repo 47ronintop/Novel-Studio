@@ -1,4 +1,10 @@
-import { expect, test, _electron as electron, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  _electron as electron,
+  type ElectronApplication,
+  type Page
+} from "@playwright/test";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,10 +22,27 @@ async function replaceChapterBody(page: Page, body: string): Promise<void> {
   await editor.fill(body);
 }
 
+async function queueDirectorySelections(
+  electronApp: ElectronApplication,
+  paths: readonly string[]
+): Promise<void> {
+  await electronApp.evaluate(({ dialog }, selectedPaths) => {
+    const queue = [...selectedPaths];
+    dialog.showOpenDialog = async () => {
+      const selectedPath = queue.shift();
+      return selectedPath === undefined
+        ? { canceled: true, filePaths: [] }
+        : { canceled: false, filePaths: [selectedPath] };
+    };
+  }, paths);
+}
+
 test("creates a project, creates a chapter, edits it, and saves through Electron", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-e2e-"));
   const defaultProjectRoot = join(tempRoot, "Default Project");
+  const missingProjectRoot = join(tempRoot, "Missing Project");
   const projectRoot = join(tempRoot, "Project Smoke");
+  await mkdir(missingProjectRoot);
   const electronApp = await electron.launch({
     args: [electronMain],
     env: {
@@ -31,21 +54,23 @@ test("creates a project, creates a chapter, edits it, and saves through Electron
 
   try {
     const page = await electronApp.firstWindow();
+    await queueDirectorySelections(electronApp, [missingProjectRoot, tempRoot]);
 
     await expect(page.getByLabel("项目导航")).toBeVisible();
 
-    await page.getByLabel("项目路径").fill(join(tempRoot, "Missing Project"));
     await page.getByRole("button", { name: "打开项目" }).click();
-    await expect(page.getByText(/已作为普通文件夹打开/)).toBeVisible();
+    await expect(page.getByText("project.json could not be read.")).toBeVisible();
+    await expect(page.getByText(/已作为普通文件夹打开/)).toHaveCount(0);
 
-    await page.getByLabel("项目路径").fill(projectRoot);
+    await page.getByLabel("项目标题").fill("Project Smoke");
+    await page.getByLabel("项目文件夹名称").fill("Project Smoke");
+    await page.getByRole("button", { name: "选择项目父文件夹" }).click();
     await page.getByRole("button", { name: "创建项目" }).click();
 
     await expect(page.getByText("Project Smoke")).toBeVisible();
 
-    const projectNavigator = page.getByLabel("项目导航");
     await page.getByRole("button", { name: "新建章节" }).click();
-    await expect(projectNavigator.getByRole("button", { name: /未命名章节 1/ })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Untitled Chapter 1.md" })).toBeVisible();
 
     await expect(chapterBody(page)).toBeVisible();
     await replaceChapterBody(page, "E2E opening line.");
@@ -167,8 +192,11 @@ test("reviews and applies an autosave recovery draft from disk", async () => {
 
   try {
     const page = await firstApp.firstWindow();
+    await queueDirectorySelections(firstApp, [tempRoot]);
 
-    await page.getByLabel("项目路径").fill(projectRoot);
+    await page.getByLabel("项目标题").fill("Recovery Smoke");
+    await page.getByLabel("项目文件夹名称").fill("Recovery Smoke");
+    await page.getByRole("button", { name: "选择项目父文件夹" }).click();
     await page.getByRole("button", { name: "创建项目" }).click();
     await page.getByRole("button", { name: "新建章节" }).click();
 
@@ -233,8 +261,8 @@ test("reviews and applies an autosave recovery draft from disk", async () => {
 
   try {
     const page = await secondApp.firstWindow();
+    await queueDirectorySelections(secondApp, [projectRoot]);
 
-    await page.getByLabel("项目路径").fill(projectRoot);
     await page.getByRole("button", { name: "打开项目" }).click();
 
     await expect(page.getByLabel("Autosave recovery")).toBeVisible();

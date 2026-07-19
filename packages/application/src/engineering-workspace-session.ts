@@ -89,6 +89,7 @@ export interface EngineeringWorkspaceSession {
     readonly projectId: string;
     readonly projectRoot: string;
   }): Promise<Result<EngineeringWorkspaceActivation, UnifiedError>>;
+  refreshWorkspace(): Promise<Result<EngineeringWorkspaceSnapshot, UnifiedError>>;
   readTextFile(path: string): Promise<Result<EngineeringTextFileSnapshot, UnifiedError>>;
   saveTextFile(input: {
     readonly path: string;
@@ -201,6 +202,30 @@ export function createEngineeringWorkspaceSession(
         })
       };
       return commitCandidate(candidate);
+    },
+
+    async refreshWorkspace() {
+      return serializeTransition(async () => {
+        if (active === undefined) return unavailable();
+        const opened = await safelyOpen(active.repository);
+        if (!opened.ok) return err(opened.error);
+        const tree = active.managedAssetsReadOnly
+          ? markTreeManaged(opened.value.tree)
+          : opened.value.tree;
+        const activation: EngineeringWorkspaceActivation = {
+          context: {
+            ...active.activation.context,
+            displayName: opened.value.displayName
+          },
+          snapshot: {
+            workspaceId: active.activation.snapshot.workspaceId,
+            displayName: opened.value.displayName,
+            tree
+          }
+        };
+        active = { ...active, activation };
+        return ok(activation.snapshot);
+      });
     },
 
     async readTextFile(path) {

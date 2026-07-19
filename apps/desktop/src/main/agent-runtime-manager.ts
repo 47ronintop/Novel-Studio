@@ -35,8 +35,20 @@ export interface DesktopAgentRuntime {
   readonly dispose?: () => void;
 }
 
+export interface PreparedDesktopAgentWorkspace {
+  readonly binding: DesktopAgentWorkspaceBinding;
+  readonly runtime: DesktopAgentRuntime;
+}
+
+export type DesktopAgentWorkspacePreparation = PreparedDesktopAgentWorkspace;
+
 export interface DesktopAgentRuntimeManager {
   bindWorkspace(binding: DesktopAgentWorkspaceBinding): Promise<Result<void, UnifiedError>>;
+  prepareWorkspace(
+    binding: DesktopAgentWorkspaceBinding
+  ): Promise<Result<PreparedDesktopAgentWorkspace, UnifiedError>>;
+  commitPreparedWorkspace(prepared: PreparedDesktopAgentWorkspace): void;
+  discardPreparedWorkspace(prepared: PreparedDesktopAgentWorkspace): void;
   current(): DesktopAgentRuntime | undefined;
   currentWorkspace():
     | {
@@ -61,6 +73,11 @@ export function createDesktopAgentRuntimeManager(
   let currentBinding: DesktopAgentWorkspaceBinding | undefined;
   let unsubscribeRuntime: (() => void) | undefined;
   const listeners = new Set<(event: AgentRunEvent) => void>();
+  const preparedStates = new Map<PreparedDesktopAgentWorkspace, {
+    readonly unsubscribe: () => void;
+    state: "prepared" | "committed" | "discarded";
+  }>();
+  const pendingPreparations = new Set<PreparedDesktopAgentWorkspace>();
 
   async function hasActiveRun(): Promise<Result<boolean, UnifiedError>> {
     if (runtime === undefined) return ok(false);
@@ -72,6 +89,19 @@ export function createDesktopAgentRuntimeManager(
 
   return {
     async bindWorkspace(binding) {
+      if (
+        runtime !== undefined &&
+        currentBinding !== undefined &&
+        isSameBinding(currentBinding, binding, runtime)
+      ) {
+        return ok(undefined);
+      }
+      const prepared = await this.prepareWorkspace(binding);
+      if (!prepared.ok) return prepared;
+      this.commitPreparedWorkspace(prepared.value);
+      return ok(undefined);
+    },
+    async prepareWorkspace(binding) {
       if (
         !isSafeId(binding.workspaceId) ||
         (binding.activeChapterId !== undefined && !isSafeId(binding.activeChapterId))
@@ -93,15 +123,6 @@ export function createDesktopAgentRuntimeManager(
         contentRoot: canonicalContentRoot,
         stateRoot: canonicalStateRoot
       };
-      if (
-        runtime?.workspaceId === binding.workspaceId &&
-        runtime.contentRoot === canonicalContentRoot &&
-        runtime.stateRoot === canonicalStateRoot &&
-        currentBinding?.kind === canonicalBinding.kind &&
-        currentBinding.activeChapterId === canonicalBinding.activeChapterId
-      ) {
-        return ok(undefined);
-      }
       const active = await hasActiveRun();
       if (!active.ok) return active;
       if (active.value) return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
@@ -113,16 +134,16 @@ export function createDesktopAgentRuntimeManager(
         return err(runtimeError("AGENT_RUNTIME_CREATE_FAILED"));
       }
 
-      let prepared: Result<void, UnifiedError>;
+      let prepareResult: Result<void, UnifiedError>;
       try {
-        prepared = await candidate.prepare();
+        prepareResult = await candidate.prepare();
       } catch {
         candidate.dispose?.();
         return err(runtimeError("AGENT_RUNTIME_PREPARE_FAILED"));
       }
-      if (!prepared.ok) {
+      if (!prepareResult.ok) {
         candidate.dispose?.();
-        return prepared;
+        return prepareResult;
       }
 
       let unsubscribeCandidate: () => void;
@@ -135,13 +156,36 @@ export function createDesktopAgentRuntimeManager(
         candidate.dispose?.();
         return err(runtimeError("AGENT_RUNTIME_PREPARE_FAILED"));
       }
-
-      unsubscribeRuntime?.();
-      runtime?.dispose?.();
-      runtime = candidate;
-      currentBinding = canonicalBinding;
-      unsubscribeRuntime = unsubscribeCandidate;
-      return ok(undefined);
+      const prepared: PreparedDesktopAgentWorkspace = {
+        binding: canonicalBinding,
+        runtime: candidate
+      };
+      preparedStates.set(prepared, { unsubscribe: unsubscribeCandidate, state: "prepared" });
+      pendingPreparations.add(prepared);
+      return ok(prepared);
+    },
+    commitPreparedWorkspace(prepared) {
+      const state = preparedStates.get(prepared);
+      if (state === undefined || state.state !== "prepared") return;
+      state.state = "committed";
+      const previousUnsubscribe = unsubscribeRuntime;
+      const previousRuntime = runtime;
+      runtime = prepared.runtime;
+      currentBinding = prepared.binding;
+      unsubscribeRuntime = state.unsubscribe;
+      previousUnsubscribe?.();
+      previousRuntime?.dispose?.();
+      preparedStates.delete(prepared);
+      pendingPreparations.delete(prepared);
+    },
+    discardPreparedWorkspace(prepared) {
+      const state = preparedStates.get(prepared);
+      if (state === undefined || state.state !== "prepared") return;
+      state.state = "discarded";
+      state.unsubscribe();
+      prepared.runtime.dispose?.();
+      preparedStates.delete(prepared);
+      pendingPreparations.delete(prepared);
     },
     current: () => runtime,
     currentWorkspace: () =>
@@ -163,9 +207,26 @@ export function createDesktopAgentRuntimeManager(
       runtime?.dispose?.();
       runtime = undefined;
       currentBinding = undefined;
+      for (const prepared of [...pendingPreparations]) {
+        this.discardPreparedWorkspace(prepared);
+      }
       listeners.clear();
     }
   };
+}
+
+function isSameBinding(
+  current: DesktopAgentWorkspaceBinding,
+  next: DesktopAgentWorkspaceBinding,
+  activeRuntime: DesktopAgentRuntime
+): boolean {
+  return (
+    activeRuntime.workspaceId === next.workspaceId &&
+    activeRuntime.contentRoot === next.contentRoot &&
+    activeRuntime.stateRoot === next.stateRoot &&
+    current.kind === next.kind &&
+    current.activeChapterId === next.activeChapterId
+  );
 }
 
 function isTerminal(status: AgentRunSnapshot["status"]): boolean {
