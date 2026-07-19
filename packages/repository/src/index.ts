@@ -98,6 +98,7 @@ export type {
   RecoveryRepositoryPort
 } from "@novel-studio/shared";
 export { ProjectFileRepository } from "./project-repository.js";
+export { ProjectCreationFileRepository } from "./project-creation-repository.js";
 export { ProjectLockFileRepository } from "./project-lock-repository.js";
 export type {
   ProjectLockFileRepositoryOptions,

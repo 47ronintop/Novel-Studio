@@ -60,6 +60,9 @@ describe("DesktopApplication project search", () => {
         createProject: async () => {
           throw new Error("not used");
         },
+        createProjectInParent: async () => {
+          throw new Error("not used");
+        },
         listChapters: async () => ok([]),
         createChapter: async () => {
           throw new Error("not used");

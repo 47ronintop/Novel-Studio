@@ -34,6 +34,7 @@ import {
   EngineeringWorkspaceFileRepository,
   HistoryRepository,
   PluginRegistryFileRepository,
+  ProjectCreationFileRepository,
   ProjectFileRepository,
   ProjectLockFileRepository,
   ProjectSettingsRepository,
@@ -152,6 +153,10 @@ export function createProjectDesktopApplication(
   });
   const projectWorkspaceSession = createProjectWorkspaceSession({
     ...(options.now === undefined ? {} : { now: options.now }),
+    projectCreationRepository: new ProjectCreationFileRepository({
+      traceId: "trace_desktop_project_creation_repository",
+      ...(options.now === undefined ? {} : { now: options.now })
+    }),
     createProjectRepository: (projectRoot) =>
       new ProjectFileRepository({
         projectRoot,

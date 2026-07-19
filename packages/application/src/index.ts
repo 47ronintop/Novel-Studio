@@ -130,6 +130,7 @@ export type {
 } from "./project-search-session.js";
 export { createDesktopApplication } from "./desktop-application.js";
 export type {
+  CreateCreativeProjectInput,
   CreateProjectInput,
   DeleteChapterInput,
   DuplicateChapterInput,
@@ -138,6 +139,9 @@ export type {
   ProjectHealthSource,
   ProjectHealthStatus,
   ProjectMetadata,
+  ProjectCreationPreview,
+  ProjectCreationRepositoryPort,
+  ProjectCreationResult,
   ProjectRepositoryPort,
   ProjectSnapshot,
   ProjectWorkspaceLock,

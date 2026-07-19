@@ -69,6 +69,7 @@ import type {
   WorkflowRunSummary
 } from "./ai-writing-workflow-session.js";
 import type {
+  CreateCreativeProjectInput,
   CreateProjectInput,
   ProjectRecoveryApplyResult,
   ProjectRecoveryDraftPreview,
@@ -141,6 +142,9 @@ export interface DesktopApplication {
   executeCommand(commandId: string): Result<DesktopShellState, UnifiedError>;
   openProject(projectRoot: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   createProject(input: CreateProjectInput): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  createProjectInParent(
+    input: CreateCreativeProjectInput
+  ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   listProjectChapters(): Promise<Result<readonly ChapterSummary[], UnifiedError>>;
   createProjectChapter(
     input: CreateChapterInput
@@ -356,6 +360,13 @@ export function createDesktopApplication(
       }
 
       return projectWorkspaceSession.createProject(input);
+    },
+    async createProjectInParent(input) {
+      if (projectWorkspaceSession === undefined) {
+        return projectWorkspaceUnavailable();
+      }
+
+      return projectWorkspaceSession.createProjectInParent(input);
     },
     async listProjectChapters() {
       if (projectWorkspaceSession === undefined) {

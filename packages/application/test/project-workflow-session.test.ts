@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -9,11 +9,14 @@ import { createUnifiedError, err, ok } from "@novel-studio/shared";
 import {
   ChapterFileRepository,
   HistoryRepository,
+  ProjectCreationFileRepository,
   ProjectFileRepository
 } from "@novel-studio/repository";
 
 import { createProjectWorkspaceSession } from "../src/project-workspace-session.js";
 import type {
+  CreateCreativeProjectInput,
+  ProjectCreationRepositoryPort,
   ProjectWorkspaceLock,
   ProjectWorkspaceLockPort
 } from "../src/project-workspace-session.js";
@@ -27,9 +30,256 @@ afterEach(async () => {
 });
 
 describe("M12 project workflow session", () => {
+  test("creates and activates a project in a dedicated child directory", async () => {
+    const parentDirectory = await createTempRoot();
+    const canonicalParent = await realpath(parentDirectory);
+    const receivedInputs: CreateCreativeProjectInput[] = [];
+    const fileRepository = new ProjectCreationFileRepository({
+      now: () => "2026-07-19T00:00:00.000Z"
+    });
+    const projectCreationRepository: ProjectCreationRepositoryPort = {
+      previewProjectInParent: (input) => fileRepository.previewProjectInParent(input),
+      createProjectInParent(input) {
+        receivedInputs.push(input);
+        return fileRepository.createProjectInParent(input);
+      },
+      cleanupCreatedProject: (projectRoot) => fileRepository.cleanupCreatedProject(projectRoot)
+    };
+    const session = createProjectWorkspaceSession({
+      projectCreationRepository,
+      now: () => "2026-07-19T00:00:00.000Z",
+      createProjectRepository: (root) =>
+        new ProjectFileRepository({
+          projectRoot: root,
+          now: () => "2026-07-19T00:00:00.000Z"
+        }),
+      createChapterRepository: (root) =>
+        new ChapterFileRepository({
+          projectRoot: root,
+          now: () => "2026-07-19T00:00:00.000Z"
+        }),
+      createHistoryRepository: (root) =>
+        new HistoryRepository({
+          projectRoot: root,
+          now: () => "2026-07-19T00:00:00.000Z",
+          createVersionId: () => "ver_task4"
+        }),
+      createRecoveryRepository: () => emptyRecoveryRepository()
+    });
+    const input: CreateCreativeProjectInput = {
+      parentDirectory,
+      folderName: "project-folder",
+      projectId: "prj_task4",
+      title: "A Separate Project Title",
+      language: "zh-CN",
+      projectType: "novel",
+      targetWordCount: 120000
+    };
+
+    const created = await session.createProjectInParent(input);
+    const chapter = await session.createChapter({
+      chapterId: "ch_task4",
+      title: "Task 4",
+      body: "Child project chapter\n"
+    });
+
+    expect(receivedInputs).toEqual([input]);
+    expect(isOk(created)).toBe(true);
+    expect(isOk(chapter)).toBe(true);
+    if (isErr(created)) {
+      throw new Error(created.error.message);
+    }
+    expect(created.value.projectRoot).toBe(join(canonicalParent, "project-folder"));
+    expect(created.value.project.title).toBe("A Separate Project Title");
+    expect(created.value.project.stats).toMatchObject({ targetWordCount: 120000 });
+    expect(created.value.activeChapterId).toBeUndefined();
+    expect(session.getSnapshot()?.activeChapterId).toBe("ch_task4");
+  });
+
+  test.each([
+    { failureMode: "result" as const, expectedCode: "TEST_RECOVERY_READ_FAILED" },
+    { failureMode: "throw" as const, expectedCode: "PROJECT_ACTIVATION_FAILED" }
+  ])(
+    "keeps the active workspace and lock when child project activation fails via $failureMode",
+    async ({ failureMode, expectedCode }) => {
+      const existingRoot = await createTempRoot();
+      const parentDirectory = await createTempRoot();
+      const canonicalParent = await realpath(parentDirectory);
+      const candidateRoot = join(canonicalParent, "candidate-project");
+      const locks = new Map<string, ProjectWorkspaceLock>();
+      const cleanedRoots: string[] = [];
+      const fileRepository = new ProjectCreationFileRepository({
+        now: () => "2026-07-19T00:00:00.000Z"
+      });
+      const projectCreationRepository: ProjectCreationRepositoryPort = {
+        previewProjectInParent: (input) => fileRepository.previewProjectInParent(input),
+        createProjectInParent: (input) => fileRepository.createProjectInParent(input),
+        async cleanupCreatedProject(projectRoot) {
+          cleanedRoots.push(projectRoot);
+          return fileRepository.cleanupCreatedProject(projectRoot);
+        }
+      };
+      const session = createProjectWorkspaceSession({
+        projectCreationRepository,
+        now: () => "2026-07-19T00:00:00.000Z",
+        createProjectRepository: (root) =>
+          new ProjectFileRepository({
+            projectRoot: root,
+            now: () => "2026-07-19T00:00:00.000Z"
+          }),
+        createChapterRepository: (root) =>
+          new ChapterFileRepository({
+            projectRoot: root,
+            now: () => "2026-07-19T00:00:00.000Z"
+          }),
+        createHistoryRepository: (root) =>
+          new HistoryRepository({
+            projectRoot: root,
+            now: () => "2026-07-19T00:00:00.000Z",
+            createVersionId: () => "ver_task4_atomic"
+          }),
+        createRecoveryRepository: (root) =>
+          root === candidateRoot
+            ? {
+                async writeRecoveryRecord(record) {
+                  return ok(record);
+                },
+                async listRecoveryRecords() {
+                  if (failureMode === "throw") {
+                    throw new Error("Candidate recovery threw unexpectedly.");
+                  }
+                  return err(
+                    createUnifiedError({
+                      code: "TEST_RECOVERY_READ_FAILED",
+                      category: "StorageError",
+                      message: "Candidate recovery could not be read.",
+                      recoverability: "retryable",
+                      suggestedAction: "Retry the test operation.",
+                      traceId: "test-task4-activation"
+                    })
+                  );
+                }
+              }
+            : emptyRecoveryRepository(),
+        createProjectLockRepository: (root) =>
+          createMemoryLockRepository(root, "window_task4", locks)
+      });
+      await session.createProject({
+        projectRoot: existingRoot,
+        projectId: "prj_existing_task4",
+        title: "Existing Project",
+        language: "en"
+      });
+      await session.createChapter({
+        chapterId: "ch_existing_task4",
+        title: "Existing Chapter",
+        body: "Existing body\n"
+      });
+      const previousSnapshot = session.getSnapshot();
+      const previousEditor = session.getActiveChapterEditorSession();
+
+      const failed = await session.createProjectInParent({
+        parentDirectory,
+        folderName: "candidate-project",
+        projectId: "prj_candidate_task4",
+        title: "Candidate Project",
+        language: "en"
+      });
+
+      expect(isErr(failed)).toBe(true);
+      if (isErr(failed)) {
+        expect(failed.error.code).toBe(expectedCode);
+      }
+      expect(session.getSnapshot()).toBe(previousSnapshot);
+      expect(session.getActiveChapterEditorSession()).toBe(previousEditor);
+      expect(locks.has(existingRoot)).toBe(true);
+      expect(locks.has(candidateRoot)).toBe(false);
+      expect(cleanedRoots).toEqual([candidateRoot]);
+      await expect(pathExists(candidateRoot)).resolves.toBe(false);
+    }
+  );
+
+  test("keeps the active workspace when the creation repository rejects the request", async () => {
+    const existingRoot = await createTempRoot();
+    const parentDirectory = await createTempRoot();
+    let cleanupCalls = 0;
+    const projectCreationRepository: ProjectCreationRepositoryPort = {
+      async previewProjectInParent() {
+        throw new Error("not used");
+      },
+      async createProjectInParent() {
+        return err(
+          createUnifiedError({
+            code: "TEST_PROJECT_CREATE_REJECTED",
+            category: "ValidationError",
+            message: "Project creation was rejected.",
+            recoverability: "user-action",
+            suggestedAction: "Choose another folder name.",
+            traceId: "test-task4-create-rejected"
+          })
+        );
+      },
+      async cleanupCreatedProject() {
+        cleanupCalls += 1;
+        return ok(undefined);
+      }
+    };
+    const session = createProjectWorkspaceSession({
+      projectCreationRepository,
+      now: () => "2026-07-19T00:00:00.000Z",
+      createProjectRepository: (root) =>
+        new ProjectFileRepository({
+          projectRoot: root,
+          now: () => "2026-07-19T00:00:00.000Z"
+        }),
+      createChapterRepository: (root) =>
+        new ChapterFileRepository({
+          projectRoot: root,
+          now: () => "2026-07-19T00:00:00.000Z"
+        }),
+      createHistoryRepository: (root) =>
+        new HistoryRepository({
+          projectRoot: root,
+          now: () => "2026-07-19T00:00:00.000Z",
+          createVersionId: () => "ver_task4_rejected"
+        }),
+      createRecoveryRepository: () => emptyRecoveryRepository()
+    });
+    await session.createProject({
+      projectRoot: existingRoot,
+      projectId: "prj_existing_rejected",
+      title: "Existing Before Rejection",
+      language: "en"
+    });
+    await session.createChapter({
+      chapterId: "ch_existing_rejected",
+      title: "Existing Chapter",
+      body: "Existing body\n"
+    });
+    const previousSnapshot = session.getSnapshot();
+    const previousEditor = session.getActiveChapterEditorSession();
+
+    const failed = await session.createProjectInParent({
+      parentDirectory,
+      folderName: "rejected-project",
+      projectId: "prj_rejected",
+      title: "Rejected Project",
+      language: "en"
+    });
+
+    expect(isErr(failed)).toBe(true);
+    if (isErr(failed)) {
+      expect(failed.error.code).toBe("TEST_PROJECT_CREATE_REJECTED");
+    }
+    expect(session.getSnapshot()).toBe(previousSnapshot);
+    expect(session.getActiveChapterEditorSession()).toBe(previousEditor);
+    expect(cleanupCalls).toBe(0);
+  });
+
   test("creates a project, creates chapters, and switches the active editor chapter", async () => {
     const projectRoot = await createTempRoot();
     const session = createProjectWorkspaceSession({
+      projectCreationRepository: new ProjectCreationFileRepository(),
       now: () => "2026-07-04T00:00:00.000Z",
       createProjectRepository: (root) =>
         new ProjectFileRepository({
@@ -94,6 +344,7 @@ describe("M12 project workflow session", () => {
   test("renames, duplicates, and soft-deletes chapters from the workspace navigator", async () => {
     const projectRoot = await createTempRoot();
     const session = createProjectWorkspaceSession({
+      projectCreationRepository: new ProjectCreationFileRepository(),
       now: () => "2026-07-07T00:00:00.000Z",
       createProjectRepository: (root) =>
         new ProjectFileRepository({
@@ -203,6 +454,7 @@ describe("M12 project workflow session", () => {
       }
     };
     const session = createProjectWorkspaceSession({
+      projectCreationRepository: new ProjectCreationFileRepository(),
       now: () => "2026-07-05T00:00:00.000Z",
       createProjectRepository: (root) =>
         new ProjectFileRepository({
@@ -295,6 +547,7 @@ describe("M12 project workflow session", () => {
       }
     };
     const session = createProjectWorkspaceSession({
+      projectCreationRepository: new ProjectCreationFileRepository(),
       now: () => "2026-07-06T00:10:00.000Z",
       createProjectRepository: (root) =>
         new ProjectFileRepository({
@@ -388,6 +641,7 @@ describe("M12 project workflow session", () => {
       }
     ];
     const session = createProjectWorkspaceSession({
+      projectCreationRepository: new ProjectCreationFileRepository(),
       now: () => "2026-07-05T00:10:00.000Z",
       createProjectRepository: (root) =>
         new ProjectFileRepository({
@@ -473,6 +727,7 @@ describe("M12 project workflow session", () => {
       }
     ];
     const session = createProjectWorkspaceSession({
+      projectCreationRepository: new ProjectCreationFileRepository(),
       now: () => "2026-07-06T00:10:00.000Z",
       createProjectRepository: (root) =>
         new ProjectFileRepository({
@@ -538,6 +793,7 @@ describe("M12 project workflow session", () => {
     const secondRoot = await createTempRoot();
     const locks = new Map<string, ProjectWorkspaceLock>();
     const session = createProjectWorkspaceSession({
+      projectCreationRepository: new ProjectCreationFileRepository(),
       now: () => "2026-07-06T00:00:00.000Z",
       createProjectRepository: (root) =>
         new ProjectFileRepository({
@@ -559,6 +815,7 @@ describe("M12 project workflow session", () => {
       createProjectLockRepository: (root) => createMemoryLockRepository(root, "window_a", locks)
     });
     const conflictingSession = createProjectWorkspaceSession({
+      projectCreationRepository: new ProjectCreationFileRepository(),
       now: () => "2026-07-06T00:01:00.000Z",
       createProjectRepository: (root) =>
         new ProjectFileRepository({
@@ -701,4 +958,13 @@ async function createTempRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "novel-studio-m12-app-"));
   tempRoots.push(root);
   return root;
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
 }

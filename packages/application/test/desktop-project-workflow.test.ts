@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -7,6 +7,7 @@ import { isErr, isOk } from "@novel-studio/shared";
 import {
   ChapterFileRepository,
   HistoryRepository,
+  ProjectCreationFileRepository,
   ProjectFileRepository,
   RecoveryRepository
 } from "@novel-studio/repository";
@@ -23,10 +24,59 @@ afterEach(async () => {
 });
 
 describe("M12 desktop project workflow", () => {
+  test("creates a project in a child directory through the desktop application", async () => {
+    const parentDirectory = await createTempRoot();
+    const canonicalParent = await realpath(parentDirectory);
+    const application = createDesktopApplication({
+      projectWorkspaceSession: createProjectWorkspaceSession({
+        projectCreationRepository: new ProjectCreationFileRepository({
+          now: () => "2026-07-19T00:00:00.000Z"
+        }),
+        now: () => "2026-07-19T00:00:00.000Z",
+        createProjectRepository: (root) =>
+          new ProjectFileRepository({
+            projectRoot: root,
+            now: () => "2026-07-19T00:00:00.000Z"
+          }),
+        createChapterRepository: (root) =>
+          new ChapterFileRepository({
+            projectRoot: root,
+            now: () => "2026-07-19T00:00:00.000Z"
+          }),
+        createHistoryRepository: (root) =>
+          new HistoryRepository({
+            projectRoot: root,
+            now: () => "2026-07-19T00:00:00.000Z",
+            createVersionId: () => "ver_task4_desktop"
+          }),
+        createRecoveryRepository: (root) => new RecoveryRepository({ projectRoot: root })
+      })
+    });
+
+    const created = await application.createProjectInParent({
+      parentDirectory,
+      folderName: "desktop-child",
+      projectId: "prj_task4_desktop",
+      title: "Desktop Child Project",
+      language: "en"
+    });
+
+    expect(isOk(created)).toBe(true);
+    if (isErr(created)) {
+      throw new Error(created.error.message);
+    }
+    expect(created.value.projectRoot).toBe(join(canonicalParent, "desktop-child"));
+    expect(created.value.project.title).toBe("Desktop Child Project");
+    expect(application.getShellState().projectTitle).toBe("Desktop Child Project");
+  });
+
   test("creates a project, creates chapters, switches active chapter, and saves through the active editor", async () => {
     const projectRoot = await createTempRoot();
     const application = createDesktopApplication({
       projectWorkspaceSession: createProjectWorkspaceSession({
+        projectCreationRepository: new ProjectCreationFileRepository({
+          now: () => "2026-07-04T00:00:00.000Z"
+        }),
         now: () => "2026-07-04T00:00:00.000Z",
         createProjectRepository: (root) =>
           new ProjectFileRepository({
