@@ -41,6 +41,7 @@ import type {
   NovelStudioApi,
   ReadAgentPermissionSummaryQuery,
   PluginSettingsSnapshot,
+  ProjectChapterSelectionDto,
   ProjectDirectorySelectionDto,
   ProjectCreationPreviewDto,
   ProjectRecoveryApplyResultDto,
@@ -162,6 +163,11 @@ const api: NovelStudioApi = {
     selectChapter: (chapterId: string) =>
       invokeTyped<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>(
         "application:project:select-chapter",
+        chapterId
+      ),
+    selectChapterAndLoad: (chapterId: string) =>
+      invokeTyped<Result<ProjectChapterSelectionDto, UnifiedError>>(
+        "application:project:select-chapter-and-load",
         chapterId
       ),
     previewRecoveryDraft: (sessionId: string) =>

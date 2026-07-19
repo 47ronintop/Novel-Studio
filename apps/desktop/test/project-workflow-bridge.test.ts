@@ -54,6 +54,33 @@ describe("project workflow bridge", () => {
     expect(failed).not.toHaveProperty("canInitializeProject");
   });
 
+  test("restores its internal ready state when project opening unexpectedly rejects", async () => {
+    let rejectSelection = false;
+    const bridge = createProjectWorkflowBridge(
+      createApi({
+        chooseOpenCreativeDirectory: async () => {
+          if (rejectSelection) throw new Error("Project chooser crashed.");
+          return ok({ canceled: false, selectionId: "selection_open", displayName: "M12" });
+        }
+      })
+    );
+    await bridge.openProject();
+    rejectSelection = true;
+
+    const failed = await bridge.openProject();
+
+    expect(failed).toMatchObject({
+      projectId: "prj_m12",
+      status: "ready",
+      feedback: { kind: "error", message: "Project chooser crashed." }
+    });
+    expect(bridge.getProps()).toMatchObject({
+      projectId: "prj_m12",
+      status: "ready",
+      feedback: { kind: "error", message: "Project chooser crashed." }
+    });
+  });
+
   test("mirrors title into folder name only until the folder is edited manually", async () => {
     const previewCreativeProject = vi.fn(async (input) =>
       ok({
@@ -121,6 +148,29 @@ describe("project workflow bridge", () => {
     );
   });
 
+  test("restores its internal idle state when project creation unexpectedly rejects", async () => {
+    const bridge = createProjectWorkflowBridge(
+      createApi({
+        createCreativeProject: async () => {
+          throw new Error("Project creation crashed.");
+        }
+      })
+    );
+    bridge.setProjectTitleInput("New Project");
+    await bridge.chooseCreateParentDirectory();
+
+    const failed = await bridge.createProject();
+
+    expect(failed).toMatchObject({
+      status: "idle",
+      feedback: { kind: "error", message: "Project creation crashed." }
+    });
+    expect(bridge.getProps()).toMatchObject({
+      status: "idle",
+      feedback: { kind: "error", message: "Project creation crashed." }
+    });
+  });
+
   test("ignores a stale preview response after the folder name changes", async () => {
     const first = deferred<ReturnType<typeof ok>>();
     const second = deferred<ReturnType<typeof ok>>();
@@ -150,17 +200,92 @@ describe("project workflow bridge", () => {
     const selected = { ...creativeSnapshot(), activeChapterId: "chapter_2" };
     const api = createApi({
       selectChapter: vi.fn(async () => ok(selected)),
+      selectChapterAndLoad: vi.fn(async () =>
+        ok({ workspace: selected, chapterEditor: chapterEditorSnapshot("chapter_2", "Two") })
+      ),
       discardRecoveryDraft: vi.fn(async () => ok(selected))
     });
     const bridge = createProjectWorkflowBridge(api);
     await bridge.openProject();
 
-    const chapter = await bridge.selectChapter("chapter_2");
+    const chapter = await bridge.selectChapterAndLoad("chapter_2");
     const recovered = await bridge.discardRecoveryDraft("recovery_1");
 
-    expect(chapter.activeChapterId).toBe("chapter_2");
+    expect(chapter.projectWorkflow.activeChapterId).toBe("chapter_2");
+    expect(chapter.chapterEditor.chapter.frontmatter.id).toBe("chapter_2");
     expect(recovered.activeChapterId).toBe("chapter_2");
     expect(JSON.stringify(recovered)).not.toContain("projectRoot");
+  });
+
+  test("does not change the workflow snapshot or open tabs when atomic selection fails", async () => {
+    const failure = createUnifiedError({
+      code: "CHAPTER_LOAD_FAILED",
+      category: "StorageError",
+      message: "Chapter could not be loaded.",
+      recoverability: "retryable",
+      suggestedAction: "Retry chapter navigation.",
+      traceId: "project-workflow-bridge-test"
+    });
+    const bridge = createProjectWorkflowBridge(
+      createApi({ selectChapterAndLoad: vi.fn(async () => err(failure)) })
+    );
+    await bridge.openProject();
+    const previous = JSON.stringify(bridge.getProps());
+
+    await expect(bridge.selectChapterAndLoad("chapter_2")).rejects.toThrow(failure.message);
+
+    expect(JSON.stringify(bridge.getProps())).toBe(previous);
+  });
+
+  test("keeps the active chapter and open tabs when closing the active tab cannot load its successor", async () => {
+    const failure = createUnifiedError({
+      code: "CHAPTER_LOAD_FAILED",
+      category: "StorageError",
+      message: "Successor chapter could not be loaded.",
+      recoverability: "retryable",
+      suggestedAction: "Retry closing the chapter tab.",
+      traceId: "project-workflow-close-tab-test"
+    });
+    let failSuccessor = false;
+    const selectChapter = vi.fn(async () => ok(creativeSnapshot()));
+    const selectChapterAndLoad = vi.fn(async (chapterId: string) => {
+      if (failSuccessor) return err(failure);
+      return ok({
+        workspace: { ...creativeSnapshot(), activeChapterId: chapterId },
+        chapterEditor: chapterEditorSnapshot(chapterId, chapterId === "chapter_1" ? "One" : "Two")
+      });
+    });
+    const bridge = createProjectWorkflowBridge(createApi({ selectChapter, selectChapterAndLoad }));
+    await bridge.openProject();
+    await bridge.selectChapterAndLoad("chapter_2");
+    const previous = JSON.stringify(bridge.getProps());
+    failSuccessor = true;
+
+    await expect(bridge.closeChapterTab("chapter_2")).rejects.toThrow(failure.message);
+
+    expect(selectChapterAndLoad).toHaveBeenLastCalledWith("chapter_1");
+    expect(selectChapter).not.toHaveBeenCalled();
+    expect(JSON.stringify(bridge.getProps())).toBe(previous);
+  });
+
+  test("returns the prepared successor editor when closing the active tab succeeds", async () => {
+    const selectChapter = vi.fn(async () => ok(creativeSnapshot()));
+    const selectChapterAndLoad = vi.fn(async (chapterId: string) =>
+      ok({
+        workspace: { ...creativeSnapshot(), activeChapterId: chapterId },
+        chapterEditor: chapterEditorSnapshot(chapterId, chapterId === "chapter_1" ? "One" : "Two")
+      })
+    );
+    const bridge = createProjectWorkflowBridge(createApi({ selectChapter, selectChapterAndLoad }));
+    await bridge.openProject();
+    await bridge.selectChapterAndLoad("chapter_2");
+
+    const closed = await bridge.closeChapterTab("chapter_2");
+
+    expect(closed.projectWorkflow.activeChapterId).toBe("chapter_1");
+    expect(closed.projectWorkflow.openChapterTabIds).toEqual(["chapter_1"]);
+    expect(closed.chapterEditor?.chapter.frontmatter.id).toBe("chapter_1");
+    expect(selectChapter).not.toHaveBeenCalled();
   });
 });
 
@@ -184,6 +309,11 @@ function createApi(overrides: Record<string, unknown> = {}): NovelStudioApi {
     duplicateChapter: async () => ok(creativeSnapshot()),
     deleteChapter: async () => ok(creativeSnapshot()),
     selectChapter: async () => ok(creativeSnapshot()),
+    selectChapterAndLoad: async () =>
+      ok({
+        workspace: creativeSnapshot(),
+        chapterEditor: chapterEditorSnapshot("chapter_1", "One")
+      }),
     previewRecoveryDraft: async () => {
       throw new Error("not used");
     },
@@ -194,6 +324,28 @@ function createApi(overrides: Record<string, unknown> = {}): NovelStudioApi {
     ...overrides
   };
   return { project } as unknown as NovelStudioApi;
+}
+
+function chapterEditorSnapshot(chapterId: string, title: string) {
+  return {
+    state: {
+      chapter: {
+        frontmatter: {
+          schemaVersion: "1.0" as const,
+          id: chapterId,
+          title,
+          order: chapterId === "chapter_1" ? 1 : 2,
+          status: "draft",
+          createdAt: "2026-07-19T00:00:00.000Z",
+          updatedAt: "2026-07-19T00:00:00.000Z"
+        },
+        body: `${title} body`
+      },
+      dirty: false,
+      saveStatus: "Saved" as const
+    },
+    versions: []
+  };
 }
 
 function creativeActivation(projectId = "prj_m12", title = "M12"): WorkspaceActivationDto {

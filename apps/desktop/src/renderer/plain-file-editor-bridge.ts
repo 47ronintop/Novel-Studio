@@ -18,11 +18,13 @@ interface PlainFileEditorState {
   readonly checksum: string;
   readonly saveStatus: PlainFileEditorProps["saveStatus"];
   readonly feedback?: PlainFileEditorProps["feedback"];
-  readonly conflict?: {
-    readonly diskContent: string;
-    readonly draftContent: string;
-    readonly diskChecksum: string;
-  } | undefined;
+  readonly conflict?:
+    | {
+        readonly diskContent: string;
+        readonly draftContent: string;
+        readonly diskChecksum: string;
+      }
+    | undefined;
 }
 
 export function createPlainFileEditorBridge(api: NovelStudioApi): PlainFileEditorBridge {
@@ -33,19 +35,7 @@ export function createPlainFileEditorBridge(api: NovelStudioApi): PlainFileEdito
     async openFile(path) {
       const read = await api.workspace.readTextFile(path);
       if (!read.ok) {
-        state = {
-          path,
-          fileName: fileNameFromPath(path),
-          content: "",
-          persistedContent: "",
-          checksum: "",
-          saveStatus: "Saved",
-          feedback: {
-            kind: "error",
-            message: read.error.message
-          }
-        };
-        return toRequiredProps();
+        throw new Error(read.error.message);
       }
 
       state = {

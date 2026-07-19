@@ -1,7 +1,4 @@
-import {
-  createDesktopApplication,
-  toProjectWorkspaceSnapshotDto
-} from "@novel-studio/application";
+import { createDesktopApplication, toProjectWorkspaceSnapshotDto } from "@novel-studio/application";
 import { realpath } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
@@ -218,11 +215,16 @@ export function createApplicationIpcHandlers(
   async function chooseDirectory(
     purpose: DirectorySelection["purpose"],
     choose: (() => Promise<string | undefined>) | undefined
-  ): Promise<Result<{
-    readonly canceled: boolean;
-    readonly selectionId?: string;
-    readonly displayName?: string;
-  }, UnifiedError>> {
+  ): Promise<
+    Result<
+      {
+        readonly canceled: boolean;
+        readonly selectionId?: string;
+        readonly displayName?: string;
+      },
+      UnifiedError
+    >
+  > {
     const selected = await choose?.();
     if (selected === undefined) return ok({ canceled: true });
     try {
@@ -283,7 +285,10 @@ export function createApplicationIpcHandlers(
     "application:project:preview-creative-project": async (input: unknown) => {
       const request = toCreativePreviewRequest(input);
       if (request === undefined) return invalidWorkspaceRequest<ProjectCreationPreviewDto>();
-      const selection = resolveDirectorySelection(request.parentSelectionId, "creative-create-parent");
+      const selection = resolveDirectorySelection(
+        request.parentSelectionId,
+        "creative-create-parent"
+      );
       if (!selection.ok) return selection;
       return application.previewCreativeProject({
         parentDirectory: selection.value.path,
@@ -338,10 +343,12 @@ export function createApplicationIpcHandlers(
     "application:project:create-chapter": async (input: unknown) => {
       const createInput = toCreateChapterInput(input);
       if (createInput === undefined) {
-        return projectSnapshotResultToDto(await application.createProjectChapter({
-          chapterId: "",
-          title: ""
-        }));
+        return projectSnapshotResultToDto(
+          await application.createProjectChapter({
+            chapterId: "",
+            title: ""
+          })
+        );
       }
 
       return projectSnapshotResultToDto(await application.createProjectChapter(createInput));
@@ -367,6 +374,17 @@ export function createApplicationIpcHandlers(
       }
 
       return projectSnapshotResultToDto(await application.selectProjectChapter(chapterId));
+    },
+    "application:project:select-chapter-and-load": async (chapterId: unknown) => {
+      const selected = await application.selectProjectChapterAndLoad(
+        typeof chapterId === "string" ? chapterId : ""
+      );
+      return selected.ok
+        ? ok({
+            workspace: toProjectWorkspaceSnapshotDto(selected.value.workspace),
+            chapterEditor: selected.value.chapterEditor
+          })
+        : selected;
     },
     "application:project:preview-recovery-draft": (sessionId: unknown) => {
       if (typeof sessionId !== "string") {
@@ -1866,9 +1884,9 @@ function toStoryBibleContextCandidateOptions(
   };
 }
 
-function toCreativePreviewRequest(value: unknown):
-  | { readonly parentSelectionId: string; readonly folderName: string }
-  | undefined {
+function toCreativePreviewRequest(
+  value: unknown
+): { readonly parentSelectionId: string; readonly folderName: string } | undefined {
   if (
     !isRecord(value) ||
     !hasOnlyKeys(value, ["parentSelectionId", "folderName"]) ||
@@ -1922,13 +1940,13 @@ function toCreateCreativeProjectRequest(value: unknown):
     title: value["title"],
     language: value["language"],
     ...(value["projectType"] === undefined ? {} : { projectType: value["projectType"] }),
-    ...(value["targetWordCount"] === undefined
-      ? {}
-      : { targetWordCount: value["targetWordCount"] })
+    ...(value["targetWordCount"] === undefined ? {} : { targetWordCount: value["targetWordCount"] })
   };
 }
 
-function toEngineeringTextFileSaveRequest(value: unknown):
+function toEngineeringTextFileSaveRequest(
+  value: unknown
+):
   | { readonly path: string; readonly content: string; readonly expectedChecksum: string }
   | undefined {
   if (

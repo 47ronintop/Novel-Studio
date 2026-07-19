@@ -1,5 +1,11 @@
-import type { NovelStudioApi, ProjectSearchResults } from "@novel-studio/application";
+import type {
+  NovelStudioApi,
+  ProjectSearchResultItem,
+  ProjectSearchResults
+} from "@novel-studio/application";
 import type { ProjectSearchProps } from "@novel-studio/ui";
+
+import type { WorkspaceNavigation } from "./workspace-navigation.js";
 
 export interface ProjectSearchBridge {
   getProps(): ProjectSearchProps;
@@ -90,6 +96,18 @@ export function createProjectSearchBridge(api: NovelStudioApi): ProjectSearchBri
       return state;
     }
   };
+}
+
+export async function openProjectSearchResult(
+  navigation: Pick<WorkspaceNavigation, "navigateToChapter" | "navigateToStoryEntry">,
+  result: ProjectSearchResultItem
+): Promise<void> {
+  if (result.sourceRef.kind === "chapter") {
+    await navigation.navigateToChapter(result.sourceRef.id);
+    return;
+  }
+
+  navigation.navigateToStoryEntry(result.sourceRef.id);
 }
 
 function withoutFeedback(props: ProjectSearchProps): Omit<ProjectSearchProps, "feedback"> {

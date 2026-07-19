@@ -148,6 +148,11 @@ export interface ProjectRecoveryApplyResultDto {
   readonly chapterEditor: ChapterEditorSnapshot;
 }
 
+export interface ProjectChapterSelectionDto {
+  readonly workspace: ProjectWorkspaceSnapshotDto;
+  readonly chapterEditor: ChapterEditorSnapshot;
+}
+
 export interface ProjectCreationPreviewDto {
   readonly folderName: string;
   readonly parentDisplayName: string;
@@ -238,6 +243,9 @@ export interface DesktopApplication {
     input: DeleteChapterInput
   ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   selectProjectChapter(chapterId: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  selectProjectChapterAndLoad(
+    chapterId: string
+  ): Promise<Result<ProjectChapterSelectionDto, UnifiedError>>;
   previewRecoveryDraft(
     sessionId: string
   ): Promise<Result<ProjectRecoveryDraftPreview, UnifiedError>>;
@@ -616,6 +624,19 @@ export function createDesktopApplication(
       }
 
       return activeProjectWorkspaceSession.selectChapter(chapterId);
+    },
+    async selectProjectChapterAndLoad(chapterId) {
+      if (activeProjectWorkspaceSession === undefined) {
+        return projectWorkspaceUnavailable();
+      }
+
+      const selected = await activeProjectWorkspaceSession.selectChapterAndLoad(chapterId);
+      return selected.ok
+        ? ok({
+            workspace: toProjectWorkspaceSnapshotDto(selected.value.workspace),
+            chapterEditor: selected.value.chapterEditor
+          })
+        : selected;
     },
     async previewRecoveryDraft(sessionId) {
       if (activeProjectWorkspaceSession === undefined) {
@@ -1100,7 +1121,7 @@ export function toProjectCreationPreviewDto(
 }
 
 export function toProjectWorkspaceSnapshotDto(
-  snapshot: ProjectWorkspaceSnapshot
+  snapshot: ProjectWorkspaceSnapshot | ProjectWorkspaceSnapshotDto
 ): ProjectWorkspaceSnapshotDto {
   return {
     project: snapshot.project,

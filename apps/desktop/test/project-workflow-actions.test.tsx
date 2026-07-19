@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { act, type SetStateAction } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type {
+  ChapterEditorProps,
   ProjectWorkflowProps,
   StoryBibleEditorProps,
   StoryBibleSummaryProps
@@ -181,6 +182,110 @@ describe("useProjectWorkflowActions", () => {
     expect(storyBibleStates).toEqual([]);
     expect(storyBibleEditorStates).toEqual([]);
   });
+
+  test("adopts the prepared successor when closing the active chapter tab", async () => {
+    const nextWorkflow = { ...createWorkflow(), activeChapterId: "chapter_1" };
+    const preparedEditor = createChapterEditor("chapter_1");
+    const adoptedEditor = { ...preparedEditor, saveStatus: "Unsaved" as const };
+    const closeChapterTab = vi.fn(async () => ({
+      projectWorkflow: nextWorkflow,
+      chapterEditor: preparedEditor
+    }));
+    const adopt = vi.fn(() => adoptedEditor);
+    const load = vi.fn();
+    const workflowStates: Array<ProjectWorkflowProps | undefined> = [];
+    const editorStates: Array<ChapterEditorProps | undefined> = [];
+    const fileStates: unknown[] = [];
+    const bridge = { closeChapterTab } as unknown as ProjectWorkflowBridge;
+    let actions: ReturnType<typeof useProjectWorkflowActions> | undefined;
+
+    function Harness() {
+      actions = useProjectWorkflowActions({
+        api: undefined,
+        chapterBridge: { adopt, load } as never,
+        projectWorkflowBridge: bridge,
+        settingsBridge: undefined,
+        storyBibleBridge: undefined,
+        studioBridge: undefined,
+        setChapterEditor: (next) => editorStates.push(resolveState(next)),
+        setFileEditor: (next) => fileStates.push(resolveState(next)),
+        setProjectWorkflow: (next) => workflowStates.push(resolveState(next)),
+        setSettings: () => undefined,
+        setShellState: () => undefined,
+        setStoryBible: () => undefined,
+        setStoryBibleEditor: () => undefined,
+        setStudio: () => undefined
+      });
+      return null;
+    }
+
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<Harness />));
+
+    await act(async () => {
+      actions?.handleCloseChapterTab("chapter_2");
+      await Promise.resolve();
+    });
+
+    expect(closeChapterTab).toHaveBeenCalledWith("chapter_2");
+    expect(adopt).toHaveBeenCalledWith(preparedEditor);
+    expect(load).not.toHaveBeenCalled();
+    expect(workflowStates).toEqual([nextWorkflow]);
+    expect(editorStates).toEqual([adoptedEditor]);
+    expect(fileStates).toEqual([undefined]);
+  });
+
+  test("restores the previous project workflow with feedback when project opening rejects", async () => {
+    const currentWorkflow = {
+      ...createWorkflow(),
+      projectId: "project-a",
+      status: "ready" as const
+    };
+    const workflowStates: Array<ProjectWorkflowProps | undefined> = [];
+    const bridge = {
+      getProps: () => currentWorkflow,
+      openProject: async () => {
+        throw new Error("Project chooser failed.");
+      }
+    } as unknown as ProjectWorkflowBridge;
+    let actions: ReturnType<typeof useProjectWorkflowActions> | undefined;
+
+    function Harness() {
+      actions = useProjectWorkflowActions({
+        api: undefined,
+        chapterBridge: undefined,
+        projectWorkflowBridge: bridge,
+        settingsBridge: undefined,
+        storyBibleBridge: undefined,
+        studioBridge: undefined,
+        setChapterEditor: () => undefined,
+        setProjectWorkflow: (next) => workflowStates.push(resolveState(next)),
+        setSettings: () => undefined,
+        setShellState: () => undefined,
+        setStoryBible: () => undefined,
+        setStoryBibleEditor: () => undefined,
+        setStudio: () => undefined
+      });
+      return null;
+    }
+
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<Harness />));
+
+    await act(async () => {
+      actions?.handleOpenProject();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(workflowStates.at(-1)).toEqual({
+      ...currentWorkflow,
+      feedback: { kind: "error", message: "Project chooser failed." }
+    });
+  });
 });
 
 function createWorkflow(): ProjectWorkflowProps {
@@ -195,4 +300,26 @@ function createWorkflow(): ProjectWorkflowProps {
 
 function resolveState<T>(action: SetStateAction<T | undefined>): T | undefined {
   return typeof action === "function" ? undefined : (action as T | undefined);
+}
+
+function createChapterEditor(chapterId: string): ChapterEditorProps {
+  return {
+    chapter: {
+      frontmatter: {
+        schemaVersion: "1.0",
+        id: chapterId,
+        title: chapterId,
+        order: 1,
+        status: "draft",
+        createdAt: "2026-07-19T00:00:00.000Z",
+        updatedAt: "2026-07-19T00:00:00.000Z"
+      },
+      body: "body"
+    },
+    dirty: false,
+    saveStatus: "Saved",
+    versions: [],
+    onBodyChange: () => undefined,
+    onSave: () => undefined
+  };
 }

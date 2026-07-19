@@ -20,7 +20,7 @@ export function TimelineMainView({
     .flatMap((entry) =>
       (entry.timelineEvents ?? []).map((event) => ({
         ...event,
-        parentEntryId: entry.id,
+        parentEntryId: event.parentEntryId ?? entry.id,
         parentTitle: entry.title
       }))
     )

@@ -597,6 +597,7 @@ export interface StoryBibleEditorEntry {
 
 export interface StoryTimelineEvent {
   readonly id: string;
+  readonly parentEntryId?: string;
   readonly sequence: number;
   readonly title: string;
   readonly status: string;

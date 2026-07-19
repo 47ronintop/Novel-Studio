@@ -54,7 +54,7 @@ export type {
   CreateCreativeProjectRequest,
   NovelStudioApi,
   ReadAgentPermissionSummaryQuery,
-  ProjectDirectorySelectionDto,
+  ProjectDirectorySelectionDto
 } from "./novel-studio-api.js";
 export type {
   ChapterEditorSaveStatus,
@@ -74,6 +74,7 @@ export type {
   DesktopShellState,
   NavigatorSection,
   PreparedWorkspaceActivation,
+  ProjectChapterSelectionDto,
   ProjectCreationPreviewDto,
   ProjectRecoveryApplyResultDto,
   ProjectWorkspaceSnapshotDto,
@@ -143,6 +144,7 @@ export type {
   DeleteChapterInput,
   DuplicateChapterInput,
   ProjectChapterRepositoryPort,
+  ProjectChapterSelectionResult,
   ProjectHealthSeverity,
   ProjectHealthSource,
   ProjectHealthStatus,

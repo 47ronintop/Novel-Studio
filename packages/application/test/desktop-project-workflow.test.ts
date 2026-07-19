@@ -439,8 +439,7 @@ describe("M12 desktop project workflow", () => {
       title: "第二章",
       body: "第二章正文\n"
     });
-    const selected = await application.selectProjectChapter("ch_second");
-    const loaded = await application.loadActiveChapter();
+    const selected = await application.selectProjectChapterAndLoad("ch_second");
     const edited = await application.editActiveChapter("第二章修改后正文\n");
     const saved = await application.saveActiveChapter();
 
@@ -448,9 +447,11 @@ describe("M12 desktop project workflow", () => {
     expect(isOk(opening)).toBe(true);
     expect(isOk(second)).toBe(true);
     expect(isOk(selected)).toBe(true);
-    expect(isOk(loaded)).toBe(true);
     expect(isOk(edited)).toBe(true);
     expect(isOk(saved)).toBe(true);
+    if (isErr(selected)) {
+      throw new Error(selected.error.message);
+    }
     if (isErr(saved)) {
       throw new Error(saved.error.message);
     }
@@ -460,6 +461,9 @@ describe("M12 desktop project workflow", () => {
       id: "chapters",
       itemCount: 2
     });
+    expect(selected.value.workspace.activeChapterId).toBe("ch_second");
+    expect(selected.value.chapterEditor.state.chapter.frontmatter.title).toBe("第二章");
+    expect(hasForbiddenRootKey(selected.value)).toBe(false);
     expect(saved.value.state.chapter.frontmatter.title).toBe("第二章");
     expect(saved.value.state.chapter.body).toBe("第二章修改后正文\n");
   });

@@ -183,6 +183,7 @@ describe("Story Bible bridge", () => {
       "evt_council"
     ]);
     expect(timelineEntry?.timelineEvents?.[0]).toMatchObject({
+      parentEntryId: "timeline_main",
       title: "Hero arrives",
       status: "active",
       sequence: 10,

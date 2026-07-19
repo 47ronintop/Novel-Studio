@@ -122,32 +122,72 @@ export function useProjectWorkflowActions({
     [clearProjectBoundStory, refreshProjectWorkflow]
   );
 
+  const restoreWorkspaceTransition = useCallback(
+    (previous: ProjectWorkflowProps, error: unknown) => {
+      setProjectWorkflow({
+        ...previous,
+        feedback: {
+          kind: "error",
+          message: error instanceof Error ? error.message : String(error)
+        }
+      });
+    },
+    [setProjectWorkflow]
+  );
+
   const handleOpenProject = useCallback(() => {
     if (projectWorkflowBridge === undefined) {
       return;
     }
 
-    setProjectWorkflow({ ...projectWorkflowBridge.getProps(), status: "opening" });
-    void projectWorkflowBridge.openProject().then(refreshWorkspaceTransition);
-  }, [projectWorkflowBridge, refreshWorkspaceTransition, setProjectWorkflow]);
+    const previous = projectWorkflowBridge.getProps();
+    setProjectWorkflow({ ...previous, status: "opening" });
+    void projectWorkflowBridge
+      .openProject()
+      .then(refreshWorkspaceTransition)
+      .catch((error: unknown) => restoreWorkspaceTransition(previous, error));
+  }, [
+    projectWorkflowBridge,
+    refreshWorkspaceTransition,
+    restoreWorkspaceTransition,
+    setProjectWorkflow
+  ]);
 
   const handleCreateProject = useCallback(() => {
     if (projectWorkflowBridge === undefined) {
       return;
     }
 
-    setProjectWorkflow({ ...projectWorkflowBridge.getProps(), status: "creating" });
-    void projectWorkflowBridge.createProject().then(refreshWorkspaceTransition);
-  }, [projectWorkflowBridge, refreshWorkspaceTransition, setProjectWorkflow]);
+    const previous = projectWorkflowBridge.getProps();
+    setProjectWorkflow({ ...previous, status: "creating" });
+    void projectWorkflowBridge
+      .createProject()
+      .then(refreshWorkspaceTransition)
+      .catch((error: unknown) => restoreWorkspaceTransition(previous, error));
+  }, [
+    projectWorkflowBridge,
+    refreshWorkspaceTransition,
+    restoreWorkspaceTransition,
+    setProjectWorkflow
+  ]);
 
   const handleCreateExampleProject = useCallback(() => {
     if (projectWorkflowBridge === undefined) {
       return;
     }
 
-    setProjectWorkflow({ ...projectWorkflowBridge.getProps(), status: "creating" });
-    void projectWorkflowBridge.createExampleProject().then(refreshWorkspaceTransition);
-  }, [projectWorkflowBridge, refreshWorkspaceTransition, setProjectWorkflow]);
+    const previous = projectWorkflowBridge.getProps();
+    setProjectWorkflow({ ...previous, status: "creating" });
+    void projectWorkflowBridge
+      .createExampleProject()
+      .then(refreshWorkspaceTransition)
+      .catch((error: unknown) => restoreWorkspaceTransition(previous, error));
+  }, [
+    projectWorkflowBridge,
+    refreshWorkspaceTransition,
+    restoreWorkspaceTransition,
+    setProjectWorkflow
+  ]);
 
   const handleCreateChapter = useCallback(() => {
     void projectWorkflowBridge?.createChapter().then(refreshProjectWorkflow);
@@ -174,18 +214,20 @@ export function useProjectWorkflowActions({
     [projectWorkflowBridge, refreshProjectWorkflow]
   );
 
-  const handleSelectChapter = useCallback(
-    (chapterId: string) => {
-      void projectWorkflowBridge?.selectChapter(chapterId).then(refreshProjectWorkflow);
-    },
-    [projectWorkflowBridge, refreshProjectWorkflow]
-  );
-
   const handleCloseChapterTab = useCallback(
     (chapterId: string) => {
-      void projectWorkflowBridge?.closeChapterTab(chapterId).then(refreshProjectWorkflow);
+      void projectWorkflowBridge
+        ?.closeChapterTab(chapterId)
+        .then((result) => {
+          setProjectWorkflow(result.projectWorkflow);
+          if (result.chapterEditor !== undefined) {
+            setFileEditor?.(undefined);
+            setChapterEditor(chapterBridge?.adopt(result.chapterEditor) ?? result.chapterEditor);
+          }
+        })
+        .catch(() => undefined);
     },
-    [projectWorkflowBridge, refreshProjectWorkflow]
+    [chapterBridge, projectWorkflowBridge, setChapterEditor, setFileEditor, setProjectWorkflow]
   );
 
   const handlePreviewRecoveryDraft = useCallback(
@@ -233,7 +275,6 @@ export function useProjectWorkflowActions({
     handleRenameChapter,
     handleDuplicateChapter,
     handleDeleteChapter,
-    handleSelectChapter,
     handleCloseChapterTab,
     handlePreviewRecoveryDraft,
     handleApplyRecoveryDraft,

@@ -295,12 +295,16 @@ function timelineEventsFromAsset(asset: StoryBibleAsset): readonly StoryTimeline
   }
 
   return events
-    .map((event, index) => toTimelineEvent(event, index))
+    .map((event, index) => toTimelineEvent(event, index, asset.id))
     .filter((event): event is StoryTimelineEvent => event !== undefined)
     .sort((left, right) => left.sequence - right.sequence || left.title.localeCompare(right.title));
 }
 
-function toTimelineEvent(value: unknown, index: number): StoryTimelineEvent | undefined {
+function toTimelineEvent(
+  value: unknown,
+  index: number,
+  parentEntryId: string
+): StoryTimelineEvent | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
@@ -321,6 +325,7 @@ function toTimelineEvent(value: unknown, index: number): StoryTimelineEvent | un
 
   return {
     id,
+    parentEntryId,
     sequence,
     title,
     status,

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import type { AgentRunEvent, AgentRunSnapshot } from "@novel-studio/agent-engine";
 import type {
@@ -79,7 +79,12 @@ describe("AgentConversationBridge", () => {
         selectedProfileId: "p1",
         onSelect: onSelectModel
       },
-      reasoning: { visible: true, values: ["low", "high"] as const, current: "low" as const, onSelect: () => undefined },
+      reasoning: {
+        visible: true,
+        values: ["low", "high"] as const,
+        current: "low" as const,
+        onSelect: () => undefined
+      },
       references: {
         chips: [{ refId: "chapter:ch-01", label: "第一章", kind: "chapter" as const }],
         available: [],
@@ -183,6 +188,36 @@ describe("AgentConversationBridge", () => {
       kind: "rollback",
       props: agentRun.rollbackReview
     });
+  });
+
+  test("routes central change-set and rollback open intents through workspace navigation", async () => {
+    const fixture = createApiFixture([
+      conversation("conv_01", "run_01", "completed", "2026-07-14T00:00:00.000Z")
+    ]);
+    const state = await createAgentConversationBridge(fixture.api).load("project_01");
+    const openChangeSet = vi.fn();
+    const openRollback = vi.fn();
+    const onOpenMainReview = vi.fn();
+    const workspace = toAgentConversationWorkspaceProps(
+      state,
+      agentRunProps("completed", {
+        changeSetReview: { ...changeSetReviewProps(false), onOpen: openChangeSet },
+        rollbackReview: { ...rollbackReviewProps(false), onOpen: openRollback }
+      }),
+      undefined,
+      undefined,
+      { ...workspaceActions(), onOpenMainReview }
+    );
+
+    workspace.view.agentRun?.changeSetReview?.onOpen?.();
+    workspace.view.agentRun?.rollbackReview?.onOpen?.();
+
+    expect(openChangeSet).toHaveBeenCalledOnce();
+    expect(openRollback).toHaveBeenCalledOnce();
+    expect(onOpenMainReview.mock.calls.map(([review]) => review.kind)).toEqual([
+      "change_set",
+      "rollback"
+    ]);
   });
 
   test.each([

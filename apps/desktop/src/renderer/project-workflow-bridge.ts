@@ -21,7 +21,8 @@ export interface ProjectWorkflowBridge {
   duplicateChapter(chapterId: string): Promise<ProjectWorkflowProps>;
   deleteChapter(chapterId: string): Promise<ProjectWorkflowProps>;
   selectChapter(chapterId: string): Promise<ProjectWorkflowProps>;
-  closeChapterTab(chapterId: string): Promise<ProjectWorkflowProps>;
+  selectChapterAndLoad(chapterId: string): Promise<ProjectChapterSelectionBridgeResult>;
+  closeChapterTab(chapterId: string): Promise<ProjectWorkflowCloseTabBridgeResult>;
   previewRecoveryDraft(sessionId: string): Promise<ProjectWorkflowProps>;
   applyRecoveryDraft(sessionId: string): Promise<ProjectWorkflowRecoveryApplyBridgeResult>;
   discardRecoveryDraft(sessionId: string): Promise<ProjectWorkflowProps>;
@@ -30,6 +31,16 @@ export interface ProjectWorkflowBridge {
 export interface ProjectWorkflowRecoveryApplyBridgeResult {
   readonly projectWorkflow: ProjectWorkflowProps;
   readonly chapterEditor?: ChapterEditorProps;
+}
+
+export interface ProjectWorkflowCloseTabBridgeResult {
+  readonly projectWorkflow: ProjectWorkflowProps;
+  readonly chapterEditor?: ChapterEditorProps;
+}
+
+export interface ProjectChapterSelectionBridgeResult {
+  readonly projectWorkflow: ProjectWorkflowProps;
+  readonly chapterEditor: ChapterEditorProps;
 }
 
 export function createProjectWorkflowBridge(
@@ -84,65 +95,68 @@ export function createProjectWorkflowBridge(
       const previousStatus = snapshot === undefined ? "idle" : "ready";
       status = "opening";
       feedback = undefined;
-      const selected = await api.project.chooseOpenCreativeDirectory();
-      if (!selected.ok) {
-        status = previousStatus;
-        return fail(selected.error.message, previousStatus);
-      }
-      if (selected.value.canceled || selected.value.selectionId === undefined) {
-        status = previousStatus;
-        feedback = { kind: "info", message: "Project opening was canceled." };
+      try {
+        const selected = await api.project.chooseOpenCreativeDirectory();
+        if (!selected.ok) {
+          return fail(selected.error.message, previousStatus);
+        }
+        if (selected.value.canceled || selected.value.selectionId === undefined) {
+          status = previousStatus;
+          feedback = { kind: "info", message: "Project opening was canceled." };
+          return toProps();
+        }
+        const opened = await api.project.openCreativeProject(selected.value.selectionId);
+        if (!opened.ok) {
+          return fail(opened.error.message, previousStatus);
+        }
+        if (!("creativeProject" in opened.value)) {
+          return fail("The selected directory is not a creative project.", previousStatus);
+        }
+        adoptSnapshot(opened.value.creativeProject);
+        status = "ready";
+        feedback = undefined;
         return toProps();
+      } catch (error) {
+        return fail(toErrorMessage(error), previousStatus);
       }
-      const opened = await api.project.openCreativeProject(selected.value.selectionId);
-      if (!opened.ok) {
-        status = previousStatus;
-        return fail(opened.error.message, previousStatus);
-      }
-      if (!("creativeProject" in opened.value)) {
-        status = previousStatus;
-        return fail("The selected directory is not a creative project.", previousStatus);
-      }
-      adoptSnapshot(opened.value.creativeProject);
-      status = "ready";
-      feedback = undefined;
-      return toProps();
     },
     async createProject() {
+      const previousStatus = snapshot === undefined ? "idle" : "ready";
       status = "creating";
       feedback = undefined;
-      if (selectedParentSelectionId === undefined) {
-        await bridge.chooseCreateParentDirectory();
-      }
-      if (selectedParentSelectionId === undefined) {
-        status = snapshot === undefined ? "idle" : "ready";
+      try {
+        if (selectedParentSelectionId === undefined) {
+          await bridge.chooseCreateParentDirectory();
+        }
+        if (selectedParentSelectionId === undefined) {
+          status = previousStatus;
+          return toProps();
+        }
+        const folderName = projectFolderNameInput;
+        const title = projectTitleInput.trim();
+        if (folderName.trim().length === 0 || title.length === 0) {
+          return fail("Project title and folder name are required.", previousStatus);
+        }
+        const created = await api.project.createCreativeProject({
+          parentSelectionId: selectedParentSelectionId,
+          folderName,
+          projectId: createProjectId(),
+          title,
+          language: "zh-CN"
+        });
+        if (!created.ok) {
+          return fail(created.error.message, previousStatus);
+        }
+        if (!("creativeProject" in created.value)) {
+          return fail("The project could not be activated as a creative project.", previousStatus);
+        }
+        adoptSnapshot(created.value.creativeProject);
+        status = "ready";
+        feedback = undefined;
         return toProps();
+      } catch (error) {
+        return fail(toErrorMessage(error), previousStatus);
       }
-      const folderName = projectFolderNameInput;
-      const title = projectTitleInput.trim();
-      if (folderName.trim().length === 0 || title.length === 0) {
-        status = snapshot === undefined ? "idle" : "ready";
-        return fail("Project title and folder name are required.", status);
-      }
-      const created = await api.project.createCreativeProject({
-        parentSelectionId: selectedParentSelectionId,
-        folderName,
-        projectId: createProjectId(),
-        title,
-        language: "zh-CN"
-      });
-      if (!created.ok) {
-        status = snapshot === undefined ? "idle" : "ready";
-        return fail(created.error.message, status);
-      }
-      if (!("creativeProject" in created.value)) {
-        status = snapshot === undefined ? "idle" : "ready";
-        return fail("The project could not be activated as a creative project.", status);
-      }
-      adoptSnapshot(created.value.creativeProject);
-      status = "ready";
-      feedback = undefined;
-      return toProps();
     },
     async createExampleProject() {
       projectTitleInput = "Example Project";
@@ -189,21 +203,44 @@ export function createProjectWorkflowBridge(
       addOpenChapterTab(chapterId);
       return toProps();
     },
+    async selectChapterAndLoad(chapterId) {
+      const selected = await api.project.selectChapterAndLoad(chapterId);
+      if (!selected.ok) {
+        throw new Error(selected.error.message);
+      }
+
+      adoptSnapshot(selected.value.workspace);
+      feedback = undefined;
+      return {
+        projectWorkflow: toProps(),
+        chapterEditor: toChapterEditorProps(selected.value.chapterEditor)
+      };
+    },
     async closeChapterTab(chapterId) {
       if (!openChapterTabIds.includes(chapterId) || openChapterTabIds.length <= 1) {
-        return toProps();
+        return { projectWorkflow: toProps() };
       }
       const closingIndex = openChapterTabIds.indexOf(chapterId);
       const remaining = openChapterTabIds.filter((id) => id !== chapterId);
-      openChapterTabIds = remaining;
       if (snapshot?.activeChapterId === chapterId) {
         const next = remaining[Math.min(closingIndex, remaining.length - 1)];
         if (next !== undefined) {
-          await applySnapshot(api.project.selectChapter(next));
+          const selected = await api.project.selectChapterAndLoad(next);
+          if (!selected.ok) {
+            throw new Error(selected.error.message);
+          }
+
+          adoptSnapshot(selected.value.workspace);
           openChapterTabIds = remaining;
+          feedback = undefined;
+          return {
+            projectWorkflow: toProps(),
+            chapterEditor: toChapterEditorProps(selected.value.chapterEditor)
+          };
         }
       }
-      return toProps();
+      openChapterTabIds = remaining;
+      return { projectWorkflow: toProps() };
     },
     async previewRecoveryDraft(sessionId) {
       recoveryReview = { status: "previewing" };
@@ -347,5 +384,9 @@ export function createProjectWorkflowBridge(
   function addOpenChapterTab(chapterId: string | undefined): void {
     if (chapterId === undefined || openChapterTabIds.includes(chapterId)) return;
     openChapterTabIds = [...openChapterTabIds, chapterId];
+  }
+
+  function toErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 }

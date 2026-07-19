@@ -64,6 +64,7 @@ import type {
 } from "./config-studio-session.js";
 import type {
   DesktopShellState,
+  ProjectChapterSelectionDto,
   ProjectCreationPreviewDto,
   ProjectRecoveryApplyResultDto,
   ProjectWorkspaceSnapshotDto,
@@ -142,9 +143,7 @@ export interface NovelStudioApi {
   project: {
     chooseOpenCreativeDirectory(): Promise<Result<ProjectDirectorySelectionDto, UnifiedError>>;
     chooseCreateParentDirectory(): Promise<Result<ProjectDirectorySelectionDto, UnifiedError>>;
-    openCreativeProject(
-      selectionId: string
-    ): Promise<Result<WorkspaceActivationDto, UnifiedError>>;
+    openCreativeProject(selectionId: string): Promise<Result<WorkspaceActivationDto, UnifiedError>>;
     previewCreativeProject(input: {
       readonly parentSelectionId: string;
       readonly folderName: string;
@@ -166,6 +165,9 @@ export interface NovelStudioApi {
       input: DeleteChapterInput
     ): Promise<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>;
     selectChapter(chapterId: string): Promise<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>;
+    selectChapterAndLoad(
+      chapterId: string
+    ): Promise<Result<ProjectChapterSelectionDto, UnifiedError>>;
     previewRecoveryDraft(
       sessionId: string
     ): Promise<Result<ProjectRecoveryDraftPreview, UnifiedError>>;

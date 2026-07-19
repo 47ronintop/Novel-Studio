@@ -16,6 +16,7 @@ import {
 import { createProjectWorkspaceSession } from "../src/project-workspace-session.js";
 import type {
   CreateCreativeProjectInput,
+  ProjectChapterRepositoryPort,
   ProjectCreationRepositoryPort,
   ProjectWorkspaceLock,
   ProjectWorkspaceLockPort
@@ -333,7 +334,7 @@ describe("M12 project workflow session", () => {
     expect(cleanupCalls).toBe(0);
   });
 
-  test("creates a project, creates chapters, and switches the active editor chapter", async () => {
+  test("creates a project, creates chapters, and atomically selects and loads a chapter", async () => {
     const projectRoot = await createTempRoot();
     const session = createProjectWorkspaceSession({
       projectCreationRepository: new ProjectCreationFileRepository(),
@@ -373,7 +374,7 @@ describe("M12 project workflow session", () => {
       title: "第二章",
       body: "第二章正文\n"
     });
-    const selected = await session.selectChapter("ch_second");
+    const selected = await session.selectChapterAndLoad("ch_second");
 
     expect(isOk(createdProject)).toBe(true);
     expect(isOk(createdChapter)).toBe(true);
@@ -383,19 +384,91 @@ describe("M12 project workflow session", () => {
       throw new Error(selected.error.message);
     }
 
-    expect(selected.value.activeChapterId).toBe("ch_second");
-    expect(selected.value.chapters.map((chapter) => chapter.id)).toEqual([
+    expect(selected.value.workspace.activeChapterId).toBe("ch_second");
+    expect(selected.value.workspace.chapters.map((chapter) => chapter.id)).toEqual([
       "ch_opening",
       "ch_second"
     ]);
+    expect(selected.value.chapterEditor.state.chapter.frontmatter.title).toBe("第二章");
+    expect(session.getActiveChapterEditorSession()?.getState()).toEqual(
+      selected.value.chapterEditor.state
+    );
+  });
 
-    const editor = session.getActiveChapterEditorSession();
-    const loaded = await editor?.load();
-    expect(loaded?.ok).toBe(true);
-    if (loaded?.ok !== true) {
-      throw new Error("Active chapter did not load.");
+  test("keeps the previous workspace and loaded editor when candidate chapter loading fails", async () => {
+    const projectRoot = await createTempRoot();
+    const failingChapterId = "ch_second";
+    const session = createProjectWorkspaceSession({
+      projectCreationRepository: new ProjectCreationFileRepository(),
+      now: () => "2026-07-04T00:00:00.000Z",
+      createProjectRepository: (root) =>
+        new ProjectFileRepository({
+          projectRoot: root,
+          now: () => "2026-07-04T00:00:00.000Z"
+        }),
+      createChapterRepository: (root) => {
+        const repository = new ChapterFileRepository({
+          projectRoot: root,
+          now: () => "2026-07-04T00:00:00.000Z"
+        });
+        const readChapter = repository.readChapter.bind(repository);
+        repository.readChapter = (chapterId) =>
+          chapterId === failingChapterId
+            ? Promise.resolve(
+                err(
+                  createUnifiedError({
+                    code: "TEST_CHAPTER_LOAD_FAILED",
+                    category: "StorageError",
+                    message: "Candidate chapter could not be loaded.",
+                    recoverability: "retryable",
+                    suggestedAction: "Retry chapter navigation.",
+                    traceId: "project-workspace-session-test"
+                  })
+                )
+              )
+            : readChapter(chapterId);
+        return repository as ProjectChapterRepositoryPort;
+      },
+      createHistoryRepository: (root) =>
+        new HistoryRepository({
+          projectRoot: root,
+          now: () => "2026-07-04T00:00:00.000Z",
+          createVersionId: () => "ver_atomic_selection"
+        }),
+      createRecoveryRepository: () => emptyRecoveryRepository()
+    });
+
+    await session.createProject({
+      projectRoot,
+      projectId: "prj_atomic_selection",
+      title: "Atomic Selection",
+      language: "zh-CN"
+    });
+    await session.createChapter({
+      chapterId: "ch_opening",
+      title: "开篇",
+      body: "旧章节正文\n"
+    });
+    await session.createChapter({
+      chapterId: "ch_second",
+      title: "第二章",
+      body: "候选章节正文\n"
+    });
+    await session.selectChapter("ch_opening");
+    const previousEditor = session.getActiveChapterEditorSession();
+    const previousLoaded = await previousEditor?.load();
+    expect(previousLoaded?.ok).toBe(true);
+    const previousSnapshot = session.getSnapshot();
+    const previousEditorState = previousEditor?.getState();
+    const selected = await session.selectChapterAndLoad("ch_second");
+
+    expect(isErr(selected)).toBe(true);
+    if (isErr(selected)) {
+      expect(selected.error.code).toBe("TEST_CHAPTER_LOAD_FAILED");
     }
-    expect(loaded.value.chapter.frontmatter.title).toBe("第二章");
+    expect(session.getSnapshot()).toBe(previousSnapshot);
+    expect(session.getActiveChapterEditorSession()).toBe(previousEditor);
+    expect(previousEditor?.getState()).toEqual(previousEditorState);
   });
 
   test("renames, duplicates, and soft-deletes chapters from the workspace navigator", async () => {

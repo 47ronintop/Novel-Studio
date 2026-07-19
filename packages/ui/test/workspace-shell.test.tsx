@@ -1677,7 +1677,8 @@ describe("WorkspaceShell", () => {
 
   test("renders the timeline workspace as an ordered event rail with metrics", () => {
     const application = createDesktopApplication();
-    const html = renderToStaticMarkup(
+    const openedEntries: string[] = [];
+    const tree = (
       <WorkspaceShell
         shellState={{ ...application.getShellState(), activeActivity: "timeline" }}
         commands={application.listCommands()}
@@ -1694,7 +1695,8 @@ describe("WorkspaceShell", () => {
               body: "Arrival happens before the council summons.",
               timelineEvents: [
                 {
-                  id: "evt_council",
+                  id: "event_01",
+                  parentEntryId: "timeline_main",
                   sequence: 20,
                   title: "Council summons",
                   status: "draft",
@@ -1724,10 +1726,14 @@ describe("WorkspaceShell", () => {
           onNewDraft: () => undefined,
           onSave: () => undefined
         }}
-        onTimelineEntryOpen={() => undefined}
+        onTimelineEntryOpen={(entryId) => openedEntries.push(entryId)}
       />
     );
+    const openEvent = findElementByAriaLabel(tree, "Edit timeline: Main Timeline");
+    openEvent?.props.onClick?.();
+    const html = renderToStaticMarkup(tree);
 
+    expect(openedEntries).toEqual(["timeline_main"]);
     expect(html).toContain('aria-label="Timeline event rail"');
     expect(html.indexOf("Hero arrives")).toBeLessThan(html.indexOf("Council summons"));
     expect(html).toContain("Events 2");

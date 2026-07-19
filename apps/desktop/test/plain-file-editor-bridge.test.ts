@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import type { NovelStudioApi } from "@novel-studio/application";
-import { ok } from "@novel-studio/shared";
+import { createUnifiedError, err, ok } from "@novel-studio/shared";
 
 import { createPlainFileEditorBridge } from "../src/renderer/plain-file-editor-bridge.js";
 
@@ -95,6 +95,35 @@ describe("plain file editor bridge", () => {
         expectedChecksum: "sha256:disk"
       }
     ]);
+  });
+
+  test("keeps the active file snapshot when preparing another file fails", async () => {
+    const api = createApi([]);
+    const readTextFile = api.workspace.readTextFile;
+    let fail = false;
+    api.workspace.readTextFile = (path) =>
+      fail
+        ? Promise.resolve(
+            err(
+              createUnifiedError({
+                code: "ENGINEERING_FILE_READ_FAILED",
+                category: "StorageError",
+                message: "File could not be read.",
+                recoverability: "retryable",
+                suggestedAction: "Retry file navigation.",
+                traceId: "plain-file-editor-bridge-test"
+              })
+            )
+          )
+        : readTextFile(path);
+    const bridge = createPlainFileEditorBridge(api);
+    await bridge.openFile("notes/current.md");
+    const previous = JSON.stringify(bridge.getProps());
+    fail = true;
+
+    await expect(bridge.openFile("notes/missing.md")).rejects.toThrow("File could not be read.");
+
+    expect(JSON.stringify(bridge.getProps())).toBe(previous);
   });
 });
 

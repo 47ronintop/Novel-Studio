@@ -11,6 +11,7 @@ import type {
   AgentComposerProps,
   AgentConversationDetailProps,
   AgentConversationListItemProps,
+  AgentConversationMainReview,
   AgentConversationWorkspaceShellProps,
   AgentPlanReviewProps,
   AgentRunPanelProps
@@ -56,6 +57,7 @@ export interface AgentConversationWorkspaceActions {
   readonly onSearchQueryChange: (query: string) => void;
   readonly onFilterChange: (filter: "active" | "archived") => void;
   readonly onReturnToActive: () => void;
+  readonly onOpenMainReview?: ((review: AgentConversationMainReview) => void) | undefined;
 }
 
 interface BridgeState {
@@ -482,7 +484,8 @@ export function toAgentConversationWorkspaceProps(
       : liveAgentRunId(selectedAgentRun, selectedPlanReview) === undefined
         ? undefined
         : selectedAgentRun;
-  const mainReview = toAgentConversationMainReview(liveAgentRun, selectedPlanReview);
+  const navigableAgentRun = withMainReviewOpenActions(liveAgentRun, actions.onOpenMainReview);
+  const mainReview = toAgentConversationMainReview(navigableAgentRun, selectedPlanReview);
 
   return {
     ...(mainReview === undefined ? {} : { mainReview }),
@@ -511,7 +514,7 @@ export function toAgentConversationWorkspaceProps(
         ? {}
         : { activeConversationId: state.activeConversationId }),
       ...(activeConversationTitle === undefined ? {} : { activeConversationTitle }),
-      ...(liveAgentRun === undefined ? {} : { agentRun: liveAgentRun }),
+      ...(navigableAgentRun === undefined ? {} : { agentRun: navigableAgentRun }),
       ...(composer === undefined ? {} : { composer }),
       loading: state.loading,
       ...(state.errorMessage === undefined ? {} : { errorMessage: state.errorMessage }),
@@ -520,6 +523,49 @@ export function toAgentConversationWorkspaceProps(
       onRestore: actions.onRestore,
       onReturnToActive: actions.onReturnToActive
     }
+  };
+}
+
+function withMainReviewOpenActions(
+  agentRun: AgentRunPanelProps | undefined,
+  onOpenMainReview: ((review: AgentConversationMainReview) => void) | undefined
+): AgentRunPanelProps | undefined {
+  if (agentRun === undefined || onOpenMainReview === undefined) {
+    return agentRun;
+  }
+
+  const changeSetReview = agentRun.changeSetReview;
+  const rollbackReview = agentRun.rollbackReview;
+  return {
+    ...agentRun,
+    ...(changeSetReview === undefined
+      ? {}
+      : {
+          changeSetReview: {
+            ...changeSetReview,
+            onOpen: () => {
+              changeSetReview.onOpen?.();
+              onOpenMainReview({
+                kind: "change_set",
+                props: { ...changeSetReview, open: true }
+              });
+            }
+          }
+        }),
+    ...(rollbackReview === undefined
+      ? {}
+      : {
+          rollbackReview: {
+            ...rollbackReview,
+            onOpen: () => {
+              rollbackReview.onOpen?.();
+              onOpenMainReview({
+                kind: "rollback",
+                props: { ...rollbackReview, open: true }
+              });
+            }
+          }
+        })
   };
 }
 

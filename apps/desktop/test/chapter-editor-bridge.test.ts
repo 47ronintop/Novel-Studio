@@ -179,4 +179,28 @@ describe("chapter editor bridge", () => {
     expect(saving?.dirty).toBe(true);
     expect(saved.saveStatus).toBe("Saved");
   });
+
+  test("adopts an atomically loaded chapter without issuing a second load", () => {
+    const calls: string[] = [];
+    const api = {
+      chapter: {
+        load: async () => {
+          calls.push("chapter.load");
+          return ok(snapshot);
+        }
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createChapterEditorBridge(api);
+    const adopted = {
+      chapter: snapshot.state.chapter,
+      dirty: true,
+      saveStatus: "Unsaved" as const,
+      versionHistory: []
+    };
+
+    bridge.adopt(adopted);
+
+    expect(bridge.beginSave()).toMatchObject({ saveStatus: "Saving", dirty: true });
+    expect(calls).toEqual([]);
+  });
 });

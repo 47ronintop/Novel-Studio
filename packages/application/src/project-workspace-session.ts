@@ -120,6 +120,11 @@ export interface ProjectRecoveryApplyResult {
   chapterEditor: ChapterEditorSnapshot;
 }
 
+export interface ProjectChapterSelectionResult {
+  readonly workspace: ProjectWorkspaceSnapshot;
+  readonly chapterEditor: ChapterEditorSnapshot;
+}
+
 export type ProjectHealthStatus = "healthy" | "attention" | "blocked";
 export type ProjectHealthSeverity = "info" | "warning" | "error";
 export type ProjectHealthSource =
@@ -202,6 +207,9 @@ export interface ProjectWorkspaceSession {
   ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   deleteChapter(input: DeleteChapterInput): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   selectChapter(chapterId: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  selectChapterAndLoad(
+    chapterId: string
+  ): Promise<Result<ProjectChapterSelectionResult, UnifiedError>>;
   previewRecoveryDraft(
     sessionId: string
   ): Promise<Result<ProjectRecoveryDraftPreview, UnifiedError>>;
@@ -391,6 +399,69 @@ export function createProjectWorkspaceSession(
       }
 
       return activateChapter(chapterId);
+    },
+    async selectChapterAndLoad(chapterId) {
+      if (
+        state === undefined ||
+        chapterRepository === undefined ||
+        historyRepository === undefined ||
+        recoveryRepository === undefined
+      ) {
+        return workspaceUnavailable();
+      }
+
+      const currentState = state;
+      const chapters = await chapterRepository.listChapters();
+      if (!chapters.ok) {
+        return chapters;
+      }
+
+      const selected = chapters.value.find((chapter) => chapter.id === chapterId);
+      if (selected === undefined) {
+        return chapterNotFound();
+      }
+
+      const recovery = await loadRecoverySummary(currentState.project.projectId);
+      if (!recovery.ok) {
+        return recovery;
+      }
+
+      const candidateEditor = createChapterEditorSessionForProject({
+        chapterId: selected.id,
+        projectId: currentState.project.projectId,
+        chapterRepository,
+        historyRepository,
+        recoveryRepository
+      });
+      const loaded = await candidateEditor.load();
+      if (!loaded.ok) {
+        return loaded;
+      }
+      const versions = await candidateEditor.listVersions();
+      if (!versions.ok) {
+        return versions;
+      }
+
+      const nextState: ProjectWorkspaceSnapshot = {
+        ...currentState,
+        chapters: chapters.value,
+        recovery: recovery.value,
+        health: buildProjectHealth({
+          checkedAt: currentTimestamp(),
+          chapters: chapters.value,
+          recovery: recovery.value,
+          ...(currentState.lock === undefined ? {} : { lock: currentState.lock })
+        }),
+        activeChapterId: selected.id
+      };
+      const chapterEditor: ChapterEditorSnapshot = {
+        state: loaded.value,
+        versions: versions.value
+      };
+
+      state = nextState;
+      activeChapterEditorSession = candidateEditor;
+      return ok({ workspace: nextState, chapterEditor });
     },
     async previewRecoveryDraft(sessionId) {
       const record = await findDirtyChapterRecoveryRecord(sessionId);
@@ -596,16 +667,7 @@ export function createProjectWorkspaceSession(
 
     const selected = chapters.value.find((chapter) => chapter.id === chapterId);
     if (selected === undefined) {
-      return err(
-        createUnifiedError({
-          code: "PROJECT_CHAPTER_NOT_FOUND",
-          category: "UserError",
-          message: "The requested chapter is not part of the open project.",
-          recoverability: "user-action",
-          suggestedAction: "Choose a chapter from the project navigator.",
-          traceId: "project-workspace-session"
-        })
-      );
+      return chapterNotFound();
     }
 
     const recovery = await loadRecoverySummary(state.project.projectId);
@@ -799,6 +861,19 @@ export function createProjectWorkspaceSession(
 
   function currentTimestamp(): string {
     return options.now?.() ?? new Date().toISOString();
+  }
+
+  function chapterNotFound<T>(): Result<T, UnifiedError> {
+    return err(
+      createUnifiedError({
+        code: "PROJECT_CHAPTER_NOT_FOUND",
+        category: "UserError",
+        message: "The requested chapter is not part of the open project.",
+        recoverability: "user-action",
+        suggestedAction: "Choose a chapter from the project navigator.",
+        traceId: "project-workspace-session"
+      })
+    );
   }
 
   async function cleanupCreatedProjectAfterFailure<T>(

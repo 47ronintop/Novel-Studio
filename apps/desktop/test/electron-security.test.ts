@@ -55,6 +55,7 @@ describe("Electron security baseline", () => {
       "application:project:duplicate-chapter",
       "application:project:delete-chapter",
       "application:project:select-chapter",
+      "application:project:select-chapter-and-load",
       "application:project:preview-recovery-draft",
       "application:project:apply-recovery-draft",
       "application:project:discard-recovery-draft",

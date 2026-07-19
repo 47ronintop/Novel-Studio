@@ -13,6 +13,7 @@ import type {
 } from "@novel-studio/ui";
 export interface ChapterEditorBridge {
   load(): Promise<ChapterEditorProps>;
+  adopt(props: ChapterEditorProps): ChapterEditorProps;
   edit(nextBody: string): Promise<ChapterEditorProps>;
   beginSave(): ChapterEditorProps | undefined;
   save(): Promise<ChapterEditorProps>;
@@ -28,6 +29,10 @@ export function createChapterEditorBridge(api: NovelStudioApi): ChapterEditorBri
   return {
     async load() {
       currentProps = toChapterEditorProps(await unwrap(api.chapter.load()));
+      return currentProps;
+    },
+    adopt(props) {
+      currentProps = props;
       return currentProps;
     },
     async edit(nextBody: string) {

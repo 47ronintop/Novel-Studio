@@ -79,6 +79,9 @@ describe("DesktopApplication project search", () => {
         selectChapter: async () => {
           throw new Error("not used");
         },
+        selectChapterAndLoad: async () => {
+          throw new Error("not used");
+        },
         previewRecoveryDraft: async () => {
           throw new Error("not used");
         },

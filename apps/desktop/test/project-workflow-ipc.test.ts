@@ -33,6 +33,7 @@ describe("Task 5 explicit workspace IPC", () => {
       title: "New Book",
       language: "en"
     });
+    await api.project.selectChapterAndLoad("chapter_1");
     await api.workspace.chooseEngineeringDirectory();
     await api.workspace.openEngineeringWorkspace("selection_1");
     await api.workspace.refreshEngineeringTree();
@@ -49,6 +50,7 @@ describe("Task 5 explicit workspace IPC", () => {
       "application:project:choose-create-parent-directory",
       "application:project:preview-creative-project",
       "application:project:create-creative-project",
+      "application:project:select-chapter-and-load",
       "application:workspace:choose-engineering-directory",
       "application:workspace:open-engineering-workspace",
       "application:workspace:refresh-engineering-tree",
@@ -90,30 +92,32 @@ describe("Task 5 explicit workspace IPC", () => {
 
   test("projects chapter and recovery results before crossing IPC", async () => {
     const snapshot = projectSnapshot();
+    const chapterEditor = {
+      state: {
+        chapter: {
+          frontmatter: {
+            schemaVersion: "1.0" as const,
+            id: "chapter_1",
+            title: "One",
+            order: 1,
+            status: "draft",
+            createdAt: "2026-07-19T00:00:00.000Z",
+            updatedAt: "2026-07-19T00:00:00.000Z"
+          },
+          body: "Draft"
+        },
+        dirty: true,
+        saveStatus: "Unsaved" as const
+      },
+      versions: []
+    };
     const handlers = createApplicationIpcHandlers({
       createProjectChapter: async () => ok(snapshot),
+      selectProjectChapterAndLoad: async () => ok({ workspace: snapshot, chapterEditor }),
       applyRecoveryDraft: async () =>
         ok({
           workspace: snapshot,
-          chapterEditor: {
-            state: {
-              chapter: {
-                frontmatter: {
-                  schemaVersion: "1.0",
-                  id: "chapter_1",
-                  title: "One",
-                  order: 1,
-                  status: "draft",
-                  createdAt: "2026-07-19T00:00:00.000Z",
-                  updatedAt: "2026-07-19T00:00:00.000Z"
-                },
-                body: "Draft"
-              },
-              dirty: true,
-              saveStatus: "Unsaved"
-            },
-            versions: []
-          }
+          chapterEditor
         })
     } as unknown as DesktopApplication);
 
@@ -121,9 +125,15 @@ describe("Task 5 explicit workspace IPC", () => {
       chapterId: "chapter_1",
       title: "One"
     });
+    const selected = await handlers["application:project:select-chapter-and-load"]("chapter_1");
     const recovered = await handlers["application:project:apply-recovery-draft"]("recovery_1");
 
     expect(JSON.stringify(chapter)).not.toContain("projectRoot");
+    expect(JSON.stringify(selected)).not.toContain("projectRoot");
+    expect(selected).toMatchObject({
+      ok: true,
+      value: { workspace: { project: { projectId: "prj_secret" } }, chapterEditor }
+    });
     expect(JSON.stringify(recovered)).not.toContain("projectRoot");
   });
 });
