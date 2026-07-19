@@ -12,9 +12,11 @@ import type { ApplicationCommandId } from "@novel-studio/application";
 import type { ModelSettingsPanelProps } from "../src/index.js";
 import { WorkspaceShell } from "../src/index.js";
 
-(globalThis as typeof globalThis & {
-  IS_REACT_ACT_ENVIRONMENT?: boolean;
-}).IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as typeof globalThis & {
+    IS_REACT_ACT_ENVIRONMENT?: boolean;
+  }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("WorkspaceShell", () => {
   test("renders settings as a workspace-level view without editor chrome", () => {
@@ -99,7 +101,9 @@ describe("WorkspaceShell", () => {
     expect(css).toContain('.ns-shell[data-accent="blue"]');
     expect(css).toContain('.ns-shell[data-accent="amber"]');
 
-    const accentScopes = [...css.matchAll(/\.ns-shell\[data-accent="(?:blue|amber)"\]\s*\{([^}]*)\}/g)]
+    const accentScopes = [
+      ...css.matchAll(/\.ns-shell\[data-accent="(?:blue|amber)"\]\s*\{([^}]*)\}/g)
+    ]
       .map((match) => match[1])
       .join("\n");
     expect(accentScopes).not.toMatch(/--ns-(?:danger|warning|success|info)/);
@@ -108,9 +112,7 @@ describe("WorkspaceShell", () => {
   test("positions find replace as a responsive editor overlay", () => {
     const css = readFileSync(join(process.cwd(), "packages", "ui", "src", "styles.css"), "utf8");
 
-    expect(css).toMatch(
-      /\.ns-editor-surface,\s*\.ns-editor-layout\s*\{[^}]*position:\s*relative/s
-    );
+    expect(css).toMatch(/\.ns-editor-surface,\s*\.ns-editor-layout\s*\{[^}]*position:\s*relative/s);
     expect(css).toMatch(
       /\.ns-editor-find-replace\s*\{[^}]*display:\s*grid[^}]*position:\s*absolute[^}]*right:\s*8px[^}]*top:\s*8px[^}]*width:\s*420px[^}]*z-index:\s*30/s
     );
@@ -157,13 +159,13 @@ describe("WorkspaceShell", () => {
     expect(html).toContain('data-region="ai-panel"');
     expect(html).not.toContain('data-region="status-bar"');
     expect(html).toContain('aria-label="活动栏"');
-    expect(html).toContain('aria-label="项目导航"');
+    expect(html).toContain('aria-label="工作区导航"');
     expect(html).toContain('aria-label="编辑区"');
     expect(html).toContain('aria-label="AI 对话面板"');
     expect(html).not.toContain('aria-label="状态栏"');
     expect(html).toContain('aria-label="Navigator resize handle"');
     expect(html).toContain('aria-label="AI panel resize handle"');
-    expect(html).toContain('aria-label="Novel Studio asset groups"');
+    expect(html).not.toContain('aria-label="Novel Studio asset groups"');
     expect(html).toContain('aria-label="AI 写作工作流"');
     expect(html).not.toContain("Markdown");
   });
@@ -379,7 +381,10 @@ describe("WorkspaceShell", () => {
       });
       const query = host.querySelector<HTMLInputElement>('[aria-label="查找内容"]');
       await act(async () => {
-        const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+        const valueSetter = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          "value"
+        )?.set;
         valueSetter?.call(query, "Moon");
         query?.dispatchEvent(new Event("input", { bubbles: true }));
       });
@@ -761,24 +766,76 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("AI suggestion");
   });
 
-  test("renders project workflow controls and chapter selection", () => {
+  test("renders the focused creative navigator for a creative project context", () => {
     const application = createDesktopApplication();
+    const storyBibleEditor = {
+      activeKind: "character" as const,
+      status: "idle" as const,
+      entries: [
+        {
+          id: "character_lin",
+          kind: "character" as const,
+          title: "林照月",
+          status: "主角",
+          body: "开篇出现。"
+        }
+      ],
+      draft: {
+        kind: "character" as const,
+        title: "林照月",
+        body: "开篇出现。",
+        status: "主角"
+      },
+      onKindSelect: () => undefined,
+      onEntrySelect: () => undefined,
+      onDraftChange: () => undefined,
+      onNewDraft: () => undefined,
+      onSave: () => undefined
+    };
     const html = renderToStaticMarkup(
       <WorkspaceShell
         shellState={{
           ...application.getShellState(),
-          navigatorExpandedSectionIds: ["novel-studio", "chapters"]
+          projectTitle: "长安旧梦",
+          workspaceContext: {
+            kind: "creativeProject",
+            workspaceId: "workspace_1",
+            projectId: "project_1",
+            displayName: "长安旧梦",
+            capabilities: ["creativeWorkbench", "writingContext"]
+          },
+          creativeNavigatorMode: "writing"
         }}
         commands={application.listCommands()}
         commandPaletteOpen={false}
+        creativeNavigator={{
+          projectTitle: "长安旧梦",
+          mode: "writing",
+          searchQuery: "",
+          chapters: [
+            {
+              id: "ch_opening",
+              title: "开篇",
+              order: 1,
+              status: "draft",
+              updatedAt: "2026-07-04T00:00:00.000Z"
+            }
+          ],
+          activeChapterId: "ch_opening",
+          dirtyChapterIds: ["ch_opening"],
+          storyBible: storyBibleEditor,
+          onModeSelect: () => undefined,
+          onSearchQueryChange: () => undefined,
+          onCreateChapter: () => undefined,
+          onChapterOpen: () => undefined,
+          onChapterRename: () => undefined,
+          onChapterDuplicate: () => undefined,
+          onChapterDelete: () => undefined,
+          onStoryKindOpen: () => undefined,
+          onStoryEntryOpen: () => undefined,
+          onStoryEntryCreate: () => undefined
+        }}
         projectWorkflow={{
-          projectTitleInput: "M12",
-          projectFolderNameInput: "m12",
-          status: "creating",
-          feedback: {
-            kind: "error",
-            message: "project.json could not be read."
-          },
           chapters: [
             {
               id: "ch_opening",
@@ -796,20 +853,21 @@ describe("WorkspaceShell", () => {
           onCreateChapter: () => undefined,
           onSelectChapter: () => undefined
         }}
+        storyBibleEditor={storyBibleEditor}
       />
     );
 
-    expect(html).toContain('aria-label="项目标题"');
-    expect(html).toContain('aria-label="项目文件夹名称"');
-    expect(html).toContain('aria-label="选择项目父文件夹"');
-    expect(html).toContain('aria-label="打开项目"');
-    expect(html).toContain('aria-label="创建项目"');
+    expect(html).toContain('role="tab"');
+    expect(html).toContain("写作");
+    expect(html).toContain("故事资料");
     expect(html).toContain('aria-label="新建章节"');
-    expect(html).toContain("正在创建");
-    expect(html).toContain('role="status"');
-    expect(html).toContain("project.json could not be read.");
-    expect(html).toContain('aria-current="true"');
+    expect(html).toContain('data-chapter-id="ch_opening"');
+    expect(html).toContain("未保存");
     expect(html).toContain("开篇");
+    expect(html).not.toContain('aria-label="项目标题"');
+    expect(html).not.toContain("Novel Studio");
+    expect(html).not.toContain("提示词");
+    expect(html).not.toContain('data-navigator-type-icon="section:workflows"');
   });
 
   test("renders onboarding quick start actions and invokes callbacks", () => {

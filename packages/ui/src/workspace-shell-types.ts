@@ -18,7 +18,11 @@ import type {
   ProjectSearchResultItem,
   ProjectWorkspaceHealth
 } from "@novel-studio/application";
-import type { ChapterSummary, UserAppearancePreferences } from "@novel-studio/shared";
+import type {
+  ChapterSummary,
+  CreativeNavigatorMode,
+  UserAppearancePreferences
+} from "@novel-studio/shared";
 import type { ChapterEditorProps } from "./chapter-editor.js";
 import type { CommandPaletteFeedback } from "./command-palette.js";
 import type { ChangeSetReviewProps, RollbackReviewProps } from "./change-set-review.js";
@@ -45,6 +49,7 @@ export interface WorkspaceShellProps {
   readonly studio?: ConfigStudioPanelProps;
   readonly storyBible?: StoryBibleSummaryProps;
   readonly storyBibleEditor?: StoryBibleEditorProps;
+  readonly creativeNavigator?: CreativeWorkspaceNavigatorProps;
   readonly onboarding?: OnboardingProps;
   readonly onCommandPaletteOpen?: () => void;
   readonly onCommandPaletteQueryChange?: ((query: string) => void) | undefined;
@@ -60,6 +65,26 @@ export interface WorkspaceShellProps {
   readonly onNavigatorSearchQueryChange?: ((query: string) => void) | undefined;
   readonly onNavigatorExpandedSectionIdsChange?:
     ((sectionIds: readonly string[]) => void) | undefined;
+}
+
+export interface CreativeWorkspaceNavigatorProps {
+  readonly projectTitle: string;
+  readonly mode: CreativeNavigatorMode;
+  readonly searchQuery: string;
+  readonly chapters: readonly ChapterSummary[];
+  readonly activeChapterId?: string;
+  readonly dirtyChapterIds: readonly string[];
+  readonly storyBible: StoryBibleEditorProps;
+  readonly onModeSelect: (mode: CreativeNavigatorMode) => void;
+  readonly onSearchQueryChange: (query: string) => void;
+  readonly onCreateChapter: () => void;
+  readonly onChapterOpen: (chapterId: string) => void;
+  readonly onChapterRename: (chapterId: string, title: string) => void;
+  readonly onChapterDuplicate: (chapterId: string) => void;
+  readonly onChapterDelete: (chapterId: string) => void;
+  readonly onStoryKindOpen: (kind: StoryBibleEditorKind) => void;
+  readonly onStoryEntryOpen: (entryId: string) => void;
+  readonly onStoryEntryCreate: (kind: StoryBibleEditorKind) => void;
 }
 
 export type AgentConversationMainReview =
@@ -271,10 +296,7 @@ export interface AgentComposerReasoningControl {
 }
 
 export type AgentComposerReferenceKind =
-  | "chapter"
-  | "story_bible"
-  | "project_file"
-  | "editor_selection";
+  "chapter" | "story_bible" | "project_file" | "editor_selection";
 
 export interface AgentComposerReferenceChip {
   readonly refId: string;
@@ -289,11 +311,7 @@ export interface AgentComposerReferenceControl {
   readonly onRemove: (refId: string) => void;
 }
 
-export type AgentComposerContextState =
-  | "normal"
-  | "heavy"
-  | "needs_refresh"
-  | "compaction_failed";
+export type AgentComposerContextState = "normal" | "heavy" | "needs_refresh" | "compaction_failed";
 
 export interface AgentComposerContextSourceRow {
   readonly refId: string;
@@ -315,7 +333,8 @@ export interface AgentComposerPermissionControl {
   readonly summary?: PermissionSummary;
   readonly loading: boolean;
   readonly errorMessage?: string;
-  readonly approvalSource: "not_applicable" | "not_approved" | "human_confirmation" | "user_preapproved_run";
+  readonly approvalSource:
+    "not_applicable" | "not_approved" | "human_confirmation" | "user_preapproved_run";
   readonly onOpen: () => void;
 }
 

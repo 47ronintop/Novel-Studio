@@ -1,4 +1,5 @@
 import type { ActivityId, NavigatorSection } from "@novel-studio/application";
+import type { WorkspaceContextDto } from "@novel-studio/shared";
 import {
   Bot,
   Brain,
@@ -20,7 +21,9 @@ import {
 import type { CSSProperties, ReactNode } from "react";
 
 import type { ConfigStudioAssetType, ConfigStudioPanelProps } from "./config-studio-panel.js";
+import { CreativeWorkspaceNavigator } from "./creative-workspace-navigator.js";
 import type {
+  CreativeWorkspaceNavigatorProps,
   ProjectFileTreeItemProps,
   ProjectWorkflowProps,
   StoryBibleEditorKind,
@@ -53,7 +56,7 @@ const studioAssetTypeByNavigatorSection: ReadonlyMap<string, ConfigStudioAssetTy
   ["workflows", "workflow"]
 ]);
 
-export interface WorkspaceNavigatorProps {
+export interface EngineeringWorkspaceNavigatorProps {
   readonly activeActivity: ActivityId;
   readonly sections: readonly NavigatorSection[];
   readonly expandedSectionIds?: readonly string[] | undefined;
@@ -72,7 +75,136 @@ export interface WorkspaceNavigatorProps {
   readonly onActivitySelect?: ((activityId: ActivityId) => void) | undefined;
 }
 
+export interface EmptyWorkspaceNavigatorProps {
+  readonly onOpenProject?: (() => void) | undefined;
+  readonly onCreateProject?: (() => void) | undefined;
+}
+
+export interface WorkspaceNavigatorProps {
+  readonly workspaceContext: WorkspaceContextDto;
+  readonly creative?: CreativeWorkspaceNavigatorProps | undefined;
+  readonly engineering?: EngineeringWorkspaceNavigatorProps | undefined;
+  readonly none: EmptyWorkspaceNavigatorProps;
+  readonly collapsed?: boolean | undefined;
+  readonly focusHidden?: boolean | undefined;
+}
+
 export function WorkspaceNavigator({
+  workspaceContext,
+  creative,
+  engineering,
+  none,
+  collapsed = false,
+  focusHidden = false
+}: WorkspaceNavigatorProps) {
+  if (workspaceContext.kind === "creativeProject") {
+    if (creative === undefined) {
+      return (
+        <UnavailableWorkspaceNavigator
+          collapsed={collapsed}
+          focusHidden={focusHidden}
+          message="正在加载创作导航"
+        />
+      );
+    }
+
+    return (
+      <div
+        className="ns-navigator-context"
+        data-collapsed={collapsed}
+        data-focus-hidden={focusHidden}
+      >
+        <CreativeWorkspaceNavigator {...creative} />
+      </div>
+    );
+  }
+
+  if (workspaceContext.kind === "engineeringWorkspace") {
+    if (engineering === undefined) {
+      return (
+        <UnavailableWorkspaceNavigator
+          collapsed={collapsed}
+          focusHidden={focusHidden}
+          message="正在加载工程导航"
+        />
+      );
+    }
+
+    return (
+      <LegacyEngineeringWorkspaceNavigator
+        {...engineering}
+        collapsed={collapsed}
+        focusHidden={focusHidden}
+      />
+    );
+  }
+
+  return (
+    <nav
+      aria-label="工作区导航"
+      className="ns-navigator ns-empty-workspace-navigator"
+      data-collapsed={collapsed}
+      data-focus-hidden={focusHidden}
+      data-region="navigator"
+    >
+      <div className="ns-panel-header">
+        <span>工作区</span>
+      </div>
+      <div className="ns-empty-workspace-actions">
+        <p>尚未打开工作区</p>
+        <button
+          aria-label="打开项目"
+          className="ns-icon-text-button"
+          disabled={none.onOpenProject === undefined}
+          onClick={none.onOpenProject}
+          type="button"
+        >
+          <FolderOpen aria-hidden="true" size={14} />
+          打开项目
+        </button>
+        <button
+          aria-label="创建项目"
+          className="ns-icon-text-button"
+          disabled={none.onCreateProject === undefined}
+          onClick={none.onCreateProject}
+          type="button"
+        >
+          <FolderPlus aria-hidden="true" size={14} />
+          创建项目
+        </button>
+      </div>
+    </nav>
+  );
+}
+
+function UnavailableWorkspaceNavigator({
+  collapsed,
+  focusHidden,
+  message
+}: {
+  readonly collapsed: boolean;
+  readonly focusHidden: boolean;
+  readonly message: string;
+}) {
+  return (
+    <nav
+      aria-label="工作区导航"
+      className="ns-navigator ns-empty-workspace-navigator"
+      data-collapsed={collapsed}
+      data-focus-hidden={focusHidden}
+      data-region="navigator"
+    >
+      <div className="ns-panel-header">
+        <span>工作区</span>
+      </div>
+      <div className="ns-empty-workspace-actions">
+        <p>{message}</p>
+      </div>
+    </nav>
+  );
+}
+
+function LegacyEngineeringWorkspaceNavigator({
   activeActivity,
   sections,
   expandedSectionIds = ["novel-studio", ...sections.map((section) => section.id)],
@@ -89,7 +221,7 @@ export function WorkspaceNavigator({
   onDuplicateChapter,
   onDeleteChapter,
   onActivitySelect
-}: WorkspaceNavigatorProps) {
+}: EngineeringWorkspaceNavigatorProps) {
   const normalizedQuery = searchQuery.trim().toLocaleLowerCase();
   const expanded = new Set(expandedSectionIds);
   const novelStudioExpanded = expanded.has("novel-studio");
@@ -203,56 +335,56 @@ export function WorkspaceNavigator({
         </li>
         {novelStudioExpanded
           ? sections.map((section) => {
-          const label = navigatorSectionLabels.get(section.id) ?? section.title;
-          const SectionIcon = navigatorSectionIcon(section.id);
-          const items = buildSectionItems({
-            sectionId: section.id,
-            query: normalizedQuery,
-            projectWorkflow,
-            storyBibleEditor,
-            studio,
-            onRenameChapter,
-            onDuplicateChapter,
-            onDeleteChapter,
-            onActivitySelect
-          });
-          const isExpanded = expanded.has(section.id);
-          return (
-            <li key={section.id}>
-              <section
-                aria-label={`${label} 分组`}
-                className="ns-tree-group"
-                data-selected={navigatorSectionSelected(section.id, activeActivity)}
-                data-expanded={isExpanded}
-              >
-                <button
-                  aria-expanded={isExpanded}
-                  aria-label={`切换导航分组：${label}`}
-                  className="ns-tree-row"
-                  onClick={() =>
-                    onExpandedSectionIdsChange?.(toggleSection(expandedSectionIds, section.id))
-                  }
-                  type="button"
-                >
-                  <ChevronRight
-                    aria-hidden="true"
-                    className="ns-tree-chevron"
-                    data-navigator-chevron={isExpanded ? "expanded" : "collapsed"}
-                    size={14}
-                  />
-                  <SectionIcon
-                    aria-hidden="true"
-                    className="ns-tree-type-icon"
-                    data-navigator-type-icon={`section:${section.id}`}
-                    size={14}
-                  />
-                  <span className="ns-tree-row-label">{label}</span>
-                  <span className="ns-tree-row-count">{items.length}</span>
-                </button>
-                {isExpanded ? <ul className="ns-navigator-item-list">{items}</ul> : null}
-              </section>
-            </li>
-          );
+              const label = navigatorSectionLabels.get(section.id) ?? section.title;
+              const SectionIcon = navigatorSectionIcon(section.id);
+              const items = buildSectionItems({
+                sectionId: section.id,
+                query: normalizedQuery,
+                projectWorkflow,
+                storyBibleEditor,
+                studio,
+                onRenameChapter,
+                onDuplicateChapter,
+                onDeleteChapter,
+                onActivitySelect
+              });
+              const isExpanded = expanded.has(section.id);
+              return (
+                <li key={section.id}>
+                  <section
+                    aria-label={`${label} 分组`}
+                    className="ns-tree-group"
+                    data-selected={navigatorSectionSelected(section.id, activeActivity)}
+                    data-expanded={isExpanded}
+                  >
+                    <button
+                      aria-expanded={isExpanded}
+                      aria-label={`切换导航分组：${label}`}
+                      className="ns-tree-row"
+                      onClick={() =>
+                        onExpandedSectionIdsChange?.(toggleSection(expandedSectionIds, section.id))
+                      }
+                      type="button"
+                    >
+                      <ChevronRight
+                        aria-hidden="true"
+                        className="ns-tree-chevron"
+                        data-navigator-chevron={isExpanded ? "expanded" : "collapsed"}
+                        size={14}
+                      />
+                      <SectionIcon
+                        aria-hidden="true"
+                        className="ns-tree-type-icon"
+                        data-navigator-type-icon={`section:${section.id}`}
+                        size={14}
+                      />
+                      <span className="ns-tree-row-label">{label}</span>
+                      <span className="ns-tree-row-count">{items.length}</span>
+                    </button>
+                    {isExpanded ? <ul className="ns-navigator-item-list">{items}</ul> : null}
+                  </section>
+                </li>
+              );
             })
           : null}
       </ul>
@@ -277,9 +409,7 @@ function ProjectWorkflowControls({
       <input
         aria-label="项目文件夹名称"
         className="ns-project-path"
-        onChange={(event) =>
-          projectWorkflow.onProjectFolderNameChange?.(event.currentTarget.value)
-        }
+        onChange={(event) => projectWorkflow.onProjectFolderNameChange?.(event.currentTarget.value)}
         placeholder="文件夹名称"
         value={projectWorkflow.projectFolderNameInput ?? ""}
       />
@@ -513,7 +643,9 @@ function renderFileTreeItem(
       <div
         className="ns-navigator-file-item"
         data-navigator-file-kind={item.kind}
-        style={{ "--ns-tree-depth": input.depth } as CSSProperties & Record<"--ns-tree-depth", number>}
+        style={
+          { "--ns-tree-depth": input.depth } as CSSProperties & Record<"--ns-tree-depth", number>
+        }
       >
         <button
           aria-expanded={isDirectory ? isExpanded : undefined}

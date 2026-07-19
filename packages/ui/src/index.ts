@@ -92,8 +92,13 @@ export type {
 export { DiffReview } from "./diff-review.js";
 export { PlanArtifactReview } from "./plan-artifact-review.js";
 export type { PlanArtifactReviewProps } from "./plan-artifact-review.js";
+export { CreativeWorkspaceNavigator } from "./creative-workspace-navigator.js";
 export { WorkspaceNavigator } from "./workspace-navigator.js";
-export type { WorkspaceNavigatorProps } from "./workspace-navigator.js";
+export type {
+  EmptyWorkspaceNavigatorProps,
+  EngineeringWorkspaceNavigatorProps,
+  WorkspaceNavigatorProps
+} from "./workspace-navigator.js";
 export type {
   AiWorkflowObservabilityProps,
   AiWorkflowObservedStepKind,
@@ -130,6 +135,7 @@ export type {
   AgentRunPanelProps,
   AgentRunPendingUserInputProps,
   AiWorkflowBranchChoiceProps,
+  CreativeWorkspaceNavigatorProps,
   OnboardingProps,
   OnboardingStepProps,
   PlainFileEditorProps,

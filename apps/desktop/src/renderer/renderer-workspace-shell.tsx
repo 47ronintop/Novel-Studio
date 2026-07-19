@@ -5,13 +5,14 @@ import type {
   DesktopShellState,
   ProjectSearchResultItem
 } from "@novel-studio/application";
-import type { UserAppearancePreferences } from "@novel-studio/shared";
+import type { CreativeNavigatorMode, UserAppearancePreferences } from "@novel-studio/shared";
 import type {
   AiWritingWorkflowProps,
   AgentConversationWorkspaceShellProps,
   ChapterEditorProps,
   CommandPaletteFeedback,
   ConfigStudioPanelProps,
+  CreativeWorkspaceNavigatorProps,
   ModelSettingsPanelProps,
   ProjectSearchProps,
   ProjectWorkflowProps,
@@ -107,6 +108,7 @@ export interface RendererWorkspaceShellProps {
   readonly onStoryBibleEntrySelect: StoryBibleEditorProps["onEntrySelect"];
   readonly onStoryBibleDraftChange: StoryBibleEditorProps["onDraftChange"];
   readonly onNewStoryBibleDraft: StoryBibleEditorProps["onNewDraft"];
+  readonly onCreativeNavigatorModeSelect: (mode: CreativeNavigatorMode) => void;
   readonly onSaveStoryBibleDraft: StoryBibleEditorProps["onSave"];
   readonly onCommandExecute: NonNullable<WorkspaceShellProps["onCommandExecute"]>;
   readonly onCommandPaletteActiveCommandChange: NonNullable<
@@ -131,9 +133,78 @@ export interface RendererWorkspaceShellProps {
 }
 
 export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
+  const projectWorkflow =
+    props.projectWorkflow === undefined
+      ? undefined
+      : ({
+          ...props.projectWorkflow,
+          onProjectTitleChange: props.onProjectTitleChange,
+          onProjectFolderNameChange: props.onProjectFolderNameChange,
+          onChooseCreateParentDirectory: props.onChooseCreateParentDirectory,
+          onOpenProject: props.onOpenProject,
+          onCreateProject: props.onCreateProject,
+          onCreateChapter: props.onCreateChapter,
+          onOpenFile: props.onOpenFile,
+          onRenameChapter: props.onRenameChapter,
+          onDuplicateChapter: props.onDuplicateChapter,
+          onDeleteChapter: props.onDeleteChapter,
+          onSelectChapter: props.onSelectChapter,
+          onCloseChapterTab: props.onCloseChapterTab,
+          onPreviewRecoveryDraft: props.onPreviewRecoveryDraft,
+          onApplyRecoveryDraft: props.onApplyRecoveryDraft,
+          onDiscardRecoveryDraft: props.onDiscardRecoveryDraft
+        } satisfies ProjectWorkflowProps);
+  const storyBibleEditor =
+    props.storyBibleEditor === undefined
+      ? undefined
+      : ({
+          ...props.storyBibleEditor,
+          onKindSelect: props.onStoryBibleKindSelect,
+          onEntrySelect: props.onStoryBibleEntrySelect,
+          onDraftChange: props.onStoryBibleDraftChange,
+          onNewDraft: props.onNewStoryBibleDraft,
+          onSave: props.onSaveStoryBibleDraft
+        } satisfies StoryBibleEditorProps);
+  const creativeNavigator =
+    props.shellState.workspaceContext.kind === "creativeProject" &&
+    projectWorkflow !== undefined &&
+    storyBibleEditor !== undefined
+      ? ({
+          projectTitle: props.shellState.workspaceContext.displayName,
+          mode: props.shellState.creativeNavigatorMode,
+          searchQuery: props.navigatorSearchQuery,
+          chapters: projectWorkflow.chapters,
+          ...(projectWorkflow.activeChapterId === undefined
+            ? {}
+            : { activeChapterId: projectWorkflow.activeChapterId }),
+          dirtyChapterIds: projectWorkflow.dirtyChapterIds ?? [],
+          storyBible: storyBibleEditor,
+          onModeSelect: props.onCreativeNavigatorModeSelect,
+          onSearchQueryChange: props.onNavigatorSearchQueryChange,
+          onCreateChapter: props.onCreateChapter,
+          onChapterOpen: props.onSelectChapter,
+          onChapterRename: props.onRenameChapter,
+          onChapterDuplicate: props.onDuplicateChapter,
+          onChapterDelete: props.onDeleteChapter,
+          onStoryKindOpen: (kind) => {
+            props.onActivitySelect("storyBible");
+            props.onStoryBibleKindSelect(kind);
+          },
+          onStoryEntryOpen: (entryId) => {
+            props.onActivitySelect("storyBible");
+            props.onStoryBibleEntrySelect(entryId);
+          },
+          onStoryEntryCreate: (kind) => {
+            props.onActivitySelect("storyBible");
+            props.onStoryBibleKindSelect(kind);
+          }
+        } satisfies CreativeWorkspaceNavigatorProps)
+      : undefined;
+
   return (
     <WorkspaceShell
       appearancePreferences={props.appearancePreferences}
+      {...(creativeNavigator === undefined ? {} : { creativeNavigator })}
       {...(props.aiWritingWorkflow === undefined ||
       (props.shellState.activeActivity === "ai" && props.agentConversationWorkspace !== undefined)
         ? {}
@@ -154,28 +225,7 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
       {...(props.agentConversationWorkspace === undefined
         ? {}
         : { agentConversationWorkspace: props.agentConversationWorkspace })}
-      {...(props.projectWorkflow === undefined
-        ? {}
-        : {
-            projectWorkflow: {
-              ...props.projectWorkflow,
-              onProjectTitleChange: props.onProjectTitleChange,
-              onProjectFolderNameChange: props.onProjectFolderNameChange,
-              onChooseCreateParentDirectory: props.onChooseCreateParentDirectory,
-              onOpenProject: props.onOpenProject,
-              onCreateProject: props.onCreateProject,
-              onCreateChapter: props.onCreateChapter,
-              onOpenFile: props.onOpenFile,
-              onRenameChapter: props.onRenameChapter,
-              onDuplicateChapter: props.onDuplicateChapter,
-              onDeleteChapter: props.onDeleteChapter,
-              onSelectChapter: props.onSelectChapter,
-              onCloseChapterTab: props.onCloseChapterTab,
-              onPreviewRecoveryDraft: props.onPreviewRecoveryDraft,
-              onApplyRecoveryDraft: props.onApplyRecoveryDraft,
-              onDiscardRecoveryDraft: props.onDiscardRecoveryDraft
-            }
-          })}
+      {...(projectWorkflow === undefined ? {} : { projectWorkflow })}
       {...(props.projectSearch === undefined
         ? {}
         : {
@@ -231,18 +281,7 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
       {...(props.fileEditor === undefined ? {} : { fileEditor: props.fileEditor })}
       {...(props.onboarding === undefined ? {} : { onboarding: props.onboarding })}
       {...(props.storyBible === undefined ? {} : { storyBible: props.storyBible })}
-      {...(props.storyBibleEditor === undefined
-        ? {}
-        : {
-            storyBibleEditor: {
-              ...props.storyBibleEditor,
-              onKindSelect: props.onStoryBibleKindSelect,
-              onEntrySelect: props.onStoryBibleEntrySelect,
-              onDraftChange: props.onStoryBibleDraftChange,
-              onNewDraft: props.onNewStoryBibleDraft,
-              onSave: props.onSaveStoryBibleDraft
-            } satisfies StoryBibleEditorProps
-          })}
+      {...(storyBibleEditor === undefined ? {} : { storyBibleEditor })}
       shellState={props.shellState}
       commands={props.commands}
       commandPaletteOpen={props.commandPaletteOpen}

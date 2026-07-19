@@ -107,14 +107,29 @@ export function useProjectWorkflowActions({
     void projectWorkflowBridge?.chooseCreateParentDirectory().then(setProjectWorkflow);
   }, [projectWorkflowBridge, setProjectWorkflow]);
 
+  const clearProjectBoundStory = useCallback(() => {
+    setStoryBible(undefined);
+    setStoryBibleEditor(undefined);
+  }, [setStoryBible, setStoryBibleEditor]);
+
+  const refreshWorkspaceTransition = useCallback(
+    async (nextWorkflow: ProjectWorkflowProps) => {
+      if (nextWorkflow.status === "ready" && nextWorkflow.feedback === undefined) {
+        clearProjectBoundStory();
+      }
+      await refreshProjectWorkflow(nextWorkflow);
+    },
+    [clearProjectBoundStory, refreshProjectWorkflow]
+  );
+
   const handleOpenProject = useCallback(() => {
     if (projectWorkflowBridge === undefined) {
       return;
     }
 
     setProjectWorkflow({ ...projectWorkflowBridge.getProps(), status: "opening" });
-    void projectWorkflowBridge.openProject().then(refreshProjectWorkflow);
-  }, [projectWorkflowBridge, refreshProjectWorkflow, setProjectWorkflow]);
+    void projectWorkflowBridge.openProject().then(refreshWorkspaceTransition);
+  }, [projectWorkflowBridge, refreshWorkspaceTransition, setProjectWorkflow]);
 
   const handleCreateProject = useCallback(() => {
     if (projectWorkflowBridge === undefined) {
@@ -122,8 +137,8 @@ export function useProjectWorkflowActions({
     }
 
     setProjectWorkflow({ ...projectWorkflowBridge.getProps(), status: "creating" });
-    void projectWorkflowBridge.createProject().then(refreshProjectWorkflow);
-  }, [projectWorkflowBridge, refreshProjectWorkflow, setProjectWorkflow]);
+    void projectWorkflowBridge.createProject().then(refreshWorkspaceTransition);
+  }, [projectWorkflowBridge, refreshWorkspaceTransition, setProjectWorkflow]);
 
   const handleCreateExampleProject = useCallback(() => {
     if (projectWorkflowBridge === undefined) {
@@ -131,8 +146,8 @@ export function useProjectWorkflowActions({
     }
 
     setProjectWorkflow({ ...projectWorkflowBridge.getProps(), status: "creating" });
-    void projectWorkflowBridge.createExampleProject().then(refreshProjectWorkflow);
-  }, [projectWorkflowBridge, refreshProjectWorkflow, setProjectWorkflow]);
+    void projectWorkflowBridge.createExampleProject().then(refreshWorkspaceTransition);
+  }, [projectWorkflowBridge, refreshWorkspaceTransition, setProjectWorkflow]);
 
   const handleCreateChapter = useCallback(() => {
     void projectWorkflowBridge?.createChapter().then(refreshProjectWorkflow);

@@ -49,6 +49,7 @@ import { RendererWorkspaceShell } from "./renderer-workspace-shell.js";
 import { useProjectWorkflowActions } from "./project-workflow-actions.js";
 import { useAiWritingWorkflowActions } from "./ai-writing-workflow-actions.js";
 import { useAgentUsageSettingsActions } from "./agent-usage-settings-actions.js";
+import { useShellPreferenceActions } from "./shell-preference-actions.js";
 
 export function App() {
   const [api] = useState(() => getNovelStudioApi());
@@ -315,6 +316,8 @@ export function App() {
     },
     [api]
   );
+  const { handleCreativeNavigatorModeSelect, handleNavigatorExpandedSectionIdsChange } =
+    useShellPreferenceActions(setShellState, persistUserPreferences);
 
   const applyActivity = useCallback(
     (activityId: ActivityId) => {
@@ -347,20 +350,6 @@ export function App() {
         const next = {
           ...current,
           activeBottomPanelTab: tab
-        };
-        persistUserPreferences({ shell: shellPreferencesFromState(next) });
-        return next;
-      });
-    },
-    [persistUserPreferences]
-  );
-
-  const handleNavigatorExpandedSectionIdsChange = useCallback(
-    (sectionIds: readonly string[]) => {
-      setShellState((current) => {
-        const next = {
-          ...current,
-          navigatorExpandedSectionIds: [...sectionIds]
         };
         persistUserPreferences({ shell: shellPreferencesFromState(next) });
         return next;
@@ -1031,6 +1020,7 @@ export function App() {
       onStoryBibleEntrySelect={handleStoryBibleEntrySelect}
       onStoryBibleDraftChange={handleStoryBibleDraftChange}
       onNewStoryBibleDraft={handleNewStoryBibleDraft}
+      onCreativeNavigatorModeSelect={handleCreativeNavigatorModeSelect}
       onSaveStoryBibleDraft={handleSaveStoryBibleDraft}
       onCommandExecute={handleCommandExecute}
       onCommandPaletteActiveCommandChange={handleCommandPaletteActiveCommandChange}

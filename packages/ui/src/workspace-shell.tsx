@@ -4,19 +4,10 @@ import type {
   ProjectSearchResultItem
 } from "@novel-studio/application";
 import type { ChapterSummary } from "@novel-studio/shared";
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type CSSProperties
-} from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { ChapterEditorProps } from "./chapter-editor.js";
 import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
-import {
-  DEFAULT_EDITOR_PREFERENCES,
-  editorFontFamilyValue
-} from "./editor-toolbar.js";
+import { DEFAULT_EDITOR_PREFERENCES, editorFontFamilyValue } from "./editor-toolbar.js";
 import {
   Bot,
   Boxes,
@@ -53,7 +44,7 @@ import {
   TimelineMainView
 } from "./workspace-shell-story-search.js";
 import { AutosaveRecoveryNotice, OnboardingQuickStart } from "./workspace-shell-project-assist.js";
-import { WorkspaceNavigator } from "./workspace-navigator.js";
+import { WorkspaceShellNavigator } from "./workspace-shell-navigator.js";
 import { DiffReview } from "./diff-review.js";
 import { RollbackReview } from "./change-set-review.js";
 import { WorkspaceStatusBar } from "./workspace-status-bar.js";
@@ -112,6 +103,7 @@ function WorkspaceShellContent({
   studio,
   storyBible,
   storyBibleEditor,
+  creativeNavigator,
   fileEditor,
   onboarding,
   onCommandPaletteOpen,
@@ -181,33 +173,33 @@ function WorkspaceShellContent({
         </button>
         {settingsMode ? null : (
           <div className="ns-layout-controls" aria-label="布局控制">
-          <button
-            aria-label="切换底部面板"
-            className="ns-icon-button"
-            onClick={() => onCommandExecute?.("workspace.toggle-bottom-panel")}
-            title="切换底部面板"
-            type="button"
-          >
-            <PanelBottom aria-hidden="true" size={14} />
-          </button>
-          <button
-            aria-label="切换 Split View"
-            className="ns-icon-button"
-            onClick={() => onCommandExecute?.("workspace.toggle-split-view")}
-            title="切换 Split View"
-            type="button"
-          >
-            <PanelRight aria-hidden="true" size={14} />
-          </button>
-          <button
-            aria-label="切换专注模式"
-            className="ns-icon-button"
-            onClick={() => onCommandExecute?.("workspace.toggle-focus-mode")}
-            title="切换专注模式"
-            type="button"
-          >
-            <Maximize2 aria-hidden="true" size={14} />
-          </button>
+            <button
+              aria-label="切换底部面板"
+              className="ns-icon-button"
+              onClick={() => onCommandExecute?.("workspace.toggle-bottom-panel")}
+              title="切换底部面板"
+              type="button"
+            >
+              <PanelBottom aria-hidden="true" size={14} />
+            </button>
+            <button
+              aria-label="切换 Split View"
+              className="ns-icon-button"
+              onClick={() => onCommandExecute?.("workspace.toggle-split-view")}
+              title="切换 Split View"
+              type="button"
+            >
+              <PanelRight aria-hidden="true" size={14} />
+            </button>
+            <button
+              aria-label="切换专注模式"
+              className="ns-icon-button"
+              onClick={() => onCommandExecute?.("workspace.toggle-focus-mode")}
+              title="切换专注模式"
+              type="button"
+            >
+              <Maximize2 aria-hidden="true" size={14} />
+            </button>
           </div>
         )}
       </header>
@@ -216,231 +208,233 @@ function WorkspaceShellContent({
         <SettingsWorkspace onClose={onSettingsClose} settings={settings} />
       ) : (
         <>
-      <div
-        className="ns-workspace-grid"
-        data-agent-conversation={
-          shellState.activeActivity === "ai" && agentConversationWorkspace !== undefined
-        }
-        data-focus-mode={focusMode}
+          <div
+            className="ns-workspace-grid"
+            data-agent-conversation={
+              shellState.activeActivity === "ai" && agentConversationWorkspace !== undefined
+            }
+            data-focus-mode={focusMode}
             data-split-view={workspaceLayout.splitView}
             style={workspaceGridStyle}
           >
-        <aside
-          className="ns-activity-bar"
-          data-focus-hidden={focusMode}
-          data-region="activity-bar"
-          aria-label="活动栏"
-        >
-          {activities.map((activity) => {
-            const Icon = activity.icon;
-            const selected = activity.id === shellState.activeActivity;
+            <aside
+              className="ns-activity-bar"
+              data-focus-hidden={focusMode}
+              data-region="activity-bar"
+              aria-label="活动栏"
+            >
+              {activities.map((activity) => {
+                const Icon = activity.icon;
+                const selected = activity.id === shellState.activeActivity;
 
-            return (
-              <button
-                {...(selected ? { "aria-current": "page" as const } : {})}
-                aria-label={activity.label}
-                className="ns-activity-button"
-                data-activity-id={activity.id}
-                data-focus-order={selected ? "2" : undefined}
-                data-selected={selected}
-                key={activity.id}
-                onClick={() => onActivitySelect?.(activity.id)}
-                title={activity.label}
-                type="button"
-              >
-                <Icon aria-hidden="true" size={18} />
-              </button>
-            );
-          })}
-        </aside>
-
-        {shellState.activeActivity === "ai" && agentConversationWorkspace !== undefined ? (
-          <div
-            className="ns-agent-conversation-navigator-region"
-            data-collapsed={focusMode || shellState.navigatorCollapsed}
-            data-focus-hidden={focusMode || shellState.navigatorCollapsed}
-          >
-            <AgentConversationNavigator {...agentConversationWorkspace.navigator} />
-          </div>
-        ) : (
-          <WorkspaceNavigator
-            activeActivity={shellState.activeActivity}
-            collapsed={focusMode || shellState.navigatorCollapsed}
-            expandedSectionIds={shellState.navigatorExpandedSectionIds}
-            focusHidden={focusMode}
-            onActivitySelect={onActivitySelect}
-            onExpandedSectionIdsChange={onNavigatorExpandedSectionIdsChange}
-            onSearchQueryChange={onNavigatorSearchQueryChange}
-            projectWorkflow={projectWorkflow}
-            searchQuery={navigatorSearchQuery}
-            sections={shellState.navigatorSections}
-            storyBibleEditor={storyBibleEditor}
-            studio={studio}
-          />
-        )}
-
-        <div
-          aria-label="Navigator resize handle"
-          aria-orientation="vertical"
-          aria-valuemax={420}
-          aria-valuemin={220}
-          aria-valuenow={workspaceLayout.navigatorWidth}
-          className="ns-resize-handle ns-resize-handle-navigator"
-          data-focus-hidden={focusMode}
-          onPointerDown={createPanelResizeHandler("navigator")}
-          role="separator"
-        />
-
-        <main aria-label="编辑区" className="ns-editor-area" data-region="editor-area">
-          {shellState.activeActivity === "ai" &&
-          agentConversationWorkspace?.mainReview?.kind === "rollback" ? (
-            <RollbackReview review={agentConversationWorkspace.mainReview.props} />
-          ) : shellState.activeActivity === "ai" &&
-            agentConversationWorkspace?.mainReview?.kind === "change_set" ? (
-            <DiffReview review={agentConversationWorkspace.mainReview.props} />
-          ) : shellState.activeActivity === "ai" &&
-            agentConversationWorkspace?.mainReview?.kind === "plan" ? (
-            <PlanArtifactReview {...agentConversationWorkspace.mainReview.props} />
-          ) : aiWritingWorkflow?.agentRun?.rollbackReview !== undefined &&
-          aiWritingWorkflow.agentRun.rollbackReview.open !== false &&
-          shellState.activeActivity === "workspace" ? (
-            <RollbackReview review={aiWritingWorkflow.agentRun.rollbackReview} />
-          ) : aiWritingWorkflow?.agentRun?.changeSetReview !== undefined &&
-          aiWritingWorkflow.agentRun.changeSetReview.open !== false &&
-          shellState.activeActivity === "workspace" ? (
-            <DiffReview review={aiWritingWorkflow.agentRun.changeSetReview} />
-          ) : shellState.activeActivity === "workspace" || shellState.activeActivity === "ai" ? (
-            <WorkspaceEditorSurface
-              chapterEditor={chapterEditor}
-              fileEditor={fileEditor}
-              onboarding={onboarding}
-              projectWorkflow={projectWorkflow}
-              splitView={workspaceLayout.splitView}
-              onFileSelectionChange={setFileSelection}
-            />
-          ) : (
-            <ActivityEmptyState
-              activityId={shellState.activeActivity}
-              aiWritingWorkflow={aiWritingWorkflow}
-              search={search}
-              studio={studio}
-              storyBibleEditor={storyBibleEditor}
-              onSearchResultOpen={onSearchResultOpen}
-              onTimelineEntryOpen={onTimelineEntryOpen}
-            />
-          )}
-        </main>
-
-        <div
-          aria-label="AI panel resize handle"
-          aria-orientation="vertical"
-          aria-valuemax={520}
-          aria-valuemin={280}
-          aria-valuenow={workspaceLayout.inspectorWidth}
-          className="ns-resize-handle ns-resize-handle-ai"
-          data-focus-hidden={focusMode}
-          onPointerDown={createPanelResizeHandler("ai")}
-          role="separator"
-        />
-
-        <aside
-          aria-label="AI 对话面板"
-          className="ns-ai-panel"
-          data-focus-hidden={focusMode}
-          data-region="ai-panel"
-        >
-          <div className="ns-panel-header">
-            <span>
-              {shellState.activeActivity === "ai" && agentConversationWorkspace !== undefined
-                ? "Agent 运行"
-                : "AI 对话"}
-            </span>
-            <PanelRight aria-hidden="true" size={15} />
-          </div>
-          {shellState.activeActivity === "ai" && agentConversationWorkspace !== undefined ? (
-            <AgentConversationView {...agentConversationWorkspace.view} />
-          ) : aiWritingWorkflow === undefined ? (
-            <section className="ns-ai-workflow ns-ai-placeholder" aria-label="AI 写作工作流">
-              <div className="ns-editor-panel-header">
-                <span>对话式写作助手</span>
-                <span className="ns-muted">未加载</span>
-              </div>
-              <p className="ns-ai-context">打开项目章节后，可以在这里向 AI 提出续写或修改要求。</p>
-              <section className="ns-ai-composer" aria-label="AI 输入区">
-                <textarea
-                  aria-label="AI 写作指令"
-                  className="ns-ai-instruction"
-                  disabled
-                  placeholder="和 AI 说明你想怎么改写或续写当前章节"
-                />
-                <div className="ns-ai-actions">
-                  <button className="ns-icon-text-button" disabled type="button">
-                    生成建议
+                return (
+                  <button
+                    {...(selected ? { "aria-current": "page" as const } : {})}
+                    aria-label={activity.label}
+                    className="ns-activity-button"
+                    data-activity-id={activity.id}
+                    data-focus-order={selected ? "2" : undefined}
+                    data-selected={selected}
+                    key={activity.id}
+                    onClick={() => onActivitySelect?.(activity.id)}
+                    title={activity.label}
+                    type="button"
+                  >
+                    <Icon aria-hidden="true" size={18} />
                   </button>
-                </div>
-              </section>
-            </section>
-          ) : (
-            <AiWritingAssistantPanel workflow={aiWritingWorkflow} />
-          )}
-          {storyBible === undefined ? null : (
-            <details className="ns-story-bible-summary" aria-label="故事圣经摘要">
-              <summary>故事圣经</summary>
-              <div className="ns-editor-panel-header">
-                <span>故事圣经</span>
-                <span className="ns-muted">{storyBible.assets.length}</span>
-              </div>
-              <ul className="ns-story-bible-list">
-                {storyBible.assets.map((asset) => (
-                  <li className="ns-story-bible-item" key={asset.id}>
-                    <div className="ns-story-bible-title">
-                      <span>{asset.title}</span>
-                      <span>{asset.type}</span>
-                    </div>
-                    <p>{asset.summary}</p>
-                    <div className="ns-story-bible-meta">
-                      <span>{asset.status}</span>
-                      {asset.contextEligible === true ? <span>可进入上下文</span> : null}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </details>
-          )}
-        </aside>
+                );
+              })}
+            </aside>
 
-        <section
-          aria-label="底部面板"
-          className="ns-bottom-panel"
-          data-focus-hidden={focusMode}
-          data-region="bottom-panel"
-          data-visible={!focusMode && shellState.bottomPanelVisible}
-        >
-          <div className="ns-bottom-tabs" role="tablist" aria-label="底部面板标签">
-            <PanelBottom aria-hidden="true" size={15} />
-            {shellState.bottomPanelTabs.map((tab, index) => (
-              <button
-                aria-label={`切换底部面板：${bottomPanelLabels.get(tab) ?? tab}`}
-                aria-selected={tab === activeBottomPanelTab}
-                className="ns-bottom-tab"
-                data-focus-order={index === 0 ? "4" : undefined}
-                key={tab}
-                onClick={() => onBottomPanelTabSelect?.(tab)}
-                role="tab"
-                title={`切换到底部面板：${bottomPanelLabels.get(tab) ?? tab}`}
-                type="button"
+            {shellState.activeActivity === "ai" && agentConversationWorkspace !== undefined ? (
+              <div
+                className="ns-agent-conversation-navigator-region"
+                data-collapsed={focusMode || shellState.navigatorCollapsed}
+                data-focus-hidden={focusMode || shellState.navigatorCollapsed}
               >
-                {bottomPanelLabels.get(tab) ?? tab}
-              </button>
-            ))}
-          </div>
-          <BottomPanelContent
-            activeTab={activeBottomPanelTab}
-            aiWritingWorkflow={aiWritingWorkflow}
-            projectWorkflow={projectWorkflow}
-            search={search}
-          />
-        </section>
+                <AgentConversationNavigator {...agentConversationWorkspace.navigator} />
+              </div>
+            ) : (
+              <WorkspaceShellNavigator
+                collapsed={focusMode || shellState.navigatorCollapsed}
+                creative={creativeNavigator}
+                focusHidden={focusMode}
+                navigatorSearchQuery={navigatorSearchQuery}
+                onActivitySelect={onActivitySelect}
+                onNavigatorExpandedSectionIdsChange={onNavigatorExpandedSectionIdsChange}
+                onNavigatorSearchQueryChange={onNavigatorSearchQueryChange}
+                projectWorkflow={projectWorkflow}
+                shellState={shellState}
+                storyBibleEditor={storyBibleEditor}
+                studio={studio}
+              />
+            )}
+
+            <div
+              aria-label="Navigator resize handle"
+              aria-orientation="vertical"
+              aria-valuemax={420}
+              aria-valuemin={220}
+              aria-valuenow={workspaceLayout.navigatorWidth}
+              className="ns-resize-handle ns-resize-handle-navigator"
+              data-focus-hidden={focusMode}
+              onPointerDown={createPanelResizeHandler("navigator")}
+              role="separator"
+            />
+
+            <main aria-label="编辑区" className="ns-editor-area" data-region="editor-area">
+              {shellState.activeActivity === "ai" &&
+              agentConversationWorkspace?.mainReview?.kind === "rollback" ? (
+                <RollbackReview review={agentConversationWorkspace.mainReview.props} />
+              ) : shellState.activeActivity === "ai" &&
+                agentConversationWorkspace?.mainReview?.kind === "change_set" ? (
+                <DiffReview review={agentConversationWorkspace.mainReview.props} />
+              ) : shellState.activeActivity === "ai" &&
+                agentConversationWorkspace?.mainReview?.kind === "plan" ? (
+                <PlanArtifactReview {...agentConversationWorkspace.mainReview.props} />
+              ) : aiWritingWorkflow?.agentRun?.rollbackReview !== undefined &&
+                aiWritingWorkflow.agentRun.rollbackReview.open !== false &&
+                shellState.activeActivity === "workspace" ? (
+                <RollbackReview review={aiWritingWorkflow.agentRun.rollbackReview} />
+              ) : aiWritingWorkflow?.agentRun?.changeSetReview !== undefined &&
+                aiWritingWorkflow.agentRun.changeSetReview.open !== false &&
+                shellState.activeActivity === "workspace" ? (
+                <DiffReview review={aiWritingWorkflow.agentRun.changeSetReview} />
+              ) : shellState.activeActivity === "workspace" ||
+                shellState.activeActivity === "ai" ? (
+                <WorkspaceEditorSurface
+                  chapterEditor={chapterEditor}
+                  fileEditor={fileEditor}
+                  onboarding={onboarding}
+                  projectWorkflow={projectWorkflow}
+                  splitView={workspaceLayout.splitView}
+                  onFileSelectionChange={setFileSelection}
+                />
+              ) : (
+                <ActivityEmptyState
+                  activityId={shellState.activeActivity}
+                  aiWritingWorkflow={aiWritingWorkflow}
+                  search={search}
+                  studio={studio}
+                  storyBibleEditor={storyBibleEditor}
+                  onSearchResultOpen={onSearchResultOpen}
+                  onTimelineEntryOpen={onTimelineEntryOpen}
+                />
+              )}
+            </main>
+
+            <div
+              aria-label="AI panel resize handle"
+              aria-orientation="vertical"
+              aria-valuemax={520}
+              aria-valuemin={280}
+              aria-valuenow={workspaceLayout.inspectorWidth}
+              className="ns-resize-handle ns-resize-handle-ai"
+              data-focus-hidden={focusMode}
+              onPointerDown={createPanelResizeHandler("ai")}
+              role="separator"
+            />
+
+            <aside
+              aria-label="AI 对话面板"
+              className="ns-ai-panel"
+              data-focus-hidden={focusMode}
+              data-region="ai-panel"
+            >
+              <div className="ns-panel-header">
+                <span>
+                  {shellState.activeActivity === "ai" && agentConversationWorkspace !== undefined
+                    ? "Agent 运行"
+                    : "AI 对话"}
+                </span>
+                <PanelRight aria-hidden="true" size={15} />
+              </div>
+              {shellState.activeActivity === "ai" && agentConversationWorkspace !== undefined ? (
+                <AgentConversationView {...agentConversationWorkspace.view} />
+              ) : aiWritingWorkflow === undefined ? (
+                <section className="ns-ai-workflow ns-ai-placeholder" aria-label="AI 写作工作流">
+                  <div className="ns-editor-panel-header">
+                    <span>对话式写作助手</span>
+                    <span className="ns-muted">未加载</span>
+                  </div>
+                  <p className="ns-ai-context">
+                    打开项目章节后，可以在这里向 AI 提出续写或修改要求。
+                  </p>
+                  <section className="ns-ai-composer" aria-label="AI 输入区">
+                    <textarea
+                      aria-label="AI 写作指令"
+                      className="ns-ai-instruction"
+                      disabled
+                      placeholder="和 AI 说明你想怎么改写或续写当前章节"
+                    />
+                    <div className="ns-ai-actions">
+                      <button className="ns-icon-text-button" disabled type="button">
+                        生成建议
+                      </button>
+                    </div>
+                  </section>
+                </section>
+              ) : (
+                <AiWritingAssistantPanel workflow={aiWritingWorkflow} />
+              )}
+              {storyBible === undefined ? null : (
+                <details className="ns-story-bible-summary" aria-label="故事圣经摘要">
+                  <summary>故事圣经</summary>
+                  <div className="ns-editor-panel-header">
+                    <span>故事圣经</span>
+                    <span className="ns-muted">{storyBible.assets.length}</span>
+                  </div>
+                  <ul className="ns-story-bible-list">
+                    {storyBible.assets.map((asset) => (
+                      <li className="ns-story-bible-item" key={asset.id}>
+                        <div className="ns-story-bible-title">
+                          <span>{asset.title}</span>
+                          <span>{asset.type}</span>
+                        </div>
+                        <p>{asset.summary}</p>
+                        <div className="ns-story-bible-meta">
+                          <span>{asset.status}</span>
+                          {asset.contextEligible === true ? <span>可进入上下文</span> : null}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </aside>
+
+            <section
+              aria-label="底部面板"
+              className="ns-bottom-panel"
+              data-focus-hidden={focusMode}
+              data-region="bottom-panel"
+              data-visible={!focusMode && shellState.bottomPanelVisible}
+            >
+              <div className="ns-bottom-tabs" role="tablist" aria-label="底部面板标签">
+                <PanelBottom aria-hidden="true" size={15} />
+                {shellState.bottomPanelTabs.map((tab, index) => (
+                  <button
+                    aria-label={`切换底部面板：${bottomPanelLabels.get(tab) ?? tab}`}
+                    aria-selected={tab === activeBottomPanelTab}
+                    className="ns-bottom-tab"
+                    data-focus-order={index === 0 ? "4" : undefined}
+                    key={tab}
+                    onClick={() => onBottomPanelTabSelect?.(tab)}
+                    role="tab"
+                    title={`切换到底部面板：${bottomPanelLabels.get(tab) ?? tab}`}
+                    type="button"
+                  >
+                    {bottomPanelLabels.get(tab) ?? tab}
+                  </button>
+                ))}
+              </div>
+              <BottomPanelContent
+                activeTab={activeBottomPanelTab}
+                aiWritingWorkflow={aiWritingWorkflow}
+                projectWorkflow={projectWorkflow}
+                search={search}
+              />
+            </section>
           </div>
 
           <WorkspaceStatusBar
@@ -580,9 +574,10 @@ function WorkspaceEditorSurface({
   readonly onboarding: OnboardingProps | undefined;
   readonly projectWorkflow: ProjectWorkflowProps | undefined;
   readonly splitView: boolean;
-  readonly onFileSelectionChange: (
-    selection: { readonly anchor: number; readonly head: number }
-  ) => void;
+  readonly onFileSelectionChange: (selection: {
+    readonly anchor: number;
+    readonly head: number;
+  }) => void;
 }) {
   const [findMode, setFindMode] = useState<EditorFindMode>("closed");
   const activeChapterId =
@@ -594,7 +589,9 @@ function WorkspaceEditorSurface({
     .filter((chapter): chapter is ChapterSummary => chapter !== undefined);
   const runtimeChapter = chapterEditor?.chapter.frontmatter;
   const visibleTabs =
-    explicitVisibleTabs.length === 0 && openChapterTabIds.length === 0 && runtimeChapter !== undefined
+    explicitVisibleTabs.length === 0 &&
+    openChapterTabIds.length === 0 &&
+    runtimeChapter !== undefined
       ? [
           {
             id: runtimeChapter.id,
@@ -650,8 +647,7 @@ function WorkspaceEditorSurface({
   const activeSaving =
     fileEditor?.saveStatus === "Saving" || chapterEditor?.saveStatus === "Saving";
   const activeSave = fileEditor?.onSave ?? chapterEditor?.onSave;
-  const activeFocusModeToggle =
-    fileEditor?.onFocusModeToggle ?? chapterEditor?.onFocusModeToggle;
+  const activeFocusModeToggle = fileEditor?.onFocusModeToggle ?? chapterEditor?.onFocusModeToggle;
   const selectionAiPreviewCommand = chapterEditor?.runtime?.selectionAiPreviewCommand;
   const selectionAction =
     fileEditor === undefined &&
@@ -660,8 +656,7 @@ function WorkspaceEditorSurface({
     chapterEditor?.onSelectionAiPreview !== undefined
       ? {
           label: selectionAiPreviewCommand.label,
-          onInvoke: () =>
-            chapterEditor.onSelectionAiPreview?.(selectionAiPreviewCommand.commandId)
+          onInvoke: () => chapterEditor.onSelectionAiPreview?.(selectionAiPreviewCommand.commandId)
         }
       : undefined;
 
@@ -694,11 +689,7 @@ function WorkspaceEditorSurface({
               onSelectionChange={onFileSelectionChange}
             />
           ) : chapterEditor ? (
-            <ChapterEditor
-              {...chapterEditor}
-              findMode={findMode}
-              onFindModeChange={setFindMode}
-            />
+            <ChapterEditor {...chapterEditor} findMode={findMode} onFindModeChange={setFindMode} />
           ) : (
             <section className="ns-empty-editor" aria-label="空章节工作区">
               <div>
@@ -743,9 +734,10 @@ function PlainFileEditor({
   readonly editor: PlainFileEditorProps;
   readonly findMode: EditorFindMode;
   readonly onFindModeChange: (mode: EditorFindMode) => void;
-  readonly onSelectionChange: (
-    selection: { readonly anchor: number; readonly head: number }
-  ) => void;
+  readonly onSelectionChange: (selection: {
+    readonly anchor: number;
+    readonly head: number;
+  }) => void;
 }) {
   const editorFocusRef = useRef<() => void>(() => undefined);
   const editorSelectionRef = useRef<

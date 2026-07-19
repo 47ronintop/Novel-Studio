@@ -1,344 +1,403 @@
+// @vitest-environment jsdom
+import { act, type ReactNode } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { isValidElement } from "react";
-import type { ReactElement, ReactNode } from "react";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+import { CreativeWorkspaceNavigator } from "../src/creative-workspace-navigator.js";
+import type {
+  CreativeWorkspaceNavigatorProps,
+  StoryBibleEditorProps
+} from "../src/workspace-shell-types.js";
 import { WorkspaceNavigator } from "../src/workspace-navigator.js";
-import type { WorkspaceNavigatorProps } from "../src/workspace-navigator.js";
 
-describe("WorkspaceNavigator", () => {
+(
+  globalThis as typeof globalThis & {
+    IS_REACT_ACT_ENVIRONMENT?: boolean;
+  }
+).IS_REACT_ACT_ENVIRONMENT = true;
+
+describe("CreativeWorkspaceNavigator", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+  });
+
   afterEach(() => {
-    delete (globalThis as { window?: unknown }).window;
+    act(() => root.unmount());
+    host.remove();
+    vi.restoreAllMocks();
   });
 
-  test("renders a searchable project asset tree with chapter and asset metadata", () => {
-    const html = renderToStaticMarkup(
-      <WorkspaceNavigator
-        {...createNavigatorProps({
-          searchQuery: "开篇",
-          expandedSectionIds: ["novel-studio", "chapters", "characters", "prompts"]
+  test("renders exactly writing and story tabs without removed project-tree groups", () => {
+    render(<CreativeWorkspaceNavigator {...createCreativeProps()} />);
+
+    const tablist = requiredElement<HTMLElement>(
+      host,
+      '[role="tablist"][aria-label="创作导航模式"]'
+    );
+    const tabs = tablist.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+
+    expect(tabs).toHaveLength(2);
+    expect(tabs[0]?.textContent).toContain("写作");
+    expect(tabs[0]?.getAttribute("aria-selected")).toBe("true");
+    expect(tabs[1]?.textContent).toContain("故事资料");
+    expect(host.textContent).not.toContain("Novel Studio");
+    expect(host.textContent).not.toContain("提示词");
+    expect(host.textContent).not.toContain("Agent");
+    expect(host.textContent).not.toContain("工作流");
+    expect(host.querySelector('[data-project-file-tree="true"]')).toBeNull();
+  });
+
+  test("shows real chapter count, active and dirty state, create action, and title filtering", () => {
+    const calls: string[] = [];
+    render(
+      <CreativeWorkspaceNavigator
+        {...createCreativeProps({
+          searchQuery: "OPENING",
+          onCreateChapter: () => calls.push("create")
         })}
       />
     );
 
-    expect(html).toContain('aria-label="项目导航"');
-    expect(html).toContain('aria-label="筛选项目资产"');
-    expect(html).toContain('aria-label="章节 分组"');
-    expect(html).toContain("开篇");
-    expect(html).toContain("1,234 字");
-    expect(html).toContain("未保存");
-    expect(html).toContain("draft");
-    expect(html).not.toContain("第二章");
-    expect(html).toContain("林照月");
-    expect(html).toContain("主角");
-    expect(html).toContain("续写章节");
-    expect(html).toContain("prompt");
-    expect(html).toContain("<mark>开篇</mark>");
-    expect(html).toContain("ns-tree-chevron");
-    expect(html).toContain('data-navigator-chevron="expanded"');
-    expect(html).toContain('data-navigator-type-icon="section:chapters"');
-    expect(html).toContain('data-navigator-type-icon="chapter"');
-    expect(html).toContain('data-navigator-type-icon="story:character"');
-    expect(html).toContain('data-navigator-type-icon="asset:prompt"');
-    expect(html).toContain('data-active="true"');
+    expect(host.textContent).toContain("章节 2");
+    expect(host.textContent).toContain("Opening");
+    expect(host.textContent).not.toContain("第二章");
+    expect(host.textContent).toContain("1,234 字");
+    expect(host.textContent).toContain("未保存");
+    expect(
+      requiredElement(host, '[data-chapter-id="ch_opening"]').getAttribute("data-active")
+    ).toBe("true");
+    click(requiredElement(host, 'button[aria-label="新建章节"]'));
+    expect(calls).toEqual(["create"]);
   });
 
-  test("renders engineering workspace files before collapsible Novel Studio asset groups", () => {
-    const html = renderToStaticMarkup(
-      <WorkspaceNavigator
-        {...createNavigatorProps({
-          fileTree: [
-            {
-              id: "folder:docs",
-              name: "docs",
-              kind: "directory",
-              path: "docs",
-              children: [
-                {
-                  id: "file:docs/INDEX.md",
-                  name: "INDEX.md",
-                  kind: "file",
-                  path: "docs/INDEX.md"
-                }
-              ]
-            },
-            {
-              id: "file:project.json",
-              name: "project.json",
-              kind: "file",
-              path: "project.json"
-            }
-          ],
-          expandedSectionIds: ["files", "folder:docs", "novel-studio", "chapters"]
+  test("distinguishes an empty project from an empty filtered result and clears the filter", () => {
+    const calls: string[] = [];
+    const emptyProjectProps = createCreativeProps({ chapters: [] });
+    Reflect.deleteProperty(emptyProjectProps, "activeChapterId");
+    render(<CreativeWorkspaceNavigator {...emptyProjectProps} />);
+    expect(host.textContent).toContain("还没有章节");
+
+    render(
+      <CreativeWorkspaceNavigator
+        {...createCreativeProps({
+          searchQuery: "不存在",
+          onSearchQueryChange: (query) => calls.push(query)
+        })}
+      />
+    );
+    expect(host.textContent).toContain("未找到匹配章节");
+    click(requiredElement(host, 'button[aria-label="清除章节筛选"]'));
+    expect(calls).toEqual([""]);
+  });
+
+  test("chapter menu actions do not open the chapter row", () => {
+    const calls: string[] = [];
+    vi.spyOn(window, "prompt").mockReturnValue("新的开篇");
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(
+      <CreativeWorkspaceNavigator
+        {...createCreativeProps({
+          onChapterOpen: (id) => calls.push(`open:${id}`),
+          onChapterRename: (id, title) => calls.push(`rename:${id}:${title}`),
+          onChapterDuplicate: (id) => calls.push(`duplicate:${id}`),
+          onChapterDelete: (id) => calls.push(`delete:${id}`)
         })}
       />
     );
 
-    const filesIndex = html.indexOf('data-navigator-group="files"');
-    const assetsIndex = html.indexOf('data-navigator-group="novel-studio"');
-
-    expect(filesIndex).toBeGreaterThan(-1);
-    expect(assetsIndex).toBeGreaterThan(filesIndex);
-    expect(html).toContain("docs");
-    expect(html).toContain("INDEX.md");
-    expect(html).toContain("project.json");
-    expect(html).toContain('data-navigator-file-kind="directory"');
-    expect(html).toContain('data-navigator-file-kind="file"');
-    expect(html).toContain('aria-label="Novel Studio asset groups"');
-  });
-
-  test("opens file rows and keeps folder rows as expand/collapse controls", () => {
-    const calls: string[] = [];
-    const baseProjectWorkflow = createNavigatorProps().projectWorkflow;
-    if (baseProjectWorkflow === undefined) {
-      throw new Error("Expected default project workflow props.");
-    }
-    const tree = WorkspaceNavigator(
-      createNavigatorProps({
-        fileTree: [
-          {
-            id: "folder:docs",
-            name: "docs",
-            kind: "directory",
-            path: "docs",
-            children: [
-              {
-                id: "file:docs/INDEX.md",
-                name: "INDEX.md",
-                kind: "file",
-                path: "docs/INDEX.md"
-              }
-            ]
-          }
-        ],
-        expandedSectionIds: ["files", "folder:docs", "novel-studio"],
-        onExpandedSectionIdsChange: (sectionIds) => calls.push(`expanded:${sectionIds.join(",")}`),
-        projectWorkflow: {
-          ...baseProjectWorkflow,
-          onOpenFile: (path) => calls.push(`open:${path}`)
-        }
-      })
-    );
-
-    findElementByAriaLabel(tree, "Toggle folder docs")?.props.onClick?.();
-    findElementByAriaLabel(tree, "Open file INDEX.md")?.props.onClick?.();
+    click(requiredElement(host, 'button[aria-label="重命名章节：Opening"]'));
+    click(requiredElement(host, 'button[aria-label="复制章节：Opening"]'));
+    click(requiredElement(host, 'button[aria-label="删除章节：Opening"]'));
 
     expect(calls).toEqual([
-      "expanded:files,novel-studio",
-      "open:docs/INDEX.md"
-    ]);
-  });
-
-  test("does not expose in-place project initialization for ordinary folders", () => {
-    const tree = WorkspaceNavigator(createNavigatorProps());
-
-    expect(findElementByAriaLabel(tree, "初始化为 Novel Studio 项目")).toBeUndefined();
-  });
-
-  test("wires section collapse, search, chapter actions, and guarded delete", () => {
-    const calls: string[] = [];
-    (globalThis as { window?: unknown }).window = {
-      prompt: () => "改名后的开篇",
-      confirm: () => true
-    };
-    const tree = WorkspaceNavigator(
-      createNavigatorProps({
-        expandedSectionIds: ["novel-studio", "chapters", "characters"],
-        onSearchQueryChange: (query) => calls.push(`search:${query}`),
-        onExpandedSectionIdsChange: (sectionIds) => calls.push(`expanded:${sectionIds.join(",")}`),
-        onRenameChapter: (chapterId, title) => calls.push(`rename:${chapterId}:${title}`),
-        onDuplicateChapter: (chapterId) => calls.push(`duplicate:${chapterId}`),
-        onDeleteChapter: (chapterId) => calls.push(`delete:${chapterId}`)
-      })
-    );
-
-    findElementByAriaLabel(tree, "筛选项目资产")?.props.onChange?.({
-      currentTarget: { value: "角色" }
-    });
-    findElementByAriaLabel(tree, "切换导航分组：人物")?.props.onClick?.();
-    findElementByAriaLabel(tree, "重命名章节：开篇")?.props.onClick?.();
-    findElementByAriaLabel(tree, "复制章节：开篇")?.props.onClick?.();
-    findElementByAriaLabel(tree, "确认删除章节：开篇")?.props.onClick?.();
-
-    expect(calls).toEqual([
-      "search:角色",
-      "expanded:novel-studio,chapters",
-      "rename:ch_opening:改名后的开篇",
+      "rename:ch_opening:新的开篇",
       "duplicate:ch_opening",
       "delete:ch_opening"
     ]);
   });
 
-  test("lets the Novel Studio parent collapse even when child groups remain expanded", () => {
-    const collapsedHtml = renderToStaticMarkup(
-      <WorkspaceNavigator
-        {...createNavigatorProps({
-          expandedSectionIds: ["chapters", "characters", "prompts"]
+  test("shows story kinds in the required order with real counts and singleton create rules", () => {
+    const storyBible = createStoryBible({ activeKind: "outline" });
+    render(<CreativeWorkspaceNavigator {...createCreativeProps({ mode: "story", storyBible })} />);
+
+    const kindButtons = Array.from(host.querySelectorAll<HTMLButtonElement>("[data-story-kind]"));
+    expect(kindButtons.map((button) => button.dataset.storyKind)).toEqual([
+      "character",
+      "world",
+      "outline",
+      "timeline",
+      "memory"
+    ]);
+    expect(
+      kindButtons.map((button) => button.querySelector(".ns-creative-row-label")?.textContent)
+    ).toEqual(["人物", "世界观", "大纲", "时间线", "记忆"]);
+    expect(
+      kindButtons.map((button) => button.querySelector(".ns-creative-row-count")?.textContent)
+    ).toEqual(["1", "1", "1", "1", "1"]);
+    expect(host.querySelector('button[aria-label="新建大纲"]')).toBeNull();
+
+    const calls: string[] = [];
+    render(
+      <CreativeWorkspaceNavigator
+        {...createCreativeProps({
+          mode: "story",
+          storyBible: createStoryBible({ activeKind: "character" }),
+          onStoryEntryCreate: (kind) => calls.push(kind)
+        })}
+      />
+    );
+    click(requiredElement(host, 'button[aria-label="新建人物"]'));
+    expect(calls).toEqual(["character"]);
+  });
+
+  test("filters only the active story kind and opens timeline_main as a story entry", () => {
+    const calls: string[] = [];
+    render(
+      <CreativeWorkspaceNavigator
+        {...createCreativeProps({
+          mode: "story",
+          searchQuery: "雨夜",
+          storyBible: createStoryBible({ activeKind: "timeline" }),
+          onStoryEntryOpen: (id) => calls.push(id)
         })}
       />
     );
 
-    expect(collapsedHtml).toContain('data-navigator-group="novel-studio"');
-    expect(collapsedHtml).toContain('data-expanded="false"');
-    expect(collapsedHtml).not.toContain('aria-label="章节 分组"');
-    expect(collapsedHtml).not.toContain('aria-label="人物 分组"');
+    expect(host.textContent).toContain("主时间线");
+    expect(host.textContent).not.toContain("林照月");
+    click(requiredElement(host, 'button[data-story-entry-id="timeline_main"]'));
+    expect(calls).toEqual(["timeline_main"]);
+  });
 
+  test("supports ArrowLeft ArrowRight Home End and unique tabpanel ids", () => {
     const calls: string[] = [];
-    const expandedTree = WorkspaceNavigator(
-      createNavigatorProps({
-        expandedSectionIds: ["novel-studio", "chapters", "characters"],
-        onExpandedSectionIdsChange: (sectionIds) => calls.push(sectionIds.join(","))
-      })
+    render(
+      <>
+        <CreativeWorkspaceNavigator
+          {...createCreativeProps({ onModeSelect: (mode) => calls.push(mode) })}
+        />
+        <CreativeWorkspaceNavigator {...createCreativeProps({ projectTitle: "第二个项目" })} />
+      </>
     );
 
-    findElementByAriaLabel(expandedTree, "Toggle Novel Studio asset groups")?.props.onClick?.();
+    const tablists = host.querySelectorAll<HTMLElement>(
+      '[role="tablist"][aria-label="创作导航模式"]'
+    );
+    const firstTabs = tablists[0]?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    if (firstTabs === undefined || firstTabs.length !== 2) {
+      throw new Error("Expected two creative navigator tabs.");
+    }
+    const writingTab = firstTabs[0];
+    const storyTab = firstTabs[1];
+    if (writingTab === undefined || storyTab === undefined) {
+      throw new Error("Expected writing and story tabs.");
+    }
 
-    expect(calls).toEqual(["chapters,characters"]);
+    writingTab.focus();
+    keydown(writingTab, "ArrowRight");
+    expect(calls).toEqual(["story"]);
+    expect(document.activeElement).toBe(storyTab);
+
+    keydown(storyTab, "Home");
+    keydown(writingTab, "End");
+    keydown(storyTab, "ArrowLeft");
+    expect(calls).toEqual(["story", "writing", "story", "writing"]);
+
+    const controls = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]')).map(
+      (tab) => tab.getAttribute("aria-controls")
+    );
+    expect(new Set(controls).size).toBe(controls.length);
+    controls.forEach((id) =>
+      expect(id === null ? null : host.querySelector(`#${id}`)).not.toBeNull()
+    );
+  });
+
+  function render(node: ReactNode): void {
+    act(() => root.render(node));
+  }
+});
+
+describe("WorkspaceNavigator", () => {
+  test("switches by workspace context and never renders the legacy tree for creative projects", () => {
+    const creativeHtml = renderWorkspaceNavigator({ kind: "creativeProject" });
+    const engineeringHtml = renderWorkspaceNavigator({ kind: "engineeringWorkspace" });
+    const noneHtml = renderWorkspaceNavigator({ kind: "none" });
+
+    expect(creativeHtml).toContain("写作");
+    expect(creativeHtml).not.toContain("Novel Studio");
+    expect(creativeHtml).not.toContain('data-navigator-group="files"');
+    expect(engineeringHtml).toContain('data-navigator-group="files"');
+    expect(engineeringHtml).toContain("project.json");
+    expect(noneHtml).toContain("打开项目");
+    expect(noneHtml).toContain("创建项目");
+    expect(noneHtml).not.toContain("Novel Studio");
   });
 });
 
-function createNavigatorProps(
-  overrides: Partial<WorkspaceNavigatorProps> = {}
-): WorkspaceNavigatorProps {
-  return {
-    activeActivity: "workspace",
-    sections: [
-      { id: "chapters", title: "章节", itemCount: 2 },
-      { id: "characters", title: "人物", itemCount: 1 },
-      { id: "prompts", title: "提示词", itemCount: 1 }
-    ],
-    expandedSectionIds: ["novel-studio", "chapters", "characters", "prompts"],
-    searchQuery: "",
-    fileTree: undefined,
-    projectWorkflow: {
-      projectTitleInput: "VUI06",
-      projectFolderNameInput: "VUI06",
-      chapters: [
-        {
-          id: "ch_opening",
-          title: "开篇",
-          order: 1,
-          status: "draft",
-          updatedAt: "2026-07-07T00:00:00.000Z",
-          wordCount: 1234
-        },
-        {
-          id: "ch_second",
-          title: "第二章",
-          order: 2,
-          status: "draft",
-          updatedAt: "2026-07-07T00:00:00.000Z"
+function renderWorkspaceNavigator(context: {
+  readonly kind: "creativeProject" | "engineeringWorkspace" | "none";
+}): string {
+  const workspaceContext =
+    context.kind === "creativeProject"
+      ? {
+          kind: "creativeProject" as const,
+          workspaceId: "workspace_1",
+          projectId: "project_1",
+          displayName: "长安旧梦",
+          capabilities: ["creativeWorkbench" as const]
         }
-      ],
-      activeChapterId: "ch_opening",
-      dirtyChapterIds: ["ch_opening"],
-      onProjectTitleChange: () => undefined,
-      onProjectFolderNameChange: () => undefined,
+      : context.kind === "engineeringWorkspace"
+        ? {
+            kind: "engineeringWorkspace" as const,
+            workspaceId: "workspace_2",
+            displayName: "工程目录",
+            capabilities: ["engineeringWorkbench" as const]
+          }
+        : ({ kind: "none" } as const);
+
+  const element = WorkspaceNavigator({
+    workspaceContext,
+    creative: createCreativeProps(),
+    engineering: {
+      activeActivity: "workspace",
+      sections: [{ id: "chapters", title: "章节", itemCount: 0 }],
+      expandedSectionIds: ["files", "novel-studio", "chapters"],
+      fileTree: [
+        {
+          id: "file:project.json",
+          name: "project.json",
+          kind: "file",
+          path: "project.json"
+        }
+      ]
+    },
+    none: {
       onOpenProject: () => undefined,
-      onCreateProject: () => undefined,
-      onCreateChapter: () => undefined,
-      onSelectChapter: () => undefined,
-      onRenameChapter: () => undefined,
-      onDuplicateChapter: () => undefined,
-      onDeleteChapter: () => undefined
-    },
-    storyBibleEditor: {
-      activeKind: "character",
-      status: "idle",
-      entries: [
-        {
-          id: "char_linzhaoyue",
-          kind: "character",
-          title: "林照月",
-          status: "主角",
-          body: "开篇出现。"
-        }
-      ],
-      draft: {
-        kind: "character",
-        title: "林照月",
-        body: "开篇出现。",
-        status: "主角"
+      onCreateProject: () => undefined
+    }
+  });
+
+  return renderToStaticMarkup(element);
+}
+
+function createCreativeProps(
+  overrides: Partial<CreativeWorkspaceNavigatorProps> = {}
+): CreativeWorkspaceNavigatorProps {
+  return {
+    projectTitle: "长安旧梦",
+    mode: "writing",
+    searchQuery: "",
+    chapters: [
+      {
+        id: "ch_opening",
+        title: "Opening",
+        order: 1,
+        status: "draft",
+        updatedAt: "2026-07-07T00:00:00.000Z",
+        wordCount: 1234
       },
-      onKindSelect: () => undefined,
-      onEntrySelect: () => undefined,
-      onDraftChange: () => undefined,
-      onNewDraft: () => undefined,
-      onSave: () => undefined
-    },
-    studio: {
-      status: "idle",
-      assets: [
-        {
-          assetType: "prompt",
-          assetId: "prompt_continue",
-          title: "续写章节"
-        }
-      ],
-      selectedAsset: {
-        assetType: "prompt",
-        assetId: "prompt_continue",
-        title: "续写章节",
-        validationStatus: "valid",
-        content: "{}"
-      },
-      versions: []
-    },
+      {
+        id: "ch_second",
+        title: "第二章",
+        order: 2,
+        status: "draft",
+        updatedAt: "2026-07-08T00:00:00.000Z"
+      }
+    ],
+    activeChapterId: "ch_opening",
+    dirtyChapterIds: ["ch_opening"],
+    storyBible: createStoryBible(),
+    onModeSelect: () => undefined,
     onSearchQueryChange: () => undefined,
-    onExpandedSectionIdsChange: () => undefined,
-    onActivitySelect: () => undefined,
+    onCreateChapter: () => undefined,
+    onChapterOpen: () => undefined,
+    onChapterRename: () => undefined,
+    onChapterDuplicate: () => undefined,
+    onChapterDelete: () => undefined,
+    onStoryKindOpen: () => undefined,
+    onStoryEntryOpen: () => undefined,
+    onStoryEntryCreate: () => undefined,
     ...overrides
   };
 }
 
-function findElementByAriaLabel(
-  node: ReactNode,
-  ariaLabel: string
-): ReactElement<NavigatorTestElementProps> | undefined {
-  if (Array.isArray(node)) {
-    for (const child of node) {
-      const found = findElementByAriaLabel(child, ariaLabel);
-      if (found !== undefined) {
-        return found;
+function createStoryBible(overrides: Partial<StoryBibleEditorProps> = {}): StoryBibleEditorProps {
+  return {
+    activeKind: "character",
+    status: "idle",
+    entries: [
+      {
+        id: "character_lin",
+        kind: "character",
+        title: "林照月",
+        status: "主角",
+        body: "开篇出现。"
+      },
+      {
+        id: "world_changan",
+        kind: "world",
+        title: "长安城",
+        status: "完成",
+        body: "雨夜中的旧城。"
+      },
+      {
+        id: "outline_main",
+        kind: "outline",
+        title: "主大纲",
+        status: "完成",
+        body: "三幕结构。"
+      },
+      {
+        id: "timeline_main",
+        kind: "timeline",
+        title: "主时间线",
+        status: "完成",
+        body: "雨夜开场。"
+      },
+      {
+        id: "memory_letter",
+        kind: "memory",
+        title: "旧信记忆",
+        status: "活动",
+        body: "林照月记得那封信。"
       }
-    }
-    return undefined;
-  }
-
-  if (!isValidElement(node)) {
-    return undefined;
-  }
-
-  const element = node as ReactElement<NavigatorTestElementProps>;
-  if (element.props["aria-label"] === ariaLabel) {
-    return element;
-  }
-
-  if (typeof element.type === "function") {
-    const renderComponent = element.type as (props: NavigatorTestElementProps) => ReactNode;
-    const found = findElementByAriaLabel(renderComponent(element.props), ariaLabel);
-    if (found !== undefined) {
-      return found;
-    }
-  }
-
-  const children = element.props.children as ReactNode;
-  if (Array.isArray(children)) {
-    for (const child of children) {
-      const found = findElementByAriaLabel(child, ariaLabel);
-      if (found !== undefined) {
-        return found;
-      }
-    }
-    return undefined;
-  }
-
-  return findElementByAriaLabel(children, ariaLabel);
+    ],
+    draft: {
+      kind: "character",
+      title: "林照月",
+      body: "开篇出现。",
+      status: "主角"
+    },
+    onKindSelect: () => undefined,
+    onEntrySelect: () => undefined,
+    onDraftChange: () => undefined,
+    onNewDraft: () => undefined,
+    onSave: () => undefined,
+    ...overrides
+  };
 }
 
-interface NavigatorTestElementProps {
-  readonly [key: string]: unknown;
-  readonly children?: ReactNode;
-  readonly onChange?: (event: { readonly currentTarget: { readonly value: string } }) => void;
-  readonly onClick?: () => void;
+function requiredElement<T extends Element = HTMLElement>(
+  container: ParentNode,
+  selector: string
+): T {
+  const element = container.querySelector<T>(selector);
+  if (element === null) {
+    throw new Error(`Missing test element: ${selector}`);
+  }
+  return element;
+}
+
+function click(element: Element): void {
+  act(() => element.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+}
+
+function keydown(element: Element, key: string): void {
+  act(() => element.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key })));
 }
