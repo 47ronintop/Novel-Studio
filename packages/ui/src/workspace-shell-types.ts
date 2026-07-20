@@ -93,10 +93,32 @@ export interface CreativeWorkspaceNavigatorProps {
   readonly onStoryEntryCreate: (kind: StoryBibleEditorKind) => void;
 }
 
+export type RecoveryReviewProps =
+  | {
+      readonly source: "chapter_autosave";
+      readonly recovery: ProjectWorkflowRecoveryProps;
+      readonly chapters: ProjectWorkflowProps["chapters"];
+      readonly onPreview: (sessionId: string) => void;
+      readonly onApply: (sessionId: string) => void;
+      readonly onDiscard: (sessionId: string) => void;
+    }
+  | {
+      readonly source: "agent_transaction";
+      readonly runId: string;
+      readonly versionGroupId?: string;
+      readonly errorCode: string;
+      readonly message: string;
+      readonly failedHooks: readonly string[];
+      readonly onOpenRollback?: () => void;
+      readonly onRetry?: () => void;
+    };
+
 export type AgentConversationMainReview =
   | { readonly kind: "plan"; readonly props: PlanArtifactReviewProps }
   | { readonly kind: "change_set"; readonly props: ChangeSetReviewProps }
-  | { readonly kind: "rollback"; readonly props: RollbackReviewProps };
+  | { readonly kind: "rollback"; readonly props: RollbackReviewProps }
+  | { readonly kind: "recovery"; readonly props: RecoveryReviewProps }
+  | { readonly kind: "selection"; readonly props: AiSelectionReviewProps };
 
 export interface AgentConversationWorkspaceShellProps {
   readonly navigator: AgentConversationNavigatorProps;
@@ -261,6 +283,10 @@ export interface AgentComposerProps {
   readonly active: boolean;
   readonly disabled?: boolean;
   readonly disabledReason?: string;
+  /** Presentation-only context filtering; the underlying Stage 5 enum remains unchanged. */
+  readonly availableContextModes?: readonly AgentContextMode[];
+  /** Optional selection/style actions rendered in the existing Composer toolbar. */
+  readonly quickActions?: readonly AgentComposerQuickAction[];
   /** Model profile selector (right toolbar). Populated from the Settings snapshot, written to the draft. */
   readonly model?: AgentComposerModelControl;
   /** Reasoning-effort selector (right toolbar). Hidden when the selected model does not expose it. */
@@ -278,6 +304,13 @@ export interface AgentComposerProps {
   readonly onWritePolicyAcknowledgedChange: (acknowledged: boolean) => void;
   readonly onSend: (request: string) => void;
   readonly onStop: () => void;
+}
+
+export interface AgentComposerQuickAction {
+  readonly id: "rewrite_selection" | "review_style";
+  readonly label: string;
+  readonly disabledReason?: string;
+  readonly onSelect: () => void;
 }
 
 /** Local mirror of `agent-engine`'s AgentContextPrecision (UI cannot import agent-engine directly). */
@@ -462,6 +495,9 @@ export interface AgentConversationViewProps {
   readonly activeConversationTitle?: string;
   readonly agentRun?: AgentRunPanelProps;
   readonly composer?: AgentComposerProps;
+  readonly navigator?: AgentConversationNavigatorProps;
+  readonly mainReview?: AgentConversationMainReview;
+  readonly onOpenMainReview?: (review: AgentConversationMainReview) => void;
   readonly loading: boolean;
   readonly errorMessage?: string;
   readonly onCreate: () => void;
@@ -477,6 +513,12 @@ export interface AiSelectionReviewProps {
   readonly rangeLabel: string;
   readonly compareLabel: string;
   readonly canUndo: boolean;
+  readonly styleReview?: AiWritingStyleReviewProps;
+  readonly diagnostic?: AiWorkflowFailureDiagnosticProps;
+  readonly onAccept?: () => void;
+  readonly onReject?: () => void;
+  readonly onUndo?: () => void;
+  readonly onRetry?: () => void;
 }
 
 export interface AiWritingStyleReviewProps {

@@ -45,52 +45,61 @@ describe("M52/M53 editor runtime and workflow UX", () => {
     expect(html).not.toMatch(/filesystem|node:fs|projectRoot/i);
   });
 
-  test("renders a workflow rail with branch choices for live observability", () => {
+  test("renders a workflow rail with branch choices in Bottom Panel history", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
-        shellState={{ ...application.getShellState(), activeActivity: "ai" }}
+        shellState={{
+          ...application.getShellState(),
+          activeActivity: "workspace",
+          activeBottomPanelTab: "工作流运行",
+          bottomPanelVisible: true
+        }}
         commands={application.listCommands()}
         commandPaletteOpen={false}
         aiWritingWorkflow={{
           status: "suggestion-ready",
           instruction: "Continue the scene.",
-          observability: {
-            workflowRunId: "wfrun_branch",
-            workflowTitle: "Continue Chapter",
-            contextLabel: "2 sources / 120 tokens",
-            modelLabel: "Default Model / example-model",
-            usageLabel: "120 tokens",
-            costLabel: "USD 0.000001",
-            generatedAtLabel: "2026-07-06 10:00",
-            steps: [
-              {
-                stepId: "build_context",
-                label: "Build context",
-                kind: "context",
-                status: "completed"
-              },
-              {
-                stepId: "choose_path",
-                label: "Choose narrative path",
-                kind: "branch",
-                status: "completed",
-                description: "Agent selected the high-tension continuation.",
-                selectedBranchId: "high_tension",
-                branchChoices: [
-                  {
-                    branchId: "quiet_reveal",
-                    label: "Quiet reveal",
-                    conditionLabel: "Low conflict"
-                  },
-                  {
-                    branchId: "high_tension",
-                    label: "High tension",
-                    conditionLabel: "Escalate conflict"
-                  }
-                ]
-              }
-            ]
+          history: {
+            runs: [],
+            selectedRun: {
+              workflowRunId: "wfrun_branch",
+              workflowTitle: "Continue Chapter",
+              statusLabel: "Completed",
+              updatedAtLabel: "2026-07-06 10:00",
+              contextLabel: "2 sources / 120 tokens",
+              modelLabel: "Default Model / example-model",
+              usageLabel: "120 tokens",
+              costLabel: "USD 0.000001",
+              steps: [
+                {
+                  stepId: "build_context",
+                  label: "Build context",
+                  kind: "context",
+                  status: "completed"
+                },
+                {
+                  stepId: "choose_path",
+                  label: "Choose narrative path",
+                  kind: "branch",
+                  status: "completed",
+                  description: "Agent selected the high-tension continuation.",
+                  selectedBranchId: "high_tension",
+                  branchChoices: [
+                    {
+                      branchId: "quiet_reveal",
+                      label: "Quiet reveal",
+                      conditionLabel: "Low conflict"
+                    },
+                    {
+                      branchId: "high_tension",
+                      label: "High tension",
+                      conditionLabel: "Escalate conflict"
+                    }
+                  ]
+                }
+              ]
+            }
           },
           onInstructionChange: () => undefined,
           onGenerateSuggestion: () => undefined,
@@ -101,7 +110,7 @@ describe("M52/M53 editor runtime and workflow UX", () => {
       />
     );
 
-    expect(html).toContain('aria-label="Workflow rail"');
+    expect(html).toContain('aria-label="History workflow rail"');
     expect(html).toContain("Choose narrative path");
     expect(html).toContain("Agent selected the high-tension continuation.");
     expect(html).toContain("Quiet reveal");
@@ -114,7 +123,12 @@ describe("M52/M53 editor runtime and workflow UX", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
-        shellState={{ ...application.getShellState(), activeActivity: "ai" }}
+        shellState={{
+          ...application.getShellState(),
+          activeActivity: "workspace",
+          activeBottomPanelTab: "工作流运行",
+          bottomPanelVisible: true
+        }}
         commands={application.listCommands()}
         commandPaletteOpen={false}
         aiWritingWorkflow={{

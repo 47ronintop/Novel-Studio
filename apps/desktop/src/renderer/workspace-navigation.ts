@@ -151,7 +151,6 @@ export function createWorkspaceNavigation(
     },
     openMainReview(review) {
       dependencies.setMainReview(review);
-      dependencies.setShellState((current) => ({ ...current, activeActivity: "ai" }));
     }
   };
 }

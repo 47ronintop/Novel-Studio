@@ -74,6 +74,10 @@ export type { AgentContextMenuProps } from "./agent-context-menu.js";
 export { AgentRunTimeline } from "./agent-run-timeline.js";
 export { AgentConversationNavigator } from "./agent-conversation-navigator.js";
 export { AgentConversationView } from "./agent-conversation-view.js";
+export { AgentConversationHistoryDrawer } from "./agent-conversation-history-drawer.js";
+export { AiSelectionReview } from "./ai-selection-review.js";
+export { AiWorkflowHistoryPanel } from "./ai-workflow-history-panel.js";
+export { RecoveryReview } from "./recovery-review.js";
 export { ChangeSetReview, RollbackReview } from "./change-set-review.js";
 export type {
   ChangeSetFileSelection,
@@ -124,6 +128,7 @@ export type {
   AgentConversationViewProps,
   AgentConversationWorkspaceShellProps,
   AgentComposerProps,
+  AgentComposerQuickAction,
   AgentComposerContextSourceRow,
   AgentComposerContextState,
   AgentComposerContextStatusControl,
@@ -141,6 +146,8 @@ export type {
   AgentRunPanelProps,
   AgentRunPendingUserInputProps,
   AiWorkflowBranchChoiceProps,
+  AiSelectionReviewProps,
+  RecoveryReviewProps,
   CreativeWorkspaceNavigatorProps,
   OnboardingProps,
   OnboardingStepProps,

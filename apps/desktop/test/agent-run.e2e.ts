@@ -1,5 +1,11 @@
-import { expect, test, _electron as electron, type Page } from "@playwright/test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import {
+  expect,
+  test,
+  _electron as electron,
+  type ElectronApplication,
+  type Page
+} from "@playwright/test";
+import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,20 +13,24 @@ import { fileURLToPath } from "node:url";
 
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const electronMain = join(repositoryRoot, "apps", "desktop", "dist", "main", "index.js");
+const fixtureRoot = join(repositoryRoot, "fixtures", "projects", "minimal-chapter");
 const activeChapterId = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D0";
 
 test("blocks an Agent run when the selected model fails capability preflight", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-agent-preflight-e2e-"));
+  const projectRoot = join(tempRoot, "Project");
+  await cp(fixtureRoot, projectRoot, { recursive: true });
   const electronApp = await electron.launch({
     args: [electronMain],
     env: electronEnv({
-      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Default Project"),
+      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Bootstrap Project"),
       NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
     })
   });
 
   try {
     const page = await electronApp.firstWindow();
+    await queueDirectorySelection(electronApp, projectRoot);
     await openAgentPanel(page);
     const composer = page.getByLabel("会话输入区");
     await composer.getByLabel("Agent 请求").fill("检查当前章节");
@@ -71,11 +81,13 @@ test("stops a live Agent run through the real Electron IPC path", async () => {
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("Expected server address");
   const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+  const projectRoot = join(tempRoot, "Project");
+  await cp(fixtureRoot, projectRoot, { recursive: true });
   const pageErrors: string[] = [];
   const electronApp = await electron.launch({
     args: [electronMain],
     env: electronEnv({
-      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Default Project"),
+      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Bootstrap Project"),
       NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
     })
   });
@@ -83,8 +95,9 @@ test("stops a live Agent run through the real Electron IPC path", async () => {
   try {
     const page = await electronApp.firstWindow();
     page.on("pageerror", (error) => pageErrors.push(error.message));
-    await configureLocalModel(page, baseUrl);
+    await queueDirectorySelection(electronApp, projectRoot);
     await openAgentPanel(page);
+    await configureLocalModel(page, baseUrl);
     const composer = page.getByLabel("会话输入区");
     await composer.getByLabel("Agent 请求").fill("读取当前章节");
     await composer.getByLabel("启动 Agent 运行").click();
@@ -110,7 +123,12 @@ test("stops a live Agent run through the real Electron IPC path", async () => {
 test("streams read tools, restores a question after reload, refreshes dirty context, and links plan execution", async () => {
   test.setTimeout(90_000);
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-agent-run-e2e-"));
-  const projectRoot = join(tempRoot, "Default Project");
+  const projectRoot = join(tempRoot, "Project");
+  await cp(fixtureRoot, projectRoot, { recursive: true });
+  const savedChapterBaseline = await readFile(
+    join(projectRoot, "chapters", `${activeChapterId}.md`),
+    "utf8"
+  );
   const requests: Array<{ readonly body: Record<string, unknown>; readonly userRequest: string }> =
     [];
   let releaseChapterToolCall: (() => void) | undefined;
@@ -226,16 +244,17 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
   const electronApp = await electron.launch({
     args: [electronMain],
     env: electronEnv({
-      NOVEL_STUDIO_PROJECT_ROOT: projectRoot,
+      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Bootstrap Project"),
       NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
     })
   });
 
   try {
     const page = await electronApp.firstWindow();
+    await queueDirectorySelection(electronApp, projectRoot);
+    await openAgentPanel(page);
     await configureLocalModel(page, baseUrl);
     await replaceChapterText(page, "未保存的开头");
-    await openAgentPanel(page);
     const composer = page.getByLabel("会话输入区");
     await composer.getByLabel("Agent 请求").fill("核对当前章节并给出计划");
     await composer.getByLabel("启动 Agent 运行").click();
@@ -256,12 +275,11 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
 
     await page.getByLabel("活动栏").getByRole("button", { name: "工作区" }).click();
     await replaceChapterText(page, "运行中发生变化");
-    await page.getByLabel("活动栏").getByRole("button", { name: "AI 工作流" }).click();
     releaseQuestion?.();
 
     await expect(page.getByLabel("Agent 阻塞问题")).toBeVisible();
     await page.reload();
-    await page.getByLabel("活动栏").getByRole("button", { name: "AI 工作流" }).click();
+    await expect(page.getByLabel("会话输入区")).toBeVisible();
     await expect(page.getByLabel("Agent 阻塞问题")).toBeVisible();
     await page.getByLabel("Agent 阻塞问题").getByText("保留", { exact: true }).click();
     await page.getByRole("button", { name: "回答并继续" }).click();
@@ -301,7 +319,6 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
     await assertCompactConversationSurface(page);
 
     await page.reload();
-    await page.getByLabel("活动栏").getByRole("button", { name: "AI 工作流" }).click();
     await expect(page.getByLabel("会话输入区")).toBeVisible();
     const restoredTurn = page.locator(`[data-run-id="${completedRunId}"]`);
     await expect(restoredTurn).toHaveCount(1);
@@ -317,13 +334,13 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
     expect(restoredCompletedSteps).toEqual(completedSteps);
     await assertCompactConversationSurface(page);
 
-    const chapterFiles = await readFile(
+    const savedChapter = await readFile(
       join(projectRoot, "chapters", `${activeChapterId}.md`),
       "utf8"
     );
-    expect(chapterFiles).toContain("这是第一章的正文");
-    expect(chapterFiles).not.toContain("未保存的开头");
-    expect(chapterFiles).not.toContain("运行中发生变化");
+    expect(savedChapter).toBe(savedChapterBaseline);
+    expect(savedChapter).not.toContain("未保存的开头");
+    expect(savedChapter).not.toContain("运行中发生变化");
   } finally {
     releaseChapterToolCall?.();
     releaseQuestion?.();
@@ -351,10 +368,35 @@ async function configureLocalModel(page: Page, baseUrl: string): Promise<void> {
 }
 
 async function openAgentPanel(page: Page): Promise<void> {
-  await page.getByLabel("活动栏").getByRole("button", { name: "AI 工作流" }).click();
+  const unbound = page.getByLabel("Agent 未绑定工作区");
+  const view = page.getByLabel("Agent 会话主视图");
+  await expect
+    .poll(async () => (await unbound.isVisible()) || (await view.isVisible()), { timeout: 15_000 })
+    .toBe(true);
+  if (await unbound.isVisible()) {
+    const opened = await page.evaluate(async () => {
+      const selected = await window.novelStudio?.project.chooseOpenCreativeDirectory();
+      if (selected?.ok !== true || selected.value.selectionId === undefined) return selected;
+      return window.novelStudio?.project.openCreativeProject(selected.value.selectionId);
+    });
+    if (opened?.ok !== true) {
+      throw new Error(`Creative project activation failed: ${JSON.stringify(opened)}`);
+    }
+    await page.reload();
+  }
+  await expect(view).toBeVisible({ timeout: 15_000 });
   const createConversation = page.getByRole("button", { name: "新建会话" }).first();
   if (await createConversation.isVisible()) await createConversation.click();
   await expect(page.getByLabel("会话输入区")).toBeVisible();
+}
+
+async function queueDirectorySelection(
+  electronApp: ElectronApplication,
+  selectedPath: string
+): Promise<void> {
+  await electronApp.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] });
+  }, selectedPath);
 }
 
 async function resolveContextRefreshIfVisible(page: Page): Promise<void> {

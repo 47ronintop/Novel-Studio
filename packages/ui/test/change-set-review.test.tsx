@@ -3,26 +3,32 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 
 import { createDesktopApplication } from "@novel-studio/application";
-import type { AiWritingWorkflowProps } from "../src/workspace-shell-types.js";
+import type {
+  AgentConversationMainReview,
+  AgentConversationWorkspaceShellProps,
+  AiWritingWorkflowProps
+} from "../src/workspace-shell-types.js";
 import { WorkspaceShell } from "../src/workspace-shell.js";
 
-describe("Change Set summary", () => {
-  test("renders the pending revision shared with the main Diff Review", () => {
+describe("Change Set central review", () => {
+  test("renders the pending revision centrally with one compact conversation summary", () => {
     const application = createDesktopApplication();
+    const workflow = createReviewWorkflow();
     const html = renderToStaticMarkup(
       <WorkspaceShell
-        aiWritingWorkflow={createReviewWorkflow()}
+        agentConversationWorkspace={reviewWorkspace(workflow)}
+        aiWritingWorkflow={workflow}
         chapterEditor={chapterEditor}
         commandPaletteOpen={false}
         commands={application.listCommands()}
-        shellState={application.getShellState()}
+        shellState={reviewShellState(application.getShellState())}
       />
     );
 
-    expect(html).toContain('aria-label="Change Set 摘要"');
+    expect(html).toContain('aria-label="中央审阅摘要"');
     expect(html).toContain('aria-label="变更集差异审阅"');
-    expect(html.match(/cs-checksum-r4/g)).toHaveLength(2);
-    expect(html.match(/>v4</g)).toHaveLength(2);
+    expect(html.match(/cs-checksum-r4/g)).toHaveLength(1);
+    expect(html.match(/>v4</g)).toHaveLength(1);
     expect(html).toContain("尚未写入");
     expect(html).toContain("chapters/ch_03.md");
     expect(html).toContain("+2");
@@ -32,15 +38,17 @@ describe("Change Set summary", () => {
 
   test("surfaces hash conflicts without presenting the proposal as written", () => {
     const application = createDesktopApplication();
+    const workflow = createReviewWorkflow({
+      baseHashConflictPaths: ["chapters/ch_03.md"]
+    });
     const html = renderToStaticMarkup(
       <WorkspaceShell
-        aiWritingWorkflow={createReviewWorkflow({
-          baseHashConflictPaths: ["chapters/ch_03.md"]
-        })}
+        agentConversationWorkspace={reviewWorkspace(workflow)}
+        aiWritingWorkflow={workflow}
         chapterEditor={chapterEditor}
         commandPaletteOpen={false}
         commands={application.listCommands()}
-        shellState={application.getShellState()}
+        shellState={reviewShellState(application.getShellState())}
       />
     );
 
@@ -51,33 +59,35 @@ describe("Change Set summary", () => {
 
   test("never presents an invalid file as an overall validation pass", () => {
     const application = createDesktopApplication();
+    const workflow = createReviewWorkflow({ valid: false });
     const html = renderToStaticMarkup(
       <WorkspaceShell
-        aiWritingWorkflow={createReviewWorkflow({ valid: false })}
+        agentConversationWorkspace={reviewWorkspace(workflow)}
+        aiWritingWorkflow={workflow}
         chapterEditor={chapterEditor}
         commandPaletteOpen={false}
         commands={application.listCommands()}
-        shellState={application.getShellState()}
+        shellState={reviewShellState(application.getShellState())}
       />
     );
-    const summary = html.match(
-      /<section class="ns-change-set-summary"[\s\S]*?<\/section>/
-    )?.[0];
+    const review = html.match(/<section class="ns-diff-review"[\s\S]*?<\/section>/)?.[0];
 
-    expect(summary).toBeDefined();
-    expect(summary).toContain("校验失败");
-    expect(summary).not.toContain("校验通过");
+    expect(review).toBeDefined();
+    expect(review).toContain("校验失败");
+    expect(review).not.toContain("校验通过");
   });
 
   test("marks an applied Change Set as written instead of pending", () => {
     const application = createDesktopApplication();
+    const workflow = createReviewWorkflow({ status: "applied" });
     const html = renderToStaticMarkup(
       <WorkspaceShell
-        aiWritingWorkflow={createReviewWorkflow({ status: "applied" })}
+        agentConversationWorkspace={reviewWorkspace(workflow)}
+        aiWritingWorkflow={workflow}
         chapterEditor={chapterEditor}
         commandPaletteOpen={false}
         commands={application.listCommands()}
-        shellState={application.getShellState()}
+        shellState={reviewShellState(application.getShellState())}
       />
     );
 
@@ -92,6 +102,13 @@ describe("Change Set summary", () => {
     delete agentRunWithoutChangeSetReview.changeSetReview;
     const html = renderToStaticMarkup(
       <WorkspaceShell
+        agentConversationWorkspace={reviewWorkspace({
+          ...workflow,
+          agentRun: {
+            ...agentRunWithoutChangeSetReview,
+            rollbackReview: rollbackReviewFixture()
+          }
+        } as AiWritingWorkflowProps)}
         aiWritingWorkflow={{
           ...workflow,
           agentRun: {
@@ -102,7 +119,7 @@ describe("Change Set summary", () => {
         chapterEditor={chapterEditor}
         commandPaletteOpen={false}
         commands={application.listCommands()}
-        shellState={application.getShellState()}
+        shellState={reviewShellState(application.getShellState())}
       />
     );
 
@@ -179,6 +196,68 @@ function createReviewWorkflow(overrides: ReviewOverrides = {}): AiWritingWorkflo
       }
     }
   } as unknown as AiWritingWorkflowProps;
+}
+
+function reviewWorkspace(workflow: AiWritingWorkflowProps): AgentConversationWorkspaceShellProps {
+  const agentRun = workflow.agentRun;
+  if (agentRun === undefined) throw new Error("Expected an Agent run review fixture.");
+  const conversation = {
+    conversationId: "conversation-review-01",
+    title: "Change Set Review",
+    status: "active" as const,
+    updatedAtLabel: "10:00",
+    runCount: 1,
+    turns: []
+  };
+  const mainReview: AgentConversationMainReview | undefined =
+    agentRun.rollbackReview !== undefined
+      ? { kind: "rollback", props: agentRun.rollbackReview }
+      : agentRun.changeSetReview === undefined
+        ? undefined
+        : { kind: "change_set", props: agentRun.changeSetReview };
+  return {
+    navigator: {
+      conversations: [conversation],
+      selectedConversationId: conversation.conversationId,
+      activeConversationId: conversation.conversationId,
+      searchQuery: "",
+      filter: "active",
+      loading: false,
+      onSearchQueryChange: () => undefined,
+      onFilterChange: () => undefined,
+      onCreate: () => undefined,
+      onSelect: () => undefined,
+      onArchive: () => undefined,
+      onRestore: () => undefined
+    },
+    view: {
+      conversation,
+      activeConversationId: conversation.conversationId,
+      activeConversationTitle: conversation.title,
+      agentRun,
+      ...(mainReview === undefined ? {} : { mainReview }),
+      loading: false,
+      onCreate: () => undefined,
+      onArchive: () => undefined,
+      onRestore: () => undefined,
+      onReturnToActive: () => undefined
+    },
+    ...(mainReview === undefined ? {} : { mainReview })
+  };
+}
+
+function reviewShellState(shellState: ReturnType<ReturnType<typeof createDesktopApplication>["getShellState"]>) {
+  return {
+    ...shellState,
+    projectTitle: "Review Project",
+    workspaceContext: {
+      kind: "creativeProject" as const,
+      workspaceId: "project-01",
+      projectId: "project-01",
+      displayName: "Review Project",
+      capabilities: ["creativeWorkbench", "writingContext"] as const
+    }
+  };
 }
 
 const changeSetFixture = {

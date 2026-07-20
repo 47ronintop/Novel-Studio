@@ -12,7 +12,7 @@ import {
 } from "@novel-studio/agent-engine";
 import { AgentRunFileRepository } from "@novel-studio/repository";
 import type { JsonObject } from "@novel-studio/shared";
-import { mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdtemp, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,13 +20,15 @@ import { fileURLToPath } from "node:url";
 
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const electronMain = join(repositoryRoot, "apps", "desktop", "dist", "main", "index.js");
+const fixtureRoot = join(repositoryRoot, "fixtures", "projects", "minimal-chapter");
 const projectId = "prj_minimal_chapter";
 const activeChapterId = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D0";
 
 test("binds compact permissions to a persisted plan execution and restores revision approval", async () => {
   test.setTimeout(120_000);
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-permission-plan-e2e-"));
-  const projectRoot = join(tempRoot, "Default Project");
+  const projectRoot = join(tempRoot, "Project");
+  await cp(fixtureRoot, projectRoot, { recursive: true });
   const userDataRoot = join(tempRoot, "User Data");
   let heldExecutionResponse: ServerResponse | undefined;
   const server = createServer(async (request, response) => {
@@ -73,7 +75,7 @@ test("binds compact permissions to a persisted plan execution and restores revis
   if (address === null || typeof address === "string") throw new Error("Expected server address");
   const baseUrl = `http://127.0.0.1:${address.port}/v1`;
   const env = electronEnv({
-    NOVEL_STUDIO_PROJECT_ROOT: projectRoot,
+    NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Bootstrap Project"),
     NOVEL_STUDIO_USER_DATA_ROOT: userDataRoot
   });
   let firstApp: ElectronApplication | undefined;
@@ -82,8 +84,9 @@ test("binds compact permissions to a persisted plan execution and restores revis
   try {
     firstApp = await electron.launch({ args: [electronMain], env });
     const page = await firstApp.firstWindow();
-    await configureLocalModel(page, baseUrl);
+    await queueDirectorySelection(firstApp, projectRoot);
     await openAgentPanel(page);
+    await configureLocalModel(page, baseUrl);
     const composer = page.getByLabel("会话输入区");
     await selectOperationMode(composer, "planning");
     await expect(composer.getByText("只读规划", { exact: true })).toBeVisible();
@@ -143,6 +146,7 @@ test("binds compact permissions to a persisted plan execution and restores revis
 
     restoredApp = await electron.launch({ args: [electronMain], env });
     const restoredPage = await restoredApp.firstWindow();
+    await queueDirectorySelection(restoredApp, projectRoot);
     await openAgentPanel(restoredPage, false);
     const revisionCard = restoredPage.getByLabel("计划修订审批");
     await expect(revisionCard).toBeVisible();
@@ -305,12 +309,37 @@ async function latestRunStatus(page: Page, runId: string): Promise<string | unde
 }
 
 async function openAgentPanel(page: Page, createIfEmpty = true): Promise<void> {
-  await page.getByLabel("活动栏").getByRole("button", { name: "AI 工作流" }).click();
+  const unbound = page.getByLabel("Agent 未绑定工作区");
+  const view = page.getByLabel("Agent 会话主视图");
+  await expect
+    .poll(async () => (await unbound.isVisible()) || (await view.isVisible()), { timeout: 15_000 })
+    .toBe(true);
+  if (await unbound.isVisible()) {
+    const opened = await page.evaluate(async () => {
+      const selected = await window.novelStudio?.project.chooseOpenCreativeDirectory();
+      if (selected?.ok !== true || selected.value.selectionId === undefined) return selected;
+      return window.novelStudio?.project.openCreativeProject(selected.value.selectionId);
+    });
+    if (opened?.ok !== true) {
+      throw new Error(`Creative project activation failed: ${JSON.stringify(opened)}`);
+    }
+    await page.reload();
+  }
+  await expect(view).toBeVisible({ timeout: 15_000 });
   const newConversation = page.getByRole("button", { name: "新建会话" }).first();
   if (createIfEmpty && (await newConversation.isVisible())) {
     await newConversation.click();
   }
   await expect(page.getByLabel("会话输入区")).toBeVisible();
+}
+
+async function queueDirectorySelection(
+  electronApp: ElectronApplication,
+  selectedPath: string
+): Promise<void> {
+  await electronApp.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] });
+  }, selectedPath);
 }
 
 async function configureLocalModel(page: Page, baseUrl: string): Promise<void> {

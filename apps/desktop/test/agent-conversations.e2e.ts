@@ -1,5 +1,12 @@
-import { expect, test, _electron as electron, type Page } from "@playwright/test";
-import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import {
+  expect,
+  test,
+  _electron as electron,
+  type ElectronApplication,
+  type Locator,
+  type Page
+} from "@playwright/test";
+import { cp, mkdtemp, readdir, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,14 +14,14 @@ import { fileURLToPath } from "node:url";
 
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const electronMain = join(repositoryRoot, "apps", "desktop", "dist", "main", "index.js");
+const fixtureRoot = join(repositoryRoot, "fixtures", "projects", "minimal-chapter");
 const projectId = "prj_minimal_chapter";
 
 test("isolates multi-run conversation context and restores project-scoped conversations", async () => {
   test.setTimeout(120_000);
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-conversations-e2e-"));
   const projectRoot = join(tempRoot, "Project A");
-  const projectBRoot = join(tempRoot, "Project B");
-  await mkdir(projectBRoot, { recursive: true });
+  await cp(fixtureRoot, projectRoot, { recursive: true });
   const modelRequests: Record<string, unknown>[] = [];
   const server = createServer(async (request, response) => {
     const body = await readJsonBody(request);
@@ -49,16 +56,19 @@ test("isolates multi-run conversation context and restores project-scoped conver
   const electronApp = await electron.launch({
     args: [electronMain],
     env: electronEnv({
-      NOVEL_STUDIO_PROJECT_ROOT: projectRoot,
+      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Bootstrap Project"),
       NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
     })
   });
 
   try {
     const page = await electronApp.firstWindow();
+    await queueDirectorySelection(electronApp, projectRoot);
+    await openAgentSurface(page);
     await configureLocalModel(page, `http://127.0.0.1:${address.port}/v1`);
-    await openAgentActivity(page);
     const conversationA = await createConversation(page);
+    const composer = page.getByLabel("会话输入区");
+    await expect(composer.getByLabel(/^模型：/)).toBeVisible();
     await expect(page.getByLabel("AI 对话面板")).toBeVisible();
     await expect(page.getByLabel("Agent 请求")).toHaveCount(1);
     await expect(page.getByRole("button", { name: /启动 Agent 运行|停止 Agent 运行/ })).toHaveCount(
@@ -83,7 +93,6 @@ test("isolates multi-run conversation context and restores project-scoped conver
       page.getByLabel("会话输入区").getByRole("group", { name: "上下文" })
     ).toHaveCount(0);
     await selectExecutionMode(page);
-    const composer = page.getByLabel("会话输入区");
     await composer.getByLabel("修改权限：每次修改前确认").click();
     const permissionMenu = composer.getByRole("dialog", { name: "修改权限与摘要" });
     await expect(permissionMenu.locator('details[aria-label="本次权限摘要"]')).toContainText(
@@ -143,39 +152,46 @@ test("isolates multi-run conversation context and restores project-scoped conver
     await waitForTerminalRuns(page);
     await expect(page.getByLabel("会话运行历史")).toContainText("cancelled");
 
-    await page.getByRole("button", { name: /^归档会话/ }).click();
-    await page.getByRole("tab", { name: "显示已归档会话" }).click();
-    await page.getByRole("searchbox", { name: "搜索会话" }).fill("Hold beta");
-    await expect(page.locator(`[data-conversation-id="${conversationB}"]`)).toBeVisible();
-    await page
+    await archiveConversation(page, conversationB);
+    const archiveDrawer = await openHistoryDrawer(page);
+    await archiveDrawer.getByRole("tab", { name: "显示已归档会话" }).click();
+    await archiveDrawer.getByRole("searchbox", { name: "搜索会话" }).fill("Hold beta");
+    await expect(
+      archiveDrawer.locator(`[data-conversation-id="${conversationB}"]`)
+    ).toBeVisible();
+    await archiveDrawer
       .locator(`[data-conversation-id="${conversationB}"]`)
       .getByRole("button", { name: /^恢复会话/ })
       .click();
-    await page.getByRole("tab", { name: "显示活跃会话" }).click();
-    await page.getByRole("searchbox", { name: "搜索会话" }).fill("");
-    await expect(page.locator(`[data-conversation-id="${conversationB}"]`)).toBeVisible();
+    await archiveDrawer.getByRole("tab", { name: "显示活跃会话" }).click();
+    await archiveDrawer.getByRole("searchbox", { name: "搜索会话" }).fill("");
+    await expect(
+      archiveDrawer.locator(`[data-conversation-id="${conversationB}"]`)
+    ).toBeVisible();
+    await closeHistoryDrawer(archiveDrawer);
 
     await page.reload();
-    await openAgentActivity(page);
-    await expect(page.locator(`[data-conversation-id="${conversationA}"]`)).toBeVisible();
-    await expect(page.locator(`[data-conversation-id="${conversationB}"]`)).toBeVisible();
+    await openAgentSurface(page);
+    await expectConversationsInHistory(page, [conversationA, conversationB]);
 
     await page.getByLabel("活动栏").getByRole("button", { name: "工作区" }).click();
-    await page.getByLabel("项目路径").fill(projectBRoot);
+    await queueDirectorySelection(electronApp, tempRoot);
+    await page.getByLabel("项目标题").fill("Project B");
+    await page.getByLabel("项目文件夹名称").fill("Project B");
+    await page.getByRole("button", { name: "选择项目父文件夹" }).click();
     await page.getByRole("button", { name: "创建项目" }).click();
     await expect(page.getByText("Project B", { exact: true })).toBeVisible();
-    await expect(page.getByLabel("项目路径")).toHaveValue(projectBRoot);
-    await openAgentActivity(page);
-    await expect(page.locator(".ns-agent-conversation-row")).toHaveCount(0);
+    await openAgentSurface(page);
+    const emptyDrawer = await openHistoryDrawer(page);
+    await expect(emptyDrawer.locator(".ns-agent-conversation-row")).toHaveCount(0);
+    await closeHistoryDrawer(emptyDrawer);
 
     await page.getByLabel("活动栏").getByRole("button", { name: "工作区" }).click();
-    await page.getByLabel("项目路径").fill(projectRoot);
-    await page.getByRole("button", { name: "打开项目" }).click();
-    await expect(page.getByLabel("项目路径")).toHaveValue(projectRoot);
+    await queueDirectorySelection(electronApp, projectRoot);
+    await page.getByLabel("项目导航").getByRole("button", { name: "打开项目" }).click();
     await waitForConversationService(page);
-    await openAgentActivity(page);
-    await expect(page.locator(`[data-conversation-id="${conversationA}"]`)).toBeVisible();
-    await expect(page.locator(`[data-conversation-id="${conversationB}"]`)).toBeVisible();
+    await openAgentSurface(page);
+    await expectConversationsInHistory(page, [conversationA, conversationB]);
 
     expect(
       (
@@ -191,33 +207,97 @@ test("isolates multi-run conversation context and restores project-scoped conver
   }
 });
 
-async function openAgentActivity(page: Page): Promise<void> {
-  await page.getByLabel("活动栏").getByRole("button", { name: "AI 工作流" }).click();
-  await expect(page.getByLabel("Agent 会话导航")).toBeVisible();
+async function openAgentSurface(page: Page): Promise<void> {
+  const unbound = page.getByLabel("Agent 未绑定工作区");
+  const view = page.getByLabel("Agent 会话主视图");
+  await expect
+    .poll(async () => (await unbound.isVisible()) || (await view.isVisible()), { timeout: 15_000 })
+    .toBe(true);
+  if (await unbound.isVisible()) {
+    const opened = await page.evaluate(async () => {
+      const selected = await window.novelStudio?.project.chooseOpenCreativeDirectory();
+      if (selected?.ok !== true || selected.value.selectionId === undefined) return selected;
+      return window.novelStudio?.project.openCreativeProject(selected.value.selectionId);
+    });
+    if (opened?.ok !== true) {
+      throw new Error(`Creative project activation failed: ${JSON.stringify(opened)}`);
+    }
+    await page.reload();
+  }
+  await expect(view).toBeVisible({ timeout: 15_000 });
+}
+
+async function queueDirectorySelection(
+  electronApp: ElectronApplication,
+  selectedPath: string
+): Promise<void> {
+  await electronApp.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] });
+  }, selectedPath);
 }
 
 async function createConversation(page: Page): Promise<string> {
-  const rows = page.locator(".ns-agent-conversation-row");
+  const drawer = await openHistoryDrawer(page);
+  const rows = drawer.locator(".ns-agent-conversation-row");
   const previousCount = await rows.count();
-  const selectedBefore = page.locator(".ns-agent-conversation-row[data-selected=true]");
+  const selectedBefore = drawer.locator(".ns-agent-conversation-row[data-selected=true]");
   const previousSelected =
     (await selectedBefore.count()) === 0
       ? null
       : await selectedBefore.getAttribute("data-conversation-id");
-  await page.getByRole("button", { name: "新建会话" }).first().click();
+  await drawer.getByRole("button", { name: "新建会话" }).click();
   await expect(rows).toHaveCount(previousCount + 1);
-  const selected = page.locator(".ns-agent-conversation-row[data-selected=true]");
+  const selected = drawer.locator(".ns-agent-conversation-row[data-selected=true]");
   await expect(selected).toBeVisible();
   await expect.poll(() => selected.getAttribute("data-conversation-id")).not.toBe(previousSelected);
   const selectedId = await selected.getAttribute("data-conversation-id");
   if (selectedId === null) throw new Error("Expected selected conversation id");
+  await closeHistoryDrawer(drawer);
+  await expect(page.getByLabel("会话输入区")).toBeVisible();
   return selectedId;
 }
 
 async function selectConversation(page: Page, conversationId: string): Promise<void> {
-  await page
+  const drawer = await openHistoryDrawer(page);
+  await drawer
     .locator(`[data-conversation-id="${conversationId}"] button[data-conversation-select]`)
     .click();
+  await expect(
+    drawer.locator(`[data-conversation-id="${conversationId}"][data-selected=true]`)
+  ).toBeVisible();
+  await closeHistoryDrawer(drawer);
+}
+
+async function archiveConversation(page: Page, conversationId: string): Promise<void> {
+  const drawer = await openHistoryDrawer(page);
+  const row = drawer.locator(`[data-conversation-id="${conversationId}"]`);
+  await row.locator("summary").click();
+  await row.getByRole("button", { name: /^归档会话/ }).click();
+  await expect(row).toHaveCount(0);
+  await closeHistoryDrawer(drawer);
+}
+
+async function expectConversationsInHistory(
+  page: Page,
+  conversationIds: readonly string[]
+): Promise<void> {
+  const drawer = await openHistoryDrawer(page);
+  for (const conversationId of conversationIds) {
+    await expect(drawer.locator(`[data-conversation-id="${conversationId}"]`)).toBeVisible();
+  }
+  await closeHistoryDrawer(drawer);
+}
+
+async function openHistoryDrawer(page: Page): Promise<Locator> {
+  await page.getByRole("button", { name: "历史会话" }).click();
+  const drawer = page.getByRole("dialog", { name: "历史会话抽屉" });
+  await expect(drawer).toBeVisible();
+  return drawer;
+}
+
+async function closeHistoryDrawer(drawer: Locator): Promise<void> {
+  await drawer.getByRole("button", { name: "关闭历史会话" }).click();
+  await expect(drawer).toHaveCount(0);
 }
 
 async function selectExecutionMode(page: Page): Promise<void> {

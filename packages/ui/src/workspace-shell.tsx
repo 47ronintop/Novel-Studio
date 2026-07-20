@@ -16,8 +16,9 @@ import {
 } from "lucide-react";
 
 import { ChapterEditor } from "./chapter-editor.js";
-import { AgentConversationNavigator } from "./agent-conversation-navigator.js";
 import { AgentConversationView } from "./agent-conversation-view.js";
+import { AiSelectionReview } from "./ai-selection-review.js";
+import { AiWorkflowHistoryPanel } from "./ai-workflow-history-panel.js";
 import { PlanArtifactReview } from "./plan-artifact-review.js";
 import { CodeMirrorDocumentEditor } from "./codemirror-document-editor.js";
 import { CommandPalette } from "./command-palette.js";
@@ -29,7 +30,6 @@ import {
 } from "./editor-document-bar.js";
 import { EditorFindReplace, type EditorFindMode } from "./editor-find-replace.js";
 import { SettingsWorkspace } from "./settings-workspace.js";
-import { AiWritingAssistantPanel, statusLabel } from "./workspace-shell-ai.js";
 import { createPanelResizeHandler } from "./workspace-shell-layout.js";
 import {
   ProjectSearchView,
@@ -44,7 +44,9 @@ import { WorkspaceStatusBar } from "./workspace-status-bar.js";
 import { WorkbenchSwitcher } from "./workbench-switcher.js";
 import { PlainFileConflictReview } from "./plain-file-conflict-review.js";
 import { WorkspaceActivityBar } from "./workspace-shell-activity.js";
+import { RecoveryReview } from "./recovery-review.js";
 import type {
+  AgentConversationMainReview,
   AiWritingWorkflowProps,
   OnboardingProps,
   PlainFileEditorProps,
@@ -87,7 +89,6 @@ function WorkspaceShellContent({
   search,
   settings,
   studio,
-  storyBible,
   storyBibleEditor,
   creativeNavigator,
   engineeringNavigator,
@@ -115,8 +116,7 @@ function WorkspaceShellContent({
   };
   const focusMode = shellState.focusMode === true;
   const settingsMode = shellState.activeActivity === "settings";
-  const editorActivity =
-    shellState.activeActivity === "workspace" || shellState.activeActivity === "ai";
+  const editorActivity = shellState.activeActivity === "workspace";
   const hasActiveDocument =
     editorActivity && (fileEditor !== undefined || chapterEditor !== undefined);
   const activeBottomPanelTab =
@@ -132,6 +132,11 @@ function WorkspaceShellContent({
     "--ns-bottom-panel-height":
       !focusMode && shellState.bottomPanelVisible ? `${workspaceLayout.bottomPanelHeight}px` : "0px"
   } as CSSProperties;
+  const chapterRecoveryReview = toChapterRecoveryReview(projectWorkflow);
+  const mainReview =
+    agentConversationWorkspace?.mainReview?.kind === "recovery"
+      ? agentConversationWorkspace.mainReview
+      : (chapterRecoveryReview ?? agentConversationWorkspace?.mainReview);
 
   useEffect(() => {
     setFileSelection({ anchor: 0, head: 0 });
@@ -201,9 +206,7 @@ function WorkspaceShellContent({
         <>
           <div
             className="ns-workspace-grid"
-            data-agent-conversation={
-              shellState.activeActivity === "ai" && agentConversationWorkspace !== undefined
-            }
+            data-agent-conversation={agentConversationWorkspace !== undefined}
             data-focus-mode={focusMode}
             data-split-view={workspaceLayout.splitView}
             style={workspaceGridStyle}
@@ -214,31 +217,21 @@ function WorkspaceShellContent({
               shellState={shellState}
             />
 
-            {shellState.activeActivity === "ai" && agentConversationWorkspace !== undefined ? (
-              <div
-                className="ns-agent-conversation-navigator-region"
-                data-collapsed={focusMode || shellState.navigatorCollapsed}
-                data-focus-hidden={focusMode || shellState.navigatorCollapsed}
-              >
-                <AgentConversationNavigator {...agentConversationWorkspace.navigator} />
-              </div>
-            ) : (
-              <WorkspaceShellNavigator
-                collapsed={focusMode || shellState.navigatorCollapsed}
-                creative={creativeNavigator}
-                engineeringNavigator={engineeringNavigator}
-                onOpenEngineeringWorkspace={onOpenEngineeringWorkspace}
-                focusHidden={focusMode}
-                navigatorSearchQuery={navigatorSearchQuery}
-                onActivitySelect={onActivitySelect}
-                onNavigatorExpandedSectionIdsChange={onNavigatorExpandedSectionIdsChange}
-                onNavigatorSearchQueryChange={onNavigatorSearchQueryChange}
-                projectWorkflow={projectWorkflow}
-                shellState={shellState}
-                storyBibleEditor={storyBibleEditor}
-                studio={studio}
-              />
-            )}
+            <WorkspaceShellNavigator
+              collapsed={focusMode || shellState.navigatorCollapsed}
+              creative={creativeNavigator}
+              engineeringNavigator={engineeringNavigator}
+              onOpenEngineeringWorkspace={onOpenEngineeringWorkspace}
+              focusHidden={focusMode}
+              navigatorSearchQuery={navigatorSearchQuery}
+              onActivitySelect={onActivitySelect}
+              onNavigatorExpandedSectionIdsChange={onNavigatorExpandedSectionIdsChange}
+              onNavigatorSearchQueryChange={onNavigatorSearchQueryChange}
+              projectWorkflow={projectWorkflow}
+              shellState={shellState}
+              storyBibleEditor={storyBibleEditor}
+              studio={studio}
+            />
 
             <div
               aria-label="Navigator resize handle"
@@ -253,25 +246,9 @@ function WorkspaceShellContent({
             />
 
             <main aria-label="编辑区" className="ns-editor-area" data-region="editor-area">
-              {shellState.activeActivity === "ai" &&
-              agentConversationWorkspace?.mainReview?.kind === "rollback" ? (
-                <RollbackReview review={agentConversationWorkspace.mainReview.props} />
-              ) : shellState.activeActivity === "ai" &&
-                agentConversationWorkspace?.mainReview?.kind === "change_set" ? (
-                <DiffReview review={agentConversationWorkspace.mainReview.props} />
-              ) : shellState.activeActivity === "ai" &&
-                agentConversationWorkspace?.mainReview?.kind === "plan" ? (
-                <PlanArtifactReview {...agentConversationWorkspace.mainReview.props} />
-              ) : aiWritingWorkflow?.agentRun?.rollbackReview !== undefined &&
-                aiWritingWorkflow.agentRun.rollbackReview.open !== false &&
-                shellState.activeActivity === "workspace" ? (
-                <RollbackReview review={aiWritingWorkflow.agentRun.rollbackReview} />
-              ) : aiWritingWorkflow?.agentRun?.changeSetReview !== undefined &&
-                aiWritingWorkflow.agentRun.changeSetReview.open !== false &&
-                shellState.activeActivity === "workspace" ? (
-                <DiffReview review={aiWritingWorkflow.agentRun.changeSetReview} />
-              ) : shellState.activeActivity === "workspace" ||
-                shellState.activeActivity === "ai" ? (
+              {mainReview !== undefined ? (
+                <AgentConversationMainReviewView review={mainReview} />
+              ) : shellState.activeActivity === "workspace" ? (
                 <WorkspaceEditorSurface
                   chapterEditor={chapterEditor}
                   fileEditor={fileEditor}
@@ -283,7 +260,6 @@ function WorkspaceShellContent({
               ) : (
                 <ActivityEmptyState
                   activityId={shellState.activeActivity}
-                  aiWritingWorkflow={aiWritingWorkflow}
                   search={search}
                   studio={studio}
                   storyBibleEditor={storyBibleEditor}
@@ -314,64 +290,24 @@ function WorkspaceShellContent({
               data-region="ai-panel"
             >
               <div className="ns-panel-header">
-                <span>
-                  {shellState.activeActivity === "ai" && agentConversationWorkspace !== undefined
-                    ? "Agent 运行"
-                    : "AI 对话"}
-                </span>
+                <span>Agent</span>
                 <PanelRight aria-hidden="true" size={15} />
               </div>
-              {shellState.activeActivity === "ai" && agentConversationWorkspace !== undefined ? (
-                <AgentConversationView {...agentConversationWorkspace.view} />
-              ) : aiWritingWorkflow === undefined ? (
-                <section className="ns-ai-workflow ns-ai-placeholder" aria-label="AI 写作工作流">
-                  <div className="ns-editor-panel-header">
-                    <span>对话式写作助手</span>
-                    <span className="ns-muted">未加载</span>
-                  </div>
-                  <p className="ns-ai-context">
-                    打开项目章节后，可以在这里向 AI 提出续写或修改要求。
-                  </p>
-                  <section className="ns-ai-composer" aria-label="AI 输入区">
-                    <textarea
-                      aria-label="AI 写作指令"
-                      className="ns-ai-instruction"
-                      disabled
-                      placeholder="和 AI 说明你想怎么改写或续写当前章节"
-                    />
-                    <div className="ns-ai-actions">
-                      <button className="ns-icon-text-button" disabled type="button">
-                        生成建议
-                      </button>
-                    </div>
-                  </section>
+              {agentConversationWorkspace !== undefined ? (
+                <AgentConversationView
+                  {...agentConversationWorkspace.view}
+                  navigator={agentConversationWorkspace.navigator}
+                  {...(mainReview === undefined ? {} : { mainReview })}
+                />
+              ) : shellState.workspaceContext.kind === "none" ? (
+                <section className="ns-agent-panel-placeholder" aria-label="Agent 未绑定工作区">
+                  <strong>未绑定工作区</strong>
+                  <p>打开创作项目或工程工作区后，Agent 会在这里保持可用。</p>
                 </section>
               ) : (
-                <AiWritingAssistantPanel workflow={aiWritingWorkflow} />
-              )}
-              {storyBible === undefined ? null : (
-                <details className="ns-story-bible-summary" aria-label="故事圣经摘要">
-                  <summary>故事圣经</summary>
-                  <div className="ns-editor-panel-header">
-                    <span>故事圣经</span>
-                    <span className="ns-muted">{storyBible.assets.length}</span>
-                  </div>
-                  <ul className="ns-story-bible-list">
-                    {storyBible.assets.map((asset) => (
-                      <li className="ns-story-bible-item" key={asset.id}>
-                        <div className="ns-story-bible-title">
-                          <span>{asset.title}</span>
-                          <span>{asset.type}</span>
-                        </div>
-                        <p>{asset.summary}</p>
-                        <div className="ns-story-bible-meta">
-                          <span>{asset.status}</span>
-                          {asset.contextEligible === true ? <span>可进入上下文</span> : null}
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                </details>
+                <section className="ns-agent-panel-placeholder" aria-label="Agent 正在加载">
+                  <strong>正在加载 Agent</strong>
+                </section>
               )}
             </aside>
 
@@ -446,12 +382,25 @@ function BottomPanelContent({
 
   if (activeTab === "工作流运行") {
     const runCount = aiWritingWorkflow?.history?.runs.length ?? 0;
+    const history = aiWritingWorkflow?.history;
+    if (history !== undefined) {
+      return (
+        <div className="ns-bottom-panel-content ns-bottom-panel-workflow-history" aria-label="底部面板内容：工作流运行">
+          <div className="ns-bottom-panel-workflow-summary">
+            <strong>工作流运行</strong>
+            <span>当前状态 {aiWritingWorkflowStatusLabel(aiWritingWorkflow?.status)}</span>
+            <span>最近运行 {runCount}</span>
+          </div>
+          <AiWorkflowHistoryPanel history={history} />
+        </div>
+      );
+    }
     return (
       <div className="ns-bottom-panel-content" aria-label="底部面板内容：工作流运行">
         <strong>工作流运行</strong>
         <span>
           当前状态{" "}
-          {aiWritingWorkflow === undefined ? "未加载" : statusLabel(aiWritingWorkflow.status)}
+          {aiWritingWorkflow === undefined ? "未加载" : aiWritingWorkflowStatusLabel(aiWritingWorkflow.status)}
         </span>
         <span>最近运行 {runCount}</span>
         <span>
@@ -531,6 +480,63 @@ function BottomPanelContent({
       <span>该面板暂无内容。</span>
     </div>
   );
+}
+
+function AgentConversationMainReviewView({
+  review
+}: {
+  readonly review: AgentConversationMainReview;
+}) {
+  switch (review.kind) {
+    case "recovery":
+      return <RecoveryReview {...review.props} />;
+    case "rollback":
+      return <RollbackReview review={review.props} />;
+    case "change_set":
+      return <DiffReview review={review.props} />;
+    case "selection":
+      return <AiSelectionReview review={review.props} />;
+    case "plan":
+      return <PlanArtifactReview {...review.props} />;
+  }
+}
+
+function toChapterRecoveryReview(
+  projectWorkflow: ProjectWorkflowProps | undefined
+): AgentConversationMainReview | undefined {
+  const recovery = projectWorkflow?.recovery;
+  if (recovery === undefined || recovery.availableItems.length === 0) return undefined;
+  return {
+    kind: "recovery",
+    props: {
+      source: "chapter_autosave",
+      recovery,
+      chapters: projectWorkflow?.chapters ?? [],
+      onPreview: (sessionId) => projectWorkflow?.onPreviewRecoveryDraft?.(sessionId),
+      onApply: (sessionId) => projectWorkflow?.onApplyRecoveryDraft?.(sessionId),
+      onDiscard: (sessionId) => projectWorkflow?.onDiscardRecoveryDraft?.(sessionId)
+    }
+  };
+}
+
+function aiWritingWorkflowStatusLabel(status: AiWritingWorkflowProps["status"] | undefined): string {
+  if (status === undefined) return "未加载";
+  switch (status) {
+    case "idle":
+      return "空闲";
+    case "generating":
+      return "生成中";
+    case "streaming":
+      return "流式生成";
+    case "suggestion-ready":
+      return "建议待审阅";
+    case "applied":
+      return "已应用";
+    case "failed":
+      return "失败";
+    case "cancelled":
+      return "已取消";
+  }
 }
 
 function WorkspaceEditorSurface({
@@ -801,7 +807,6 @@ function PlainFileEditor({
 
 function ActivityEmptyState({
   activityId,
-  aiWritingWorkflow,
   search,
   studio,
   storyBibleEditor,
@@ -809,7 +814,6 @@ function ActivityEmptyState({
   onTimelineEntryOpen
 }: {
   readonly activityId: ActivityId;
-  readonly aiWritingWorkflow: AiWritingWorkflowProps | undefined;
   readonly search: ProjectSearchProps | undefined;
   readonly studio: ConfigStudioPanelProps | undefined;
   readonly storyBibleEditor: StoryBibleEditorProps | undefined;
@@ -844,19 +848,6 @@ function ActivityEmptyState({
     );
   }
 
-  if (activityId === "ai") {
-    return (
-      <section className="ns-activity-view" aria-label="AI 工作流主视图">
-        <h1>AI 写作助手</h1>
-        <p>像对话一样提出写作要求，AI 只生成建议；写入正文前仍需要你确认应用。</p>
-        {aiWritingWorkflow === undefined ? (
-          <p>打开项目章节后可以生成写作建议。</p>
-        ) : (
-          <AiWritingAssistantPanel workflow={aiWritingWorkflow} />
-        )}
-      </section>
-    );
-  }
   if (activityId === "workspace") {
     return null;
   }
@@ -874,7 +865,7 @@ function ActivityEmptyState({
   );
 }
 
-function activityViewCopy(activityId: Exclude<ActivityId, "workspace" | "ai" | "storyBible">): {
+function activityViewCopy(activityId: Exclude<ActivityId, "workspace" | "storyBible">): {
   readonly title: string;
   readonly description: string;
   readonly nextAction: string;

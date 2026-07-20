@@ -12,6 +12,46 @@ import { WorkspaceShell } from "../src/workspace-shell.js";
 describe("Agent Conversation workspace", () => {
   afterEach(() => document.body.replaceChildren());
 
+  test.each(["workspace", "search", "timeline", "studio"] as const)(
+    "keeps one Agent surface when the %s activity is active",
+    (activeActivity) => {
+      const application = createDesktopApplication();
+      const legacyActivityId = ["a", "i"].join("");
+      const conversation = {
+        conversationId: "conversation-one-surface",
+        title: "统一 Agent",
+        status: "active" as const,
+        updatedAtLabel: "16:00",
+        runCount: 1,
+        turns: []
+      };
+      const html = renderToStaticMarkup(
+        <WorkspaceShell
+          agentConversationWorkspace={oneSurfaceWorkspace(conversation) as never}
+          commandPaletteOpen={false}
+          commands={application.listCommands()}
+          shellState={{
+            ...application.getShellState(),
+            activeActivity,
+            workspaceContext: {
+              kind: "creativeProject",
+              workspaceId: "project-one-surface",
+              projectId: "project-one-surface",
+              displayName: "统一 Agent 项目",
+              capabilities: ["creativeWorkbench", "writingContext", "creativeSearch", "creativeStudio"]
+            }
+          }}
+        />
+      );
+
+      expect(html.match(/<textarea[^>]*aria-label="Agent 请求"/g) ?? []).toHaveLength(1);
+      expect(html.match(/aria-label="会话输入区"/g) ?? []).toHaveLength(1);
+      expect(html.match(/aria-label="AI 对话面板"/g) ?? []).toHaveLength(1);
+      expect(html).not.toContain(`data-activity-id="${legacyActivityId}"`);
+      expect(html).not.toContain('aria-label="AI 写作工作流"');
+    }
+  );
+
   test("keeps the editor central and renders one conversation in the right panel", () => {
     const application = createDesktopApplication();
     const conversation = {
@@ -53,13 +93,16 @@ describe("Agent Conversation workspace", () => {
         }}
         commandPaletteOpen={false}
         commands={application.listCommands()}
-        shellState={{ ...application.getShellState(), activeActivity: "ai" }}
+        shellState={{ ...application.getShellState(), activeActivity: "workspace" }}
         />
       );
     });
 
     const editor = host.querySelector('[aria-label="编辑区"]');
     const aiPanel = host.querySelector('[aria-label="AI 对话面板"]');
+    expect(host.querySelector('[aria-label="工作区导航"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Agent 会话导航"]')).toBeNull();
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="历史会话"]')?.click());
     expect(host.querySelector('[aria-label="Agent 会话导航"]')).not.toBeNull();
     expect(editor?.querySelector('[aria-label="章节编辑器表面"]')).not.toBeNull();
     expect(editor?.querySelector('[aria-label="Agent 会话主视图"]')).toBeNull();
@@ -122,7 +165,7 @@ describe("Agent Conversation workspace", () => {
           }}
           commandPaletteOpen={false}
           commands={application.listCommands()}
-          shellState={{ ...application.getShellState(), activeActivity: "ai" }}
+          shellState={{ ...application.getShellState(), activeActivity: "workspace" }}
         />
       );
     });
@@ -200,7 +243,7 @@ describe("Agent Conversation workspace", () => {
         }}
         commandPaletteOpen={false}
         commands={application.listCommands()}
-        shellState={{ ...application.getShellState(), activeActivity: "ai" }}
+        shellState={{ ...application.getShellState(), activeActivity: "workspace" }}
       />
     );
 
@@ -275,5 +318,53 @@ function readyPlanArtifact() {
     verification: ["运行测试"],
     sourceRefs: ["chapter:chapter-01"],
     createdAt: "2026-07-13T00:00:00.000Z"
+  };
+}
+
+function oneSurfaceWorkspace(conversation: {
+  readonly conversationId: string;
+  readonly title: string;
+  readonly status: "active";
+  readonly updatedAtLabel: string;
+  readonly runCount: number;
+  readonly turns: readonly never[];
+}) {
+  return {
+    navigator: {
+      conversations: [conversation],
+      selectedConversationId: conversation.conversationId,
+      searchQuery: "",
+      filter: "active",
+      loading: false,
+      onSearchQueryChange: () => undefined,
+      onFilterChange: () => undefined,
+      onCreate: () => undefined,
+      onSelect: () => undefined,
+      onArchive: () => undefined,
+      onRestore: () => undefined
+    },
+    view: {
+      conversation,
+      loading: false,
+      composer: {
+        request: "检查当前项目",
+        operationMode: "execution",
+        contextMode: "writing",
+        writePolicy: "write_before_confirmation",
+        writePolicyAcknowledged: false,
+        active: false,
+        onRequestChange: () => undefined,
+        onOperationModeChange: () => undefined,
+        onContextModeChange: () => undefined,
+        onWritePolicyChange: () => undefined,
+        onWritePolicyAcknowledgedChange: () => undefined,
+        onSend: () => undefined,
+        onStop: () => undefined
+      },
+      onCreate: () => undefined,
+      onArchive: () => undefined,
+      onRestore: () => undefined,
+      onReturnToActive: () => undefined
+    }
   };
 }

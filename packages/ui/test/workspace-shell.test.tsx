@@ -9,7 +9,11 @@ import { describe, expect, test } from "vitest";
 
 import { createDesktopApplication } from "@novel-studio/application";
 import type { ApplicationCommandId } from "@novel-studio/application";
-import type { ModelSettingsPanelProps } from "../src/index.js";
+import type {
+  AgentConversationNavigatorProps,
+  AgentConversationViewProps,
+  ModelSettingsPanelProps
+} from "../src/index.js";
 import { WorkspaceShell } from "../src/index.js";
 import { workspaceActivitiesFor } from "../src/workspace-shell-activity.js";
 
@@ -40,12 +44,12 @@ describe("WorkspaceShell", () => {
   test("keeps project activities above bottom activities", () => {
     const application = createDesktopApplication();
     const groups = workspaceActivitiesFor(application.getShellState());
+    const legacyActivityId = ["a", "i"].join("");
 
     expect(groups.projectActivities.map((activity) => activity.id)).toEqual([
       "workspace",
       "search",
-      "timeline",
-      "ai"
+      "timeline"
     ]);
     expect(groups.bottomActivities.map((activity) => activity.id)).toEqual(["studio", "settings"]);
 
@@ -66,9 +70,7 @@ describe("WorkspaceShell", () => {
     expect(activityBar.indexOf('data-region="project-activities"')).toBeLessThan(
       activityBar.indexOf('data-region="bottom-activities"')
     );
-    expect(activityBar.indexOf('data-activity-id="ai"')).toBeLessThan(
-      activityBar.indexOf('data-activity-id="studio"')
-    );
+    expect(activityBar).not.toContain(`data-activity-id="${legacyActivityId}"`);
   });
 
   test("keeps only settings in the engineering bottom activity group", () => {
@@ -84,7 +86,7 @@ describe("WorkspaceShell", () => {
       }
     });
 
-    expect(groups.projectActivities.map((activity) => activity.id)).toEqual(["workspace", "ai"]);
+    expect(groups.projectActivities.map((activity) => activity.id)).toEqual(["workspace"]);
     expect(groups.bottomActivities.map((activity) => activity.id)).toEqual(["settings"]);
   });
 
@@ -251,7 +253,8 @@ describe("WorkspaceShell", () => {
     expect(html).toContain('aria-label="Navigator resize handle"');
     expect(html).toContain('aria-label="AI panel resize handle"');
     expect(html).not.toContain('aria-label="Novel Studio asset groups"');
-    expect(html).toContain('aria-label="AI 写作工作流"');
+    expect(html).toContain('aria-label="Agent 未绑定工作区"');
+    expect(html).not.toContain('aria-label="AI 写作工作流"');
     expect(html).not.toContain("Markdown");
   });
 
@@ -688,6 +691,7 @@ describe("WorkspaceShell", () => {
 
   test("renders localized activity buttons with active state and click wiring", () => {
     const application = createDesktopApplication();
+    const legacyActivityId = ["a", "i"].join("");
     const html = renderToStaticMarkup(
       <WorkspaceShell
         shellState={application.getShellState()}
@@ -700,10 +704,10 @@ describe("WorkspaceShell", () => {
     expect(html).toContain('aria-label="工作区"');
     expect(html).toContain('aria-label="搜索"');
     expect(html).toContain('aria-label="时间线"');
-    expect(html).toContain('aria-label="AI 工作流"');
     expect(html).toContain('aria-label="创作系统"');
     expect(html).toContain('aria-label="设置"');
     expect(html).toContain('data-activity-id="workspace"');
+    expect(html).not.toContain(`data-activity-id="${legacyActivityId}"`);
     expect(html).toContain('aria-current="page"');
   });
 
@@ -1117,31 +1121,40 @@ describe("WorkspaceShell", () => {
     expect(pluginSection).not.toContain("secret://");
   });
 
-  test("renders AI selection review controls in the inspector", () => {
+  test("renders AI selection review controls in the central area", () => {
     const application = createDesktopApplication();
     const calls: string[] = [];
     const tree = WorkspaceShell({
-      shellState: { ...application.getShellState(), inspectorCollapsed: false },
+      shellState: {
+        ...application.getShellState(),
+        inspectorCollapsed: false,
+        workspaceContext: {
+          kind: "creativeProject",
+          workspaceId: "project-selection-review",
+          projectId: "project-selection-review",
+          displayName: "Selection Review",
+          capabilities: ["creativeWorkbench", "writingContext"]
+        }
+      },
       commands: application.listCommands(),
       commandPaletteOpen: false,
-      aiWritingWorkflow: {
-        status: "suggestion-ready",
-        instruction: "Rewrite selection.",
-        selectionReview: {
-          status: "pending",
-          originalText: "Opening line.",
-          proposedText: "The opening line tightened.",
-          rangeLabel: "0-13",
-          compareLabel: "Opening line. -> The opening line tightened.",
-          canUndo: true
-        },
-        onInstructionChange: () => undefined,
-        onGenerateSuggestion: () => undefined,
-        onApplySuggestion: () => calls.push("accept"),
-        onRejectSelectionReview: () => calls.push("reject"),
-        onUndoSelectionReview: () => calls.push("undo"),
-        onRetrySuggestion: () => undefined,
-        onCancelStreaming: () => undefined
+      agentConversationWorkspace: {
+        navigator: emptyConversationNavigator(),
+        view: emptyConversationView(),
+        mainReview: {
+          kind: "selection",
+          props: {
+            status: "pending",
+            originalText: "Opening line.",
+            proposedText: "The opening line tightened.",
+            rangeLabel: "0-13",
+            compareLabel: "Opening line. -> The opening line tightened.",
+            canUndo: true,
+            onAccept: () => calls.push("accept"),
+            onReject: () => calls.push("reject"),
+            onUndo: () => calls.push("undo")
+          }
+        }
       }
     });
 
@@ -1438,7 +1451,7 @@ describe("WorkspaceShell", () => {
     expect(html.match(/class="ns-document-tab"/g)).toHaveLength(1);
   });
 
-  test("renders an autosave recovery notice from project workflow recovery state", () => {
+  test("routes available autosave recovery drafts to the central review", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
@@ -1479,10 +1492,16 @@ describe("WorkspaceShell", () => {
       />
     );
 
-    expect(html).toContain('aria-label="Autosave recovery"');
-    expect(html).toContain("Recoverable drafts 1");
+    expect(html).toContain('aria-label="章节恢复审阅"');
+    expect(html).not.toContain('aria-label="Autosave recovery"');
+    expect(html).not.toContain('aria-label="预览恢复草稿：Opening"');
+    expect(html).not.toContain('aria-label="应用恢复草稿：Opening"');
+    expect(html).not.toContain('aria-label="丢弃恢复草稿：Opening"');
+    expect(html).toContain("章节草稿恢复");
     expect(html).toContain("Opening");
-    expect(html).toContain('data-dirty="true"');
+    expect(html).toContain('aria-label="预览恢复草稿"');
+    expect(html).toContain('aria-label="应用恢复草稿"');
+    expect(html).toContain('aria-label="丢弃恢复草稿"');
   });
 
   test("renders recovery review preview, apply, and discard actions", () => {
@@ -1538,9 +1557,9 @@ describe("WorkspaceShell", () => {
       }
     });
 
-    findElementByAriaLabel(tree, "预览恢复草稿：Opening")?.props.onClick?.();
-    findElementByAriaLabel(tree, "应用恢复草稿：Opening")?.props.onClick?.();
-    findElementByAriaLabel(tree, "丢弃恢复草稿：Opening")?.props.onClick?.();
+    findElementByAriaLabel(tree, "预览恢复草稿")?.props.onClick?.();
+    findElementByAriaLabel(tree, "应用恢复草稿")?.props.onClick?.();
+    findElementByAriaLabel(tree, "丢弃恢复草稿")?.props.onClick?.();
 
     expect(calls).toEqual([
       "preview:session_prj_m49_ch_opening",
@@ -1555,7 +1574,7 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("丢弃恢复草稿");
   });
 
-  test("renders Story Bible summaries and context eligibility", () => {
+  test("keeps Story Bible summaries out of the unique Agent surface", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
@@ -1584,10 +1603,11 @@ describe("WorkspaceShell", () => {
       />
     );
 
-    expect(html).toContain('aria-label="故事圣经摘要"');
-    expect(html).toContain("Hero");
-    expect(html).toContain("Oath");
-    expect(html).toContain("可进入上下文");
+    expect(html).toContain('aria-label="AI 对话面板"');
+    expect(html).not.toContain('aria-label="故事圣经摘要"');
+    expect(html).not.toContain("Hero");
+    expect(html).not.toContain("Oath");
+    expect(html).not.toContain("可进入上下文");
   });
 
   test("renders the M21 Story Bible editor view", () => {
@@ -1888,6 +1908,31 @@ function createSettingsProps(): ModelSettingsPanelProps {
       timeoutMs: "60000"
     },
     saveStatus: "idle"
+  };
+}
+
+function emptyConversationNavigator(): AgentConversationNavigatorProps {
+  return {
+    conversations: [],
+    searchQuery: "",
+    filter: "active",
+    loading: false,
+    onSearchQueryChange: () => undefined,
+    onFilterChange: () => undefined,
+    onCreate: () => undefined,
+    onSelect: () => undefined,
+    onArchive: () => undefined,
+    onRestore: () => undefined
+  };
+}
+
+function emptyConversationView(): AgentConversationViewProps {
+  return {
+    loading: false,
+    onCreate: () => undefined,
+    onArchive: () => undefined,
+    onRestore: () => undefined,
+    onReturnToActive: () => undefined
   };
 }
 

@@ -142,6 +142,33 @@ describe("AgentConversationView", () => {
       expect(host.querySelectorAll('[aria-label="启动 Agent 运行"]'), status).toHaveLength(0);
     }
   });
+
+  test("opens conversation history inside the right panel and restores focus on Escape", () => {
+    const onCreate = vi.fn();
+    const { host } = renderView({
+      navigator: {
+        conversations: [conversation()],
+        selectedConversationId: "conv-current",
+        searchQuery: "",
+        filter: "active",
+        loading: false,
+        onSearchQueryChange: () => undefined,
+        onFilterChange: () => undefined,
+        onCreate,
+        onSelect: () => undefined,
+        onArchive: () => undefined,
+        onRestore: () => undefined
+      }
+    });
+
+    expect(host.querySelectorAll('[aria-label="历史会话"]')).toHaveLength(1);
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="历史会话"]')?.click());
+    expect(host.querySelector('[aria-label="历史会话抽屉"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Agent 会话导航"]')).not.toBeNull();
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    expect(host.querySelector('[aria-label="历史会话抽屉"]')).toBeNull();
+    expect(document.activeElement).toBe(host.querySelector('[aria-label="历史会话"]'));
+  });
 });
 
 function renderView(overrides: Partial<AgentConversationViewProps> = {}) {

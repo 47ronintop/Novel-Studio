@@ -516,6 +516,9 @@ export function toAgentConversationWorkspaceProps(
       ...(activeConversationTitle === undefined ? {} : { activeConversationTitle }),
       ...(navigableAgentRun === undefined ? {} : { agentRun: navigableAgentRun }),
       ...(composer === undefined ? {} : { composer }),
+      ...(actions.onOpenMainReview === undefined
+        ? {}
+        : { onOpenMainReview: actions.onOpenMainReview }),
       loading: state.loading,
       ...(state.errorMessage === undefined ? {} : { errorMessage: state.errorMessage }),
       onCreate: actions.onCreate,
@@ -629,6 +632,7 @@ function liveAgentRunId(
 ): string | undefined {
   if (agentRun === undefined || agentRun.runId === undefined) return undefined;
   const runId = agentRun.runId;
+  if (toAgentRecoveryReview(agentRun) !== undefined) return runId;
   if (!isTerminalRunStatus(agentRun.status)) return runId;
   if (
     agentRun.rollbackReview !== undefined &&
@@ -652,6 +656,8 @@ function toAgentConversationMainReview(
   agentRun: AgentRunPanelProps | undefined,
   planReview: AgentPlanReviewProps | undefined
 ): AgentConversationWorkspaceShellProps["mainReview"] {
+  const recovery = toAgentRecoveryReview(agentRun);
+  if (recovery !== undefined) return { kind: "recovery", props: recovery };
   if (agentRun?.rollbackReview !== undefined && agentRun.rollbackReview.open !== false) {
     return { kind: "rollback", props: agentRun.rollbackReview };
   }
@@ -660,6 +666,63 @@ function toAgentConversationMainReview(
   }
   if (planReview !== undefined) return { kind: "plan", props: planReview };
   return undefined;
+}
+
+function toAgentRecoveryReview(
+  agentRun: AgentRunPanelProps | undefined
+): Extract<AgentConversationMainReview, { readonly kind: "recovery" }>["props"] | undefined {
+  if (agentRun?.runId === undefined) return undefined;
+  const diagnostic = agentRun.diagnostic;
+  const synchronizationEvent = [...agentRun.events]
+    .reverse()
+    .find(
+      (event) =>
+        event.type === "write_applied" &&
+        event.detail?.["synchronizationStatus"] === "recovery_required"
+    );
+  if (diagnostic?.recoveryState !== "recovery_review" && synchronizationEvent === undefined) {
+    return undefined;
+  }
+
+  const recoveryJournal = readObject(diagnostic?.redactedDetail["recoveryJournal"]);
+  const versionGroupId =
+    readString(recoveryJournal?.["versionGroupId"]) ??
+    readString(synchronizationEvent?.detail?.["versionGroupId"]);
+  const failedHooks = readStringArray(
+    synchronizationEvent?.detail?.["synchronizationFailedHooks"] ??
+      recoveryJournal?.["failedHooks"] ??
+      diagnostic?.redactedDetail["failedHooks"]
+  );
+  const rollback = agentRun.rollbackReview?.onOpen;
+  const retryTarget = diagnostic?.retryTargets[0];
+  return {
+    source: "agent_transaction",
+    runId: agentRun.runId,
+    ...(versionGroupId === undefined ? {} : { versionGroupId }),
+    errorCode: diagnostic?.code ?? "AGENT_POST_COMMIT_SYNC_FAILED",
+    message: diagnostic?.message ?? "事务已提交，但工作区同步需要恢复审阅。",
+    failedHooks,
+    ...(rollback === undefined ? {} : { onOpenRollback: rollback }),
+    ...(retryTarget === undefined || agentRun.onRetryTarget === undefined
+      ? {}
+      : { onRetry: () => agentRun.onRetryTarget?.(retryTarget) })
+  };
+}
+
+function readObject(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : undefined;
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function readStringArray(value: unknown): readonly string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+    : [];
 }
 
 function isTerminalRunStatus(status: AgentRunPanelProps["status"]): boolean {

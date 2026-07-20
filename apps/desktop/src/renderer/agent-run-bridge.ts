@@ -62,6 +62,7 @@ type AgentPlanExecutionOptions = NonNullable<
 
 export interface AgentRunBridgeContext {
   readonly projectId: string;
+  readonly workspaceKind?: "creativeProject" | "engineeringWorkspace";
   readonly conversationId?: string;
   readonly activeChapterId?: string;
   readonly chapterEditor?: ChapterEditorProps;
@@ -506,7 +507,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   function undoAgentRun(): Promise<AgentRunPanelProps> {
     if (undoInFlight !== undefined) return undoInFlight;
     const snapshot = requireSnapshot();
-    if (snapshot === undefined) return Promise.resolve(toProps());
+    if (snapshot === undefined || !canUndoAppliedRun(state)) return Promise.resolve(toProps());
     if (state.rollbackReview !== undefined && !state.rollbackReviewOpen) {
       state = { ...state, rollbackReviewOpen: true };
       notify();
@@ -917,12 +918,15 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         notify();
         return;
       }
+      const normalizeForEngineering =
+        ctx.workspaceKind === "engineeringWorkspace" &&
+        result.value.runDraft.contextMode !== "general_file";
       state = {
         ...state,
         runDraft: result.value.runDraft,
         contextDraft: result.value.contextDraft,
         operationMode: result.value.runDraft.operationMode,
-        contextMode: result.value.runDraft.contextMode,
+        contextMode: normalizeForEngineering ? "general_file" : result.value.runDraft.contextMode,
         writePolicy: result.value.runDraft.writePolicy,
         writePolicyAcknowledged: result.value.runDraft.writePolicyAcknowledged,
         permissionSummary: undefined,
@@ -930,6 +934,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         draftPending: false
       };
       notify();
+      if (normalizeForEngineering) {
+        updateRunDraftChoice({ kind: "set_context_mode", contextMode: "general_file" }, true);
+        return;
+      }
       await previewBudget(token);
     })();
   }
@@ -1346,6 +1354,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       writePolicy: state.writePolicy,
       writePolicyAcknowledged: state.writePolicyAcknowledged,
       active: state.snapshot !== undefined && !isTerminalRunStatus(state.snapshot.status),
+      availableContextModes:
+        context?.workspaceKind === "engineeringWorkspace"
+          ? ["general_file"]
+          : ["writing", "general_file"],
       ...composerDraftGroups(),
       ...(stage5BApi.readPermissionSummary === undefined && state.permissionSummary === undefined
         ? {}
@@ -1447,9 +1459,22 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         permissionSummaryRequested = false;
         state = resetRunState(state);
       }
-      // Load (or lazily initialize) the persisted composer draft when the conversation changes so the
-      // model/reasoning/reference controls reflect the server-authoritative state, not stale memory.
-      if (conversationChanged && nextContext.conversationId !== undefined) {
+      if (nextContext.workspaceKind === "engineeringWorkspace" && state.contextMode !== "general_file") {
+        state = { ...state, contextMode: "general_file" };
+        if (state.runDraft !== undefined) {
+          updateRunDraftChoice(
+            { kind: "set_context_mode", contextMode: "general_file" },
+            true
+          );
+        }
+      }
+      // Settings can arrive after the permanent conversation surface selects a conversation. Load
+      // whenever that conversation still has no draft, while avoiding duplicate in-flight reads.
+      if (
+        nextContext.conversationId !== undefined &&
+        state.runDraft === undefined &&
+        !state.draftPending
+      ) {
         loadDraft();
       }
       return toProps();
@@ -1480,7 +1505,25 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     async loadRun(runId) {
       if (runId === undefined) {
         permissionSummaryRequested = false;
+        const currentDraft = {
+          runDraft: state.runDraft,
+          contextDraft: state.contextDraft,
+          budgetPreview: state.budgetPreview,
+          draftPending: state.draftPending
+        };
         state = resetRunState(state);
+        state = {
+          ...state,
+          ...(currentDraft.runDraft === undefined ? {} : { runDraft: currentDraft.runDraft }),
+          ...(currentDraft.contextDraft === undefined
+            ? {}
+            : { contextDraft: currentDraft.contextDraft }),
+          ...(currentDraft.budgetPreview === undefined
+            ? {}
+            : { budgetPreview: currentDraft.budgetPreview }),
+          draftPending: currentDraft.draftPending
+        };
+        if (state.runDraft === undefined && !state.draftPending) loadDraft();
         notify();
         return toProps();
       }

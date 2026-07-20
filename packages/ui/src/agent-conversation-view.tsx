@@ -1,19 +1,52 @@
-import { Archive, ArchiveRestore, CornerUpLeft, Plus } from "lucide-react";
+import { Archive, ArchiveRestore, CornerUpLeft, History, Plus } from "lucide-react";
+import { useCallback, useRef, useState } from "react";
 
 import { AgentComposer } from "./agent-composer.js";
 import { AgentActivitySummary } from "./agent-activity-summary.js";
+import { AgentConversationHistoryDrawer } from "./agent-conversation-history-drawer.js";
 import { AgentRunPanel } from "./agent-run-panel.js";
 import type {
+  AgentConversationMainReview,
   AgentConversationDetailProps,
   AgentConversationViewProps
 } from "./workspace-shell-types.js";
 
 export function AgentConversationView(props: AgentConversationViewProps) {
   const conversation = props.conversation;
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const historyButtonRef = useRef<HTMLButtonElement>(null);
+  const closeHistory = useCallback(() => {
+    setHistoryOpen(false);
+    historyButtonRef.current?.focus();
+  }, []);
+  const historyButton =
+    props.navigator === undefined ? null : (
+      <button
+        ref={historyButtonRef}
+        aria-label="历史会话"
+        className="ns-icon-button"
+        onClick={() => setHistoryOpen(true)}
+        title="历史会话"
+        type="button"
+      >
+        <History aria-hidden="true" size={15} />
+      </button>
+    );
+  const historyDrawer =
+    historyOpen && props.navigator !== undefined ? (
+      <AgentConversationHistoryDrawer navigator={props.navigator} onClose={closeHistory} />
+    ) : null;
 
   if (conversation === undefined) {
     return (
       <section className="ns-agent-conversation-view" aria-label="Agent 会话主视图">
+        <header className="ns-agent-conversation-view-header ns-agent-conversation-view-header-empty">
+          <div>
+            <h1>Agent</h1>
+            <span>当前工作区会话</span>
+          </div>
+          {historyButton}
+        </header>
         {props.errorMessage === undefined ? null : (
           <p className="ns-project-feedback" data-kind="error" role="alert">
             {props.errorMessage}
@@ -33,6 +66,7 @@ export function AgentConversationView(props: AgentConversationViewProps) {
             新建会话
           </button>
         </div>
+        {historyDrawer}
       </section>
     );
   }
@@ -49,28 +83,31 @@ export function AgentConversationView(props: AgentConversationViewProps) {
             {conversation.virtual ? " · 只读" : ""}
           </span>
         </div>
-        {conversation.virtual ? null : conversation.status === "archived" ? (
-          <button
-            aria-label={`恢复会话：${conversation.title}`}
-            className="ns-icon-button"
-            onClick={() => props.onRestore(conversation.conversationId)}
-            title="恢复会话"
-            type="button"
-          >
-            <ArchiveRestore aria-hidden="true" size={15} />
-          </button>
-        ) : (
-          <button
-            aria-label={`归档会话：${conversation.title}`}
-            className="ns-icon-button"
-            disabled={conversation.canArchive === false}
-            onClick={() => props.onArchive(conversation.conversationId)}
-            title={conversation.archiveDisabledReason ?? "归档会话"}
-            type="button"
-          >
-            <Archive aria-hidden="true" size={15} />
-          </button>
-        )}
+        <div className="ns-agent-conversation-header-actions">
+          {historyButton}
+          {conversation.virtual ? null : conversation.status === "archived" ? (
+            <button
+              aria-label={`恢复会话：${conversation.title}`}
+              className="ns-icon-button"
+              onClick={() => props.onRestore(conversation.conversationId)}
+              title="恢复会话"
+              type="button"
+            >
+              <ArchiveRestore aria-hidden="true" size={15} />
+            </button>
+          ) : (
+            <button
+              aria-label={`归档会话：${conversation.title}`}
+              className="ns-icon-button"
+              disabled={conversation.canArchive === false}
+              onClick={() => props.onArchive(conversation.conversationId)}
+              title={conversation.archiveDisabledReason ?? "归档会话"}
+              type="button"
+            >
+              <Archive aria-hidden="true" size={15} />
+            </button>
+          )}
+        </div>
       </header>
 
       {props.errorMessage === undefined ? null : (
@@ -99,6 +136,13 @@ export function AgentConversationView(props: AgentConversationViewProps) {
         <p className="ns-agent-conversation-summary">{conversation.contextSummary}</p>
       )}
 
+      {props.mainReview === undefined ? null : (
+        <AgentConversationReviewSummary
+          onOpen={props.onOpenMainReview}
+          review={props.mainReview}
+        />
+      )}
+
       <ConversationTurns conversation={conversation} />
 
       {props.agentRun === undefined ? null : (
@@ -114,8 +158,50 @@ export function AgentConversationView(props: AgentConversationViewProps) {
           {...(disabledReason === undefined ? {} : { disabledReason })}
         />
       )}
+      {historyDrawer}
     </section>
   );
+}
+
+function AgentConversationReviewSummary({
+  review,
+  onOpen
+}: {
+  readonly review: AgentConversationMainReview;
+  readonly onOpen: ((review: AgentConversationMainReview) => void) | undefined;
+}) {
+  return (
+    <section className="ns-agent-review-summary" aria-label="中央审阅摘要">
+      <div>
+        <strong>{mainReviewLabel(review.kind)}</strong>
+        <span>{review.kind === "recovery" ? "需要处理后再继续" : "审阅已在中央区域打开"}</span>
+      </div>
+      <button
+        aria-label="在中央查看"
+        className="ns-icon-text-button"
+        disabled={onOpen === undefined}
+        onClick={() => onOpen?.(review)}
+        type="button"
+      >
+        在中央查看
+      </button>
+    </section>
+  );
+}
+
+function mainReviewLabel(kind: AgentConversationMainReview["kind"]): string {
+  switch (kind) {
+    case "recovery":
+      return "恢复审阅";
+    case "rollback":
+      return "撤销审阅";
+    case "change_set":
+      return "Change Set";
+    case "selection":
+      return "选区审阅";
+    case "plan":
+      return "计划审阅";
+  }
 }
 
 function ConversationTurns({

@@ -490,21 +490,59 @@ async function waitForSnapshot(
 }
 
 async function launchFixture(fixture: DiagnosticFixture): Promise<ElectronApplication> {
-  return electron.launch({
+  const electronApp = await electron.launch({
     args: [electronMain],
     env: electronEnv({
-      NOVEL_STUDIO_PROJECT_ROOT: fixture.projectRoot,
+      NOVEL_STUDIO_PROJECT_ROOT: join(fixture.tempRoot, "Bootstrap Project"),
       NOVEL_STUDIO_USER_DATA_ROOT: join(fixture.tempRoot, "User Data")
     })
   });
+  const page = await electronApp.firstWindow();
+  await page.waitForLoadState("domcontentloaded");
+  const unbound = page.getByLabel("Agent 未绑定工作区");
+  const view = page.getByLabel("Agent 会话主视图");
+  await expect
+    .poll(async () => (await unbound.isVisible()) || (await view.isVisible()), { timeout: 15_000 })
+    .toBe(true);
+  await queueDirectorySelection(electronApp, fixture.projectRoot);
+  return electronApp;
 }
 
 async function openFixtureConversation(page: Page, title: string): Promise<void> {
-  await page.getByLabel("活动栏").getByRole("button", { name: "AI 工作流" }).click();
-  const select = page.getByRole("button", { name: `选择会话：${title}` });
+  const unbound = page.getByLabel("Agent 未绑定工作区");
+  const view = page.getByLabel("Agent 会话主视图");
+  await expect
+    .poll(async () => (await unbound.isVisible()) || (await view.isVisible()), { timeout: 15_000 })
+    .toBe(true);
+  if (await unbound.isVisible()) {
+    const opened = await page.evaluate(async () => {
+      const selected = await window.novelStudio?.project.chooseOpenCreativeDirectory();
+      if (selected?.ok !== true || selected.value.selectionId === undefined) return selected;
+      return window.novelStudio?.project.openCreativeProject(selected.value.selectionId);
+    });
+    if (opened?.ok !== true) {
+      throw new Error(`Creative project activation failed: ${JSON.stringify(opened)}`);
+    }
+    await page.reload();
+  }
+  await expect(view).toBeVisible({ timeout: 15_000 });
+  await page.getByRole("button", { name: "历史会话" }).click();
+  const drawer = page.getByRole("dialog", { name: "历史会话抽屉" });
+  await expect(drawer).toBeVisible();
+  const select = drawer.getByRole("button", { name: `选择会话：${title}` });
   await expect(select).toBeVisible();
   await select.click();
+  await drawer.getByRole("button", { name: "关闭历史会话" }).click();
   await expect(page.getByLabel("会话输入区")).toBeVisible();
+}
+
+async function queueDirectorySelection(
+  electronApp: ElectronApplication,
+  selectedPath: string
+): Promise<void> {
+  await electronApp.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] });
+  }, selectedPath);
 }
 
 async function readRun(page: Page, runId: string): Promise<{

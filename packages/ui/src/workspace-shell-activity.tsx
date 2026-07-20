@@ -1,5 +1,5 @@
 import type { ActivityId, DesktopShellState } from "@novel-studio/application";
-import { Bot, Boxes, Clock3, FolderTree, Search, Settings } from "lucide-react";
+import { Boxes, Clock3, FolderTree, Search, Settings } from "lucide-react";
 
 export interface WorkspaceActivityDescriptor {
   readonly id: ActivityId;
@@ -10,8 +10,7 @@ export interface WorkspaceActivityDescriptor {
 export const projectActivities: readonly WorkspaceActivityDescriptor[] = [
   { id: "workspace", label: "工作区", icon: FolderTree },
   { id: "search", label: "搜索", icon: Search },
-  { id: "timeline", label: "时间线", icon: Clock3 },
-  { id: "ai", label: "AI 工作流", icon: Bot }
+  { id: "timeline", label: "时间线", icon: Clock3 }
 ];
 
 export const bottomActivities: readonly WorkspaceActivityDescriptor[] = [
@@ -36,9 +35,7 @@ export function workspaceActivitiesFor(
   }
 
   return {
-    projectActivities: projectActivities.filter(
-      (activity) => activity.id === "workspace" || activity.id === "ai"
-    ),
+    projectActivities: projectActivities.filter((activity) => activity.id === "workspace"),
     bottomActivities: bottomActivities.filter((activity) => activity.id === "settings")
   };
 }

@@ -1,4 +1,4 @@
-import { ChevronDown, Cpu, Plus, Send, Square, X, Zap } from "lucide-react";
+import { ChevronDown, Cpu, Plus, ScanText, Send, Sparkles, Square, X, Zap } from "lucide-react";
 import { useRef, type KeyboardEvent } from "react";
 
 import { AgentContextMenu } from "./agent-context-menu.js";
@@ -41,6 +41,7 @@ export function AgentComposer(props: AgentComposerProps) {
   const model = props.model;
   const reasoning = props.reasoning;
   const references = props.references;
+  const availableContextModes = props.availableContextModes ?? ["writing", "general_file"];
   const selectedModelLabel =
     model === undefined
       ? ""
@@ -130,46 +131,50 @@ export function AgentComposer(props: AgentComposerProps) {
                     </button>
                   </div>
                   <div aria-label="上下文" role="group">
-                    <button
-                      aria-pressed={props.contextMode === "writing"}
-                      data-context-option="writing"
-                      disabled={draftDisabled}
-                      onClick={() => {
-                        props.onContextModeChange("writing");
-                        close();
-                      }}
-                      onKeyDown={(event) => {
-                        rovePopoverOptions(event);
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
+                    {availableContextModes.includes("writing") ? (
+                      <button
+                        aria-pressed={props.contextMode === "writing"}
+                        data-context-option="writing"
+                        disabled={draftDisabled}
+                        onClick={() => {
                           props.onContextModeChange("writing");
                           close();
-                        }
-                      }}
-                      type="button"
-                    >
-                      写作
-                    </button>
-                    <button
-                      aria-pressed={props.contextMode === "general_file"}
-                      data-context-option="general_file"
-                      disabled={draftDisabled}
-                      onClick={() => {
-                        props.onContextModeChange("general_file");
-                        close();
-                      }}
-                      onKeyDown={(event) => {
-                        rovePopoverOptions(event);
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
+                        }}
+                        onKeyDown={(event) => {
+                          rovePopoverOptions(event);
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            props.onContextModeChange("writing");
+                            close();
+                          }
+                        }}
+                        type="button"
+                      >
+                        写作
+                      </button>
+                    ) : null}
+                    {availableContextModes.includes("general_file") ? (
+                      <button
+                        aria-pressed={props.contextMode === "general_file"}
+                        data-context-option="general_file"
+                        disabled={draftDisabled}
+                        onClick={() => {
                           props.onContextModeChange("general_file");
                           close();
-                        }
-                      }}
-                      type="button"
-                    >
-                      通用文件
-                    </button>
+                        }}
+                        onKeyDown={(event) => {
+                          rovePopoverOptions(event);
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            props.onContextModeChange("general_file");
+                            close();
+                          }
+                        }}
+                        type="button"
+                      >
+                        通用文件
+                      </button>
+                    ) : null}
                   </div>
                 </>
               )}
@@ -191,6 +196,26 @@ export function AgentComposer(props: AgentComposerProps) {
             )}
             {props.contextStatus === undefined ? null : (
               <AgentContextMenu control={props.contextStatus} disabled={draftDisabled} />
+            )}
+            {props.quickActions === undefined || props.quickActions.length === 0 ? null : (
+              <div className="ns-agent-composer-quick-actions" aria-label="Agent 快捷动作">
+                {props.quickActions.map((action) => {
+                  const Icon = action.id === "rewrite_selection" ? Sparkles : ScanText;
+                  return (
+                    <button
+                      aria-label={action.label}
+                      className="ns-icon-button"
+                      disabled={draftDisabled || action.disabledReason !== undefined}
+                      key={action.id}
+                      onClick={action.onSelect}
+                      title={action.disabledReason ?? action.label}
+                      type="button"
+                    >
+                      <Icon aria-hidden="true" size={13} />
+                    </button>
+                  );
+                })}
+              </div>
             )}
           </div>
           <div className="ns-agent-composer-toolbar-right">

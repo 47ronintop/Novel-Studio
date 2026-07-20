@@ -224,8 +224,7 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
       appearancePreferences={props.appearancePreferences}
       {...(creativeNavigator === undefined ? {} : { creativeNavigator })}
       {...(engineeringNavigator === undefined ? {} : { engineeringNavigator })}
-      {...(props.aiWritingWorkflow === undefined ||
-      (props.shellState.activeActivity === "ai" && props.agentConversationWorkspace !== undefined)
+      {...(props.aiWritingWorkflow === undefined
         ? {}
         : {
             aiWritingWorkflow: {

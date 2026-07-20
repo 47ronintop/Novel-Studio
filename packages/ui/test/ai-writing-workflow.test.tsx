@@ -4,77 +4,71 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 
-import { createDesktopApplication } from "@novel-studio/application";
-import { WorkspaceShell } from "../src/index.js";
+import { createDesktopApplication, type DesktopShellState } from "@novel-studio/application";
+import {
+  WorkspaceShell,
+  type AgentConversationMainReview,
+  type AgentConversationTurnProps,
+  type AgentConversationWorkspaceShellProps,
+  type AiWritingWorkflowProps
+} from "../src/index.js";
 
 (globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT?: boolean;
 }).IS_REACT_ACT_ENVIRONMENT = true;
 
-describe("AI writing workflow UI", () => {
-  test("renders workflow controls and suggestion trace", () => {
+describe("AI writing workflow compatibility UI", () => {
+  test("projects selection review and workflow history without a legacy assistant surface", () => {
     const application = createDesktopApplication();
+    const mainReview: AgentConversationMainReview = {
+      kind: "selection",
+      props: {
+        status: "pending",
+        originalText: "冷冷的风像雨一样落下。",
+        proposedText: "风压低檐角，雨线随之倾斜。",
+        rangeLabel: "0-13",
+        compareLabel: "原选区 -> 建议文本",
+        canUndo: true,
+        styleReview: {
+          status: "attention",
+          hitCount: 2,
+          hits: [
+            {
+              ruleId: "mechanical-emotion",
+              title: "模板化情绪词",
+              severity: "notice",
+              matchedText: "冷冷",
+              positionLabel: "第 1 字附近",
+              suggestion: "改成可观察的动作、语气或环境反应。"
+            },
+            {
+              ruleId: "stacked-simile",
+              title: "连续比喻",
+              severity: "notice",
+              matchedText: "像雨",
+              positionLabel: "第 6 字附近",
+              suggestion: "保留一个更准确的比喻。"
+            }
+          ]
+        },
+        diagnostic: {
+          title: "工作流失败",
+          code: "AGENT_MODEL_CALL_FAILED",
+          message: "The agent model call failed.",
+          recoverabilityLabel: "可重试",
+          suggestedAction: "Inspect the model profile and retry the workflow step."
+        },
+        onAccept: () => undefined,
+        onReject: () => undefined,
+        onUndo: () => undefined,
+        onRetry: () => undefined
+      }
+    };
     const html = renderToStaticMarkup(
       <WorkspaceShell
-        shellState={{ ...application.getShellState(), activeActivity: "ai" }}
-        commands={application.listCommands()}
-        commandPaletteOpen={false}
-        aiWritingWorkflow={{
+        agentConversationWorkspace={agentWorkspace({ mainReview })}
+        aiWritingWorkflow={compatibilityWorkflow({
           status: "failed",
-          instruction: "续写当前场景",
-          summary: "补写了主角推门后的动作。",
-          styleReview: {
-            status: "attention",
-            hitCount: 2,
-            hits: [
-              {
-                ruleId: "mechanical-emotion",
-                title: "模板化情绪词",
-                severity: "notice",
-                matchedText: "冷冷",
-                positionLabel: "第 16 字附近",
-                suggestion: "改成可观察的动作、语气或环境反应。"
-              },
-              {
-                ruleId: "stacked-simile",
-                title: "连续比喻",
-                severity: "notice",
-                matchedText: "像风像雨",
-                positionLabel: "第 28 字附近",
-                suggestion: "保留一个更准确的比喻，另一个改成动作或感官细节。"
-              }
-            ]
-          },
-          contextTraceLabel: "1 source / 4 tokens",
-          observability: {
-            workflowRunId: "wfrun_m24",
-            workflowTitle: "Continue Chapter",
-            contextLabel: "1 source / 4 tokens",
-            modelLabel: "Default Model / example-model",
-            usageLabel: "24 tokens · estimated",
-            costLabel: "USD 0.000000 · estimated",
-            generatedAtLabel: "2026-07-05 09:30",
-            steps: [
-              {
-                stepId: "build_context",
-                label: "构建上下文",
-                kind: "context",
-                status: "completed"
-              },
-              {
-                stepId: "write_suggestion",
-                label: "运行写作 Agent",
-                kind: "agent",
-                status: "completed"
-              },
-              {
-                stepId: "confirm_apply",
-                label: "等待用户确认",
-                kind: "confirmation",
-                status: "waiting-confirmation"
-              }
-            ]
-          },
           history: {
             runs: [
               {
@@ -85,15 +79,6 @@ describe("AI writing workflow UI", () => {
                 modelLabel: "Default Model / example-model",
                 usageLabel: "24 tokens · estimated",
                 costLabel: "USD 0.000000 · estimated"
-              },
-              {
-                workflowRunId: "wfrun_m26_failed",
-                workflowTitle: "Continue Chapter",
-                statusLabel: "失败",
-                updatedAtLabel: "2026-07-05 09:31",
-                modelLabel: "Default Model / example-model",
-                usageLabel: "0 tokens · missing",
-                costLabel: "USD 0.000000 · unknown"
               }
             ],
             selectedRun: {
@@ -108,206 +93,94 @@ describe("AI writing workflow UI", () => {
               errorLabel: "AGENT_MODEL_CALL_FAILED · The agent model call failed.",
               steps: [
                 {
-                  stepId: "build_context",
-                  label: "构建上下文",
-                  kind: "context",
-                  status: "completed"
-                },
-                {
                   stepId: "write_suggestion",
                   label: "运行写作 Agent",
                   kind: "agent",
                   status: "failed"
-                },
-                {
-                  stepId: "confirm_apply",
-                  label: "等待用户确认",
-                  kind: "confirmation",
-                  status: "pending"
                 }
               ]
             }
-          },
-          failure: {
-            title: "工作流失败",
-            code: "AGENT_MODEL_CALL_FAILED",
-            message: "The agent model call failed.",
-            recoverabilityLabel: "可重试",
-            suggestedAction: "Inspect the model profile and retry the workflow step."
-          },
-          retryPolicy: {
-            modeLabel: "手动重试",
-            maxAttemptsLabel: "最多 1 次",
-            backoffLabel: "用户手动重试",
-            retryableCodesLabel: "LLM_TIMEOUT / LLM_RATE_LIMITED / LLM_PROVIDER_ERROR"
-          },
-          modelDiscovery: {
-            profileId: "model_default",
-            provider: "openai-compatible",
-            status: "loaded",
-            models: [
-              {
-                id: "example-model",
-                displayName: "example-model",
-                provider: "openai-compatible"
-              },
-              {
-                id: "gpt-5",
-                displayName: "gpt-5",
-                provider: "openai-compatible",
-                reasoningStrength: {
-                  status: "available",
-                  providerParamName: "reasoning_effort",
-                  allowedValues: ["low", "medium", "high"],
-                  defaultValue: "medium"
-                }
-              }
-            ],
-            reasoningStrength: {
-              status: "hidden",
-              reason: "Select a whitelisted reasoning model before exposing reasoning controls."
-            }
-          },
-          selectedModelName: "gpt-5",
-          onInstructionChange: () => undefined,
-          onGenerateSuggestion: () => undefined,
-          onApplySuggestion: () => undefined,
-          onModelSelect: () => undefined,
-          onRetrySuggestion: () => undefined,
-          onCancelStreaming: () => undefined
-        }}
+          }
+        })}
+        commandPaletteOpen={false}
+        commands={application.listCommands()}
+        shellState={creativeShellState(application, {
+          activeBottomPanelTab: "工作流运行",
+          bottomPanelVisible: true
+        })}
       />
     );
 
-    expect(html).toContain('aria-label="AI 写作工作流"');
-    expect(html).toContain('aria-label="AI 写作指令"');
-    expect(html).toContain('aria-label="生成 AI 建议"');
-    expect(html).not.toContain('aria-label="应用 AI 建议"');
-    expect(html).toContain("补写了主角推门后的动作。");
+    expect(html).toContain('aria-label="Selection AI review"');
     expect(html).toContain('aria-label="AI 文风规则检查"');
     expect(html).toContain("文风规则命中 2 处");
-    expect(html).toContain("冷冷");
-    expect(html).toContain("连续比喻");
-    expect(html).not.toMatch(/过检测|绕检测|检测分数|AI检测|检测平台/);
-    expect(html).toContain("1 source / 4 tokens");
-    expect(html).toContain('aria-label="AI 工作流运行观测"');
-    expect(html).toContain("Continue Chapter");
-    expect(html).toContain("Default Model / example-model");
-    expect(html).toContain('aria-label="AI model controls"');
-    expect(html).toContain('class="ns-ai-model-trigger"');
-    expect(html).toContain('class="ns-ai-model-trigger-item"');
-    expect(html).toContain('data-placement="top"');
-    expect(html).toContain("gpt-5");
-    expect(html).toContain("模型");
-    expect(html).toContain("推理");
-    expect(html).not.toContain('aria-label="AI model selector"');
-    expect(html).toContain('aria-label="Reasoning effort"');
-    expect(html).toContain("reasoning_effort");
-    expect(html).toContain('class="ns-ai-model-popover-layer"');
-    expect(html).toContain("24 tokens · estimated");
-    expect(html).toContain("USD 0.000000 · estimated");
-    expect(html).toContain("构建上下文");
-    expect(html).toContain("运行写作 Agent");
-    expect(html).toContain("等待用户确认");
-    expect(html).toContain('aria-label="工作流运行历史"');
-    expect(html).toContain("待确认");
-    expect(html).toContain('aria-label="失败诊断"');
     expect(html).toContain("AGENT_MODEL_CALL_FAILED");
     expect(html).toContain("可重试");
-    expect(html).toContain("Inspect the model profile and retry the workflow step.");
-    expect(html).toContain('aria-label="重试策略"');
-    expect(html).toContain("手动重试");
-    expect(html).toContain("最多 1 次");
-    expect(html).toContain("LLM_TIMEOUT / LLM_RATE_LIMITED / LLM_PROVIDER_ERROR");
-    expect(html).toContain('aria-label="重试 AI 工作流"');
-    expect(html).toContain("失败");
+    expect(html).toContain('aria-label="Retry selection AI preview"');
+    expect(html).toContain('aria-label="工作流运行历史"');
+    expect(html).toContain("Continue Chapter");
+    expect(html.match(/<textarea[^>]*aria-label="Agent 请求"/g) ?? []).toHaveLength(1);
+    expect(html).not.toContain('aria-label="AI 写作工作流"');
+    expect(html).not.toContain('aria-label="AI 写作指令"');
   });
 
-  test("keeps model controls and actions attached to the composer below the chat log", () => {
+  test("keeps model, reasoning, and the send slot inside the single Agent Composer", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
-        shellState={{ ...application.getShellState(), activeActivity: "ai" }}
-        commands={application.listCommands()}
-        commandPaletteOpen={false}
-        aiWritingWorkflow={{
-          status: "failed",
-          instruction: "续写当前场景",
-          failure: {
-            title: "工作流失败",
-            code: "AGENT_MODEL_CALL_FAILED",
-            message: "The agent model call failed.",
-            recoverabilityLabel: "可重试",
-            suggestedAction: "Inspect the model profile and retry the workflow step."
-          },
+        agentConversationWorkspace={agentWorkspace({
+          turns: [
+            {
+              runId: "run-one",
+              userRequest: "续写当前场景",
+              assistantText: "建议已生成。",
+              statusLabel: "已完成",
+              updatedAtLabel: "10:00"
+            }
+          ]
+        })}
+        aiWritingWorkflow={compatibilityWorkflow({
           modelDiscovery: {
             profileId: "model_default",
             provider: "openai-compatible",
             status: "loaded",
-            models: [
-              {
-                id: "gpt-5",
-                displayName: "gpt-5",
-                provider: "openai-compatible",
-                reasoningStrength: {
-                  status: "available",
-                  providerParamName: "reasoning_effort",
-                  allowedValues: ["low", "medium", "high"],
-                  defaultValue: "medium"
-                }
-              }
-            ],
+            models: [],
             reasoningStrength: {
               status: "hidden",
-              reason: "Select a whitelisted reasoning model before exposing reasoning controls."
+              reason: "Compatibility controls no longer own the Composer."
             }
-          },
-          selectedModelName: "gpt-5",
-          onInstructionChange: () => undefined,
-          onGenerateSuggestion: () => undefined,
-          onApplySuggestion: () => undefined,
-          onModelSelect: () => undefined,
-          onRetrySuggestion: () => undefined,
-          onCancelStreaming: () => undefined
-        }}
+          }
+        })}
+        commandPaletteOpen={false}
+        commands={application.listCommands()}
+        shellState={creativeShellState(application)}
       />
     );
 
-    const chatIndex = html.indexOf('class="ns-ai-chat-log"');
-    const composerIndex = html.indexOf('class="ns-ai-composer ns-ai-vscode-composer"');
-    const composerEndIndex = html.indexOf("</section>", composerIndex);
-    const modelIndex = html.indexOf('aria-label="AI model controls"');
-    const toolbarIndex = html.indexOf('class="ns-ai-composer-toolbar"');
-    const sendIndex = html.indexOf('class="ns-ai-send-button"');
-    const legacyActionsIndex = html.indexOf('class="ns-ai-actions"');
-    const failureIndex = html.indexOf('aria-label="失败诊断"');
+    const conversationIndex = html.indexOf('aria-label="会话运行历史"');
+    const composerIndex = html.indexOf(
+      'class="ns-agent-conversation-composer ns-agent-composer"'
+    );
+    const modelIndex = html.indexOf('class="ns-agent-composer-model-trigger"');
+    const reasoningIndex = html.indexOf('class="ns-agent-composer-reasoning-trigger"');
+    const sendIndex = html.indexOf('aria-label="启动 Agent 运行"');
 
-    expect(chatIndex).toBeGreaterThan(-1);
-    expect(composerIndex).toBeGreaterThan(chatIndex);
-    expect(failureIndex).toBeGreaterThan(chatIndex);
-    expect(composerIndex).toBeGreaterThan(failureIndex);
+    expect(conversationIndex).toBeGreaterThan(-1);
+    expect(composerIndex).toBeGreaterThan(conversationIndex);
     expect(modelIndex).toBeGreaterThan(composerIndex);
-    expect(modelIndex).toBeLessThan(composerEndIndex);
-    expect(toolbarIndex).toBeGreaterThan(composerIndex);
-    expect(toolbarIndex).toBeLessThan(composerEndIndex);
-    expect(modelIndex).toBeGreaterThan(toolbarIndex);
-    expect(modelIndex).toBeLessThan(sendIndex);
-    expect(html).toContain('data-placement="top"');
-    expect(sendIndex).toBeGreaterThan(toolbarIndex);
-    expect(sendIndex).toBeLessThan(composerEndIndex);
-    expect(legacyActionsIndex).toBe(-1);
+    expect(reasoningIndex).toBeGreaterThan(modelIndex);
+    expect(sendIndex).toBeGreaterThan(reasoningIndex);
+    expect(html.match(/aria-label="启动 Agent 运行"/g) ?? []).toHaveLength(1);
+    expect(html).not.toContain('class="ns-ai-composer ns-ai-vscode-composer"');
+    expect(html).not.toContain('aria-label="AI model controls"');
   });
 
-  test("keeps model controls visible when model discovery falls back", () => {
+  test("keeps Agent model ownership when compatibility discovery falls back", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
-        shellState={{ ...application.getShellState(), activeActivity: "ai" }}
-        commands={application.listCommands()}
-        commandPaletteOpen={false}
-        aiWritingWorkflow={{
-          status: "idle",
-          instruction: "Continue the scene.",
+        agentConversationWorkspace={agentWorkspace({ modelLabel: "manual-proxy-model" })}
+        aiWritingWorkflow={compatibilityWorkflow({
           modelDiscovery: {
             profileId: "model_custom",
             provider: "openai-compatible",
@@ -319,53 +192,46 @@ describe("AI writing workflow UI", () => {
               reason: "Discovery failed for this endpoint."
             }
           },
-          selectedModelName: "manual-proxy-model",
-          onInstructionChange: () => undefined,
-          onGenerateSuggestion: () => undefined,
-          onApplySuggestion: () => undefined,
-          onModelSelect: () => undefined,
-          onRetrySuggestion: () => undefined,
-          onCancelStreaming: () => undefined
-        }}
+          selectedModelName: "legacy-model"
+        })}
+        commandPaletteOpen={false}
+        commands={application.listCommands()}
+        shellState={creativeShellState(application)}
       />
     );
 
-    expect(html).toContain('aria-label="AI model controls"');
-    expect(html).toContain('class="ns-ai-model-trigger"');
-    expect(html).toContain('class="ns-ai-model-trigger-item"');
-    expect(html).toContain('data-placement="top"');
-    expect(html).toContain("manual-proxy-model");
-    expect(html).toContain("fetch failed");
-    expect(html).toContain("更多模型");
+    expect(html).toContain('aria-label="模型：manual-proxy-model"');
+    expect(html.match(/ns-agent-composer-model-trigger/g) ?? []).toHaveLength(1);
+    expect(html).not.toContain("fetch failed");
+    expect(html).not.toContain("legacy-model");
     expect(html).not.toContain('aria-label="AI model selector"');
   });
 
-  test("renders streaming preview and cancel control", () => {
+  test("projects streaming status to the Bottom Panel without a second cancel surface", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
-        shellState={{ ...application.getShellState(), activeActivity: "ai" }}
-        commands={application.listCommands()}
-        commandPaletteOpen={false}
-        aiWritingWorkflow={{
+        agentConversationWorkspace={agentWorkspace()}
+        aiWritingWorkflow={compatibilityWorkflow({
           status: "streaming",
-          instruction: "Continue the scene.",
-          streamPreview: "The city answered",
-          onInstructionChange: () => undefined,
-          onGenerateSuggestion: () => undefined,
-          onApplySuggestion: () => undefined,
-          onRetrySuggestion: () => undefined,
-          onCancelStreaming: () => undefined
-        }}
+          streamPreview: "The city answered"
+        })}
+        commandPaletteOpen={false}
+        commands={application.listCommands()}
+        shellState={creativeShellState(application, {
+          activeBottomPanelTab: "工作流运行",
+          bottomPanelVisible: true
+        })}
       />
     );
 
-    expect(html).toContain("The city answered");
-    expect(html).toContain('aria-label="取消 AI 流式输出"');
-    expect(html).toContain("流式输出中");
+    expect(html).toContain("当前状态 流式生成");
+    expect(html).not.toContain("The city answered");
+    expect(html).not.toContain('aria-label="取消 AI 流式输出"');
+    expect(html.match(/<textarea[^>]*aria-label="Agent 请求"/g) ?? []).toHaveLength(1);
   });
 
-  test("calls reasoning effort selection from the model controls", async () => {
+  test("calls reasoning effort selection from the Agent Composer", async () => {
     const calls: string[] = [];
     const application = createDesktopApplication();
     const host = document.createElement("div");
@@ -373,51 +239,27 @@ describe("AI writing workflow UI", () => {
     const root = createRoot(host);
 
     await act(async () => {
-      root.render(<WorkspaceShell
-        shellState={{ ...application.getShellState(), activeActivity: "ai" }}
-        commands={application.listCommands()}
-        commandPaletteOpen={false}
-        aiWritingWorkflow={{
-          status: "idle",
-          instruction: "Continue the scene.",
-          modelDiscovery: {
-            profileId: "model_default",
-            provider: "openai-compatible",
-            status: "loaded",
-            models: [
-              {
-                id: "gpt-5",
-                displayName: "gpt-5",
-                provider: "openai-compatible",
-                reasoningStrength: {
-                  status: "available",
-                  providerParamName: "reasoning_effort",
-                  allowedValues: ["low", "medium", "high"],
-                  defaultValue: "medium"
-                }
-              }
-            ],
-            reasoningStrength: {
-              status: "hidden",
-              reason: "Select a whitelisted reasoning model before exposing reasoning controls."
-            }
-          },
-          selectedModelName: "gpt-5",
-          selectedReasoningEffort: "medium",
-          onInstructionChange: () => undefined,
-          onGenerateSuggestion: () => undefined,
-          onApplySuggestion: () => undefined,
-          onModelSelect: () => undefined,
-          onReasoningEffortSelect: (value) => calls.push(value),
-          onRetrySuggestion: () => undefined,
-          onCancelStreaming: () => undefined
-        }}
-      />);
+      root.render(
+        <WorkspaceShell
+          agentConversationWorkspace={agentWorkspace({
+            onReasoningSelect: (value) => calls.push(value)
+          })}
+          aiWritingWorkflow={compatibilityWorkflow()}
+          commandPaletteOpen={false}
+          commands={application.listCommands()}
+          shellState={creativeShellState(application)}
+        />
+      );
     });
 
     await act(async () => {
       host
-        .querySelector<HTMLButtonElement>('[aria-label="Set reasoning effort high"]')
+        .querySelector<HTMLButtonElement>('[aria-label="推理强度：中"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await act(async () => {
+      host
+        .querySelector<HTMLButtonElement>('[data-reasoning-option="high"]')
         ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
 
@@ -426,56 +268,158 @@ describe("AI writing workflow UI", () => {
     host.remove();
   });
 
-  test("renders persisted chat messages from the active AI session", () => {
+  test("renders persisted Agent turns without duplicating compatibility chat messages", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
-        shellState={{ ...application.getShellState(), activeActivity: "ai" }}
-        commands={application.listCommands()}
-        commandPaletteOpen={false}
-        aiWritingWorkflow={{
+        agentConversationWorkspace={agentWorkspace({
+          turns: [
+            {
+              runId: "run-agent-history",
+              userRequest: "续写这段。",
+              assistantText: "Agent answer keeps the scene moving.",
+              statusLabel: "已完成",
+              updatedAtLabel: "2026-07-05 00:01"
+            }
+          ]
+        })}
+        aiWritingWorkflow={compatibilityWorkflow({
           status: "suggestion-ready",
-          instruction: "",
-          summary: "Second answer shortens the prior continuation.",
           conversationMessages: [
             {
-              messageId: "msg_user_1",
+              messageId: "legacy-user",
               role: "user",
-              content: "续写这段。",
+              content: "Legacy workflow request",
               createdAtLabel: "2026-07-05 00:00"
             },
             {
-              messageId: "msg_assistant_1",
+              messageId: "legacy-assistant",
               role: "assistant",
-              content: "First answer keeps the scene moving.",
+              content: "Legacy workflow answer",
               createdAtLabel: "2026-07-05 00:00"
-            },
-            {
-              messageId: "msg_user_2",
-              role: "user",
-              content: "再短一点。",
-              createdAtLabel: "2026-07-05 00:01"
-            },
-            {
-              messageId: "msg_assistant_2",
-              role: "assistant",
-              content: "Second answer shortens the prior continuation.",
-              createdAtLabel: "2026-07-05 00:01"
             }
-          ],
-          onInstructionChange: () => undefined,
-          onGenerateSuggestion: () => undefined,
-          onApplySuggestion: () => undefined,
-          onRetrySuggestion: () => undefined,
-          onCancelStreaming: () => undefined
-        }}
+          ]
+        })}
+        commandPaletteOpen={false}
+        commands={application.listCommands()}
+        shellState={creativeShellState(application)}
       />
     );
 
     expect(html).toContain("续写这段。");
-    expect(html).toContain("First answer keeps the scene moving.");
-    expect(html).toContain("再短一点。");
-    expect(html).toContain("Second answer shortens the prior continuation.");
+    expect(html).toContain("Agent answer keeps the scene moving.");
     expect(html).toContain("2026-07-05 00:01");
+    expect(html).not.toContain("Legacy workflow request");
+    expect(html).not.toContain("Legacy workflow answer");
+    expect(html.match(/aria-label="会话输入区"/g) ?? []).toHaveLength(1);
   });
 });
+
+function creativeShellState(
+  application: ReturnType<typeof createDesktopApplication>,
+  overrides: Partial<DesktopShellState> = {}
+): DesktopShellState {
+  return {
+    ...application.getShellState(),
+    ...overrides,
+    workspaceContext: {
+      kind: "creativeProject",
+      workspaceId: "project-ai-writing-compatibility",
+      projectId: "project-ai-writing-compatibility",
+      displayName: "AI Writing Compatibility",
+      capabilities: ["creativeWorkbench", "writingContext"]
+    }
+  };
+}
+
+function compatibilityWorkflow(
+  overrides: Partial<AiWritingWorkflowProps> = {}
+): AiWritingWorkflowProps {
+  return {
+    status: "idle",
+    instruction: "",
+    onInstructionChange: () => undefined,
+    onGenerateSuggestion: () => undefined,
+    onApplySuggestion: () => undefined,
+    onRetrySuggestion: () => undefined,
+    onCancelStreaming: () => undefined,
+    ...overrides
+  };
+}
+
+function agentWorkspace(
+  options: {
+    readonly mainReview?: AgentConversationMainReview;
+    readonly modelLabel?: string;
+    readonly onReasoningSelect?: (value: string) => void;
+    readonly turns?: readonly AgentConversationTurnProps[];
+  } = {}
+): AgentConversationWorkspaceShellProps {
+  const turns = options.turns ?? [];
+  const modelLabel = options.modelLabel ?? "gpt-5";
+  const conversation = {
+    conversationId: "conversation-ai-writing-compatibility",
+    title: "写作 Agent",
+    status: "active" as const,
+    updatedAtLabel: "10:00",
+    runCount: turns.length,
+    turns
+  };
+  return {
+    navigator: {
+      conversations: [conversation],
+      selectedConversationId: conversation.conversationId,
+      searchQuery: "",
+      filter: "active",
+      loading: false,
+      onSearchQueryChange: () => undefined,
+      onFilterChange: () => undefined,
+      onCreate: () => undefined,
+      onSelect: () => undefined,
+      onArchive: () => undefined,
+      onRestore: () => undefined
+    },
+    view: {
+      conversation,
+      loading: false,
+      composer: {
+        request: "续写当前场景",
+        operationMode: "execution",
+        contextMode: "writing",
+        writePolicy: "write_before_confirmation",
+        writePolicyAcknowledged: false,
+        active: false,
+        availableContextModes: ["writing", "general_file"],
+        model: {
+          profiles: [
+            {
+              id: modelLabel,
+              label: modelLabel,
+              provider: "openai-compatible"
+            }
+          ],
+          selectedProfileId: modelLabel,
+          onSelect: () => undefined
+        },
+        reasoning: {
+          visible: true,
+          values: ["low", "medium", "high"],
+          current: "medium",
+          onSelect: (value) => options.onReasoningSelect?.(value)
+        },
+        onRequestChange: () => undefined,
+        onOperationModeChange: () => undefined,
+        onContextModeChange: () => undefined,
+        onWritePolicyChange: () => undefined,
+        onWritePolicyAcknowledgedChange: () => undefined,
+        onSend: () => undefined,
+        onStop: () => undefined
+      },
+      onCreate: () => undefined,
+      onArchive: () => undefined,
+      onRestore: () => undefined,
+      onReturnToActive: () => undefined
+    },
+    ...(options.mainReview === undefined ? {} : { mainReview: options.mainReview })
+  };
+}

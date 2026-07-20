@@ -343,6 +343,30 @@ describe("AgentComposer", () => {
       true
     );
   });
+
+  test("limits context modes and keeps selection actions beside the composer controls", () => {
+    const rewrite = vi.fn();
+    const style = vi.fn();
+    const { host } = renderComposer({
+      availableContextModes: ["general_file"],
+      quickActions: [
+        { id: "rewrite_selection", label: "改写当前选区", onSelect: rewrite },
+        { id: "review_style", label: "检查文风与一致性", onSelect: style }
+      ]
+    });
+
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="执行 · 写作"]')?.click());
+    expect(host.querySelector('[data-context-option="writing"]')).toBeNull();
+    expect(host.querySelector('[data-context-option="general_file"]')).not.toBeNull();
+    expect(host.querySelectorAll('[aria-label="Agent 快捷动作"]')).toHaveLength(1);
+    expect(host.querySelector('[aria-label="改写当前选区"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="检查文风与一致性"]')).not.toBeNull();
+
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="改写当前选区"]')?.click());
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="检查文风与一致性"]')?.click());
+    expect(rewrite).toHaveBeenCalledOnce();
+    expect(style).toHaveBeenCalledOnce();
+  });
 });
 
 function renderComposer(overrides: Partial<AgentComposerProps> = {}) {

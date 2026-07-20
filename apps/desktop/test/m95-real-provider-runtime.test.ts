@@ -304,6 +304,30 @@ describe("M95 real provider runtime", () => {
     expect(calls).toEqual([]);
   });
 
+  test("returns the selection response schema through demo mode", async () => {
+    const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-selection-demo-"));
+    tempRoots.push(userDataRoot);
+    const runtime = createDesktopModelRuntime({
+      userDataRoot,
+      secretStore: createEncryptedFileModelSecretStore({
+        userDataRoot,
+        cipher: testCipher
+      })
+    });
+    const chapterEditorSession = await createLoadedChapterEditorSession();
+    const provider = runtime.createAiProvider({ chapterEditorSession });
+
+    const completed = await provider.complete(selectionRequest());
+
+    expect(completed.content).toEqual({
+      type: "json",
+      value: {
+        proposedText: "Opening line. AI rewrite.",
+        summary: "当前是演示模式，未配置真实Key。"
+      }
+    });
+  });
+
   test("streams through a verified OpenAI-compatible profile and aborts the fetch when cancelled", async () => {
     const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-stream-real-"));
     tempRoots.push(userDataRoot);
@@ -612,6 +636,23 @@ function streamingRequest(): LlmRequest {
       temperature: 0.7,
       maxTokens: 64
     }
+  };
+}
+
+function selectionRequest(): LlmRequest {
+  return {
+    ...streamingRequest(),
+    requestId: "llmreq_selection_demo",
+    traceId: "ai-selection-preview",
+    mode: "non-streaming",
+    messages: [
+      { role: "system", content: "Return JSON with proposedText and summary." },
+      {
+        role: "user",
+        content: "Selection offsets: 0-13\nSelected text: Opening line."
+      }
+    ],
+    responseFormat: { type: "json_object" }
   };
 }
 

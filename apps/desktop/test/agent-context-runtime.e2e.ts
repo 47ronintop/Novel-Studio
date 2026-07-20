@@ -1,5 +1,11 @@
-import { expect, test, _electron as electron, type Page } from "@playwright/test";
-import { mkdtemp, rm } from "node:fs/promises";
+import {
+  expect,
+  test,
+  _electron as electron,
+  type ElectronApplication,
+  type Page
+} from "@playwright/test";
+import { cp, mkdtemp, rm } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +13,7 @@ import { fileURLToPath } from "node:url";
 
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const electronMain = join(repositoryRoot, "apps", "desktop", "dist", "main", "index.js");
+const fixtureRoot = join(repositoryRoot, "fixtures", "projects", "minimal-chapter");
 const projectId = "prj_minimal_chapter";
 
 test("surfaces draft-backed context controls and round-trips a reference through real IPC", async () => {
@@ -26,19 +33,22 @@ test("surfaces draft-backed context controls and round-trips a reference through
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("Expected a TCP address");
   const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+  const projectRoot = join(tempRoot, "Project");
+  await cp(fixtureRoot, projectRoot, { recursive: true });
 
   const electronApp = await electron.launch({
     args: [electronMain],
     env: electronEnv({
-      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Default Project"),
+      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Bootstrap Project"),
       NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
     })
   });
 
   try {
     const page = await electronApp.firstWindow();
-    await configureLocalModel(page, baseUrl);
+    await queueDirectorySelection(electronApp, projectRoot);
     await openAgentPanel(page);
+    await configureLocalModel(page, baseUrl);
     const composer = page.getByLabel("会话输入区");
 
     // The draft loaded through the real preload→main→application→repository path, so the composer
@@ -198,10 +208,35 @@ async function addProjectFileRef(
 }
 
 async function openAgentPanel(page: Page): Promise<void> {
-  await page.getByLabel("活动栏").getByRole("button", { name: "AI 工作流" }).click();
+  const unbound = page.getByLabel("Agent 未绑定工作区");
+  const view = page.getByLabel("Agent 会话主视图");
+  await expect
+    .poll(async () => (await unbound.isVisible()) || (await view.isVisible()), { timeout: 15_000 })
+    .toBe(true);
+  if (await unbound.isVisible()) {
+    const opened = await page.evaluate(async () => {
+      const selected = await window.novelStudio?.project.chooseOpenCreativeDirectory();
+      if (selected?.ok !== true || selected.value.selectionId === undefined) return selected;
+      return window.novelStudio?.project.openCreativeProject(selected.value.selectionId);
+    });
+    if (opened?.ok !== true) {
+      throw new Error(`Creative project activation failed: ${JSON.stringify(opened)}`);
+    }
+    await page.reload();
+  }
+  await expect(view).toBeVisible({ timeout: 15_000 });
   const createConversation = page.getByRole("button", { name: "新建会话" }).first();
   if (await createConversation.isVisible()) await createConversation.click();
   await expect(page.getByLabel("会话输入区")).toBeVisible();
+}
+
+async function queueDirectorySelection(
+  electronApp: ElectronApplication,
+  selectedPath: string
+): Promise<void> {
+  await electronApp.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] });
+  }, selectedPath);
 }
 
 async function configureLocalModel(page: Page, baseUrl: string): Promise<void> {

@@ -1,6 +1,6 @@
 import { expect, test, _electron as electron } from "@playwright/test";
-import type { Locator, Page } from "@playwright/test";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import type { ElectronApplication, Locator, Page } from "@playwright/test";
+import { cp, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const electronMain = join(repositoryRoot, "apps", "desktop", "dist", "main", "index.js");
+const fixtureRoot = join(repositoryRoot, "fixtures", "projects", "minimal-chapter");
 
 function createElectronEnv(overrides: Record<string, string>): NodeJS.ProcessEnv {
   const env = { ...process.env };
@@ -31,47 +32,46 @@ async function readCodeMirrorText(editor: Locator): Promise<string> {
 test("generates an AI writing suggestion and applies it only after confirmation", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-ai-e2e-"));
   const defaultProjectRoot = join(tempRoot, "Default Project");
-  const projectRoot = join(tempRoot, "AI Workflow Smoke");
   const electronApp = await electron.launch({
     args: [electronMain],
-    env: createElectronEnv({ NOVEL_STUDIO_PROJECT_ROOT: defaultProjectRoot })
+    env: createElectronEnv({
+      NOVEL_STUDIO_PROJECT_ROOT: defaultProjectRoot,
+      NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
+    })
   });
 
   try {
     const page = await electronApp.firstWindow();
-    const activityBar = page.getByLabel("活动栏");
 
-    await page.getByLabel("项目路径").fill(projectRoot);
-    await page.getByRole("button", { name: "创建项目" }).click();
+    await queueDirectorySelection(electronApp, tempRoot);
+    await createQueuedCreativeProject(page, {
+      folderName: "AI Workflow Smoke",
+      projectId: "prj_ai_workflow_smoke",
+      title: "AI Workflow Smoke"
+    });
     await page.getByRole("button", { name: "新建章节" }).click();
 
     const body = page.getByLabel("章节正文");
     await expect(body).toBeVisible();
     await replaceCodeMirrorText(page, body, "Opening line.");
+    const composer = await openAgentComposer(page);
 
-    await activityBar.getByRole("button", { name: "AI 工作流" }).click();
-    await page.getByLabel("AI 写作指令").fill("Continue the active scene.");
-    await page.getByRole("button", { name: "生成 AI 建议" }).click();
+    const review = await requestSelectionReview(page, body, composer, "改写当前选区");
+    await expect(review).toContainText("Opening line.");
+    const proposedText = await readSelectionProposal(review);
 
-    await expect(
-      page.getByText("Generated a local mock continuation for review.", { exact: true })
-    ).toBeVisible();
-    await expect(page.getByLabel("AI 建议差异")).toContainText("AI continuation draft.");
-    await activityBar.getByRole("button", { name: "工作区" }).click();
+    await review.getByRole("button", { name: "Reject selection AI preview" }).click();
+    await expect(review).toContainText("rejected");
+    await expect(review.getByRole("button", { name: "Undo selection AI rejection" })).toBeEnabled();
+    await review.getByRole("button", { name: "Undo selection AI rejection" }).click();
+    await expect(review).toContainText("pending");
+
+    await review.getByRole("button", { name: "Accept selection AI preview" }).click();
+    await expect(review).toHaveCount(0);
+
     await expect
       .poll(() => readCodeMirrorText(page.getByLabel("章节正文")))
-      .toContain("Opening line.");
-    await expect
-      .poll(() => readCodeMirrorText(page.getByLabel("章节正文")))
-      .not.toContain("AI continuation draft.");
-
-    await activityBar.getByRole("button", { name: "AI 工作流" }).click();
-    await page.getByRole("button", { name: "应用 AI 建议" }).click();
-
-    await activityBar.getByRole("button", { name: "工作区" }).click();
-    await expect
-      .poll(() => readCodeMirrorText(page.getByLabel("章节正文")))
-      .toBe("Opening line.\nAI continuation draft.\n");
+      .toBe(proposedText);
     await expect(page.getByText("未保存").first()).toBeVisible();
   } finally {
     await electronApp.close();
@@ -83,40 +83,46 @@ test("completes the core writing journey across save, close, reopen, and continu
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-core-journey-e2e-"));
   const defaultProjectRoot = join(tempRoot, "Default Project");
   const projectRoot = join(tempRoot, "Core Journey Smoke");
+  let appliedBody = "";
 
   const firstApp = await electron.launch({
     args: [electronMain],
-    env: createElectronEnv({ NOVEL_STUDIO_PROJECT_ROOT: defaultProjectRoot })
+    env: createElectronEnv({
+      NOVEL_STUDIO_PROJECT_ROOT: defaultProjectRoot,
+      NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
+    })
   });
 
   try {
     const page = await firstApp.firstWindow();
-    const activityBar = page.getByLabel("活动栏");
 
-    await page.getByLabel("项目路径").fill(projectRoot);
-    await page.getByRole("button", { name: "创建项目" }).click();
+    await queueDirectorySelection(firstApp, tempRoot);
+    await createQueuedCreativeProject(page, {
+      folderName: "Core Journey Smoke",
+      projectId: "prj_core_journey_smoke",
+      title: "Core Journey Smoke"
+    });
     await page.getByRole("button", { name: "新建章节" }).click();
 
     const body = page.getByLabel("章节正文");
     await expect(body).toBeVisible();
     await replaceCodeMirrorText(page, body, "Core journey opening line.");
+    const composer = await openAgentComposer(page);
 
-    await activityBar.getByRole("button", { name: "AI 工作流" }).click();
-    await page.getByLabel("AI 写作指令").fill("Continue the current chapter for the core journey.");
-    await page.getByRole("button", { name: "生成 AI 建议" }).click();
+    const review = await requestSelectionReview(
+      page,
+      body,
+      composer,
+      "检查文风与一致性"
+    );
+    await expect(review.getByLabel("AI 文风规则检查")).toBeVisible();
+    appliedBody = await readSelectionProposal(review);
 
-    await expect(page.getByLabel("AI 建议差异")).toContainText("AI continuation draft.");
-    await activityBar.getByRole("button", { name: "工作区" }).click();
+    await review.getByRole("button", { name: "Accept selection AI preview" }).click();
+    await expect(review).toHaveCount(0);
     await expect
       .poll(() => readCodeMirrorText(page.getByLabel("章节正文")))
-      .toBe("Core journey opening line.");
-
-    await activityBar.getByRole("button", { name: "AI 工作流" }).click();
-    await page.getByRole("button", { name: "应用 AI 建议" }).click();
-    await activityBar.getByRole("button", { name: "工作区" }).click();
-    await expect
-      .poll(() => readCodeMirrorText(page.getByLabel("章节正文")))
-      .toBe("Core journey opening line.\nAI continuation draft.\n");
+      .toBe(appliedBody);
     await expect(page.getByText("未保存").first()).toBeVisible();
 
     await page.getByRole("button", { name: "保存当前文档" }).click();
@@ -135,8 +141,7 @@ test("completes the core writing journey across save, close, reopen, and continu
   }
   const chapterPath = join(projectRoot, "chapters", chapterFile);
   const savedAfterAi = await readFile(chapterPath, "utf8");
-  expect(savedAfterAi).toContain("Core journey opening line.");
-  expect(savedAfterAi).toContain("AI continuation draft.");
+  expect(savedAfterAi).toContain(appliedBody);
 
   const historyAssetDirs = await readdir(join(projectRoot, "history", "chapters"));
   expect(historyAssetDirs.length).toBeGreaterThan(0);
@@ -144,27 +149,25 @@ test("completes the core writing journey across save, close, reopen, and continu
   const secondApp = await electron.launch({
     args: [electronMain],
     env: createElectronEnv({
-      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Second Default Project")
+      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Second Default Project"),
+      NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "Second User Data")
     })
   });
 
   try {
     const page = await secondApp.firstWindow();
 
-    await page.getByLabel("项目路径").fill(projectRoot);
-    await page.getByRole("button", { name: "打开项目" }).click();
+    await queueDirectorySelection(secondApp, projectRoot);
+    await openAgentComposer(page);
 
     const body = page.getByLabel("章节正文");
     await expect
-      .poll(() => readCodeMirrorText(body))
-      .toBe("Core journey opening line.\nAI continuation draft.\n");
+      .poll(async () => (await readCodeMirrorText(body)).trimEnd())
+      .toBe(appliedBody.trimEnd());
     await expect(page.getByLabel("版本历史")).toContainText("Before AI apply");
 
-    await replaceCodeMirrorText(
-      page,
-      body,
-      "Core journey opening line.\nAI continuation draft.\nContinued after reopen."
-    );
+    const continuedBody = `${appliedBody}${appliedBody.endsWith("\n") ? "" : "\n"}Continued after reopen.`;
+    await replaceCodeMirrorText(page, body, continuedBody);
     await expect(page.getByText("未保存").first()).toBeVisible();
     await page.getByRole("button", { name: "保存当前文档" }).click();
     await expect(page.getByText("已保存").first()).toBeVisible();
@@ -178,7 +181,7 @@ test("completes the core writing journey across save, close, reopen, and continu
   await rm(tempRoot, { recursive: true, force: true });
 });
 
-test("routes a real Electron streaming request to a local OpenAI-compatible SSE server", async () => {
+test("routes a real Electron selection preview to a local OpenAI-compatible server", async () => {
   test.setTimeout(60_000);
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-real-provider-e2e-"));
   const requests: Array<{ readonly method: string; readonly url: string; readonly body: unknown }> =
@@ -208,7 +211,19 @@ test("routes a real Electron streaming request to a local OpenAI-compatible SSE 
       response.writeHead(200, { "content-type": "application/json" });
       response.end(
         JSON.stringify({
-          choices: [{ message: { role: "assistant", content: "pong" } }],
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: isSelectionPreviewRequest(body)
+                  ? JSON.stringify({
+                      proposedText: "Real provider opening, refined.",
+                      summary: "Returned by local provider."
+                    })
+                  : "pong"
+              }
+            }
+          ],
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }
         })
       );
@@ -236,17 +251,22 @@ test("routes a real Electron streaming request to a local OpenAI-compatible SSE 
     throw new Error("Expected a TCP address for the local SSE server.");
   }
   const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+  const projectRoot = join(tempRoot, "Project");
+  await cp(fixtureRoot, projectRoot, { recursive: true });
   const electronApp = await electron.launch({
     args: [electronMain],
     env: createElectronEnv({
-      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Default Project"),
+      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Bootstrap Project"),
       NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
     })
   });
 
   try {
     const page = await electronApp.firstWindow();
-    await replaceCodeMirrorText(page, page.getByLabel("章节正文"), "Real provider opening.");
+    await queueDirectorySelection(electronApp, projectRoot);
+    const composer = await openAgentComposer(page);
+    const body = page.getByLabel("章节正文");
+    await replaceCodeMirrorText(page, body, "Real provider opening.");
 
     await page.getByLabel("活动栏").getByRole("button", { name: "设置" }).click();
     await expect(page.getByRole("heading", { name: "设置" })).toBeVisible();
@@ -264,13 +284,15 @@ test("routes a real Electron streaming request to a local OpenAI-compatible SSE 
     );
     await page.getByRole("button", { name: "关闭设置" }).click();
 
-    await page.getByLabel("活动栏").getByRole("button", { name: "AI 工作流" }).click();
-    await page.getByLabel("AI 写作指令").fill("Continue through the local provider.");
-    await page.getByRole("button", { name: "生成 AI 建议" }).click();
+    const review = await requestSelectionReview(page, body, composer, "改写当前选区");
 
-    await expect(page.getByText("Returned by local SSE provider.", { exact: true })).toBeVisible();
-    await expect(page.getByLabel("AI 建议差异")).toContainText("Real provider continuation.");
+    await expect(review).toContainText("Real provider opening, refined.");
     await expect(page.getByText("当前是演示模式，未配置真实Key。")).toHaveCount(0);
+    await review.getByRole("button", { name: "Accept selection AI preview" }).click();
+    await expect(review).toHaveCount(0);
+    await expect.poll(() => readCodeMirrorText(page.getByLabel("章节正文"))).toBe(
+      "Real provider opening, refined."
+    );
     await expect
       .poll(
         () =>
@@ -278,10 +300,7 @@ test("routes a real Electron streaming request to a local OpenAI-compatible SSE 
             (entry) =>
               entry.method === "POST" &&
               entry.url === "/v1/chat/completions" &&
-              typeof entry.body === "object" &&
-              entry.body !== null &&
-              "stream" in entry.body &&
-              entry.body.stream === true
+              isSelectionPreviewRequest(entry.body)
           ).length
       )
       .toBe(1);
@@ -293,3 +312,97 @@ test("routes a real Electron streaming request to a local OpenAI-compatible SSE 
     await rm(tempRoot, { recursive: true, force: true });
   }
 });
+
+async function openAgentComposer(page: Page): Promise<Locator> {
+  const unbound = page.getByLabel("Agent 未绑定工作区");
+  const view = page.getByLabel("Agent 会话主视图");
+  await expect
+    .poll(async () => (await unbound.isVisible()) || (await view.isVisible()), { timeout: 15_000 })
+    .toBe(true);
+  if (await unbound.isVisible()) {
+    const opened = await page.evaluate(async () => {
+      const selected = await window.novelStudio?.project.chooseOpenCreativeDirectory();
+      if (selected?.ok !== true || selected.value.selectionId === undefined) return selected;
+      return window.novelStudio?.project.openCreativeProject(selected.value.selectionId);
+    });
+    if (opened?.ok !== true) {
+      throw new Error(`Creative project activation failed: ${JSON.stringify(opened)}`);
+    }
+    await page.reload();
+  }
+  await expect(view).toBeVisible({ timeout: 15_000 });
+  const composer = view.getByLabel("会话输入区");
+  if (!(await composer.isVisible())) {
+    const createConversation = view.getByRole("button", { name: "新建会话" });
+    await expect(createConversation).toBeEnabled();
+    await createConversation.click();
+  }
+  await expect(composer).toBeVisible();
+  return composer;
+}
+
+async function createQueuedCreativeProject(
+  page: Page,
+  input: { readonly folderName: string; readonly projectId: string; readonly title: string }
+): Promise<void> {
+  const created = await page.evaluate(async (request) => {
+    const selected = await window.novelStudio?.project.chooseCreateParentDirectory();
+    if (selected?.ok !== true || selected.value.selectionId === undefined) return selected;
+    return window.novelStudio?.project.createCreativeProject({
+      parentSelectionId: selected.value.selectionId,
+      folderName: request.folderName,
+      projectId: request.projectId,
+      title: request.title,
+      language: "zh-CN"
+    });
+  }, input);
+  if (created?.ok !== true) {
+    throw new Error(`Creative project creation failed: ${JSON.stringify(created)}`);
+  }
+  await page.reload();
+  await expect(page.getByLabel("项目导航")).toBeVisible({ timeout: 15_000 });
+}
+
+async function queueDirectorySelection(
+  electronApp: ElectronApplication,
+  selectedPath: string
+): Promise<void> {
+  await electronApp.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] });
+  }, selectedPath);
+}
+
+async function requestSelectionReview(
+  page: Page,
+  editor: Locator,
+  composer: Locator,
+  actionName: "改写当前选区" | "检查文风与一致性"
+): Promise<Locator> {
+  await selectAllCodeMirrorText(page, editor);
+  const action = composer.getByRole("button", { name: actionName });
+  await expect(action).toBeEnabled();
+  await action.click();
+  const review = page.getByLabel("Selection AI review");
+  await expect(review).toBeVisible();
+  return review;
+}
+
+async function selectAllCodeMirrorText(page: Page, editor: Locator): Promise<void> {
+  const content = editor.locator('.cm-content[contenteditable="true"]');
+  await content.click();
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+}
+
+async function readSelectionProposal(review: Locator): Promise<string> {
+  const proposedText = await review
+    .locator(".ns-selection-review-diff article")
+    .nth(1)
+    .locator("p")
+    .textContent();
+  if (proposedText === null) throw new Error("Expected a selection preview proposal.");
+  return proposedText;
+}
+
+function isSelectionPreviewRequest(body: unknown): boolean {
+  return JSON.stringify(body).includes("selected text rewrite");
+}

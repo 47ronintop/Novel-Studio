@@ -26,7 +26,11 @@ import type {
   ProjectSettings,
   ProjectSettingsPort
 } from "@novel-studio/application";
-import { createLlmAdapter, type LlmProvider } from "@novel-studio/llm-adapter";
+import {
+  createLlmAdapter,
+  type LlmProvider,
+  type LlmRequest
+} from "@novel-studio/llm-adapter";
 import {
   ChapterFileRepository,
   AgentUsageFileRepository,
@@ -383,17 +387,24 @@ export function createProjectDesktopApplication(
 function createDesktopMockAiProvider(chapterEditorSession: ChapterEditorSession): LlmProvider {
   return {
     id: "mock",
-    async complete() {
+    async complete(request) {
       const currentBody = chapterEditorSession.getState()?.chapter.body ?? "";
       const separator = currentBody.endsWith("\n") || currentBody.length === 0 ? "" : "\n";
+      const selectedText = desktopMockSelectionText(request);
 
       return {
         content: {
           type: "json",
-          value: {
-            proposedBody: `${currentBody}${separator}AI continuation draft.\n`,
-            summary: "Generated a local mock continuation for review."
-          }
+          value:
+            selectedText === undefined
+              ? {
+                  proposedBody: `${currentBody}${separator}AI continuation draft.\n`,
+                  summary: "Generated a local mock continuation for review."
+                }
+              : {
+                  proposedText: `${selectedText} AI rewrite.`,
+                  summary: "Generated a local mock selection rewrite for review."
+                }
         },
         usage: {
           inputTokens: 16,
@@ -415,6 +426,17 @@ function createDesktopMockAiProvider(chapterEditorSession: ChapterEditorSession)
       };
     }
   };
+}
+
+function desktopMockSelectionText(request: LlmRequest): string | undefined {
+  if (request.traceId !== "ai-selection-preview") return undefined;
+  const marker = "Selected text: ";
+  for (const message of [...request.messages].reverse()) {
+    if (message.role !== "user") continue;
+    const markerIndex = message.content.lastIndexOf(marker);
+    if (markerIndex !== -1) return message.content.slice(markerIndex + marker.length);
+  }
+  return undefined;
 }
 
 export function createDefaultDesktopApplication(): DesktopApplication {

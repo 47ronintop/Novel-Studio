@@ -292,7 +292,8 @@ export function ensureCreativeWorkspaceContext(
   if (shellState.workspaceContext.kind !== "none" || shellState.projectTitle === "未打开项目") {
     return shellState;
   }
-  const id = projectId ?? "prj_minimal_chapter";
+  if (projectId === undefined) return shellState;
+  const id = projectId;
   return {
     ...shellState,
     workspaceContext: {

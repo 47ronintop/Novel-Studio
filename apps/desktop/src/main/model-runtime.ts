@@ -21,6 +21,7 @@ import {
   LlmProviderFailure,
   OpenAiCompatibleHttpError,
   type LlmProvider,
+  type LlmRequest,
   type LlmModelProfile,
   type LlmParameters,
   type OpenAiCompatibleTransport,
@@ -797,16 +798,23 @@ async function writeSecretFile(
 function createDemoModeProvider(chapterEditorSession: ChapterEditorSession): LlmProvider {
   return {
     id: "mock",
-    async complete() {
+    async complete(request) {
       const currentBody = chapterEditorSession.getState()?.chapter.body ?? "";
       const separator = currentBody.endsWith("\n") || currentBody.length === 0 ? "" : "\n";
+      const selectedText = demoSelectionText(request);
       return {
         content: {
           type: "json",
-          value: {
-            proposedBody: `${currentBody}${separator}AI continuation draft.\n`,
-            summary: "当前是演示模式，未配置真实Key。"
-          }
+          value:
+            selectedText === undefined
+              ? {
+                  proposedBody: `${currentBody}${separator}AI continuation draft.\n`,
+                  summary: "当前是演示模式，未配置真实Key。"
+                }
+              : {
+                  proposedText: `${selectedText} AI rewrite.`,
+                  summary: "当前是演示模式，未配置真实Key。"
+                }
         },
         usage: {
           inputTokens: 16,
@@ -829,6 +837,17 @@ function createDemoModeProvider(chapterEditorSession: ChapterEditorSession): Llm
       };
     }
   };
+}
+
+function demoSelectionText(request: LlmRequest): string | undefined {
+  if (request.traceId !== "ai-selection-preview") return undefined;
+  const marker = "Selected text: ";
+  for (const message of [...request.messages].reverse()) {
+    if (message.role !== "user") continue;
+    const markerIndex = message.content.lastIndexOf(marker);
+    if (markerIndex !== -1) return message.content.slice(markerIndex + marker.length);
+  }
+  return undefined;
 }
 
 function stringHeaders(headers: JsonObject | undefined): Record<string, string> {

@@ -534,18 +534,11 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
       }
 
       const snapshot = await unwrap(api.ai.applySelectionPreview(currentSelectionPreviewId));
+      const { selectionReview, ...withoutSelectionReview } = props;
+      void selectionReview;
       props = createProps({
-        ...props,
-        status: "applied",
-        ...(props.selectionReview === undefined
-          ? {}
-          : {
-              selectionReview: {
-                ...props.selectionReview,
-                status: "applied",
-                canUndo: false
-              }
-            })
+        ...withoutSelectionReview,
+        status: "applied"
       });
       currentSelectionPreviewId = undefined;
       currentSelectionPreview = undefined;
@@ -556,18 +549,11 @@ export function createAiWritingWorkflowBridge(api: NovelStudioApi): AiWritingWor
       if (currentSuggestionId === undefined) {
         if (currentSelectionPreviewId !== undefined) {
           const snapshot = await unwrap(api.ai.applySelectionPreview(currentSelectionPreviewId));
+          const { selectionReview, ...withoutSelectionReview } = props;
+          void selectionReview;
           props = createProps({
-            ...props,
-            status: "applied",
-            ...(props.selectionReview === undefined
-              ? {}
-              : {
-                  selectionReview: {
-                    ...props.selectionReview,
-                    status: "applied",
-                    canUndo: false
-                  }
-                })
+            ...withoutSelectionReview,
+            status: "applied"
           });
           currentSelectionPreviewId = undefined;
           currentSelectionPreview = undefined;

@@ -707,6 +707,36 @@ describe("AI writing workflow bridge", () => {
     ]);
   });
 
+  test("closes the selection review after applying it through the shared accept action", async () => {
+    const calls: string[] = [];
+    const bridge = createAiWritingWorkflowBridge(createApi(calls));
+    await bridge.generateSelectionPreview({
+      instruction: "Rewrite selection.",
+      command: {
+        commandId: "editor.ai.preview-selection",
+        runtimeId: "textarea",
+        selection: {
+          startOffset: 0,
+          endOffset: 13,
+          characterCount: 13,
+          lineStart: 1,
+          lineEnd: 1,
+          selectedTextPreview: "Opening line.",
+          collapsed: false
+        }
+      },
+      selectedText: "Opening line."
+    });
+
+    await bridge.applySuggestion();
+
+    expect(bridge.getProps().selectionReview).toBeUndefined();
+    expect(calls).toEqual([
+      "ai.selection:Rewrite selection.:0-13",
+      "ai.apply-selection:sug_selection_m74"
+    ]);
+  });
+
   test("rejects and restores a selection preview review without calling the preload API", async () => {
     const calls: string[] = [];
     const bridge = createAiWritingWorkflowBridge(createApi(calls));

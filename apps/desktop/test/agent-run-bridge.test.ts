@@ -11,7 +11,7 @@ import {
   type AgentRunDraftSessionRepository,
   type NovelStudioApi
 } from "@novel-studio/application";
-import { ok, type JsonObject } from "@novel-studio/shared";
+import { createUnifiedError, err, ok, type JsonObject } from "@novel-studio/shared";
 import type { ChapterEditorProps, ModelSettingsPanelProps } from "@novel-studio/ui";
 
 import { createAgentRunBridge } from "../src/renderer/agent-run-bridge.js";
@@ -1180,6 +1180,7 @@ describe("Agent Run renderer bridge", () => {
   test("coalesces double-click run undo into one command", async () => {
     const appliedSnapshot = {
       ...snapshot,
+      operationMode: "execution" as const,
       status: "completed" as const,
       versionGroupId: "version-group-01",
       runRevision: 20,
@@ -1224,6 +1225,55 @@ describe("Agent Run renderer bridge", () => {
       projectId: "project-01",
       expectedRunRevision: 20
     });
+  });
+
+  test("ignores a stale second undo click after the completed undo is hydrated", async () => {
+    const appliedSnapshot = {
+      ...snapshot,
+      operationMode: "execution" as const,
+      status: "completed" as const,
+      versionGroupId: "version-group-01",
+      runRevision: 20,
+      lastSequence: 20
+    };
+    const undoneSnapshot = {
+      ...appliedSnapshot,
+      runRevision: 22,
+      lastSequence: 22
+    };
+    const undoCommands: Array<Record<string, unknown>> = [];
+    let undone = false;
+    const api = {
+      agentRuns: {
+        onEvent: () => () => undefined,
+        list: async () => ok([undone ? undoneSnapshot : appliedSnapshot]),
+        read: async () =>
+          ok({
+            snapshot: undone ? undoneSnapshot : appliedSnapshot,
+            events: undone
+              ? [
+                  event(20, "write_applied", { versionGroupId: "version-group-01" }),
+                  event(22, "run_undone", { versionGroupId: "version-group-01" })
+                ]
+              : [event(20, "write_applied", { versionGroupId: "version-group-01" })],
+            changeSet: { ...changeSet(4, "change-set-checksum-r4", true), status: "applied" }
+          }),
+        undoRun: async (command: Record<string, unknown>) => {
+          undoCommands.push(structuredClone(command));
+          undone = true;
+          return ok(undoneSnapshot);
+        }
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({ projectId: "project-01", settings });
+    await bridge.load("project-01");
+
+    await bridge.undoRun();
+    await bridge.undoRun();
+
+    expect(undoCommands).toHaveLength(1);
+    expect(bridge.getProps()?.canUndoRun).toBe(false);
   });
 
   test("binds rollback review decisions and failed-only retry to the durable review id", async () => {
@@ -1427,6 +1477,220 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     expect(composer?.reasoning).toMatchObject({ visible: true, current: "medium" });
     expect(composer?.references?.chips.map((chip) => chip.refId)).toEqual(["chapter:chapter-01"]);
     expect(composer?.contextStatus?.state).toBe("normal");
+  });
+
+  test("loads the selected conversation draft when settings arrive after the conversation", async () => {
+    const { api } = createDraftApi();
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor
+    });
+
+    expect(bridge.getComposerProps()?.model).toBeUndefined();
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.model).toBeDefined());
+  });
+
+  test("normalizes a persisted writing draft before sending from an engineering workspace", async () => {
+    const { api } = createDraftApi();
+    await api.agentRuns.readRunDraft?.({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      initialize: {
+        modelProfileId: "profile-01",
+        operationMode: "planning",
+        contextMode: "writing",
+        writePolicy: "write_before_confirmation",
+        writePolicyAcknowledged: false,
+        contextRefs: []
+      }
+    } as never);
+
+    let preparedCommand: Record<string, unknown> | undefined;
+    const originalPrepareStart = api.agentRuns.prepareStart;
+    api.agentRuns.prepareStart = async (command) => {
+      preparedCommand = command as Record<string, unknown>;
+      return originalPrepareStart(command);
+    };
+
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      workspaceKind: "engineeringWorkspace",
+      conversationId: "conversation-01",
+      fileEditor: {
+        path: "src/index.ts",
+        fileName: "index.ts",
+        content: "export {};",
+        dirty: false,
+        saveStatus: "Saved"
+      }
+    });
+    expect(bridge.getComposerProps()?.model).toBeUndefined();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    bridge.syncContext({
+      projectId: "project-01",
+      workspaceKind: "engineeringWorkspace",
+      conversationId: "conversation-01",
+      fileEditor: {
+        path: "src/index.ts",
+        fileName: "index.ts",
+        content: "export {};",
+        dirty: false,
+        saveStatus: "Saved"
+      },
+      settings: draftSettings
+    });
+
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.model).toBeDefined());
+    await bridge.send("检查工程文件");
+
+    expect(preparedCommand).toMatchObject({ contextMode: "general_file" });
+    const persisted = await api.agentRuns.readRunDraft?.({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      initialize: {
+        modelProfileId: "profile-01",
+        operationMode: "planning",
+        contextMode: "writing",
+        writePolicy: "write_before_confirmation",
+        writePolicyAcknowledged: false,
+        contextRefs: []
+      }
+    } as never);
+    expect(persisted).toMatchObject({
+      ok: true,
+      value: { runDraft: { contextMode: "general_file" } }
+    });
+  });
+
+  test("loads and normalizes an engineering draft when settings are ready on first sync", async () => {
+    const { api } = createDraftApi();
+    await api.agentRuns.readRunDraft?.({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      initialize: {
+        modelProfileId: "profile-01",
+        operationMode: "planning",
+        contextMode: "writing",
+        writePolicy: "write_before_confirmation",
+        writePolicyAcknowledged: false,
+        contextRefs: []
+      }
+    } as never);
+
+    let preparedCommand: Record<string, unknown> | undefined;
+    const originalPrepareStart = api.agentRuns.prepareStart;
+    api.agentRuns.prepareStart = async (command) => {
+      preparedCommand = command as Record<string, unknown>;
+      return originalPrepareStart(command);
+    };
+
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      workspaceKind: "engineeringWorkspace",
+      conversationId: "conversation-01",
+      fileEditor: {
+        path: "src/index.ts",
+        fileName: "index.ts",
+        content: "export {};",
+        dirty: false,
+        saveStatus: "Saved"
+      },
+      settings: draftSettings
+    });
+
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.model).toBeDefined());
+    await bridge.send("检查工程文件");
+
+    expect(preparedCommand).toMatchObject({ contextMode: "general_file" });
+    const persisted = await api.agentRuns.readRunDraft?.({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      initialize: {
+        modelProfileId: "profile-01",
+        operationMode: "planning",
+        contextMode: "writing",
+        writePolicy: "write_before_confirmation",
+        writePolicyAcknowledged: false,
+        contextRefs: []
+      }
+    } as never);
+    expect(persisted).toMatchObject({
+      ok: true,
+      value: { runDraft: { contextMode: "general_file" } }
+    });
+  });
+
+  test("reloads the selected conversation draft after clearing an empty run", async () => {
+    const { api } = createDraftApi();
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.model).toBeDefined());
+
+    await bridge.loadRun(undefined);
+
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.model).toBeDefined());
+  });
+
+  test("does not duplicate an in-flight draft initialization while clearing an empty run", async () => {
+    let releaseFirstRead: (() => void) | undefined;
+    const firstRead = new Promise<void>((resolve) => {
+      releaseFirstRead = resolve;
+    });
+    const { api } = createDraftApi();
+    const readRunDraft = api.agentRuns.readRunDraft;
+    let readCount = 0;
+    api.agentRuns.readRunDraft = async (command) => {
+      readCount += 1;
+      if (readCount === 1) {
+        await firstRead;
+        return readRunDraft(command);
+      }
+      return err(
+        createUnifiedError({
+          code: "AGENT_RUN_DRAFT_CONFLICT",
+          category: "ConflictError",
+          message: "Draft initialization raced.",
+          recoverability: "retryable",
+          suggestedAction: "Retry after the first initialization completes.",
+          traceId: "agent-run-bridge-test"
+        })
+      );
+    };
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+    await vi.waitFor(() => expect(readCount).toBe(1));
+
+    await bridge.loadRun(undefined);
+    releaseFirstRead?.();
+
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.model).toBeDefined());
+    expect(readCount).toBe(1);
   });
 
   test("writes a model selection to the draft and re-previews the budget", async () => {

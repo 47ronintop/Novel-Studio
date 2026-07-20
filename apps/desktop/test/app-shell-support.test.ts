@@ -14,6 +14,7 @@ import {
   createChapterEditorRuntime,
   createChapterEditorSelectionCommand,
   applyShellPreferences,
+  ensureCreativeWorkspaceContext,
   persistAppearancePreferences,
   rendererShellState,
   resolveActivityTransition,
@@ -99,6 +100,17 @@ describe("renderer app shell editor runtime support", () => {
       activeActivity: "timeline",
       lastNonSettingsActivity: "timeline"
     });
+  });
+
+  test("does not invent a creative project context for a non-empty title", () => {
+    const state = {
+      ...rendererShellState,
+      projectTitle: "临时窗口",
+      workspaceContext: EMPTY_WORKSPACE_CONTEXT
+    };
+
+    expect(ensureCreativeWorkspaceContext(state)).toBe(state);
+    expect(ensureCreativeWorkspaceContext(state).workspaceContext).toEqual(EMPTY_WORKSPACE_CONTEXT);
   });
 
   test("returns no feedback when appearance preferences persist", async () => {

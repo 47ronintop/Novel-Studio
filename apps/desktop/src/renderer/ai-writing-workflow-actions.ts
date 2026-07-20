@@ -57,12 +57,13 @@ export function useAiWritingWorkflowActions({
   }, [aiWritingWorkflow, aiWritingWorkflowBridge, setAiWritingWorkflow, setChapterEditor]);
 
   const handleSelectionAiPreview = useCallback(
-    (commandId: string) => {
+    (commandId: string, instructionOverride?: string) => {
       const input = createSelectionPreviewInput({
         aiWritingWorkflow,
         chapterEditor,
         chapterSelection,
-        commandId
+        commandId,
+        ...(instructionOverride === undefined ? {} : { instructionOverride })
       });
       if (aiWritingWorkflowBridge === undefined || input === undefined) return;
       setAiWritingWorkflow(aiWritingWorkflowBridge.beginGenerate(input.instruction));
@@ -79,6 +80,24 @@ export function useAiWritingWorkflowActions({
       setAiWritingWorkflow,
       setChapterEditor
     ]
+  );
+
+  const handleRewriteSelection = useCallback(
+    () =>
+      handleSelectionAiPreview(
+        "agent.rewrite-selection",
+        "Rewrite the selected text while preserving meaning and continuity."
+      ),
+    [handleSelectionAiPreview]
+  );
+
+  const handleReviewSelectionStyle = useCallback(
+    () =>
+      handleSelectionAiPreview(
+        "agent.review-selection-style",
+        "Review the selected text for style, consistency, and templated phrasing."
+      ),
+    [handleSelectionAiPreview]
   );
 
   const handleApplyAiSuggestion = useCallback(() => {
@@ -137,6 +156,8 @@ export function useAiWritingWorkflowActions({
     handleAiInstructionChange,
     handleGenerateAiSuggestion,
     handleSelectionAiPreview,
+    handleRewriteSelection,
+    handleReviewSelectionStyle,
     handleApplyAiSuggestion,
     handleRejectSelectionReview,
     handleUndoSelectionReview,
@@ -151,6 +172,7 @@ function createSelectionPreviewInput(input: {
   readonly chapterEditor: ChapterEditorProps | undefined;
   readonly chapterSelection: ChapterEditorSelection | undefined;
   readonly commandId: string;
+  readonly instructionOverride?: string;
 }): AiSelectionPreviewBridgeInput | undefined {
   if (
     input.aiWritingWorkflow === undefined ||
@@ -164,9 +186,10 @@ function createSelectionPreviewInput(input: {
   });
   if (command === undefined || command.selection.collapsed) return undefined;
   const instruction =
-    input.aiWritingWorkflow.instruction.trim().length === 0
+    input.instructionOverride ??
+    (input.aiWritingWorkflow.instruction.trim().length === 0
       ? "Rewrite the selected text."
-      : input.aiWritingWorkflow.instruction;
+      : input.aiWritingWorkflow.instruction);
   return {
     instruction,
     command,

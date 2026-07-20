@@ -6,7 +6,11 @@ import { createRoot } from "react-dom/client";
 import { describe, expect, test, vi } from "vitest";
 
 import { createDesktopApplication } from "@novel-studio/application";
-import type { AiWritingWorkflowProps } from "../src/workspace-shell-types.js";
+import type {
+  AgentConversationMainReview,
+  AgentConversationWorkspaceShellProps,
+  AiWritingWorkflowProps
+} from "../src/workspace-shell-types.js";
 import { WorkspaceShell } from "../src/workspace-shell.js";
 
 Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
@@ -301,16 +305,62 @@ function renderReview(overrides: RenderOverrides = {}): HTMLElement {
   act(() => {
     root.render(
       <WorkspaceShell
+        agentConversationWorkspace={reviewWorkspace(workflow)}
         aiWritingWorkflow={workflow}
         chapterEditor={chapterEditor}
         commandPaletteOpen={false}
         commands={application.listCommands()}
-        shellState={application.getShellState()}
+        shellState={{
+          ...application.getShellState(),
+          projectTitle: "Review Project",
+          workspaceContext: {
+            kind: "creativeProject",
+            workspaceId: "project-01",
+            projectId: "project-01",
+            displayName: "Review Project",
+            capabilities: ["creativeWorkbench", "writingContext"]
+          }
+        }}
       />
     );
   });
   Reflect.set(host, "__root", root);
   return host;
+}
+
+function reviewWorkspace(workflow: AiWritingWorkflowProps): AgentConversationWorkspaceShellProps {
+  const agentRun = workflow.agentRun;
+  if (agentRun === undefined || agentRun.changeSetReview === undefined) {
+    throw new Error("Expected a Change Set review fixture.");
+  }
+  const mainReview: AgentConversationMainReview = {
+    kind: "change_set",
+    props: agentRun.changeSetReview
+  };
+  return {
+    navigator: {
+      conversations: [],
+      searchQuery: "",
+      filter: "active",
+      loading: false,
+      onSearchQueryChange: () => undefined,
+      onFilterChange: () => undefined,
+      onCreate: () => undefined,
+      onSelect: () => undefined,
+      onArchive: () => undefined,
+      onRestore: () => undefined
+    },
+    view: {
+      agentRun,
+      mainReview,
+      loading: false,
+      onCreate: () => undefined,
+      onArchive: () => undefined,
+      onRestore: () => undefined,
+      onReturnToActive: () => undefined
+    },
+    mainReview
+  };
 }
 
 function cleanup(host: HTMLElement): void {

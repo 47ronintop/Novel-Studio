@@ -112,7 +112,7 @@ import type {
 import type { ContextCandidate } from "@novel-studio/context-engine";
 
 export type ActivityId =
-  "workspace" | "search" | "storyBible" | "timeline" | "ai" | "studio" | "settings";
+  "workspace" | "search" | "storyBible" | "timeline" | "studio" | "settings";
 
 export type SaveStatus = "Saved" | "Saving" | "Unsaved" | "Recovery available";
 

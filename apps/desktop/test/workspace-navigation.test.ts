@@ -165,7 +165,7 @@ describe("workspace navigation", () => {
     );
   });
 
-  test("opens the supplied central review before selecting the Agent activity", () => {
+  test("opens the supplied central review without changing the active activity", () => {
     const log: string[] = [];
     const state = createState({ activeActivity: "workspace" });
     const review = { kind: "plan", props: {} } as AgentConversationMainReview;
@@ -179,7 +179,7 @@ describe("workspace navigation", () => {
 
     navigation.openMainReview(review);
 
-    expect(log).toEqual(["state.review:plan", "state.activity:ai"]);
+    expect(log).toEqual(["state.review:plan"]);
     expect(state.mainReview).toBe(review);
   });
 });
