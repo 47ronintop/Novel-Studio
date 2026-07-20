@@ -1720,28 +1720,75 @@ git add packages/ui/src/agent-conversation-history-drawer.tsx packages/ui/src/ai
 git commit -m "refactor: unify the agent conversation surface"
 ```
 
-## Task 10: Complete Visual Hierarchy, Settings, Accessibility, and Release Gates
+## Task 10: Complete Native Project Entry, Stable Agent Surface, Visual Hierarchy, Settings, Accessibility, and Release Gates
 
 **Files:**
 
+- Modify: `packages/application/src/command-registry.ts`
+- Modify: `packages/application/src/ipc-contract.ts`
+- Modify: `packages/application/src/novel-studio-api.ts`
+- Modify: `apps/desktop/src/main/menu.ts`
+- Modify: `apps/desktop/src/main/index.ts`
+- Modify: `apps/desktop/src/preload/index.cts`
+- Modify: `apps/desktop/src/preload/index.ts`
+- Modify: `apps/desktop/src/preload/api.ts`
+- Modify: `apps/desktop/src/renderer/App.tsx`
+- Modify: `apps/desktop/src/renderer/agent-conversation-workspace.ts`
+- Modify: `apps/desktop/src/renderer/renderer-workspace-shell.tsx`
+- Modify: `apps/desktop/src/renderer/workspace-navigation.ts`
+- Modify: `apps/desktop/electron-builder.config.cjs`
 - Modify: `packages/ui/src/styles.css`
 - Modify: `packages/ui/src/settings-workspace.tsx`
 - Modify: `packages/ui/src/settings-panel-tabs.tsx`
 - Modify: `packages/ui/src/model-settings-panel.tsx`
 - Modify: `packages/ui/src/agent-usage-settings.tsx`
+- Modify: `packages/ui/src/agent-composer.tsx`
+- Modify: `packages/ui/src/agent-conversation-view.tsx`
+- Modify: `packages/ui/src/creative-workspace-navigator.tsx`
+- Modify: `packages/ui/src/workspace-navigator.tsx`
 - Modify: `packages/ui/src/workspace-shell.tsx`
+- Modify: `packages/ui/src/workspace-shell-project-assist.tsx`
+- Modify: `packages/ui/src/workspace-shell-types.ts`
 - Modify: `packages/ui/src/workspace-status-bar.tsx`
+- Create: `packages/ui/src/project-create-dialog.tsx`
+- Create: `packages/ui/test/project-create-dialog.test.tsx`
+- Modify: `apps/desktop/test/application-menu.test.ts`
+- Modify: `apps/desktop/test/app-shell-support.test.ts`
+- Modify: `apps/desktop/test/beta-packaging.test.ts`
+- Modify: `packages/ui/test/agent-composer.test.tsx`
+- Modify: `packages/ui/test/agent-conversation-view.test.tsx`
+- Modify: `packages/ui/test/agent-conversation-workspace.test.tsx`
+- Modify: `packages/ui/test/workspace-navigator.test.tsx`
 - Modify: `packages/ui/test/settings-and-studio.test.tsx`
 - Modify: `packages/ui/test/workspace-shell.test.tsx`
+- Modify: `apps/desktop/test/project-workflow.e2e.ts`
 - Modify: `apps/desktop/test/settings-editor-chrome.e2e.ts`
 - Modify: `apps/desktop/test/agent-usage-settings.e2e.ts`
 - Modify: `apps/desktop/test/unified-workbench.e2e.ts`
 - Test: all files listed in the final verification matrix below
 
-- [ ] **Step 1: Write failing layout, focus, and reduced-motion tests**
+**Mature-product design audit applied by this task:**
+
+- VS Code assigns Explorer to the Primary Side Bar, Chat to the Secondary Side Bar, and keeps the Editor as the largest remaining region; Novel Studio keeps the same stable ownership.
+- VS Code opens a workspace through `File > Open Folder...` and restores workspace-specific UI state. Novel Studio uses the Electron native “文件” menu plus a central welcome surface for global project lifecycle commands, while Navigator owns only current content.
+- Codex-style project/task binding keeps the conversation surface stable while the bound project and task context change. Novel Studio therefore keeps one Agent shell visible, but does not invent a Conversation or Run before a workspace is bound.
+- `WorkbenchMode` remains a layout/navigation state and `AgentContextMode` remains a per-run context-engineering state. The UI uses “写作上下文 / 文件上下文” labels instead of presenting them as a second pair of workbench names.
+
+Review evidence: [VS Code User Interface](https://code.visualstudio.com/docs/editing/userinterface) and [VS Code Workspaces](https://code.visualstudio.com/docs/editing/workspaces/workspaces).
+
+- [ ] **Step 1: Write failing ownership, native-menu, stable-Agent, layout, focus, and packaging tests**
 
 Add jsdom assertions for:
 
+- the Electron native “文件” submenu contains “新建创作项目… / 打开创作项目… / 打开工程文件夹…” before “关闭窗口” and exposes stable semantic command IDs;
+- invoking a native project command reaches the focused Renderer command subscription exactly once and reuses `WorkspaceNavigation`; `menu.ts` has no Repository, filesystem, selection-token, or project-session dependency;
+- repeated Renderer mounts/subscriptions do not duplicate one native-menu click, and a missing/destroyed focused window is a safe no-op;
+- the empty and creative Navigators contain no application-level “打开项目 / 创建项目 / 打开工程目录” buttons and no persistent project title/folder/parent-directory creation form;
+- the central create dialog owns project title, folder name, parent-directory selection, cancel, create, busy, failure, Escape, and focus-return behavior;
+- `workspaceContext.kind === "none"` still renders exactly one `AgentConversationView` and one `aria-label="会话输入区"`, with send/create/history/model/context actions disabled and no Conversation/Run callbacks;
+- opening Settings changes only the central Editor Area and keeps the same Navigator, Agent Surface, Status Bar, active Conversation, and run state mounted;
+- a bound creative or engineering workspace reuses that single Agent region; there is never a second textarea or a second Agent panel;
+- Composer presents “写作上下文 / 文件上下文”; creative projects keep both Stage 5 contexts, engineering workspaces expose only file context, and workbench switching does not rewrite an active run or persisted Plan;
 - settings uses one main form column and no two-column summary card;
 - labels and their controls stay in a grid that permits wrapping without placing an action button on the same constrained text line;
 - no settings root has `scrollWidth > clientWidth` in the 220px Navigator / narrow-shell fixture;
@@ -1749,23 +1796,40 @@ Add jsdom assertions for:
 - model, reasoning, mode, approval, references, and send remain inside `aria-label="会话输入区"`;
 - collapsed Navigator/Agent hide their resize handles;
 - every icon-only button has an accessible name and visible `:focus-visible` style;
-- CSS contains a `@media (prefers-reduced-motion: reduce)` override that disables non-essential transitions.
+- CSS contains a `@media (prefers-reduced-motion: reduce)` override that disables non-essential transitions;
+- Electron Builder keeps only `zh-CN` and `en-US` locale packs, while settings do not expose a fake UI-language selector without translation catalogs.
 
-Add Playwright checks at normal and narrow window sizes for settings overflow, Agent composer grouping, editor toolbar cleanliness, and status bar visibility.
+Add Playwright/Electron assertions for native File-menu routing, central create/open flows, no-workspace Agent rendering without Agent API calls, creative/engineering binding, settings overflow, Agent composer grouping, editor toolbar cleanliness, and status bar visibility at normal and narrow window sizes.
 
-- [ ] **Step 2: Run focused visual/structure tests and verify current CSS fails**
+- [ ] **Step 2: Run the focused ownership/visual collection and verify the new tests fail**
 
 Run:
 
 ```powershell
-npm test -- packages/ui/test/settings-and-studio.test.tsx packages/ui/test/workspace-shell.test.tsx
+npm test -- apps/desktop/test/application-menu.test.ts apps/desktop/test/app-shell-support.test.ts apps/desktop/test/beta-packaging.test.ts packages/ui/test/project-create-dialog.test.tsx packages/ui/test/agent-composer.test.tsx packages/ui/test/agent-conversation-view.test.tsx packages/ui/test/agent-conversation-workspace.test.tsx packages/ui/test/workspace-navigator.test.tsx packages/ui/test/settings-and-studio.test.tsx packages/ui/test/workspace-shell.test.tsx
 npm run build
-npx playwright test apps/desktop/test/settings-editor-chrome.e2e.ts apps/desktop/test/agent-usage-settings.e2e.ts apps/desktop/test/unified-workbench.e2e.ts
+npx playwright test apps/desktop/test/project-workflow.e2e.ts apps/desktop/test/settings-editor-chrome.e2e.ts apps/desktop/test/agent-usage-settings.e2e.ts apps/desktop/test/unified-workbench.e2e.ts
 ```
 
-Expected: FAIL on at least the current settings/layout grouping and collapsed-panel behavior before the final CSS and component cleanup.
+Expected: FAIL because the File menu only closes the window, project lifecycle controls still live in Navigator, no-workspace Agent uses a replacement placeholder, locale packs are unrestricted, and the current settings/layout grouping still overflows or exposes dead handles.
 
-- [ ] **Step 3: Apply the restrained professional visual system**
+- [ ] **Step 3: Move project lifecycle commands into the native File menu and central task surfaces**
+
+Add a closed `NativeMenuCommandId` union for create creative project, open creative project, and open engineering folder. Build the Electron menu from injected semantic command handlers; each click resolves the current focused, non-destroyed Novel Studio window at click time and otherwise safely no-ops. Main sends only an allowlisted command over a narrow channel, preload exposes subscribe/unsubscribe, and `App.tsx` dispatches into the existing `WorkspaceNavigation` handlers exactly once. Do not accept arbitrary channel payloads or call dialog, Repository, project workflow Session, or activation coordinator from `menu.ts`.
+
+Move the current creation form out of `CreativeWorkspaceNavigator` into `ProjectCreateDialog` (or an equivalent central modal editor). The native menu opens that surface; the central no-workspace welcome surface may open the same surface. Opening a creative project or engineering folder may proceed directly to the existing secure selection-token flow. Remove all three application lifecycle buttons from `WorkspaceNavigator` and remove persistent create controls from the bound creative Navigator. A menu-triggered failure preserves the old workspace and reports through the same workflow feedback.
+
+Do not add “最近打开”, “全部保存”, or “关闭工作区” until their repositories/commands exist. Preserve the existing “关闭窗口” item and localized Edit/View/Window/Help menus.
+
+- [ ] **Step 4: Keep one complete Agent surface mounted before and after workspace binding**
+
+Represent Agent availability explicitly as `unbound | loading | ready` in UI props. `WorkspaceShell` always renders the same `AgentConversationView` region, including while Settings or another central surface is open. In `unbound`, render the Conversation header/empty state and the full Composer group with inert disabled controls and a precise disabled reason. Do not instantiate `createAgentConversationBridge`, load a draft, call Agent IPC, or create any Conversation/Run/virtual project ID until a real `workspaceId` exists.
+
+This intentionally supersedes Task 9 Step 7's temporary presentation rule that rendered the Agent only for `workspaceContext.kind !== "none"`; it does not supersede Task 9's no-virtual-Conversation/no-Agent-API invariant.
+
+Keep `WorkbenchMode` and `AgentContextMode` separate. Rename the visible context choices to “写作上下文 / 文件上下文”; creative projects retain both and default to writing, engineering workspaces retain only file context. Switching workbench must not alter an active run, persisted Plan, Conversation sequence, or Context Snapshot. Existing draft normalization for a real engineering workspace continues through the Application draft mutation rather than presentation-only state.
+
+- [ ] **Step 5: Apply the restrained professional visual system**
 
 Keep standard DOM/CSS and the existing second-version IDE structure. Use the current neutral dark/light tokens and restrained teal accent; do not add decorative textures, particles, continuous animation, Canvas text, or a broad “Chinese skin.” Chinese context is expressed through clear Chinese labels and long-form typography, not ornamental chrome.
 
@@ -1807,11 +1871,15 @@ Use these layout constraints:
 
 Use flex/grid children with `min-width: 0`, ellipsis for long project/file names, and overlay menus/drawers that do not resize adjacent rows.
 
-- [ ] **Step 4: Rebuild settings as category navigation plus one form column**
+Match the approved workbench reference at the level of hierarchy and proportion rather than pixel-copying it: native application menu above the custom Title Bar; project identity, workbench selector, Command Center, and layout controls in the Title Bar; Activity Bar + content-only Navigator on the left; tabbed Editor as the largest region; one stable Agent conversation with Composer on the right; Status Bar at the bottom. The bound creative Navigator starts with writing/story tabs and content filtering, not project creation controls.
 
-Keep existing settings categories and behavior, but render the selected category as one main column. Labels occupy their own row or a stable label column; connection test/save/default actions live in a separate action row. Preserve model profiles, model discovery, secrets, plugin settings, Agent usage settings, appearance, and editor preferences. Do not remove a setting to solve overflow.
+- [ ] **Step 6: Rebuild settings as category navigation plus one form column and constrain packaged locales**
 
-- [ ] **Step 5: Verify the requested UI problem list explicitly**
+Keep existing settings categories and behavior, but render Settings inside the central Editor Area rather than replacing the entire Workbench Shell. The selected category uses one main column. Labels occupy their own row or a stable label column; connection test/save/default actions live in a separate action row. Preserve model profiles, model discovery, secrets, plugin settings, Agent usage settings, appearance, editor preferences, the surrounding Navigator/Agent/Status Bar, and the pre-Settings central-surface focus target. Do not remove a setting to solve overflow.
+
+Set Electron Builder `electronLanguages` to `['zh-CN', 'en-US']` and extend packaging tests to prove other `.pak` files are omitted. Treat this only as Chromium/Electron resource trimming. Do not add a UI language selector until a separate i18n contract provides translation catalogs, fallback behavior, an app-local locale preference, and restart semantics for native UI.
+
+- [ ] **Step 7: Verify the requested UI problem list explicitly**
 
 Add named Playwright assertions and screenshots proving:
 
@@ -1822,34 +1890,40 @@ await expect(settingsRoot).toHaveJSProperty(
 );
 await expect(page.locator('[aria-label="会话输入区"]')).toContainText("规划");
 await expect(page.locator('[aria-label="会话输入区"]')).toContainText("模型");
+await expect(page.getByLabel("Agent 会话主视图")).toBeVisible();
+await expect(page.locator('[aria-label="会话输入区"]')).toBeVisible();
+await expect(page.getByRole("button", { name: "启动 Agent 运行" })).toBeDisabled();
+const navigator = page.getByLabel("工作区导航");
+await expect(navigator.getByRole("button", { name: "打开项目" })).toHaveCount(0);
+await expect(navigator.getByRole("button", { name: "创建项目" })).toHaveCount(0);
 await expect(page.locator('[aria-label="编辑区"] .ns-editor-document-bar')).not.toContainText(
   "运行状态"
 );
 await expect(page.locator('[aria-label="状态栏"]')).toBeVisible();
 ```
 
-Capture normal-window and narrow-window evidence for the creative workbench, engineering workbench, settings page, and Agent composer. Store screenshots in Playwright output, not as committed product assets, and attach them to the implementation handoff.
+Use Electron `Menu.getApplicationMenu()` assertions to prove the native “文件” submenu and click routing; page screenshots cannot capture native window chrome and are not a substitute for menu assertions. Capture normal-window and narrow-window evidence for the unbound welcome surface, creative workbench, engineering workbench, settings page, and Agent composer. Store screenshots in Playwright output, not as committed product assets, and attach them to the implementation handoff.
 
-- [ ] **Step 6: Run the focused closeout tests**
+- [ ] **Step 8: Run the focused closeout tests**
 
 Run:
 
 ```powershell
-npm test -- packages/ui/test/settings-and-studio.test.tsx packages/ui/test/workspace-shell.test.tsx packages/ui/test/workspace-navigator.test.tsx packages/ui/test/agent-composer.test.tsx
+npm test -- apps/desktop/test/application-menu.test.ts apps/desktop/test/app-shell-support.test.ts apps/desktop/test/beta-packaging.test.ts packages/ui/test/project-create-dialog.test.tsx packages/ui/test/settings-and-studio.test.tsx packages/ui/test/workspace-shell.test.tsx packages/ui/test/workspace-navigator.test.tsx packages/ui/test/agent-composer.test.tsx packages/ui/test/agent-conversation-view.test.tsx packages/ui/test/agent-conversation-workspace.test.tsx
 npm run build
-npx playwright test apps/desktop/test/settings-editor-chrome.e2e.ts apps/desktop/test/agent-usage-settings.e2e.ts apps/desktop/test/unified-workbench.e2e.ts
+npx playwright test apps/desktop/test/project-workflow.e2e.ts apps/desktop/test/settings-editor-chrome.e2e.ts apps/desktop/test/agent-usage-settings.e2e.ts apps/desktop/test/unified-workbench.e2e.ts
 npm run typecheck
 npm run lint
 ```
 
-Expected: PASS with no horizontal overflow, clipped labels, duplicate Agent controls, dead resize handles, or inaccessible icon buttons.
+Expected: PASS with semantic native-menu routing, no project lifecycle form in Navigator, one stable Agent surface in unbound/bound states, no virtual Conversation/Run, only supported locale packs, and no horizontal overflow, clipped labels, duplicate Agent controls, dead resize handles, or inaccessible icon buttons.
 
-- [ ] **Step 7: Run the complete final verification on the final worktree**
+- [ ] **Step 9: Run the complete final verification on the final worktree**
 
 Run the required focused integration set:
 
 ```powershell
-npm test -- packages/application/test/user-preferences-session.test.ts packages/repository/test/project-workflow.test.ts packages/application/test/project-workflow-session.test.ts packages/application/test/desktop-project-workflow.test.ts packages/application/test/engineering-workspace-session.test.ts packages/repository/test/engineering-workspace-repository.test.ts packages/repository/test/workspace-state-repository.test.ts packages/ui/test/workspace-navigator.test.tsx packages/ui/test/workspace-shell.test.tsx packages/ui/test/agent-composer.test.tsx apps/desktop/test/app-shell-support.test.ts apps/desktop/test/project-workflow-bridge.test.ts apps/desktop/test/project-workflow-ipc.test.ts apps/desktop/test/engineering-workspace-bridge.test.ts apps/desktop/test/workspace-activation.test.ts
+npm test -- packages/application/test/user-preferences-session.test.ts packages/repository/test/project-workflow.test.ts packages/application/test/project-workflow-session.test.ts packages/application/test/desktop-project-workflow.test.ts packages/application/test/engineering-workspace-session.test.ts packages/repository/test/engineering-workspace-repository.test.ts packages/repository/test/workspace-state-repository.test.ts packages/ui/test/project-create-dialog.test.tsx packages/ui/test/workspace-navigator.test.tsx packages/ui/test/workspace-shell.test.tsx packages/ui/test/agent-composer.test.tsx packages/ui/test/agent-conversation-view.test.tsx packages/ui/test/agent-conversation-workspace.test.tsx apps/desktop/test/application-menu.test.ts apps/desktop/test/app-shell-support.test.ts apps/desktop/test/beta-packaging.test.ts apps/desktop/test/project-workflow-bridge.test.ts apps/desktop/test/project-workflow-ipc.test.ts apps/desktop/test/engineering-workspace-bridge.test.ts apps/desktop/test/workspace-activation.test.ts
 ```
 
 Run static and full-unit gates:
@@ -1871,25 +1945,26 @@ npx playwright test apps/desktop/test/project-workflow.e2e.ts apps/desktop/test/
 
 Expected: every command exits 0. If any command fails, identify and fix the root cause, then rerun that command and every later gate on the resulting final worktree. Do not report completion from an earlier intermediate tree.
 
-- [ ] **Step 8: Commit Gate E quality closeout**
+- [ ] **Step 10: Commit Gate E unified-workbench closeout**
 
 ```powershell
-git add packages/ui/src/styles.css packages/ui/src/settings-workspace.tsx packages/ui/src/settings-panel-tabs.tsx packages/ui/src/model-settings-panel.tsx packages/ui/src/agent-usage-settings.tsx packages/ui/src/workspace-shell.tsx packages/ui/src/workspace-status-bar.tsx packages/ui/test/settings-and-studio.test.tsx packages/ui/test/workspace-shell.test.tsx apps/desktop/test/settings-editor-chrome.e2e.ts apps/desktop/test/agent-usage-settings.e2e.ts apps/desktop/test/unified-workbench.e2e.ts
-git commit -m "style: finish unified workbench experience"
+git add packages/application/src/command-registry.ts packages/application/src/ipc-contract.ts packages/application/src/novel-studio-api.ts apps/desktop/src/main/menu.ts apps/desktop/src/main/index.ts apps/desktop/src/preload/index.cts apps/desktop/src/preload/index.ts apps/desktop/src/preload/api.ts apps/desktop/src/renderer/App.tsx apps/desktop/src/renderer/agent-conversation-workspace.ts apps/desktop/src/renderer/renderer-workspace-shell.tsx apps/desktop/src/renderer/workspace-navigation.ts apps/desktop/electron-builder.config.cjs packages/ui/src/project-create-dialog.tsx packages/ui/src/agent-composer.tsx packages/ui/src/agent-conversation-view.tsx packages/ui/src/creative-workspace-navigator.tsx packages/ui/src/workspace-navigator.tsx packages/ui/src/workspace-shell.tsx packages/ui/src/workspace-shell-project-assist.tsx packages/ui/src/workspace-shell-types.ts packages/ui/src/workspace-status-bar.tsx packages/ui/src/settings-workspace.tsx packages/ui/src/settings-panel-tabs.tsx packages/ui/src/model-settings-panel.tsx packages/ui/src/agent-usage-settings.tsx packages/ui/src/styles.css apps/desktop/test/application-menu.test.ts apps/desktop/test/app-shell-support.test.ts apps/desktop/test/beta-packaging.test.ts packages/ui/test/project-create-dialog.test.tsx packages/ui/test/agent-composer.test.tsx packages/ui/test/agent-conversation-view.test.tsx packages/ui/test/agent-conversation-workspace.test.tsx packages/ui/test/workspace-navigator.test.tsx packages/ui/test/settings-and-studio.test.tsx packages/ui/test/workspace-shell.test.tsx apps/desktop/test/project-workflow.e2e.ts apps/desktop/test/settings-editor-chrome.e2e.ts apps/desktop/test/agent-usage-settings.e2e.ts apps/desktop/test/unified-workbench.e2e.ts
+git commit -m "feat: complete the unified workbench experience"
 ```
 
 ## Required Follow-Up Capability Ledger
 
 These are retained product requirements, not deleted ideas. They are intentionally separated because each needs its own data, permission, and test contract.
 
-| Priority | Capability                                                 | Why it matters                                                                       | Required boundary before implementation                                                                                                                         |
-| -------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| P1       | Engineering full-text search + Agent `search_project_text` | Large projects cannot rely on browsing filenames or reading one known file at a time | Search index ownership, ignore rules, result limits, binary exclusion, permission/audit contract, Search Activity and central result navigation                 |
-| P1       | Recent creative projects and engineering workspaces        | Removes repeated directory selection in normal daily use                             | App-local recent-item repository, context kind, canonical root validation, missing-path handling, welcome-page/open-menu UI                                     |
-| P1       | Engineering Prompt/Agent/Workflow Studio                   | Enables reusable code-review, refactor, testing, and multi-step automation presets   | Store config under engineering `stateRoot`, define engineering schemas/defaults, retain Studio version restore, never write Novel assets into `contentRoot`     |
-| P1       | Existing-file create/delete/move/rename                    | Needed for a mature engineering Explorer                                             | Application/Repository commands, canonical path guard, confirmation and conflict rules, Agent Change Set integration, recovery/undo semantics                   |
-| P2       | Controlled command execution and task running              | Needed for full Codex/Cline-style coding loops                                       | Shell-tool specification, per-command approval, cwd/environment isolation, output limits, timeout/cancel, audit and recovery; no unrestricted terminal shortcut |
-| P2/P3    | Git UI, LSP, debugger                                      | Improves engineering productivity after core workspace safety is stable              | Separate provider/process contracts and product prioritization; must not be hidden inside this Navigator redesign                                               |
+| Priority | Capability                                                 | Why it matters                                                                         | Required boundary before implementation                                                                                                                          |
+| -------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P1       | Engineering full-text search + Agent `search_project_text` | Large projects cannot rely on browsing filenames or reading one known file at a time   | Search index ownership, ignore rules, result limits, binary exclusion, permission/audit contract, Search Activity and central result navigation                  |
+| P1       | Recent creative projects and engineering workspaces        | Removes repeated directory selection in normal daily use                               | App-local recent-item repository, context kind, canonical root validation, missing-path handling, welcome-page/open-menu UI                                      |
+| P1       | Engineering Prompt/Agent/Workflow Studio                   | Enables reusable code-review, refactor, testing, and multi-step automation presets     | Store config under engineering `stateRoot`, define engineering schemas/defaults, retain Studio version restore, never write Novel assets into `contentRoot`      |
+| P1       | Existing-file create/delete/move/rename                    | Needed for a mature engineering Explorer                                               | Application/Repository commands, canonical path guard, confirmation and conflict rules, Agent Change Set integration, recovery/undo semantics                    |
+| P2       | Controlled command execution and task running              | Needed for full Codex/Cline-style coding loops                                         | Shell-tool specification, per-command approval, cwd/environment isolation, output limits, timeout/cancel, audit and recovery; no unrestricted terminal shortcut  |
+| P2       | Application UI internationalization and language selection | A real language selector must translate the complete product, not only Electron chrome | App-local locale preference, translation catalogs, fallback/missing-key policy, live-vs-restart behavior, supported-locale packaging, full UI and Electron tests |
+| P2/P3    | Git UI, LSP, debugger                                      | Improves engineering productivity after core workspace safety is stable                | Separate provider/process contracts and product prioritization; must not be hidden inside this Navigator redesign                                                |
 
 ## Completion Definition
 
@@ -1898,7 +1973,10 @@ This plan is complete only when:
 - creating a creative project produces one new child folder and never initializes the selected parent;
 - opening an ordinary engineering folder writes no Novel Studio structure into it;
 - creative projects switch between creative and engineering workbenches without losing drafts, tabs, Conversation, active run, Plan, Change Set, or review state;
+- the Electron native File menu owns create/open project commands, the central welcome surface can repeat them, and Navigator contains no persistent project lifecycle form;
 - the creative Navigator contains only writing/story projections and the engineering Navigator contains only the formal file tree;
-- the application renders one right-side Agent composer in every supported workspace context and no independent robot Activity or second AI textarea;
+- the application renders one stable right-side Agent surface before and after workspace binding; the unbound Composer is visible but inert and creates no virtual Conversation/Run;
+- Workbench and Agent context remain separate state dimensions, with unambiguous “写作上下文 / 文件上下文” labels and unchanged active-run/Plan semantics;
+- packaged Electron locales are limited to `zh-CN` and `en-US`, without claiming application-level i18n;
 - existing selection review, style review, Plan, Diff, Change Set, rollback, recovery, undo, Studio, Search, Timeline, and chapter operations remain reachable where their current data model supports them;
 - all focused, full Vitest, typecheck, lint, build, package, and Electron commands above pass on the final worktree.
