@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { CreativeWorkspaceNavigator } from "../src/creative-workspace-navigator.js";
+import { EngineeringWorkspaceNavigator } from "../src/engineering-workspace-navigator.js";
 import type {
   CreativeWorkspaceNavigatorProps,
   StoryBibleEditorProps
@@ -224,6 +225,48 @@ describe("CreativeWorkspaceNavigator", () => {
 });
 
 describe("WorkspaceNavigator", () => {
+  test("renders a controlled bounded engineering tree without creative asset actions", () => {
+    const html = renderToStaticMarkup(
+      <EngineeringWorkspaceNavigator
+        displayName="工程目录"
+        tree={{
+          nodes: [
+            {
+              id: "folder:src",
+              name: "src",
+              kind: "directory",
+              path: "src",
+              children: [
+                {
+                  id: "file:src/main.ts",
+                  name: "main.ts",
+                  kind: "file",
+                  path: "src/main.ts",
+                  readOnlyReason: "managed file"
+                }
+              ]
+            },
+            { id: "file:README.md", name: "README.md", kind: "file", path: "README.md" }
+          ],
+          truncated: true
+        }}
+        expandedPathIds={["folder:src"]}
+        onExpandedPathIdsChange={() => undefined}
+        onFileOpen={() => undefined}
+        onRefresh={() => undefined}
+      />
+    );
+
+    expect(html).toContain("工程目录");
+    expect(html).toContain("列表已截断，请缩小目录范围");
+    expect(html).toContain("managed file");
+    expect(html).not.toContain("章节");
+    expect(html).not.toContain("故事圣经");
+    expect(html).not.toContain("搜索");
+    expect(html).not.toContain("时间线");
+    expect(html).not.toContain("创作系统");
+  });
+
   test("switches by workspace context and never renders the legacy tree for creative projects", () => {
     const creativeHtml = renderWorkspaceNavigator({ kind: "creativeProject" });
     const engineeringHtml = renderWorkspaceNavigator({ kind: "engineeringWorkspace" });

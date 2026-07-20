@@ -1,4 +1,8 @@
-import type { ActivityId, DesktopShellState } from "@novel-studio/application";
+import type {
+  ActivityId,
+  DesktopShellState,
+  EngineeringWorkspaceSnapshot
+} from "@novel-studio/application";
 import type { WorkbenchMode, WorkspaceContextDto } from "@novel-studio/shared";
 import type {
   AgentConversationMainReview,
@@ -10,6 +14,7 @@ import type {
 } from "@novel-studio/ui";
 
 import type { PlainFileEditorBridge } from "./plain-file-editor-bridge.js";
+import type { EngineeringWorkspaceBridge } from "./engineering-workspace-bridge.js";
 import type { ChapterEditorBridge } from "./chapter-editor-bridge.js";
 import type { ProjectWorkflowBridge } from "./project-workflow-bridge.js";
 import type { StoryBibleBridge } from "./story-bible-bridge.js";
@@ -41,6 +46,11 @@ export interface WorkspaceNavigationDependencies {
   readonly setFileEditor: (next: PlainFileEditorProps | undefined) => void;
   readonly setStoryBibleEditor: (next: StoryBibleEditorProps | undefined) => void;
   readonly setMainReview: (review: AgentConversationMainReview) => void;
+  readonly engineeringWorkspaceBridge?: Pick<
+    EngineeringWorkspaceBridge,
+    "attachCreativeProject"
+  > | undefined;
+  readonly setEngineeringWorkspace?: ((workspace: EngineeringWorkspaceSnapshot) => void) | undefined;
   readonly openCreativeProject: () => void;
   readonly openEngineeringWorkspace: () => void;
   readonly createCreativeProject: () => void;
@@ -54,6 +64,26 @@ export function createWorkspaceNavigation(
     selectWorkbench(mode) {
       if (mode === "creative" && !hasCreativeContext(dependencies.getWorkspaceContext())) {
         dependencies.onNavigationFeedback?.("当前工程工作区不提供创作工作台。请先打开创作项目。");
+        return;
+      }
+
+      if (
+        mode === "engineering" &&
+        dependencies.getWorkspaceContext().kind !== "engineeringWorkspace" &&
+        dependencies.engineeringWorkspaceBridge !== undefined
+      ) {
+        void dependencies.engineeringWorkspaceBridge.attachCreativeProject().then(
+          (next) => {
+            if (next.status !== "ready" || next.workspace === undefined) {
+              throw new Error(next.feedback?.message ?? "无法载入创作项目的工程视图。");
+            }
+            dependencies.setEngineeringWorkspace?.(next.workspace);
+            dependencies.setShellState((current) => ({ ...current, workbenchMode: mode }));
+          },
+          (error: unknown) => {
+            dependencies.onNavigationFeedback?.(toErrorMessage(error));
+          }
+        );
         return;
       }
 

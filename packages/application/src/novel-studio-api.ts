@@ -183,6 +183,9 @@ export interface NovelStudioApi {
     openEngineeringWorkspace(
       selectionId: string
     ): Promise<Result<WorkspaceActivationDto, UnifiedError>>;
+    attachActiveCreativeProjectEngineeringWorkspace(): Promise<
+      Result<EngineeringWorkspaceSnapshot, UnifiedError>
+    >;
     refreshEngineeringTree(): Promise<Result<EngineeringWorkspaceSnapshot, UnifiedError>>;
     readTextFile(path: string): Promise<Result<EngineeringTextFileSnapshot, UnifiedError>>;
     saveTextFile(input: {

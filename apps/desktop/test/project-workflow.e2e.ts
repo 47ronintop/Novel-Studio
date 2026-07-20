@@ -198,7 +198,10 @@ test("reviews and applies an autosave recovery draft from disk", async () => {
     await page.getByLabel("项目文件夹名称").fill("Recovery Smoke");
     await page.getByRole("button", { name: "选择项目父文件夹" }).click();
     await page.getByRole("button", { name: "创建项目" }).click();
+    await expect(page.getByText("Recovery Smoke")).toBeVisible();
     await page.getByRole("button", { name: "新建章节" }).click();
+    await expect(page.getByRole("tab", { name: "Untitled Chapter 1.md" })).toBeVisible();
+    await expect(chapterBody(page)).toBeVisible();
 
     await replaceChapterBody(page, "Persisted baseline.");
     const saveButton = page.getByRole("button", { name: "保存当前文档" });

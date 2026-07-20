@@ -3,6 +3,7 @@ import type {
   ApplicationCommand,
   ApplicationCommandId,
   DesktopShellState,
+  EngineeringWorkspaceSnapshot,
   ProjectSearchResultItem,
   UserPreferencesSaveInput
 } from "@novel-studio/application";
@@ -47,7 +48,8 @@ import {
   rendererCommands,
   rendererShellState,
   resolveActivityTransition,
-  shellPreferencesFromState
+  shellPreferencesFromState,
+  ensureCreativeWorkspaceContext
 } from "./app-shell-support.js";
 import { useRendererAppEffects } from "./renderer-app-effects.js";
 import { RendererWorkspaceShell } from "./renderer-workspace-shell.js";
@@ -94,6 +96,7 @@ export function App() {
   const [commands, setCommands] = useState<readonly ApplicationCommand[]>(rendererCommands);
   const [chapterEditor, setChapterEditor] = useState<ChapterEditorProps | undefined>();
   const [fileEditor, setFileEditor] = useState<PlainFileEditorProps | undefined>();
+  const [engineeringWorkspace, setEngineeringWorkspace] = useState<EngineeringWorkspaceSnapshot | undefined>(() => engineeringWorkspaceBridge?.getProps().workspace);
   const [chapterSelection, setChapterSelection] = useState<ChapterEditorSelection | undefined>();
   const [projectWorkflow, setProjectWorkflow] = useState(() => projectWorkflowBridge?.getProps());
   const [projectSearch, setProjectSearch] = useState(() => projectSearchBridge?.getProps());
@@ -154,6 +157,12 @@ export function App() {
       setPendingMainReview(undefined);
     }
   }, [agentConversationWorkspacePresentation.shouldClearPendingMainReview]);
+
+  useEffect(() => {
+    const next = ensureCreativeWorkspaceContext(shellState, projectWorkflow?.projectId);
+    if (next !== shellState) setShellState(next);
+  }, [projectWorkflow?.projectId, shellState.projectTitle, shellState.workspaceContext.kind]);
+  useEffect(() => engineeringWorkspaceBridge?.subscribe((next) => setEngineeringWorkspace(next.workspace)), [engineeringWorkspaceBridge]);
 
   useLayoutEffect(() => {
     if (agentRunBridge === undefined) {
@@ -341,8 +350,11 @@ export function App() {
     },
     [api]
   );
-  const { handleCreativeNavigatorModeSelect, handleNavigatorExpandedSectionIdsChange } =
-    useShellPreferenceActions(setShellState, persistUserPreferences);
+  const {
+    handleCreativeNavigatorModeSelect,
+    handleNavigatorExpandedSectionIdsChange,
+    handleEngineeringExpandedPathIdsChange
+  } = useShellPreferenceActions(setShellState, persistUserPreferences);
   const handleOpenEngineeringWorkspace = useCallback(() => {
     if (api === undefined || engineeringWorkspaceBridge === undefined) {
       return;
@@ -469,19 +481,23 @@ export function App() {
       return {
         ...nextFileEditor,
         editorPreferences,
-        onContentChange: (content: string) => {
-          const updated = plainFileBridge?.updateContent(content);
-          setFileEditor(decorateFileEditor(updated));
-        },
-        onSave: () => {
-          const saving = plainFileBridge?.beginSave();
-          if (saving !== undefined) {
-            setFileEditor(decorateFileEditor(saving));
-          }
-          void plainFileBridge?.save().then((saved) => {
-            setFileEditor(decorateFileEditor(saved));
-          });
-        },
+        ...(nextFileEditor.readOnlyReason === undefined
+          ? {
+              onContentChange: (content: string) => {
+                const updated = plainFileBridge?.updateContent(content);
+                setFileEditor(decorateFileEditor(updated));
+              },
+              onSave: () => {
+                const saving = plainFileBridge?.beginSave();
+                if (saving !== undefined) {
+                  setFileEditor(decorateFileEditor(saving));
+                }
+                void plainFileBridge?.save().then((saved) => {
+                  setFileEditor(decorateFileEditor(saved));
+                });
+              }
+            }
+          : {}),
         onClose: () => {
           plainFileBridge?.clear();
           setFileEditor(undefined);
@@ -534,6 +550,8 @@ export function App() {
     openCreativeProject: handleOpenProject,
     openEngineeringWorkspace: handleOpenEngineeringWorkspace,
     createCreativeProject: handleCreateProject,
+    engineeringWorkspaceBridge,
+    setEngineeringWorkspace,
     onNavigationFeedback: (message) =>
       setProjectWorkflow((current) =>
         current === undefined ? current : { ...current, feedback: { kind: "info", message } }
@@ -1008,6 +1026,11 @@ export function App() {
       onStudioRestoreVersion={handleStudioRestoreVersion}
       onStoryBibleDraftChange={handleStoryBibleDraftChange}
       onCreativeNavigatorModeSelect={handleCreativeNavigatorModeSelect}
+      engineeringWorkspace={engineeringWorkspace}
+      onEngineeringExpandedPathIdsChange={handleEngineeringExpandedPathIdsChange}
+      onRefreshEngineeringTree={() => void engineeringWorkspaceBridge?.refreshEngineeringTree()}
+      onWorkbenchSelect={workspaceNavigation.selectWorkbench}
+      onOpenEngineeringWorkspace={handleOpenEngineeringWorkspace}
       onSaveStoryBibleDraft={handleSaveStoryBibleDraft}
       onCommandExecute={handleCommandExecute}
       onCommandPaletteActiveCommandChange={handleCommandPaletteActiveCommandChange}

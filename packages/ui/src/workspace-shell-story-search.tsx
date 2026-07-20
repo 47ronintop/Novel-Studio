@@ -106,7 +106,7 @@ export function StoryBibleEditorView({ editor }: { readonly editor: StoryBibleEd
   const visibleEntries = editor.entries.filter((entry) => entry.kind === editor.activeKind);
 
   return (
-    <section className="ns-story-editor" aria-label="故事圣经编辑器">
+    <section className="ns-story-editor" aria-label="故事圣经">
       <div className="ns-story-editor-header">
         <div>
           <h1>故事圣经</h1>
@@ -173,6 +173,7 @@ export function StoryBibleEditorView({ editor }: { readonly editor: StoryBibleEd
         </aside>
 
         <form
+          aria-label="故事圣经编辑器"
           className="ns-story-editor-form"
           onSubmit={(event) => {
             event.preventDefault();

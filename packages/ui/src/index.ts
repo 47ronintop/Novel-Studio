@@ -93,6 +93,12 @@ export { DiffReview } from "./diff-review.js";
 export { PlanArtifactReview } from "./plan-artifact-review.js";
 export type { PlanArtifactReviewProps } from "./plan-artifact-review.js";
 export { CreativeWorkspaceNavigator } from "./creative-workspace-navigator.js";
+export { EngineeringWorkspaceNavigator } from "./engineering-workspace-navigator.js";
+export type { EngineeringWorkspaceNavigatorProps as FormalEngineeringWorkspaceNavigatorProps } from "./engineering-workspace-navigator.js";
+export { PlainFileConflictReview } from "./plain-file-conflict-review.js";
+export type { PlainFileConflictReviewProps } from "./plain-file-conflict-review.js";
+export { WorkbenchSwitcher } from "./workbench-switcher.js";
+export type { WorkbenchSwitcherProps } from "./workbench-switcher.js";
 export { WorkspaceNavigator } from "./workspace-navigator.js";
 export type {
   EmptyWorkspaceNavigatorProps,

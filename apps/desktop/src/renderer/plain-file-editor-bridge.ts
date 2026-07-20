@@ -16,6 +16,7 @@ interface PlainFileEditorState {
   readonly content: string;
   readonly persistedContent: string;
   readonly checksum: string;
+  readonly readOnlyReason?: string;
   readonly saveStatus: PlainFileEditorProps["saveStatus"];
   readonly feedback?: PlainFileEditorProps["feedback"];
   readonly conflict?:
@@ -44,6 +45,9 @@ export function createPlainFileEditorBridge(api: NovelStudioApi): PlainFileEdito
         content: read.value.content,
         persistedContent: read.value.content,
         checksum: read.value.checksum,
+        ...(read.value.readOnlyReason === undefined
+          ? {}
+          : { readOnlyReason: read.value.readOnlyReason }),
         saveStatus: "Saved"
       };
       return toRequiredProps();
@@ -52,6 +56,7 @@ export function createPlainFileEditorBridge(api: NovelStudioApi): PlainFileEdito
       if (state === undefined) {
         return undefined;
       }
+      if (state.readOnlyReason !== undefined) return toProps();
 
       state = {
         ...state,
@@ -68,6 +73,7 @@ export function createPlainFileEditorBridge(api: NovelStudioApi): PlainFileEdito
       if (state === undefined) {
         return undefined;
       }
+      if (state.readOnlyReason !== undefined) return toProps();
 
       state = {
         ...state,
@@ -79,6 +85,7 @@ export function createPlainFileEditorBridge(api: NovelStudioApi): PlainFileEdito
       if (state === undefined) {
         return undefined;
       }
+      if (state.readOnlyReason !== undefined) return toProps();
 
       const savingState = state;
       const written = await api.workspace.saveTextFile({
@@ -149,6 +156,7 @@ export function createPlainFileEditorBridge(api: NovelStudioApi): PlainFileEdito
       content: state.content,
       dirty: state.content !== state.persistedContent,
       saveStatus: state.saveStatus,
+      ...(state.readOnlyReason === undefined ? {} : { readOnlyReason: state.readOnlyReason }),
       ...(state.feedback === undefined ? {} : { feedback: state.feedback }),
       ...(state.conflict === undefined
         ? {}

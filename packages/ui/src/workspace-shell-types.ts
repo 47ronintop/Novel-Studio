@@ -21,7 +21,8 @@ import type {
 import type {
   ChapterSummary,
   CreativeNavigatorMode,
-  UserAppearancePreferences
+  UserAppearancePreferences,
+  WorkbenchMode
 } from "@novel-studio/shared";
 import type { ChapterEditorProps } from "./chapter-editor.js";
 import type { CommandPaletteFeedback } from "./command-palette.js";
@@ -30,6 +31,7 @@ import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
 import type { EditorPreferences } from "./editor-toolbar.js";
 import type { ModelSettingsPanelProps } from "./model-settings-panel.js";
 import type { PlanArtifactReviewProps } from "./plan-artifact-review.js";
+import type { EngineeringWorkspaceNavigatorProps } from "./engineering-workspace-navigator.js";
 
 export interface WorkspaceShellProps {
   readonly appearancePreferences?: UserAppearancePreferences | undefined;
@@ -50,6 +52,7 @@ export interface WorkspaceShellProps {
   readonly storyBible?: StoryBibleSummaryProps;
   readonly storyBibleEditor?: StoryBibleEditorProps;
   readonly creativeNavigator?: CreativeWorkspaceNavigatorProps;
+  readonly engineeringNavigator?: EngineeringWorkspaceNavigatorProps;
   readonly onboarding?: OnboardingProps;
   readonly onCommandPaletteOpen?: () => void;
   readonly onCommandPaletteQueryChange?: ((query: string) => void) | undefined;
@@ -60,6 +63,8 @@ export interface WorkspaceShellProps {
   readonly onSearchResultOpen?: ((result: ProjectSearchResultItem) => void) | undefined;
   readonly onTimelineEntryOpen?: ((entryId: string) => void) | undefined;
   readonly onActivitySelect?: (activityId: ActivityId) => void;
+  readonly onWorkbenchSelect?: (mode: WorkbenchMode) => void;
+  readonly onOpenEngineeringWorkspace?: () => void;
   readonly onSettingsClose?: (() => void) | undefined;
   readonly navigatorSearchQuery?: string | undefined;
   readonly onNavigatorSearchQueryChange?: ((query: string) => void) | undefined;
@@ -69,6 +74,7 @@ export interface WorkspaceShellProps {
 
 export interface CreativeWorkspaceNavigatorProps {
   readonly projectTitle: string;
+  readonly projectWorkflow?: ProjectWorkflowProps | undefined;
   readonly mode: CreativeNavigatorMode;
   readonly searchQuery: string;
   readonly chapters: readonly ChapterSummary[];
@@ -140,6 +146,7 @@ export interface PlainFileEditorProps {
   readonly content: string;
   readonly dirty: boolean;
   readonly saveStatus: "Saved" | "Saving" | "Unsaved";
+  readonly readOnlyReason?: string;
   readonly feedback?: ProjectWorkflowFeedback | undefined;
   readonly conflict?: {
     readonly diskContent: string;

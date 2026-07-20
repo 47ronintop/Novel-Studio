@@ -18,13 +18,28 @@ export function WorkspaceStatusBar({
     return null;
   }
 
+  if (fileEditor !== undefined) {
+    return (
+      <footer aria-label="状态栏" className="ns-status-bar" data-region="status-bar">
+        <div className="ns-status-bar-left">
+          <span>{documentSaveStatusLabel(fileEditor.saveStatus)}</span>
+          {fileEditor.readOnlyReason === undefined ? null : <span>只读</span>}
+        </div>
+        <div className="ns-status-bar-right">
+          <span>{formatDocumentCursorLabel(body, fileSelection)}</span>
+          <span>UTF-8</span>
+          <span>{body.includes("\r\n") ? "CRLF" : "LF"}</span>
+          <span>{fileModeLabel(fileEditor.path)}</span>
+        </div>
+      </footer>
+    );
+  }
+
   const metrics = calculateWritingMetrics(body);
-  const saveStatus = fileEditor?.saveStatus ?? chapterEditor?.saveStatus ?? "Saved";
+  const saveStatus = chapterEditor?.saveStatus ?? "Saved";
   const cursorPositionLabel =
-    fileEditor === undefined
-      ? (chapterEditor?.runtime?.cursorPositionLabel ??
-        formatDocumentCursorLabel(body, { anchor: 0, head: 0 }))
-      : formatDocumentCursorLabel(body, fileSelection);
+    chapterEditor?.runtime?.cursorPositionLabel ??
+    formatDocumentCursorLabel(body, { anchor: 0, head: 0 });
   const documentMode = chapterEditor?.runtime?.documentMode ?? "Markdown";
 
   return (
@@ -40,6 +55,28 @@ export function WorkspaceStatusBar({
       </div>
     </footer>
   );
+}
+
+function fileModeLabel(path: string): string {
+  const extension = path.split(".").at(-1)?.toLocaleLowerCase();
+  switch (extension) {
+    case "ts":
+    case "tsx":
+      return "TypeScript";
+    case "js":
+    case "jsx":
+      return "JavaScript";
+    case "json":
+      return "JSON";
+    case "md":
+      return "Markdown";
+    case "css":
+      return "CSS";
+    case "html":
+      return "HTML";
+    default:
+      return extension === undefined ? "Text" : extension.toUpperCase();
+  }
 }
 
 export function formatDocumentCursorLabel(

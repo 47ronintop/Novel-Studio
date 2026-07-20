@@ -252,6 +252,9 @@ export interface DesktopApplication {
   applyRecoveryDraft(sessionId: string): Promise<Result<ProjectRecoveryApplyResult, UnifiedError>>;
   discardRecoveryDraft(sessionId: string): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   refreshEngineeringTree(): Promise<Result<EngineeringWorkspaceSnapshot, UnifiedError>>;
+  attachActiveCreativeProjectEngineeringWorkspace(): Promise<
+    Result<EngineeringWorkspaceSnapshot, UnifiedError>
+  >;
   readEngineeringTextFile(path: string): Promise<Result<EngineeringTextFileSnapshot, UnifiedError>>;
   saveEngineeringTextFile(input: {
     readonly path: string;
@@ -391,6 +394,7 @@ export function createDesktopApplication(
   const chapterEditorSession = options.chapterEditorSession;
   let activeProjectWorkspaceSession = options.projectWorkspaceSession;
   let activeEngineeringWorkspaceSession = options.engineeringWorkspaceSession;
+  let attachedCreativeEngineeringWorkspaceSession: EngineeringWorkspaceSession | undefined;
   const activationRecords = new Map<string, PreparedWorkspaceActivationRecord>();
   const projectCreationRepository = options.projectCreationRepository;
   let activationSequence = 0;
@@ -442,6 +446,10 @@ export function createDesktopApplication(
         firstError === undefined
       ) {
         firstError = releasedEngineering.error;
+      }
+      const releasedAttached = await attachedCreativeEngineeringWorkspaceSession?.releaseWorkspaceLock();
+      if (releasedAttached !== undefined && !releasedAttached.ok && firstError === undefined) {
+        firstError = releasedAttached.error;
       }
       return firstError === undefined ? ok(undefined) : err(firstError);
     },
@@ -537,6 +545,7 @@ export function createDesktopApplication(
         activeProjectWorkspaceSession = undefined;
         activeEngineeringWorkspaceSession = record.engineeringSession;
       }
+      attachedCreativeEngineeringWorkspaceSession = undefined;
       const dto = toWorkspaceActivationDto(record.activation);
       shellState = {
         ...shellState,
@@ -660,22 +669,50 @@ export function createDesktopApplication(
       return activeProjectWorkspaceSession.discardRecoveryDraft(sessionId);
     },
     async refreshEngineeringTree() {
-      if (activeEngineeringWorkspaceSession === undefined) {
+      const session = activeEngineeringWorkspaceSession ?? attachedCreativeEngineeringWorkspaceSession;
+      if (session === undefined) {
         return engineeringWorkspaceUnavailable();
       }
-      return activeEngineeringWorkspaceSession.refreshWorkspace();
+      return session.refreshWorkspace();
+    },
+    async attachActiveCreativeProjectEngineeringWorkspace() {
+      if (activeProjectWorkspaceSession === undefined) {
+        return engineeringWorkspaceUnavailable();
+      }
+
+      const snapshot = activeProjectWorkspaceSession.getSnapshot();
+      if (snapshot === undefined) {
+        return engineeringWorkspaceUnavailable();
+      }
+
+      const attached = attachedCreativeEngineeringWorkspaceSession;
+      if (attached !== undefined && attached.getActivation()?.context.workspaceId === snapshot.project.projectId) {
+        return attached.refreshWorkspace();
+      }
+
+      const session = createEngineeringCandidateSession();
+      if (session === undefined) return engineeringWorkspaceUnavailable();
+      const opened = await session.attachCreativeProject({
+        projectId: snapshot.project.projectId,
+        projectRoot: snapshot.projectRoot
+      });
+      if (!opened.ok) return opened;
+      attachedCreativeEngineeringWorkspaceSession = session;
+      return ok(opened.value.snapshot);
     },
     async readEngineeringTextFile(path) {
-      if (activeEngineeringWorkspaceSession === undefined) {
+      const session = activeEngineeringWorkspaceSession ?? attachedCreativeEngineeringWorkspaceSession;
+      if (session === undefined) {
         return engineeringWorkspaceUnavailable();
       }
-      return activeEngineeringWorkspaceSession.readTextFile(path);
+      return session.readTextFile(path);
     },
     async saveEngineeringTextFile(input) {
-      if (activeEngineeringWorkspaceSession === undefined) {
+      const session = activeEngineeringWorkspaceSession ?? attachedCreativeEngineeringWorkspaceSession;
+      if (session === undefined) {
         return engineeringWorkspaceUnavailable();
       }
-      return activeEngineeringWorkspaceSession.saveTextFile(input);
+      return session.saveTextFile(input);
     },
     async rebuildProjectSearchIndex() {
       const searchSession = getProjectSearchSession();

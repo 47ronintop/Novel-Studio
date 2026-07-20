@@ -22,6 +22,7 @@ import type {
   WorkspaceShellProps
 } from "@novel-studio/ui";
 import { WorkspaceShell } from "@novel-studio/ui";
+import type { EngineeringWorkspaceSnapshot } from "@novel-studio/application";
 
 import type { WorkspaceNavigation } from "./workspace-navigation.js";
 
@@ -35,6 +36,7 @@ export interface RendererWorkspaceShellProps {
   readonly studio: ConfigStudioPanelProps | undefined;
   readonly chapterEditor: ChapterEditorProps | undefined;
   readonly fileEditor: PlainFileEditorProps | undefined;
+  readonly engineeringWorkspace: EngineeringWorkspaceSnapshot | undefined;
   readonly onboarding: WorkspaceShellProps["onboarding"];
   readonly storyBible: StoryBibleSummaryProps | undefined;
   readonly storyBibleEditor: StoryBibleEditorProps | undefined;
@@ -104,6 +106,12 @@ export interface RendererWorkspaceShellProps {
   readonly onStudioRestoreVersion: NonNullable<ConfigStudioPanelProps["onRestoreVersion"]>;
   readonly onStoryBibleDraftChange: StoryBibleEditorProps["onDraftChange"];
   readonly onCreativeNavigatorModeSelect: (mode: CreativeNavigatorMode) => void;
+  readonly onEngineeringExpandedPathIdsChange: (pathIds: readonly string[]) => void;
+  readonly onRefreshEngineeringTree: () => void;
+  readonly onWorkbenchSelect: NonNullable<WorkspaceShellProps["onWorkbenchSelect"]>;
+  readonly onOpenEngineeringWorkspace: NonNullable<
+    WorkspaceShellProps["onOpenEngineeringWorkspace"]
+  >;
   readonly onSaveStoryBibleDraft: StoryBibleEditorProps["onSave"];
   readonly onCommandExecute: NonNullable<WorkspaceShellProps["onCommandExecute"]>;
   readonly onCommandPaletteActiveCommandChange: NonNullable<
@@ -171,6 +179,7 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
     storyBibleEditor !== undefined
       ? ({
           projectTitle: props.shellState.workspaceContext.displayName,
+          projectWorkflow,
           mode: props.shellState.creativeNavigatorMode,
           searchQuery: props.navigatorSearchQuery,
           chapters: projectWorkflow.chapters,
@@ -193,11 +202,28 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
           onStoryEntryCreate: props.navigation.createStoryEntry
         } satisfies CreativeWorkspaceNavigatorProps)
       : undefined;
+  const engineeringNavigator =
+    props.engineeringWorkspace === undefined
+      ? undefined
+      : {
+          displayName: props.engineeringWorkspace.displayName,
+          tree: props.engineeringWorkspace.tree,
+          expandedPathIds: props.shellState.engineeringExpandedPathIds,
+          ...(props.fileEditor?.path === undefined
+            ? {}
+            : { activeFilePath: props.fileEditor.path }),
+          onExpandedPathIdsChange: props.onEngineeringExpandedPathIdsChange,
+          onFileOpen: (path: string) => {
+            void props.navigation.navigateToFile(path);
+          },
+          onRefresh: props.onRefreshEngineeringTree
+        };
 
   return (
     <WorkspaceShell
       appearancePreferences={props.appearancePreferences}
       {...(creativeNavigator === undefined ? {} : { creativeNavigator })}
+      {...(engineeringNavigator === undefined ? {} : { engineeringNavigator })}
       {...(props.aiWritingWorkflow === undefined ||
       (props.shellState.activeActivity === "ai" && props.agentConversationWorkspace !== undefined)
         ? {}
@@ -289,6 +315,8 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
       onSearchResultOpen={props.onSearchResultOpen}
       onTimelineEntryOpen={props.navigation.navigateToStoryEntry}
       onActivitySelect={props.onActivitySelect}
+      onWorkbenchSelect={props.onWorkbenchSelect}
+      onOpenEngineeringWorkspace={props.onOpenEngineeringWorkspace}
       onSettingsClose={props.onSettingsClose}
       navigatorSearchQuery={props.navigatorSearchQuery}
       onNavigatorSearchQueryChange={props.onNavigatorSearchQueryChange}

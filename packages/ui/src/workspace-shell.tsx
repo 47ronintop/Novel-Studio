@@ -9,17 +9,10 @@ import type { ChapterEditorProps } from "./chapter-editor.js";
 import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
 import { DEFAULT_EDITOR_PREFERENCES, editorFontFamilyValue } from "./editor-toolbar.js";
 import {
-  Bot,
-  Boxes,
-  Clock3,
   FilePlus,
-  FolderTree,
-  BookOpen,
   Maximize2,
   PanelBottom,
-  PanelRight,
-  Search,
-  Settings
+  PanelRight
 } from "lucide-react";
 
 import { ChapterEditor } from "./chapter-editor.js";
@@ -48,6 +41,9 @@ import { WorkspaceShellNavigator } from "./workspace-shell-navigator.js";
 import { DiffReview } from "./diff-review.js";
 import { RollbackReview } from "./change-set-review.js";
 import { WorkspaceStatusBar } from "./workspace-status-bar.js";
+import { WorkbenchSwitcher } from "./workbench-switcher.js";
+import { PlainFileConflictReview } from "./plain-file-conflict-review.js";
+import { WorkspaceActivityBar } from "./workspace-shell-activity.js";
 import type {
   AiWritingWorkflowProps,
   OnboardingProps,
@@ -57,16 +53,6 @@ import type {
   StoryBibleEditorProps,
   WorkspaceShellProps
 } from "./workspace-shell-types.js";
-
-const activities = [
-  { id: "workspace", label: "工作区", icon: FolderTree },
-  { id: "search", label: "搜索", icon: Search },
-  { id: "storyBible", label: "故事圣经", icon: BookOpen },
-  { id: "timeline", label: "时间线", icon: Clock3 },
-  { id: "ai", label: "AI 工作流", icon: Bot },
-  { id: "studio", label: "创作系统", icon: Boxes },
-  { id: "settings", label: "设置", icon: Settings }
-] as const;
 
 const bottomPanelLabels: ReadonlyMap<string, string> = new Map([
   ["Workflow Run", "工作流运行"],
@@ -104,6 +90,7 @@ function WorkspaceShellContent({
   storyBible,
   storyBibleEditor,
   creativeNavigator,
+  engineeringNavigator,
   fileEditor,
   onboarding,
   onCommandPaletteOpen,
@@ -117,7 +104,9 @@ function WorkspaceShellContent({
   onSettingsClose,
   navigatorSearchQuery,
   onNavigatorSearchQueryChange,
-  onNavigatorExpandedSectionIdsChange
+  onNavigatorExpandedSectionIdsChange,
+  onWorkbenchSelect,
+  onOpenEngineeringWorkspace
 }: WorkspaceShellProps) {
   const [fileSelection, setFileSelection] = useState({ anchor: 0, head: 0 });
   const appearance = appearancePreferences ?? {
@@ -138,7 +127,8 @@ function WorkspaceShellContent({
   const workspaceGridStyle = {
     "--ns-navigator-width":
       focusMode || shellState.navigatorCollapsed ? "0px" : `${workspaceLayout.navigatorWidth}px`,
-    "--ns-ai-panel-width": focusMode ? "0px" : `${workspaceLayout.inspectorWidth}px`,
+    "--ns-ai-panel-width":
+      focusMode || shellState.inspectorCollapsed ? "0px" : `${workspaceLayout.inspectorWidth}px`,
     "--ns-bottom-panel-height":
       !focusMode && shellState.bottomPanelVisible ? `${workspaceLayout.bottomPanelHeight}px` : "0px"
   } as CSSProperties;
@@ -161,6 +151,7 @@ function WorkspaceShellContent({
           <span className="ns-project-title">{shellState.projectTitle}</span>
           <span className="ns-save-status">{saveStatusLabel(shellState.saveStatus)}</span>
         </div>
+        <WorkbenchSwitcher mode={shellState.workbenchMode} {...(shellState.workspaceContext.kind === "engineeringWorkspace" ? { creativeDisabledReason: "当前工作区不是创作项目。" } : {})} onSelect={onWorkbenchSelect ?? (() => undefined)} />
         <button
           aria-label="打开命令面板"
           className="ns-command-button"
@@ -217,34 +208,11 @@ function WorkspaceShellContent({
             data-split-view={workspaceLayout.splitView}
             style={workspaceGridStyle}
           >
-            <aside
-              className="ns-activity-bar"
-              data-focus-hidden={focusMode}
-              data-region="activity-bar"
-              aria-label="活动栏"
-            >
-              {activities.map((activity) => {
-                const Icon = activity.icon;
-                const selected = activity.id === shellState.activeActivity;
-
-                return (
-                  <button
-                    {...(selected ? { "aria-current": "page" as const } : {})}
-                    aria-label={activity.label}
-                    className="ns-activity-button"
-                    data-activity-id={activity.id}
-                    data-focus-order={selected ? "2" : undefined}
-                    data-selected={selected}
-                    key={activity.id}
-                    onClick={() => onActivitySelect?.(activity.id)}
-                    title={activity.label}
-                    type="button"
-                  >
-                    <Icon aria-hidden="true" size={18} />
-                  </button>
-                );
-              })}
-            </aside>
+            <WorkspaceActivityBar
+              focusHidden={focusMode}
+              onActivitySelect={onActivitySelect}
+              shellState={shellState}
+            />
 
             {shellState.activeActivity === "ai" && agentConversationWorkspace !== undefined ? (
               <div
@@ -258,6 +226,8 @@ function WorkspaceShellContent({
               <WorkspaceShellNavigator
                 collapsed={focusMode || shellState.navigatorCollapsed}
                 creative={creativeNavigator}
+                engineeringNavigator={engineeringNavigator}
+                onOpenEngineeringWorkspace={onOpenEngineeringWorkspace}
                 focusHidden={focusMode}
                 navigatorSearchQuery={navigatorSearchQuery}
                 onActivitySelect={onActivitySelect}
@@ -323,17 +293,19 @@ function WorkspaceShellContent({
               )}
             </main>
 
-            <div
-              aria-label="AI panel resize handle"
-              aria-orientation="vertical"
-              aria-valuemax={520}
-              aria-valuemin={280}
-              aria-valuenow={workspaceLayout.inspectorWidth}
-              className="ns-resize-handle ns-resize-handle-ai"
-              data-focus-hidden={focusMode}
-              onPointerDown={createPanelResizeHandler("ai")}
-              role="separator"
-            />
+            {shellState.inspectorCollapsed ? null : (
+              <div
+                aria-label="AI panel resize handle"
+                aria-orientation="vertical"
+                aria-valuemax={520}
+                aria-valuemin={280}
+                aria-valuenow={workspaceLayout.inspectorWidth}
+                className="ns-resize-handle ns-resize-handle-ai"
+                data-focus-hidden={focusMode}
+                onPointerDown={createPanelResizeHandler("ai")}
+                role="separator"
+              />
+            )}
 
             <aside
               aria-label="AI 对话面板"
@@ -646,7 +618,7 @@ function WorkspaceEditorSurface({
   const activeDirty = fileEditor?.dirty ?? chapterEditor?.dirty ?? false;
   const activeSaving =
     fileEditor?.saveStatus === "Saving" || chapterEditor?.saveStatus === "Saving";
-  const activeSave = fileEditor?.onSave ?? chapterEditor?.onSave;
+  const activeSave = fileEditor?.conflict === undefined ? (fileEditor?.onSave ?? chapterEditor?.onSave) : undefined;
   const activeFocusModeToggle = fileEditor?.onFocusModeToggle ?? chapterEditor?.onFocusModeToggle;
   const selectionAiPreviewCommand = chapterEditor?.runtime?.selectionAiPreviewCommand;
   const selectionAction =
@@ -681,7 +653,14 @@ function WorkspaceEditorSurface({
         <section className="ns-editor-surface" aria-label="章节编辑器表面">
           <OnboardingQuickStart onboarding={onboarding} />
           <AutosaveRecoveryNotice projectWorkflow={projectWorkflow} />
-          {fileEditor ? (
+          {fileEditor?.conflict !== undefined ? (
+            <PlainFileConflictReview
+              fileName={fileEditor.fileName}
+              conflict={fileEditor.conflict}
+              onReloadFromDisk={fileEditor.onReloadFromDisk ?? (() => undefined)}
+              onKeepDraft={fileEditor.onKeepDraft ?? (() => undefined)}
+            />
+          ) : fileEditor ? (
             <PlainFileEditor
               editor={fileEditor}
               findMode={findMode}
@@ -769,6 +748,11 @@ function PlainFileEditor({
       {editor.feedback === undefined ? null : (
         <p className="ns-project-feedback" data-kind={editor.feedback.kind} role="status">
           {editor.feedback.message}
+        </p>
+      )}
+      {editor.readOnlyReason === undefined ? null : (
+        <p className="ns-file-read-only-reason" role="status">
+          只读：{editor.readOnlyReason}
         </p>
       )}
       {editor.conflict === undefined ? null : (

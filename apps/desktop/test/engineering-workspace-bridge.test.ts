@@ -39,6 +39,23 @@ describe("engineering workspace bridge", () => {
     ]);
     expect(calls.at(-1)).toEqual(["refresh"]);
   });
+
+  test("attaches the active creative project without sending a project root to the renderer", async () => {
+    const calls: unknown[] = [];
+    const bridge = createEngineeringWorkspaceBridge(createApi(calls));
+
+    const attached = await bridge.attachCreativeProject();
+
+    expect(attached).toMatchObject({
+      status: "ready",
+      workspace: {
+        workspaceId: "prj_creative",
+        tree: { nodes: [{ readOnlyReason: expect.any(String) }] }
+      }
+    });
+    expect(JSON.stringify(attached)).not.toContain("projectRoot");
+    expect(calls).toContainEqual(["attach"]);
+  });
 });
 
 function createApi(calls: unknown[]): NovelStudioApi {
@@ -80,6 +97,25 @@ function createApi(calls: unknown[]): NovelStudioApi {
           displayName: "Source",
           tree: {
             nodes: [{ id: "file:src.ts", name: "src.ts", kind: "file" as const, path: "src.ts" }],
+            truncated: false
+          }
+        });
+      },
+      async attachActiveCreativeProjectEngineeringWorkspace() {
+        calls.push(["attach"]);
+        return ok({
+          workspaceId: "prj_creative",
+          displayName: "Creative",
+          tree: {
+            nodes: [
+              {
+                id: "file:project.json",
+                name: "project.json",
+                kind: "file" as const,
+                path: "project.json",
+                readOnlyReason: "managed"
+              }
+            ],
             truncated: false
           }
         });

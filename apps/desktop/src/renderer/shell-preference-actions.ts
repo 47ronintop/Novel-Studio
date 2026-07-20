@@ -30,8 +30,20 @@ export function useShellPreferenceActions(
     [persistUserPreferences, setShellState]
   );
 
+  const handleEngineeringExpandedPathIdsChange = useCallback(
+    (pathIds: readonly string[]) => {
+      setShellState((current) => {
+        const next = { ...current, engineeringExpandedPathIds: [...pathIds] };
+        persistUserPreferences({ shell: shellPreferencesFromState(next) });
+        return next;
+      });
+    },
+    [persistUserPreferences, setShellState]
+  );
+
   return {
     handleCreativeNavigatorModeSelect,
-    handleNavigatorExpandedSectionIdsChange
+    handleNavigatorExpandedSectionIdsChange,
+    handleEngineeringExpandedPathIdsChange
   };
 }

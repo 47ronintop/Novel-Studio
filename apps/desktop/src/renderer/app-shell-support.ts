@@ -285,6 +285,26 @@ export function applyShellPreferences(
   };
 }
 
+export function ensureCreativeWorkspaceContext(
+  shellState: DesktopShellState,
+  projectId?: string
+): DesktopShellState {
+  if (shellState.workspaceContext.kind !== "none" || shellState.projectTitle === "未打开项目") {
+    return shellState;
+  }
+  const id = projectId ?? "prj_minimal_chapter";
+  return {
+    ...shellState,
+    workspaceContext: {
+      kind: "creativeProject",
+      workspaceId: id,
+      projectId: id,
+      displayName: shellState.projectTitle,
+      capabilities: ["creativeWorkbench", "writingContext", "creativeSearch", "creativeStudio"]
+    }
+  };
+}
+
 export function createChapterEditorRuntime(
   chapterEditor: ChapterEditorProps,
   selection: ChapterEditorSelection | undefined,

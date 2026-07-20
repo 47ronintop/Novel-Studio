@@ -39,6 +39,25 @@ describe("plain file editor bridge", () => {
     ]);
   });
 
+  test("preserves a read-only reason and omits edit/save callbacks for managed files", async () => {
+    const api = createApi([]);
+    api.workspace.readTextFile = async () =>
+      ok({
+        path: "chapters/ch_01.md",
+        content: "managed",
+        checksum: "checksum",
+        byteLength: 7,
+        readOnlyReason: "由 Novel Studio 管理"
+      });
+    const bridge = createPlainFileEditorBridge(api);
+
+    const opened = await bridge.openFile("chapters/ch_01.md");
+
+    expect(opened).toMatchObject({ readOnlyReason: "由 Novel Studio 管理" });
+    expect(opened.onContentChange).toBeUndefined();
+    expect(opened.onSave).toBeUndefined();
+  });
+
   test("keeps the draft and exposes disk state when save detects a conflict", async () => {
     const api = createApi([], true);
     const bridge = createPlainFileEditorBridge(api);

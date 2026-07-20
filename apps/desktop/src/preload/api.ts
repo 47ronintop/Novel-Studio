@@ -224,6 +224,11 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           "application:workspace:open-engineering-workspace",
           selectionId
         ),
+      attachActiveCreativeProjectEngineeringWorkspace: () =>
+        invokeTyped<Result<EngineeringWorkspaceSnapshot, UnifiedError>>(
+          ipc,
+          "application:workspace:attach-active-creative-project"
+        ),
       refreshEngineeringTree: () =>
         invokeTyped<Result<EngineeringWorkspaceSnapshot, UnifiedError>>(
           ipc,

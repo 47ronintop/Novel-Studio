@@ -11,6 +11,7 @@ import { createDesktopApplication } from "@novel-studio/application";
 import type { ApplicationCommandId } from "@novel-studio/application";
 import type { ModelSettingsPanelProps } from "../src/index.js";
 import { WorkspaceShell } from "../src/index.js";
+import { workspaceActivitiesFor } from "../src/workspace-shell-activity.js";
 
 (
   globalThis as typeof globalThis & {
@@ -19,6 +20,74 @@ import { WorkspaceShell } from "../src/index.js";
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("WorkspaceShell", () => {
+  test("renders the top workbench selector in the title bar", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={application.getShellState()}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        onWorkbenchSelect={() => undefined}
+      />
+    );
+
+    expect(html).toContain('aria-label="当前工作台：创作工作台"');
+    expect(html.indexOf('aria-label="当前工作台：创作工作台"')).toBeLessThan(
+      html.indexOf('aria-label="打开命令面板"')
+    );
+  });
+
+  test("keeps project activities above bottom activities", () => {
+    const application = createDesktopApplication();
+    const groups = workspaceActivitiesFor(application.getShellState());
+
+    expect(groups.projectActivities.map((activity) => activity.id)).toEqual([
+      "workspace",
+      "search",
+      "timeline",
+      "ai"
+    ]);
+    expect(groups.bottomActivities.map((activity) => activity.id)).toEqual(["studio", "settings"]);
+
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={application.getShellState()}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+      />
+    );
+    const activityBar = html.slice(
+      html.indexOf('data-region="activity-bar"'),
+      html.indexOf("</aside>", html.indexOf('data-region="activity-bar"'))
+    );
+
+    expect(activityBar).toContain('data-region="project-activities"');
+    expect(activityBar).toContain('data-region="bottom-activities"');
+    expect(activityBar.indexOf('data-region="project-activities"')).toBeLessThan(
+      activityBar.indexOf('data-region="bottom-activities"')
+    );
+    expect(activityBar.indexOf('data-activity-id="ai"')).toBeLessThan(
+      activityBar.indexOf('data-activity-id="studio"')
+    );
+  });
+
+  test("keeps only settings in the engineering bottom activity group", () => {
+    const application = createDesktopApplication();
+    const groups = workspaceActivitiesFor({
+      ...application.getShellState(),
+      workbenchMode: "engineering",
+      workspaceContext: {
+        kind: "engineeringWorkspace",
+        workspaceId: "workspace_test",
+        displayName: "工程工作区",
+        capabilities: ["engineeringWorkbench", "generalFileContext"]
+      }
+    });
+
+    expect(groups.projectActivities.map((activity) => activity.id)).toEqual(["workspace", "ai"]);
+    expect(groups.bottomActivities.map((activity) => activity.id)).toEqual(["settings"]);
+  });
+
   test("renders settings as a workspace-level view without editor chrome", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
@@ -121,7 +190,7 @@ describe("WorkspaceShell", () => {
     );
   });
 
-  test("collapses the navigator before hiding the Agent conversation on narrow workspaces", () => {
+  test("collapses Bottom Panel, then Navigator, then Agent on narrow workspaces", () => {
     const css = readFileSync(join(process.cwd(), "packages", "ui", "src", "styles.css"), "utf8");
     const narrowStart = css.indexOf("@media (max-width: 1279px)");
     const nextMediaStart = css.indexOf("@media", narrowStart + 1);
@@ -139,6 +208,22 @@ describe("WorkspaceShell", () => {
     );
     expect(narrowWorkspace).toMatch(
       /\.ns-workspace-grid\[data-focus-mode="true"\]\s*\{[^}]*grid-template-areas:\s*"editor"[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s
+    );
+    expect(narrowWorkspace).toMatch(/\.ns-bottom-panel\s*\{[^}]*display:\s*none/s);
+    expect(narrowWorkspace).toMatch(
+      /grid-template-columns:\s*48px\s+minmax\(180px,\s*250px\)\s+4px\s+minmax\(0,\s*1fr\)\s+4px\s+minmax\(280px/s
+    );
+    expect(narrowWorkspace).not.toMatch(
+      /\.ns-ai-panel,\s*\.ns-resize-handle-ai\s*\{[^}]*display:\s*none/s
+    );
+    expect(css).toMatch(
+      /@media\s*\(max-width:\s*900px\)[\s\S]*?\.ns-navigator-context[^}]*display:\s*none/s
+    );
+    expect(css).toMatch(
+      /@media\s*\(max-width:\s*900px\)[\s\S]*?\.ns-navigator,\s*\.ns-navigator-context[^}]*display:\s*none/s
+    );
+    expect(css).toMatch(
+      /@media\s*\(max-width:\s*760px\)[\s\S]*?\.ns-ai-panel[^}]*display:\s*none/s
     );
     expect(css).toMatch(/\.ns-ai-panel\s*\{[^}]*min-width:\s*280px/s);
   });

@@ -14,7 +14,9 @@ export interface EngineeringWorkspaceBridgeProps {
 
 export interface EngineeringWorkspaceBridge {
   getProps(): EngineeringWorkspaceBridgeProps;
+  subscribe(listener: (props: EngineeringWorkspaceBridgeProps) => void): () => void;
   openEngineeringWorkspace(): Promise<EngineeringWorkspaceBridgeProps>;
+  attachCreativeProject(): Promise<EngineeringWorkspaceBridgeProps>;
   refreshEngineeringTree(): Promise<EngineeringWorkspaceBridgeProps>;
   clear(): void;
 }
@@ -25,9 +27,14 @@ export function createEngineeringWorkspaceBridge(
   let status: EngineeringWorkspaceBridgeProps["status"] = "idle";
   let workspace: EngineeringWorkspaceSnapshot | undefined;
   let feedback: ProjectWorkflowFeedback | undefined;
+  const listeners = new Set<(props: EngineeringWorkspaceBridgeProps) => void>();
 
   const bridge: EngineeringWorkspaceBridge = {
     getProps: toProps,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     async openEngineeringWorkspace() {
       status = "opening";
       feedback = undefined;
@@ -50,6 +57,18 @@ export function createEngineeringWorkspaceBridge(
       workspace = opened.value.engineeringWorkspace;
       status = "ready";
       feedback = undefined;
+      publish();
+      return toProps();
+    },
+    async attachCreativeProject() {
+      status = "opening";
+      feedback = undefined;
+      const attached = await api.workspace.attachActiveCreativeProjectEngineeringWorkspace();
+      if (!attached.ok) return fail(attached.error.message);
+      workspace = attached.value;
+      status = "ready";
+      feedback = undefined;
+      publish();
       return toProps();
     },
     async refreshEngineeringTree() {
@@ -60,12 +79,14 @@ export function createEngineeringWorkspaceBridge(
       workspace = refreshed.value;
       status = "ready";
       feedback = undefined;
+      publish();
       return toProps();
     },
     clear() {
       status = "idle";
       workspace = undefined;
       feedback = undefined;
+      publish();
     }
   };
 
@@ -89,5 +110,10 @@ export function createEngineeringWorkspaceBridge(
         void bridge.refreshEngineeringTree();
       }
     };
+  }
+
+  function publish(): void {
+    const props = toProps();
+    listeners.forEach((listener) => listener(props));
   }
 }

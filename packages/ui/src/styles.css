@@ -151,6 +151,77 @@ textarea:focus-visible,
   gap: 10px;
 }
 
+.ns-workbench-switcher {
+  margin-right: auto;
+  position: relative;
+}
+
+.ns-workbench-trigger {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--ns-ink);
+  cursor: pointer;
+  display: inline-flex;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 8px;
+}
+
+.ns-workbench-trigger:hover,
+.ns-workbench-trigger[aria-expanded="true"] {
+  background: var(--ns-surface-raised);
+  border-color: var(--ns-border);
+}
+
+.ns-workbench-menu {
+  background: var(--ns-surface-raised);
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  box-shadow: 0 8px 22px color-mix(in srgb, #000 22%, transparent);
+  display: grid;
+  gap: 2px;
+  left: 0;
+  min-width: 168px;
+  padding: 4px;
+  position: absolute;
+  top: calc(100% + 4px);
+  z-index: 20;
+}
+
+.ns-workbench-menu-item {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--ns-ink);
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  min-height: 30px;
+  padding: 0 8px;
+  text-align: left;
+}
+
+.ns-workbench-menu-item:hover,
+.ns-workbench-menu-item:focus-visible {
+  background: color-mix(in srgb, var(--ns-primary) 12%, transparent);
+}
+
+.ns-workbench-menu-item[aria-disabled="true"] {
+  color: var(--ns-muted);
+  cursor: not-allowed;
+}
+
+.ns-workbench-disabled-reason {
+  border-top: 1px solid var(--ns-border);
+  color: var(--ns-muted);
+  font-size: 12px;
+  margin: 3px 0 0;
+  padding: 7px 8px 3px;
+}
+
 .ns-project-title,
 .ns-panel-header,
 .ns-document-title {
@@ -238,9 +309,19 @@ textarea:focus-visible,
   border-right: 1px solid var(--ns-border);
   display: flex;
   flex-direction: column;
-  gap: 6px;
   grid-area: activity;
   padding: 8px 6px;
+}
+
+.ns-activity-project,
+.ns-activity-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ns-activity-bottom {
+  margin-top: auto;
 }
 
 .ns-activity-button {
@@ -285,6 +366,125 @@ textarea:focus-visible,
 
 .ns-navigator-context > .ns-navigator {
   height: 100%;
+}
+
+.ns-engineering-navigator {
+  display: flex;
+  flex-direction: column;
+}
+
+.ns-engineering-truncated {
+  color: var(--ns-muted);
+  font-size: 12px;
+  margin: 0;
+  padding: 7px 10px;
+}
+
+.ns-engineering-tree,
+.ns-engineering-tree-children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ns-engineering-tree {
+  min-width: 0;
+  overflow: auto;
+  padding: 4px 0 10px;
+}
+
+.ns-engineering-tree-children {
+  padding-left: 14px;
+}
+
+.ns-engineering-tree-row {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--ns-ink);
+  cursor: pointer;
+  display: flex;
+  gap: 6px;
+  min-height: 28px;
+  min-width: 0;
+  padding: 0 10px;
+  text-align: left;
+  width: 100%;
+}
+
+.ns-engineering-tree-row:hover,
+.ns-engineering-tree-row:focus-visible,
+.ns-engineering-tree-row[data-active="true"] {
+  background: color-mix(in srgb, var(--ns-primary) 12%, transparent);
+}
+
+.ns-engineering-tree-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ns-tree-chevron {
+  flex: 0 0 14px;
+  transform: rotate(0deg);
+  transition: transform 120ms ease;
+}
+
+.ns-tree-chevron[data-expanded="true"] {
+  transform: rotate(90deg);
+}
+
+.ns-engineering-tree-row svg[aria-label] {
+  color: var(--ns-muted);
+  flex: 0 0 auto;
+}
+
+.ns-file-read-only-reason {
+  color: var(--ns-muted);
+  font-size: 12px;
+  margin: 0;
+  padding: 7px 12px;
+}
+
+.ns-file-conflict-review {
+  display: grid;
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+}
+
+.ns-file-conflict-columns {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-height: 0;
+}
+
+.ns-file-conflict-columns > section {
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ns-file-conflict-columns h3 {
+  border-bottom: 1px solid var(--ns-border);
+  font-size: 13px;
+  margin: 0;
+  padding: 8px 10px;
+}
+
+.ns-file-conflict-columns pre {
+  font-family: var(--ns-editor-font-family, ui-monospace, monospace);
+  margin: 0;
+  max-height: 52vh;
+  overflow: auto;
+  padding: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .ns-creative-project-title {
@@ -5882,14 +6082,16 @@ textarea:focus-visible,
 
 @media (max-width: 1279px) {
   .ns-workspace-grid {
-    grid-template-columns: 48px 250px 4px minmax(0, 1fr);
+    grid-template-columns:
+      48px minmax(180px, 250px) 4px minmax(0, 1fr) 4px
+      minmax(280px, var(--ns-ai-panel-width, 320px));
     grid-template-areas:
-      "activity navigator nav-resize editor"
-      "bottom bottom bottom bottom";
+      "activity navigator nav-resize editor ai-resize ai"
+      "bottom bottom bottom bottom bottom bottom";
+    grid-template-rows: minmax(0, 1fr) 0;
   }
 
-  .ns-ai-panel,
-  .ns-resize-handle-ai {
+  .ns-bottom-panel {
     display: none;
   }
 
@@ -5926,6 +6128,40 @@ textarea:focus-visible,
   }
 
   .config-studio-versions {
+    display: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .ns-workspace-grid {
+    grid-template-columns: 48px minmax(0, 1fr) 4px minmax(280px, var(--ns-ai-panel-width, 320px));
+    grid-template-areas:
+      "activity editor ai-resize ai"
+      "bottom bottom bottom bottom";
+  }
+
+  .ns-navigator,
+  .ns-navigator-context,
+  .ns-agent-conversation-navigator-region,
+  .ns-resize-handle-navigator {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .ns-workspace-grid,
+  .ns-workspace-grid[data-agent-conversation="true"][data-focus-mode="false"] {
+    grid-template-columns: 48px minmax(0, 1fr);
+    grid-template-areas:
+      "activity editor"
+      "bottom bottom";
+    grid-template-rows: minmax(0, 1fr) 0;
+  }
+
+  .ns-workspace-grid .ns-ai-panel,
+  .ns-workspace-grid .ns-resize-handle-ai,
+  .ns-workspace-grid[data-agent-conversation="true"][data-focus-mode="false"] .ns-ai-panel,
+  .ns-workspace-grid[data-agent-conversation="true"][data-focus-mode="false"] .ns-resize-handle-ai {
     display: none;
   }
 }

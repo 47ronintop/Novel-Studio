@@ -328,6 +328,8 @@ export function createApplicationIpcHandlers(
       }
       return options.workspaceActivationCoordinator.openEngineeringWorkspace(selection.value.path);
     },
+    "application:workspace:attach-active-creative-project": () =>
+      application.attachActiveCreativeProjectEngineeringWorkspace(),
     "application:workspace:refresh-engineering-tree": () => application.refreshEngineeringTree(),
     "application:workspace:read-text-file": (path: unknown) =>
       typeof path === "string"

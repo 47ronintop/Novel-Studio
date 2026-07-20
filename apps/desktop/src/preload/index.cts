@@ -196,6 +196,10 @@ const api: NovelStudioApi = {
         "application:workspace:open-engineering-workspace",
         selectionId
       ),
+    attachActiveCreativeProjectEngineeringWorkspace: () =>
+      invokeTyped<Result<EngineeringWorkspaceSnapshot, UnifiedError>>(
+        "application:workspace:attach-active-creative-project"
+      ),
     refreshEngineeringTree: () =>
       invokeTyped<Result<EngineeringWorkspaceSnapshot, UnifiedError>>(
         "application:workspace:refresh-engineering-tree"
