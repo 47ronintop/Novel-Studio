@@ -335,7 +335,15 @@ function WorkspaceShellContent({
           data-visible={!focusMode && shellState.bottomPanelVisible}
         >
           <div className="ns-bottom-tabs" role="tablist" aria-label="底部面板标签">
-            <PanelBottom aria-hidden="true" size={15} />
+            <button
+              aria-label="收起底部面板"
+              className="ns-icon-button"
+              onClick={() => onCommandExecute?.("workspace.toggle-bottom-panel")}
+              title="收起底部面板"
+              type="button"
+            >
+              <PanelBottom aria-hidden="true" size={15} />
+            </button>
             {shellState.bottomPanelTabs.map((tab, index) => (
               <button
                 aria-label={`切换底部面板：${bottomPanelLabels.get(tab) ?? tab}`}

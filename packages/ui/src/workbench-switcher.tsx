@@ -19,6 +19,7 @@ export function WorkbenchSwitcher({
   onSelect
 }: WorkbenchSwitcherProps) {
   const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
@@ -32,6 +33,17 @@ export function WorkbenchSwitcher({
     setOpen(false);
     triggerRef.current?.focus();
   };
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        close();
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open, close]);
 
   const select = (next: WorkbenchMode) => {
     if (next === "creative" && creativeDisabledReason !== undefined) return;
@@ -51,7 +63,7 @@ export function WorkbenchSwitcher({
   };
 
   return (
-    <div className="ns-workbench-switcher">
+    <div className="ns-workbench-switcher" ref={containerRef}>
       <button
         ref={triggerRef}
         aria-expanded={open}
@@ -59,6 +71,12 @@ export function WorkbenchSwitcher({
         aria-label={`当前工作台：${labelFor(mode)}`}
         className="ns-workbench-trigger"
         onClick={() => setOpen((value) => !value)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && open) {
+            event.preventDefault();
+            close();
+          }
+        }}
         type="button"
       >
         <span>{labelFor(mode)}</span>

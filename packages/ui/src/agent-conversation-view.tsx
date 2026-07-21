@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, CornerUpLeft, History, Plus } from "lucide-react";
+import { Archive, ArchiveRestore, Bot, ChevronDown, CornerUpLeft, History, MessageSquare, MoreHorizontal, Plus, User } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 
 import { AgentComposer } from "./agent-composer.js";
@@ -83,35 +83,52 @@ export function AgentConversationView(props: AgentConversationViewProps) {
   return (
     <section className="ns-agent-conversation-view" aria-label="Agent 会话主视图">
       <header className="ns-agent-conversation-view-header">
-        <div>
-          <h1>{conversation.title}</h1>
-          <span>
-            {conversation.runCount} 次运行 · {conversation.updatedAtLabel}
-            {conversation.virtual ? " · 只读" : ""}
-          </span>
-        </div>
+        <button
+          aria-label={`会话：${conversation.title}，点击查看历史`}
+          className="ns-agent-conversation-title-trigger"
+          onClick={() => setHistoryOpen(true)}
+          title="点击切换会话"
+          type="button"
+        >
+          <MessageSquare aria-hidden="true" size={13} />
+          <span className="ns-agent-conversation-title-prefix">Agent 会话</span>
+          {conversation.title.length > 0 && (
+            <span className="ns-agent-conversation-title-name">·{conversation.title}</span>
+          )}
+          <ChevronDown aria-hidden="true" size={12} />
+        </button>
         <div className="ns-agent-conversation-header-actions">
+          <button
+            aria-label="新建会话"
+            className="ns-icon-button"
+            disabled={props.createDisabled === true}
+            onClick={props.onCreate}
+            title="新建会话"
+            type="button"
+          >
+            <Plus aria-hidden="true" size={15} />
+          </button>
           {historyButton}
-          {conversation.virtual ? null : conversation.status === "archived" ? (
+          {conversation.virtual ? null : (
             <button
-              aria-label={`恢复会话：${conversation.title}`}
+              aria-label="更多操作"
               className="ns-icon-button"
-              onClick={() => props.onRestore(conversation.conversationId)}
-              title="恢复会话"
+              title={conversation.status === "archived" ? "恢复会话" : "归档会话"}
+              onClick={() =>
+                conversation.status === "archived"
+                  ? props.onRestore(conversation.conversationId)
+                  : props.onArchive(conversation.conversationId)
+              }
+              disabled={
+                conversation.status !== "archived" && conversation.canArchive === false
+              }
               type="button"
             >
-              <ArchiveRestore aria-hidden="true" size={15} />
-            </button>
-          ) : (
-            <button
-              aria-label={`归档会话：${conversation.title}`}
-              className="ns-icon-button"
-              disabled={conversation.canArchive === false}
-              onClick={() => props.onArchive(conversation.conversationId)}
-              title={conversation.archiveDisabledReason ?? "归档会话"}
-              type="button"
-            >
-              <Archive aria-hidden="true" size={15} />
+              {conversation.status === "archived" ? (
+                <ArchiveRestore aria-hidden="true" size={15} />
+              ) : (
+                <MoreHorizontal aria-hidden="true" size={15} />
+              )}
             </button>
           )}
         </div>
@@ -243,12 +260,23 @@ function ConversationTurns({
       {conversation.turns.map((turn) => (
         <li data-run-id={turn.runId} key={turn.runId}>
           <div className="ns-agent-conversation-message" data-speaker="user">
+            <div className="ns-agent-conversation-message-header">
+              <span className="ns-agent-conversation-avatar" data-speaker="user">
+                <User aria-hidden="true" size={11} />
+              </span>
+              <span className="ns-agent-conversation-speaker-name">你</span>
+            </div>
             <p>{turn.userRequest}</p>
           </div>
           {(turn.assistantText === undefined || turn.assistantText.length === 0) &&
           (turn.events === undefined || turn.events.length === 0) ? null : (
             <div className="ns-agent-conversation-message" data-speaker="assistant">
-              <span className="ns-agent-conversation-speaker-label">Agent</span>
+              <div className="ns-agent-conversation-message-header">
+                <span className="ns-agent-conversation-avatar" data-speaker="assistant">
+                  <Bot aria-hidden="true" size={11} />
+                </span>
+                <span className="ns-agent-conversation-speaker-name">Agent</span>
+              </div>
               {turn.assistantText === undefined || turn.assistantText.length === 0 ? null : (
                 <p>{turn.assistantText}</p>
               )}

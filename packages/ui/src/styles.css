@@ -3898,25 +3898,55 @@ textarea:focus-visible,
 }
 
 .ns-agent-conversation-view-header {
+  align-items: center;
   border-bottom: 1px solid var(--ns-border);
+  display: flex;
+  gap: 8px;
   justify-content: space-between;
-  min-height: 52px;
-  padding: 8px 12px 8px 16px;
+  min-height: 44px;
+  padding: 6px 12px;
 }
 
-.ns-agent-conversation-view-header > div {
-  display: grid;
-  gap: 3px;
+.ns-agent-conversation-title-trigger {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  color: var(--ns-ink);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 1 1 auto;
+  font-size: 13px;
+  gap: 6px;
   min-width: 0;
+  padding: 4px 6px;
+  transition: background 100ms;
 }
 
-.ns-agent-conversation-view-header h1 {
-  font-size: 14px;
-  font-weight: 650;
-  margin: 0;
+.ns-agent-conversation-title-trigger:hover {
+  background: color-mix(in srgb, var(--ns-ink) 6%, transparent);
+}
+
+.ns-agent-conversation-title-prefix {
+  color: var(--ns-muted);
+  flex: 0 0 auto;
+  font-weight: 500;
+}
+
+.ns-agent-conversation-title-name {
+  flex: 1 1 auto;
+  font-weight: 600;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ns-agent-conversation-header-actions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
 }
 
 .ns-agent-conversation-view-header span,
@@ -3976,16 +4006,40 @@ textarea:focus-visible,
 
 .ns-agent-conversation-message {
   display: grid;
-  gap: 5px;
-  max-width: 74ch;
+  gap: 6px;
+  max-width: 100%;
 }
 
-.ns-agent-conversation-message > span {
-  color: var(--ns-muted);
-  font-size: 10px;
+.ns-agent-conversation-message-header {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.ns-agent-conversation-avatar {
+  align-items: center;
+  border-radius: 50%;
+  display: inline-flex;
+  flex: 0 0 20px;
+  height: 20px;
+  justify-content: center;
+  width: 20px;
+}
+
+.ns-agent-conversation-avatar[data-speaker="user"] {
+  background: color-mix(in srgb, var(--ns-accent) 18%, transparent);
+  color: var(--ns-accent);
+}
+
+.ns-agent-conversation-avatar[data-speaker="assistant"] {
+  background: color-mix(in srgb, var(--ns-primary) 18%, transparent);
+  color: var(--ns-primary);
+}
+
+.ns-agent-conversation-speaker-name {
+  color: var(--ns-ink);
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
 }
 
 .ns-agent-conversation-message > p {
@@ -3996,23 +4050,19 @@ textarea:focus-visible,
   white-space: pre-wrap;
 }
 
-/* User message: right-aligned bubble like Claude Code / Cline */
+/* User message: subtle card */
 .ns-agent-conversation-message[data-speaker="user"] {
-  background: color-mix(in srgb, var(--ns-accent) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--ns-accent) 22%, var(--ns-border));
-  border-radius: 10px 10px 3px 10px;
-  justify-self: end;
-  max-width: 86%;
-  padding: 8px 11px;
+  background: color-mix(in srgb, var(--ns-surface-raised) 80%, transparent);
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  padding: 8px 10px 8px 10px;
 }
 
-/* Assistant message: left side, no border — just content */
+/* Assistant message: icon+label then plain text, no box */
 .ns-agent-conversation-message[data-speaker="assistant"] {
-  border-left: 2px solid color-mix(in srgb, var(--ns-border-strong) 70%, transparent);
-  padding-left: 10px;
+  padding-left: 0;
 }
 
-/* Speaker label above assistant message */
 .ns-agent-conversation-speaker-label {
   color: var(--ns-muted);
   font-size: 10px;
