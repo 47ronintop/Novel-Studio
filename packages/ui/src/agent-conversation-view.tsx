@@ -211,6 +211,24 @@ function mainReviewLabel(kind: AgentConversationMainReview["kind"]): string {
   }
 }
 
+function formatTimestamp(label: string): string {
+  // If the label looks like an ISO timestamp, format it as local time
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(label)) {
+    try {
+      const date = new Date(label);
+      return date.toLocaleString("zh-CN", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit"
+      });
+    } catch {
+      return label;
+    }
+  }
+  return label;
+}
+
 function ConversationTurns({
   conversation
 }: {
@@ -239,7 +257,7 @@ function ConversationTurns({
           )}
           <div className="ns-agent-conversation-turn-meta">
             <span>{turn.statusLabel}</span>
-            <time>{turn.updatedAtLabel}</time>
+            <time>{formatTimestamp(turn.updatedAtLabel)}</time>
           </div>
         </li>
       ))}

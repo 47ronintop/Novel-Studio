@@ -1,5 +1,5 @@
 import type { ApplicationCommand } from "@novel-studio/application";
-import { Search } from "lucide-react";
+import { Search, X } from "lucide-react";
 
 export interface CommandPaletteShortcutEvent {
   readonly key: string;
@@ -10,6 +10,7 @@ export interface CommandPaletteShortcutEvent {
 export interface CommandPaletteProps {
   readonly commands: readonly ApplicationCommand[];
   readonly executionFeedback?: CommandPaletteFeedback | undefined;
+  readonly onClose?: () => void;
   readonly onCommandExecute?: ((commandId: ApplicationCommand["id"]) => void) | undefined;
   readonly onActiveCommandChange?: ((commandId: ApplicationCommand["id"]) => void) | undefined;
   readonly onQueryChange?: ((query: string) => void) | undefined;
@@ -31,6 +32,7 @@ export function CommandPalette({
   commands,
   executionFeedback,
   onActiveCommandChange,
+  onClose,
   onCommandExecute,
   onQueryChange,
   open,
@@ -48,27 +50,46 @@ export function CommandPalette({
   const groupedCommands = groupCommands(filteredCommands);
 
   return (
-    <div className="ns-command-palette" role="dialog" aria-modal="true" aria-label="命令面板">
-      <div className="ns-command-search">
-        <Search aria-hidden="true" size={16} />
-        <input
-          aria-label="Search commands"
-          onChange={(event) => {
-            onQueryChange?.(event.currentTarget.value);
-          }}
-          onKeyDown={(event) =>
-            handleCommandKeyDown({
-              activeCommandId,
-              commands: filteredCommands,
-              event,
-              onActiveCommandChange,
-              onCommandExecute
-            })
-          }
-          placeholder="搜索命令"
-          value={currentQuery}
-        />
-      </div>
+    <>
+      <div aria-hidden="true" className="ns-command-backdrop" onClick={onClose} />
+      <div className="ns-command-palette" role="dialog" aria-modal="true" aria-label="命令面板">
+        <div className="ns-command-search">
+          <Search aria-hidden="true" size={16} />
+          <input
+            aria-label="搜索命令"
+            autoFocus
+            onChange={(event) => {
+              onQueryChange?.(event.currentTarget.value);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                onClose?.();
+                return;
+              }
+              handleCommandKeyDown({
+                activeCommandId,
+                commands: filteredCommands,
+                event,
+                onActiveCommandChange,
+                onCommandExecute: (id) => {
+                  onCommandExecute?.(id);
+                  onClose?.();
+                }
+              });
+            }}
+            placeholder="搜索命令"
+            value={currentQuery}
+          />
+          <button
+            aria-label="关闭命令面板"
+            className="ns-command-close"
+            onClick={onClose}
+            type="button"
+          >
+            <X aria-hidden="true" size={14} />
+          </button>
+        </div>
       {executionFeedback === undefined ? null : (
         <p className="ns-command-feedback" data-kind={executionFeedback.kind} role="status">
           {executionFeedback.message}
@@ -89,13 +110,14 @@ export function CommandPalette({
                 {group.commands.map((command) => (
                   <li className="ns-command-item" key={command.id}>
                     <button
-                      aria-label={`Execute command: ${command.title}`}
+                      aria-label={`执行命令：${command.title}`}
                       className="ns-command-action"
                       data-active={command.id === activeCommandId}
                       disabled={command.disabledReason !== undefined}
                       onClick={() => {
                         if (command.disabledReason === undefined) {
                           onCommandExecute?.(command.id);
+                          onClose?.();
                         }
                       }}
                       type="button"
@@ -116,7 +138,8 @@ export function CommandPalette({
           ))}
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -212,9 +235,9 @@ function handleCommandKeyDown({
 function scopeLabel(scope: ApplicationCommand["scope"]): string {
   switch (scope) {
     case "workspace":
-      return "Workspace";
+      return "工作区";
     case "plugin":
-      return "Plugin";
+      return "插件";
   }
 }
 

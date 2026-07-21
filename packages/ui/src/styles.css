@@ -6212,6 +6212,13 @@ textarea:focus-visible,
   margin: 0;
 }
 
+.ns-command-backdrop {
+  background: rgba(0, 0, 0, 0.42);
+  inset: 0;
+  position: fixed;
+  z-index: 39;
+}
+
 .ns-command-palette {
   background: var(--ns-surface-raised);
   border: 1px solid var(--ns-border);
@@ -6241,6 +6248,27 @@ textarea:focus-visible,
   color: var(--ns-ink);
   flex: 1;
   outline: none;
+}
+
+.ns-command-close {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--ns-muted);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 24px;
+  height: 24px;
+  justify-content: center;
+  padding: 0;
+  transition: background 100ms, color 100ms;
+  width: 24px;
+}
+
+.ns-command-close:hover {
+  background: color-mix(in srgb, var(--ns-ink) 10%, transparent);
+  color: var(--ns-ink);
 }
 
 .ns-command-feedback {

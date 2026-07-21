@@ -371,6 +371,7 @@ function WorkspaceShellContent({
         commands={commands}
         executionFeedback={commandPaletteFeedback}
         onActiveCommandChange={onCommandPaletteActiveCommandChange}
+        {...(onCommandPaletteOpen === undefined ? {} : { onClose: onCommandPaletteOpen })}
         onCommandExecute={onCommandExecute}
         onQueryChange={onCommandPaletteQueryChange}
         open={commandPaletteOpen || shellState.commandPaletteOpen}
