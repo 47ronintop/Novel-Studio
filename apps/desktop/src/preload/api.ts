@@ -29,6 +29,7 @@ import type {
   ModelDiscoverySnapshot,
   ModelProfile,
   ModelSettingsSnapshot,
+  NativeMenuCommandId,
   NovelStudioApi,
   ReadAgentPermissionSummaryQuery,
   PluginSettingsSnapshot,
@@ -597,8 +598,24 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           "application:preferences:save",
           input
         )
+    },
+    menu: {
+      onNativeCommand: (listener: (commandId: NativeMenuCommandId) => void) => {
+        if (ipc.on === undefined) return () => undefined;
+        return ipc.on("application:menu:native-command", (payload) => {
+          if (isNativeMenuCommandId(payload)) listener(payload);
+        });
+      }
     }
   };
+}
+
+function isNativeMenuCommandId(value: unknown): value is NativeMenuCommandId {
+  return (
+    value === "createCreativeProject" ||
+    value === "openCreativeProject" ||
+    value === "openEngineeringFolder"
+  );
 }
 
 function isAiWritingSuggestionStreamPushEvent(

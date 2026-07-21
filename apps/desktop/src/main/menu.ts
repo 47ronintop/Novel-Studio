@@ -1,10 +1,42 @@
 import type { MenuItemConstructorOptions } from "electron";
+import type { NativeMenuCommandId } from "@novel-studio/application";
 
-export function createApplicationMenuTemplate(): MenuItemConstructorOptions[] {
+export interface CreateApplicationMenuTemplateOptions {
+  readonly onCommand?: (commandId: NativeMenuCommandId) => void;
+}
+
+const FILE_MENU_ITEM_LABELS: Readonly<Record<NativeMenuCommandId, string>> = {
+  createCreativeProject: "新建创作项目…",
+  openCreativeProject: "打开创作项目…",
+  openEngineeringFolder: "打开工程文件夹…"
+};
+
+const FILE_LIFECYCLE_COMMAND_IDS: readonly NativeMenuCommandId[] = [
+  "createCreativeProject",
+  "openCreativeProject",
+  "openEngineeringFolder"
+];
+
+export function createApplicationMenuTemplate(
+  options: CreateApplicationMenuTemplateOptions = {}
+): MenuItemConstructorOptions[] {
+  const onCommand = options.onCommand ?? (() => undefined);
+  const fileLifecycleItems: MenuItemConstructorOptions[] = FILE_LIFECYCLE_COMMAND_IDS.map(
+    (commandId) => ({
+      id: commandId,
+      label: FILE_MENU_ITEM_LABELS[commandId],
+      click: () => onCommand(commandId)
+    })
+  );
+
   return [
     {
       label: "文件",
-      submenu: [{ role: "close", label: "关闭窗口" }]
+      submenu: [
+        ...fileLifecycleItems,
+        { type: "separator" },
+        { role: "close", label: "关闭窗口" }
+      ]
     },
     {
       label: "编辑",

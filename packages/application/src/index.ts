@@ -2,7 +2,8 @@ export type {
   ApplicationCommand,
   ApplicationCommandId,
   ApplicationCommandScope,
-  CommandRiskLevel
+  CommandRiskLevel,
+  NativeMenuCommandId
 } from "./command-registry.js";
 export {
   DEFAULT_APPLICATION_COMMANDS,

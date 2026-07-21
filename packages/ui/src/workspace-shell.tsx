@@ -200,158 +200,173 @@ function WorkspaceShellContent({
         )}
       </header>
 
-      {settingsMode ? (
-        <SettingsWorkspace onClose={onSettingsClose} settings={settings} />
-      ) : (
-        <>
-          <div
-            className="ns-workspace-grid"
-            data-agent-conversation={agentConversationWorkspace !== undefined}
-            data-focus-mode={focusMode}
-            data-split-view={workspaceLayout.splitView}
-            style={workspaceGridStyle}
-          >
-            <WorkspaceActivityBar
-              focusHidden={focusMode}
-              onActivitySelect={onActivitySelect}
-              shellState={shellState}
-            />
+      <div
+        className="ns-workspace-grid"
+        data-agent-conversation={agentConversationWorkspace !== undefined}
+        data-focus-mode={focusMode}
+        data-split-view={workspaceLayout.splitView}
+        style={workspaceGridStyle}
+      >
+        <WorkspaceActivityBar
+          focusHidden={focusMode}
+          onActivitySelect={onActivitySelect}
+          shellState={shellState}
+        />
 
-            <WorkspaceShellNavigator
-              collapsed={focusMode || shellState.navigatorCollapsed}
-              creative={creativeNavigator}
-              engineeringNavigator={engineeringNavigator}
-              onOpenEngineeringWorkspace={onOpenEngineeringWorkspace}
-              focusHidden={focusMode}
-              navigatorSearchQuery={navigatorSearchQuery}
-              onActivitySelect={onActivitySelect}
-              onNavigatorExpandedSectionIdsChange={onNavigatorExpandedSectionIdsChange}
-              onNavigatorSearchQueryChange={onNavigatorSearchQueryChange}
+        <WorkspaceShellNavigator
+          collapsed={focusMode || shellState.navigatorCollapsed}
+          creative={creativeNavigator}
+          engineeringNavigator={engineeringNavigator}
+          onOpenEngineeringWorkspace={onOpenEngineeringWorkspace}
+          focusHidden={focusMode}
+          navigatorSearchQuery={navigatorSearchQuery}
+          onActivitySelect={onActivitySelect}
+          onNavigatorExpandedSectionIdsChange={onNavigatorExpandedSectionIdsChange}
+          onNavigatorSearchQueryChange={onNavigatorSearchQueryChange}
+          projectWorkflow={projectWorkflow}
+          shellState={shellState}
+          storyBibleEditor={storyBibleEditor}
+          studio={studio}
+        />
+
+        <div
+          aria-label="Navigator resize handle"
+          aria-orientation="vertical"
+          aria-valuemax={420}
+          aria-valuemin={220}
+          aria-valuenow={workspaceLayout.navigatorWidth}
+          className="ns-resize-handle ns-resize-handle-navigator"
+          data-focus-hidden={focusMode}
+          onPointerDown={createPanelResizeHandler("navigator")}
+          role="separator"
+        />
+
+        <main aria-label="编辑区" className="ns-editor-area" data-region="editor-area">
+          {settingsMode ? (
+            <div data-region="settings-workspace">
+              <SettingsWorkspace onClose={onSettingsClose} settings={settings} />
+            </div>
+          ) : mainReview !== undefined ? (
+            <AgentConversationMainReviewView review={mainReview} />
+          ) : shellState.activeActivity === "workspace" ? (
+            <WorkspaceEditorSurface
+              chapterEditor={chapterEditor}
+              fileEditor={fileEditor}
+              onboarding={onboarding}
               projectWorkflow={projectWorkflow}
-              shellState={shellState}
-              storyBibleEditor={storyBibleEditor}
+              splitView={workspaceLayout.splitView}
+              onFileSelectionChange={setFileSelection}
+            />
+          ) : (
+            <ActivityEmptyState
+              activityId={shellState.activeActivity}
+              search={search}
               studio={studio}
+              storyBibleEditor={storyBibleEditor}
+              onSearchResultOpen={onSearchResultOpen}
+              onTimelineEntryOpen={onTimelineEntryOpen}
             />
+          )}
+        </main>
 
-            <div
-              aria-label="Navigator resize handle"
-              aria-orientation="vertical"
-              aria-valuemax={420}
-              aria-valuemin={220}
-              aria-valuenow={workspaceLayout.navigatorWidth}
-              className="ns-resize-handle ns-resize-handle-navigator"
-              data-focus-hidden={focusMode}
-              onPointerDown={createPanelResizeHandler("navigator")}
-              role="separator"
-            />
-
-            <main aria-label="编辑区" className="ns-editor-area" data-region="editor-area">
-              {mainReview !== undefined ? (
-                <AgentConversationMainReviewView review={mainReview} />
-              ) : shellState.activeActivity === "workspace" ? (
-                <WorkspaceEditorSurface
-                  chapterEditor={chapterEditor}
-                  fileEditor={fileEditor}
-                  onboarding={onboarding}
-                  projectWorkflow={projectWorkflow}
-                  splitView={workspaceLayout.splitView}
-                  onFileSelectionChange={setFileSelection}
-                />
-              ) : (
-                <ActivityEmptyState
-                  activityId={shellState.activeActivity}
-                  search={search}
-                  studio={studio}
-                  storyBibleEditor={storyBibleEditor}
-                  onSearchResultOpen={onSearchResultOpen}
-                  onTimelineEntryOpen={onTimelineEntryOpen}
-                />
-              )}
-            </main>
-
-            {shellState.inspectorCollapsed ? null : (
-              <div
-                aria-label="AI panel resize handle"
-                aria-orientation="vertical"
-                aria-valuemax={520}
-                aria-valuemin={280}
-                aria-valuenow={workspaceLayout.inspectorWidth}
-                className="ns-resize-handle ns-resize-handle-ai"
-                data-focus-hidden={focusMode}
-                onPointerDown={createPanelResizeHandler("ai")}
-                role="separator"
-              />
-            )}
-
-            <aside
-              aria-label="AI 对话面板"
-              className="ns-ai-panel"
-              data-focus-hidden={focusMode}
-              data-region="ai-panel"
-            >
-              <div className="ns-panel-header">
-                <span>Agent</span>
-                <PanelRight aria-hidden="true" size={15} />
-              </div>
-              {agentConversationWorkspace !== undefined ? (
-                <AgentConversationView
-                  {...agentConversationWorkspace.view}
-                  navigator={agentConversationWorkspace.navigator}
-                  {...(mainReview === undefined ? {} : { mainReview })}
-                />
-              ) : shellState.workspaceContext.kind === "none" ? (
-                <section className="ns-agent-panel-placeholder" aria-label="Agent 未绑定工作区">
-                  <strong>未绑定工作区</strong>
-                  <p>打开创作项目或工程工作区后，Agent 会在这里保持可用。</p>
-                </section>
-              ) : (
-                <section className="ns-agent-panel-placeholder" aria-label="Agent 正在加载">
-                  <strong>正在加载 Agent</strong>
-                </section>
-              )}
-            </aside>
-
-            <section
-              aria-label="底部面板"
-              className="ns-bottom-panel"
-              data-focus-hidden={focusMode}
-              data-region="bottom-panel"
-              data-visible={!focusMode && shellState.bottomPanelVisible}
-            >
-              <div className="ns-bottom-tabs" role="tablist" aria-label="底部面板标签">
-                <PanelBottom aria-hidden="true" size={15} />
-                {shellState.bottomPanelTabs.map((tab, index) => (
-                  <button
-                    aria-label={`切换底部面板：${bottomPanelLabels.get(tab) ?? tab}`}
-                    aria-selected={tab === activeBottomPanelTab}
-                    className="ns-bottom-tab"
-                    data-focus-order={index === 0 ? "4" : undefined}
-                    key={tab}
-                    onClick={() => onBottomPanelTabSelect?.(tab)}
-                    role="tab"
-                    title={`切换到底部面板：${bottomPanelLabels.get(tab) ?? tab}`}
-                    type="button"
-                  >
-                    {bottomPanelLabels.get(tab) ?? tab}
-                  </button>
-                ))}
-              </div>
-              <BottomPanelContent
-                activeTab={activeBottomPanelTab}
-                aiWritingWorkflow={aiWritingWorkflow}
-                projectWorkflow={projectWorkflow}
-                search={search}
-              />
-            </section>
-          </div>
-
-          <WorkspaceStatusBar
-            chapterEditor={editorActivity ? chapterEditor : undefined}
-            fileEditor={editorActivity ? fileEditor : undefined}
-            fileSelection={fileSelection}
+        {shellState.inspectorCollapsed ? null : (
+          <div
+            aria-label="AI panel resize handle"
+            aria-orientation="vertical"
+            aria-valuemax={520}
+            aria-valuemin={280}
+            aria-valuenow={workspaceLayout.inspectorWidth}
+            className="ns-resize-handle ns-resize-handle-ai"
+            data-focus-hidden={focusMode}
+            onPointerDown={createPanelResizeHandler("ai")}
+            role="separator"
           />
-        </>
-      )}
+        )}
+
+        <aside
+          aria-label="AI 对话面板"
+          className="ns-ai-panel"
+          data-focus-hidden={focusMode}
+          data-region="ai-panel"
+        >
+          <div className="ns-panel-header">
+            <span>Agent</span>
+            <PanelRight aria-hidden="true" size={15} />
+          </div>
+          {agentConversationWorkspace !== undefined ? (
+            <AgentConversationView
+              {...agentConversationWorkspace.view}
+              navigator={agentConversationWorkspace.navigator}
+              {...(mainReview === undefined ? {} : { mainReview })}
+            />
+          ) : (
+            <AgentConversationView
+              loading={false}
+              createDisabled={true}
+              onCreate={() => undefined}
+              onArchive={() => undefined}
+              onRestore={() => undefined}
+              onReturnToActive={() => undefined}
+              composer={{
+                request: "",
+                operationMode: "execution",
+                contextMode: "writing",
+                writePolicy: "write_before_confirmation",
+                writePolicyAcknowledged: false,
+                active: false,
+                disabled: true,
+                disabledReason: "打开创作项目或工程工作区后，Agent 会在这里保持可用。",
+                onRequestChange: () => undefined,
+                onOperationModeChange: () => undefined,
+                onContextModeChange: () => undefined,
+                onWritePolicyChange: () => undefined,
+                onWritePolicyAcknowledgedChange: () => undefined,
+                onSend: () => undefined,
+                onStop: () => undefined
+              }}
+            />
+          )}
+        </aside>
+
+        <section
+          aria-label="底部面板"
+          className="ns-bottom-panel"
+          data-focus-hidden={focusMode}
+          data-region="bottom-panel"
+          data-visible={!focusMode && shellState.bottomPanelVisible}
+        >
+          <div className="ns-bottom-tabs" role="tablist" aria-label="底部面板标签">
+            <PanelBottom aria-hidden="true" size={15} />
+            {shellState.bottomPanelTabs.map((tab, index) => (
+              <button
+                aria-label={`切换底部面板：${bottomPanelLabels.get(tab) ?? tab}`}
+                aria-selected={tab === activeBottomPanelTab}
+                className="ns-bottom-tab"
+                data-focus-order={index === 0 ? "4" : undefined}
+                key={tab}
+                onClick={() => onBottomPanelTabSelect?.(tab)}
+                role="tab"
+                title={`切换到底部面板：${bottomPanelLabels.get(tab) ?? tab}`}
+                type="button"
+              >
+                {bottomPanelLabels.get(tab) ?? tab}
+              </button>
+            ))}
+          </div>
+          <BottomPanelContent
+            activeTab={activeBottomPanelTab}
+            aiWritingWorkflow={aiWritingWorkflow}
+            projectWorkflow={projectWorkflow}
+            search={search}
+          />
+        </section>
+      </div>
+
+      <WorkspaceStatusBar
+        chapterEditor={editorActivity ? chapterEditor : undefined}
+        fileEditor={editorActivity ? fileEditor : undefined}
+        fileSelection={fileSelection}
+      />
 
       <CommandPalette
         commands={commands}

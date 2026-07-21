@@ -283,7 +283,7 @@ async function selectOperationMode(
   const expected = mode === "planning" ? /^规划 · / : /^执行 · /;
   if ((await composer.getByRole("button", { name: expected }).count()) > 0) return;
   await composer
-    .getByRole("button", { name: /^(规划|执行) · (写作|通用文件)$/ })
+    .getByRole("button", { name: /^(规划|执行) · (写作上下文|文件上下文)$/ })
     .click();
   const modes = composer.getByLabel("运行方式");
   await modes

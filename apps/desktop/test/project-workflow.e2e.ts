@@ -37,12 +37,22 @@ async function queueDirectorySelections(
   }, paths);
 }
 
+async function triggerFileMenuItem(
+  electronApp: ElectronApplication,
+  commandId: string
+): Promise<void> {
+  await electronApp.evaluate(({ Menu }, id) => {
+    const appMenu = Menu.getApplicationMenu();
+    const fileMenu = appMenu?.items.find((item) => item.label === "文件");
+    const menuItem = (fileMenu?.submenu?.items ?? []).find((item) => item.id === id);
+    menuItem?.click({ triggerAcceleratorIfAvailable: false } as never);
+  }, commandId);
+}
+
 test("creates a project, creates a chapter, edits it, and saves through Electron", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-e2e-"));
   const defaultProjectRoot = join(tempRoot, "Default Project");
-  const missingProjectRoot = join(tempRoot, "Missing Project");
   const projectRoot = join(tempRoot, "Project Smoke");
-  await mkdir(missingProjectRoot);
   const electronApp = await electron.launch({
     args: [electronMain],
     env: {
@@ -54,13 +64,13 @@ test("creates a project, creates a chapter, edits it, and saves through Electron
 
   try {
     const page = await electronApp.firstWindow();
-    await queueDirectorySelections(electronApp, [missingProjectRoot, tempRoot]);
+    await queueDirectorySelections(electronApp, [tempRoot]);
 
-    await expect(page.getByLabel("项目导航")).toBeVisible();
+    await expect(page.getByLabel("工作区导航")).toBeVisible();
 
-    await page.getByRole("button", { name: "打开项目" }).click();
-    await expect(page.getByText("project.json could not be read.")).toBeVisible();
-    await expect(page.getByText(/已作为普通文件夹打开/)).toHaveCount(0);
+    // Open the create-project dialog via the native File menu.
+    await triggerFileMenuItem(electronApp, "createCreativeProject");
+    await expect(page.getByRole("dialog", { name: "新建创作项目" })).toBeVisible();
 
     await page.getByLabel("项目标题").fill("Project Smoke");
     await page.getByLabel("项目文件夹名称").fill("Project Smoke");
@@ -113,11 +123,9 @@ test("starts public install users in a ready default project without quick start
   try {
     const page = await electronApp.firstWindow();
 
-    const projectNavigator = page.getByLabel("项目导航");
     await expect(page.getByRole("region", { name: "快速开始" })).toHaveCount(0);
-    await expect(projectNavigator.getByRole("button", { name: "打开项目" })).toBeVisible();
-    await expect(projectNavigator.getByRole("button", { name: "创建项目" })).toBeVisible();
-    await expect(projectNavigator.getByRole("button", { name: "新建章节" })).toBeVisible();
+    // Project lifecycle commands are now in the native File menu, not the Navigator.
+    await expect(page.getByRole("navigation", { name: "项目导航" })).toHaveCount(0);
     await expect(page.getByText("未命名长篇项目")).toBeVisible();
     await expect(page.getByRole("tab", { name: "第一章.md" })).toBeVisible();
     await expect(chapterBody(page)).toContainText(/这是第一章的正文/);
@@ -194,6 +202,9 @@ test("reviews and applies an autosave recovery draft from disk", async () => {
     const page = await firstApp.firstWindow();
     await queueDirectorySelections(firstApp, [tempRoot]);
 
+    await triggerFileMenuItem(firstApp, "createCreativeProject");
+    await expect(page.getByRole("dialog", { name: "新建创作项目" })).toBeVisible();
+
     await page.getByLabel("项目标题").fill("Recovery Smoke");
     await page.getByLabel("项目文件夹名称").fill("Recovery Smoke");
     await page.getByRole("button", { name: "选择项目父文件夹" }).click();
@@ -266,7 +277,7 @@ test("reviews and applies an autosave recovery draft from disk", async () => {
     const page = await secondApp.firstWindow();
     await queueDirectorySelections(secondApp, [projectRoot]);
 
-    await page.getByRole("button", { name: "打开项目" }).click();
+    await triggerFileMenuItem(secondApp, "openCreativeProject");
 
     await expect(page.getByLabel("Autosave recovery")).toBeVisible();
     await page.getByRole("button", { name: /预览恢复草稿/ }).click();

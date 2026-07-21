@@ -1,6 +1,5 @@
 import type { ActivityId, NavigatorSection } from "@novel-studio/application";
 import type { WorkbenchMode, WorkspaceContextDto } from "@novel-studio/shared";
-import { FolderOpen, FolderPlus } from "lucide-react";
 
 import { CreativeWorkspaceNavigator } from "./creative-workspace-navigator.js";
 import {
@@ -62,7 +61,6 @@ export function WorkspaceNavigator({
   workbenchMode,
   creative,
   engineering,
-  none,
   collapsed = false,
   focusHidden = false
 }: WorkspaceNavigatorProps) {
@@ -138,36 +136,7 @@ export function WorkspaceNavigator({
       </div>
       <div className="ns-empty-workspace-actions">
         <p>尚未打开工作区</p>
-        <button
-          aria-label="打开项目"
-          className="ns-icon-text-button"
-          disabled={none.onOpenProject === undefined}
-          onClick={none.onOpenProject}
-          type="button"
-        >
-          <FolderOpen aria-hidden="true" size={14} />
-          打开项目
-        </button>
-        <button
-          aria-label="创建项目"
-          className="ns-icon-text-button"
-          disabled={none.onCreateProject === undefined}
-          onClick={none.onCreateProject}
-          type="button"
-        >
-          <FolderPlus aria-hidden="true" size={14} />
-          创建项目
-        </button>
-        <button
-          aria-label="打开工程目录"
-          className="ns-icon-text-button"
-          disabled={none.onOpenEngineeringWorkspace === undefined}
-          onClick={none.onOpenEngineeringWorkspace}
-          type="button"
-        >
-          <FolderOpen aria-hidden="true" size={14} />
-          打开工程目录
-        </button>
+        <p className="ns-muted">通过“文件”菜单新建创作项目或打开工程文件夹。</p>
       </div>
     </nav>
   );

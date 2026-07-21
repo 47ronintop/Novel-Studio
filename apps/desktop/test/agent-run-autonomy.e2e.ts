@@ -276,7 +276,7 @@ async function startAutonomousExecution(page: Page): Promise<void> {
 async function selectExecutionMode(composer: ReturnType<Page["getByLabel"]>): Promise<void> {
   if ((await composer.getByRole("button", { name: /^执行 · / }).count()) > 0) return;
   await composer
-    .getByRole("button", { name: /^(规划|执行) · (写作|通用文件)$/ })
+    .getByRole("button", { name: /^(规划|执行) · (写作上下文|文件上下文)$/ })
     .click();
   await composer
     .getByLabel("运行方式")

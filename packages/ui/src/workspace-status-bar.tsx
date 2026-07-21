@@ -15,7 +15,7 @@ export function WorkspaceStatusBar({
 }: WorkspaceStatusBarProps) {
   const body = fileEditor?.content ?? chapterEditor?.chapter.body;
   if (body === undefined) {
-    return null;
+    return <footer aria-label="状态栏" className="ns-status-bar" data-region="status-bar" />;
   }
 
   if (fileEditor !== undefined) {

@@ -300,7 +300,18 @@ export function createMainWindow(): BrowserWindow {
 }
 
 export function setApplicationMenu(): void {
-  Menu.setApplicationMenu(Menu.buildFromTemplate(createApplicationMenuTemplate()));
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate(
+      createApplicationMenuTemplate({
+        onCommand: (commandId) => {
+          const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+          if (window !== undefined && !window.isDestroyed()) {
+            window.webContents.send("application:menu:native-command", commandId);
+          }
+        }
+      })
+    )
+  );
 }
 
 if (process.env["VITEST"] !== "true") {

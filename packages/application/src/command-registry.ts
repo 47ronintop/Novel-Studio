@@ -12,6 +12,11 @@ export type WorkspaceApplicationCommandId =
 
 export type ApplicationCommandId = string;
 
+export type NativeMenuCommandId =
+  | "createCreativeProject"
+  | "openCreativeProject"
+  | "openEngineeringFolder";
+
 export type ApplicationCommandScope = "workspace" | "plugin";
 
 export type CommandRiskLevel = "safe" | "confirmation-required" | "destructive";

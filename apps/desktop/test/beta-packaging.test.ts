@@ -8,6 +8,20 @@ import { withBuildGateLock } from "./build-gate-lock";
 const packageCheckTimeoutMs = 240_000;
 
 describe("M10 beta packaging", () => {
+  test("electron-builder config restricts Chromium locale packs to zh-CN and en-US", () => {
+    const config = readFileSync(
+      join(process.cwd(), "apps", "desktop", "electron-builder.config.cjs"),
+      "utf8"
+    );
+    // Must declare electronLanguages limiting locale .pak files to two supported locales.
+    // Absence of this restriction means every Chromium locale pak is bundled (~400 MB extra).
+    expect(config).toContain("electronLanguages");
+    expect(config).toContain("zh-CN");
+    expect(config).toContain("en-US");
+    // Must not include an open-ended wildcard alongside the restricted list.
+    expect(config).not.toMatch(/electronLanguages[^;]*\*/);
+  });
+
   test("declares renderer bundling and installer-grade packaging scripts", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
       readonly scripts: Record<string, string>;

@@ -13,7 +13,6 @@ import type {
   ChapterEditorSelection,
   ChapterEditorProps,
   CommandPaletteFeedback,
-  ConfigStudioPanelProps,
   EditorPreferences,
   ModelSettingsDraft,
   PlainFileEditorProps,
@@ -21,7 +20,7 @@ import type {
   StoryBibleEditorDraft,
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
-import { DEFAULT_EDITOR_PREFERENCES } from "@novel-studio/ui";
+import { DEFAULT_EDITOR_PREFERENCES, ProjectCreateDialog } from "@novel-studio/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { createAiWritingWorkflowBridge } from "./ai-writing-workflow-bridge.js";
@@ -60,6 +59,7 @@ import { useAiWritingWorkflowActions } from "./ai-writing-workflow-actions.js";
 import { useAgentUsageSettingsActions } from "./agent-usage-settings-actions.js";
 import { useShellPreferenceActions } from "./shell-preference-actions.js";
 import { createWorkspaceNavigation, type WorkspaceNavigation } from "./workspace-navigation.js";
+import { useStudioActions } from "./studio-actions.js";
 
 export function App() {
   const [api] = useState(() => getNovelStudioApi());
@@ -145,6 +145,7 @@ export function App() {
   >(undefined);
   const [navigatorSearchQuery, setNavigatorSearchQuery] = useState("");
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
+  const [projectCreateDialogOpen, setProjectCreateDialogOpen] = useState(false);
   const [editorPreferences, setEditorPreferences] = useState<EditorPreferences>(
     DEFAULT_EDITOR_PREFERENCES
   );
@@ -162,6 +163,27 @@ export function App() {
       setPendingMainReview(undefined);
     }
   }, [agentConversationWorkspacePresentation.shouldClearPendingMainReview]);
+
+  useEffect(() => {
+    if (api === undefined) return;
+    return api.menu.onNativeCommand((commandId) => {
+      const nav = workspaceNavigationRef.current;
+      if (nav === undefined) return;
+      if (commandId === "createCreativeProject") nav.createCreativeProject();
+      else if (commandId === "openCreativeProject") nav.openCreativeProject();
+      else if (commandId === "openEngineeringFolder") nav.openEngineeringWorkspace();
+    });
+  }, [api]);
+
+  useEffect(() => {
+    if (
+      projectCreateDialogOpen &&
+      projectWorkflow?.status === "ready" &&
+      projectWorkflow.feedback === undefined
+    ) {
+      setProjectCreateDialogOpen(false);
+    }
+  }, [projectCreateDialogOpen, projectWorkflow?.status, projectWorkflow?.feedback]);
 
   useEffect(() => {
     const next = ensureCreativeWorkspaceContext(shellState, projectWorkflow?.projectId);
@@ -526,7 +548,7 @@ export function App() {
     },
     openCreativeProject: handleOpenProject,
     openEngineeringWorkspace: handleOpenEngineeringWorkspace,
-    createCreativeProject: handleCreateProject,
+    createCreativeProject: () => setProjectCreateDialogOpen(true),
     engineeringWorkspaceBridge,
     setEngineeringWorkspace,
     onNavigationFeedback: (message) =>
@@ -764,130 +786,18 @@ export function App() {
 
   const agentUsageSettingsActions = useAgentUsageSettingsActions(settingsBridge, setSettings);
 
-  const handleStudioAssetSelect = useCallback<NonNullable<ConfigStudioPanelProps["onAssetSelect"]>>(
-    (assetType, assetId) => {
-      if (studioBridge === undefined) {
-        return;
-      }
-
-      void studioBridge.selectAsset(assetType, assetId).then(setStudio);
-    },
-    [studioBridge]
-  );
-
-  const handleStudioContentChange = useCallback<
-    NonNullable<ConfigStudioPanelProps["onContentChange"]>
-  >(
-    (nextContent) => {
-      if (studioBridge === undefined) {
-        return;
-      }
-
-      setStudio(studioBridge.updateContent(nextContent));
-    },
-    [studioBridge]
-  );
-
-  const handleStudioWorkflowNodeSelect = useCallback<
-    NonNullable<ConfigStudioPanelProps["onWorkflowNodeSelect"]>
-  >(
-    (nodeId) => {
-      if (studioBridge === undefined) {
-        return;
-      }
-
-      setStudio(studioBridge.selectWorkflowNode(nodeId));
-    },
-    [studioBridge]
-  );
-
-  const handleStudioWorkflowEdgeSelect = useCallback<
-    NonNullable<ConfigStudioPanelProps["onWorkflowEdgeSelect"]>
-  >(
-    (edgeId) => {
-      if (studioBridge === undefined) {
-        return;
-      }
-
-      setStudio(studioBridge.selectWorkflowEdge(edgeId));
-    },
-    [studioBridge]
-  );
-
-  const handleStudioWorkflowNodeEdit = useCallback<
-    NonNullable<ConfigStudioPanelProps["onWorkflowNodeEdit"]>
-  >(
-    (edit) => {
-      if (studioBridge === undefined) {
-        return;
-      }
-
-      setStudio(studioBridge.applyWorkflowNodeEdit(edit));
-    },
-    [studioBridge]
-  );
-
-  const handleStudioWorkflowSemanticEdit = useCallback<
-    NonNullable<ConfigStudioPanelProps["onWorkflowSemanticEdit"]>
-  >(
-    (edit) => {
-      if (studioBridge === undefined) {
-        return;
-      }
-
-      setStudio(studioBridge.applyWorkflowSemanticEdit(edit));
-    },
-    [studioBridge]
-  );
-
-  const handleStudioWorkflowLayoutChange = useCallback<
-    NonNullable<ConfigStudioPanelProps["onWorkflowLayoutChange"]>
-  >(
-    (edit) => {
-      if (studioBridge === undefined) {
-        return;
-      }
-
-      setStudio(studioBridge.updateWorkflowGraphLayout(edit));
-    },
-    [studioBridge]
-  );
-
-  const handleStudioWorkflowNodeDragCommit = useCallback<
-    NonNullable<ConfigStudioPanelProps["onWorkflowNodeDragCommit"]>
-  >(
-    (edit) => {
-      if (studioBridge === undefined) {
-        return;
-      }
-
-      setStudio(studioBridge.commitWorkflowNodeDrag(edit));
-    },
-    [studioBridge]
-  );
-
-  const handleStudioSave = useCallback<NonNullable<ConfigStudioPanelProps["onSave"]>>(() => {
-    if (studioBridge === undefined) {
-      return;
-    }
-
-    setStudio(studioBridge.beginSave());
-    void studioBridge.save().then(setStudio);
-  }, [studioBridge]);
-
-  const handleStudioRestoreVersion = useCallback<
-    NonNullable<ConfigStudioPanelProps["onRestoreVersion"]>
-  >(
-    (versionId) => {
-      if (studioBridge === undefined) {
-        return;
-      }
-
-      setStudio(studioBridge.beginRestore());
-      void studioBridge.restoreVersion(versionId).then(setStudio);
-    },
-    [studioBridge]
-  );
+  const {
+    handleStudioAssetSelect,
+    handleStudioContentChange,
+    handleStudioWorkflowNodeSelect,
+    handleStudioWorkflowEdgeSelect,
+    handleStudioWorkflowNodeEdit,
+    handleStudioWorkflowSemanticEdit,
+    handleStudioWorkflowLayoutChange,
+    handleStudioWorkflowNodeDragCommit,
+    handleStudioSave,
+    handleStudioRestoreVersion
+  } = useStudioActions(studioBridge, setStudio);
 
   const interactiveChapterEditor =
     chapterEditor === undefined
@@ -954,6 +864,7 @@ export function App() {
   });
 
   return (
+    <>
     <RendererWorkspaceShell
       appearancePreferences={appearancePreferences}
       aiWritingWorkflow={aiWritingWorkflow}
@@ -1036,5 +947,26 @@ export function App() {
       onNavigatorExpandedSectionIdsChange={handleNavigatorExpandedSectionIdsChange}
       navigation={workspaceNavigation}
     />
+    <ProjectCreateDialog
+      open={projectCreateDialogOpen}
+      titleInput={projectWorkflow?.projectTitleInput ?? ""}
+      folderNameInput={projectWorkflow?.projectFolderNameInput ?? ""}
+      {...(projectWorkflow?.selectedParentDisplayName === undefined
+        ? {}
+        : { selectedParentDisplayName: projectWorkflow.selectedParentDisplayName })}
+      {...(projectWorkflow?.creationPreview === undefined
+        ? {}
+        : { creationPreview: projectWorkflow.creationPreview })}
+      busy={projectWorkflow?.status === "creating"}
+      {...(projectWorkflow?.feedback === undefined
+        ? {}
+        : { feedback: projectWorkflow.feedback })}
+      onTitleChange={handleProjectTitleChange}
+      onFolderNameChange={handleProjectFolderNameChange}
+      onChooseParentDirectory={handleChooseCreateParentDirectory}
+      onCancel={() => setProjectCreateDialogOpen(false)}
+      onCreate={handleCreateProject}
+    />
+  </>
   );
 }

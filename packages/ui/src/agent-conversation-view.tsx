@@ -58,7 +58,7 @@ export function AgentConversationView(props: AgentConversationViewProps) {
           <button
             aria-label="新建会话"
             className="ns-icon-text-button"
-            disabled={props.loading}
+            disabled={props.loading || props.createDisabled === true}
             onClick={props.onCreate}
             type="button"
           >
@@ -67,6 +67,13 @@ export function AgentConversationView(props: AgentConversationViewProps) {
           </button>
         </div>
         {historyDrawer}
+        {props.composer === undefined ? null : (
+          <AgentComposer
+            {...props.composer}
+            disabled={true}
+            disabledReason={props.composer.disabledReason ?? "打开工作区后即可开始对话。"}
+          />
+        )}
       </section>
     );
   }

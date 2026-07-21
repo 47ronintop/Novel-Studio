@@ -5,8 +5,6 @@ import {
   Clock3,
   FilePlus2,
   FileText,
-  FolderOpen,
-  FolderPlus,
   Globe2,
   MoreHorizontal,
   Plus,
@@ -18,7 +16,6 @@ import { useId, type KeyboardEvent, type MouseEvent } from "react";
 
 import type {
   CreativeWorkspaceNavigatorProps,
-  ProjectWorkflowProps,
   StoryBibleEditorKind
 } from "./workspace-shell-types.js";
 
@@ -67,9 +64,6 @@ export function CreativeWorkspaceNavigator(props: CreativeWorkspaceNavigatorProp
           <MoreHorizontal size={15} />
         </span>
       </div>
-      {props.projectWorkflow === undefined ? null : (
-        <CreativeProjectControls projectWorkflow={props.projectWorkflow} />
-      )}
       <div aria-label="创作导航模式" className="ns-creative-mode-tabs" role="tablist">
         <button
           aria-controls={writingPanelId}
@@ -119,69 +113,6 @@ export function CreativeWorkspaceNavigator(props: CreativeWorkspaceNavigatorProp
         <StoryProjection {...props} />
       </section>
     </nav>
-  );
-}
-
-function CreativeProjectControls({
-  projectWorkflow
-}: {
-  readonly projectWorkflow: ProjectWorkflowProps;
-}) {
-  const busy = projectWorkflow.status === "opening" || projectWorkflow.status === "creating";
-  return (
-    <div className="ns-project-workflow">
-      <input
-        aria-label="项目标题"
-        className="ns-project-path"
-        onChange={(event) => projectWorkflow.onProjectTitleChange?.(event.currentTarget.value)}
-        placeholder="项目标题"
-        value={projectWorkflow.projectTitleInput ?? ""}
-      />
-      <input
-        aria-label="项目文件夹名称"
-        className="ns-project-path"
-        onChange={(event) => projectWorkflow.onProjectFolderNameChange?.(event.currentTarget.value)}
-        placeholder="文件夹名称"
-        value={projectWorkflow.projectFolderNameInput ?? ""}
-      />
-      <div className="ns-project-actions">
-        <button
-          aria-label="选择项目父文件夹"
-          className="ns-icon-text-button"
-          disabled={busy}
-          onClick={projectWorkflow.onChooseCreateParentDirectory}
-          type="button"
-        >
-          <FolderOpen aria-hidden="true" size={14} />
-          {projectWorkflow.selectedParentDisplayName ?? "选择父文件夹"}
-        </button>
-        <button
-          aria-label="打开项目"
-          className="ns-icon-text-button"
-          disabled={busy}
-          onClick={projectWorkflow.onOpenProject}
-          type="button"
-        >
-          <FolderOpen aria-hidden="true" size={14} />
-          {projectWorkflow.status === "opening" ? "正在打开" : "打开项目"}
-        </button>
-        <button
-          aria-label="创建项目"
-          className="ns-icon-text-button"
-          disabled={busy}
-          onClick={projectWorkflow.onCreateProject}
-          type="button"
-        >
-          <FolderPlus aria-hidden="true" size={14} />
-          {projectWorkflow.status === "creating" ? "正在创建" : "创建项目"}
-        </button>
-      </div>
-      {projectWorkflow.feedback === undefined ? null : (
-        <p className="ns-project-feedback" data-kind={projectWorkflow.feedback.kind} role="status">
-          {projectWorkflow.feedback.message}
-        </p>
-      )}
-    </div>
   );
 }
 

@@ -499,6 +499,7 @@ export interface AgentConversationViewProps {
   readonly mainReview?: AgentConversationMainReview;
   readonly onOpenMainReview?: (review: AgentConversationMainReview) => void;
   readonly loading: boolean;
+  readonly createDisabled?: boolean;
   readonly errorMessage?: string;
   readonly onCreate: () => void;
   readonly onArchive: (conversationId: string) => void;

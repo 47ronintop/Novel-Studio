@@ -109,6 +109,8 @@ export type {
   EngineeringWorkspaceNavigatorProps,
   WorkspaceNavigatorProps
 } from "./workspace-navigator.js";
+export { ProjectCreateDialog } from "./project-create-dialog.js";
+export type { ProjectCreateDialogProps } from "./project-create-dialog.js";
 export type {
   AiWorkflowObservabilityProps,
   AiWorkflowObservedStepKind,

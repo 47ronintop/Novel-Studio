@@ -277,9 +277,22 @@ describe("WorkspaceNavigator", () => {
     expect(creativeHtml).not.toContain('data-navigator-group="files"');
     expect(engineeringHtml).toContain('data-navigator-group="files"');
     expect(engineeringHtml).toContain("project.json");
-    expect(noneHtml).toContain("打开项目");
-    expect(noneHtml).toContain("创建项目");
+    // Project lifecycle entry points belong to the native File menu and central dialog,
+    // not inside the Navigator. These buttons must not appear in any Navigator variant.
+    expect(noneHtml).not.toContain("打开项目");
+    expect(noneHtml).not.toContain("创建项目");
+    expect(noneHtml).not.toContain("打开工程目录");
     expect(noneHtml).not.toContain("Novel Studio");
+  });
+
+  test("creative Navigator has no persistent project-creation form or lifecycle buttons", () => {
+    const creativeHtml = renderWorkspaceNavigator({ kind: "creativeProject" });
+
+    expect(creativeHtml).not.toContain("打开项目");
+    expect(creativeHtml).not.toContain("创建项目");
+    expect(creativeHtml).not.toContain("打开工程目录");
+    // No inline folder-name or title inputs for project creation
+    expect(creativeHtml).not.toMatch(/input[^>]*placeholder[^>]*(项目名称|文件夹|folder)/i);
   });
 });
 

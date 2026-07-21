@@ -29,7 +29,7 @@ import type {
   UndoRunCommand
 } from "@novel-studio/agent-engine";
 
-import type { ApplicationCommand } from "./command-registry.js";
+import type { ApplicationCommand, NativeMenuCommandId } from "./command-registry.js";
 import type {
   AgentRunDraftResult,
   ReadAgentRunDraftCommand,
@@ -328,6 +328,9 @@ export interface NovelStudioApi {
   preferences: {
     load(): Promise<Result<UserPreferencesSnapshot, UnifiedError>>;
     save(input: UserPreferencesSaveInput): Promise<Result<UserPreferencesSnapshot, UnifiedError>>;
+  };
+  menu: {
+    onNativeCommand(listener: (commandId: NativeMenuCommandId) => void): () => void;
   };
 }
 

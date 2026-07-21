@@ -19,6 +19,7 @@ module.exports = {
   },
   npmRebuild: false,
   asar: true,
+  electronLanguages: ["zh-CN", "en-US"],
   win: {
     icon: "apps/desktop/build/icon.svg",
     forceCodeSigning: false,

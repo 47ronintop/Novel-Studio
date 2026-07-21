@@ -90,7 +90,7 @@ describe("WorkspaceShell", () => {
     expect(groups.bottomActivities.map((activity) => activity.id)).toEqual(["settings"]);
   });
 
-  test("renders settings as a workspace-level view without editor chrome", () => {
+  test("renders settings inside the central Editor Area and keeps Navigator, Agent Surface, and Status Bar mounted", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
@@ -102,14 +102,20 @@ describe("WorkspaceShell", () => {
       />
     );
 
+    // Settings form must be reachable
     expect(html).toContain('data-region="settings-workspace"');
     expect(html).toContain('aria-label="关闭设置"');
     expect(html).toContain('aria-label="打开命令面板"');
-    expect(html).not.toContain('data-region="activity-bar"');
-    expect(html).not.toContain('data-region="editor-area"');
-    expect(html).not.toContain('data-region="ai-panel"');
-    expect(html).not.toContain('data-region="bottom-panel"');
-    expect(html).not.toContain('data-region="status-bar"');
+    // Shell chrome MUST remain mounted when settings is open
+    expect(html).toContain('data-region="activity-bar"');
+    expect(html).toContain('data-region="editor-area"');
+    expect(html).toContain('data-region="ai-panel"');
+    expect(html).toContain('data-region="status-bar"');
+    // Settings workspace is nested inside the editor area, not floating above the whole shell
+    const editorAreaStart = html.indexOf('data-region="editor-area"');
+    const settingsStart = html.indexOf('data-region="settings-workspace"');
+    expect(settingsStart).toBeGreaterThan(editorAreaStart);
+    // Layout controls should not duplicate inside settings form
     expect(html).not.toContain('aria-label="切换 Split View"');
   });
 
@@ -230,6 +236,19 @@ describe("WorkspaceShell", () => {
     expect(css).toMatch(/\.ns-ai-panel\s*\{[^}]*min-width:\s*280px/s);
   });
 
+  test("disables non-essential transitions and animations under prefers-reduced-motion", () => {
+    const css = readFileSync(join(process.cwd(), "packages", "ui", "src", "styles.css"), "utf8");
+    const reduceMotionBlocks = [
+      ...css.matchAll(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{([^}]*\{[^}]*\}[^}]*)\}/gs)
+    ];
+    const combined = reduceMotionBlocks.map((match) => match[0]).join("\n");
+
+    // Must broadly disable animation/transition duration, not just target a single component.
+    expect(combined).toMatch(/\*[^{]*\{[^}]*transition-duration:\s*0\.01ms\s*!important/s);
+    expect(combined).toMatch(/\*[^{]*\{[^}]*animation-duration:\s*0\.01ms\s*!important/s);
+    expect(combined).toMatch(/animation-iteration-count:\s*1\s*!important/s);
+  });
+
   test("renders the VS Code style application shell regions", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
@@ -244,18 +263,45 @@ describe("WorkspaceShell", () => {
     expect(html).toContain('data-region="navigator"');
     expect(html).toContain('data-region="editor-area"');
     expect(html).toContain('data-region="ai-panel"');
-    expect(html).not.toContain('data-region="status-bar"');
+    expect(html).toContain('data-region="status-bar"');
     expect(html).toContain('aria-label="活动栏"');
     expect(html).toContain('aria-label="工作区导航"');
     expect(html).toContain('aria-label="编辑区"');
     expect(html).toContain('aria-label="AI 对话面板"');
-    expect(html).not.toContain('aria-label="状态栏"');
+    expect(html).toContain('aria-label="状态栏"');
     expect(html).toContain('aria-label="Navigator resize handle"');
     expect(html).toContain('aria-label="AI panel resize handle"');
     expect(html).not.toContain('aria-label="Novel Studio asset groups"');
-    expect(html).toContain('aria-label="Agent 未绑定工作区"');
+    // Unbound Agent must render the FULL Agent Conversation View (Composer included, inert),
+    // not a placeholder message. This proves the Agent shell never disappears pre-binding.
+    expect(html).toContain('aria-label="Agent 会话主视图"');
+    expect(html).toContain('aria-label="会话输入区"');
+    expect(html).not.toContain('aria-label="Agent 未绑定工作区"');
     expect(html).not.toContain('aria-label="AI 写作工作流"');
     expect(html).not.toContain("Markdown");
+  });
+
+  test("keeps one complete inert Agent surface mounted before any workspace is bound", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{
+          ...application.getShellState(),
+          workspaceContext: { kind: "none" }
+        }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+      />
+    );
+
+    // Exactly one Agent Conversation View and one composer region, always present.
+    expect(html.match(/aria-label="Agent 会话主视图"/g) ?? []).toHaveLength(1);
+    expect(html.match(/aria-label="会话输入区"/g) ?? []).toHaveLength(1);
+    // The Composer's controls must be inert with a precise disabled reason, not absent.
+    expect(html).toMatch(/aria-label="启动 Agent 运行"[^>]*disabled/);
+    expect(html).toMatch(/aria-label="新建会话"[^>]*disabled/);
+    // No virtual conversation/run should ever be synthesized for the unbound state.
+    expect(html).not.toContain("prj_minimal_chapter");
   });
 
   test("renders compact status for the active chapter only", () => {
@@ -336,7 +382,11 @@ describe("WorkspaceShell", () => {
       />
     );
 
-    expect(html).not.toContain('data-region="status-bar"');
+    // The Status Bar chrome stays mounted (design point 8: hidden only via explicit
+    // collapse/focus/narrow layout, never as a side effect of navigating elsewhere),
+    // but it must not leak document-specific status while outside an editor activity.
+    expect(html).toContain('data-region="status-bar"');
+    expect(html).not.toContain("Hidden Status");
   });
 
   test("keeps duplicate save/context metadata out of the AI panel and uses an IDE editor surface", () => {

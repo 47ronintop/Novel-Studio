@@ -123,7 +123,7 @@ function PermissionSummaryDetails({
           </div>
           <div>
             <dt>上下文</dt>
-            <dd>{summary.contextMode === "writing" ? "写作" : "通用文件"}</dd>
+            <dd>{summary.contextMode === "writing" ? "写作上下文" : "文件上下文"}</dd>
           </div>
           <div>
             <dt>可读取</dt>

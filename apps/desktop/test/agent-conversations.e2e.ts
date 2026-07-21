@@ -76,7 +76,7 @@ test("isolates multi-run conversation context and restores project-scoped conver
     );
     await expect(
       page.getByRole("button", {
-        name: /执行 · 写作|规划 · 写作|执行 · 通用文件|规划 · 通用文件/
+        name: /执行 · 写作上下文|规划 · 写作上下文|执行 · 文件上下文|规划 · 文件上下文/
       })
     ).toHaveCount(1);
     await expect(page.getByLabel("AI 对话记录")).toHaveCount(0);
@@ -86,7 +86,7 @@ test("isolates multi-run conversation context and restores project-scoped conver
     await expect(page.getByLabel("AI 工作流运行观测")).toHaveCount(0);
 
     await selectPlanningWritingMode(page);
-    await expect(page.getByRole("button", { name: "规划 · 写作" })).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "规划 · 写作上下文" })).toHaveCount(1);
     await expect(page.getByLabel("会话输入区").getByLabel(/^修改权限：/)).toHaveCount(0);
     await expect(page.getByLabel("运行方式")).toHaveCount(0);
     await expect(
@@ -302,22 +302,22 @@ async function closeHistoryDrawer(drawer: Locator): Promise<void> {
 
 async function selectExecutionMode(page: Page): Promise<void> {
   const trigger = page.getByRole("button", {
-    name: /执行 · 写作|规划 · 写作|执行 · 通用文件|规划 · 通用文件/
+    name: /执行 · 写作上下文|规划 · 写作上下文|执行 · 文件上下文|规划 · 文件上下文/
   });
-  if ((await trigger.getAttribute("aria-label")) === "执行 · 写作") return;
+  if ((await trigger.getAttribute("aria-label")) === "执行 · 写作上下文") return;
   await trigger.click();
   await page.getByLabel("运行方式").getByRole("button", { name: "执行", exact: true }).click();
 }
 
 async function selectPlanningWritingMode(page: Page): Promise<void> {
   let trigger = page.getByRole("button", {
-    name: /执行 · 写作|规划 · 写作|执行 · 通用文件|规划 · 通用文件/
+    name: /执行 · 写作上下文|规划 · 写作上下文|执行 · 文件上下文|规划 · 文件上下文/
   });
   await trigger.click();
   await page.getByLabel("运行方式").getByRole("button", { name: "规划（只读）" }).click();
-  trigger = page.getByRole("button", { name: /规划 · 写作|规划 · 通用文件/ });
+  trigger = page.getByRole("button", { name: /规划 · 写作上下文|规划 · 文件上下文/ });
   await trigger.click();
-  await page.getByLabel("上下文").getByRole("button", { name: "写作", exact: true }).click();
+  await page.getByLabel("上下文").getByRole("button", { name: "写作上下文", exact: true }).click();
 }
 
 async function sendConversationRequest(page: Page, request: string): Promise<void> {

@@ -20,7 +20,7 @@ describe("AgentComposer", () => {
 
     expect(host.querySelectorAll('textarea[aria-label="Agent 请求"]')).toHaveLength(1);
     expect(host.querySelectorAll('button[aria-label="启动 Agent 运行"]')).toHaveLength(1);
-    expect(host.querySelectorAll("button").item(0).textContent).toContain("执行 · 写作");
+    expect(host.querySelectorAll("button").item(0).textContent).toContain("执行 · 写作上下文");
     expect(host.querySelectorAll('[aria-label="运行方式"]')).toHaveLength(0);
     expect(host.querySelectorAll('[aria-label="上下文"]')).toHaveLength(0);
   });
@@ -64,7 +64,7 @@ describe("AgentComposer", () => {
     expect(host.querySelector<HTMLTextAreaElement>('[aria-label="Agent 请求"]')?.disabled).toBe(
       true
     );
-    expect(host.textContent).toContain("执行 · 写作");
+    expect(host.textContent).toContain("执行 · 写作上下文");
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="停止 Agent 运行"]')?.click());
     expect(onStop).toHaveBeenCalledTimes(1);
   });
@@ -80,7 +80,7 @@ describe("AgentComposer", () => {
       onWritePolicyChange,
       onWritePolicyAcknowledgedChange
     });
-    const trigger = host.querySelector<HTMLButtonElement>('[aria-label="执行 · 写作"]');
+    const trigger = host.querySelector<HTMLButtonElement>('[aria-label="执行 · 写作上下文"]');
 
     act(() =>
       trigger?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }))
@@ -90,8 +90,8 @@ describe("AgentComposer", () => {
     expect(host.querySelector('[aria-label="运行方式"]')?.textContent).toContain("执行");
     expect(host.querySelector('[aria-label="运行方式"]')?.textContent).toContain("规划（只读）");
     expect(host.querySelectorAll('[aria-label="上下文"]')).toHaveLength(1);
-    expect(host.querySelector('[aria-label="上下文"]')?.textContent).toContain("写作");
-    expect(host.querySelector('[aria-label="上下文"]')?.textContent).toContain("通用文件");
+    expect(host.querySelector('[aria-label="上下文"]')?.textContent).toContain("写作上下文");
+    expect(host.querySelector('[aria-label="上下文"]')?.textContent).toContain("文件上下文");
 
     const execution = host.querySelector<HTMLButtonElement>('[data-mode-option="execution"]');
     act(() =>
@@ -116,7 +116,7 @@ describe("AgentComposer", () => {
 
   test("closes the mode popover with Escape and exposes planning as read only", () => {
     const { host } = renderComposer({ operationMode: "planning" });
-    const trigger = host.querySelector<HTMLButtonElement>('[aria-label="规划 · 写作"]');
+    const trigger = host.querySelector<HTMLButtonElement>('[aria-label="规划 · 写作上下文"]');
     expect(host.textContent).toContain("只读规划");
     expect(host.textContent).not.toContain("每次修改前确认");
     expect(host.querySelector('[aria-label^="修改权限："]')).toBeNull();
@@ -157,6 +157,8 @@ describe("AgentComposer", () => {
     expect(summary?.textContent).toContain("Git");
     expect(summary?.textContent).toContain("网络");
     expect(summary?.textContent).toContain("propose_chapter_write");
+    expect(summary?.textContent).toContain("写作上下文");
+    expect(summary?.textContent).not.toContain("通用文件");
   });
 
   test("requires explicit risk acknowledgement before an automatic-modification run can start", () => {
@@ -355,7 +357,7 @@ describe("AgentComposer", () => {
       ]
     });
 
-    act(() => host.querySelector<HTMLButtonElement>('[aria-label="执行 · 写作"]')?.click());
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="执行 · 写作上下文"]')?.click());
     expect(host.querySelector('[data-context-option="writing"]')).toBeNull();
     expect(host.querySelector('[data-context-option="general_file"]')).not.toBeNull();
     expect(host.querySelectorAll('[aria-label="Agent 快捷动作"]')).toHaveLength(1);

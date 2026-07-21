@@ -47,9 +47,10 @@ test("accepts settings and editor chrome across desktop and narrow Electron wind
     const semanticBefore = await readSemanticTokens(page);
     await page.getByLabel("活动栏").getByRole("button", { name: "设置" }).click();
     await expect(page.getByRole("heading", { name: "设置" })).toBeVisible();
-    await expect(page.locator('[data-region="editor-area"]')).toHaveCount(0);
-    await expect(page.locator('[data-region="ai-panel"]')).toHaveCount(0);
-    await expect(page.locator('[data-region="status-bar"]')).toHaveCount(0);
+    // Chrome regions stay mounted even during settings mode (VS Code-style architecture).
+    await expect(page.locator('[data-region="editor-area"]')).toHaveCount(1);
+    await expect(page.locator('[data-region="ai-panel"]')).toHaveCount(1);
+    await expect(page.locator('[data-region="status-bar"]')).toHaveCount(1);
     await capture(page, "desktop-settings.png");
 
     await page

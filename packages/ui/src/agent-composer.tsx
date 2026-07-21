@@ -37,7 +37,7 @@ export function AgentComposer(props: AgentComposerProps) {
   }
 
   const operationLabel = props.operationMode === "execution" ? "执行" : "规划";
-  const contextLabel = props.contextMode === "writing" ? "写作" : "通用文件";
+  const contextLabel = props.contextMode === "writing" ? "写作上下文" : "文件上下文";
   const model = props.model;
   const reasoning = props.reasoning;
   const references = props.references;
@@ -150,7 +150,7 @@ export function AgentComposer(props: AgentComposerProps) {
                         }}
                         type="button"
                       >
-                        写作
+                        写作上下文
                       </button>
                     ) : null}
                     {availableContextModes.includes("general_file") ? (
@@ -172,7 +172,7 @@ export function AgentComposer(props: AgentComposerProps) {
                         }}
                         type="button"
                       >
-                        通用文件
+                        文件上下文
                       </button>
                     ) : null}
                   </div>
