@@ -59,10 +59,7 @@ export function CreativeWorkspaceNavigator(props: CreativeWorkspaceNavigatorProp
       data-region="navigator"
     >
       <div className="ns-panel-header">
-        <span className="ns-creative-project-title">创作内容</span>
-        <span className="ns-creative-project-menu" aria-hidden="true">
-          <MoreHorizontal size={15} />
-        </span>
+        <span className="ns-creative-project-title" title={props.projectTitle}>{props.projectTitle}</span>
       </div>
       <div aria-label="创作导航模式" className="ns-creative-mode-tabs" role="tablist">
         <button

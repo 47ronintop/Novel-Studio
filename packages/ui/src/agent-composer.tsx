@@ -1,7 +1,6 @@
-import { ChevronDown, Cpu, Plus, ScanText, Send, Sparkles, Square, X, Zap } from "lucide-react";
+import { ChevronDown, Cpu, Plus, Send, Square, X } from "lucide-react";
 import { useRef, type KeyboardEvent } from "react";
 
-import { AgentContextMenu } from "./agent-context-menu.js";
 import { AgentPermissionMenu } from "./agent-permission-menu.js";
 import { AgentPopover, rovePopoverOptions } from "./agent-popover.js";
 import type { AgentComposerProps } from "./workspace-shell-types.js";
@@ -37,16 +36,20 @@ export function AgentComposer(props: AgentComposerProps) {
   }
 
   const operationLabel = props.operationMode === "execution" ? "执行" : "规划";
-  const contextLabel = props.contextMode === "writing" ? "写作上下文" : "文件上下文";
   const model = props.model;
   const reasoning = props.reasoning;
   const references = props.references;
-  const availableContextModes = props.availableContextModes ?? ["writing", "general_file"];
+
+  // Combined model+reasoning label for the trigger
   const selectedModelLabel =
     model === undefined
       ? ""
       : model.profiles.find((profile) => profile.id === model.selectedProfileId)?.label ??
         model.selectedProfileId;
+  const showReasoningInTrigger = reasoning !== undefined && reasoning.visible;
+  const combinedModelLabel = showReasoningInTrigger
+    ? `${selectedModelLabel} · ${reasoningLabel(reasoning.current)}`
+    : selectedModelLabel;
 
   return (
     <section className="ns-agent-conversation-composer ns-agent-composer" aria-label="会话输入区">
@@ -59,128 +62,133 @@ export function AgentComposer(props: AgentComposerProps) {
           disabled={draftDisabled}
           onChange={(event) => props.onRequestChange(event.currentTarget.value)}
           onKeyDown={handleDraftKeyDown}
-          placeholder="说明本次规划或执行目标"
+          placeholder="说明你想续写、修改、分析或规划的内容…"
           value={props.request}
         />
+        {references !== undefined && references.chips.length > 0 ? (
+          <ul aria-label="已选引用" className="ns-agent-composer-reference-chips-inset">
+            {references.chips.map((chip) => (
+              <li key={chip.refId}>
+                <span className="ns-agent-composer-reference-chip-label">{chip.label}</span>
+                <button
+                  aria-label={`移除引用 ${chip.label}`}
+                  disabled={draftDisabled}
+                  onClick={() => references.onRemove(chip.refId)}
+                  type="button"
+                >
+                  <X aria-hidden="true" size={11} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
         <div className="ns-agent-composer-toolbar">
           <div className="ns-agent-composer-toolbar-left">
+            {references !== undefined ? (
+              <AgentPopover
+                disabled={draftDisabled || references.available.length === 0}
+                panelClassName="ns-agent-composer-reference-popover"
+                panelLabel="添加上下文引用"
+                triggerClassName="ns-agent-composer-ref-add-trigger"
+                triggerContent={<Plus aria-hidden="true" size={13} />}
+                triggerLabel="添加上下文引用"
+                triggerTitle="添加上下文引用"
+              >
+                {({ close }) => (
+                  <ul aria-label="可添加的引用" className="ns-agent-composer-option-list" role="listbox">
+                    {references.available.length === 0 ? (
+                      <li className="ns-agent-context-empty">暂无可添加的引用</li>
+                    ) : (
+                      references.available.map((ref) => (
+                        <li key={ref.refId}>
+                          <button
+                            data-reference-option={ref.refId}
+                            disabled={draftDisabled}
+                            onClick={() => {
+                              references.onAdd(ref.refId);
+                              close();
+                            }}
+                            type="button"
+                          >
+                            {ref.label}
+                          </button>
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                )}
+              </AgentPopover>
+            ) : null}
             <AgentPopover
               disabled={draftDisabled}
               initialFocus={
                 props.operationMode === "execution" ? executionOptionRef : planningOptionRef
               }
               panelClassName="ns-agent-composer-mode-popover"
-              panelLabel="运行方式与上下文"
+              panelLabel="运行方式"
+              triggerClassName="ns-agent-composer-mode-trigger"
               triggerContent={
                 <>
-                  {operationLabel} · {contextLabel}
-                  <ChevronDown aria-hidden="true" size={13} />
+                  {operationLabel}
+                  <ChevronDown aria-hidden="true" size={12} />
                 </>
               }
-              triggerLabel={`${operationLabel} · ${contextLabel}`}
-              triggerTitle="选择运行方式和上下文"
+              triggerLabel={operationLabel}
+              triggerTitle="选择运行方式"
             >
               {({ close }) => (
-                <>
-                  <div aria-label="运行方式" role="group">
-                    <button
-                      aria-pressed={props.operationMode === "execution"}
-                      data-mode-option="execution"
-                      disabled={draftDisabled}
-                      onClick={() => {
+                <div aria-label="运行方式" role="group">
+                  <button
+                    aria-pressed={props.operationMode === "execution"}
+                    data-mode-option="execution"
+                    disabled={draftDisabled}
+                    onClick={() => {
+                      props.onOperationModeChange("execution");
+                      close();
+                    }}
+                    onKeyDown={(event) => {
+                      rovePopoverOptions(event);
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
                         props.onOperationModeChange("execution");
                         close();
-                      }}
-                      onKeyDown={(event) => {
-                        rovePopoverOptions(event);
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          props.onOperationModeChange("execution");
-                          close();
-                        }
-                      }}
-                      ref={executionOptionRef}
-                      type="button"
-                    >
-                      执行
-                    </button>
-                    <button
-                      aria-pressed={props.operationMode === "planning"}
-                      data-mode-option="planning"
-                      disabled={draftDisabled}
-                      onClick={() => {
+                      }
+                    }}
+                    ref={executionOptionRef}
+                    type="button"
+                  >
+                    执行
+                  </button>
+                  <button
+                    aria-pressed={props.operationMode === "planning"}
+                    data-mode-option="planning"
+                    disabled={draftDisabled}
+                    onClick={() => {
+                      props.onOperationModeChange("planning");
+                      props.onWritePolicyChange("write_before_confirmation");
+                      props.onWritePolicyAcknowledgedChange(false);
+                      close();
+                    }}
+                    onKeyDown={(event) => {
+                      rovePopoverOptions(event);
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
                         props.onOperationModeChange("planning");
                         props.onWritePolicyChange("write_before_confirmation");
                         props.onWritePolicyAcknowledgedChange(false);
                         close();
-                      }}
-                      onKeyDown={(event) => {
-                        rovePopoverOptions(event);
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          props.onOperationModeChange("planning");
-                          props.onWritePolicyChange("write_before_confirmation");
-                          props.onWritePolicyAcknowledgedChange(false);
-                          close();
-                        }
-                      }}
-                      ref={planningOptionRef}
-                      type="button"
-                    >
-                      规划（只读）
-                    </button>
-                  </div>
-                  <div aria-label="上下文" role="group">
-                    {availableContextModes.includes("writing") ? (
-                      <button
-                        aria-pressed={props.contextMode === "writing"}
-                        data-context-option="writing"
-                        disabled={draftDisabled}
-                        onClick={() => {
-                          props.onContextModeChange("writing");
-                          close();
-                        }}
-                        onKeyDown={(event) => {
-                          rovePopoverOptions(event);
-                          if (event.key === "Enter" || event.key === " ") {
-                            event.preventDefault();
-                            props.onContextModeChange("writing");
-                            close();
-                          }
-                        }}
-                        type="button"
-                      >
-                        写作上下文
-                      </button>
-                    ) : null}
-                    {availableContextModes.includes("general_file") ? (
-                      <button
-                        aria-pressed={props.contextMode === "general_file"}
-                        data-context-option="general_file"
-                        disabled={draftDisabled}
-                        onClick={() => {
-                          props.onContextModeChange("general_file");
-                          close();
-                        }}
-                        onKeyDown={(event) => {
-                          rovePopoverOptions(event);
-                          if (event.key === "Enter" || event.key === " ") {
-                            event.preventDefault();
-                            props.onContextModeChange("general_file");
-                            close();
-                          }
-                        }}
-                        type="button"
-                      >
-                        文件上下文
-                      </button>
-                    ) : null}
-                  </div>
-                </>
+                      }
+                    }}
+                    ref={planningOptionRef}
+                    type="button"
+                  >
+                    规划（只读）
+                  </button>
+                </div>
               )}
             </AgentPopover>
             {props.operationMode === "planning" ? (
-              <span>只读规划</span>
+              <span className="ns-agent-composer-mode-badge">只读</span>
             ) : (
               <AgentPermissionMenu
                 {...(props.permission === undefined ? {} : { control: props.permission })}
@@ -191,110 +199,73 @@ export function AgentComposer(props: AgentComposerProps) {
                 writePolicyAcknowledged={props.writePolicyAcknowledged}
               />
             )}
-            {references === undefined ? null : (
-              <ReferenceControls draftDisabled={draftDisabled} references={references} />
-            )}
-            {props.contextStatus === undefined ? null : (
-              <AgentContextMenu control={props.contextStatus} disabled={draftDisabled} />
-            )}
-            {props.quickActions === undefined || props.quickActions.length === 0 ? null : (
-              <div className="ns-agent-composer-quick-actions" aria-label="Agent 快捷动作">
-                {props.quickActions.map((action) => {
-                  const Icon = action.id === "rewrite_selection" ? Sparkles : ScanText;
-                  return (
-                    <button
-                      aria-label={action.label}
-                      className="ns-icon-button"
-                      disabled={draftDisabled || action.disabledReason !== undefined}
-                      key={action.id}
-                      onClick={action.onSelect}
-                      title={action.disabledReason ?? action.label}
-                      type="button"
-                    >
-                      <Icon aria-hidden="true" size={13} />
-                    </button>
-                  );
-                })}
-              </div>
-            )}
           </div>
           <div className="ns-agent-composer-toolbar-right">
             {model === undefined ? null : (
               <AgentPopover
                 disabled={draftDisabled}
                 panelClassName="ns-agent-composer-model-popover"
-                panelLabel="模型"
+                panelLabel="模型与推理"
                 triggerClassName="ns-agent-composer-model-trigger"
                 triggerContent={
                   <>
                     <Cpu aria-hidden="true" size={13} />
-                    <span>{selectedModelLabel}</span>
+                    <span>{combinedModelLabel}</span>
+                    <ChevronDown aria-hidden="true" size={12} />
                   </>
                 }
-                triggerLabel={`模型：${selectedModelLabel}`}
-                triggerTitle="选择模型"
+                triggerLabel={`模型与推理：${combinedModelLabel}`}
+                triggerTitle="选择模型与推理强度"
               >
                 {({ close }) => (
-                  <ul aria-label="模型" className="ns-agent-composer-option-list" role="listbox">
-                    {model.profiles.map((profile) => (
-                      <li key={profile.id}>
-                        <button
-                          aria-selected={profile.id === model.selectedProfileId}
-                          data-model-option={profile.id}
-                          disabled={draftDisabled}
-                          onClick={() => {
-                            model.onSelect(profile.id);
-                            close();
-                          }}
-                          type="button"
+                  <div className="ns-agent-composer-model-panel">
+                    <ul aria-label="模型" className="ns-agent-composer-option-list" role="listbox">
+                      {model.profiles.map((profile) => (
+                        <li key={profile.id}>
+                          <button
+                            aria-selected={profile.id === model.selectedProfileId}
+                            data-model-option={profile.id}
+                            disabled={draftDisabled}
+                            onClick={() => {
+                              model.onSelect(profile.id);
+                              close();
+                            }}
+                            type="button"
+                          >
+                            <span>{profile.label}</span>
+                            <span className="ns-agent-composer-option-hint">{profile.provider}</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                    {reasoning !== undefined && reasoning.visible ? (
+                      <>
+                        <div aria-hidden="true" className="ns-agent-composer-model-divider" />
+                        <ul
+                          aria-label="推理强度"
+                          className="ns-agent-composer-option-list"
+                          role="listbox"
                         >
-                          <span>{profile.label}</span>
-                          <span className="ns-agent-composer-option-hint">{profile.provider}</span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </AgentPopover>
-            )}
-            {reasoning === undefined || !reasoning.visible ? null : (
-              <AgentPopover
-                disabled={draftDisabled}
-                panelClassName="ns-agent-composer-reasoning-popover"
-                panelLabel="推理强度"
-                triggerClassName="ns-agent-composer-reasoning-trigger"
-                triggerContent={
-                  <>
-                    <Zap aria-hidden="true" size={13} />
-                    <span>{reasoningLabel(reasoning.current)}</span>
-                  </>
-                }
-                triggerLabel={`推理强度：${reasoningLabel(reasoning.current)}`}
-                triggerTitle="选择推理强度"
-              >
-                {({ close }) => (
-                  <ul
-                    aria-label="推理强度"
-                    className="ns-agent-composer-option-list"
-                    role="listbox"
-                  >
-                    {reasoning.values.map((value) => (
-                      <li key={value}>
-                        <button
-                          aria-selected={value === reasoning.current}
-                          data-reasoning-option={value}
-                          disabled={draftDisabled}
-                          onClick={() => {
-                            reasoning.onSelect(value);
-                            close();
-                          }}
-                          type="button"
-                        >
-                          {reasoningLabel(value)}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
+                          {reasoning.values.map((value) => (
+                            <li key={value}>
+                              <button
+                                aria-selected={value === reasoning.current}
+                                data-reasoning-option={value}
+                                disabled={draftDisabled}
+                                onClick={() => {
+                                  reasoning.onSelect(value);
+                                  close();
+                                }}
+                                type="button"
+                              >
+                                {reasoningLabel(value)}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : null}
+                  </div>
                 )}
               </AgentPopover>
             )}
@@ -325,69 +296,5 @@ export function AgentComposer(props: AgentComposerProps) {
         </div>
       </div>
     </section>
-  );
-}
-
-function ReferenceControls(props: {
-  readonly references: NonNullable<AgentComposerProps["references"]>;
-  readonly draftDisabled: boolean;
-}) {
-  const { references, draftDisabled } = props;
-  return (
-    <div className="ns-agent-composer-references">
-      <AgentPopover
-        disabled={draftDisabled || references.available.length === 0}
-        panelClassName="ns-agent-composer-reference-popover"
-        panelLabel="添加上下文引用"
-        triggerClassName="ns-agent-composer-reference-add"
-        triggerContent={
-          <>
-            <Plus aria-hidden="true" size={13} />
-            <span>引用</span>
-          </>
-        }
-        triggerLabel="添加上下文引用"
-        triggerTitle="添加上下文引用"
-      >
-        {({ close }) => (
-          <ul aria-label="可添加的引用" className="ns-agent-composer-option-list" role="listbox">
-            {references.available.length === 0 ? (
-              <li className="ns-agent-context-empty">暂无可添加的引用</li>
-            ) : (
-              references.available.map((ref) => (
-                <li key={ref.refId}>
-                  <button
-                    data-reference-option={ref.refId}
-                    disabled={draftDisabled}
-                    onClick={() => {
-                      references.onAdd(ref.refId);
-                      close();
-                    }}
-                    type="button"
-                  >
-                    {ref.label}
-                  </button>
-                </li>
-              ))
-            )}
-          </ul>
-        )}
-      </AgentPopover>
-      <ul aria-label="已选引用" className="ns-agent-composer-reference-chips">
-        {references.chips.map((chip) => (
-          <li key={chip.refId}>
-            <span className="ns-agent-composer-reference-chip-label">{chip.label}</span>
-            <button
-              aria-label={`移除引用 ${chip.label}`}
-              disabled={draftDisabled}
-              onClick={() => references.onRemove(chip.refId)}
-              type="button"
-            >
-              <X aria-hidden="true" size={11} />
-            </button>
-          </li>
-        ))}
-      </ul>
-    </div>
   );
 }

@@ -1,4 +1,4 @@
-import { Maximize2, Save, Search, X } from "lucide-react";
+import { Maximize2, Save, Search, Sparkles, X } from "lucide-react";
 
 export interface EditorDocumentTab {
   readonly id: string;
@@ -71,12 +71,13 @@ export function EditorDocumentBar({
         {selectionAction === undefined ? null : (
           <button
             aria-label={selectionAction.label}
-            className="ns-icon-button"
+            className="ns-document-selection-action"
             onClick={selectionAction.onInvoke}
             title={selectionAction.label}
             type="button"
           >
-            {selectionAction.label}
+            <Sparkles aria-hidden="true" size={13} />
+            <span>{selectionAction.label}</span>
           </button>
         )}
         {onFind === undefined ? null : (

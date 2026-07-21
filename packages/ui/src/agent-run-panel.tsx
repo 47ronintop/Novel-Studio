@@ -1,4 +1,4 @@
-import { Check, Play, RefreshCw, RotateCcw, X } from "lucide-react";
+import { Check, CircleCheck, LoaderCircle, Play, RefreshCw, RotateCcw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { AgentActivitySummary } from "./agent-activity-summary.js";
@@ -29,6 +29,7 @@ export function AgentRunPanel(props: AgentRunPanelProps) {
       {...(props.runId === undefined ? {} : { "data-run-id": props.runId })}
     >
       <header className="ns-agent-run-header">
+        <RunStatusIndicator status={props.status} />
         <span className="ns-agent-status">{statusLabel(props.status)}</span>
       </header>
 
@@ -155,6 +156,35 @@ export function AgentRunPanel(props: AgentRunPanelProps) {
       </div>
     </section>
   );
+}
+
+function RunStatusIndicator({ status }: { readonly status: AgentRunPanelProps["status"] }) {
+  const isRunning =
+    status === "planning_model" ||
+    status === "executing_model" ||
+    status === "executing_read_tool" ||
+    status === "staging_changes" ||
+    status === "applying_changes" ||
+    status === "context_compacting";
+
+  const isCompleted = status === "completed";
+  const isWaiting =
+    status === "awaiting_write_approval" ||
+    status === "awaiting_user_input" ||
+    status === "awaiting_context_refresh" ||
+    status === "plan_ready" ||
+    status === "awaiting_plan_revision";
+
+  if (isRunning) {
+    return <LoaderCircle aria-hidden="true" className="ns-agent-spin" size={14} />;
+  }
+  if (isCompleted) {
+    return <CircleCheck aria-hidden="true" size={14} />;
+  }
+  if (isWaiting) {
+    return <CircleCheck aria-hidden="true" className="ns-status-waiting" size={14} />;
+  }
+  return null;
 }
 
 function PlanRevisionCard({ control }: { readonly control: AgentPlanExecutionControl }) {

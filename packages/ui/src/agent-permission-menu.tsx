@@ -1,4 +1,4 @@
-import { ChevronDown, ShieldCheck } from "lucide-react";
+import { ChevronDown, ShieldOff, ShieldCheck } from "lucide-react";
 import type { AgentWritePolicy } from "@novel-studio/application";
 
 import { AgentPopover } from "./agent-popover.js";
@@ -17,7 +17,8 @@ export interface AgentPermissionMenuProps {
 
 export function AgentPermissionMenu(props: AgentPermissionMenuProps) {
   const automatic = props.writePolicy === "user_preapproved_run";
-  const policyLabel = automatic ? "本次运行自动修改" : "每次修改前确认";
+  const policyLabel = automatic ? "自动" : "只读";
+  const PolicyIcon = automatic ? ShieldCheck : ShieldOff;
 
   return (
     <AgentPopover
@@ -29,7 +30,7 @@ export function AgentPermissionMenu(props: AgentPermissionMenuProps) {
       triggerClassName="ns-agent-permission-trigger"
       triggerContent={
         <>
-          <ShieldCheck aria-hidden="true" size={13} />
+          <PolicyIcon aria-hidden="true" size={13} />
           <span>{policyLabel}</span>
           <ChevronDown aria-hidden="true" size={12} />
         </>

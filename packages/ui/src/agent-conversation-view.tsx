@@ -224,24 +224,23 @@ function ConversationTurns({
     <ol className="ns-agent-conversation-turns" aria-label="会话运行历史">
       {conversation.turns.map((turn) => (
         <li data-run-id={turn.runId} key={turn.runId}>
-          <div className="ns-agent-conversation-turn-meta">
-            <span>{turn.statusLabel}</span>
-            <time>{turn.updatedAtLabel}</time>
-          </div>
           <div className="ns-agent-conversation-message" data-speaker="user">
-            <span>你</span>
             <p>{turn.userRequest}</p>
           </div>
           {(turn.assistantText === undefined || turn.assistantText.length === 0) &&
           (turn.events === undefined || turn.events.length === 0) ? null : (
             <div className="ns-agent-conversation-message" data-speaker="assistant">
-              <span>Agent</span>
+              <span className="ns-agent-conversation-speaker-label">Agent</span>
               {turn.assistantText === undefined || turn.assistantText.length === 0 ? null : (
                 <p>{turn.assistantText}</p>
               )}
               <AgentActivitySummary events={turn.events ?? []} />
             </div>
           )}
+          <div className="ns-agent-conversation-turn-meta">
+            <span>{turn.statusLabel}</span>
+            <time>{turn.updatedAtLabel}</time>
+          </div>
         </li>
       ))}
     </ol>

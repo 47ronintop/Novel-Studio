@@ -156,15 +156,18 @@ textarea:focus-visible,
   position: relative;
 }
 
+/* Workbench trigger — show subtle border so it looks clickable */
 .ns-workbench-trigger {
   align-items: center;
   background: transparent;
-  border: 1px solid transparent;
+  border: 1px solid color-mix(in srgb, var(--ns-border) 60%, transparent);
   border-radius: 5px;
   color: var(--ns-ink);
   cursor: pointer;
   display: inline-flex;
+  font-size: 13px;
   gap: 5px;
+  font-weight: 500;
   min-height: 28px;
   padding: 0 8px;
 }
@@ -247,8 +250,35 @@ textarea:focus-visible,
   cursor: pointer;
 }
 
+/* Command palette button — search-bar style like Claude Code / VSCode */
 .ns-command-button {
-  padding: 5px 8px;
+  align-items: center;
+  background: color-mix(in srgb, var(--ns-surface-raised) 60%, transparent);
+  border: 1px solid var(--ns-border);
+  border-radius: 6px;
+  color: var(--ns-muted);
+  display: inline-flex;
+  font-size: 12px;
+  gap: 6px;
+  max-width: 320px;
+  min-width: 200px;
+  padding: 0 10px;
+  height: 28px;
+  transition: background 120ms, border-color 120ms;
+}
+
+.ns-command-button > span {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ns-command-button:hover {
+  background: var(--ns-surface-raised);
+  border-color: var(--ns-border-strong);
+  color: var(--ns-ink);
 }
 
 .ns-layout-controls {
@@ -274,8 +304,13 @@ textarea:focus-visible,
 }
 
 .ns-command-button kbd {
+  background: color-mix(in srgb, var(--ns-border) 60%, transparent);
+  border: 1px solid var(--ns-border);
+  border-radius: 3px;
   color: var(--ns-muted);
-  margin-left: 8px;
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 0 4px;
 }
 
 .ns-workspace-grid {
@@ -334,6 +369,11 @@ textarea:focus-visible,
   height: 34px;
   justify-content: center;
   width: 34px;
+}
+
+.ns-activity-button:hover {
+  background: color-mix(in srgb, var(--ns-ink) 8%, transparent);
+  color: var(--ns-ink);
 }
 
 .ns-activity-button[data-selected="true"] {
@@ -1138,6 +1178,27 @@ textarea:focus-visible,
   height: 26px;
   min-height: 26px;
   width: 26px;
+}
+
+.ns-document-selection-action {
+  align-items: center;
+  background: color-mix(in oklch, var(--ns-accent) 14%, transparent);
+  border: 1px solid color-mix(in oklch, var(--ns-accent) 30%, transparent);
+  border-radius: 5px;
+  color: var(--ns-accent);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 12px;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  transition: background 120ms, border-color 120ms;
+  white-space: nowrap;
+}
+
+.ns-document-selection-action:hover {
+  background: color-mix(in oklch, var(--ns-accent) 22%, transparent);
+  border-color: color-mix(in oklch, var(--ns-accent) 50%, transparent);
 }
 
 .ns-editor-panes {
@@ -2402,7 +2463,7 @@ textarea:focus-visible,
   border-left: 1px solid var(--ns-border);
   display: grid;
   grid-area: ai;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr);
   min-width: 280px;
   overflow: hidden;
   position: relative;
@@ -3337,9 +3398,23 @@ textarea:focus-visible,
   display: flex;
 }
 
+/* Run status header — icon + label side by side */
 .ns-agent-run-header,
 .ns-plan-review header {
   justify-content: space-between;
+}
+
+.ns-agent-run-header {
+  gap: 6px;
+}
+
+.ns-agent-run-header > svg {
+  color: var(--ns-primary, #4f7cff);
+  flex-shrink: 0;
+}
+
+.ns-agent-run-header > svg.ns-status-waiting {
+  color: var(--ns-warning, #d08b1a);
 }
 
 .ns-agent-mode-controls,
@@ -3733,6 +3808,7 @@ textarea:focus-visible,
 }
 
 .ns-agent-conversation-active-dot {
+  animation: ns-active-dot-pulse 2s ease-in-out infinite;
   color: var(--ns-primary-strong);
 }
 
@@ -3881,38 +3957,68 @@ textarea:focus-visible,
   padding: 0 16px;
 }
 
+/* Turn meta moved to bottom, more subtle */
 .ns-agent-conversation-turns > li {
-  border-bottom: 1px solid var(--ns-border);
+  border-bottom: 1px solid color-mix(in srgb, var(--ns-border) 60%, transparent);
   display: grid;
+  gap: 10px;
+  padding: 14px 0;
+}
+
+.ns-agent-conversation-turn-meta {
+  color: var(--ns-muted);
+  font-size: 10px;
   gap: 8px;
-  padding: 12px 0;
+  justify-content: flex-start;
+  margin-top: 2px;
+  opacity: 0.7;
 }
 
 .ns-agent-conversation-message {
   display: grid;
-  gap: 4px;
-  max-width: 72ch;
+  gap: 5px;
+  max-width: 74ch;
 }
 
 .ns-agent-conversation-message > span {
   color: var(--ns-muted);
   font-size: 10px;
   font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }
 
 .ns-agent-conversation-message > p {
   font-size: 13px;
-  line-height: 1.55;
+  line-height: 1.6;
   margin: 0;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
+/* User message: right-aligned bubble like Claude Code / Cline */
 .ns-agent-conversation-message[data-speaker="user"] {
-  background: color-mix(in srgb, var(--ns-accent) 10%, transparent);
-  border-radius: 6px;
+  background: color-mix(in srgb, var(--ns-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ns-accent) 22%, var(--ns-border));
+  border-radius: 10px 10px 3px 10px;
   justify-self: end;
-  padding: 7px 9px;
+  max-width: 86%;
+  padding: 8px 11px;
+}
+
+/* Assistant message: left side, no border — just content */
+.ns-agent-conversation-message[data-speaker="assistant"] {
+  border-left: 2px solid color-mix(in srgb, var(--ns-border-strong) 70%, transparent);
+  padding-left: 10px;
+}
+
+/* Speaker label above assistant message */
+.ns-agent-conversation-speaker-label {
+  color: var(--ns-muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .ns-agent-conversation-turns-empty {
@@ -4254,14 +4360,14 @@ textarea:focus-visible,
   display: flex;
   flex: 1 1 180px;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
   position: relative;
 }
 
 .ns-agent-composer-toolbar button,
 .ns-agent-composer-toolbar select {
-  min-height: 28px;
+  min-height: 26px;
 }
 
 .ns-agent-popover {
@@ -4286,8 +4392,21 @@ textarea:focus-visible,
 
 .ns-agent-composer-mode-popover [role="group"] {
   display: grid;
-  gap: 4px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.ns-agent-composer-mode-popover [role="group"] button {
+  border-radius: 5px;
+  font-size: 13px;
+  min-height: 30px;
+  padding: 0 9px;
+  text-align: left;
+  width: 100%;
+}
+
+.ns-agent-composer-mode-popover [role="group"] button[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--ns-accent, #4f7cff) 18%, transparent);
+  color: var(--ns-accent, #4f7cff);
 }
 
 .ns-agent-composer-toolbar-right {
@@ -4295,11 +4414,145 @@ textarea:focus-visible,
   display: flex;
   flex: 0 1 auto;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
   justify-content: flex-end;
   min-width: 0;
 }
 
+/* ── Toolbar button shared base ──────────────────────────────────────── */
+.ns-agent-composer-mode-trigger,
+.ns-agent-composer-model-trigger,
+.ns-agent-permission-trigger {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--ns-border);
+  border-radius: 5px;
+  color: var(--ns-muted);
+  display: inline-flex;
+  font-size: 12px;
+  gap: 4px;
+  height: 26px;
+  padding: 0 7px;
+  transition: background 120ms, border-color 120ms, color 120ms;
+  white-space: nowrap;
+}
+
+.ns-agent-composer-mode-trigger:hover,
+.ns-agent-composer-mode-trigger[aria-expanded="true"],
+.ns-agent-composer-model-trigger:hover,
+.ns-agent-composer-model-trigger[aria-expanded="true"],
+.ns-agent-permission-trigger:hover,
+.ns-agent-permission-trigger[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--ns-surface-raised) 80%, transparent);
+  border-color: var(--ns-border-strong);
+  color: var(--ns-ink);
+}
+
+.ns-agent-composer-mode-trigger:disabled,
+.ns-agent-composer-model-trigger:disabled,
+.ns-agent-permission-trigger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ns-agent-composer-mode-trigger > span,
+.ns-agent-composer-model-trigger > span,
+.ns-agent-permission-trigger > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Ref add "+" icon-only button ────────────────────────────────────── */
+.ns-agent-composer-ref-add-trigger {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--ns-border);
+  border-radius: 5px;
+  color: var(--ns-muted);
+  display: inline-flex;
+  height: 26px;
+  justify-content: center;
+  padding: 0;
+  transition: background 120ms, border-color 120ms, color 120ms;
+  width: 26px;
+}
+
+.ns-agent-composer-ref-add-trigger:hover,
+.ns-agent-composer-ref-add-trigger[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--ns-surface-raised) 80%, transparent);
+  border-color: var(--ns-border-strong);
+  color: var(--ns-ink);
+}
+
+.ns-agent-composer-ref-add-trigger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ── Reference chips inset (inside surface, above toolbar) ───────────── */
+.ns-agent-composer-reference-chips-inset {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 4px 2px 0;
+}
+
+.ns-agent-composer-reference-chips-inset > li {
+  align-items: center;
+  background: color-mix(in srgb, var(--ns-accent, #4f7cff) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ns-accent, #4f7cff) 30%, var(--ns-border));
+  border-radius: 999px;
+  color: var(--ns-ink);
+  display: inline-flex;
+  font-size: 11px;
+  gap: 3px;
+  max-width: 160px;
+  padding: 1px 3px 1px 7px;
+}
+
+.ns-agent-composer-reference-chips-inset > li > button {
+  align-items: center;
+  color: var(--ns-muted);
+  display: inline-flex;
+  min-height: 18px;
+  padding: 1px 2px;
+}
+
+.ns-agent-composer-reference-chips-inset > li > button:hover {
+  color: var(--ns-ink);
+}
+
+/* ── Combined model + reasoning popover panel ────────────────────────── */
+.ns-agent-composer-model-panel {
+  display: grid;
+  gap: 4px;
+}
+
+.ns-agent-composer-model-divider {
+  background: var(--ns-border);
+  height: 1px;
+  margin: 2px 0;
+}
+
+/* ── "只读" mode badge (planning mode, no write-policy button) ──────── */
+.ns-agent-composer-mode-badge {
+  align-items: center;
+  background: color-mix(in srgb, var(--ns-accent, #4f7cff) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ns-accent, #4f7cff) 25%, var(--ns-border));
+  border-radius: 5px;
+  color: var(--ns-muted);
+  display: inline-flex;
+  font-size: 11px;
+  height: 26px;
+  padding: 0 7px;
+}
+
+/* Legacy reference controls (removed from toolbar, kept for backwards compatibility) */
 .ns-agent-composer-references {
   align-items: center;
   display: flex;
@@ -4330,6 +4583,7 @@ textarea:focus-visible,
 }
 
 .ns-agent-composer-reference-chip-label {
+  font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4369,30 +4623,9 @@ textarea:focus-visible,
   right: auto;
 }
 
+/* Permission trigger — overrides shared base for max-width */
 .ns-agent-permission-trigger {
-  align-items: center;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 5px;
-  color: var(--ns-muted);
-  display: inline-flex;
-  gap: 5px;
-  max-width: 190px;
-  padding: 0 6px;
-}
-
-.ns-agent-permission-trigger:hover,
-.ns-agent-permission-trigger[aria-expanded="true"] {
-  background: color-mix(in srgb, var(--ns-surface-raised) 76%, transparent);
-  border-color: var(--ns-border);
-  color: var(--ns-ink);
-}
-
-.ns-agent-permission-trigger > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 140px;
 }
 
 .ns-agent-permission-popover {
@@ -4657,6 +4890,11 @@ textarea:focus-visible,
   to {
     transform: rotate(360deg);
   }
+}
+
+@keyframes ns-active-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -246,15 +246,19 @@ function TimelineIcon({ status }: { readonly status: TimelineItem["status"] }) {
 function toolActivityLabel(toolName: string | undefined): string {
   switch (toolName) {
     case "list_project_entries":
-      return "正在读取项目结构";
+      return "读取项目结构";
     case "read_chapter":
-      return "正在读取第 3 章";
+      return "读取章节";
     case "read_story_bible":
-      return "正在读取 Story Bible";
+      return "读取 Story Bible";
     case "read_project_text":
-      return "正在读取项目文本";
+      return "读取项目文本";
+    case "propose_chapter_write":
+      return "提案写入章节";
+    case "propose_file_write":
+      return "提案写入文件";
     default:
-      return "正在处理只读步骤";
+      return toolName !== undefined ? toolName.replace(/_/g, " ") : "处理步骤";
   }
 }
 

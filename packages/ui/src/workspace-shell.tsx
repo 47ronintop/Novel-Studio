@@ -12,7 +12,8 @@ import {
   FilePlus,
   Maximize2,
   PanelBottom,
-  PanelRight
+  PanelRight,
+  Search
 } from "lucide-react";
 
 import { ChapterEditor } from "./chapter-editor.js";
@@ -162,10 +163,12 @@ function WorkspaceShellContent({
           className="ns-command-button"
           data-focus-order="1"
           onClick={onCommandPaletteOpen}
-          title="打开命令面板"
+          title="搜索项目或运行命令 Ctrl/Cmd+K"
           type="button"
         >
-          命令面板 <kbd>Ctrl/Cmd+K</kbd>
+          <Search aria-hidden="true" size={14} />
+          <span>搜索项目或运行命令</span>
+          <kbd>⌘K</kbd>
         </button>
         {settingsMode ? null : (
           <div className="ns-layout-controls" aria-label="布局控制">
@@ -289,10 +292,6 @@ function WorkspaceShellContent({
           data-focus-hidden={focusMode}
           data-region="ai-panel"
         >
-          <div className="ns-panel-header">
-            <span>Agent</span>
-            <PanelRight aria-hidden="true" size={15} />
-          </div>
           {agentConversationWorkspace !== undefined ? (
             <AgentConversationView
               {...agentConversationWorkspace.view}
