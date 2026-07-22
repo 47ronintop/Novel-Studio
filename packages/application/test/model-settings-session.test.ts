@@ -82,12 +82,18 @@ describe("model settings session", () => {
     });
   });
 
-  test("hides reasoning strength for matching custom models until the endpoint is opted in", () => {
+  test("shows recognized reasoning models on custom endpoints without a Settings opt-in", () => {
     expect(
-      reasoningStrengthForModel("openai-compatible", "gpt-5.5", "https://api.hostcentral.cc/v1")
-    ).toMatchObject({
-      status: "hidden",
-      reason: expect.stringContaining("explicitly marked")
+      reasoningStrengthForModel(
+        "openai-compatible",
+        "gpt-5.6-luna",
+        "https://api.hostcentral.cc/v1"
+      )
+    ).toEqual({
+      status: "available",
+      providerParamName: "reasoning_effort",
+      allowedValues: ["none", "low", "medium", "high", "xhigh", "max", "ultra"],
+      defaultValue: "medium"
     });
   });
 

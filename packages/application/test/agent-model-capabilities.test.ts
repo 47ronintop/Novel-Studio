@@ -60,28 +60,23 @@ describe("agent model capability preflight", () => {
     });
   });
 
-  test("distinguishes missing context metadata and never catalogs custom endpoints", () => {
+  test("lets missing compatible metadata proceed with the conservative Agent budget", () => {
     const preflight = applicationExports.preflightAgentModelCapabilities({
       profileId: "model_unknown_context",
       provider: "openai-compatible",
-      modelName: "gpt-4.1",
-      capabilities: {
-        streaming: true,
-        toolCalling: true,
-        structuredArguments: true
-      },
+      modelName: "gpt-5.6-luna",
+      capabilities: {},
       requiredContextTokens: 8_000
     });
 
     expect(preflight).toMatchObject({
-      ok: false,
-      error: {
-        code: "AGENT_MODEL_CAPABILITY_UNSUPPORTED",
-        suggestedAction: expect.stringContaining("verified context window"),
-        redactedDetail: {
-          missingCapabilities: ["contextWindow"],
-          contextWindowStatus: "missing"
-        }
+      ok: true,
+      value: {
+        streaming: true,
+        toolCalling: true,
+        structuredArguments: true,
+        contextWindow: 16_384,
+        requiredContextTokens: 8_000
       }
     });
     expect(

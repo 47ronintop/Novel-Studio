@@ -24,13 +24,7 @@ test("surfaces draft-backed context controls and round-trips a reference through
       json(response, {
         data: [
           {
-            id: "gpt-5",
-            context_window: 128000,
-            capabilities: {
-              streaming: true,
-              tool_calling: true,
-              structured_arguments: true
-            }
+            id: "gpt-5.6-luna"
           }
         ]
       });
@@ -72,7 +66,7 @@ test("surfaces draft-backed context controls and round-trips a reference through
     await modelMenu.locator('[data-model-menu="model"]').click();
     const modelOptions = page.getByRole("listbox", { name: "模型", exact: true });
     await expect(modelOptions).toBeVisible();
-    await expect(modelOptions.getByRole("button", { name: /gpt-5/ })).toBeVisible();
+    await expect(modelOptions.getByRole("button", { name: /gpt-5\.6-luna/ })).toBeVisible();
 
     await modelMenu.getByRole("button", { name: "返回模型与推理选项" }).click();
     await modelMenu.locator('[data-model-menu="reasoning"]').click();
@@ -82,21 +76,28 @@ test("surfaces draft-backed context controls and round-trips a reference through
     });
     await expect(reasoningOptions).toBeVisible();
     await reasoningOptions.getByRole("button", { name: "高", exact: true }).click();
-    await expect(modelTrigger).toHaveAccessibleName("模型与推理：gpt-5 · 高");
+    await expect(modelTrigger).toHaveAccessibleName("模型与推理：gpt-5.6-luna · 高");
+
+    await selectOperationMode(page, composer, "execution");
+    await composer.getByLabel("添加引用与执行审批").click();
+    const addMenu = page.getByRole("dialog", { name: "添加引用与执行审批" });
+    await expect(addMenu.getByRole("radio", { name: "请求批准" })).toBeVisible();
+    await expect(addMenu.getByRole("radio", { name: "替我审批" })).toBeVisible();
+    await addMenu.press("Escape");
 
     const conversationId = await selectedConversationId(page);
 
     // Read the persisted draft through IPC; loadDraft already initialized it for this conversation.
     const draft = await readRunDraft(page, conversationId);
     expect(draft.runDraft.modelProfileId).toEqual(expect.any(String));
-    expect(draft.runDraft.modelName).toBe("gpt-5");
+    expect(draft.runDraft.modelName).toBe("gpt-5.6-luna");
     expect(draft.runDraft.reasoningEffort).toBe("high");
     const contextDraftId = draft.contextDraft.contextDraftId;
     const modelProfileId = draft.runDraft.modelProfileId;
 
-    // A budget preview resolves the model facts server-side (context window from /v1/models).
+    // Bare OpenAI-compatible model metadata uses the conservative Agent floor instead of blocking.
     const budget = await previewBudget(page, conversationId, draft.runDraft);
-    expect(budget.contextWindow).toBe(128000);
+    expect(budget.contextWindow).toBe(16384);
     expect(budget.contextWindowSemantics).toBe("shared_input_output_window");
 
     // Adding a context reference round-trips through updateContextDraft and persists a new revision.
@@ -275,17 +276,27 @@ async function configureLocalModel(page: Page, baseUrl: string): Promise<void> {
   await page.getByLabel("活动栏").getByRole("button", { name: "设置" }).click();
   await expect(page.getByRole("heading", { name: "设置" })).toBeVisible();
   await page.getByLabel("模型 Base URL").fill(baseUrl);
-  await page.getByLabel("模型名称").fill("gpt-5");
+  await page.getByLabel("模型名称").fill("gpt-5.6-luna");
   await page.getByLabel("密钥引用").fill("local-context-e2e-key");
-  await page.getByLabel("高级模型设置").locator(":scope > summary").click();
-  await page.getByLabel("确认该端点支持 reasoning_effort").check();
   await page.getByRole("button", { name: "保存模型配置" }).click();
   await expect(page.getByText("模型配置已保存。", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "测试连接", exact: true }).click();
   await expect(page.locator('.ns-project-feedback[role="status"]')).toHaveText(
-    "Connected to openai-compatible/gpt-5."
+    "Connected to openai-compatible/gpt-5.6-luna."
   );
   await page.getByRole("button", { name: "关闭设置" }).click();
+}
+
+async function selectOperationMode(
+  page: Page,
+  composer: ReturnType<Page["getByLabel"]>,
+  mode: "planning" | "execution"
+): Promise<void> {
+  const expected = mode === "planning" ? "计划" : "执行";
+  const trigger = composer.getByTitle("选择计划或执行模式");
+  if ((await trigger.getAttribute("aria-label")) === expected) return;
+  await trigger.click();
+  await page.getByLabel("计划或执行模式").getByRole("button", { name: expected }).click();
 }
 
 function electronEnv(overrides: Record<string, string>): NodeJS.ProcessEnv {

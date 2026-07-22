@@ -272,6 +272,7 @@ textarea:focus-visible,
 }
 
 .ns-workbench-switcher {
+  margin-left: clamp(24px, 4vw, 64px);
   margin-right: auto;
   position: relative;
 }

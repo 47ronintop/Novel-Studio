@@ -91,47 +91,55 @@ export function preflightAgentModelCapabilities(
   input: AgentModelCapabilityPreflightInput
 ): Result<AgentModelCapabilitySnapshot, UnifiedError> {
   const missingCapabilities: string[] = [];
-  if (input.capabilities.streaming !== true) {
+  if (input.capabilities.streaming === false) {
     missingCapabilities.push("streaming");
   }
-  if (input.capabilities.toolCalling !== true) {
+  if (input.capabilities.toolCalling === false) {
     missingCapabilities.push("toolCalling");
   }
-  if (input.capabilities.structuredArguments !== true) {
+  if (input.capabilities.structuredArguments === false) {
     missingCapabilities.push("structuredArguments");
   }
-  const contextWindow = input.capabilities.contextWindow;
-  const contextWindowMissing =
-    contextWindow === undefined || !Number.isFinite(contextWindow) || contextWindow <= 0;
+  const configuredContextWindow = input.capabilities.contextWindow;
+  const declaredContextWindow =
+    typeof configuredContextWindow === "number" &&
+    Number.isFinite(configuredContextWindow) &&
+    configuredContextWindow > 0
+      ? configuredContextWindow
+      : undefined;
+  // Most OpenAI-compatible /models responses omit capability metadata. Keep enough total capacity
+  // for the required input plus output/system reserves, then let the provider verify the real limit.
+  const contextWindow = declaredContextWindow ?? Math.max(16_384, input.requiredContextTokens * 2);
   const contextWindowInsufficient =
-    !contextWindowMissing &&
-    contextWindow !== undefined &&
-    contextWindow < input.requiredContextTokens;
-  if (contextWindowMissing || contextWindowInsufficient) {
+    declaredContextWindow !== undefined && declaredContextWindow < input.requiredContextTokens;
+  if (contextWindowInsufficient) {
     missingCapabilities.push("contextWindow");
   }
 
-  if (missingCapabilities.length > 0 || contextWindow === undefined) {
+  if (missingCapabilities.length > 0) {
     return err(
       createUnifiedError({
         code: "AGENT_MODEL_CAPABILITY_UNSUPPORTED",
         category: "UserError",
         message: "The selected provider/model cannot start an Agent run.",
         recoverability: "user-action",
-        suggestedAction: contextWindowMissing
-          ? "Refresh the model list or enter the model's verified context window in Settings; Max Tokens is only the output limit."
-          : contextWindowInsufficient
-            ? `Choose a model with at least ${input.requiredContextTokens} context tokens or correct the verified context-window setting.`
-            : "Choose a model that explicitly supports the missing Agent capabilities.",
+        suggestedAction: contextWindowInsufficient
+          ? `Choose a model with at least ${input.requiredContextTokens} context tokens or correct the verified context-window setting.`
+          : "Choose a model that explicitly supports the missing Agent capabilities.",
         traceId: "agent-model-capability-preflight",
         redactedDetail: {
           profileId: input.profileId,
           provider: input.provider,
           modelName: input.modelName,
           missingCapabilities,
-          contextWindowStatus: contextWindowMissing ? "missing" : "insufficient",
+          contextWindowStatus:
+            declaredContextWindow === undefined
+              ? "assumed_required_floor"
+              : contextWindowInsufficient
+                ? "insufficient"
+                : "verified",
           requiredContextTokens: input.requiredContextTokens,
-          availableContextTokens: contextWindow ?? 0
+          availableContextTokens: contextWindow
         }
       })
     );

@@ -20,9 +20,19 @@ test("switches a creative project into the engineering explorer without losing t
 
   try {
     const page = await electronApp.firstWindow();
-    await expect(page.getByRole("button", { name: "当前工作台：创作工作台" })).toBeVisible();
+    const workbenchTrigger = page.getByRole("button", { name: "当前工作台：创作工作台" });
+    await expect(workbenchTrigger).toBeVisible();
+    const projectStatusBox = await page.locator(".ns-project-status").boundingBox();
+    const workbenchBox = await workbenchTrigger.boundingBox();
+    expect(projectStatusBox).not.toBeNull();
+    expect(workbenchBox).not.toBeNull();
+    if (projectStatusBox !== null && workbenchBox !== null) {
+      expect(workbenchBox.x - (projectStatusBox.x + projectStatusBox.width)).toBeGreaterThanOrEqual(
+        24
+      );
+    }
 
-    await page.getByRole("button", { name: "当前工作台：创作工作台" }).click();
+    await workbenchTrigger.click();
     await page.getByRole("menuitemradio", { name: "工程工作台" }).click();
 
     await expect(page.getByRole("navigation", { name: "工程资源管理器" })).toBeVisible();

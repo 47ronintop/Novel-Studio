@@ -128,14 +128,6 @@ export function reasoningStrengthForModel(
     return hiddenReasoningStrength();
   }
 
-  if (!isOfficialOpenAiEndpoint(provider, baseUrl) && !reasoningEffortEnabled) {
-    return {
-      status: "hidden",
-      reason:
-        "Reasoning strength is hidden for custom OpenAI-compatible endpoints until this provider is explicitly marked as supporting reasoning_effort."
-    };
-  }
-
   const spec = reasoningEffortSpecForOpenAiModel(normalized);
   if (spec !== undefined) {
     return {
@@ -143,6 +135,23 @@ export function reasoningStrengthForModel(
       providerParamName: "reasoning_effort",
       allowedValues: spec.allowedValues,
       defaultValue: spec.defaultValue
+    };
+  }
+
+  if (reasoningEffortEnabled) {
+    return {
+      status: "available",
+      providerParamName: "reasoning_effort",
+      allowedValues: ["none", "low", "medium", "high"],
+      defaultValue: "medium"
+    };
+  }
+
+  if (!isOfficialOpenAiEndpoint(provider, baseUrl)) {
+    return {
+      status: "hidden",
+      reason:
+        "This custom endpoint uses an unrecognized model name; enable the advanced reasoning_effort override to expose generic values."
     };
   }
 

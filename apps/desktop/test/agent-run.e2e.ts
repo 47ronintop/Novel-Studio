@@ -58,13 +58,7 @@ test("stops a live Agent run through the real Electron IPC path", async () => {
       json(response, {
         data: [
           {
-            id: "local-agent",
-            context_window: 128000,
-            capabilities: {
-              streaming: true,
-              tool_calling: true,
-              structured_arguments: true
-            }
+            id: "local-agent"
           }
         ]
       });
