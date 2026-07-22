@@ -46,6 +46,7 @@ describe("Electron security baseline", () => {
       "application:project:preview-creative-project",
       "application:project:create-creative-project",
       "application:workspace:choose-engineering-directory",
+      "application:workspace:choose-text-file",
       "application:workspace:open-engineering-workspace",
       "application:workspace:attach-active-creative-project",
       "application:workspace:refresh-engineering-tree",
@@ -163,6 +164,7 @@ describe("Electron security baseline", () => {
     await api.project.chooseOpenCreativeDirectory();
     await api.project.chooseCreateParentDirectory();
     await api.workspace.chooseEngineeringDirectory();
+    await api.workspace.chooseTextFile();
     await api.project.renameChapter({ chapterId: "ch_opening", title: "Opening" });
     await api.project.duplicateChapter({
       sourceChapterId: "ch_opening",
@@ -268,6 +270,7 @@ describe("Electron security baseline", () => {
       "application:project:choose-open-creative-directory",
       "application:project:choose-create-parent-directory",
       "application:workspace:choose-engineering-directory",
+      "application:workspace:choose-text-file",
       "application:project:rename-chapter",
       "application:project:duplicate-chapter",
       "application:project:delete-chapter",

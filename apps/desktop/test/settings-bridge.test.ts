@@ -214,7 +214,7 @@ describe("M22 settings bridge", () => {
     expect(calls.at(-1)).toBe("settings.listAgentUsage:2026-07-11:2026-07-17::::");
 
     await bridge.setAgentUsageRange("today");
-    expect(calls.at(-1)).toBe("settings.listAgentUsage:2026-07-17:2026-07-17::::");
+    expect(calls.at(-1)).toBe("settings.listAgentUsage:2026-07-17:2026-07-17::::2026-07-17");
     await bridge.setAgentUsageRange("30d");
     expect(calls.at(-1)).toBe("settings.listAgentUsage:2026-06-18:2026-07-17::::");
     await bridge.setAgentUsageRange("7d");

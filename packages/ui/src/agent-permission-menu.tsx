@@ -1,3 +1,4 @@
+import { Check, ShieldAlert, ShieldCheck } from "lucide-react";
 import type { AgentWritePolicy } from "@novel-studio/application";
 
 import type { AgentComposerPermissionControl } from "./workspace-shell-types.js";
@@ -24,10 +25,14 @@ export function AgentPermissionMenu(props: AgentPermissionMenuProps) {
             onChange={() => props.onWritePolicyChange("write_before_confirmation")}
             type="radio"
           />
+          <ShieldAlert aria-hidden="true" className="ns-agent-permission-choice-icon" size={16} />
           <span>
             <strong>请求批准</strong>
             <small>每个 Change Set 都先进入差异审阅。</small>
           </span>
+          {!automatic ? (
+            <Check aria-hidden="true" className="ns-agent-permission-choice-check" size={15} />
+          ) : null}
         </label>
         <label>
           <input
@@ -37,10 +42,14 @@ export function AgentPermissionMenu(props: AgentPermissionMenuProps) {
             onChange={() => props.onWritePolicyChange("user_preapproved_run")}
             type="radio"
           />
+          <ShieldCheck aria-hidden="true" className="ns-agent-permission-choice-icon" size={16} />
           <span>
             <strong>替我审批</strong>
             <small>只预授权当前运行，不扩大工具或路径范围。</small>
           </span>
+          {automatic ? (
+            <Check aria-hidden="true" className="ns-agent-permission-choice-check" size={15} />
+          ) : null}
         </label>
       </fieldset>
 

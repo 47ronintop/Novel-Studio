@@ -359,7 +359,9 @@ export function createAgentConversationBridge(
     };
     if (state.selectedConversationId === conversationId) {
       const sameFilter = conversations.filter((conversation) =>
-        state.includeArchived ? conversation.status === "archived" : conversation.status === "active"
+        state.includeArchived
+          ? conversation.status === "archived"
+          : conversation.status === "active"
       );
       await hydrateSelection(
         preferredConversationId(sameFilter) ?? preferredConversationId(conversations)
@@ -520,14 +522,21 @@ export function toAgentConversationWorkspaceProps(
   if (state.selectedConversation?.lastRunId !== undefined) {
     selectedRunIds.add(state.selectedConversation.lastRunId);
   }
+  const selectedConversationId = state.selectedConversation?.conversationId;
+  const agentRunMatchesSelectedConversation =
+    agentRun !== undefined &&
+    agentRun.projectId === state.projectId &&
+    selectedConversationId !== undefined &&
+    agentRun.conversationId === selectedConversationId;
   const selectedAgentRun =
-    agentRun?.runId === undefined
-      ? agentRun?.errorMessage !== undefined &&
-        agentRun.projectId === state.projectId &&
-        state.selectedConversation !== undefined
-        ? agentRun
-        : undefined
-      : selectedRunIds.has(agentRun.runId)
+    agentRun === undefined
+      ? undefined
+      : agentRunMatchesSelectedConversation ||
+          (agentRun.runId !== undefined && selectedRunIds.has(agentRun.runId)) ||
+          (agentRun.runId === undefined &&
+            agentRun.errorMessage !== undefined &&
+            agentRun.projectId === state.projectId &&
+            state.selectedConversation !== undefined)
         ? agentRun
         : undefined;
   const selectedPlanReview =
@@ -550,7 +559,9 @@ export function toAgentConversationWorkspaceProps(
   )?.title;
 
   const liveAgentRun =
-    selectedAgentRun?.runId === undefined && selectedAgentRun?.errorMessage !== undefined
+    selectedAgentRun?.runId === undefined &&
+    (selectedAgentRun?.errorMessage !== undefined ||
+      (selectedAgentRun?.userRequest?.trim().length ?? 0) > 0)
       ? selectedAgentRun
       : liveAgentRunId(selectedAgentRun, selectedPlanReview) === undefined
         ? undefined
@@ -721,6 +732,7 @@ function liveAgentRunId(
 ): string | undefined {
   if (agentRun === undefined || agentRun.runId === undefined) return undefined;
   const runId = agentRun.runId;
+  if (agentRun.errorMessage !== undefined || agentRun.diagnostic !== undefined) return runId;
   if (toAgentRecoveryReview(agentRun) !== undefined) return runId;
   if (!isTerminalRunStatus(agentRun.status)) return runId;
   if (

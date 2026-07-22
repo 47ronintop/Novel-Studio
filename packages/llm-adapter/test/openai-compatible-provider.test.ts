@@ -332,7 +332,7 @@ describe("OpenAI-compatible provider", () => {
                     index: 0,
                     id: "call_01",
                     type: "function",
-                    function: { name: "read_chapter", arguments: "{\"chapter" }
+                    function: { name: "read_chapter", arguments: '{"chapter' }
                   }
                 ]
               }
@@ -346,7 +346,7 @@ describe("OpenAI-compatible provider", () => {
                 tool_calls: [
                   {
                     index: 0,
-                    function: { arguments: "Id\":\"chapter-03\"}" }
+                    function: { arguments: 'Id":"chapter-03"}' }
                   }
                 ]
               },
@@ -369,12 +369,16 @@ describe("OpenAI-compatible provider", () => {
           type: "tool_call_delta",
           toolCallId: "call_01",
           name: "read_chapter",
-          argumentsDelta: "{\"chapter"
+          argumentsDelta: '{"chapter'
         }
       },
       {
         ok: true,
-        value: { type: "tool_call_delta", toolCallId: "call_01", argumentsDelta: "Id\":\"chapter-03\"}" }
+        value: {
+          type: "tool_call_delta",
+          toolCallId: "call_01",
+          argumentsDelta: 'Id":"chapter-03"}'
+        }
       },
       { ok: true, value: { type: "round_completed", finishReason: "tool_calls" } },
       expect.objectContaining({ ok: true, value: expect.objectContaining({ type: "done" }) })
@@ -509,7 +513,7 @@ describe("OpenAI-compatible provider", () => {
     expect(calls[1]?.body).not.toHaveProperty("reasoning_effort");
   });
 
-  test("retries streaming requests without reasoning_effort when the provider rejects the parameter", async () => {
+  test("retries streaming requests when the rejected reasoning parameter is outside the message", async () => {
     const calls: OpenAiCompatibleTransportRequest[] = [];
     const provider = createOpenAiCompatibleProvider({
       transport: async () => readFixture("openai-compatible-chat-success.json"),
@@ -521,7 +525,9 @@ describe("OpenAI-compatible provider", () => {
             message: "Provider returned HTTP 400.",
             body: {
               error: {
-                message: "Unrecognized request argument supplied: reasoning_effort"
+                message: "Unsupported value: 'ultra'.",
+                param: "reasoning_effort",
+                code: "unsupported_value"
               }
             }
           });
@@ -548,14 +554,14 @@ describe("OpenAI-compatible provider", () => {
         mode: "streaming",
         parameters: {
           ...request.parameters,
-          reasoningEffort: "high"
+          reasoningEffort: "ultra"
         }
       })
     );
 
     expect(calls).toHaveLength(2);
     expect(calls[0]?.body).toMatchObject({
-      reasoning_effort: "high"
+      reasoning_effort: "ultra"
     });
     expect(calls[1]?.body).not.toHaveProperty("reasoning_effort");
     expect(events).toContainEqual({

@@ -24,6 +24,7 @@ export interface AgentUsageRepositoryQuery {
   readonly model?: string;
   readonly projectId?: string;
   readonly detailLocalDate?: string;
+  readonly includeModelBreakdown?: boolean;
 }
 
 export interface AgentUsageRepositoryCostTotal {
@@ -42,6 +43,11 @@ export interface AgentUsageRepositoryDailyBucket {
   readonly totalTokens: number;
   readonly costs: readonly AgentUsageRepositoryCostTotal[];
   readonly hasUnknownCost: boolean;
+  readonly models?: readonly {
+    readonly provider: string;
+    readonly model: string;
+    readonly totalTokens: number;
+  }[];
 }
 
 export interface AgentUsageRepositoryRunSummary {
@@ -1005,7 +1011,8 @@ function projectAggregate(
       reasoningTokens: numberField(aggregate, "reasoningTokens"),
       totalTokens: numberField(aggregate, "totalTokens"),
       costs: costTotals(jsonObjectArray(aggregate["costs"])),
-      hasUnknownCost: aggregate["hasUnknownCost"] === true
+      hasUnknownCost: aggregate["hasUnknownCost"] === true,
+      ...(query.includeModelBreakdown === true ? { models: [] } : {})
     };
   }
   return {
@@ -1017,8 +1024,26 @@ function projectAggregate(
     reasoningTokens: sumField(filtered, "reasoningTokens"),
     totalTokens: sumField(filtered, "totalTokens"),
     costs: costTotals(mergeDimensionCosts(filtered)),
-    hasUnknownCost: filtered.some((dimension) => dimension["hasUnknownCost"] === true)
+    hasUnknownCost: filtered.some((dimension) => dimension["hasUnknownCost"] === true),
+    ...(query.includeModelBreakdown === true ? { models: aggregateModels(filtered) } : {})
   };
+}
+
+function aggregateModels(
+  dimensions: readonly JsonObject[]
+): readonly { readonly provider: string; readonly model: string; readonly totalTokens: number }[] {
+  const totals = new Map<string, { provider: string; model: string; totalTokens: number }>();
+  for (const dimension of dimensions) {
+    const provider = stringField(dimension, "provider");
+    const model = stringField(dimension, "model");
+    const key = `${provider}\u0000${model}`;
+    const prior = totals.get(key) ?? { provider, model, totalTokens: 0 };
+    prior.totalTokens += numberField(dimension, "totalTokens");
+    totals.set(key, prior);
+  }
+  return [...totals.values()].sort(
+    (left, right) => right.totalTokens - left.totalTokens || left.model.localeCompare(right.model)
+  );
 }
 
 function mergeCosts(existing: readonly JsonObject[], dimension: JsonObject): JsonObject[] {

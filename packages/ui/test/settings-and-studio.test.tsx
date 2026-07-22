@@ -422,7 +422,8 @@ describe("M8 Settings and Studio UI", () => {
                   { currency: "USD", actualAmount: 0.04, estimatedAmount: 0.02 },
                   { currency: "EUR", actualAmount: 0, estimatedAmount: 0.03 }
                 ],
-                hasUnknownCost: true
+                hasUnknownCost: true,
+                models: [{ provider: "openai", model: "gpt-5", totalTokens: 1500 }]
               }
             ],
             runs: [
@@ -451,9 +452,10 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).toContain("近 7 天");
     expect(html).toContain("近 30 天");
     expect(html).toContain('aria-label="Provider 筛选"');
-    expect(html).toContain('aria-label="Token 用量趋势"');
-    expect(html.match(/<circle[^>]+data-series=/g)).toHaveLength(3);
-    expect(html.match(/<circle[^>]+r="3.5"/g)).toHaveLength(3);
+    expect(html).toContain('data-chart-kind="daily"');
+    expect(html).toContain('aria-label="每日 Agent Token 柱状图"');
+    expect(html).toContain('aria-label="模型颜色图例"');
+    expect(html).toContain('data-model-key="openai/gpt-5"');
     expect(html).toContain("Input");
     expect(html).toContain("Output");
     expect(html).toContain("Cached");

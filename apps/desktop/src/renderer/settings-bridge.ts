@@ -412,12 +412,18 @@ export function createSettingsBridge(
       filters,
       feedback: { kind: "info", message: "正在读取 Agent 用量..." }
     };
+    const range = rangeForPreset(rangePreset, todayLocalDate());
+    const effectiveDetailLocalDate =
+      detailLocalDate ?? (rangePreset === "today" ? range.toLocalDate : undefined);
     const query: AgentUsageQuery = {
-      range: rangeForPreset(rangePreset, todayLocalDate()),
+      range,
       ...(filters.provider.trim() === "" ? {} : { provider: filters.provider.trim() }),
       ...(filters.model.trim() === "" ? {} : { model: filters.model.trim() }),
       ...(filters.projectId.trim() === "" ? {} : { projectId: filters.projectId.trim() }),
-      ...(detailLocalDate === undefined ? {} : { detailLocalDate })
+      ...(effectiveDetailLocalDate === undefined
+        ? {}
+        : { detailLocalDate: effectiveDetailLocalDate }),
+      includeModelBreakdown: true
     };
     const result = await api.settings.listAgentUsage(query);
     if (generation !== usageGeneration) return toProps();

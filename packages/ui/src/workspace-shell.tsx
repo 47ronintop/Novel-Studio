@@ -8,13 +8,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import type { ChapterEditorProps } from "./chapter-editor.js";
 import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
 import { editorFontFamilyValue } from "./editor-toolbar.js";
-import {
-  FilePlus,
-  Maximize2,
-  PanelBottom,
-  PanelRight,
-  Search
-} from "lucide-react";
+import { FilePlus, PanelBottom } from "lucide-react";
 
 import { ChapterEditor } from "./chapter-editor.js";
 import { AgentConversationView } from "./agent-conversation-view.js";
@@ -42,9 +36,9 @@ import { WorkspaceShellNavigator } from "./workspace-shell-navigator.js";
 import { DiffReview } from "./diff-review.js";
 import { RollbackReview } from "./change-set-review.js";
 import { WorkspaceStatusBar } from "./workspace-status-bar.js";
-import { WorkbenchSwitcher } from "./workbench-switcher.js";
 import { PlainFileConflictReview } from "./plain-file-conflict-review.js";
 import { WorkspaceActivityBar } from "./workspace-shell-activity.js";
+import { WorkspaceShellTitlebar } from "./workspace-shell-titlebar.js";
 import { RecoveryReview } from "./recovery-review.js";
 import type {
   AgentConversationMainReview,
@@ -153,56 +147,13 @@ function WorkspaceShellContent({
       data-settings-mode={settingsMode}
       data-theme={appearance.theme}
     >
-      <header className="ns-titlebar">
-        <div className="ns-project-status">
-          <span className="ns-project-title">{shellState.projectTitle}</span>
-          <span className="ns-save-status">{saveStatusLabel(shellState.saveStatus)}</span>
-        </div>
-        <WorkbenchSwitcher mode={shellState.workbenchMode} {...(shellState.workspaceContext.kind === "engineeringWorkspace" ? { creativeDisabledReason: "当前工作区不是创作项目。" } : {})} onSelect={onWorkbenchSelect ?? (() => undefined)} />
-        <button
-          aria-label="打开命令面板"
-          className="ns-command-button"
-          data-focus-order="1"
-          onClick={onCommandPaletteOpen}
-          title="搜索项目或运行命令 Ctrl/Cmd+K"
-          type="button"
-        >
-          <Search aria-hidden="true" size={14} />
-          <span>搜索项目或运行命令</span>
-          <kbd>⌘K</kbd>
-        </button>
-        {settingsMode ? null : (
-          <div className="ns-layout-controls" aria-label="布局控制">
-            <button
-              aria-label="切换底部面板"
-              className="ns-icon-button"
-              onClick={() => onCommandExecute?.("workspace.toggle-bottom-panel")}
-              title="切换底部面板"
-              type="button"
-            >
-              <PanelBottom aria-hidden="true" size={14} />
-            </button>
-            <button
-              aria-label="切换 Split View"
-              className="ns-icon-button"
-              onClick={() => onCommandExecute?.("workspace.toggle-split-view")}
-              title="切换 Split View"
-              type="button"
-            >
-              <PanelRight aria-hidden="true" size={14} />
-            </button>
-            <button
-              aria-label="切换专注模式"
-              className="ns-icon-button"
-              onClick={() => onCommandExecute?.("workspace.toggle-focus-mode")}
-              title="切换专注模式"
-              type="button"
-            >
-              <Maximize2 aria-hidden="true" size={14} />
-            </button>
-          </div>
-        )}
-      </header>
+      <WorkspaceShellTitlebar
+        onCommandExecute={onCommandExecute}
+        onCommandPaletteOpen={onCommandPaletteOpen}
+        onWorkbenchSelect={onWorkbenchSelect}
+        settingsMode={settingsMode}
+        shellState={shellState}
+      />
 
       <div
         className="ns-workspace-grid"
@@ -408,7 +359,10 @@ function BottomPanelContent({
     const history = aiWritingWorkflow?.history;
     if (history !== undefined) {
       return (
-        <div className="ns-bottom-panel-content ns-bottom-panel-workflow-history" aria-label="底部面板内容：工作流运行">
+        <div
+          className="ns-bottom-panel-content ns-bottom-panel-workflow-history"
+          aria-label="底部面板内容：工作流运行"
+        >
           <div className="ns-bottom-panel-workflow-summary">
             <strong>工作流运行</strong>
             <span>当前状态 {aiWritingWorkflowStatusLabel(aiWritingWorkflow?.status)}</span>
@@ -423,7 +377,9 @@ function BottomPanelContent({
         <strong>工作流运行</strong>
         <span>
           当前状态{" "}
-          {aiWritingWorkflow === undefined ? "未加载" : aiWritingWorkflowStatusLabel(aiWritingWorkflow.status)}
+          {aiWritingWorkflow === undefined
+            ? "未加载"
+            : aiWritingWorkflowStatusLabel(aiWritingWorkflow.status)}
         </span>
         <span>最近运行 {runCount}</span>
         <span>
@@ -542,7 +498,9 @@ function toChapterRecoveryReview(
   };
 }
 
-function aiWritingWorkflowStatusLabel(status: AiWritingWorkflowProps["status"] | undefined): string {
+function aiWritingWorkflowStatusLabel(
+  status: AiWritingWorkflowProps["status"] | undefined
+): string {
   if (status === undefined) return "未加载";
   switch (status) {
     case "idle":
@@ -647,7 +605,8 @@ function WorkspaceEditorSurface({
   const activeDirty = fileEditor?.dirty ?? chapterEditor?.dirty ?? false;
   const activeSaving =
     fileEditor?.saveStatus === "Saving" || chapterEditor?.saveStatus === "Saving";
-  const activeSave = fileEditor?.conflict === undefined ? (fileEditor?.onSave ?? chapterEditor?.onSave) : undefined;
+  const activeSave =
+    fileEditor?.conflict === undefined ? (fileEditor?.onSave ?? chapterEditor?.onSave) : undefined;
   const activeFocusModeToggle = fileEditor?.onFocusModeToggle ?? chapterEditor?.onFocusModeToggle;
   const selectionAiPreviewCommand = chapterEditor?.runtime?.selectionAiPreviewCommand;
   const selectionAction =
@@ -927,17 +886,4 @@ function activityViewCopy(activityId: Exclude<ActivityId, "workspace" | "storyBi
 
 function isProjectWorkflowBusy(projectWorkflow: ProjectWorkflowProps): boolean {
   return projectWorkflow.status === "opening" || projectWorkflow.status === "creating";
-}
-
-function saveStatusLabel(status: DesktopShellState["saveStatus"]): string {
-  switch (status) {
-    case "Saved":
-      return "已保存";
-    case "Saving":
-      return "保存中";
-    case "Unsaved":
-      return "未保存";
-    case "Recovery available":
-      return "有可恢复内容";
-  }
 }

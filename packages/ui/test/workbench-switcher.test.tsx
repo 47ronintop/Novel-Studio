@@ -30,6 +30,8 @@ describe("WorkbenchSwitcher", () => {
       'button[aria-label="当前工作台：创作工作台"]'
     );
     expect(trigger).not.toBeNull();
+    expect(host.querySelector('.ns-workbench-switcher[data-mode="creative"]')).not.toBeNull();
+    expect(trigger?.querySelector(".ns-workbench-mode-icon")).not.toBeNull();
     act(() => trigger?.click());
 
     expect(
@@ -41,9 +43,7 @@ describe("WorkbenchSwitcher", () => {
       '[role="menuitemradio"][aria-label="工程工作台"]'
     );
     act(() =>
-      engineering?.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Escape", bubbles: true })
-      )
+      engineering?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
     );
 
     expect(host.querySelector('[role="menu"]')).toBeNull();
@@ -74,6 +74,8 @@ describe("WorkbenchSwitcher", () => {
       '[role="menuitemradio"][aria-label="工程工作台"]'
     );
     expect(creative?.getAttribute("aria-disabled")).toBe("true");
+    expect(engineering?.getAttribute("data-selected")).toBe("true");
+    expect(engineering?.querySelector(".ns-workbench-menu-check")).not.toBeNull();
     expect(creative?.getAttribute("aria-describedby")).toBeTruthy();
     expect(host.textContent).toContain("当前工作区不是创作项目。");
 
@@ -86,9 +88,7 @@ describe("WorkbenchSwitcher", () => {
     );
     expect(document.activeElement).toBe(engineering);
     act(() =>
-      engineering?.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })
-      )
+      engineering?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }))
     );
     expect(document.activeElement).toBe(engineering);
     expect(onSelect).not.toHaveBeenCalled();

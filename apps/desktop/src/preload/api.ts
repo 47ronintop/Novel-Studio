@@ -38,6 +38,7 @@ import type {
   ProjectRecoveryApplyResultDto,
   ProjectRecoveryDraftPreview,
   ProjectDirectorySelectionDto,
+  ProjectTextFileSelectionDto,
   ProjectSearchIndex,
   ProjectSearchQuery,
   ProjectSearchResults,
@@ -225,6 +226,11 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
         invokeTyped<Result<ProjectDirectorySelectionDto, UnifiedError>>(
           ipc,
           "application:workspace:choose-engineering-directory"
+        ),
+      chooseTextFile: () =>
+        invokeTyped<Result<ProjectTextFileSelectionDto, UnifiedError>>(
+          ipc,
+          "application:workspace:choose-text-file"
         ),
       openEngineeringWorkspace: (selectionId: string) =>
         invokeTyped<Result<WorkspaceActivationDto, UnifiedError>>(

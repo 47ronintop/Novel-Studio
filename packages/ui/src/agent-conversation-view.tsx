@@ -1,4 +1,13 @@
-import { ArchiveRestore, Bot, ChevronDown, CornerUpLeft, History, MessageSquare, MoreHorizontal, Plus, User } from "lucide-react";
+import {
+  ArchiveRestore,
+  Bot,
+  ChevronDown,
+  CornerUpLeft,
+  History,
+  MessageSquare,
+  MoreHorizontal,
+  Plus
+} from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 
 import { AgentComposer } from "./agent-composer.js";
@@ -113,9 +122,7 @@ export function AgentConversationView(props: AgentConversationViewProps) {
                   ? props.onRestore(conversation.conversationId)
                   : props.onArchive(conversation.conversationId)
               }
-              disabled={
-                conversation.status !== "archived" && conversation.canArchive === false
-              }
+              disabled={conversation.status !== "archived" && conversation.canArchive === false}
               type="button"
             >
               {conversation.status === "archived" ? (
@@ -155,13 +162,15 @@ export function AgentConversationView(props: AgentConversationViewProps) {
       )}
 
       {props.mainReview === undefined ? null : (
-        <AgentConversationReviewSummary
-          onOpen={props.onOpenMainReview}
-          review={props.mainReview}
-        />
+        <AgentConversationReviewSummary onOpen={props.onOpenMainReview} review={props.mainReview} />
       )}
 
       <ConversationTurns conversation={conversation} />
+
+      {props.agentRun?.userRequest === undefined ||
+      props.agentRun.userRequest.trim().length === 0 ? null : (
+        <ConversationUserMessage request={props.agentRun.userRequest} live />
+      )}
 
       {props.agentRun === undefined ? null : (
         <div className="ns-agent-conversation-run-panel">
@@ -269,17 +278,9 @@ function ConversationTurns({
 
   return (
     <ol className="ns-agent-conversation-turns" aria-label="会话运行历史">
-      {conversation.turns.map((turn) => (
+      {[...conversation.turns].reverse().map((turn) => (
         <li data-run-id={turn.runId} key={turn.runId}>
-          <div className="ns-agent-conversation-message" data-speaker="user">
-            <div className="ns-agent-conversation-message-header">
-              <span className="ns-agent-conversation-avatar" data-speaker="user">
-                <User aria-hidden="true" size={11} />
-              </span>
-              <span className="ns-agent-conversation-speaker-name">你</span>
-            </div>
-            <p>{turn.userRequest}</p>
-          </div>
+          <ConversationUserMessage request={turn.userRequest} />
           {(turn.assistantText === undefined || turn.assistantText.length === 0) &&
           (turn.events === undefined || turn.events.length === 0) ? null : (
             <div className="ns-agent-conversation-message" data-speaker="assistant">
@@ -302,6 +303,24 @@ function ConversationTurns({
         </li>
       ))}
     </ol>
+  );
+}
+
+function ConversationUserMessage({
+  request,
+  live = false
+}: {
+  readonly request: string;
+  readonly live?: boolean;
+}) {
+  return (
+    <div
+      className="ns-agent-conversation-message ns-agent-conversation-user-message"
+      data-speaker="user"
+      {...(live ? { "data-live": "true" } : {})}
+    >
+      <p>{request}</p>
+    </div>
   );
 }
 

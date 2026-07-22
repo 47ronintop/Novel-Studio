@@ -179,15 +179,30 @@ interface ReasoningEffortSpec {
 function reasoningEffortSpecForOpenAiModel(
   normalizedModelId: string
 ): ReasoningEffortSpec | undefined {
+  // These compatible endpoints expose model-specific tiers. Keep the catalog per model instead of
+  // applying one conservative list to every GPT-5.6 alias.
+  if (/^gpt-5\.6-sol(?:-|$)/.test(normalizedModelId)) {
+    return {
+      allowedValues: ["low", "medium", "high", "max", "ultra"],
+      defaultValue: "medium"
+    };
+  }
+  if (/^gpt-5\.6-luna(?:-|$)/.test(normalizedModelId)) {
+    return {
+      allowedValues: ["low", "medium", "high"],
+      defaultValue: "medium"
+    };
+  }
   if (normalizedModelId === "gpt-5-pro") {
     return { allowedValues: ["high"], defaultValue: "high" };
   }
-  if (/^gpt-5\.6(?:-|$)/.test(normalizedModelId)) {
+  if (normalizedModelId === "gpt-5.6" || /^gpt-5\.6-codex(?:-|$)/.test(normalizedModelId)) {
     return {
       allowedValues: ["none", "low", "medium", "high", "xhigh", "max", "ultra"],
       defaultValue: "medium"
     };
   }
+  if (/^gpt-5\.6-/.test(normalizedModelId)) return undefined;
   if (normalizedModelId.includes("codex") && normalizedModelId.startsWith("gpt-5")) {
     return {
       allowedValues: ["minimal", "low", "medium", "high", "xhigh"],

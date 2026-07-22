@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronRight,
   Cpu,
+  FilePlus2,
   Plus,
   Send,
   Square,
@@ -367,6 +368,20 @@ export function AgentComposer(props: AgentComposerProps) {
                         ))
                       )}
                     </ul>
+                    {references?.onPickFile === undefined ? null : (
+                      <button
+                        className="ns-agent-composer-add-file"
+                        disabled={draftDisabled}
+                        onClick={() => {
+                          references.onPickFile?.();
+                          close();
+                        }}
+                        type="button"
+                      >
+                        <FilePlus2 aria-hidden="true" size={14} />
+                        添加项目文件…
+                      </button>
+                    )}
                   </section>
                   {props.operationMode === "planning" ? null : (
                     <>

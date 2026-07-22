@@ -201,6 +201,8 @@ describe("WorkspaceShell", () => {
     expect(css).toContain('.ns-shell[data-theme="light"]');
     expect(css).toContain('.ns-shell[data-theme="system"]');
     expect(css).toContain('.ns-shell[data-theme="ink-gold"]');
+    expect(css).toContain('.ns-shell[data-theme="ink-gold"][data-accent="blue"]');
+    expect(css).toContain('.ns-shell[data-theme="ink-gold"][data-accent="amber"]');
     expect(css).toContain("--ns-gilded-accent: linear-gradient");
     expect(css).toContain('.ns-shell[data-accent="blue"]');
     expect(css).toContain('.ns-shell[data-accent="amber"]');

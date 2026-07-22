@@ -871,6 +871,117 @@ describe("Agent Run renderer bridge", () => {
     expect(props.errorMessage).toContain("Max Tokens");
   });
 
+  test("surfaces an unsupported reasoning effort with the model's allowed values", async () => {
+    const api = createApi({
+      prepareStart: async () =>
+        err(
+          createUnifiedError({
+            code: "AGENT_REASONING_EFFORT_UNSUPPORTED",
+            category: "UserError",
+            message: "The selected model cannot use the requested reasoning strength.",
+            recoverability: "user-action",
+            suggestedAction: "Choose a supported value.",
+            traceId: "agent-run-bridge-reasoning",
+            redactedDetail: {
+              modelName: "gpt-5.6-luna",
+              requestedEffort: "ultra",
+              allowedValues: ["low", "medium", "high"]
+            }
+          })
+        )
+    });
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      settings
+    });
+
+    const props = await bridge.send("检查当前章节");
+
+    expect(props.errorMessage).toContain("gpt-5.6-luna");
+    expect(props.errorMessage).toContain("ultra");
+    expect(props.errorMessage).toContain("low、medium、high");
+  });
+
+  test("keeps the request visible when an Agent start call rejects", async () => {
+    const bridge = createAgentRunBridge(
+      createApi({
+        prepareStart: async () => {
+          throw new Error("模型端点拒绝了当前请求。");
+        }
+      })
+    );
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      settings
+    });
+
+    bridge.getComposerProps()?.onSend("这条消息不能静默消失");
+
+    await vi.waitFor(() =>
+      expect(bridge.getProps()).toMatchObject({
+        userRequest: "这条消息不能静默消失",
+        errorMessage: "模型端点拒绝了当前请求。"
+      })
+    );
+  });
+
+  test("publishes a pending request immediately while start preflight is waiting", async () => {
+    let finishPrepare: ((value: unknown) => void) | undefined;
+    const preparePending = new Promise<unknown>((resolve) => {
+      finishPrepare = resolve;
+    });
+    const bridge = createAgentRunBridge(
+      createApi({
+        prepareStart: async () => preparePending
+      })
+    );
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      settings
+    });
+    const listener = vi.fn();
+    bridge.subscribe(listener);
+
+    bridge.getComposerProps()?.onSend("等待预检的消息");
+
+    expect(listener).toHaveBeenCalled();
+    expect(bridge.getProps()).toMatchObject({
+      conversationId: "conversation-01",
+      userRequest: "等待预检的消息",
+      status: "created"
+    });
+    expect(bridge.getProps()?.runId).toBeUndefined();
+    expect(bridge.getComposerProps()).toMatchObject({
+      disabled: true,
+      disabledReason: "正在启动 Agent…"
+    });
+
+    finishPrepare?.(
+      err(
+        createUnifiedError({
+          code: "AGENT_REASONING_EFFORT_UNSUPPORTED",
+          category: "UserError",
+          message: "Unsupported reasoning effort.",
+          recoverability: "user-action",
+          suggestedAction: "Choose a supported value.",
+          traceId: "agent-run-pending-test",
+          redactedDetail: {
+            modelName: "gpt-5.6-luna",
+            requestedEffort: "ultra",
+            allowedValues: ["low", "medium", "high"]
+          }
+        })
+      )
+    );
+
+    await vi.waitFor(() => expect(bridge.getProps()?.errorMessage).toContain("gpt-5.6-luna"));
+    expect(bridge.getComposerProps()?.disabled).toBe(false);
+  });
+
   test("restores the Act preapproval choice without a second acknowledgement", () => {
     const bridge = createAgentRunBridge(createApi());
     bridge.syncContext({
@@ -1552,6 +1663,62 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     expect(composer?.reasoning).toMatchObject({ visible: true, current: "medium" });
     expect(composer?.references?.chips.map((chip) => chip.refId)).toEqual(["chapter:chapter-01"]);
     expect(composer?.contextStatus?.state).toBe("normal");
+  });
+
+  test("replaces a stale unsupported reasoning effort before preparing a run", async () => {
+    let preparedCommand: Record<string, unknown> | undefined;
+    const { api } = createDraftApi();
+    const originalPrepareStart = api.agentRuns.prepareStart;
+    api.agentRuns.prepareStart = async (command) => {
+      preparedCommand = command as Record<string, unknown>;
+      return originalPrepareStart(command);
+    };
+    const lunaSettings = {
+      ...draftSettings,
+      profiles: draftSettings.profiles.map((profile) =>
+        profile.id === "profile-01" ? { ...profile, modelName: "gpt-5.6-luna" } : profile
+      ),
+      modelDiscovery: {
+        ...draftSettings.modelDiscovery,
+        models: [
+          {
+            id: "gpt-5.6-luna",
+            displayName: "gpt-5.6-luna",
+            provider: "openai-compatible"
+          }
+        ],
+        reasoningStrength: {
+          status: "available" as const,
+          providerParamName: "reasoning_effort" as const,
+          allowedValues: ["low", "medium", "high"],
+          defaultValue: "medium"
+        }
+      }
+    } as ModelSettingsPanelProps;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: lunaSettings
+    });
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.reasoning?.visible).toBe(true));
+
+    // Simulate an older persisted draft created while this endpoint incorrectly exposed `ultra`.
+    bridge.getComposerProps()?.reasoning?.onSelect("ultra");
+    expect(bridge.getComposerProps()?.contextStatus?.busy).toBe(true);
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.contextStatus?.busy).toBe(false));
+
+    expect(bridge.getComposerProps()?.reasoning).toMatchObject({
+      values: ["low", "medium", "high"],
+      current: "medium"
+    });
+    await bridge.send("继续检查当前章节");
+    expect(preparedCommand).toMatchObject({
+      modelName: "gpt-5.6-luna",
+      reasoningEffort: "medium"
+    });
   });
 
   test("exposes discovered sibling models and persists the selected model name", async () => {

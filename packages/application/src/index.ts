@@ -60,7 +60,8 @@ export type {
   CreateCreativeProjectRequest,
   NovelStudioApi,
   ReadAgentPermissionSummaryQuery,
-  ProjectDirectorySelectionDto
+  ProjectDirectorySelectionDto,
+  ProjectTextFileSelectionDto
 } from "./novel-studio-api.js";
 export type {
   ChapterEditorSaveStatus,
@@ -388,6 +389,7 @@ export type {
   AgentUsageCostTotal,
   AgentUsageDailyBucket,
   AgentUsageDateRange,
+  AgentUsageModelTotal,
   AgentUsageQuery,
   AgentUsageReport,
   AgentUsageRunSummary,

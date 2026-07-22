@@ -133,6 +133,7 @@ interface BridgeState {
   /** The latest server-resolved budget preview for the current draft revision (never renderer-authored). */
   readonly budgetPreview: ContextBudgetSnapshot | undefined;
   readonly draftPending: boolean;
+  readonly startPending: boolean;
   readonly permissionSummary: PermissionSummary | undefined;
   readonly permissionPending: boolean;
   readonly permissionError: string | undefined;
@@ -165,6 +166,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     contextDraft: undefined,
     budgetPreview: undefined,
     draftPending: false,
+    startPending: false,
     permissionSummary: undefined,
     permissionPending: false,
     permissionError: undefined,
@@ -252,66 +254,94 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   });
 
   async function sendRun(request: string): Promise<AgentRunPanelProps> {
-    state = { ...state, userRequest: request, errorMessage: undefined };
-    // The draft is the source of truth for model/reasoning/refs when the composer is draft-backed;
-    // otherwise fall back to the project's selected profile and the active chapter.
-    const profileId = selectedRunModelProfileId(state.runDraft, context?.settings);
-    if (profileId === undefined) {
-      state = {
-        ...state,
-        errorMessage:
-          "未选择可用的模型配置。请在设置中选择一个模型，或将现有模型设为默认模型后重试。"
-      };
-      return toProps();
-    }
-    if (context === undefined) {
-      state = { ...state, errorMessage: "项目尚未打开，无法启动 Agent。" };
-      return toProps();
-    }
-    if (context.conversationId === undefined) {
-      state = { ...state, errorMessage: "请先选择一个会话。" };
-      return toProps();
-    }
-    // Server-authoritative start: persist the user's intent as a draft, then start by reference.
-    // The renderer authors only choices (mode, model, request, context refs) — never provider,
-    // capabilities, context window, or resolved document content.
-    const writePolicy =
-      state.operationMode === "planning" ? "write_before_confirmation" : state.writePolicy;
-    const reasoningEffort = state.runDraft?.reasoningEffort;
-    const modelName = selectedModelName(state.runDraft, context.settings, profileId);
-    const contextRefs = state.contextDraft?.refs ?? contextDraftRefs(context);
-    const prepared = await api.agentRuns.prepareStart({
-      projectId: context.projectId,
-      conversationId: context.conversationId,
-      commandId: createCommandId("prepare"),
+    if (state.startPending) return toProps();
+    state = {
+      ...state,
       userRequest: request,
-      operationMode: state.operationMode,
-      contextMode: state.contextMode,
-      writePolicy,
-      writePolicyAcknowledged:
-        state.operationMode === "execution" &&
-        state.writePolicy === "user_preapproved_run" &&
-        state.writePolicyAcknowledged,
-      modelProfileId: profileId,
-      ...(modelName === undefined ? {} : { modelName }),
-      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
-      contextRefs
-    });
-    if (!prepared.ok) {
-      state = { ...state, errorMessage: formatAgentStartError(prepared.error) };
-      return toProps();
-    }
-    const command: StartAgentRunCommand = {
-      projectId: context.projectId,
-      conversationId: context.conversationId,
-      commandId: createCommandId("start"),
-      expectedRunRevision: 0,
-      runDraftId: prepared.value.runDraft.runDraftId,
-      runDraftRevision: prepared.value.runDraft.revision,
-      runDraftChecksum: prepared.value.runDraft.checksum
+      snapshot: undefined,
+      events: [],
+      assistantText: "",
+      pendingUserInput: undefined,
+      diagnostic: undefined,
+      planArtifact: undefined,
+      changeSet: undefined,
+      reviewOpen: false,
+      rollbackReview: undefined,
+      rollbackReviewOpen: false,
+      rollbackDecisions: {},
+      selectionPending: false,
+      errorMessage: undefined,
+      permissionSummary: undefined,
+      permissionPending: false,
+      permissionError: undefined,
+      planExecution: undefined,
+      startPending: true
     };
-    await applyCommandResult(await api.agentRuns.start(command));
-    return toProps();
+    notify();
+    try {
+      // The draft is the source of truth for model/reasoning/refs when the composer is draft-backed;
+      // otherwise fall back to the project's selected profile and the active chapter.
+      const profileId = selectedRunModelProfileId(state.runDraft, context?.settings);
+      if (profileId === undefined) {
+        state = {
+          ...state,
+          errorMessage:
+            "未选择可用的模型配置。请在设置中选择一个模型，或将现有模型设为默认模型后重试。"
+        };
+        return toProps();
+      }
+      if (context === undefined) {
+        state = { ...state, errorMessage: "项目尚未打开，无法启动 Agent。" };
+        return toProps();
+      }
+      if (context.conversationId === undefined) {
+        state = { ...state, errorMessage: "请先选择一个会话。" };
+        return toProps();
+      }
+      // Server-authoritative start: persist the user's intent as a draft, then start by reference.
+      // The renderer authors only choices (mode, model, request, context refs) — never provider,
+      // capabilities, context window, or resolved document content.
+      const writePolicy =
+        state.operationMode === "planning" ? "write_before_confirmation" : state.writePolicy;
+      const reasoningEffort = safeReasoningEffortForDraft(state.runDraft, context.settings);
+      const modelName = selectedModelName(state.runDraft, context.settings, profileId);
+      const contextRefs = state.contextDraft?.refs ?? contextDraftRefs(context);
+      const prepared = await api.agentRuns.prepareStart({
+        projectId: context.projectId,
+        conversationId: context.conversationId,
+        commandId: createCommandId("prepare"),
+        userRequest: request,
+        operationMode: state.operationMode,
+        contextMode: state.contextMode,
+        writePolicy,
+        writePolicyAcknowledged:
+          state.operationMode === "execution" &&
+          state.writePolicy === "user_preapproved_run" &&
+          state.writePolicyAcknowledged,
+        modelProfileId: profileId,
+        ...(modelName === undefined ? {} : { modelName }),
+        ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+        contextRefs
+      });
+      if (!prepared.ok) {
+        state = { ...state, errorMessage: formatAgentStartError(prepared.error) };
+        return toProps();
+      }
+      const command: StartAgentRunCommand = {
+        projectId: context.projectId,
+        conversationId: context.conversationId,
+        commandId: createCommandId("start"),
+        expectedRunRevision: 0,
+        runDraftId: prepared.value.runDraft.runDraftId,
+        runDraftRevision: prepared.value.runDraft.revision,
+        runDraftChecksum: prepared.value.runDraft.checksum
+      };
+      await applyCommandResult(await api.agentRuns.start(command));
+      return toProps();
+    } finally {
+      state = { ...state, startPending: false };
+      notify();
+    }
   }
 
   async function stopRun(): Promise<AgentRunPanelProps> {
@@ -809,10 +839,13 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
 
   function toProps(): AgentRunPanelProps {
     const planExecution = planExecutionControl();
+    const conversationId = context?.conversationId ?? state.snapshot?.conversationId ?? undefined;
     return {
       projectId: context?.projectId ?? state.snapshot?.projectId ?? "",
+      ...(conversationId === undefined ? {} : { conversationId }),
       ...(state.snapshot === undefined ? {} : { runId: state.snapshot.runId }),
-      status: state.snapshot?.status ?? "idle",
+      ...(state.userRequest.length === 0 ? {} : { userRequest: state.userRequest }),
+      status: state.snapshot?.status ?? (state.startPending ? "created" : "idle"),
       assistantText: state.assistantText,
       events: state.events,
       ...(state.pendingUserInput === undefined ? {} : { pendingUserInput: state.pendingUserInput }),
@@ -1151,12 +1184,16 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   }
 
   function addReferenceDraft(refId: string): void {
-    const updateContextDraft = draftApi.updateContextDraft;
-    if (updateContextDraft === undefined) return;
     const ref = availableReferenceRefs(context, state.contextDraft).find(
       (candidate) => candidate.refId === refId
     );
     if (ref === undefined) return;
+    addReferenceValue(ref);
+  }
+
+  function addReferenceValue(ref: ContextDraftRef): void {
+    const updateContextDraft = draftApi.updateContextDraft;
+    if (updateContextDraft === undefined) return;
     void queueDraftMutation(async () => {
       const ctx = context;
       const draft = state.contextDraft;
@@ -1172,6 +1209,33 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       });
       applyDraftResult(result, token);
       await previewBudget(token);
+    });
+  }
+
+  async function pickProjectFile(): Promise<void> {
+    const chooser = api.workspace?.chooseTextFile;
+    if (chooser === undefined) return;
+    let selected: Awaited<ReturnType<typeof chooser>>;
+    try {
+      selected = await chooser();
+    } catch (error) {
+      state = { ...state, errorMessage: thrownErrorMessage(error) };
+      notify();
+      return;
+    }
+    if (!selected.ok) {
+      state = { ...state, errorMessage: selected.error.message };
+      notify();
+      return;
+    }
+    if (selected.value.canceled || selected.value.relativePath === undefined) return;
+    const relativePath = selected.value.relativePath;
+    if (state.contextDraft?.refs.some((ref) => ref.refId === `file:${relativePath}`)) return;
+    addReferenceValue({
+      kind: "project_file",
+      refId: `file:${relativePath}`,
+      relativePath,
+      label: selected.value.displayName ?? relativePath
     });
   }
 
@@ -1322,22 +1386,14 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     const selectedReasoningStrength =
       selectedProfile === undefined
         ? undefined
-        : (selectedChoice.reasoningStrength ??
-          (settings.modelDiscovery?.profileId === selectedProfile.id &&
-          selectedChoice.modelName === selectedProfile.modelName
-            ? settings.modelDiscovery.reasoningStrength
-            : reasoningStrengthForModel(
-                selectedProfile.provider,
-                selectedChoice.modelName,
-                selectedProfile.baseUrl,
-                selectedProfile.reasoningEffortEnabled
-              )));
+        : reasoningStrengthForChoice(settings, selectedChoice, selectedProfile);
     const reasoning = reasoningControl(selectedReasoningStrength, runDraft);
     const references: AgentComposerReferenceControl = {
       chips: contextDraft.refs.map(refToChip),
       available: availableReferenceRefs(context, contextDraft).map(refToChip),
       onAdd: (refId) => addReferenceDraft(refId),
-      onRemove: (refId) => removeReferenceDraft(refId)
+      onRemove: (refId) => removeReferenceDraft(refId),
+      onPickFile: () => void pickProjectFile()
     };
     const contextStatus = contextStatusControl(contextDraft);
     return { model, reasoning, references, contextStatus };
@@ -1358,7 +1414,13 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     return {
       visible: true,
       values: control.allowedValues,
-      current: runDraft.reasoningEffort ?? control.defaultValue,
+      // Drafts can outlive a model discovery refresh. Never render a stale value that the current
+      // endpoint did not declare; the start path applies the same fallback before sending.
+      current:
+        runDraft.reasoningEffort !== undefined &&
+        control.allowedValues.includes(runDraft.reasoningEffort)
+          ? runDraft.reasoningEffort
+          : control.defaultValue,
       onSelect: (value) => updateReasoningDraft(value)
     };
   }
@@ -1495,11 +1557,14 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       writePolicy: state.writePolicy,
       writePolicyAcknowledged: state.writePolicyAcknowledged,
       active: state.snapshot !== undefined && !isTerminalRunStatus(state.snapshot.status),
-      disabled: state.draftPending,
-      ...(state.draftPending
+      disabled: state.draftPending || state.startPending,
+      ...(state.draftPending || state.startPending
         ? {
-            disabledReason:
-              state.runDraft === undefined ? "正在准备模型与上下文…" : "正在保存运行设置…"
+            disabledReason: state.startPending
+              ? "正在启动 Agent…"
+              : state.runDraft === undefined
+                ? "正在准备模型与上下文…"
+                : "正在保存运行设置…"
           }
         : {}),
       availableContextModes:
@@ -1556,7 +1621,14 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           false
         );
       },
-      onSend: (request) => void sendRun(request).then(notify),
+      onSend: (request) => {
+        void sendRun(request)
+          .then(notify)
+          .catch((error: unknown) => {
+            state = { ...state, errorMessage: thrownErrorMessage(error) };
+            notify();
+          });
+      },
       onStop: () => void stopRun().then(notify)
     };
   }
@@ -1772,6 +1844,7 @@ function resetRunState(state: BridgeState): BridgeState {
     contextDraft: undefined,
     budgetPreview: undefined,
     draftPending: false,
+    startPending: false,
     permissionSummary: undefined,
     permissionPending: false,
     permissionError: undefined,
@@ -1948,6 +2021,56 @@ function selectedModelName(
   return settings?.profiles.find((profile) => profile.id === profileId)?.modelName;
 }
 
+function safeReasoningEffortForDraft(
+  runDraft: AgentRunDraft | undefined,
+  settings: ModelSettingsPanelProps | undefined
+): ModelReasoningStrengthValue | undefined {
+  if (settings === undefined) return undefined;
+  const profileId = selectedRunModelProfileId(runDraft, settings);
+  if (profileId === undefined) return undefined;
+  const modelName = selectedModelName(runDraft, settings, profileId);
+  if (modelName === undefined) return undefined;
+  const choice = composerModelChoices(settings).find(
+    (candidate) => candidate.profileId === profileId && candidate.modelName === modelName
+  );
+  const profile = settings.profiles.find((candidate) => candidate.id === profileId);
+  if (profile === undefined) return undefined;
+  const strength =
+    choice === undefined ? undefined : reasoningStrengthForChoice(settings, choice, profile);
+  if (strength === undefined || strength.status !== "available") return undefined;
+  const requested = runDraft?.reasoningEffort;
+  return requested !== undefined && strength.allowedValues.includes(requested)
+    ? requested
+    : strength.defaultValue;
+}
+
+function reasoningStrengthForChoice(
+  settings: ModelSettingsPanelProps,
+  choice: ComposerModelChoice,
+  profile: ModelSettingsPanelProps["profiles"][number]
+): ModelReasoningStrengthControl | undefined {
+  if (choice.reasoningStrength !== undefined) return choice.reasoningStrength;
+
+  const discovery = settings.modelDiscovery;
+  if (discovery?.profileId === profile.id) {
+    const discovered = discovery.models.find((model) => model.id === choice.modelName);
+    if (discovered?.reasoningStrength !== undefined) return discovered.reasoningStrength;
+    if (choice.modelName === profile.modelName) return discovery.reasoningStrength;
+  }
+
+  return reasoningStrengthForModel(
+    profile.provider,
+    choice.modelName,
+    profile.baseUrl,
+    profile.reasoningEffortEnabled
+  );
+}
+
+function thrownErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) return error.message;
+  return "Agent 请求未能启动。请检查模型配置后重试。";
+}
+
 function replacementModelForDraft(
   draft: AgentRunDraft,
   settings: ModelSettingsPanelProps,
@@ -2014,6 +2137,22 @@ function selectedRunModelProfileId(
 function formatAgentStartError(error: UnifiedError): string {
   if (error.code === "MODEL_PROFILE_NOT_FOUND") {
     return "所选模型配置已不存在。请在设置中重新选择模型或设置默认模型后重试。";
+  }
+  if (error.code === "AGENT_REASONING_EFFORT_UNSUPPORTED") {
+    const detail = error.redactedDetail;
+    const modelName =
+      typeof detail?.["modelName"] === "string" && detail["modelName"].length <= 80
+        ? `模型“${detail["modelName"]}”`
+        : "当前模型";
+    const requested =
+      typeof detail?.["requestedEffort"] === "string"
+        ? `“${detail["requestedEffort"]}”`
+        : "该推理强度";
+    const allowed = Array.isArray(detail?.["allowedValues"])
+      ? detail["allowedValues"].filter((value): value is string => typeof value === "string")
+      : [];
+    const supported = allowed.length === 0 ? "" : `可用值：${allowed.join("、")}。`;
+    return `${modelName}不支持${requested}。${supported}请在“模型与推理”中重新选择后重试。`;
   }
   if (error.code !== "AGENT_MODEL_CAPABILITY_UNSUPPORTED") return error.message;
 

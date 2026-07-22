@@ -242,6 +242,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     chooseOpenProjectDirectory: () => chooseProjectDirectory("Open Novel Studio project"),
     chooseCreateProjectDirectory: () => chooseProjectDirectory("Create Novel Studio project"),
     chooseEngineeringDirectory: () => chooseProjectDirectory("Open engineering workspace"),
+    chooseProjectTextFile: (workspaceRoot) => chooseProjectTextFile(workspaceRoot),
     workspaceActivationCoordinator,
     modelSecretStore,
     publishAiSuggestionStreamEvent: (event) => {
@@ -326,6 +327,51 @@ async function chooseProjectDirectory(title: string): Promise<string | undefined
   const result = await dialog.showOpenDialog({
     title,
     properties: ["openDirectory", "createDirectory"]
+  });
+
+  return result.canceled ? undefined : result.filePaths[0];
+}
+
+async function chooseProjectTextFile(workspaceRoot: string): Promise<string | undefined> {
+  const result = await dialog.showOpenDialog({
+    title: "Add project file to Agent context",
+    defaultPath: workspaceRoot,
+    properties: ["openFile"],
+    filters: [
+      {
+        name: "Text and source files",
+        extensions: [
+          "md",
+          "mdx",
+          "txt",
+          "json",
+          "jsonc",
+          "yaml",
+          "yml",
+          "toml",
+          "ts",
+          "tsx",
+          "js",
+          "jsx",
+          "css",
+          "scss",
+          "html",
+          "xml",
+          "py",
+          "rs",
+          "go",
+          "java",
+          "c",
+          "h",
+          "cpp",
+          "hpp",
+          "cs",
+          "sh",
+          "ps1"
+        ]
+      },
+      { name: "All files", extensions: ["*"] }
+    ]
   });
 
   return result.canceled ? undefined : result.filePaths[0];

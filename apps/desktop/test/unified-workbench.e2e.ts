@@ -23,13 +23,20 @@ test("switches a creative project into the engineering explorer without losing t
     const workbenchTrigger = page.getByRole("button", { name: "当前工作台：创作工作台" });
     await expect(workbenchTrigger).toBeVisible();
     const projectStatusBox = await page.locator(".ns-project-status").boundingBox();
+    const titlebarBox = await page.locator(".ns-titlebar").boundingBox();
     const workbenchBox = await workbenchTrigger.boundingBox();
     expect(projectStatusBox).not.toBeNull();
+    expect(titlebarBox).not.toBeNull();
     expect(workbenchBox).not.toBeNull();
     if (projectStatusBox !== null && workbenchBox !== null) {
       expect(workbenchBox.x - (projectStatusBox.x + projectStatusBox.width)).toBeGreaterThanOrEqual(
         24
       );
+    }
+    if (titlebarBox !== null && workbenchBox !== null) {
+      const titlebarCenter = titlebarBox.x + titlebarBox.width / 2;
+      const workbenchCenter = workbenchBox.x + workbenchBox.width / 2;
+      expect(Math.abs(workbenchCenter - titlebarCenter)).toBeLessThanOrEqual(2);
     }
 
     await workbenchTrigger.click();

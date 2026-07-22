@@ -9,6 +9,7 @@ export const APPLICATION_IPC_CHANNELS = [
   "application:project:preview-creative-project",
   "application:project:create-creative-project",
   "application:workspace:choose-engineering-directory",
+  "application:workspace:choose-text-file",
   "application:workspace:open-engineering-workspace",
   "application:workspace:attach-active-creative-project",
   "application:workspace:refresh-engineering-tree",

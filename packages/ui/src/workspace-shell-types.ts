@@ -349,6 +349,8 @@ export interface AgentComposerReferenceControl {
   readonly available: readonly AgentComposerReferenceChip[];
   readonly onAdd: (refId: string) => void;
   readonly onRemove: (refId: string) => void;
+  /** Opens the native project-file picker used by the + menu. */
+  readonly onPickFile?: (() => void) | undefined;
 }
 
 export type AgentComposerContextState = "normal" | "heavy" | "needs_refresh" | "compaction_failed";
@@ -382,7 +384,11 @@ export type AgentPlanReviewProps = PlanArtifactReviewProps;
 
 export interface AgentRunPanelProps {
   readonly projectId: string;
+  /** Conversation that owns this live or pending run. */
+  readonly conversationId?: string;
   readonly runId?: string;
+  /** The request currently being started; shown immediately before a persisted run exists. */
+  readonly userRequest?: string;
   readonly status: AgentRunStatusV11 | "idle";
   readonly assistantText: string;
   readonly events: readonly AgentRunEvent[];

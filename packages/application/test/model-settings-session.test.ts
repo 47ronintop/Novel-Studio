@@ -66,7 +66,7 @@ const secondaryProfile = {
 } satisfies ModelProfile;
 
 describe("model settings session", () => {
-  test("shows reasoning strength for matching custom OpenAI-compatible model names after opt-in", () => {
+  test("uses model-specific catalog tiers on custom endpoints", () => {
     const result = reasoningStrengthForModel(
       "openai-compatible",
       "gpt-5.5",
@@ -92,9 +92,30 @@ describe("model settings session", () => {
     ).toEqual({
       status: "available",
       providerParamName: "reasoning_effort",
-      allowedValues: ["none", "low", "medium", "high", "xhigh", "max", "ultra"],
+      allowedValues: ["low", "medium", "high"],
       defaultValue: "medium"
     });
+  });
+
+  test("preserves model-specific max and ultra tiers for gpt-5.6-sol", () => {
+    expect(
+      reasoningStrengthForModel("openai-compatible", "gpt-5.6-sol", "https://api.hostcentral.cc/v1")
+    ).toEqual({
+      status: "available",
+      providerParamName: "reasoning_effort",
+      allowedValues: ["low", "medium", "high", "max", "ultra"],
+      defaultValue: "medium"
+    });
+  });
+
+  test("does not infer reasoning tiers for an unknown gpt-5.6 alias", () => {
+    expect(
+      reasoningStrengthForModel(
+        "openai-compatible",
+        "gpt-5.6-unknown",
+        "https://api.hostcentral.cc/v1"
+      )
+    ).toMatchObject({ status: "hidden" });
   });
 
   test("uses model-specific reasoning effort values for official OpenAI endpoints", () => {

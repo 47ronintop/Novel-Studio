@@ -25,6 +25,9 @@ test("surfaces draft-backed context controls and round-trips a reference through
         data: [
           {
             id: "gpt-5.6-luna"
+          },
+          {
+            id: "gpt-5.6-sol"
           }
         ]
       });
@@ -66,15 +69,44 @@ test("surfaces draft-backed context controls and round-trips a reference through
     await modelMenu.locator('[data-model-menu="model"]').click();
     const modelOptions = page.getByRole("listbox", { name: "模型", exact: true });
     await expect(modelOptions).toBeVisible();
-    await expect(modelOptions.getByRole("button", { name: /gpt-5\.6-luna/ })).toBeVisible();
+    const lunaOption = modelOptions.getByRole("button", { name: /gpt-5\.6-luna/ });
+    const solOption = modelOptions.getByRole("button", { name: /gpt-5\.6-sol/ });
+    await expect(lunaOption).toBeVisible();
+    await expect(solOption).toBeVisible();
+    await solOption.click();
+    await expect(modelTrigger).toHaveAccessibleName("模型与推理：gpt-5.6-sol · 中");
 
-    await modelMenu.getByRole("button", { name: "返回模型与推理选项" }).click();
+    await modelTrigger.click();
     await modelMenu.locator('[data-model-menu="reasoning"]').click();
     const reasoningOptions = page.getByRole("listbox", {
       name: "推理强度",
       exact: true
     });
+    await expect(reasoningOptions.locator("[data-reasoning-option]")).toHaveText([
+      "低",
+      "中",
+      "高",
+      "最大",
+      "超高"
+    ]);
+    await reasoningOptions.getByRole("button", { name: "最大", exact: true }).click();
+    await expect(modelTrigger).toHaveAccessibleName("模型与推理：gpt-5.6-sol · 最大");
+
+    await modelTrigger.click();
+    await modelMenu.locator('[data-model-menu="model"]').click();
+    await modelOptions.getByRole("button", { name: /gpt-5\.6-luna/ }).click();
+    await expect(modelTrigger).toHaveAccessibleName("模型与推理：gpt-5.6-luna · 中");
+
+    await modelTrigger.click();
+    await modelMenu.locator('[data-model-menu="reasoning"]').click();
     await expect(reasoningOptions).toBeVisible();
+    await expect(reasoningOptions.locator("[data-reasoning-option]")).toHaveText([
+      "低",
+      "中",
+      "高"
+    ]);
+    await expect(reasoningOptions.locator('[data-reasoning-option="max"]')).toHaveCount(0);
+    await expect(reasoningOptions.locator('[data-reasoning-option="ultra"]')).toHaveCount(0);
     await reasoningOptions.getByRole("button", { name: "高", exact: true }).click();
     await expect(modelTrigger).toHaveAccessibleName("模型与推理：gpt-5.6-luna · 高");
 

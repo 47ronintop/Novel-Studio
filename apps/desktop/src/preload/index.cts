@@ -46,6 +46,7 @@ import type {
   PluginSettingsSnapshot,
   ProjectChapterSelectionDto,
   ProjectDirectorySelectionDto,
+  ProjectTextFileSelectionDto,
   ProjectCreationPreviewDto,
   ProjectRecoveryApplyResultDto,
   ProjectRecoveryDraftPreview,
@@ -197,6 +198,10 @@ const api: NovelStudioApi = {
     chooseEngineeringDirectory: () =>
       invokeTyped<Result<ProjectDirectorySelectionDto, UnifiedError>>(
         "application:workspace:choose-engineering-directory"
+      ),
+    chooseTextFile: () =>
+      invokeTyped<Result<ProjectTextFileSelectionDto, UnifiedError>>(
+        "application:workspace:choose-text-file"
       ),
     openEngineeringWorkspace: (selectionId: string) =>
       invokeTyped<Result<WorkspaceActivationDto, UnifiedError>>(

@@ -1,4 +1,4 @@
-import { ChevronDown } from "lucide-react";
+import { BookOpenText, Check, ChevronDown, Code2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { WorkbenchMode } from "@novel-studio/shared";
 
@@ -25,7 +25,10 @@ export function WorkbenchSwitcher({
 
   useEffect(() => {
     if (!open) return;
-    const index = Math.max(0, modes.findIndex((entry) => entry.mode === mode));
+    const index = Math.max(
+      0,
+      modes.findIndex((entry) => entry.mode === mode)
+    );
     itemRefs.current[index]?.focus();
   }, [mode, open]);
 
@@ -63,7 +66,7 @@ export function WorkbenchSwitcher({
   };
 
   return (
-    <div className="ns-workbench-switcher" ref={containerRef}>
+    <div className="ns-workbench-switcher" data-mode={mode} ref={containerRef}>
       <button
         ref={triggerRef}
         aria-expanded={open}
@@ -79,6 +82,11 @@ export function WorkbenchSwitcher({
         }}
         type="button"
       >
+        {mode === "engineering" ? (
+          <Code2 aria-hidden="true" className="ns-workbench-mode-icon" size={15} />
+        ) : (
+          <BookOpenText aria-hidden="true" className="ns-workbench-mode-icon" size={15} />
+        )}
         <span>{labelFor(mode)}</span>
         <ChevronDown aria-hidden="true" size={14} />
       </button>
@@ -97,6 +105,8 @@ export function WorkbenchSwitcher({
                 aria-disabled={disabled}
                 aria-label={entry.label}
                 className="ns-workbench-menu-item"
+                data-mode={entry.mode}
+                data-selected={entry.mode === mode}
                 key={entry.mode}
                 onClick={() => select(entry.mode)}
                 onKeyDown={(event) => {
@@ -131,8 +141,15 @@ export function WorkbenchSwitcher({
                 role="menuitemradio"
                 type="button"
               >
+                {entry.mode === "engineering" ? (
+                  <Code2 aria-hidden="true" size={15} />
+                ) : (
+                  <BookOpenText aria-hidden="true" size={15} />
+                )}
                 <span>{entry.label}</span>
-                {entry.mode === mode ? <span aria-hidden="true">当前</span> : null}
+                {entry.mode === mode ? (
+                  <Check aria-hidden="true" className="ns-workbench-menu-check" size={14} />
+                ) : null}
               </button>
             );
           })}

@@ -26,7 +26,9 @@ describe("AgentConversationView", () => {
     expect(host.querySelector('[aria-label="Agent 会话主视图"]')).not.toBeNull();
     expect(host.textContent).toContain("正在准备会话");
     expect(host.querySelector('[aria-label="会话输入区"]')).not.toBeNull();
-    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="Agent 请求"]')?.disabled).toBe(true);
+    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="Agent 请求"]')?.disabled).toBe(
+      true
+    );
     expect(host.querySelector('[aria-label="新建会话"]')).toBeNull();
     expect(onCreate).not.toHaveBeenCalled();
   });
@@ -44,6 +46,34 @@ describe("AgentConversationView", () => {
     expect(host.querySelectorAll('button[aria-label="启动 Agent 运行"]')).toHaveLength(1);
     expect(host.querySelectorAll('[data-run-id="run-previous"]')).toHaveLength(1);
     expect(host.querySelectorAll('[data-run-id="run-current"]')).toHaveLength(1);
+  });
+
+  test("keeps older messages above newer ones and renders the live request without a user badge", () => {
+    const prior = conversation().turns[0];
+    if (prior === undefined) throw new Error("Expected a conversation turn fixture");
+    const { host } = renderView({
+      conversation: {
+        ...conversation(),
+        // Conversation persistence returns newest first.
+        turns: [
+          { ...prior, runId: "run-newer", userRequest: "较新的消息" },
+          { ...prior, runId: "run-older", userRequest: "较早的消息" }
+        ]
+      },
+      agentRun: { ...agentRun(), userRequest: "正在发送的消息", status: "planning_model" }
+    });
+
+    expect(
+      Array.from(host.querySelectorAll(".ns-agent-conversation-user-message p")).map(
+        (message) => message.textContent
+      )
+    ).toEqual(["较早的消息", "较新的消息", "正在发送的消息"]);
+    expect(host.querySelector('.ns-agent-conversation-avatar[data-speaker="user"]')).toBeNull();
+    expect(
+      host.querySelector(
+        '.ns-agent-conversation-message[data-speaker="user"] .ns-agent-conversation-speaker-name'
+      )
+    ).toBeNull();
   });
 
   test("does not render internal conversation context payloads as a user-facing summary", () => {

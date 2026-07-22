@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
@@ -36,6 +36,7 @@ describe("Task 5 explicit workspace IPC", () => {
     });
     await api.project.selectChapterAndLoad("chapter_1");
     await api.workspace.chooseEngineeringDirectory();
+    await api.workspace.chooseTextFile();
     await api.workspace.openEngineeringWorkspace("selection_1");
     await api.workspace.refreshEngineeringTree();
     await api.workspace.readTextFile("notes/scene.md");
@@ -54,6 +55,7 @@ describe("Task 5 explicit workspace IPC", () => {
       "application:project:create-creative-project",
       "application:project:select-chapter-and-load",
       "application:workspace:choose-engineering-directory",
+      "application:workspace:choose-text-file",
       "application:workspace:open-engineering-workspace",
       "application:workspace:refresh-engineering-tree",
       "application:workspace:read-text-file",
@@ -89,6 +91,50 @@ describe("Task 5 explicit workspace IPC", () => {
       expect(coordinator.openCreativeProject).toHaveBeenCalledWith(canonicalRoot);
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("returns only a project-relative path for selected context files", async () => {
+    const root = await mkdtemp(join(tmpdir(), "novel-studio-project-file-"));
+    const outsideRoot = await mkdtemp(join(tmpdir(), "novel-studio-outside-file-"));
+    try {
+      const projectFile = join(root, "notes.md");
+      const outsideFile = join(outsideRoot, "outside.md");
+      await Promise.all([
+        writeFile(projectFile, "inside", "utf8"),
+        writeFile(outsideFile, "outside", "utf8")
+      ]);
+      let selectedPath = projectFile;
+      const handlers = createApplicationIpcHandlers(undefined, {
+        chooseProjectTextFile: async () => selectedPath,
+        agentRuntimeManager: {
+          currentWorkspace: () => ({
+            workspaceId: "workspace_01",
+            contentRoot: root,
+            stateRoot: root
+          }),
+          subscribeAgentRunEvents: () => () => undefined
+        } as never
+      });
+
+      const selected = await handlers["application:workspace:choose-text-file"]();
+
+      expect(selected).toEqual({
+        ok: true,
+        value: { canceled: false, relativePath: "notes.md", displayName: "notes.md" }
+      });
+      expect(JSON.stringify(selected)).not.toContain(await realpath(root));
+
+      selectedPath = outsideFile;
+      await expect(handlers["application:workspace:choose-text-file"]()).resolves.toMatchObject({
+        ok: false,
+        error: { code: "PROJECT_FILE_SELECTION_INVALID" }
+      });
+    } finally {
+      await Promise.all([
+        rm(root, { recursive: true, force: true }),
+        rm(outsideRoot, { recursive: true, force: true })
+      ]);
     }
   });
 

@@ -150,6 +150,8 @@ describe("AgentComposer", () => {
     expect(summary?.open).toBe(false);
     expect(document.querySelector('[aria-label="执行审批"]')?.textContent).toContain("请求批准");
     expect(document.querySelector('[aria-label="执行审批"]')?.textContent).toContain("替我审批");
+    expect(document.querySelectorAll(".ns-agent-permission-choice-icon")).toHaveLength(2);
+    expect(document.querySelectorAll(".ns-agent-permission-choice-check")).toHaveLength(1);
 
     act(() => summary?.querySelector("summary")?.click());
     expect(summary?.open).toBe(true);
@@ -377,12 +379,14 @@ describe("AgentComposer", () => {
   test("lists context reference chips and adds/removes through callbacks", () => {
     const onAdd = vi.fn();
     const onRemove = vi.fn();
+    const onPickFile = vi.fn();
     const { host } = renderComposer({
       references: {
         chips: [{ refId: "chapter:ch-01", label: "第一章", kind: "chapter" }],
         available: [{ refId: "file:notes.md", label: "notes.md", kind: "project_file" }],
         onAdd,
-        onRemove
+        onRemove,
+        onPickFile
       }
     });
     expect(host.querySelector('[aria-label="已选引用"]')?.textContent).toContain("第一章");
@@ -391,6 +395,9 @@ describe("AgentComposer", () => {
       document.querySelector<HTMLButtonElement>('[data-reference-option="file:notes.md"]')?.click()
     );
     expect(onAdd).toHaveBeenCalledWith("file:notes.md");
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="添加引用与执行审批"]')?.click());
+    act(() => document.querySelector<HTMLButtonElement>(".ns-agent-composer-add-file")?.click());
+    expect(onPickFile).toHaveBeenCalledTimes(1);
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="移除引用 第一章"]')?.click());
     expect(onRemove).toHaveBeenCalledWith("chapter:ch-01");
   });

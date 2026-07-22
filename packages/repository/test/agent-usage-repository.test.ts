@@ -102,6 +102,7 @@ type UsageRepository = {
     model?: string;
     projectId?: string;
     detailLocalDate?: string;
+    includeModelBreakdown?: boolean;
   }): Promise<{
     ok: boolean;
     value?: ReadonlyArray<
@@ -127,6 +128,7 @@ type UsageRepository = {
     model?: string;
     projectId?: string;
     detailLocalDate?: string;
+    includeModelBreakdown?: boolean;
   }): Promise<{
     ok: boolean;
     value?: ReadonlyArray<{
@@ -138,6 +140,7 @@ type UsageRepository = {
       totalTokens: number;
       costs: ReadonlyArray<{ currency: string; actualAmount: number; estimatedAmount: number }>;
       hasUnknownCost: boolean;
+      models?: ReadonlyArray<{ provider: string; model: string; totalTokens: number }>;
     }>;
     error?: { code: string };
   }>;
@@ -312,6 +315,31 @@ describe("AgentUsageFileRepository", () => {
       detailLocalDate: "2026-01-01"
     });
     expect(invalid).toMatchObject({ ok: false, error: { code: "AGENT_USAGE_QUERY_INVALID" } });
+  });
+
+  test("projects a model-colored daily breakdown only when requested", async () => {
+    const repository = await createRepository();
+    await repository.writeFinal(
+      baseRecord({ roundId: "model_a", finalSequence: 1, provider: "openai", model: "gpt-5" })
+    );
+    await repository.writeFinal(
+      baseRecord({
+        roundId: "model_b",
+        finalSequence: 2,
+        provider: "anthropic",
+        model: "claude-writer"
+      })
+    );
+
+    const result = await repository.queryDailyAggregates({
+      range: { fromLocalDate: "2026-07-16", toLocalDate: "2026-07-16" },
+      includeModelBreakdown: true
+    });
+
+    expect(result.value?.[0]?.models).toEqual([
+      { provider: "anthropic", model: "claude-writer", totalTokens: 1200 },
+      { provider: "openai", model: "gpt-5", totalTokens: 1200 }
+    ]);
   });
 
   test("counts the DST repeated hour once per distinct UTC timestamp and usage id", async () => {

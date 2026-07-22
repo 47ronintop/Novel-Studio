@@ -183,6 +183,7 @@ export interface NovelStudioApi {
   };
   workspace: {
     chooseEngineeringDirectory(): Promise<Result<ProjectDirectorySelectionDto, UnifiedError>>;
+    chooseTextFile(): Promise<Result<ProjectTextFileSelectionDto, UnifiedError>>;
     openEngineeringWorkspace(
       selectionId: string
     ): Promise<Result<WorkspaceActivationDto, UnifiedError>>;
@@ -345,6 +346,13 @@ export interface AiWritingSuggestionStreamOptions {
 export interface ProjectDirectorySelectionDto {
   readonly canceled: boolean;
   readonly selectionId?: string;
+  readonly displayName?: string;
+}
+
+export interface ProjectTextFileSelectionDto {
+  readonly canceled: boolean;
+  /** POSIX-style path relative to the active workspace root. Absolute paths never cross IPC. */
+  readonly relativePath?: string;
   readonly displayName?: string;
 }
 

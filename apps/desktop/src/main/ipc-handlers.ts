@@ -1,7 +1,7 @@
 import { createDesktopApplication, toProjectWorkspaceSnapshotDto } from "@novel-studio/application";
-import { realpath } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { basename } from "node:path";
+import { basename, isAbsolute, relative } from "node:path";
 import type {
   AgentConversationSession,
   AgentContextSession,
@@ -15,6 +15,7 @@ import type {
   CompactContextCommand,
   DesktopApplication,
   ProjectCreationPreviewDto,
+  ProjectTextFileSelectionDto,
   WorkspaceActivationDto,
   PreviewContextBudgetCommand,
   ReadAgentPermissionSummaryQuery,
@@ -81,6 +82,7 @@ export interface ApplicationIpcHandlerOptions {
   readonly chooseOpenProjectDirectory?: () => Promise<string | undefined>;
   readonly chooseCreateProjectDirectory?: () => Promise<string | undefined>;
   readonly chooseEngineeringDirectory?: () => Promise<string | undefined>;
+  readonly chooseProjectTextFile?: (workspaceRoot: string) => Promise<string | undefined>;
   readonly workspaceActivationCoordinator?: WorkspaceActivationCoordinator;
   readonly modelSecretStore?: ModelSecretStore;
   readonly publishAiSuggestionStreamEvent?: (event: AiWritingSuggestionStreamPushEvent) => void;
@@ -243,6 +245,49 @@ export function createApplicationIpcHandlers(
     }
   }
 
+  async function chooseProjectTextFile(): Promise<
+    Result<ProjectTextFileSelectionDto, UnifiedError>
+  > {
+    const workspaceRoot = options.agentRuntimeManager?.currentWorkspace()?.contentRoot;
+    if (workspaceRoot === undefined) {
+      return err(
+        createUnifiedError({
+          code: "PROJECT_FILE_SELECTION_UNAVAILABLE",
+          category: "UserError",
+          message: "请先打开项目，再添加引用文件。",
+          recoverability: "user-action",
+          suggestedAction: "Open a project and retry the file selection.",
+          traceId: "project-file-selection"
+        })
+      );
+    }
+
+    const selected = await options.chooseProjectTextFile?.(workspaceRoot);
+    if (selected === undefined) return ok({ canceled: true });
+    try {
+      const [canonicalRoot, canonicalFile] = await Promise.all([
+        realpath(workspaceRoot),
+        realpath(selected)
+      ]);
+      const fileInfo = await stat(canonicalFile);
+      const relativePath = relative(canonicalRoot, canonicalFile);
+      const outsideWorkspace =
+        relativePath.length === 0 ||
+        isAbsolute(relativePath) ||
+        /^\.\.([\\/]|$)/.test(relativePath);
+      if (outsideWorkspace || !fileInfo.isFile()) {
+        return err(projectTextFileSelectionInvalid());
+      }
+      return ok({
+        canceled: false,
+        relativePath: relativePath.replaceAll("\\", "/"),
+        displayName: basename(canonicalFile)
+      });
+    } catch {
+      return err(projectTextFileSelectionInvalid());
+    }
+  }
+
   function resolveDirectorySelection(
     selectionId: unknown,
     purpose: DirectorySelection["purpose"]
@@ -322,6 +367,7 @@ export function createApplicationIpcHandlers(
     },
     "application:workspace:choose-engineering-directory": () =>
       chooseDirectory("engineering-open", options.chooseEngineeringDirectory),
+    "application:workspace:choose-text-file": () => chooseProjectTextFile(),
     "application:workspace:open-engineering-workspace": async (selectionId: unknown) => {
       const selection = resolveDirectorySelection(selectionId, "engineering-open");
       if (!selection.ok) return selection;
@@ -2025,6 +2071,17 @@ function directorySelectionInvalid(): UnifiedError {
     recoverability: "user-action",
     suggestedAction: "Choose the directory again.",
     traceId: "desktop-directory-selection"
+  });
+}
+
+function projectTextFileSelectionInvalid(): UnifiedError {
+  return createUnifiedError({
+    code: "PROJECT_FILE_SELECTION_INVALID",
+    category: "ValidationError",
+    message: "只能添加当前项目目录内的现有文件。",
+    recoverability: "user-action",
+    suggestedAction: "Choose a file inside the active workspace and try again.",
+    traceId: "project-file-selection"
   });
 }
 

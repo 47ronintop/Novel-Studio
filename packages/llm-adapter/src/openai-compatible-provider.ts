@@ -104,7 +104,7 @@ async function* streamChatCompletion(
       if (!emittedEvent && shouldRetryWithoutReasoningEffort(error, transportRequest)) {
         yield reasoningEffortIgnoredWarning();
         for await (const chunk of streamTransport(omitReasoningEffort(transportRequest))) {
-        for (const event of parseStreamChunk(chunk, toolCallIdsByIndex)) {
+          for (const event of parseStreamChunk(chunk, toolCallIdsByIndex)) {
             yield event;
           }
         }
@@ -246,6 +246,10 @@ function shouldRetryWithoutReasoningEffort(
     return false;
   }
   const message = `${error.message}\n${readProviderErrorMessage(error.body) ?? ""}`;
+  const parameter = readProviderErrorParameter(error.body);
+  if (error.status >= 400 && error.status < 500 && parameter === "reasoning_effort") {
+    return true;
+  }
   return (
     error.status >= 400 &&
     error.status < 500 &&
@@ -482,6 +486,16 @@ function readProviderErrorMessage(body: unknown): string | undefined {
     return typeof message === "string" && message.trim().length > 0 ? message : undefined;
   }
   return undefined;
+}
+
+/** Some compatible gateways put the rejected field in `error.param` and omit it from the message. */
+function readProviderErrorParameter(body: unknown): string | undefined {
+  if (!isRecord(body)) return undefined;
+  const candidates: unknown[] = [body.param, body.parameter];
+  if (isRecord(body.error)) {
+    candidates.push(body.error.param, body.error.parameter);
+  }
+  return candidates.find((value): value is string => typeof value === "string")?.trim();
 }
 
 function readProviderRequestId(body: unknown): string | undefined {

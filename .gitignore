@@ -5,6 +5,7 @@ release/
 coverage/
 playwright-report/
 test-results/
+.tmp-novel-studio-*/
 *.tsbuildinfo
 .env
 .env.*

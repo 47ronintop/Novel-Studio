@@ -76,7 +76,16 @@ export function createAgentUsageSession(
 }
 
 function isValidQuery(query: unknown): query is AgentUsageQuery {
-  if (!hasOnlyKeys(query, ["range", "provider", "model", "projectId", "detailLocalDate"])) {
+  if (
+    !hasOnlyKeys(query, [
+      "range",
+      "provider",
+      "model",
+      "projectId",
+      "detailLocalDate",
+      "includeModelBreakdown"
+    ])
+  ) {
     return false;
   }
   const candidate = query as unknown as AgentUsageQuery;
@@ -84,6 +93,12 @@ function isValidQuery(query: unknown): query is AgentUsageQuery {
   if (candidate.provider !== undefined && !isSafeFilter(candidate.provider)) return false;
   if (candidate.model !== undefined && !isSafeFilter(candidate.model)) return false;
   if (candidate.projectId !== undefined && !isSafeId(candidate.projectId)) return false;
+  if (
+    candidate.includeModelBreakdown !== undefined &&
+    typeof candidate.includeModelBreakdown !== "boolean"
+  ) {
+    return false;
+  }
   return (
     candidate.detailLocalDate === undefined ||
     (isIsoLocalDate(candidate.detailLocalDate) &&

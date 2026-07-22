@@ -1,4 +1,5 @@
 import { Trash2 } from "lucide-react";
+import type { CSSProperties } from "react";
 import type { AgentUsageReport } from "@novel-studio/application";
 
 export type AgentUsageRangePreset = "today" | "7d" | "30d";
@@ -120,42 +121,172 @@ function UsageFilter({
 }
 
 function UsageChart({ report }: { readonly report: AgentUsageReport }) {
-  const maxValue = Math.max(
-    1,
-    ...report.days.flatMap((day) => [day.inputTokens, day.outputTokens, day.cachedTokens])
+  const hourly =
+    report.query.range.fromLocalDate === report.query.range.toLocalDate && report.runs.length > 0;
+  const buckets = hourly ? hourlyUsageBuckets(report) : dailyUsageBuckets(report);
+  const maxValue = Math.max(1, ...buckets.map((bucket) => bucket.totalTokens));
+  const modelKeys = [
+    ...new Set(buckets.flatMap((bucket) => bucket.segments.map((segment) => segment.key)))
+  ];
+  const modelLabels = new Map(
+    buckets.flatMap((bucket) =>
+      bucket.segments.map((segment) => [segment.key, segment.label] as const)
+    )
   );
-  const points = (key: "inputTokens" | "outputTokens" | "cachedTokens") =>
-    report.days
-      .map((day, index) => {
-        const x = report.days.length === 1 ? 360 : 24 + (index * 672) / (report.days.length - 1);
-        return `${x},${190 - (day[key] / maxValue) * 150}`;
-      })
-      .join(" ");
-  const singleDay = report.days[0];
-  const markerY = (value: number) => 190 - (value / maxValue) * 150;
   return (
-    <figure className="agent-usage-chart">
-      <figcaption>Token 用量趋势</figcaption>
-      <div className="agent-usage-legend" aria-hidden="true">
-        <span data-series="input">Input</span>
-        <span data-series="output">Output</span>
-        <span data-series="cached">Cached</span>
+    <figure className="agent-usage-chart" data-chart-kind={hourly ? "hourly" : "daily"}>
+      <figcaption>{hourly ? "Token 用量（按小时）" : "Token 用量（按天）"}</figcaption>
+      <ul aria-label="模型颜色图例" className="agent-usage-legend">
+        {modelKeys.map((key, index) => (
+          <li key={key}>
+            <span
+              aria-hidden="true"
+              className="agent-usage-legend-swatch"
+              style={usageColorStyle(index)}
+            />
+            <span>{modelLabels.get(key) ?? key}</span>
+          </li>
+        ))}
+      </ul>
+      <div className="agent-usage-chart-body">
+        <div aria-hidden="true" className="agent-usage-scale">
+          <span>{formatCompactTokens(maxValue)}</span>
+          <span>0</span>
+        </div>
+        <div
+          aria-label={hourly ? "每小时 Agent Token 柱状图" : "每日 Agent Token 柱状图"}
+          className="agent-usage-bar-plot"
+          role="img"
+        >
+          {buckets.map((bucket) => (
+            <div className="agent-usage-bar-column" key={bucket.key}>
+              <div className="agent-usage-bar-track">
+                {bucket.totalTokens === 0 ? null : (
+                  <div
+                    className="agent-usage-bar-stack"
+                    style={{ height: `${Math.max(2, (bucket.totalTokens / maxValue) * 100)}%` }}
+                    title={`${bucket.label} · ${bucket.totalTokens.toLocaleString()} tokens`}
+                  >
+                    {bucket.segments.map((segment) => {
+                      const colorIndex = modelKeys.indexOf(segment.key);
+                      return (
+                        <span
+                          className="agent-usage-bar-segment"
+                          data-model-key={segment.key}
+                          key={segment.key}
+                          style={{
+                            ...usageColorStyle(Math.max(0, colorIndex)),
+                            flexGrow: Math.max(1, segment.totalTokens)
+                          }}
+                          title={`${segment.label} · ${segment.totalTokens.toLocaleString()} tokens`}
+                        />
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              <span className="agent-usage-bar-label">{bucket.showLabel ? bucket.label : ""}</span>
+            </div>
+          ))}
+        </div>
       </div>
-      <svg aria-label="Token 用量趋势" role="img" viewBox="0 0 720 220">
-        <line x1="24" x2="696" y1="190" y2="190" />
-        <polyline data-series="input" points={points("inputTokens")} />
-        <polyline data-series="output" points={points("outputTokens")} />
-        <polyline data-series="cached" points={points("cachedTokens")} />
-        {report.days.length === 1 && singleDay !== undefined ? (
-          <>
-            <circle cx="360" cy={markerY(singleDay.inputTokens)} data-series="input" r="3.5" />
-            <circle cx="360" cy={markerY(singleDay.outputTokens)} data-series="output" r="3.5" />
-            <circle cx="360" cy={markerY(singleDay.cachedTokens)} data-series="cached" r="3.5" />
-          </>
-        ) : null}
-      </svg>
     </figure>
   );
+}
+
+interface UsageChartSegment {
+  readonly key: string;
+  readonly label: string;
+  readonly totalTokens: number;
+}
+
+interface UsageChartBucket {
+  readonly key: string;
+  readonly label: string;
+  readonly showLabel: boolean;
+  readonly totalTokens: number;
+  readonly segments: readonly UsageChartSegment[];
+}
+
+const USAGE_MODEL_COLORS = [
+  "#c65345",
+  "#3f8581",
+  "#4d78a8",
+  "#b17a28",
+  "#66864f",
+  "#9a5f8f",
+  "#69707d",
+  "#bb6b4a"
+] as const;
+
+function dailyUsageBuckets(report: AgentUsageReport): UsageChartBucket[] {
+  const labelEvery = Math.max(1, Math.ceil(report.days.length / 8));
+  return report.days.map((day, index) => {
+    const fallbackLabel = report.query.model ?? "全部模型";
+    const models =
+      day.models !== undefined && day.models.length > 0
+        ? day.models.map((model) => ({
+            key: `${model.provider}/${model.model}`,
+            label: model.model,
+            totalTokens: model.totalTokens
+          }))
+        : [
+            {
+              key: `${report.query.provider ?? "all"}/${report.query.model ?? "all"}`,
+              label: fallbackLabel,
+              totalTokens: day.totalTokens
+            }
+          ];
+    return {
+      key: day.localDate,
+      label: day.localDate.slice(5),
+      showLabel: index % labelEvery === 0 || index === report.days.length - 1,
+      totalTokens: day.totalTokens,
+      segments: models.filter((model) => model.totalTokens > 0)
+    };
+  });
+}
+
+function hourlyUsageBuckets(report: AgentUsageReport): UsageChartBucket[] {
+  const hours = Array.from({ length: 24 }, () => new Map<string, UsageChartSegment>());
+  for (const run of report.runs) {
+    const timestamp = new Date(run.timestamp);
+    if (!Number.isFinite(timestamp.getTime())) continue;
+    const key = `${run.provider}/${run.model}`;
+    const bucket = hours[timestamp.getHours()];
+    if (bucket === undefined) continue;
+    const prior = bucket.get(key);
+    bucket.set(key, {
+      key,
+      label: run.model,
+      totalTokens: (prior?.totalTokens ?? 0) + run.totalTokens
+    });
+  }
+  return hours.map((segments, hour) => {
+    const values = [...segments.values()].sort(
+      (left, right) => right.totalTokens - left.totalTokens || left.label.localeCompare(right.label)
+    );
+    return {
+      key: String(hour),
+      label: `${String(hour).padStart(2, "0")}:00`,
+      showLabel: hour % 3 === 0 || hour === 23,
+      totalTokens: values.reduce((sum, segment) => sum + segment.totalTokens, 0),
+      segments: values
+    };
+  });
+}
+
+function usageColorStyle(index: number): CSSProperties {
+  return {
+    "--usage-color": USAGE_MODEL_COLORS[index % USAGE_MODEL_COLORS.length]
+  } as CSSProperties;
+}
+
+function formatCompactTokens(value: number): string {
+  return new Intl.NumberFormat("zh-CN", {
+    notation: "compact",
+    maximumFractionDigits: 1
+  }).format(value);
 }
 
 function DailyUsageTable({
@@ -180,15 +311,15 @@ function DailyUsageTable({
         <tbody>
           {report.days.map((day) => (
             <tr key={day.localDate}>
-              <th scope="row">
+              <th data-label="日期" scope="row">
                 <button onClick={() => onSelectDay?.(day.localDate)} type="button">
                   {day.localDate}
                 </button>
               </th>
-              <td>{day.inputTokens.toLocaleString()}</td>
-              <td>{day.outputTokens.toLocaleString()}</td>
-              <td>{day.cachedTokens.toLocaleString()}</td>
-              <td>
+              <td data-label="Input">{day.inputTokens.toLocaleString()}</td>
+              <td data-label="Output">{day.outputTokens.toLocaleString()}</td>
+              <td data-label="Cached">{day.cachedTokens.toLocaleString()}</td>
+              <td data-label="费用">
                 {day.costs.map((cost) => (
                   <span className="agent-usage-cost" key={cost.currency}>
                     {cost.currency} 实际费用 {formatAmount(cost.actualAmount)} · 估算费用{" "}
@@ -228,14 +359,16 @@ function RunDetails({ report }: { readonly report: AgentUsageReport }) {
             <tbody>
               {report.runs.map((run) => (
                 <tr key={run.usageId}>
-                  <th scope="row">{run.runId}</th>
-                  <td>
+                  <th data-label="Run" scope="row">
+                    {run.runId}
+                  </th>
+                  <td data-label="Provider / Model">
                     {run.provider} / {run.model}
                   </td>
-                  <td>{run.projectId}</td>
-                  <td>{run.totalTokens.toLocaleString()}</td>
-                  <td>{statusLabel(run.usageStatus)}</td>
-                  <td>
+                  <td data-label="Project">{run.projectId}</td>
+                  <td data-label="Tokens">{run.totalTokens.toLocaleString()}</td>
+                  <td data-label="用量状态">{statusLabel(run.usageStatus)}</td>
+                  <td data-label="费用">
                     {run.cost.status === "unknown"
                       ? "未知费用"
                       : `${run.cost.currency} ${formatAmount(run.cost.amount)} (${run.cost.status === "actual" ? "实际费用" : "估算费用"})`}

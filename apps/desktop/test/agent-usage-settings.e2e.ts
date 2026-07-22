@@ -36,11 +36,17 @@ test("shows private daily usage analytics and clears only usage data", async () 
       runId: "run_estimated",
       roundId: "estimated",
       finalSequence: 2,
+      model: "gpt-5.6-luna",
       pricingVersion: "pricing-v1",
       unitPrices: { inputPerMillion: 100, outputPerMillion: 2000, currency: "EUR" },
       cost: { amount: 0.5, currency: "EUR", status: "estimated" }
     }),
-    usageRecord(today, { runId: "run_unknown", roundId: "unknown", finalSequence: 3 })
+    usageRecord(today, {
+      runId: "run_unknown",
+      roundId: "unknown",
+      finalSequence: 3,
+      model: "gpt-5.6-luna"
+    })
   ];
   for (const record of records) {
     const written = await repository.writeFinal(record);
@@ -56,6 +62,8 @@ test("shows private daily usage analytics and clears only usage data", async () 
   });
   try {
     const page = await electronApp.firstWindow();
+    const browserWindow = await electronApp.browserWindow(page);
+    await browserWindow.evaluate((window) => window.setSize(1100, 780));
     const runRepository = new AgentRunFileRepository({ projectRoot });
     const recoveryRepository = new RecoveryRepository({ projectRoot });
     await seedProjectHistory(runRepository, recoveryRepository);
@@ -65,10 +73,20 @@ test("shows private daily usage analytics and clears only usage data", async () 
       .getByText("Agent 用量", { exact: true })
       .click();
     await expect(page.getByRole("heading", { name: "Agent 用量" })).toBeVisible();
-    await expect(page.getByLabel("Token 用量趋势")).toBeVisible();
-    const pointMarkers = page.getByLabel("Token 用量趋势").locator("circle[data-series]");
-    await expect(pointMarkers).toHaveCount(3);
-    await expect(pointMarkers.first()).toHaveAttribute("r", "3.5");
+    const dailyChart = page.locator('.agent-usage-chart[data-chart-kind="daily"]');
+    await expect(dailyChart).toBeVisible();
+    await expect(page.getByRole("img", { name: "每日 Agent Token 柱状图" })).toBeVisible();
+    await expect(dailyChart.locator(".agent-usage-bar-column")).toHaveCount(1);
+    await expect(dailyChart.locator(".agent-usage-legend li")).toHaveCount(2);
+    await expectNoHorizontalOverflow(page.locator(".agent-usage-settings"));
+    const dailySegmentColors = await dailyChart
+      .locator(".agent-usage-bar-segment")
+      .evaluateAll((segments) =>
+        segments.map((segment) =>
+          getComputedStyle(segment).getPropertyValue("--usage-color").trim()
+        )
+      );
+    expect(new Set(dailySegmentColors).size).toBe(2);
     const daily = page.getByRole("table", { name: "每日 Agent 用量明细" });
     await expect(daily).toContainText("Input");
     await expect(daily).toContainText("Output");
@@ -78,7 +96,13 @@ test("shows private daily usage analytics and clears only usage data", async () 
     await expect(daily).toContainText("估算费用");
     await expect(daily).toContainText("未知费用");
 
-    await daily.getByRole("button", { name: today }).click();
+    await page.getByRole("button", { name: "今日", exact: true }).click();
+    const hourlyChart = page.locator('.agent-usage-chart[data-chart-kind="hourly"]');
+    await expect(hourlyChart).toBeVisible();
+    await expect(page.getByRole("img", { name: "每小时 Agent Token 柱状图" })).toBeVisible();
+    await expect(hourlyChart.locator(".agent-usage-bar-column")).toHaveCount(24);
+    await expect(hourlyChart.locator(".agent-usage-legend li")).toHaveCount(2);
+    await expectNoHorizontalOverflow(hourlyChart.locator(".agent-usage-chart-body"));
     const runs = page.getByRole("table", { name: "所选日期 Agent 运行记录" });
     await expect(runs).toContainText("run_reported");
     await expect(runs).toContainText("已报告");
@@ -89,15 +113,25 @@ test("shows private daily usage analytics and clears only usage data", async () 
     await expectProjectHistoryReadable(runRepository, recoveryRepository);
 
     await page.getByRole("button", { name: "关闭设置" }).click();
-    await page.getByLabel("活动栏").getByRole("button", { name: "AI 工作流" }).click();
+    await expect(page.getByRole("heading", { name: "Agent 用量" })).toHaveCount(0);
     await expect(page.locator("main")).not.toContainText(
-      /Token 用量趋势|实际费用|估算费用|Agent 运行记录/
+      /Token 用量（按|实际费用|估算费用|Agent 运行记录/
     );
   } finally {
     await electronApp.close();
     await rm(tempRoot, { recursive: true, force: true });
   }
 });
+
+async function expectNoHorizontalOverflow(
+  locator: import("@playwright/test").Locator
+): Promise<void> {
+  const dimensions = await locator.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth
+  }));
+  expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth + 1);
+}
 
 async function seedProjectHistory(
   runRepository: AgentRunFileRepository,

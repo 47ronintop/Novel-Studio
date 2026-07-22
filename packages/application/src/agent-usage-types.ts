@@ -11,6 +11,13 @@ export interface AgentUsageQuery {
   readonly model?: string;
   readonly projectId?: string;
   readonly detailLocalDate?: string;
+  readonly includeModelBreakdown?: boolean;
+}
+
+export interface AgentUsageModelTotal {
+  readonly provider: string;
+  readonly model: string;
+  readonly totalTokens: number;
 }
 
 export interface AgentUsageCostTotal {
@@ -28,6 +35,7 @@ export interface AgentUsageDailyBucket {
   readonly totalTokens: number;
   readonly costs: readonly AgentUsageCostTotal[];
   readonly hasUnknownCost: boolean;
+  readonly models?: readonly AgentUsageModelTotal[];
 }
 
 export interface AgentUsageRunSummary {

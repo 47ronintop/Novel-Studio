@@ -254,7 +254,10 @@ describe("AgentConversationBridge", () => {
     const state = await createAgentConversationBridge(fixture.api).load("project_01");
     const workspace = toAgentConversationWorkspaceProps(
       state,
-      agentRunProps("planning_model", { runId: "run_other" }),
+      agentRunProps("planning_model", {
+        conversationId: "conv_other",
+        runId: "run_other"
+      }),
       undefined,
       {
         contextMode: "writing",
@@ -269,13 +272,78 @@ describe("AgentConversationBridge", () => {
     expect(workspace.view.conversation?.turns.map((turn) => turn.runId)).toEqual(["run_01"]);
   });
 
+  test("projects a pending request before the new run reaches conversation history", async () => {
+    const fixture = createApiFixture([
+      conversation("conv_01", undefined, undefined, "2026-07-14T00:00:00.000Z")
+    ]);
+    const state = await createAgentConversationBridge(fixture.api).load("project_01");
+    const pendingRequest = agentRunProps("created", {
+      conversationId: "conv_01",
+      runId: undefined,
+      userRequest: "检查这一章",
+      assistantText: ""
+    });
+
+    const pendingWorkspace = toAgentConversationWorkspaceProps(
+      state,
+      pendingRequest,
+      undefined,
+      undefined,
+      workspaceActions()
+    );
+
+    expect(pendingWorkspace.view.agentRun).toBe(pendingRequest);
+
+    const startedRun = agentRunProps("planning_model", {
+      conversationId: "conv_01",
+      runId: "run_new",
+      userRequest: "检查这一章",
+      assistantText: ""
+    });
+    const startedWorkspace = toAgentConversationWorkspaceProps(
+      state,
+      startedRun,
+      undefined,
+      undefined,
+      workspaceActions()
+    );
+
+    expect(startedWorkspace.view.agentRun).toBe(startedRun);
+    expect(startedWorkspace.view.conversation?.turns).toEqual([]);
+  });
+
+  test("keeps a failed provider run visible when it carries an error", async () => {
+    const fixture = createApiFixture([
+      conversation("conv_01", "run_01", "failed", "2026-07-14T00:00:00.000Z")
+    ]);
+    const state = await createAgentConversationBridge(fixture.api).load("project_01");
+    const failedRun = agentRunProps("failed", {
+      conversationId: "conv_01",
+      errorMessage: "模型不支持推理强度 ultra。",
+      assistantText: ""
+    });
+
+    const workspace = toAgentConversationWorkspaceProps(
+      state,
+      failedRun,
+      undefined,
+      undefined,
+      workspaceActions()
+    );
+
+    expect(workspace.view.agentRun).toBe(failedRun);
+    expect(workspace.view.conversation?.turns).toEqual([]);
+  });
+
   test("projects a preflight error without a run id into the selected conversation", async () => {
     const fixture = createApiFixture([
       conversation("conv_01", undefined, undefined, "2026-07-14T00:00:00.000Z")
     ]);
     const state = await createAgentConversationBridge(fixture.api).load("project_01");
     const preflightFailure = agentRunProps("idle", {
+      conversationId: "conv_01",
       runId: undefined,
+      userRequest: "检查这一章",
       errorMessage: "The selected model cannot start an Agent run."
     });
 
@@ -645,9 +713,7 @@ function createApiFixture(initial: readonly AgentConversationSummary[]) {
         if (current === undefined) throw new Error("Missing delete target");
         byProject.set(
           projectId,
-          summaries(projectId).filter(
-            (entry) => entry.conversationId !== command["conversationId"]
-          )
+          summaries(projectId).filter((entry) => entry.conversationId !== command["conversationId"])
         );
         return {
           ok: true as const,

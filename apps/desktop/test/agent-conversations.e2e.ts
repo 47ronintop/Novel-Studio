@@ -462,6 +462,12 @@ async function sendConversationRequest(page: Page, request: string): Promise<voi
   const composer = page.getByLabel("会话输入区");
   await composer.getByLabel("Agent 请求").fill(request);
   await composer.getByRole("button", { name: "启动 Agent 运行" }).click();
+  await expect(
+    page
+      .getByLabel("Agent 会话主视图")
+      .locator('.ns-agent-conversation-user-message[data-speaker="user"]')
+      .filter({ hasText: request })
+  ).toBeVisible();
 }
 
 async function waitForRunCount(page: Page, count: number): Promise<void> {
