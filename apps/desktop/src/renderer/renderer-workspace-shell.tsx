@@ -118,6 +118,7 @@ export interface RendererWorkspaceShellProps {
     WorkspaceShellProps["onCommandPaletteActiveCommandChange"]
   >;
   readonly onCommandPaletteOpen: NonNullable<WorkspaceShellProps["onCommandPaletteOpen"]>;
+  readonly onCommandPaletteClose: NonNullable<WorkspaceShellProps["onCommandPaletteClose"]>;
   readonly onCommandPaletteQueryChange: NonNullable<
     WorkspaceShellProps["onCommandPaletteQueryChange"]
   >;
@@ -309,6 +310,7 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
       onCommandExecute={props.onCommandExecute}
       onCommandPaletteActiveCommandChange={props.onCommandPaletteActiveCommandChange}
       onCommandPaletteOpen={props.onCommandPaletteOpen}
+      onCommandPaletteClose={props.onCommandPaletteClose}
       onCommandPaletteQueryChange={props.onCommandPaletteQueryChange}
       onBottomPanelTabSelect={props.onBottomPanelTabSelect}
       onSearchResultOpen={props.onSearchResultOpen}

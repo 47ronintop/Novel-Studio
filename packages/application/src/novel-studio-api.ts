@@ -108,11 +108,13 @@ import type {
 } from "./agent-usage-types.js";
 import type {
   AgentConversationCommandResult,
+  AgentConversationDeleteResult,
   AgentConversationListPage,
   AgentConversationReadResult,
   AgentConversationSearchPage,
   ChangeAgentConversationStatusCommand,
   CreateAgentConversationCommand,
+  DeleteAgentConversationCommand,
   ListAgentConversationsQuery,
   ReadAgentConversationQuery,
   SearchAgentConversationsQuery
@@ -141,6 +143,7 @@ export interface NovelStudioApi {
     execute(commandId: string): Promise<Result<DesktopShellState, UnifiedError>>;
   };
   project: {
+    getActiveWorkspace(): Promise<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>;
     chooseOpenCreativeDirectory(): Promise<Result<ProjectDirectorySelectionDto, UnifiedError>>;
     chooseCreateParentDirectory(): Promise<Result<ProjectDirectorySelectionDto, UnifiedError>>;
     openCreativeProject(selectionId: string): Promise<Result<WorkspaceActivationDto, UnifiedError>>;
@@ -262,6 +265,7 @@ export interface NovelStudioApi {
     ): Promise<Result<AgentConversationReadResult, UnifiedError>>;
     archive(command: ChangeAgentConversationStatusCommand): Promise<AgentConversationCommandResult>;
     restore(command: ChangeAgentConversationStatusCommand): Promise<AgentConversationCommandResult>;
+    delete(command: DeleteAgentConversationCommand): Promise<AgentConversationDeleteResult>;
     search(
       query: SearchAgentConversationsQuery
     ): Promise<Result<AgentConversationSearchPage, UnifiedError>>;

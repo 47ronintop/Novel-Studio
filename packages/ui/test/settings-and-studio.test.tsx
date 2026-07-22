@@ -555,6 +555,7 @@ describe("M8 Settings and Studio UI", () => {
     const providerIndex = html.indexOf('aria-label="模型 Provider"');
     const baseUrlIndex = html.indexOf('aria-label="模型 Base URL"');
     const advancedIndex = html.indexOf('class="model-settings-advanced"');
+    const reasoningEffortIndex = html.indexOf('aria-label="确认该端点支持 reasoning_effort"');
     const profileIdIndex = html.indexOf('aria-label="模型 Profile ID"');
     const temperatureIndex = html.indexOf('aria-label="Temperature"');
 
@@ -565,6 +566,7 @@ describe("M8 Settings and Studio UI", () => {
     expect(providerIndex).toBeGreaterThan(-1);
     expect(baseUrlIndex).toBeGreaterThan(-1);
     expect(advancedIndex).toBeGreaterThan(baseUrlIndex);
+    expect(reasoningEffortIndex).toBeGreaterThan(advancedIndex);
     expect(profileIdIndex).toBeGreaterThan(advancedIndex);
     expect(temperatureIndex).toBeGreaterThan(advancedIndex);
   });

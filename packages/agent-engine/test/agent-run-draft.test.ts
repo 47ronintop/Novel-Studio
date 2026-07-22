@@ -39,7 +39,11 @@ describe("Agent Run Draft value object", () => {
 
   test("set_request produces one next revision and a changed checksum", () => {
     const draft = baseDraft();
-    const result = applyAgentRunDraftMutation(draft, { kind: "set_request", request: "续写第三章" }, "t1");
+    const result = applyAgentRunDraftMutation(
+      draft,
+      { kind: "set_request", request: "续写第三章" },
+      "t1"
+    );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.revision).toBe(2);
@@ -64,7 +68,11 @@ describe("Agent Run Draft value object", () => {
       writePolicyAcknowledged: true
     });
     expect(execution.writePolicyAcknowledged).toBe(true);
-    const toPlanning = applyAgentRunDraftMutation(execution, { kind: "set_operation_mode", operationMode: "planning" }, "t1");
+    const toPlanning = applyAgentRunDraftMutation(
+      execution,
+      { kind: "set_operation_mode", operationMode: "planning" },
+      "t1"
+    );
     expect(toPlanning.ok).toBe(true);
     if (!toPlanning.ok) return;
     expect(toPlanning.value.writePolicy).toBe("write_before_confirmation");
@@ -97,29 +105,56 @@ describe("Agent Run Draft value object", () => {
     expect(result.value.writePolicyAcknowledged).toBe(true);
   });
 
-  test("set_model updates the profile and set_reasoning updates the effort", () => {
+  test("set_model persists a model override and clears stale choices when switching", () => {
     const draft = baseDraft({ operationMode: "execution" });
     const modeled = applyAgentRunDraftMutation(
       draft,
-      { kind: "set_model", modelProfileId: "model_02", reasoningEffort: "high" },
+      {
+        kind: "set_model",
+        modelProfileId: "model_02",
+        modelName: "gpt-5.6",
+        reasoningEffort: "ultra"
+      },
       "t1"
     );
     expect(modeled.ok).toBe(true);
     if (!modeled.ok) return;
     expect(modeled.value.modelProfileId).toBe("model_02");
-    expect(modeled.value.reasoningEffort).toBe("high");
+    expect(modeled.value.modelName).toBe("gpt-5.6");
+    expect(modeled.value.reasoningEffort).toBe("ultra");
 
-    const reasoned = applyAgentRunDraftMutation(modeled.value, { kind: "set_reasoning", reasoningEffort: "low" }, "t2");
+    const reasoned = applyAgentRunDraftMutation(
+      modeled.value,
+      { kind: "set_reasoning", reasoningEffort: "low" },
+      "t2"
+    );
     expect(reasoned.ok).toBe(true);
     if (!reasoned.ok) return;
     expect(reasoned.value.reasoningEffort).toBe("low");
+
+    const switched = applyAgentRunDraftMutation(
+      reasoned.value,
+      { kind: "set_model", modelProfileId: "model_03", modelName: "gpt-5" },
+      "t3"
+    );
+    expect(switched).toMatchObject({
+      ok: true,
+      value: { modelProfileId: "model_03", modelName: "gpt-5" }
+    });
+    if (switched.ok) {
+      expect(switched.value).not.toHaveProperty("reasoningEffort");
+    }
   });
 
   test("bindContextDraft re-points at a new context revision and checksum", () => {
     const draft = baseDraft();
     const bound = bindContextDraft(
       draft,
-      { contextDraftId: "context_draft_01", contextDraftRevision: 5, contextDraftChecksum: "d".repeat(64) },
+      {
+        contextDraftId: "context_draft_01",
+        contextDraftRevision: 5,
+        contextDraftChecksum: "d".repeat(64)
+      },
       "t1"
     );
     expect(bound.revision).toBe(draft.revision + 1);

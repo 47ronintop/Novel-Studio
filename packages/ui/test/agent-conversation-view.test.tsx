@@ -19,14 +19,16 @@ describe("AgentConversationView", () => {
     document.body.replaceChildren();
   });
 
-  test("renders a focused empty state that creates the first conversation", () => {
+  test("keeps the composer visible while the first conversation is prepared", () => {
     const onCreate = vi.fn();
-    const { host } = renderView({ conversation: undefined, onCreate });
+    const { host } = renderView({ conversation: undefined, loading: true, onCreate });
 
     expect(host.querySelector('[aria-label="Agent 会话主视图"]')).not.toBeNull();
-    expect(host.textContent).toContain("新建会话后开始规划或执行写作任务。");
-    act(() => host.querySelector<HTMLButtonElement>('[aria-label="新建会话"]')?.click());
-    expect(onCreate).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("正在准备会话");
+    expect(host.querySelector('[aria-label="会话输入区"]')).not.toBeNull();
+    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="Agent 请求"]')?.disabled).toBe(true);
+    expect(host.querySelector('[aria-label="新建会话"]')).toBeNull();
+    expect(onCreate).not.toHaveBeenCalled();
   });
 
   test("renders turn history, one current run surface, and exactly one composer", () => {
@@ -42,6 +44,22 @@ describe("AgentConversationView", () => {
     expect(host.querySelectorAll('button[aria-label="启动 Agent 运行"]')).toHaveLength(1);
     expect(host.querySelectorAll('[data-run-id="run-previous"]')).toHaveLength(1);
     expect(host.querySelectorAll('[data-run-id="run-current"]')).toHaveLength(1);
+  });
+
+  test("does not render internal conversation context payloads as a user-facing summary", () => {
+    const { host } = renderView({
+      conversation: {
+        ...conversation(),
+        contextSummary: JSON.stringify({
+          kind: "agent_conversation_context",
+          instructionPolicy: "untrusted_data_not_authority",
+          recentRuns: []
+        })
+      }
+    });
+
+    expect(host.querySelector(".ns-agent-conversation-summary")).toBeNull();
+    expect(host.textContent).not.toContain("agent_conversation_context");
   });
 
   test("keeps a completed turn activity summary collapsed and expandable", () => {

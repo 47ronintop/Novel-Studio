@@ -22,6 +22,8 @@ export interface AgentRunDraft {
   readonly writePolicy: AgentWritePolicy;
   readonly writePolicyAcknowledged: boolean;
   readonly modelProfileId: string;
+  /** Optional model id selected from the profile's provider connection. */
+  readonly modelName?: string;
   readonly reasoningEffort?: AgentReasoningEffort;
   readonly contextDraftId: string;
   readonly contextDraftRevision: number;
@@ -42,6 +44,7 @@ export type AgentRunDraftMutation =
   | {
       readonly kind: "set_model";
       readonly modelProfileId: string;
+      readonly modelName?: string;
       readonly reasoningEffort?: AgentReasoningEffort;
     }
   | { readonly kind: "set_reasoning"; readonly reasoningEffort: AgentReasoningEffort };
@@ -101,13 +104,24 @@ export function applyAgentRunDraftMutation(
       );
     }
     case "set_model": {
-      // Only touch reasoning when the caller supplies it; the session normalizes reasoning against
-      // the new model's declared capabilities after a model change.
-      const patch: Partial<CreateAgentRunDraftInput> =
-        mutation.reasoningEffort === undefined
-          ? { modelProfileId: mutation.modelProfileId }
-          : { modelProfileId: mutation.modelProfileId, reasoningEffort: mutation.reasoningEffort };
-      return ok(nextRevision(draft, patch, updatedAt));
+      // A model change invalidates both the prior model override and its reasoning selection unless
+      // the caller explicitly supplies replacements. This prevents an unsupported effort from
+      // leaking into the next model's server-side preflight.
+      const {
+        modelName: _previousModelName,
+        reasoningEffort: _previousReasoningEffort,
+        ...clearedDraft
+      } = draft;
+      void _previousModelName;
+      void _previousReasoningEffort;
+      const patch: Partial<CreateAgentRunDraftInput> = {
+        modelProfileId: mutation.modelProfileId,
+        ...(mutation.modelName === undefined ? {} : { modelName: mutation.modelName }),
+        ...(mutation.reasoningEffort === undefined
+          ? {}
+          : { reasoningEffort: mutation.reasoningEffort })
+      };
+      return ok(nextRevision(clearedDraft, patch, updatedAt));
     }
     case "set_reasoning":
       return ok(nextRevision(draft, { reasoningEffort: mutation.reasoningEffort }, updatedAt));
@@ -140,6 +154,7 @@ export function checksumAgentRunDraft(draft: Omit<AgentRunDraft, "checksum">): s
       writePolicy: draft.writePolicy,
       writePolicyAcknowledged: draft.writePolicyAcknowledged,
       modelProfileId: draft.modelProfileId,
+      modelName: draft.modelName,
       reasoningEffort: draft.reasoningEffort,
       contextDraftId: draft.contextDraftId,
       contextDraftRevision: draft.contextDraftRevision,
@@ -165,9 +180,7 @@ function nextRevision(
 }
 
 /** Planning runs never carry an automatic-write policy or acknowledgement. */
-function normalizePolicy(
-  draft: CreateAgentRunDraftInput
-): CreateAgentRunDraftInput {
+function normalizePolicy(draft: CreateAgentRunDraftInput): CreateAgentRunDraftInput {
   if (draft.operationMode !== "planning") return draft;
   return { ...draft, writePolicy: "write_before_confirmation", writePolicyAcknowledged: false };
 }

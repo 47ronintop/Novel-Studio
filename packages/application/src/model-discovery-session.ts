@@ -2,7 +2,8 @@ import type { JsonObject, Result, UnifiedError } from "@novel-studio/shared";
 import type { ModelProfile } from "./model-settings-session.js";
 
 export type ModelDiscoveryStatus = "loaded" | "fallback";
-export type ModelReasoningStrengthValue = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+/** Open-ended because providers can add model-specific reasoning levels without an app release. */
+export type ModelReasoningStrengthValue = string;
 
 export interface ModelReasoningStrengthAvailable extends JsonObject {
   readonly status: "available";
@@ -31,6 +32,7 @@ export interface ModelDiscoveryModelInput {
   readonly id: string;
   readonly displayName: string;
   readonly contextWindow?: number;
+  readonly reasoningStrength?: ModelReasoningStrengthControl;
 }
 
 export interface ModelDiscoverySnapshot extends JsonObject {
@@ -81,25 +83,31 @@ export function createModelDiscoverySnapshot(input: {
   const models: ModelDiscoveryOption[] = input.models.map((model) => ({
     ...model,
     provider: input.profile.provider,
-    reasoningStrength: reasoningStrengthForModel(
-      input.profile.provider,
-      model.id,
-      input.profile.baseUrl,
-      input.profile.reasoningEffortEnabled
-    )
+    reasoningStrength:
+      model.reasoningStrength ??
+      reasoningStrengthForModel(
+        input.profile.provider,
+        model.id,
+        input.profile.baseUrl,
+        input.profile.reasoningEffortEnabled
+      )
   }));
+
+  const configuredModel = models.find((model) => model.id === input.profile.modelName);
 
   return {
     profileId: input.profile.id,
     provider: input.profile.provider,
     status: "loaded",
     models,
-    reasoningStrength: reasoningStrengthForModel(
-      input.profile.provider,
-      input.profile.modelName,
-      input.profile.baseUrl,
-      input.profile.reasoningEffortEnabled
-    )
+    reasoningStrength:
+      configuredModel?.reasoningStrength ??
+      reasoningStrengthForModel(
+        input.profile.provider,
+        input.profile.modelName,
+        input.profile.baseUrl,
+        input.profile.reasoningEffortEnabled
+      )
   };
 }
 
@@ -114,6 +122,14 @@ export function reasoningStrengthForModel(
     return hiddenReasoningStrength();
   }
 
+  if (!isOfficialOpenAiEndpoint(provider, baseUrl) && !reasoningEffortEnabled) {
+    return {
+      status: "hidden",
+      reason:
+        "Reasoning strength is hidden for custom OpenAI-compatible endpoints until this provider is explicitly marked as supporting reasoning_effort."
+    };
+  }
+
   const spec = reasoningEffortSpecForOpenAiModel(normalized);
   if (spec !== undefined) {
     return {
@@ -121,14 +137,6 @@ export function reasoningStrengthForModel(
       providerParamName: "reasoning_effort",
       allowedValues: spec.allowedValues,
       defaultValue: spec.defaultValue
-    };
-  }
-
-  if (!isOfficialOpenAiEndpoint(provider, baseUrl) && !reasoningEffortEnabled) {
-    return {
-      status: "hidden",
-      reason:
-        "Reasoning strength is hidden for custom OpenAI-compatible endpoints until this provider is explicitly marked as supporting reasoning_effort."
     };
   }
 
@@ -158,6 +166,12 @@ function reasoningEffortSpecForOpenAiModel(
 ): ReasoningEffortSpec | undefined {
   if (normalizedModelId === "gpt-5-pro") {
     return { allowedValues: ["high"], defaultValue: "high" };
+  }
+  if (/^gpt-5\.6(?:-|$)/.test(normalizedModelId)) {
+    return {
+      allowedValues: ["none", "low", "medium", "high", "xhigh", "max", "ultra"],
+      defaultValue: "medium"
+    };
   }
   if (normalizedModelId.includes("codex") && normalizedModelId.startsWith("gpt-5")) {
     return {

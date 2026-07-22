@@ -5,7 +5,8 @@ import type { AgentContextSourceInput } from "./context-snapshot.js";
 export type AgentOperationMode = "planning" | "execution";
 export type AgentContextMode = "writing" | "general_file";
 export type AgentWritePolicy = "write_before_confirmation" | "user_preapproved_run";
-export type AgentReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+/** Provider-declared reasoning effort. Known values are labels, not a closed protocol enum. */
+export type AgentReasoningEffort = string;
 export type AgentRunStatus =
   | "created"
   | "planning_model"

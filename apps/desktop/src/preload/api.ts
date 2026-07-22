@@ -3,6 +3,7 @@ import type {
   ApplicationIpcChannel,
   ApplicationIpcEventChannel,
   AgentConversationCommandResult,
+  AgentConversationDeleteResult,
   AgentConversationListPage,
   AgentConversationReadResult,
   AgentConversationSearchPage,
@@ -48,6 +49,7 @@ import type {
   EngineeringTextFileSnapshot,
   EngineeringWorkspaceSnapshot,
   CreateAgentConversationCommand,
+  DeleteAgentConversationCommand,
   ChangeAgentConversationStatusCommand,
   ListAgentConversationsQuery,
   ReadAgentConversationQuery,
@@ -122,6 +124,11 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
         )
     },
     project: {
+      getActiveWorkspace: () =>
+        invokeTyped<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>(
+          ipc,
+          "application:project:get-active-workspace"
+        ),
       chooseOpenCreativeDirectory: () =>
         invokeTyped<Result<ProjectDirectorySelectionDto, UnifiedError>>(
           ipc,
@@ -422,6 +429,12 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
         invokeTyped<AgentConversationCommandResult>(
           ipc,
           "application:agent-conversation:restore",
+          command
+        ),
+      delete: (command: DeleteAgentConversationCommand) =>
+        invokeTyped<AgentConversationDeleteResult>(
+          ipc,
+          "application:agent-conversation:delete",
           command
         ),
       search: (query: SearchAgentConversationsQuery) =>

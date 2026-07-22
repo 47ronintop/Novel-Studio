@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
-import { createChapterEditorSession, type AiWritingSuggestion } from "@novel-studio/application";
+import {
+  createChapterEditorSession,
+  type AiWritingSuggestion,
+  type ChapterEditorSession
+} from "@novel-studio/application";
 import type { LlmProviderStreamEvent, LlmRequest } from "@novel-studio/llm-adapter";
 import type { Result, UnifiedError } from "@novel-studio/shared";
 
@@ -43,6 +47,36 @@ describe("M95 real provider runtime", () => {
 
     const restored = await secretStore.readSecret(apiKeyRef);
     expect(restored).toEqual({ ok: true, value: "sk-real-deepseek-key" });
+  });
+
+  test("keeps a verified API key valid when switching models on the same endpoint", async () => {
+    const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-secrets-switch-"));
+    tempRoots.push(userDataRoot);
+    const secretStore = createEncryptedFileModelSecretStore({
+      userDataRoot,
+      cipher: testCipher
+    });
+    await secretStore.saveSecret(apiKeyRef, "sk-real-deepseek-key");
+    await secretStore.markVerified(apiKeyRef, {
+      provider: "openai-compatible",
+      baseUrl: "https://api.example.com/v1",
+      modelName: "first-model"
+    });
+
+    await expect(
+      secretStore.isVerified(apiKeyRef, {
+        provider: "openai-compatible",
+        baseUrl: "https://api.example.com/v1/",
+        modelName: "second-model"
+      })
+    ).resolves.toEqual({ ok: true, value: true });
+    await expect(
+      secretStore.isVerified(apiKeyRef, {
+        provider: "openai-compatible",
+        baseUrl: "https://other.example.com/v1",
+        modelName: "second-model"
+      })
+    ).resolves.toEqual({ ok: true, value: false });
   });
 
   test("tests model connections by sending a real OpenAI-compatible request with the stored key", async () => {
@@ -138,7 +172,12 @@ describe("M95 real provider runtime", () => {
       fetch: createModelsFetch(calls, {
         data: [
           { id: "deepseek-chat", object: "model", context_window: 64000 },
-          { id: "deepseek-reasoner", object: "model" }
+          {
+            id: "deepseek-reasoner",
+            object: "model",
+            supported_reasoning_efforts: ["low", "high", "max"],
+            default_reasoning_effort: "max"
+          }
         ]
       })
     });
@@ -161,7 +200,13 @@ describe("M95 real provider runtime", () => {
           {
             id: "deepseek-reasoner",
             displayName: "deepseek-reasoner",
-            provider: "deepseek"
+            provider: "deepseek",
+            reasoningStrength: {
+              status: "available",
+              providerParamName: "reasoning_effort",
+              allowedValues: ["low", "high", "max"],
+              defaultValue: "max"
+            }
           }
         ],
         reasoningStrength: {
@@ -302,6 +347,31 @@ describe("M95 real provider runtime", () => {
       }
     ]);
     expect(calls).toEqual([]);
+  });
+
+  test("keeps demo Agent streaming safe when no editor session is available", async () => {
+    const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-agent-demo-safe-"));
+    tempRoots.push(userDataRoot);
+    const runtime = createDesktopModelRuntime({
+      userDataRoot,
+      secretStore: createEncryptedFileModelSecretStore({
+        userDataRoot,
+        cipher: testCipher
+      })
+    });
+    const provider = runtime.createAiProvider({
+      chapterEditorSession: {} as ChapterEditorSession
+    });
+
+    await expect(collectProviderStream(provider.stream(streamingRequest()))).resolves.toEqual([
+      {
+        type: "delta",
+        value: JSON.stringify({
+          proposedBody: "AI continuation draft.\n",
+          summary: "Generated a local mock continuation for review."
+        })
+      }
+    ]);
   });
 
   test("returns the selection response schema through demo mode", async () => {

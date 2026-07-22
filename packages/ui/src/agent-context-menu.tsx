@@ -41,6 +41,7 @@ export function AgentContextMenu(props: AgentContextMenuProps): ReactNode {
       disabled={props.disabled ?? false}
       panelClassName="ns-agent-context-popover"
       panelLabel="上下文用量"
+      rootClassName="ns-agent-context-popover-root"
       triggerClassName={
         attention ? "ns-agent-context-trigger ns-agent-context-trigger-attention" : "ns-agent-context-trigger"
       }
@@ -51,7 +52,6 @@ export function AgentContextMenu(props: AgentContextMenuProps): ReactNode {
           ) : (
             <Layers aria-hidden="true" size={13} />
           )}
-          <span>{stateLabel}</span>
         </>
       }
       triggerLabel={`${stateLabel} · ${control.usageLabel}`}

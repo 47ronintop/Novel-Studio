@@ -1,4 +1,5 @@
 export { MODEL_PROVIDER_CATALOG, isModelProvider } from "./model-provider-catalog.js";
+export { reasoningStrengthForModel } from "./model-discovery-session.js";
 export { createPluginSecurityAuditReport } from "./plugin-runtime-session.js";
 export {
   applyConfigWorkflowGraphLayoutEdit,
@@ -10,6 +11,8 @@ export {
 export { LEGACY_AGENT_CONVERSATION_ID } from "./agent-conversation-session.js";
 export type {
   AgentConversationCommandResult,
+  AgentConversationDeleteResult,
+  AgentConversationDeletion,
   AgentConversationDiagnostic,
   AgentConversationListPage,
   AgentConversationReadResult,
@@ -20,6 +23,7 @@ export type {
   AgentConversationSummaryFreshness,
   ChangeAgentConversationStatusCommand,
   CreateAgentConversationCommand,
+  DeleteAgentConversationCommand,
   ListAgentConversationsQuery,
   ReadAgentConversationQuery,
   SearchAgentConversationsQuery

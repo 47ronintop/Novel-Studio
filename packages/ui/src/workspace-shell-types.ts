@@ -55,6 +55,7 @@ export interface WorkspaceShellProps {
   readonly engineeringNavigator?: EngineeringWorkspaceNavigatorProps;
   readonly onboarding?: OnboardingProps;
   readonly onCommandPaletteOpen?: () => void;
+  readonly onCommandPaletteClose?: () => void;
   readonly onCommandPaletteQueryChange?: ((query: string) => void) | undefined;
   readonly onCommandPaletteActiveCommandChange?:
     ((commandId: ApplicationCommandId) => void) | undefined;
@@ -487,6 +488,7 @@ export interface AgentConversationNavigatorProps {
   readonly onSelect: (conversationId: string) => void;
   readonly onArchive: (conversationId: string) => void;
   readonly onRestore: (conversationId: string) => void;
+  readonly onDelete?: ((conversationId: string) => void) | undefined;
 }
 
 export interface AgentConversationViewProps {

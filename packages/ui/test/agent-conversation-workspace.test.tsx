@@ -7,7 +7,9 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { createDesktopApplication } from "@novel-studio/application";
 import { WorkspaceShell } from "../src/workspace-shell.js";
 
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("Agent Conversation workspace", () => {
   afterEach(() => document.body.replaceChildren());
@@ -38,7 +40,12 @@ describe("Agent Conversation workspace", () => {
               workspaceId: "project-one-surface",
               projectId: "project-one-surface",
               displayName: "统一 Agent 项目",
-              capabilities: ["creativeWorkbench", "writingContext", "creativeSearch", "creativeStudio"]
+              capabilities: [
+                "creativeWorkbench",
+                "writingContext",
+                "creativeSearch",
+                "creativeStudio"
+              ]
             }
           }}
         />
@@ -68,32 +75,32 @@ describe("Agent Conversation workspace", () => {
     act(() => {
       root.render(
         <WorkspaceShell
-        agentConversationWorkspace={{
-          navigator: {
-            conversations: [conversation],
-            selectedConversationId: conversation.conversationId,
-            searchQuery: "",
-            filter: "active",
-            loading: false,
-            onSearchQueryChange: () => undefined,
-            onFilterChange: () => undefined,
-            onCreate: () => undefined,
-            onSelect: () => undefined,
-            onArchive: () => undefined,
-            onRestore: () => undefined
-          },
-          view: {
-            conversation,
-            loading: false,
-            onCreate: () => undefined,
-            onArchive: () => undefined,
-            onRestore: () => undefined,
-            onReturnToActive: () => undefined
-          }
-        }}
-        commandPaletteOpen={false}
-        commands={application.listCommands()}
-        shellState={{ ...application.getShellState(), activeActivity: "workspace" }}
+          agentConversationWorkspace={{
+            navigator: {
+              conversations: [conversation],
+              selectedConversationId: conversation.conversationId,
+              searchQuery: "",
+              filter: "active",
+              loading: false,
+              onSearchQueryChange: () => undefined,
+              onFilterChange: () => undefined,
+              onCreate: () => undefined,
+              onSelect: () => undefined,
+              onArchive: () => undefined,
+              onRestore: () => undefined
+            },
+            view: {
+              conversation,
+              loading: false,
+              onCreate: () => undefined,
+              onArchive: () => undefined,
+              onRestore: () => undefined,
+              onReturnToActive: () => undefined
+            }
+          }}
+          commandPaletteOpen={false}
+          commands={application.listCommands()}
+          shellState={{ ...application.getShellState(), activeActivity: "workspace" }}
         />
       );
     });
@@ -181,7 +188,11 @@ describe("Agent Conversation workspace", () => {
       .find((label) => label.textContent?.includes("本次运行自动修改"))
       ?.querySelector<HTMLInputElement>('input[type="radio"]');
     act(() => automaticWrite?.click());
-    expect(editor?.textContent).toContain("Version Group");
+    expect(editor?.textContent).not.toContain("我理解本次运行可自动修改");
+    expect(editor?.querySelector('input[type="checkbox"]')).toBeNull();
+    const approve = editor?.querySelector<HTMLButtonElement>('[aria-label="按此方案执行"]');
+    expect(approve?.disabled).toBe(false);
+    act(() => approve?.click());
     const confirmedWrite = Array.from(editor?.querySelectorAll("label") ?? [])
       .find((label) => label.textContent?.includes("每次修改前确认"))
       ?.querySelector<HTMLInputElement>('input[type="radio"]');
@@ -189,6 +200,11 @@ describe("Agent Conversation workspace", () => {
     expect(aiPanel?.querySelector('[aria-label="Agent 会话主视图"]')).not.toBeNull();
     act(() => editor?.querySelector<HTMLButtonElement>('[aria-label="拒绝计划"]')?.click());
     act(() => editor?.querySelector<HTMLButtonElement>('[aria-label="按此方案执行"]')?.click());
+    expect(onDecision).toHaveBeenCalledWith("approve", {
+      executionContextMode: "writing",
+      executionWritePolicy: "user_preapproved_run",
+      executionWritePolicyAcknowledged: true
+    });
     expect(onDecision).toHaveBeenCalledWith("reject");
     expect(onDecision).toHaveBeenCalledWith("approve", {
       executionContextMode: "writing",

@@ -51,6 +51,12 @@ describe("beta startup default project", () => {
     const chapters = await application.listProjectChapters();
 
     expect(shellState.projectTitle).toBe("未命名长篇项目");
+    expect(shellState.workspaceContext).toMatchObject({
+      kind: "creativeProject",
+      workspaceId: "prj_minimal_chapter",
+      projectId: "prj_minimal_chapter",
+      displayName: "未命名长篇项目"
+    });
     expect(shellState.navigatorSections.find((section) => section.id === "chapters")).toMatchObject(
       {
         itemCount: 1

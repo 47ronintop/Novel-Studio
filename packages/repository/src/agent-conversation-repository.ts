@@ -28,13 +28,15 @@ const MAX_SEARCH_INDEX_BYTES = 4 * 1024 * 1024;
 const MAX_SEARCH_DOCUMENTS = 10_000;
 const MAX_SEARCH_USER_REQUESTS = 100;
 
+export type AgentConversationRecordStatus = "active" | "archived" | "deleted";
+
 export interface AgentConversationRecord extends JsonObject {
   readonly schemaVersion: "1.0";
   readonly conversationId: string;
   readonly projectId: string;
   readonly revision: number;
   readonly title: string;
-  readonly status: "active" | "archived";
+  readonly status: AgentConversationRecordStatus;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly createdByCommandId?: string;
@@ -69,7 +71,7 @@ export interface AgentConversationSearchDocument extends JsonObject {
   readonly conversationId: string;
   readonly projectId: string;
   readonly title: string;
-  readonly status: "active" | "archived";
+  readonly status: AgentConversationRecordStatus;
   readonly updatedAt: string;
   readonly latestSummary: string;
   readonly userRequests: string[];
@@ -96,7 +98,7 @@ export interface UpdateAgentConversationRecordInput {
   readonly projectId: string;
   readonly expectedRevision: number;
   readonly title?: string;
-  readonly status?: "active" | "archived";
+  readonly status?: AgentConversationRecordStatus;
   readonly updatedAt: string;
   readonly mutationCommandId?: string;
 }
@@ -132,7 +134,11 @@ export class AgentConversationFileRepository {
     if (record.conversationId === LEGACY_CONVERSATION_ID) {
       return Promise.resolve(this.invalid("AGENT_CONVERSATION_ID_RESERVED"));
     }
-    if (!isConversationRecord(record) || jsonByteLength(record) > MAX_RECORD_BYTES) {
+    if (
+      !isConversationRecord(record) ||
+      record.status === "deleted" ||
+      jsonByteLength(record) > MAX_RECORD_BYTES
+    ) {
       return Promise.resolve(this.invalid("AGENT_CONVERSATION_RECORD_INVALID"));
     }
     return this.withConversationWrite(record.conversationId, async () => {
@@ -198,7 +204,11 @@ export class AgentConversationFileRepository {
           diagnostics.push({ conversationId: entry.name, code: conversation.error.code });
           continue;
         }
-        if (conversation.value === undefined || conversation.value.projectId !== input.projectId) {
+        if (
+          conversation.value === undefined ||
+          conversation.value.projectId !== input.projectId ||
+          conversation.value.status === "deleted"
+        ) {
           continue;
         }
         if (input.status !== undefined && conversation.value.status !== input.status) continue;
@@ -274,7 +284,7 @@ export class AgentConversationFileRepository {
         });
         continue;
       }
-      documents.push(candidate);
+      if (candidate.status !== "deleted") documents.push(candidate);
     }
     documents.sort(compareSearchDocuments);
     const index: JsonObject = {
@@ -359,6 +369,12 @@ export class AgentConversationFileRepository {
         return this.invalid("AGENT_CONVERSATION_REVISION_CONFLICT", {
           latestConversation: current.value
         });
+      }
+      if (current.value.status === "deleted") {
+        return this.invalid("AGENT_CONVERSATION_DELETED");
+      }
+      if (input.status === "deleted" && current.value.status !== "archived") {
+        return this.invalid("AGENT_CONVERSATION_DELETE_REQUIRES_ARCHIVE");
       }
       const next: AgentConversationRecord = {
         ...current.value,
@@ -714,7 +730,9 @@ function isConversationRecord(value: unknown): value is AgentConversationRecord 
     typeof value["title"] === "string" &&
     value["title"].trim().length > 0 &&
     Buffer.byteLength(value["title"], "utf8") <= MAX_TITLE_BYTES &&
-    (value["status"] === "active" || value["status"] === "archived") &&
+    (value["status"] === "active" ||
+      value["status"] === "archived" ||
+      value["status"] === "deleted") &&
     typeof value["createdAt"] === "string" &&
     value["createdAt"].length > 0 &&
     typeof value["updatedAt"] === "string" &&
@@ -752,7 +770,10 @@ function isSummaryRevision(value: unknown): value is AgentConversationSummaryRev
   );
 }
 
-function compareConversations(left: AgentConversationRecord, right: AgentConversationRecord): number {
+function compareConversations(
+  left: AgentConversationRecord,
+  right: AgentConversationRecord
+): number {
   return (
     right.updatedAt.localeCompare(left.updatedAt) ||
     left.conversationId.localeCompare(right.conversationId)
@@ -833,7 +854,9 @@ function isSearchDocument(value: unknown): value is AgentConversationSearchDocum
     isSafeId(value["projectId"]) &&
     typeof value["title"] === "string" &&
     Buffer.byteLength(value["title"], "utf8") <= MAX_TITLE_BYTES &&
-    (value["status"] === "active" || value["status"] === "archived") &&
+    (value["status"] === "active" ||
+      value["status"] === "archived" ||
+      value["status"] === "deleted") &&
     typeof value["updatedAt"] === "string" &&
     typeof value["latestSummary"] === "string" &&
     Buffer.byteLength(value["latestSummary"], "utf8") <= MAX_SUMMARY_CONTENT_BYTES &&

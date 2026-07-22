@@ -21,7 +21,7 @@ test("surfaces draft-backed context controls and round-trips a reference through
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-agent-context-e2e-"));
   const server = createServer(async (request, response) => {
     if (request.method === "GET" && request.url === "/v1/models") {
-      json(response, { data: [{ id: "local-agent", context_window: 128000 }] });
+      json(response, { data: [{ id: "gpt-5", context_window: 128000 }] });
       return;
     }
     json(response, {
@@ -52,15 +52,31 @@ test("surfaces draft-backed context controls and round-trips a reference through
     const composer = page.getByLabel("会话输入区");
 
     // The draft loaded through the real preload→main→application→repository path, so the composer
-    // surfaces its server-authoritative model selector and the quiet context-status control.
-    await expect(composer.getByLabel(/^模型：/)).toBeVisible();
-    await expect(composer.locator(".ns-agent-context-trigger")).toBeVisible();
+    // surfaces its server-authoritative model and reasoning controls in one compact menu.
+    const modelTrigger = composer.getByLabel(/^模型与推理：/);
+    await expect(modelTrigger).toBeVisible();
+    await modelTrigger.click();
+    await composer.locator('[data-model-menu="model"]').hover();
+    const modelOptions = page.getByRole("listbox", { name: "模型", exact: true });
+    await expect(modelOptions).toBeVisible();
+    await expect(modelOptions.getByRole("button", { name: /gpt-5/ })).toBeVisible();
+
+    await composer.locator('[data-model-menu="reasoning"]').hover();
+    const reasoningOptions = page.getByRole("listbox", {
+      name: "推理强度",
+      exact: true
+    });
+    await expect(reasoningOptions).toBeVisible();
+    await reasoningOptions.getByRole("button", { name: "高", exact: true }).click();
+    await expect(modelTrigger).toHaveAccessibleName("模型与推理：gpt-5 · 高");
 
     const conversationId = await selectedConversationId(page);
 
     // Read the persisted draft through IPC; loadDraft already initialized it for this conversation.
     const draft = await readRunDraft(page, conversationId);
     expect(draft.runDraft.modelProfileId).toEqual(expect.any(String));
+    expect(draft.runDraft.modelName).toBe("gpt-5");
+    expect(draft.runDraft.reasoningEffort).toBe("high");
     const contextDraftId = draft.contextDraft.contextDraftId;
     const modelProfileId = draft.runDraft.modelProfileId;
 
@@ -85,9 +101,9 @@ test("surfaces draft-backed context controls and round-trips a reference through
 
     // Reloading the draft returns the persisted post-mutation state (recovery after reopen).
     const reloaded = await readRunDraft(page, conversationId);
-    expect(reloaded.contextDraft.refs.some((ref) => ref.refId === "file:notes/e2e-context.md")).toBe(
-      true
-    );
+    expect(
+      reloaded.contextDraft.refs.some((ref) => ref.refId === "file:notes/e2e-context.md")
+    ).toBe(true);
   } finally {
     await electronApp.close();
     await new Promise<void>((resolve, reject) =>
@@ -103,6 +119,8 @@ interface RunDraftView {
     readonly revision: number;
     readonly checksum: string;
     readonly modelProfileId: string;
+    readonly modelName?: string;
+    readonly reasoningEffort?: string;
     readonly contextDraftRevision: number;
   };
   readonly contextDraft: {
@@ -243,13 +261,13 @@ async function configureLocalModel(page: Page, baseUrl: string): Promise<void> {
   await page.getByLabel("活动栏").getByRole("button", { name: "设置" }).click();
   await expect(page.getByRole("heading", { name: "设置" })).toBeVisible();
   await page.getByLabel("模型 Base URL").fill(baseUrl);
-  await page.getByLabel("模型名称").fill("local-agent");
+  await page.getByLabel("模型名称").fill("gpt-5");
   await page.getByLabel("密钥引用").fill("local-context-e2e-key");
   await page.getByRole("button", { name: "保存模型配置" }).click();
   await expect(page.getByText("模型配置已保存。", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "测试连接", exact: true }).click();
-  await expect(page.locator(".ns-project-feedback")).toContainText(
-    "Connected to openai-compatible/local-agent"
+  await expect(page.locator('.ns-project-feedback[role="status"]')).toHaveText(
+    "Connected to openai-compatible/gpt-5."
   );
   await page.getByRole("button", { name: "关闭设置" }).click();
 }

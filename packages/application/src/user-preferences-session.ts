@@ -107,9 +107,9 @@ export function createDefaultUserPreferences(): UserPreferencesSnapshot {
       dismissed: false
     },
     editor: {
-      fontFamily: "mono",
-      fontSize: 13,
-      lineHeight: 1.7
+      fontFamily: "serif",
+      fontSize: 16,
+      lineHeight: 1.8
     },
     appearance: {
       theme: "dark",
@@ -186,9 +186,11 @@ function normalizeAppearancePreferences(
 function normalizeEditorPreferences(preferences: UserEditorPreferences): UserEditorPreferences {
   return {
     fontFamily:
-      preferences.fontFamily === "serif" || preferences.fontFamily === "sans"
+      preferences.fontFamily === "mono" ||
+      preferences.fontFamily === "serif" ||
+      preferences.fontFamily === "sans"
         ? preferences.fontFamily
-        : "mono",
+        : "serif",
     fontSize: clampNumber(preferences.fontSize, 12, 20),
     lineHeight: clampNumber(preferences.lineHeight, 1.4, 2)
   };

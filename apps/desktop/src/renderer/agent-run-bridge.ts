@@ -34,6 +34,7 @@ import type {
   NovelStudioApi,
   PlanArtifact
 } from "@novel-studio/application";
+import { reasoningStrengthForModel } from "@novel-studio/application";
 import type {
   AgentComposerContextStatusControl,
   AgentComposerModelControl,
@@ -56,9 +57,7 @@ import type {
   RollbackReviewModel
 } from "@novel-studio/ui";
 
-type AgentPlanExecutionOptions = NonNullable<
-  Parameters<AgentPlanReviewProps["onDecision"]>[1]
->;
+type AgentPlanExecutionOptions = NonNullable<Parameters<AgentPlanReviewProps["onDecision"]>[1]>;
 
 export interface AgentRunBridgeContext {
   readonly projectId: string;
@@ -68,6 +67,15 @@ export interface AgentRunBridgeContext {
   readonly chapterEditor?: ChapterEditorProps;
   readonly fileEditor?: PlainFileEditorProps;
   readonly settings?: ModelSettingsPanelProps;
+}
+
+interface ComposerModelChoice {
+  readonly id: string;
+  readonly label: string;
+  readonly provider: string;
+  readonly profileId: string;
+  readonly modelName: string;
+  readonly reasoningStrength?: ModelReasoningStrengthControl;
 }
 
 export interface AgentRunBridge {
@@ -210,7 +218,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           ? "Agent run failed, and diagnostic details could not be saved."
           : event.type === "run_failed" || event.type === "tool_failed"
             ? undefined
-          : state.errorMessage,
+            : state.errorMessage,
       planArtifact:
         event.type === "plan_ready" && event.detail !== undefined
           ? (event.detail as unknown as PlanArtifact)
@@ -259,6 +267,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     const writePolicy =
       state.operationMode === "planning" ? "write_before_confirmation" : state.writePolicy;
     const reasoningEffort = state.runDraft?.reasoningEffort;
+    const modelName = selectedModelName(state.runDraft, context.settings, profileId);
     const contextRefs = state.contextDraft?.refs ?? contextDraftRefs(context);
     const prepared = await api.agentRuns.prepareStart({
       projectId: context.projectId,
@@ -273,6 +282,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         state.writePolicy === "user_preapproved_run" &&
         state.writePolicyAcknowledged,
       modelProfileId: profileId,
+      ...(modelName === undefined ? {} : { modelName }),
       ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
       contextRefs
     });
@@ -437,9 +447,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     return toProps();
   }
 
-  function updateChangeSetSelection(
-    selection: ChangeSetSelection
-  ): Promise<AgentRunPanelProps> {
+  function updateChangeSetSelection(selection: ChangeSetSelection): Promise<AgentRunPanelProps> {
     if (selectionInFlight !== undefined) return selectionInFlight;
     const snapshot = requireSnapshot();
     const changeSet = state.changeSet;
@@ -459,9 +467,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     };
     const request = (async () => {
       try {
-        await applyCommandResult(
-          await api.agentRuns.decideChangeSet(command)
-        );
+        await applyCommandResult(await api.agentRuns.decideChangeSet(command));
       } finally {
         state = { ...state, selectionPending: false };
         selectionInFlight = undefined;
@@ -473,9 +479,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     return request;
   }
 
-  function decideChangeSet(
-    decision: "apply_selected" | "reject_all"
-  ): Promise<AgentRunPanelProps> {
+  function decideChangeSet(decision: "apply_selected" | "reject_all"): Promise<AgentRunPanelProps> {
     if (approvalInFlight !== undefined) return approvalInFlight;
     const snapshot = requireSnapshot();
     const changeSet = state.changeSet;
@@ -545,9 +549,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     const snapshot = requireSnapshot();
     const review = state.rollbackReview;
     if (snapshot === undefined || review === undefined) return Promise.resolve(toProps());
-    const decisions = Object.entries(state.rollbackDecisions).map(
-      ([relativePath, decision]) => ({ relativePath, decision })
-    );
+    const decisions = Object.entries(state.rollbackDecisions).map(([relativePath, decision]) => ({
+      relativePath,
+      decision
+    }));
     const request = (async () => {
       try {
         await applyCommandResult(
@@ -680,7 +685,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       permissionSummaryId: snapshot.permissionSummaryId
     });
     if (!result.ok) return { summary: undefined, errorMessage: result.error.message };
-    if (result.value === undefined || result.value.checksum !== snapshot.permissionSummaryChecksum) {
+    if (
+      result.value === undefined ||
+      result.value.checksum !== snapshot.permissionSummaryChecksum
+    ) {
       return {
         summary: undefined,
         errorMessage: "权限摘要与当前运行绑定不一致，请重新加载。"
@@ -748,9 +756,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     };
   }
 
-  function decidePendingPlanRevision(
-    decision: "approve" | "reject"
-  ): Promise<AgentRunPanelProps> {
+  function decidePendingPlanRevision(decision: "approve" | "reject"): Promise<AgentRunPanelProps> {
     if (planDecisionInFlight !== undefined) return planDecisionInFlight;
     const snapshot = requireSnapshot();
     const request = pendingPlanRevisionRequest();
@@ -899,10 +905,12 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     if (modelProfileId === undefined) return;
     const projectId = ctx.projectId;
     const conversationId = ctx.conversationId;
+    const modelName = selectedModelName(undefined, ctx.settings, modelProfileId);
     draftToken += 1;
     const token = draftToken;
     const initialize: AgentRunDraftInitialization = {
       modelProfileId,
+      ...(modelName === undefined ? {} : { modelName }),
       operationMode: state.operationMode,
       contextMode: state.contextMode,
       writePolicy: state.writePolicy,
@@ -938,6 +946,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         updateRunDraftChoice({ kind: "set_context_mode", contextMode: "general_file" }, true);
         return;
       }
+      if (reconcileDraftModel()) return;
       await previewBudget(token);
     })();
   }
@@ -947,7 +956,11 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     const previewContextBudget = draftApi.previewContextBudget;
     const ctx = context;
     const draft = state.runDraft;
-    if (previewContextBudget === undefined || ctx?.conversationId === undefined || draft === undefined) {
+    if (
+      previewContextBudget === undefined ||
+      ctx?.conversationId === undefined ||
+      draft === undefined
+    ) {
       return;
     }
     const result = await previewContextBudget({
@@ -1009,7 +1022,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     });
   }
 
-  function updateModelDraft(modelProfileId: string): void {
+  function updateModelDraft(modelProfileId: string, modelName: string): void {
     const updateRunDraft = draftApi.updateRunDraft;
     if (updateRunDraft === undefined) return;
     void queueDraftMutation(async () => {
@@ -1024,12 +1037,22 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         expectedDraftRevision: draft.revision,
         // A model change invalidates the old budget; the session normalizes reasoning to the new
         // model's declared capabilities, so we deliberately send no reasoningEffort here.
-        mutation: { kind: "set_model", modelProfileId }
+        mutation: { kind: "set_model", modelProfileId, modelName }
       });
       applyDraftResult(result, token);
       // The new profile's context window changes the budget — re-preview against the new revision.
       await previewBudget(token);
     });
+  }
+
+  function reconcileDraftModel(previousSettings?: ModelSettingsPanelProps): boolean {
+    const draft = state.runDraft;
+    const settings = context?.settings;
+    if (draft === undefined || settings === undefined) return false;
+    const target = replacementModelForDraft(draft, settings, previousSettings);
+    if (target === undefined) return false;
+    updateModelDraft(target.profileId, target.modelName);
+    return true;
   }
 
   function updateReasoningDraft(reasoningEffort: ModelReasoningStrengthValue): void {
@@ -1045,7 +1068,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         conversationId: ctx.conversationId,
         commandId: createCommandId("draft-reasoning"),
         expectedDraftRevision: draft.revision,
-        mutation: { kind: "set_reasoning", reasoningEffort: reasoningEffort as AgentReasoningEffort }
+        mutation: {
+          kind: "set_reasoning",
+          reasoningEffort: reasoningEffort as AgentReasoningEffort
+        }
       });
       applyDraftResult(result, token);
     });
@@ -1183,18 +1209,49 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   > {
     const runDraft = state.runDraft;
     const contextDraft = state.contextDraft;
-    if (runDraft === undefined || contextDraft === undefined) return {};
     const settings = context?.settings;
+    const draftProfileId = runDraft?.modelProfileId;
+    const fallbackProfileId =
+      (draftProfileId !== undefined &&
+      settings?.profiles.some((profile) => profile.id === draftProfileId)
+        ? draftProfileId
+        : undefined) ??
+      selectedModelProfileId(settings) ??
+      settings?.profiles[0]?.id;
+    if (settings === undefined || fallbackProfileId === undefined) return {};
+    const choices = composerModelChoices(settings);
+    const fallbackModelName = selectedModelName(runDraft, settings, fallbackProfileId);
+    const selectedChoice =
+      choices.find(
+        (choice) => choice.profileId === fallbackProfileId && choice.modelName === fallbackModelName
+      ) ?? choices.find((choice) => choice.profileId === fallbackProfileId);
+    if (selectedChoice === undefined) return {};
     const model: AgentComposerModelControl = {
-      profiles: (settings?.profiles ?? []).map((profile) => ({
-        id: profile.id,
-        label: profile.displayName,
-        provider: profile.provider
-      })),
-      selectedProfileId: runDraft.modelProfileId,
-      onSelect: (profileId) => updateModelDraft(profileId)
+      profiles: choices.map(({ id, label, provider }) => ({ id, label, provider })),
+      selectedProfileId: selectedChoice.id,
+      onSelect: (choiceId) => {
+        const choice = choices.find((candidate) => candidate.id === choiceId);
+        if (choice !== undefined) updateModelDraft(choice.profileId, choice.modelName);
+      }
     };
-    const reasoning = reasoningControl(settings?.modelDiscovery?.reasoningStrength, runDraft);
+    if (runDraft === undefined || contextDraft === undefined) return { model };
+    const selectedProfile = settings.profiles.find(
+      (profile) => profile.id === selectedChoice.profileId
+    );
+    const selectedReasoningStrength =
+      selectedProfile === undefined
+        ? undefined
+        : (selectedChoice.reasoningStrength ??
+          (settings.modelDiscovery?.profileId === selectedProfile.id &&
+          selectedChoice.modelName === selectedProfile.modelName
+            ? settings.modelDiscovery.reasoningStrength
+            : reasoningStrengthForModel(
+                selectedProfile.provider,
+                selectedChoice.modelName,
+                selectedProfile.baseUrl,
+                selectedProfile.reasoningEffortEnabled
+              )));
+    const reasoning = reasoningControl(selectedReasoningStrength, runDraft);
     const references: AgentComposerReferenceControl = {
       chips: contextDraft.refs.map(refToChip),
       available: availableReferenceRefs(context, contextDraft).map(refToChip),
@@ -1334,7 +1391,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       runDraftRevision: draft.revision,
       runDraftChecksum: draft.checksum
     });
-    if (state.runDraft?.runDraftId !== draft.runDraftId || state.runDraft.revision !== draft.revision) {
+    if (
+      state.runDraft?.runDraftId !== draft.runDraftId ||
+      state.runDraft.revision !== draft.revision
+    ) {
       return;
     }
     state = {
@@ -1354,6 +1414,13 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       writePolicy: state.writePolicy,
       writePolicyAcknowledged: state.writePolicyAcknowledged,
       active: state.snapshot !== undefined && !isTerminalRunStatus(state.snapshot.status),
+      disabled: state.draftPending,
+      ...(state.draftPending
+        ? {
+            disabledReason:
+              state.runDraft === undefined ? "正在准备模型与上下文…" : "正在保存运行设置…"
+          }
+        : {}),
       availableContextModes:
         context?.workspaceKind === "engineeringWorkspace"
           ? ["general_file"]
@@ -1402,17 +1469,13 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           {
             kind: "set_write_policy",
             writePolicy,
-            acknowledged:
-              writePolicy === "user_preapproved_run" && state.writePolicyAcknowledged
+            acknowledged: writePolicy === "user_preapproved_run" && state.writePolicyAcknowledged
           },
           false
         );
       },
       onWritePolicyAcknowledgedChange: (writePolicyAcknowledged) => {
-        if (
-          state.operationMode !== "execution" ||
-          state.writePolicy !== "user_preapproved_run"
-        ) {
+        if (state.operationMode !== "execution" || state.writePolicy !== "user_preapproved_run") {
           return;
         }
         state = { ...state, writePolicyAcknowledged };
@@ -1449,6 +1512,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     getComposerProps: () => (context === undefined ? undefined : toComposerProps()),
     getPlanReviewProps: () => (context === undefined ? undefined : toPlanReviewProps()),
     syncContext(nextContext) {
+      const previousSettings = context?.settings;
       const projectChanged = context?.projectId !== nextContext.projectId;
       const conversationChanged = context?.conversationId !== nextContext.conversationId;
       context = nextContext;
@@ -1459,13 +1523,13 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         permissionSummaryRequested = false;
         state = resetRunState(state);
       }
-      if (nextContext.workspaceKind === "engineeringWorkspace" && state.contextMode !== "general_file") {
+      if (
+        nextContext.workspaceKind === "engineeringWorkspace" &&
+        state.contextMode !== "general_file"
+      ) {
         state = { ...state, contextMode: "general_file" };
         if (state.runDraft !== undefined) {
-          updateRunDraftChoice(
-            { kind: "set_context_mode", contextMode: "general_file" },
-            true
-          );
+          updateRunDraftChoice({ kind: "set_context_mode", contextMode: "general_file" }, true);
         }
       }
       // Settings can arrive after the permanent conversation surface selects a conversation. Load
@@ -1476,6 +1540,8 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         !state.draftPending
       ) {
         loadDraft();
+      } else if (!conversationChanged && state.runDraft !== undefined) {
+        reconcileDraftModel(previousSettings);
       }
       return toProps();
     },
@@ -1539,7 +1605,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         (context.conversationId !== undefined &&
           result.value.snapshot.conversationId !== context.conversationId)
       ) {
-        state = { ...resetRunState(state), errorMessage: "The Agent run is outside the selected conversation." };
+        state = {
+          ...resetRunState(state),
+          errorMessage: "The Agent run is outside the selected conversation."
+        };
         notify();
         return toProps();
       }
@@ -1733,10 +1802,123 @@ function contextSources(context: AgentRunBridgeContext | undefined): AgentContex
   ];
 }
 
-/** The user's selected model profile id — the only model choice the renderer authors. */
-function selectedModelProfileId(
-  settings: ModelSettingsPanelProps | undefined
+function composerModelChoices(settings: ModelSettingsPanelProps): ComposerModelChoice[] {
+  const choices: ComposerModelChoice[] = [];
+  const seen = new Set<string>();
+  const discovery = settings.modelDiscovery;
+
+  for (const profile of settings.profiles) {
+    const addChoice = (input: {
+      readonly id: string;
+      readonly modelName: string;
+      readonly label: string;
+      readonly reasoningStrength?: ModelReasoningStrengthControl;
+    }): void => {
+      const key = `${profile.id}\u0000${input.modelName}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      choices.push({
+        id: input.id,
+        label: input.label,
+        provider: `${profile.displayName} · ${profile.provider}`,
+        profileId: profile.id,
+        modelName: input.modelName,
+        ...(input.reasoningStrength === undefined
+          ? {}
+          : { reasoningStrength: input.reasoningStrength })
+      });
+    };
+
+    // Preserve the profile id for its configured model so old composer consumers and persisted
+    // selections continue to resolve. Extra models discovered on the same connection get stable,
+    // profile-scoped ids while still running through that profile's credentials and endpoint.
+    const configuredReasoningStrength =
+      discovery?.profileId === profile.id
+        ? discovery.models.find((model) => model.id === profile.modelName)?.reasoningStrength
+        : undefined;
+    addChoice({
+      id: profile.id,
+      modelName: profile.modelName,
+      label: profile.modelName,
+      ...(configuredReasoningStrength === undefined
+        ? {}
+        : { reasoningStrength: configuredReasoningStrength })
+    });
+
+    if (discovery?.profileId !== profile.id) continue;
+    for (const model of discovery.models) {
+      addChoice({
+        id: `${profile.id}::${encodeURIComponent(model.id)}`,
+        modelName: model.id,
+        label: model.displayName || model.id,
+        ...(model.reasoningStrength === undefined
+          ? {}
+          : { reasoningStrength: model.reasoningStrength })
+      });
+    }
+  }
+
+  return choices;
+}
+
+function selectedModelName(
+  runDraft: AgentRunDraft | undefined,
+  settings: ModelSettingsPanelProps | undefined,
+  profileId: string
 ): string | undefined {
+  if (runDraft?.modelProfileId === profileId && runDraft.modelName !== undefined) {
+    return runDraft.modelName;
+  }
+  return settings?.profiles.find((profile) => profile.id === profileId)?.modelName;
+}
+
+function replacementModelForDraft(
+  draft: AgentRunDraft,
+  settings: ModelSettingsPanelProps,
+  previousSettings?: ModelSettingsPanelProps
+): { readonly profileId: string; readonly modelName: string } | undefined {
+  const profile = settings.profiles.find((entry) => entry.id === draft.modelProfileId);
+  if (profile === undefined) {
+    const fallbackProfileId = selectedModelProfileId(settings);
+    const fallbackProfile = settings.profiles.find((entry) => entry.id === fallbackProfileId);
+    return fallbackProfile === undefined
+      ? undefined
+      : { profileId: fallbackProfile.id, modelName: fallbackProfile.modelName };
+  }
+
+  const draftModelName = draft.modelName;
+  if (draftModelName === undefined) {
+    return { profileId: profile.id, modelName: profile.modelName };
+  }
+
+  // A profile edit should move a draft that still points at that profile's old configured model.
+  // A deliberately selected discovered sibling remains untouched.
+  const previousProfile = previousSettings?.profiles.find((entry) => entry.id === profile.id);
+  if (
+    previousProfile !== undefined &&
+    previousProfile.modelName !== profile.modelName &&
+    draftModelName === previousProfile.modelName
+  ) {
+    return { profileId: profile.id, modelName: profile.modelName };
+  }
+
+  // On restart there is no previous settings snapshot. If the provider has loaded a fresh model
+  // list and the persisted model disappeared from it, it is stale rather than an intentional choice.
+  const discovery = settings.modelDiscovery;
+  if (
+    discovery?.status === "loaded" &&
+    discovery.profileId === profile.id &&
+    draftModelName !== profile.modelName &&
+    !discovery.models.some((model) => model.id === draftModelName)
+  ) {
+    return { profileId: profile.id, modelName: profile.modelName };
+  }
+
+  return undefined;
+}
+
+/** The user's selected model profile id. */
+function selectedModelProfileId(settings: ModelSettingsPanelProps | undefined): string | undefined {
   const profile = settings?.profiles.find(
     (entry) => entry.id === (settings.selectedProfileId ?? settings.defaultProfileId)
   );
@@ -1967,15 +2149,14 @@ function conflictPaths(events: readonly AgentRunEvent[], changeSet: ChangeSet): 
   const targetPaths = new Set(changeSet.files.map((file) => file.relativePath));
   for (const event of [...events].reverse()) {
     const raw = event.detail?.["baseHashConflictPaths"];
-    if (Array.isArray(raw)) return raw.filter((value): value is string => typeof value === "string");
+    if (Array.isArray(raw))
+      return raw.filter((value): value is string => typeof value === "string");
     if (
       typeof event.detail?.["code"] === "string" &&
       event.detail["code"].includes("BASE_CONFLICT") &&
       typeof event.detail["relativePath"] === "string"
     ) {
-      return targetPaths.has(event.detail["relativePath"])
-        ? [event.detail["relativePath"]]
-        : [];
+      return targetPaths.has(event.detail["relativePath"]) ? [event.detail["relativePath"]] : [];
     }
     if (event.type === "context_stale" && Array.isArray(event.detail?.["staleRefs"])) {
       const staleTargetPaths = event.detail["staleRefs"]

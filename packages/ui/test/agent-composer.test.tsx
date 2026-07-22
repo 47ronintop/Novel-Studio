@@ -15,12 +15,14 @@ import type { AgentComposerProps } from "../src/workspace-shell-types.js";
 describe("AgentComposer", () => {
   afterEach(() => document.body.replaceChildren());
 
-  test("renders one draft input and one compact mode trigger without permanent groups", () => {
+  test("renders one draft input and one compact run-mode trigger without permanent groups", () => {
     const { host } = renderComposer();
 
     expect(host.querySelectorAll('textarea[aria-label="Agent 请求"]')).toHaveLength(1);
     expect(host.querySelectorAll('button[aria-label="启动 Agent 运行"]')).toHaveLength(1);
-    expect(host.querySelectorAll("button").item(0).textContent).toContain("执行 · 写作上下文");
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="只读"]')?.textContent).toContain(
+      "只读"
+    );
     expect(host.querySelectorAll('[aria-label="运行方式"]')).toHaveLength(0);
     expect(host.querySelectorAll('[aria-label="上下文"]')).toHaveLength(0);
   });
@@ -55,7 +57,7 @@ describe("AgentComposer", () => {
     );
   });
 
-  test("replaces send with one stop while active and keeps draft controls readable but disabled", () => {
+  test("replaces send with one stop while active and keeps permission details readable", () => {
     const onStop = vi.fn();
     const { host } = renderComposer({ active: true, onStop });
 
@@ -64,12 +66,21 @@ describe("AgentComposer", () => {
     expect(host.querySelector<HTMLTextAreaElement>('[aria-label="Agent 请求"]')?.disabled).toBe(
       true
     );
-    expect(host.textContent).toContain("执行 · 写作上下文");
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="只读"]')?.disabled).toBe(true);
+    const permissionTrigger =
+      host.querySelector<HTMLButtonElement>('[aria-label="修改权限：只读"]');
+    expect(permissionTrigger?.disabled).toBe(false);
+    act(() => permissionTrigger?.click());
+    expect(
+      Array.from(host.querySelectorAll<HTMLInputElement>('[name="agent-write-policy"]')).every(
+        (input) => input.disabled
+      )
+    ).toBe(true);
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="停止 Agent 运行"]')?.click());
     expect(onStop).toHaveBeenCalledTimes(1);
   });
 
-  test("opens two labelled groups and selects modes with keyboard focus return", () => {
+  test("opens one labelled run-mode group and selects modes with focus return", () => {
     const onOperationModeChange = vi.fn();
     const onWritePolicyChange = vi.fn();
     const onWritePolicyAcknowledgedChange = vi.fn();
@@ -80,32 +91,27 @@ describe("AgentComposer", () => {
       onWritePolicyChange,
       onWritePolicyAcknowledgedChange
     });
-    const trigger = host.querySelector<HTMLButtonElement>('[aria-label="执行 · 写作上下文"]');
+    const trigger = host.querySelector<HTMLButtonElement>('[aria-label="自动"]');
 
     act(() =>
       trigger?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }))
     );
-    expect(document.activeElement).toBe(host.querySelector('[data-mode-option="execution"]'));
-    expect(host.querySelectorAll('[aria-label="运行方式"]')).toHaveLength(1);
-    expect(host.querySelector('[aria-label="运行方式"]')?.textContent).toContain("执行");
-    expect(host.querySelector('[aria-label="运行方式"]')?.textContent).toContain("规划（只读）");
-    expect(host.querySelectorAll('[aria-label="上下文"]')).toHaveLength(1);
-    expect(host.querySelector('[aria-label="上下文"]')?.textContent).toContain("写作上下文");
-    expect(host.querySelector('[aria-label="上下文"]')?.textContent).toContain("文件上下文");
+    expect(document.activeElement).toBe(host.querySelector('[data-run-mode="automatic"]'));
+    expect(host.querySelectorAll('[role="dialog"][aria-label="运行方式"]')).toHaveLength(1);
+    const modeGroup = host.querySelector('[role="group"][aria-label="运行方式"]');
+    expect(modeGroup?.textContent).toContain("规划");
+    expect(modeGroup?.textContent).toContain("只读");
+    expect(modeGroup?.textContent).toContain("自动");
+    expect(host.querySelectorAll('[aria-label="上下文"]')).toHaveLength(0);
+    expect(host.querySelector("[data-context-option]")).toBeNull();
 
-    const execution = host.querySelector<HTMLButtonElement>('[data-mode-option="execution"]');
+    const automatic = host.querySelector<HTMLButtonElement>('[data-run-mode="automatic"]');
     act(() =>
-      execution?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }))
+      automatic?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }))
     );
-    expect(document.activeElement?.textContent).toContain("规划（只读）");
-    const selectEvent = new KeyboardEvent("keydown", {
-      key: "Enter",
-      bubbles: true,
-      cancelable: true
-    });
-    act(() => document.activeElement?.dispatchEvent(selectEvent));
+    expect(document.activeElement?.textContent).toContain("规划");
+    act(() => (document.activeElement as HTMLButtonElement | null)?.click());
 
-    expect(selectEvent.defaultPrevented).toBe(true);
     expect(onOperationModeChange).toHaveBeenCalledWith("planning");
     expect(onOperationModeChange).toHaveBeenCalledTimes(1);
     expect(onWritePolicyChange).toHaveBeenCalledWith("write_before_confirmation");
@@ -114,28 +120,25 @@ describe("AgentComposer", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  test("closes the mode popover with Escape and exposes planning as read only", () => {
+  test("closes the mode popover with Escape and exposes planning in the compact trigger", () => {
     const { host } = renderComposer({ operationMode: "planning" });
-    const trigger = host.querySelector<HTMLButtonElement>('[aria-label="规划 · 写作上下文"]');
-    expect(host.textContent).toContain("只读规划");
+    const trigger = host.querySelector<HTMLButtonElement>('[aria-label="规划"]');
     expect(host.textContent).not.toContain("每次修改前确认");
     expect(host.querySelector('[aria-label^="修改权限："]')).toBeNull();
 
     act(() => trigger?.click());
-    const popover = host.querySelector<HTMLElement>('[aria-label="运行方式与上下文"]');
+    const popover = host.querySelector<HTMLElement>('[aria-label="运行方式"]');
     act(() =>
       popover?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
     );
-    expect(host.querySelector('[aria-label="运行方式与上下文"]')).toBeNull();
+    expect(host.querySelector('[aria-label="运行方式"]')).toBeNull();
     expect(document.activeElement).toBe(trigger);
   });
 
   test("keeps permission details closed by default and reveals server-owned forbidden capabilities on demand", () => {
     const onOpen = vi.fn();
     const { host } = renderComposer({ permission: permissionControl({ onOpen }) });
-    const trigger = host.querySelector<HTMLButtonElement>(
-      '[aria-label="修改权限：每次修改前确认"]'
-    );
+    const trigger = host.querySelector<HTMLButtonElement>('[aria-label="修改权限：只读"]');
 
     expect(trigger).not.toBeNull();
     expect(host.querySelector('[aria-label="修改权限与摘要"]')).toBeNull();
@@ -161,52 +164,62 @@ describe("AgentComposer", () => {
     expect(summary?.textContent).not.toContain("通用文件");
   });
 
-  test("requires explicit risk acknowledgement before an automatic-modification run can start", () => {
+  test("treats automatic mode selection as the authorization for this run", () => {
+    const onOperationModeChange = vi.fn();
+    const onWritePolicyChange = vi.fn();
     const onWritePolicyAcknowledgedChange = vi.fn();
     const { host } = renderComposer({
-      writePolicy: "user_preapproved_run",
-      writePolicyAcknowledged: false,
       permission: permissionControl(),
+      onOperationModeChange,
+      onWritePolicyChange,
       onWritePolicyAcknowledgedChange
     });
 
-    expect(host.querySelector<HTMLButtonElement>('[aria-label="启动 Agent 运行"]')?.disabled).toBe(
-      true
-    );
-    act(() =>
-      host
-        .querySelector<HTMLButtonElement>('[aria-label="修改权限：本次运行自动修改"]')
-        ?.click()
-    );
-    const acknowledgement = host.querySelector<HTMLInputElement>(
-      '[aria-label="确认本次运行自动修改风险"]'
-    );
-    expect(acknowledgement).not.toBeNull();
-    expect(host.querySelector('[aria-label="修改权限与摘要"]')?.textContent).toContain(
-      "每次实际写入仍会生成差异、校验并创建版本点"
-    );
-    act(() => acknowledgement?.click());
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="只读"]')?.click());
+    act(() => host.querySelector<HTMLButtonElement>('[data-run-mode="automatic"]')?.click());
+    expect(onOperationModeChange).toHaveBeenCalledWith("execution");
+    expect(onWritePolicyChange).toHaveBeenCalledWith("user_preapproved_run");
     expect(onWritePolicyAcknowledgedChange).toHaveBeenCalledWith(true);
+    expect(host.querySelector('[aria-label="确认本次运行自动修改风险"]')).toBeNull();
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="启动 Agent 运行"]')?.disabled).toBe(
+      false
+    );
+
+    const onSend = vi.fn();
+    const automatic = renderComposer({
+      writePolicy: "user_preapproved_run",
+      writePolicyAcknowledged: false,
+      onWritePolicyAcknowledgedChange,
+      onSend
+    });
+    act(() =>
+      automatic.host.querySelector<HTMLButtonElement>('[aria-label="启动 Agent 运行"]')?.click()
+    );
+    expect(onWritePolicyAcknowledgedChange).toHaveBeenLastCalledWith(true);
+    expect(onSend).toHaveBeenCalledWith("检查当前章节");
   });
 
   test("closes an open mode popover when the run becomes active", () => {
     const { host, rerender } = renderComposer();
-    act(() => host.querySelector<HTMLButtonElement>('[title="选择运行方式和上下文"]')?.click());
-    expect(host.querySelector('[aria-label="运行方式与上下文"]')).not.toBeNull();
+    act(() => host.querySelector<HTMLButtonElement>('[title="选择运行方式"]')?.click());
+    expect(host.querySelector('[aria-label="运行方式"]')).not.toBeNull();
 
     rerender({ active: true });
 
-    expect(host.querySelector('[aria-label="运行方式与上下文"]')).toBeNull();
-    expect(host.querySelector<HTMLButtonElement>('[title="选择运行方式和上下文"]')?.disabled).toBe(
-      true
-    );
+    expect(host.querySelector('[aria-label="运行方式"]')).toBeNull();
+    expect(host.querySelector<HTMLButtonElement>('[title="选择运行方式"]')?.disabled).toBe(true);
   });
 
-  test("uses a single-column surface with wrapping toolbar and a fixed command slot", () => {
+  test("uses one compact footer row with a fixed command slot", () => {
     const { host } = renderComposer({ disabled: true, disabledReason: "只读会话" });
     const composer = host.querySelector('[aria-label="会话输入区"]');
     expect(composer?.querySelector(":scope > .ns-agent-conversation-composer-note")).not.toBeNull();
     expect(composer?.querySelector(":scope > .ns-agent-composer-surface")).not.toBeNull();
+    expect(composer?.querySelector('[aria-label="会话配置"]')).not.toBeNull();
+    expect(composer?.querySelector('[aria-label="会话操作"]')).not.toBeNull();
+    expect(composer?.querySelector(".ns-agent-composer-footer")).not.toBeNull();
+    expect(composer?.querySelector(".ns-agent-composer-config-row")).toBeNull();
+    expect(composer?.querySelector(".ns-agent-composer-action-row")).toBeNull();
 
     const css = readFileSync(join(process.cwd(), "packages", "ui", "src", "styles.css"), "utf8");
     expect(css).toMatch(
@@ -215,17 +228,21 @@ describe("AgentComposer", () => {
     expect(css).toMatch(
       /\.ns-agent-composer-surface\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s
     );
-    expect(css).toMatch(/\.ns-agent-composer-toolbar\s*\{[^}]*flex-wrap:\s*wrap/s);
-    expect(css).toMatch(/\.ns-agent-composer-command-slot\s*\{[^}]*flex:\s*0 0 32px/s);
+    expect(css).toMatch(/\.ns-agent-composer-footer\s*\{[^}]*display:\s*flex/s);
+    expect(css).toMatch(/\.ns-agent-composer-footer-leading\s*\{[^}]*flex:\s*1 1 auto/s);
+    expect(css).toMatch(/\.ns-agent-composer-command-slot\s*\{[^}]*flex:\s*0 0 30px/s);
     expect(css).toMatch(/\.ns-agent-composer-mode-popover\s*\{[^}]*position:\s*absolute/s);
+    expect(css).toMatch(
+      /\.ns-agent-composer-model-popover\s*\{[^}]*width:\s*min\(216px,\s*calc\(100cqw - 8px\)\)/s
+    );
   });
 
-  test("does not render grouped controls when their sub-objects are absent", () => {
+  test("keeps run mode and permission available when model and reference controls are absent", () => {
     const { host } = renderComposer();
-    expect(host.querySelector('[aria-label^="模型："]')).toBeNull();
-    expect(host.querySelector('[aria-label^="推理强度："]')).toBeNull();
+    expect(host.querySelector('[aria-label^="模型与推理："]')).toBeNull();
     expect(host.querySelector('[aria-label="添加上下文引用"]')).toBeNull();
-    expect(host.querySelector(".ns-agent-context-trigger")).toBeNull();
+    expect(host.querySelector('[aria-label="只读"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="修改权限：只读"]')).not.toBeNull();
   });
 
   test("selects a model profile and writes the choice through onSelect", () => {
@@ -240,30 +257,124 @@ describe("AgentComposer", () => {
         onSelect
       }
     });
-    const trigger = host.querySelector<HTMLButtonElement>('[aria-label="模型：GPT-Writer"]');
+    const trigger = host.querySelector<HTMLButtonElement>('[aria-label="模型与推理：GPT-Writer"]');
     expect(trigger?.textContent).toContain("GPT-Writer");
     act(() => trigger?.click());
-    act(() => host.querySelector<HTMLButtonElement>('[data-model-option="p2"]')?.click());
+    expect(host.querySelector('[data-model-menu="model"]')).not.toBeNull();
+    act(() => host.querySelector<HTMLButtonElement>('[data-model-menu="model"]')?.click());
+    act(() => document.querySelector<HTMLButtonElement>('[data-model-option="p2"]')?.click());
     expect(onSelect).toHaveBeenCalledWith("p2");
     expect(host.querySelector('[role="dialog"]')).toBeNull();
   });
 
-  test("shows the reasoning selector only when visible and reports the choice", () => {
+  test("includes reasoning in the model menu only when visible and reports the choice", () => {
+    const model = {
+      profiles: [{ id: "p1", label: "GPT-Writer", provider: "openai" }],
+      selectedProfileId: "p1",
+      onSelect: vi.fn()
+    };
     const onSelect = vi.fn();
     const hidden = renderComposer({
+      model,
       reasoning: { visible: false, values: ["low", "high"], current: "low", onSelect }
     });
+    const hiddenTrigger = hidden.host.querySelector<HTMLButtonElement>(
+      '[aria-label="模型与推理：GPT-Writer"]'
+    );
+    expect(hiddenTrigger).not.toBeNull();
+    act(() => hiddenTrigger?.click());
+    expect(hidden.host.querySelector('[aria-label="推理强度"]')).toBeNull();
     expect(hidden.host.querySelector('[aria-label^="推理强度："]')).toBeNull();
 
     const onSelect2 = vi.fn();
     const { host } = renderComposer({
-      reasoning: { visible: true, values: ["low", "medium", "high"], current: "medium", onSelect: onSelect2 }
+      model,
+      reasoning: {
+        visible: true,
+        values: ["low", "medium", "high"],
+        current: "medium",
+        onSelect: onSelect2
+      }
     });
-    const trigger = host.querySelector<HTMLButtonElement>('[aria-label="推理强度：中"]');
+    const trigger = host.querySelector<HTMLButtonElement>(
+      '[aria-label="模型与推理：GPT-Writer · 中"]'
+    );
     expect(trigger).not.toBeNull();
     act(() => trigger?.click());
-    act(() => host.querySelector<HTMLButtonElement>('[data-reasoning-option="high"]')?.click());
+    expect(host.querySelector('[data-model-menu="reasoning"]')).not.toBeNull();
+    act(() => host.querySelector<HTMLButtonElement>('[data-model-menu="reasoning"]')?.click());
+    act(() => document.querySelector<HTMLButtonElement>('[data-reasoning-option="high"]')?.click());
     expect(onSelect2).toHaveBeenCalledWith("high");
+  });
+
+  test("drills into model and reasoning choices inside one anchored menu", () => {
+    const model = {
+      profiles: [
+        { id: "p1", label: "GPT-Writer", provider: "openai" },
+        { id: "p2", label: "Claude-Writer", provider: "anthropic" }
+      ],
+      selectedProfileId: "p1",
+      onSelect: vi.fn()
+    };
+    const { host } = renderComposer({
+      model,
+      reasoning: {
+        visible: true,
+        values: ["low", "medium", "high"],
+        current: "medium",
+        onSelect: vi.fn()
+      }
+    });
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label^="模型与推理："]')?.click());
+    const modelRow = host.querySelector<HTMLButtonElement>('[data-model-menu="model"]');
+    expect(host.querySelector("[data-submenu]")).toBeNull();
+
+    act(() => modelRow?.click());
+    expect(host.querySelector('[data-submenu="model"]')).not.toBeNull();
+    expect(document.querySelectorAll('[data-submenu="model"]')).toHaveLength(1);
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="返回模型与推理选项"]')?.click());
+
+    const returnedReasoningRow = host.querySelector<HTMLButtonElement>(
+      '[data-model-menu="reasoning"]'
+    );
+    act(() => returnedReasoningRow?.click());
+    expect(host.querySelector('[data-submenu="reasoning"]')).not.toBeNull();
+    expect(document.activeElement).toBe(host.querySelector('[data-reasoning-option="medium"]'));
+
+    act(() =>
+      document
+        .querySelector<HTMLButtonElement>('[data-reasoning-option="medium"]')
+        ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
+    );
+    expect(host.querySelector('[data-submenu="reasoning"]')).toBeNull();
+    expect(document.activeElement).toBe(host.querySelector('[data-model-menu="reasoning"]'));
+  });
+
+  test("keeps provider-added reasoning values visible in the compact trigger and submenu", () => {
+    const model = {
+      profiles: [{ id: "p1", label: "GPT-5.6", provider: "openai" }],
+      selectedProfileId: "p1",
+      onSelect: vi.fn()
+    };
+    const { host } = renderComposer({
+      model,
+      reasoning: {
+        visible: true,
+        values: ["high", "max", "ultra"],
+        current: "ultra",
+        onSelect: vi.fn()
+      }
+    });
+    const trigger = host.querySelector<HTMLButtonElement>('[aria-label^="模型与推理："]');
+    expect(trigger?.textContent).toContain("GPT-5.6");
+    expect(trigger?.textContent).not.toContain("超高");
+    expect(trigger?.getAttribute("aria-label")).toContain("超高");
+    act(() => trigger?.click());
+    act(() => host.querySelector<HTMLButtonElement>('[data-model-menu="reasoning"]')?.click());
+    expect(document.querySelector('[data-reasoning-option="max"]')?.textContent).toContain("最大");
+    expect(document.querySelector('[data-reasoning-option="ultra"]')?.textContent).toContain(
+      "超高"
+    );
   });
 
   test("lists context reference chips and adds/removes through callbacks", () => {
@@ -277,47 +388,50 @@ describe("AgentComposer", () => {
         onRemove
       }
     });
-    expect(host.querySelector(".ns-agent-composer-reference-chips")?.textContent).toContain(
-      "第一章"
-    );
+    expect(host.querySelector('[aria-label="已选引用"]')?.textContent).toContain("第一章");
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="添加上下文引用"]')?.click());
-    act(() => host.querySelector<HTMLButtonElement>('[data-reference-option="file:notes.md"]')?.click());
+    act(() =>
+      host.querySelector<HTMLButtonElement>('[data-reference-option="file:notes.md"]')?.click()
+    );
     expect(onAdd).toHaveBeenCalledWith("file:notes.md");
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="移除引用 第一章"]')?.click());
     expect(onRemove).toHaveBeenCalledWith("chapter:ch-01");
   });
 
-  test("keeps the context status button quiet in the normal state", () => {
+  test("keeps context mode and legacy quick actions out while exposing context usage", () => {
     const { host } = renderComposer({
-      contextStatus: {
-        state: "normal",
-        usageLabel: "12k / 128k",
-        precision: "reported",
-        sources: [{ refId: "chapter:ch-01", label: "第一章", detail: "4k · 精确" }]
-      }
-    });
-    const trigger = host.querySelector<HTMLButtonElement>(".ns-agent-context-trigger");
-    expect(trigger?.textContent).toContain("上下文");
-    expect(trigger?.classList.contains("ns-agent-context-trigger-attention")).toBe(false);
-  });
-
-  test("announces heavy/failed context states and triggers compact", () => {
-    const onCompact = vi.fn();
-    const { host } = renderComposer({
+      availableContextModes: ["general_file"],
       contextStatus: {
         state: "heavy",
         usageLabel: "120k / 128k",
         precision: "estimated",
-        sources: [{ refId: "file:draft.md", label: "draft.md", detail: "100k · 估算" }],
-        onCompact
-      }
+        sources: [{ refId: "chapter:ch-01", label: "第一章", detail: "4k · 精确" }]
+      },
+      quickActions: [
+        { id: "rewrite_selection", label: "改写当前选区", onSelect: vi.fn() },
+        { id: "review_style", label: "检查文风与一致性", onSelect: vi.fn() }
+      ]
     });
-    const trigger = host.querySelector<HTMLButtonElement>(".ns-agent-context-trigger-attention");
-    expect(trigger?.textContent).toContain("上下文较多");
-    act(() => trigger?.click());
-    expect(host.querySelector('[aria-label="上下文用量"]')?.textContent).toContain("120k / 128k");
-    act(() => host.querySelector<HTMLButtonElement>(".ns-agent-context-actions button")?.click());
-    expect(onCompact).toHaveBeenCalledTimes(1);
+
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="执行"]')?.click());
+    expect(host.querySelector("[data-context-option]")).toBeNull();
+    const contextTrigger = host.querySelector<HTMLButtonElement>(
+      '[aria-label="上下文较多 · 120k / 128k"]'
+    );
+    expect(contextTrigger).not.toBeNull();
+    act(() => contextTrigger?.click());
+    const contextPopover = host.querySelector<HTMLElement>('[aria-label="上下文用量"]');
+    expect(contextPopover?.textContent).toContain("120k / 128k");
+    expect(contextPopover?.parentElement?.classList).toContain("ns-agent-context-popover-root");
+    expect(host.querySelector('[aria-label="上下文来源"]')?.textContent).toContain("第一章");
+    const css = readFileSync(join(process.cwd(), "packages", "ui", "src", "styles.css"), "utf8");
+    expect(css).toMatch(
+      /\.ns-agent-composer-surface \.ns-agent-context-popover-root\s*\{[^}]*position:\s*static/s
+    );
+    expect(css).toMatch(
+      /\.ns-agent-composer-surface \.ns-agent-context-popover\s*\{[^}]*width:\s*min\(272px,\s*calc\(100%\s*-\s*12px\)\)/s
+    );
+    expect(host.querySelector('[aria-label="Agent 快捷动作"]')).toBeNull();
   });
 
   test("locks grouped controls while a run is active", () => {
@@ -335,39 +449,15 @@ describe("AgentComposer", () => {
         onRemove: vi.fn()
       }
     });
-    expect(host.querySelector<HTMLButtonElement>('[aria-label="模型：GPT-Writer"]')?.disabled).toBe(
-      true
-    );
+    expect(
+      host.querySelector<HTMLButtonElement>('[aria-label="模型与推理：GPT-Writer"]')?.disabled
+    ).toBe(true);
     expect(host.querySelector<HTMLButtonElement>('[aria-label="添加上下文引用"]')?.disabled).toBe(
       true
     );
     expect(host.querySelector<HTMLButtonElement>('[aria-label="移除引用 第一章"]')?.disabled).toBe(
       true
     );
-  });
-
-  test("limits context modes and keeps selection actions beside the composer controls", () => {
-    const rewrite = vi.fn();
-    const style = vi.fn();
-    const { host } = renderComposer({
-      availableContextModes: ["general_file"],
-      quickActions: [
-        { id: "rewrite_selection", label: "改写当前选区", onSelect: rewrite },
-        { id: "review_style", label: "检查文风与一致性", onSelect: style }
-      ]
-    });
-
-    act(() => host.querySelector<HTMLButtonElement>('[aria-label="执行 · 写作上下文"]')?.click());
-    expect(host.querySelector('[data-context-option="writing"]')).toBeNull();
-    expect(host.querySelector('[data-context-option="general_file"]')).not.toBeNull();
-    expect(host.querySelectorAll('[aria-label="Agent 快捷动作"]')).toHaveLength(1);
-    expect(host.querySelector('[aria-label="改写当前选区"]')).not.toBeNull();
-    expect(host.querySelector('[aria-label="检查文风与一致性"]')).not.toBeNull();
-
-    act(() => host.querySelector<HTMLButtonElement>('[aria-label="改写当前选区"]')?.click());
-    act(() => host.querySelector<HTMLButtonElement>('[aria-label="检查文风与一致性"]')?.click());
-    expect(rewrite).toHaveBeenCalledOnce();
-    expect(style).toHaveBeenCalledOnce();
   });
 });
 
@@ -420,7 +510,15 @@ function permissionControl(
       rootFingerprint: "f".repeat(64),
       readCapabilities: ["read_chapter", "read_project_text"],
       proposalCapabilities: ["propose_chapter_write"],
-      forbiddenCapabilities: ["shell", "git", "network", "delete", "move", "rename", "create_directory"],
+      forbiddenCapabilities: [
+        "shell",
+        "git",
+        "network",
+        "delete",
+        "move",
+        "rename",
+        "create_directory"
+      ],
       checksum: "c".repeat(64),
       generatedAt: "2026-07-17T00:00:00.000Z"
     },

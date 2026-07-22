@@ -43,4 +43,15 @@ describe("agent conversation workspace presentation", () => {
     expect(result.workspace).toBe(liveWorkspace);
     expect(result.shouldClearPendingMainReview).toBe(true);
   });
+
+  test("clears a stale workspace immediately when no project is active", () => {
+    const result = resolveAgentConversationWorkspacePresentation(
+      liveWorkspace,
+      undefined,
+      undefined
+    );
+
+    expect(result.workspace).toBeUndefined();
+    expect(result.shouldClearPendingMainReview).toBe(false);
+  });
 });

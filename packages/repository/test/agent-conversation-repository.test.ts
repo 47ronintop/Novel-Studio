@@ -164,6 +164,103 @@ describe("AgentConversationFileRepository", () => {
     });
   });
 
+  test("keeps deleted conversations as terminal tombstones outside lists and search", async () => {
+    const { projectRoot, repository } = await createRepository();
+    const record = conversationRecord("conv_deleted", "2026-07-14T00:00:00.000Z");
+    const summary = summaryRevision(record.conversationId, 1, "Preserved summary");
+    await repository.createConversation(record);
+    await repository.writeSummary(summary);
+    await repository.writeCommandReceipt(record.conversationId, "cmd_existing", {
+      ok: true,
+      value: { preserved: true }
+    });
+
+    expect(
+      await repository.updateConversation({
+        conversationId: record.conversationId,
+        projectId: record.projectId,
+        expectedRevision: 1,
+        status: "deleted",
+        updatedAt: "2026-07-14T01:00:00.000Z"
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONVERSATION_DELETE_REQUIRES_ARCHIVE" }
+    });
+
+    const archived = await repository.updateConversation({
+      conversationId: record.conversationId,
+      projectId: record.projectId,
+      expectedRevision: 1,
+      status: "archived",
+      updatedAt: "2026-07-14T01:00:00.000Z"
+    });
+    expect(archived).toMatchObject({ ok: true, value: { revision: 2, status: "archived" } });
+
+    const deleted = await repository.updateConversation({
+      conversationId: record.conversationId,
+      projectId: record.projectId,
+      expectedRevision: 2,
+      status: "deleted",
+      updatedAt: "2026-07-14T02:00:00.000Z",
+      mutationCommandId: "cmd_delete"
+    });
+    expect(deleted).toMatchObject({
+      ok: true,
+      value: { revision: 3, status: "deleted", lastMutationCommandId: "cmd_delete" }
+    });
+    expect(await repository.readConversation(record.conversationId)).toEqual(deleted);
+    expect(await repository.listConversations({ projectId: record.projectId })).toEqual({
+      ok: true,
+      value: { items: [], diagnostics: [] }
+    });
+    expect(
+      await repository.listConversations({ projectId: record.projectId, status: "archived" })
+    ).toEqual({ ok: true, value: { items: [], diagnostics: [] } });
+    expect(
+      await repository.searchConversations({
+        projectId: record.projectId,
+        query: "deleted",
+        includeArchived: true,
+        documents: [
+          searchDocument(record.conversationId, "2026-07-14T02:00:00.000Z", {
+            status: "deleted",
+            userRequests: ["deleted"]
+          })
+        ]
+      })
+    ).toMatchObject({ ok: true, value: { items: [], diagnostics: [] } });
+    expect(
+      await repository.updateConversation({
+        conversationId: record.conversationId,
+        projectId: record.projectId,
+        expectedRevision: 3,
+        status: "active",
+        updatedAt: "2026-07-14T03:00:00.000Z"
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_CONVERSATION_DELETED" } });
+
+    await expect(
+      readFile(
+        join(projectRoot, "history", "conversations", record.conversationId, "summaries", "1.json"),
+        "utf8"
+      )
+    ).resolves.toContain("Preserved summary");
+    await expect(
+      readFile(
+        join(
+          projectRoot,
+          "history",
+          "conversations",
+          record.conversationId,
+          "command-receipts",
+          "cmd_existing.json"
+        ),
+        "utf8"
+      )
+    ).resolves.toContain("preserved");
+  });
+
   test("rejects unsafe identifiers and isolates corrupted records from list results", async () => {
     const { projectRoot, repository } = await createRepository();
     const valid = conversationRecord("conv_valid", "2026-07-14T00:00:00.000Z");

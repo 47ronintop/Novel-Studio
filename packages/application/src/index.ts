@@ -33,6 +33,8 @@ export type {
   AgentConversationPersistencePort,
   AgentConversationPersistenceListPage,
   AgentConversationCommandResult,
+  AgentConversationDeleteResult,
+  AgentConversationDeletion,
   AgentConversationDiagnostic,
   AgentConversationListPage,
   AgentConversationReadResult,
@@ -45,6 +47,7 @@ export type {
   AgentConversationSummaryFreshness,
   ChangeAgentConversationStatusCommand,
   CreateAgentConversationCommand,
+  DeleteAgentConversationCommand,
   CreateAgentConversationSessionOptions,
   ListAgentConversationsQuery,
   ReadAgentConversationQuery,
@@ -197,6 +200,7 @@ export type { ModelProvider, ModelProviderCatalogEntry } from "./model-provider-
 export { MODEL_PROVIDER_CATALOG, isModelProvider } from "./model-provider-catalog.js";
 export type {
   ModelDiscoveryOption,
+  ModelDiscoveryModelInput,
   ModelDiscoveryPort,
   ModelDiscoverySnapshot,
   ModelDiscoveryStatus,

@@ -6,7 +6,7 @@ import {
   type Locator,
   type Page
 } from "@playwright/test";
-import { cp, mkdtemp, readdir, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,11 +15,13 @@ import { fileURLToPath } from "node:url";
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const electronMain = join(repositoryRoot, "apps", "desktop", "dist", "main", "index.js");
 const fixtureRoot = join(repositoryRoot, "fixtures", "projects", "minimal-chapter");
+const screenshotRoot = join(repositoryRoot, "test-results", "agent-composer-layout");
 const projectId = "prj_minimal_chapter";
 
 test("isolates multi-run conversation context and restores project-scoped conversations", async () => {
   test.setTimeout(120_000);
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-conversations-e2e-"));
+  await mkdir(screenshotRoot, { recursive: true });
   const projectRoot = join(tempRoot, "Project A");
   await cp(fixtureRoot, projectRoot, { recursive: true });
   const modelRequests: Record<string, unknown>[] = [];
@@ -64,11 +66,27 @@ test("isolates multi-run conversation context and restores project-scoped conver
   try {
     const page = await electronApp.firstWindow();
     await queueDirectorySelection(electronApp, projectRoot);
+    await openQueuedCreativeProject(page);
     await openAgentSurface(page);
     await configureLocalModel(page, `http://127.0.0.1:${address.port}/v1`);
-    const conversationA = await createConversation(page);
+    const conversationA = await selectedConversation(page);
     const composer = page.getByLabel("会话输入区");
-    await expect(composer.getByLabel(/^模型：/)).toBeVisible();
+    await expect(composer.getByLabel(/^模型与推理：/)).toBeVisible();
+    await assertComposerLayout(composer);
+    await composer.screenshot({ path: join(screenshotRoot, "composer-320px.png") });
+    const defaultComposerWidth = (await composer.boundingBox())?.width;
+    expect(defaultComposerWidth).toBeDefined();
+    await page.locator(".ns-workspace-grid").evaluate((grid) => {
+      (grid as HTMLElement).style.setProperty("--ns-ai-panel-width", "280px");
+    });
+    await expect
+      .poll(async () => (await composer.boundingBox())?.width ?? 0)
+      .toBeLessThan(defaultComposerWidth ?? 0);
+    await assertComposerLayout(composer);
+    await composer.screenshot({ path: join(screenshotRoot, "composer-280px.png") });
+    await page.locator(".ns-workspace-grid").evaluate((grid) => {
+      (grid as HTMLElement).style.setProperty("--ns-ai-panel-width", "320px");
+    });
     await expect(page.getByLabel("AI 对话面板")).toBeVisible();
     await expect(page.getByLabel("Agent 请求")).toHaveCount(1);
     await expect(page.getByRole("button", { name: /启动 Agent 运行|停止 Agent 运行/ })).toHaveCount(
@@ -76,7 +94,7 @@ test("isolates multi-run conversation context and restores project-scoped conver
     );
     await expect(
       page.getByRole("button", {
-        name: /执行 · 写作上下文|规划 · 写作上下文|执行 · 文件上下文|规划 · 文件上下文/
+        name: /^(规划|只读|自动)$/
       })
     ).toHaveCount(1);
     await expect(page.getByLabel("AI 对话记录")).toHaveCount(0);
@@ -86,26 +104,27 @@ test("isolates multi-run conversation context and restores project-scoped conver
     await expect(page.getByLabel("AI 工作流运行观测")).toHaveCount(0);
 
     await selectPlanningWritingMode(page);
-    await expect(page.getByRole("button", { name: "规划 · 写作上下文" })).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "规划", exact: true })).toHaveCount(1);
     await expect(page.getByLabel("会话输入区").getByLabel(/^修改权限：/)).toHaveCount(0);
     await expect(page.getByLabel("运行方式")).toHaveCount(0);
-    await expect(
-      page.getByLabel("会话输入区").getByRole("group", { name: "上下文" })
-    ).toHaveCount(0);
+    await expect(page.getByLabel("会话输入区").getByRole("group", { name: "上下文" })).toHaveCount(
+      0
+    );
     await selectExecutionMode(page);
-    await composer.getByLabel("修改权限：每次修改前确认").click();
+    await composer.getByLabel("修改权限：只读").click();
     const permissionMenu = composer.getByRole("dialog", { name: "修改权限与摘要" });
     await expect(permissionMenu.locator('details[aria-label="本次权限摘要"]')).toContainText(
       "服务端事实"
     );
     await permissionMenu.getByRole("radio", { name: "本次运行自动修改" }).check();
-    await permissionMenu.getByRole("checkbox", { name: "确认本次运行自动修改风险" }).check();
+    await expect(permissionMenu.getByRole("checkbox")).toHaveCount(0);
+    await expect(permissionMenu).toContainText("本次运行已获自动修改授权");
     await permissionMenu.press("Escape");
 
     await sendConversationRequest(page, "Remember the alpha lantern clue.");
     await waitForRunCount(page, 1);
     await waitForLatestRunStatus(page, "completed");
-    await expect(composer.getByLabel("修改权限：每次修改前确认")).toBeVisible();
+    await expect(composer.getByLabel("修改权限：只读")).toBeVisible();
     const firstRunId = await latestRunId(page);
     await expect(page.locator(`[data-run-id="${firstRunId}"]`)).toHaveCount(1);
     await expect(
@@ -123,9 +142,7 @@ test("isolates multi-run conversation context and restores project-scoped conver
     const conversationB = await createConversation(page);
     expect(conversationB).not.toBe(conversationA);
     await selectExecutionMode(page);
-    await expect(
-      page.getByLabel("会话输入区").getByLabel("修改权限：每次修改前确认")
-    ).toBeVisible();
+    await expect(page.getByLabel("会话输入区").getByLabel("修改权限：只读")).toBeVisible();
     await sendConversationRequest(page, "Hold beta without alpha context.");
     await expect(page.locator(".ns-agent-assistant-text")).toContainText("Holding beta run");
     const conversationView = page.getByLabel("Agent 会话主视图");
@@ -156,42 +173,68 @@ test("isolates multi-run conversation context and restores project-scoped conver
     const archiveDrawer = await openHistoryDrawer(page);
     await archiveDrawer.getByRole("tab", { name: "显示已归档会话" }).click();
     await archiveDrawer.getByRole("searchbox", { name: "搜索会话" }).fill("Hold beta");
-    await expect(
-      archiveDrawer.locator(`[data-conversation-id="${conversationB}"]`)
-    ).toBeVisible();
+    await expect(archiveDrawer.locator(`[data-conversation-id="${conversationB}"]`)).toBeVisible();
     await archiveDrawer
       .locator(`[data-conversation-id="${conversationB}"]`)
       .getByRole("button", { name: /^恢复会话/ })
       .click();
     await archiveDrawer.getByRole("tab", { name: "显示活跃会话" }).click();
     await archiveDrawer.getByRole("searchbox", { name: "搜索会话" }).fill("");
-    await expect(
-      archiveDrawer.locator(`[data-conversation-id="${conversationB}"]`)
-    ).toBeVisible();
+    await expect(archiveDrawer.locator(`[data-conversation-id="${conversationB}"]`)).toBeVisible();
     await closeHistoryDrawer(archiveDrawer);
 
     await page.reload();
     await openAgentSurface(page);
     await expectConversationsInHistory(page, [conversationA, conversationB]);
 
-    await page.getByLabel("活动栏").getByRole("button", { name: "工作区" }).click();
     await queueDirectorySelection(electronApp, tempRoot);
-    await page.getByLabel("项目标题").fill("Project B");
-    await page.getByLabel("项目文件夹名称").fill("Project B");
-    await page.getByRole("button", { name: "选择项目父文件夹" }).click();
-    await page.getByRole("button", { name: "创建项目" }).click();
-    await expect(page.getByText("Project B", { exact: true })).toBeVisible();
+    await createQueuedCreativeProject(page, {
+      folderName: "Project B",
+      projectId: "prj_project_b",
+      title: "Project B"
+    });
+    await expect(page.getByRole("banner").getByText("Project B", { exact: true })).toBeVisible();
     await openAgentSurface(page);
-    const emptyDrawer = await openHistoryDrawer(page);
-    await expect(emptyDrawer.locator(".ns-agent-conversation-row")).toHaveCount(0);
-    await closeHistoryDrawer(emptyDrawer);
+    const preparedDrawer = await openHistoryDrawer(page);
+    await expect(preparedDrawer.locator(".ns-agent-conversation-row")).toHaveCount(1);
+    await expect(
+      preparedDrawer.locator(".ns-agent-conversation-row[data-selected=true]")
+    ).toBeVisible();
+    await closeHistoryDrawer(preparedDrawer);
 
-    await page.getByLabel("活动栏").getByRole("button", { name: "工作区" }).click();
     await queueDirectorySelection(electronApp, projectRoot);
-    await page.getByLabel("项目导航").getByRole("button", { name: "打开项目" }).click();
+    await openQueuedCreativeProject(page);
     await waitForConversationService(page);
     await openAgentSurface(page);
     await expectConversationsInHistory(page, [conversationA, conversationB]);
+
+    await archiveConversation(page, conversationB);
+    const archivedDrawer = await openHistoryDrawer(page);
+    await archivedDrawer.getByRole("tab", { name: "显示已归档会话" }).click();
+    const archivedConversation = archivedDrawer.locator(
+      `[data-conversation-id="${conversationB}"]`
+    );
+    await expect(archivedConversation).toBeVisible();
+    await Promise.all([
+      page.waitForEvent("dialog").then(async (dialog) => {
+        expect(dialog.type()).toBe("confirm");
+        expect(dialog.message()).toContain("确定删除归档会话");
+        await dialog.accept();
+      }),
+      archivedConversation.getByRole("button", { name: /^删除会话/ }).click()
+    ]);
+    await expect(archivedConversation).toHaveCount(0);
+    await closeHistoryDrawer(archivedDrawer);
+
+    await page.reload();
+    await openAgentSurface(page);
+    const reloadedDrawer = await openHistoryDrawer(page);
+    await expect(reloadedDrawer.locator(`[data-conversation-id="${conversationA}"]`)).toBeVisible();
+    await expect(reloadedDrawer.locator(`[data-conversation-id="${conversationB}"]`)).toHaveCount(
+      0
+    );
+    await expect(reloadedDrawer.locator(".ns-agent-conversation-row")).toHaveCount(1);
+    await closeHistoryDrawer(reloadedDrawer);
 
     expect(
       (
@@ -236,6 +279,41 @@ async function queueDirectorySelection(
   }, selectedPath);
 }
 
+async function createQueuedCreativeProject(
+  page: Page,
+  input: { readonly folderName: string; readonly projectId: string; readonly title: string }
+): Promise<void> {
+  const created = await page.evaluate(async (request) => {
+    const selected = await window.novelStudio?.project.chooseCreateParentDirectory();
+    if (selected?.ok !== true || selected.value.selectionId === undefined) return selected;
+    return window.novelStudio?.project.createCreativeProject({
+      parentSelectionId: selected.value.selectionId,
+      folderName: request.folderName,
+      projectId: request.projectId,
+      title: request.title,
+      language: "zh-CN"
+    });
+  }, input);
+  if (created?.ok !== true) {
+    throw new Error(`Creative project creation failed: ${JSON.stringify(created)}`);
+  }
+  await page.reload();
+  await expect(page.getByLabel("项目导航")).toBeVisible({ timeout: 15_000 });
+}
+
+async function openQueuedCreativeProject(page: Page): Promise<void> {
+  const opened = await page.evaluate(async () => {
+    const selected = await window.novelStudio?.project.chooseOpenCreativeDirectory();
+    if (selected?.ok !== true || selected.value.selectionId === undefined) return selected;
+    return window.novelStudio?.project.openCreativeProject(selected.value.selectionId);
+  });
+  if (opened?.ok !== true) {
+    throw new Error(`Creative project activation failed: ${JSON.stringify(opened)}`);
+  }
+  await page.reload();
+  await expect(page.getByLabel("项目导航")).toBeVisible({ timeout: 15_000 });
+}
+
 async function createConversation(page: Page): Promise<string> {
   const drawer = await openHistoryDrawer(page);
   const rows = drawer.locator(".ns-agent-conversation-row");
@@ -250,6 +328,17 @@ async function createConversation(page: Page): Promise<string> {
   const selected = drawer.locator(".ns-agent-conversation-row[data-selected=true]");
   await expect(selected).toBeVisible();
   await expect.poll(() => selected.getAttribute("data-conversation-id")).not.toBe(previousSelected);
+  const selectedId = await selected.getAttribute("data-conversation-id");
+  if (selectedId === null) throw new Error("Expected selected conversation id");
+  await closeHistoryDrawer(drawer);
+  await expect(page.getByLabel("会话输入区")).toBeVisible();
+  return selectedId;
+}
+
+async function selectedConversation(page: Page): Promise<string> {
+  const drawer = await openHistoryDrawer(page);
+  const selected = drawer.locator(".ns-agent-conversation-row[data-selected=true]");
+  await expect(selected).toBeVisible();
   const selectedId = await selected.getAttribute("data-conversation-id");
   if (selectedId === null) throw new Error("Expected selected conversation id");
   await closeHistoryDrawer(drawer);
@@ -301,23 +390,16 @@ async function closeHistoryDrawer(drawer: Locator): Promise<void> {
 }
 
 async function selectExecutionMode(page: Page): Promise<void> {
-  const trigger = page.getByRole("button", {
-    name: /执行 · 写作上下文|规划 · 写作上下文|执行 · 文件上下文|规划 · 文件上下文/
-  });
-  if ((await trigger.getAttribute("aria-label")) === "执行 · 写作上下文") return;
+  const trigger = page.getByTitle("选择运行方式");
+  if ((await trigger.getAttribute("aria-label")) === "只读") return;
   await trigger.click();
-  await page.getByLabel("运行方式").getByRole("button", { name: "执行", exact: true }).click();
+  await page.getByLabel("运行方式").getByRole("button", { name: "只读", exact: true }).click();
 }
 
 async function selectPlanningWritingMode(page: Page): Promise<void> {
-  let trigger = page.getByRole("button", {
-    name: /执行 · 写作上下文|规划 · 写作上下文|执行 · 文件上下文|规划 · 文件上下文/
-  });
+  const trigger = page.getByTitle("选择运行方式");
   await trigger.click();
-  await page.getByLabel("运行方式").getByRole("button", { name: "规划（只读）" }).click();
-  trigger = page.getByRole("button", { name: /规划 · 写作上下文|规划 · 文件上下文/ });
-  await trigger.click();
-  await page.getByLabel("上下文").getByRole("button", { name: "写作上下文", exact: true }).click();
+  await page.getByLabel("运行方式").getByRole("button", { name: "规划", exact: true }).click();
 }
 
 async function sendConversationRequest(page: Page, request: string): Promise<void> {
@@ -384,6 +466,60 @@ async function assertCompactConversationSurface(page: Page): Promise<void> {
   await expect(panel).not.toContainText(
     /tokens?|成本|cost|Context Trace|Workflow History|Observability|文风规则/i
   );
+}
+
+async function assertComposerLayout(composer: Locator): Promise<void> {
+  const surface = composer.locator(".ns-agent-composer-surface");
+  const footer = composer.locator(".ns-agent-composer-footer");
+  const leading = composer.getByRole("group", { name: "会话配置" });
+  const trailing = composer.getByRole("group", { name: "会话操作" });
+  const model = composer.locator(".ns-agent-composer-model-popover-root");
+  const command = composer.locator(".ns-agent-composer-command-slot");
+  await expect(footer).toBeVisible();
+  await expect(leading).toBeVisible();
+  await expect(trailing).toBeVisible();
+
+  const [surfaceBox, footerBox, leadingBox, trailingBox, modelBox, commandBox] = await Promise.all([
+    surface.boundingBox(),
+    footer.boundingBox(),
+    leading.boundingBox(),
+    trailing.boundingBox(),
+    model.boundingBox(),
+    command.boundingBox()
+  ]);
+  expect(surfaceBox).not.toBeNull();
+  expect(footerBox).not.toBeNull();
+  expect(leadingBox).not.toBeNull();
+  expect(trailingBox).not.toBeNull();
+  expect(modelBox).not.toBeNull();
+  expect(commandBox).not.toBeNull();
+  if (
+    surfaceBox === null ||
+    footerBox === null ||
+    leadingBox === null ||
+    trailingBox === null ||
+    modelBox === null ||
+    commandBox === null
+  ) {
+    return;
+  }
+
+  const metrics = JSON.stringify({
+    surfaceBox,
+    footerBox,
+    leadingBox,
+    trailingBox,
+    modelBox,
+    commandBox
+  });
+  expect(footerBox.height, metrics).toBeLessThanOrEqual(34);
+  expect(leadingBox.x + leadingBox.width, metrics).toBeLessThanOrEqual(trailingBox.x + 1);
+  expect(modelBox.width, metrics).toBeGreaterThanOrEqual(44);
+  expect(commandBox.width, metrics).toBeGreaterThanOrEqual(30);
+  for (const box of [footerBox, leadingBox, trailingBox, modelBox, commandBox]) {
+    expect(box.x, metrics).toBeGreaterThanOrEqual(surfaceBox.x);
+    expect(box.x + box.width, metrics).toBeLessThanOrEqual(surfaceBox.x + surfaceBox.width + 1);
+  }
 }
 
 async function waitForConversationService(page: Page): Promise<void> {

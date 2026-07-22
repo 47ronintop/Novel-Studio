@@ -6,15 +6,7 @@ import {
   type Page
 } from "@playwright/test";
 import { createHash } from "node:crypto";
-import {
-  copyFile,
-  mkdir,
-  mkdtemp,
-  readFile,
-  readdir,
-  rm,
-  writeFile
-} from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -112,10 +104,7 @@ test("applies a confirmed multi-file Change Set through one Version Group", asyn
     expect(journal.entries).toHaveLength(2);
     expect(journal.entries.map((entry) => entry.status)).toEqual(["applied", "applied"]);
     expect(journal.entries.map((entry) => entry.relativePath).sort()).toEqual(
-      [
-        `chapters/${chapterOneId}.md`,
-        `chapters/${chapterTwoId}.md`
-      ].sort()
+      [`chapters/${chapterOneId}.md`, `chapters/${chapterTwoId}.md`].sort()
     );
     expect(new Set(journal.entries.map((entry) => entry.writeId)).size).toBe(2);
     expect(journal.approvalSource).toBe("human_confirmation");
@@ -141,13 +130,7 @@ test("applies a confirmed multi-file Change Set through one Version Group", asyn
     });
 
     const runSnapshot = await readJsonRecord(
-      join(
-        scenario.projectRoot,
-        "history",
-        "agent-runs",
-        journal.runId,
-        "run.json"
-      )
+      join(scenario.projectRoot, "history", "agent-runs", journal.runId, "run.json")
     );
     expect(runSnapshot).toMatchObject({
       runId: journal.runId
@@ -226,9 +209,9 @@ test("applies a confirmed multi-file Change Set through one Version Group", asyn
     });
     expect(runUndo).not.toHaveProperty("approvalSource");
     expect(runUndo).not.toHaveProperty("approvalToken");
-    expect(await readHistoryRecords(scenario.projectRoot, "before-agent-session-undo")).toHaveLength(
-      2
-    );
+    expect(
+      await readHistoryRecords(scenario.projectRoot, "before-agent-session-undo")
+    ).toHaveLength(2);
   } finally {
     await scenario.close();
   }
@@ -248,9 +231,7 @@ test("deselects a whole file into a new revision and excludes it from the transa
     await startExecution(scenario.page);
     const binding = scenario.page.getByLabel("Change Set 审批绑定");
     const firstBinding = await binding.textContent();
-    const fileSelections = scenario.page.locator(
-      ".ns-diff-review-file-row input[type=checkbox]"
-    );
+    const fileSelections = scenario.page.locator(".ns-diff-review-file-row input[type=checkbox]");
     await expect(fileSelections).toHaveCount(2);
     await expect(fileSelections.nth(0)).toBeChecked();
     await expect(fileSelections.nth(1)).toBeChecked();
@@ -355,12 +336,7 @@ interface TransactionJournal {
   readonly approvalSource: string;
   readonly approvalToken: string;
   readonly transactionStatus:
-    | "prepared"
-    | "applying"
-    | "compensating"
-    | "applied"
-    | "rolled_back"
-    | "partial_failure";
+    "prepared" | "applying" | "compensating" | "applied" | "rolled_back" | "partial_failure";
   readonly entries: readonly TransactionJournalEntry[];
 }
 
@@ -500,14 +476,10 @@ async function startExecution(page: Page): Promise<void> {
 }
 
 async function selectExecutionMode(composer: ReturnType<Page["getByLabel"]>): Promise<void> {
-  if ((await composer.getByRole("button", { name: /^执行 · / }).count()) > 0) return;
-  await composer
-    .getByRole("button", { name: /^(规划|执行) · (写作上下文|文件上下文)$/ })
-    .click();
-  await composer
-    .getByLabel("运行方式")
-    .getByRole("button", { name: "执行", exact: true })
-    .click();
+  const trigger = composer.getByTitle("选择运行方式");
+  if ((await trigger.getAttribute("aria-label")) === "只读") return;
+  await trigger.click();
+  await composer.getByLabel("运行方式").getByRole("button", { name: "只读", exact: true }).click();
 }
 
 async function resolveContextRefreshIfVisible(page: Page): Promise<void> {

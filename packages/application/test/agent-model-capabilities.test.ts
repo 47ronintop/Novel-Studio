@@ -136,6 +136,32 @@ describe("agent reasoning effort resolution", () => {
     expect(result).toEqual({ ok: true, value: { reasoningEffort: "high" } });
   });
 
+  test("accepts provider-added reasoning values while still enforcing the declared list", () => {
+    if (resolve === undefined) return;
+    const control = {
+      status: "available" as const,
+      providerParamName: "reasoning_effort" as const,
+      allowedValues: ["high", "max", "ultra"],
+      defaultValue: "high"
+    };
+    expect(
+      resolve({
+        profileId: "p",
+        modelName: "gpt-5.6",
+        reasoningStrength: control,
+        requestedEffort: "ultra"
+      })
+    ).toEqual({ ok: true, value: { reasoningEffort: "ultra" } });
+    expect(
+      resolve({
+        profileId: "p",
+        modelName: "gpt-5.6",
+        reasoningStrength: control,
+        requestedEffort: "xhigh"
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_REASONING_EFFORT_UNSUPPORTED" } });
+  });
+
   test("falls back to the model default when the control is available but nothing is requested", () => {
     if (resolve === undefined) return;
     const result = resolve({

@@ -5,8 +5,10 @@ import type {
   AgentRunModelDriver,
   ChapterEditorSession,
   CreateLlmAgentRunModelDriverOptions,
+  ModelDiscoveryModelInput,
   ModelDiscoveryPort,
   ModelConnectionTester,
+  ModelReasoningStrengthControl,
   ModelProfile
 } from "@novel-studio/application";
 import {
@@ -189,7 +191,7 @@ export function createEncryptedFileModelSecretStore(input: {
         return file;
       }
       const entry = file.value.secrets[secretRef];
-      return ok(entry?.verificationFingerprint === profileFingerprint(profile));
+      return ok(verificationMatchesProfile(entry?.verificationFingerprint, profile));
     }
   };
 }
@@ -661,6 +663,7 @@ function normalizeOpenAiCompatibleModels(payload: unknown): readonly {
   readonly id: string;
   readonly displayName: string;
   readonly contextWindow?: number;
+  readonly reasoningStrength?: ModelReasoningStrengthControl;
 }[] {
   if (!isJsonRecord(payload) || !Array.isArray(payload["data"])) {
     throw new OpenAiCompatibleHttpError({
@@ -678,16 +681,88 @@ function normalizeOpenAiCompatibleModels(payload: unknown): readonly {
         return undefined;
       }
       const contextWindow = optionalNumber(entry["context_window"] ?? entry["contextWindow"]);
+      const reasoningStrength = reasoningStrengthFromModelMetadata(entry);
       return {
         id,
         displayName: id,
-        ...(contextWindow === undefined ? {} : { contextWindow })
+        ...(contextWindow === undefined ? {} : { contextWindow }),
+        ...(reasoningStrength === undefined ? {} : { reasoningStrength })
       };
     })
-    .filter(
-      (entry): entry is { id: string; displayName: string; contextWindow?: number } =>
-        entry !== undefined
+    .filter((entry): entry is ModelDiscoveryModelInput => entry !== undefined);
+}
+
+/** Normalize common provider metadata spellings into one model capability shape. */
+function reasoningStrengthFromModelMetadata(
+  entry: JsonObject
+): ModelReasoningStrengthControl | undefined {
+  const candidates: unknown[] = [
+    entry["reasoning_efforts"],
+    entry["supported_reasoning_efforts"],
+    entry["reasoningEfforts"],
+    entry["reasoning_effort_values"],
+    entry["reasoningEffortValues"],
+    entry["reasoning_effort"]
+  ];
+  let nestedDefault: string | undefined;
+  for (const nestedKey of [
+    "reasoning",
+    "reasoning_effort",
+    "reasoningEffort",
+    "capabilities",
+    "metadata"
+  ]) {
+    const nested = entry[nestedKey];
+    if (!isJsonRecord(nested)) continue;
+    candidates.push(
+      nested["allowedValues"],
+      nested["allowed_values"],
+      nested["reasoning_efforts"],
+      nested["supported_reasoning_efforts"],
+      nested["reasoningEfforts"]
     );
+    nestedDefault ??=
+      stringValue(nested["defaultValue"]) ??
+      stringValue(nested["default_value"]) ??
+      stringValue(nested["default"]);
+  }
+
+  const allowedValues = candidates.map(readReasoningValues).find((values) => values.length > 0);
+  if (allowedValues === undefined) return undefined;
+  const defaultCandidate =
+    stringValue(entry["default_reasoning_effort"]) ??
+    stringValue(entry["defaultReasoningEffort"]) ??
+    stringValue(entry["reasoning_effort_default"]) ??
+    nestedDefault;
+  const defaultValue =
+    defaultCandidate !== undefined && allowedValues.includes(defaultCandidate)
+      ? defaultCandidate
+      : allowedValues.includes("medium")
+        ? "medium"
+        : allowedValues[0];
+  if (defaultValue === undefined) return undefined;
+  return {
+    status: "available",
+    providerParamName: "reasoning_effort",
+    allowedValues,
+    defaultValue
+  };
+}
+
+function readReasoningValues(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const values = value
+    .map((item) => {
+      if (typeof item === "string") return item.trim();
+      if (!isJsonRecord(item)) return undefined;
+      return (
+        stringValue(item["value"]) ??
+        stringValue(item["id"]) ??
+        stringValue(item["reasoning_effort"])
+      );
+    })
+    .filter((item): item is string => item !== undefined && item.length > 0);
+  return [...new Set(values)];
 }
 
 function stringValue(value: unknown): string | undefined {
@@ -695,7 +770,7 @@ function stringValue(value: unknown): string | undefined {
 }
 
 function optionalNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 function parseProviderJsonPayload(response: Response, text: string): unknown {
@@ -796,11 +871,13 @@ async function writeSecretFile(
 }
 
 function createDemoModeProvider(chapterEditorSession: ChapterEditorSession): LlmProvider {
+  const currentBody = (): string => chapterEditorSession.getState?.()?.chapter.body ?? "";
+
   return {
     id: "mock",
     async complete(request) {
-      const currentBody = chapterEditorSession.getState()?.chapter.body ?? "";
-      const separator = currentBody.endsWith("\n") || currentBody.length === 0 ? "" : "\n";
+      const body = currentBody();
+      const separator = body.endsWith("\n") || body.length === 0 ? "" : "\n";
       const selectedText = demoSelectionText(request);
       return {
         content: {
@@ -808,7 +885,7 @@ function createDemoModeProvider(chapterEditorSession: ChapterEditorSession): Llm
           value:
             selectedText === undefined
               ? {
-                  proposedBody: `${currentBody}${separator}AI continuation draft.\n`,
+                  proposedBody: `${body}${separator}AI continuation draft.\n`,
                   summary: "当前是演示模式，未配置真实Key。"
                 }
               : {
@@ -826,12 +903,12 @@ function createDemoModeProvider(chapterEditorSession: ChapterEditorSession): Llm
       };
     },
     async *stream() {
-      const currentBody = chapterEditorSession.getState()?.chapter.body ?? "";
-      const separator = currentBody.endsWith("\n") || currentBody.length === 0 ? "" : "\n";
+      const body = currentBody();
+      const separator = body.endsWith("\n") || body.length === 0 ? "" : "\n";
       yield {
         type: "delta",
         value: JSON.stringify({
-          proposedBody: `${currentBody}${separator}AI continuation draft.\n`,
+          proposedBody: `${body}${separator}AI continuation draft.\n`,
           summary: "Generated a local mock continuation for review."
         })
       };
@@ -860,9 +937,34 @@ function stringHeaders(headers: JsonObject | undefined): Record<string, string> 
 function profileFingerprint(profile: ModelProfileVerificationInput): string {
   return JSON.stringify({
     provider: profile.provider,
-    baseUrl: profile.baseUrl ?? "",
-    modelName: profile.modelName
+    baseUrl: verificationBaseUrl(profile.baseUrl)
   });
+}
+
+function verificationMatchesProfile(
+  fingerprint: string | undefined,
+  profile: ModelProfileVerificationInput
+): boolean {
+  if (fingerprint === undefined) return false;
+  if (fingerprint === profileFingerprint(profile)) return true;
+
+  // Pre-1.0 entries also recorded modelName. Retain their verified endpoint state when users switch
+  // to another model served by the same provider and Base URL.
+  try {
+    const parsed: unknown = JSON.parse(fingerprint);
+    return (
+      isJsonRecord(parsed) &&
+      parsed["provider"] === profile.provider &&
+      typeof parsed["baseUrl"] === "string" &&
+      verificationBaseUrl(parsed["baseUrl"]) === verificationBaseUrl(profile.baseUrl)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function verificationBaseUrl(baseUrl: string | undefined): string {
+  return (baseUrl ?? "").trim().replace(/\/+$/, "");
 }
 
 function isValidSecretRef(value: string): boolean {

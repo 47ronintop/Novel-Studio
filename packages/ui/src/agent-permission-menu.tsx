@@ -1,10 +1,8 @@
-import { ChevronDown, ShieldOff, ShieldCheck } from "lucide-react";
+import { ShieldOff, ShieldCheck } from "lucide-react";
 import type { AgentWritePolicy } from "@novel-studio/application";
 
 import { AgentPopover } from "./agent-popover.js";
-import type {
-  AgentComposerPermissionControl
-} from "./workspace-shell-types.js";
+import type { AgentComposerPermissionControl } from "./workspace-shell-types.js";
 
 export interface AgentPermissionMenuProps {
   readonly writePolicy: AgentWritePolicy;
@@ -27,14 +25,10 @@ export function AgentPermissionMenu(props: AgentPermissionMenuProps) {
       }}
       panelClassName="ns-agent-permission-popover"
       panelLabel="修改权限与摘要"
-      triggerClassName="ns-agent-permission-trigger"
-      triggerContent={
-        <>
-          <PolicyIcon aria-hidden="true" size={13} />
-          <span>{policyLabel}</span>
-          <ChevronDown aria-hidden="true" size={12} />
-        </>
-      }
+      triggerClassName={`ns-agent-permission-trigger ${
+        automatic ? "is-automatic" : "is-confirmation"
+      }`}
+      triggerContent={<PolicyIcon aria-hidden="true" size={14} />}
       triggerLabel={`修改权限：${policyLabel}`}
       triggerTitle="修改权限与本次权限摘要"
     >
@@ -60,7 +54,10 @@ export function AgentPermissionMenu(props: AgentPermissionMenuProps) {
                 checked={automatic}
                 disabled={props.policyDisabled}
                 name="agent-write-policy"
-                onChange={() => props.onWritePolicyChange("user_preapproved_run")}
+                onChange={() => {
+                  props.onWritePolicyChange("user_preapproved_run");
+                  props.onWritePolicyAcknowledgedChange(true);
+                }}
                 type="radio"
               />
               <span>
@@ -72,19 +69,7 @@ export function AgentPermissionMenu(props: AgentPermissionMenuProps) {
 
           {!automatic ? null : (
             <div className="ns-agent-permission-risk">
-              <p>每次实际写入仍会生成差异、校验并创建版本点，可从本次运行撤销。</p>
-              <label>
-                <input
-                  aria-label="确认本次运行自动修改风险"
-                  checked={props.writePolicyAcknowledged}
-                  disabled={props.policyDisabled}
-                  onChange={(event) =>
-                    props.onWritePolicyAcknowledgedChange(event.currentTarget.checked)
-                  }
-                  type="checkbox"
-                />
-                <span>我理解此授权仅适用于本次运行。</span>
-              </label>
+              <p>本次运行已获自动修改授权；每次写入仍会生成差异、校验并创建版本点。</p>
             </div>
           )}
 
@@ -107,7 +92,9 @@ function PermissionSummaryDetails({
     <details aria-label="本次权限摘要" className="ns-agent-permission-summary">
       <summary>
         <span>本次权限摘要</span>
-        <small>{control?.loading ? "读取中" : summary === undefined ? "尚未生成" : "服务端事实"}</small>
+        <small>
+          {control?.loading ? "读取中" : summary === undefined ? "尚未生成" : "服务端事实"}
+        </small>
       </summary>
       {control?.errorMessage === undefined ? null : (
         <p className="ns-project-feedback" data-kind="error" role="alert">
@@ -136,7 +123,9 @@ function PermissionSummaryDetails({
           </div>
           <div>
             <dt>Change Set</dt>
-            <dd>{summary.proposalCapabilities.length > 0 ? "允许生成，仍需走审批管线" : "不适用"}</dd>
+            <dd>
+              {summary.proposalCapabilities.length > 0 ? "允许生成，仍需走审批管线" : "不适用"}
+            </dd>
           </div>
           <div>
             <dt>审批状态</dt>
@@ -148,7 +137,9 @@ function PermissionSummaryDetails({
           </div>
           <div>
             <dt>事实绑定</dt>
-            <dd>{summary.checksum.slice(0, 12)} · registry {summary.toolRegistryRevision.slice(0, 8)}</dd>
+            <dd>
+              {summary.checksum.slice(0, 12)} · registry {summary.toolRegistryRevision.slice(0, 8)}
+            </dd>
           </div>
         </dl>
       )}

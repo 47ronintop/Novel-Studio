@@ -305,7 +305,7 @@ describe("Agent Run renderer bridge", () => {
     bridge.syncContext({ projectId: "project-01", conversationId: "conversation-01", settings });
     await bridge.send("run in the first conversation");
     expect(bridge.getProps()).toMatchObject({
-      runId: "run-bridge",
+      runId: "run-bridge"
     });
     expect(bridge.getComposerProps()).toMatchObject({
       writePolicy: "write_before_confirmation"
@@ -885,7 +885,10 @@ describe("Agent Run renderer bridge", () => {
           if (command["decision"] === "update_selection") {
             pending = changeSet(5, "change-set-checksum-r5", false);
           }
-          return ok({ ...writeSnapshot, runRevision: writeSnapshot.runRevision + decisions.length });
+          return ok({
+            ...writeSnapshot,
+            runRevision: writeSnapshot.runRevision + decisions.length
+          });
         }
       }
     } as unknown as NovelStudioApi;
@@ -895,7 +898,8 @@ describe("Agent Run renderer bridge", () => {
 
     expect(typeof bridge.updateChangeSetSelection).toBe("function");
     expect(typeof bridge.applyChangeSet).toBe("function");
-    if (bridge.updateChangeSetSelection === undefined || bridge.applyChangeSet === undefined) return;
+    if (bridge.updateChangeSetSelection === undefined || bridge.applyChangeSet === undefined)
+      return;
 
     const selected = await bridge.updateChangeSetSelection({
       files: [
@@ -1337,8 +1341,7 @@ describe("Agent Run renderer bridge", () => {
       agentRuns: {
         onEvent: () => () => undefined,
         list: async () => ok([appliedSnapshot]),
-        read: async () =>
-          ok({ snapshot: appliedSnapshot, events: [], rollbackReview }),
+        read: async () => ok({ snapshot: appliedSnapshot, events: [], rollbackReview }),
         undoRun: async (command: Record<string, unknown>) => {
           undoCommands.push(structuredClone(command));
           return ok({ ...appliedSnapshot, runRevision: appliedSnapshot.runRevision + 2 });
@@ -1412,9 +1415,7 @@ describe("Agent Run renderer bridge", () => {
 
     props.rollbackReview?.onApply();
     await vi.waitFor(() =>
-      expect(bridge.getProps()?.rollbackReview?.review.updatedAt).toBe(
-        "2026-07-13T00:02:00.000Z"
-      )
+      expect(bridge.getProps()?.rollbackReview?.review.updatedAt).toBe("2026-07-13T00:02:00.000Z")
     );
 
     expect(bridge.getProps()?.rollbackReview?.decisions).toEqual({});
@@ -1445,7 +1446,12 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
       provider: "openai-compatible",
       status: "loaded" as const,
       models: [
-        { id: "local-model", displayName: "local-model", provider: "openai-compatible", contextWindow: 128000 }
+        {
+          id: "local-model",
+          displayName: "local-model",
+          provider: "openai-compatible",
+          contextWindow: 128000
+        }
       ],
       reasoningStrength: {
         status: "available" as const,
@@ -1467,7 +1473,12 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
       settings: draftSettings
     });
 
-    await vi.waitFor(() => expect(bridge.getComposerProps()?.model).toBeDefined());
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()).toMatchObject({
+        disabled: false,
+        reasoning: { visible: true }
+      })
+    );
     const composer = bridge.getComposerProps();
     expect(composer?.model?.selectedProfileId).toBe("profile-01");
     expect(composer?.model?.profiles.map((profile) => profile.id)).toEqual([
@@ -1477,6 +1488,65 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     expect(composer?.reasoning).toMatchObject({ visible: true, current: "medium" });
     expect(composer?.references?.chips.map((chip) => chip.refId)).toEqual(["chapter:chapter-01"]);
     expect(composer?.contextStatus?.state).toBe("normal");
+  });
+
+  test("exposes discovered sibling models and persists the selected model name", async () => {
+    let preparedCommand: Record<string, unknown> | undefined;
+    const { api } = createDraftApi();
+    const originalPrepareStart = api.agentRuns.prepareStart;
+    api.agentRuns.prepareStart = async (command) => {
+      preparedCommand = command as Record<string, unknown>;
+      return originalPrepareStart(command);
+    };
+    const settingsWithModels = {
+      ...draftSettings,
+      modelDiscovery: {
+        ...draftSettings.modelDiscovery,
+        models: [
+          ...(draftSettings.modelDiscovery?.models ?? []),
+          {
+            id: "gpt-5.6",
+            displayName: "GPT-5.6",
+            provider: "openai-compatible",
+            reasoningStrength: {
+              status: "available" as const,
+              providerParamName: "reasoning_effort" as const,
+              allowedValues: ["high", "max", "ultra"],
+              defaultValue: "high"
+            }
+          }
+        ]
+      }
+    } as ModelSettingsPanelProps;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: settingsWithModels
+    });
+
+    await vi.waitFor(() => {
+      expect(bridge.getComposerProps()?.model?.profiles).toHaveLength(3);
+      expect(bridge.getComposerProps()?.reasoning?.visible).toBe(true);
+    });
+    const composer = bridge.getComposerProps();
+    const discovered = composer?.model?.profiles.find((profile) => profile.label === "GPT-5.6");
+    expect(discovered).toBeDefined();
+    composer?.model?.onSelect(discovered?.id ?? "");
+
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()?.model?.selectedProfileId).toBe(discovered?.id)
+    );
+    expect(bridge.getComposerProps()?.reasoning).toMatchObject({
+      visible: true,
+      values: ["high", "max", "ultra"],
+      current: "high"
+    });
+
+    await bridge.send("使用新模型检查这一段");
+    expect(preparedCommand).toMatchObject({ modelName: "gpt-5.6" });
   });
 
   test("loads the selected conversation draft when settings arrive after the conversation", async () => {
@@ -1499,6 +1569,64 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     });
 
     await vi.waitFor(() => expect(bridge.getComposerProps()?.model).toBeDefined());
+  });
+
+  test("syncs the persisted draft when a profile's configured model changes", async () => {
+    const { api } = createDraftApi();
+    const bridge = createAgentRunBridge(api);
+    const bridgeContext = {
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor
+    } as const;
+    bridge.syncContext({ ...bridgeContext, settings: draftSettings });
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.disabled).toBe(false));
+
+    const renamedSettings = {
+      ...draftSettings,
+      profiles: draftSettings.profiles.map((profile) =>
+        profile.id === "profile-01" ? { ...profile, modelName: "gpt-5" } : profile
+      ),
+      draft: { ...draftSettings.draft, modelName: "gpt-5" },
+      modelDiscovery: {
+        profileId: "profile-01",
+        provider: "openai-compatible",
+        status: "loaded" as const,
+        models: [
+          {
+            id: "gpt-5",
+            displayName: "gpt-5",
+            provider: "openai-compatible",
+            contextWindow: 128000
+          }
+        ],
+        reasoningStrength: draftSettings.modelDiscovery?.reasoningStrength ?? {
+          status: "hidden" as const,
+          reason: "not needed"
+        }
+      }
+    } as ModelSettingsPanelProps;
+
+    bridge.syncContext({ ...bridgeContext, settings: renamedSettings });
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.disabled).toBe(false));
+
+    const persisted = await api.agentRuns.readRunDraft?.({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      initialize: {
+        modelProfileId: "profile-01",
+        modelName: "gpt-5",
+        operationMode: "planning",
+        contextMode: "writing",
+        writePolicy: "write_before_confirmation",
+        contextRefs: []
+      }
+    } as never);
+    expect(persisted).toMatchObject({
+      ok: true,
+      value: { runDraft: { modelProfileId: "profile-01", modelName: "gpt-5" } }
+    });
   });
 
   test("normalizes a persisted writing draft before sending from an engineering workspace", async () => {
@@ -1703,7 +1831,12 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
       chapterEditor: editor,
       settings: draftSettings
     });
-    await vi.waitFor(() => expect(bridge.getComposerProps()?.model).toBeDefined());
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()).toMatchObject({
+        disabled: false,
+        reasoning: { visible: true }
+      })
+    );
     const before = budgetCalls.length;
 
     bridge.getComposerProps()?.model?.onSelect("profile-02");
@@ -1728,9 +1861,7 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
 
     bridge.getComposerProps()?.reasoning?.onSelect("high");
 
-    await vi.waitFor(() =>
-      expect(bridge.getComposerProps()?.reasoning?.current).toBe("high")
-    );
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.reasoning?.current).toBe("high"));
   });
 
   test("refreshes an opened server permission summary after the draft policy changes", async () => {
@@ -1743,7 +1874,12 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
       chapterEditor: editor,
       settings: draftSettings
     });
-    await vi.waitFor(() => expect(bridge.getComposerProps()?.model).toBeDefined());
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()).toMatchObject({
+        disabled: false,
+        reasoning: { visible: true }
+      })
+    );
     bridge.getComposerProps()?.onOperationModeChange("execution");
     await vi.waitFor(() => expect(bridge.getComposerProps()?.operationMode).toBe("execution"));
     await vi.waitFor(() => expect(bridge.getComposerProps()?.contextStatus?.busy).toBe(false));
@@ -1785,7 +1921,12 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
       chapterEditor: editor,
       settings: draftSettings
     });
-    await vi.waitFor(() => expect(bridge.getComposerProps()?.model).toBeDefined());
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()).toMatchObject({
+        disabled: false,
+        reasoning: { visible: true }
+      })
+    );
     bridge.getComposerProps()?.onOperationModeChange("execution");
     await vi.waitFor(() => expect(bridge.getComposerProps()?.operationMode).toBe("execution"));
 

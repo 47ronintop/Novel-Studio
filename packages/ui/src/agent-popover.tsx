@@ -27,6 +27,7 @@ export interface AgentPopoverProps {
   /** Visible trigger content (label text, chevron, badge, …). */
   readonly triggerContent: ReactNode;
   readonly triggerClassName?: string;
+  readonly rootClassName?: string;
   /** Accessible name of the `role="dialog"` panel. */
   readonly panelLabel: string;
   readonly panelClassName?: string;
@@ -85,7 +86,7 @@ export function AgentPopover(props: AgentPopoverProps): ReactNode {
   }
 
   return (
-    <div className="ns-agent-popover">
+    <div className={["ns-agent-popover", props.rootClassName].filter(Boolean).join(" ")}>
       <button
         aria-controls={open ? panelId : undefined}
         aria-expanded={open}

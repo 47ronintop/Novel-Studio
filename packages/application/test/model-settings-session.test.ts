@@ -65,11 +65,12 @@ const secondaryProfile = {
 } satisfies ModelProfile;
 
 describe("model settings session", () => {
-  test("shows reasoning strength for matching OpenAI-compatible model names", () => {
+  test("shows reasoning strength for matching custom OpenAI-compatible model names after opt-in", () => {
     const result = reasoningStrengthForModel(
       "openai-compatible",
       "gpt-5.5",
-      "https://api.hostcentral.cc/v1"
+      "https://api.hostcentral.cc/v1",
+      true
     );
 
     expect(result).toEqual({
@@ -77,6 +78,15 @@ describe("model settings session", () => {
       providerParamName: "reasoning_effort",
       allowedValues: ["none", "low", "medium", "high", "xhigh"],
       defaultValue: "medium"
+    });
+  });
+
+  test("hides reasoning strength for matching custom models until the endpoint is opted in", () => {
+    expect(
+      reasoningStrengthForModel("openai-compatible", "gpt-5.5", "https://api.hostcentral.cc/v1")
+    ).toMatchObject({
+      status: "hidden",
+      reason: expect.stringContaining("explicitly marked")
     });
   });
 
@@ -118,6 +128,14 @@ describe("model settings session", () => {
       providerParamName: "reasoning_effort",
       allowedValues: ["high"],
       defaultValue: "high"
+    });
+    expect(
+      reasoningStrengthForModel("openai", "gpt-5.6-codex", "https://api.openai.com/v1")
+    ).toEqual({
+      status: "available",
+      providerParamName: "reasoning_effort",
+      allowedValues: ["none", "low", "medium", "high", "xhigh", "max", "ultra"],
+      defaultValue: "medium"
     });
   });
 
@@ -368,7 +386,8 @@ describe("model settings session", () => {
             {
               ...defaultProfile,
               baseUrl: "https://api.hostcentral.cc/v1",
-              modelName: "gpt-5.5"
+              modelName: "gpt-5.5",
+              reasoningEffortEnabled: true
             }
           ]
         }

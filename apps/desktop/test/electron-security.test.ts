@@ -41,6 +41,7 @@ describe("Electron security baseline", () => {
       "application:execute-command",
       "application:project:choose-open-creative-directory",
       "application:project:choose-create-parent-directory",
+      "application:project:get-active-workspace",
       "application:project:open-creative-project",
       "application:project:preview-creative-project",
       "application:project:create-creative-project",
@@ -99,6 +100,7 @@ describe("Electron security baseline", () => {
       "application:agent-conversation:read",
       "application:agent-conversation:archive",
       "application:agent-conversation:restore",
+      "application:agent-conversation:delete",
       "application:agent-conversation:search",
       "application:chapter:load",
       "application:chapter:edit",
@@ -135,6 +137,7 @@ describe("Electron security baseline", () => {
     expect(isApplicationIpcChannel("application:agent-run:decide-plan-revision")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-run:undo")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-conversation:search")).toBe(true);
+    expect(isApplicationIpcChannel("application:agent-conversation:delete")).toBe(true);
     expect(isApplicationIpcChannel("application:settings:list-model-profiles")).toBe(true);
     expect(isApplicationIpcChannel("application:settings:discover-models")).toBe(true);
     expect(isApplicationIpcChannel("application:settings:list-agent-usage")).toBe(true);

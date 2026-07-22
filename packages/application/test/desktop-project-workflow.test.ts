@@ -50,6 +50,16 @@ describe("M12 desktop project workflow", () => {
       createWorkspaceActivationId: () => "activation_creative"
     });
     const beforeShell = application.getShellState();
+    expect(beforeShell).toMatchObject({
+      projectTitle: "Old Project",
+      workspaceContext: {
+        kind: "creativeProject",
+        workspaceId: "prj_old",
+        projectId: "prj_old",
+        displayName: "Old Project"
+      }
+    });
+    expect(application.getActiveProjectWorkspace()).toEqual(ok(oldSnapshot));
 
     const prepared = await application.prepareOpenCreativeProject("D:/Novel/New");
 

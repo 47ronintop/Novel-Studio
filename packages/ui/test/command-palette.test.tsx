@@ -34,7 +34,7 @@ describe("CommandPalette", () => {
       onCommandExecute: (commandId) => executedCommands.push(commandId),
       open: true
     });
-    const commandButton = findElementByAriaLabel(tree, "Execute command: 切换项目导航");
+    const commandButton = findElementByAriaLabel(tree, "执行命令：切换项目导航");
 
     expect(commandButton).toBeDefined();
     commandButton?.props.onClick?.();
@@ -64,7 +64,7 @@ describe("CommandPalette", () => {
       query: "toggle",
       selectedCommandId: "workspace.toggle-navigator"
     });
-    const input = findElementByAriaLabel(tree, "Search commands");
+    const input = findElementByAriaLabel(tree, "搜索命令");
 
     expect(input).toBeDefined();
     input?.props.onKeyDown?.({

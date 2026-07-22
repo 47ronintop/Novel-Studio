@@ -33,7 +33,7 @@ export interface AgentConversationWorkspaceProps {
 }
 
 export interface AgentConversationBridgeOptions {
-  readonly createCommandId?: (action: "create" | "archive" | "restore") => string;
+  readonly createCommandId?: (action: "create" | "archive" | "restore" | "delete") => string;
   readonly resetRunWriteAuthorization?: () => void;
 }
 
@@ -44,6 +44,7 @@ export interface AgentConversationBridge {
   select(conversationId: string): Promise<AgentConversationWorkspaceProps>;
   archive(conversationId: string): Promise<AgentConversationWorkspaceProps>;
   restore(conversationId: string): Promise<AgentConversationWorkspaceProps>;
+  delete(conversationId: string): Promise<AgentConversationWorkspaceProps>;
   search(query: string, includeArchived?: boolean): Promise<AgentConversationWorkspaceProps>;
   subscribe(listener: () => void): () => void;
   dispose(): void;
@@ -54,6 +55,7 @@ export interface AgentConversationWorkspaceActions {
   readonly onSelect: (conversationId: string) => void;
   readonly onArchive: (conversationId: string) => void;
   readonly onRestore: (conversationId: string) => void;
+  readonly onDelete?: ((conversationId: string) => void) | undefined;
   readonly onSearchQueryChange: (query: string) => void;
   readonly onFilterChange: (filter: "active" | "archived") => void;
   readonly onReturnToActive: () => void;
@@ -85,6 +87,7 @@ export function createAgentConversationBridge(
   const runConversationIds = new Map<string, string>();
   const knownConversations = new Map<string, AgentConversationSummary>();
   let state: BridgeState = emptyState();
+  let createInFlight: Promise<void> | undefined;
 
   const unsubscribeRunEvents = api.agentRuns.onEvent((event) => {
     void routeRunEvent(event);
@@ -190,6 +193,35 @@ export function createAgentConversationBridge(
     return true;
   }
 
+  /** Keep the first-run experience conversational: create the backing history entry silently. */
+  async function createAndSelectConversation(projectId: string): Promise<void> {
+    if (createInFlight !== undefined) {
+      await createInFlight;
+      return;
+    }
+
+    const operation = (async () => {
+      const created = await api.agentConversations.create({
+        projectId,
+        commandId: createCommandId("create")
+      });
+      if (!created.ok) {
+        state = { ...state, loading: false, errorMessage: created.error.message };
+        return;
+      }
+      if (state.projectId !== projectId) return;
+      mergeSummary(created.value);
+      await refreshList();
+      await hydrateSelection(created.value.conversationId);
+    })();
+    createInFlight = operation;
+    try {
+      await operation;
+    } finally {
+      if (createInFlight === operation) createInFlight = undefined;
+    }
+  }
+
   async function routeRunEvent(event: AgentRunEvent): Promise<void> {
     if (state.projectId !== event.projectId) return;
     let conversationId = runConversationIds.get(event.runId);
@@ -289,6 +321,55 @@ export function createAgentConversationBridge(
     return requireProps();
   }
 
+  async function deleteConversation(
+    conversationId: string
+  ): Promise<AgentConversationWorkspaceProps> {
+    const projectId = state.projectId;
+    const summary = knownConversations.get(conversationId);
+    if (projectId === undefined || summary === undefined) {
+      state = { ...state, errorMessage: "The Agent conversation is not available." };
+      return requireProps();
+    }
+    setLoading(true);
+    const result = await api.agentConversations.delete({
+      projectId,
+      conversationId,
+      commandId: createCommandId("delete"),
+      expectedConversationRevision: summary.revision
+    });
+    if (!result.ok) {
+      if (result.latestConversation !== undefined) mergeSummary(result.latestConversation);
+      state = { ...state, loading: false, errorMessage: result.error.message };
+      notify();
+      return requireProps();
+    }
+
+    knownConversations.delete(conversationId);
+    for (const [runId, ownerConversationId] of runConversationIds) {
+      if (ownerConversationId === conversationId) runConversationIds.delete(runId);
+    }
+    const conversations = state.conversations.filter(
+      (conversation) => conversation.conversationId !== conversationId
+    );
+    state = {
+      ...state,
+      conversations,
+      activeConversationId: findActiveConversation(knownConversations.values()),
+      errorMessage: undefined
+    };
+    if (state.selectedConversationId === conversationId) {
+      const sameFilter = conversations.filter((conversation) =>
+        state.includeArchived ? conversation.status === "archived" : conversation.status === "active"
+      );
+      await hydrateSelection(
+        preferredConversationId(sameFilter) ?? preferredConversationId(conversations)
+      );
+    }
+    state = { ...state, loading: false };
+    notify();
+    return requireProps();
+  }
+
   const bridge: AgentConversationBridge = {
     getProps: () => (state.projectId === undefined ? undefined : toProps(state)),
     async load(projectId) {
@@ -313,7 +394,7 @@ export function createAgentConversationBridge(
       }
       applyListPage(listed.value);
       const preferred = preferredConversationId(state.conversations);
-      if (preferred === undefined) resetSelection();
+      if (preferred === undefined) await createAndSelectConversation(projectId);
       else await hydrateSelection(preferred);
       state = { ...state, loading: false };
       notify();
@@ -323,18 +404,7 @@ export function createAgentConversationBridge(
       const projectId = state.projectId;
       if (projectId === undefined) return requireProps();
       setLoading(true);
-      const created = await api.agentConversations.create({
-        projectId,
-        commandId: createCommandId("create")
-      });
-      if (!created.ok) {
-        state = { ...state, loading: false, errorMessage: created.error.message };
-        notify();
-        return requireProps();
-      }
-      mergeSummary(created.value);
-      await refreshList();
-      await hydrateSelection(created.value.conversationId);
+      await createAndSelectConversation(projectId);
       state = { ...state, loading: false };
       notify();
       return requireProps();
@@ -348,6 +418,7 @@ export function createAgentConversationBridge(
     },
     archive: (conversationId) => runStatusCommand(conversationId, "archive"),
     restore: (conversationId) => runStatusCommand(conversationId, "restore"),
+    delete: deleteConversation,
     async search(query, includeArchived = state.includeArchived) {
       const projectId = state.projectId;
       if (projectId === undefined) return requireProps();
@@ -506,7 +577,8 @@ export function toAgentConversationWorkspaceProps(
       onCreate: actions.onCreate,
       onSelect: actions.onSelect,
       onArchive: actions.onArchive,
-      onRestore: actions.onRestore
+      onRestore: actions.onRestore,
+      onDelete: actions.onDelete
     },
     view: {
       ...(conversation === undefined ? {} : { conversation }),
@@ -600,11 +672,10 @@ function toConversationDetail(
   activeConversationId: string | undefined,
   excludedRunId?: string
 ): AgentConversationDetailProps {
+  const contextSummary = visibleContextSummary(conversation.contextSummary);
   return {
     ...toConversationListItem(conversation, activeConversationId),
-    ...(conversation.contextSummary === undefined
-      ? {}
-      : { contextSummary: conversation.contextSummary }),
+    ...(contextSummary === undefined ? {} : { contextSummary }),
     turns: conversation.runs.flatMap((run) => {
       const runId = readRunString(run, "runId");
       const userRequest = readRunString(run, "userRequest");
@@ -624,6 +695,24 @@ function toConversationDetail(
       ];
     })
   };
+}
+
+function visibleContextSummary(summary: string | undefined): string | undefined {
+  if (summary === undefined) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(summary);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed) &&
+      (parsed as Record<string, unknown>)["kind"] === "agent_conversation_context"
+    ) {
+      return undefined;
+    }
+  } catch {
+    // User-facing summaries are plain text; a non-JSON value remains displayable.
+  }
+  return summary;
 }
 
 function liveAgentRunId(
@@ -921,7 +1010,7 @@ function laterTimestamp(current: string, candidate: string): string {
 
 let commandSequence = 0;
 
-function defaultCommandId(action: "create" | "archive" | "restore"): string {
+function defaultCommandId(action: "create" | "archive" | "restore" | "delete"): string {
   commandSequence += 1;
   return `agent_conversation_${action}_${Date.now().toString(36)}_${commandSequence.toString(36)}`;
 }

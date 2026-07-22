@@ -10,6 +10,21 @@ import { createUnifiedError, err, ok } from "@novel-studio/shared";
 import { createProjectWorkflowBridge } from "../src/renderer/project-workflow-bridge.js";
 
 describe("project workflow bridge", () => {
+  test("hydrates the active startup project before rendering its chapter navigator", async () => {
+    const getActiveWorkspace = vi.fn(async () => ok(creativeSnapshot()));
+    const bridge = createProjectWorkflowBridge(createApi({ getActiveWorkspace }));
+
+    const loaded = await bridge.loadActiveProject("prj_m12");
+
+    expect(getActiveWorkspace).toHaveBeenCalledOnce();
+    expect(loaded).toMatchObject({
+      projectId: "prj_m12",
+      activeChapterId: "chapter_1",
+      status: "ready"
+    });
+    expect(loaded.chapters.map((chapter) => chapter.id)).toEqual(["chapter_1", "chapter_2"]);
+  });
+
   test("opens a creative project explicitly without an ordinary-folder fallback", async () => {
     const openCreativeProject = vi.fn(async () => ok(creativeActivation()));
     const api = createApi({ openCreativeProject });
@@ -291,6 +306,7 @@ describe("project workflow bridge", () => {
 
 function createApi(overrides: Record<string, unknown> = {}): NovelStudioApi {
   const project = {
+    getActiveWorkspace: async () => ok(creativeSnapshot()),
     chooseOpenCreativeDirectory: async () =>
       ok({ canceled: false, selectionId: "selection_open", displayName: "M12" }),
     chooseCreateParentDirectory: async () =>

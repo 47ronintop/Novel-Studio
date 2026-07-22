@@ -7,7 +7,13 @@ export function AiSelectionReview({ review }: { readonly review: AiSelectionRevi
     <section className="ns-ai-selection-review" aria-label="Selection AI review">
       <header className="ns-ai-observability-header">
         <span>Selection review</span>
-        <span>{review.status}</span>
+        <span
+          aria-label={review.status === "applied" ? "AI 修改已应用" : undefined}
+          className={review.status === "applied" ? "ns-ai-applied-stamp" : undefined}
+          data-status={review.status}
+        >
+          {review.status === "applied" ? "已应用" : review.status}
+        </span>
       </header>
       <p className="ns-ai-context">
         Range {review.rangeLabel}: {review.compareLabel}

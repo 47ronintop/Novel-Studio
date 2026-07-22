@@ -7,7 +7,7 @@ import type { ChapterSummary } from "@novel-studio/shared";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { ChapterEditorProps } from "./chapter-editor.js";
 import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
-import { DEFAULT_EDITOR_PREFERENCES, editorFontFamilyValue } from "./editor-toolbar.js";
+import { editorFontFamilyValue } from "./editor-toolbar.js";
 import {
   FilePlus,
   Maximize2,
@@ -96,6 +96,7 @@ function WorkspaceShellContent({
   fileEditor,
   onboarding,
   onCommandPaletteOpen,
+  onCommandPaletteClose,
   onCommandPaletteQueryChange,
   onCommandPaletteActiveCommandChange,
   onCommandExecute,
@@ -379,7 +380,7 @@ function WorkspaceShellContent({
         commands={commands}
         executionFeedback={commandPaletteFeedback}
         onActiveCommandChange={onCommandPaletteActiveCommandChange}
-        {...(onCommandPaletteOpen === undefined ? {} : { onClose: onCommandPaletteOpen })}
+        {...(onCommandPaletteClose === undefined ? {} : { onClose: onCommandPaletteClose })}
         onCommandExecute={onCommandExecute}
         onQueryChange={onCommandPaletteQueryChange}
         open={commandPaletteOpen || shellState.commandPaletteOpen}
@@ -751,7 +752,11 @@ function PlainFileEditor({
   const editorSelectionRef = useRef<
     (selection: { readonly anchor: number; readonly head: number }) => void
   >(() => undefined);
-  const editorPreferences = editor.editorPreferences ?? DEFAULT_EDITOR_PREFERENCES;
+  const editorPreferences = {
+    fontFamily: "mono" as const,
+    fontSize: 13,
+    lineHeight: 1.7
+  };
   const registerEditorFocus = useCallback((focus: () => void) => {
     editorFocusRef.current = focus;
   }, []);

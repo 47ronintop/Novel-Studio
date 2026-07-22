@@ -22,7 +22,10 @@ test("starts with an editable bootstrapped beta project when no source fixtures 
     const page = await electronApp.firstWindow();
     const body = page.getByLabel("章节正文").locator(".cm-content");
 
-    await expect(page.getByText("未命名长篇项目")).toBeVisible();
+    await expect(page.locator(".ns-project-title")).toHaveText("未命名长篇项目");
+    await expect(page.getByText("尚未打开工作区")).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: "第一章.md" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "新建会话" }).first()).toBeEnabled();
     await expect(body).toBeVisible();
     await expect(body).toContainText("这是第一章的正文。你可以直接开始写作。");
 

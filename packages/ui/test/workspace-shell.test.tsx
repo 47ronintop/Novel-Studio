@@ -41,6 +41,31 @@ describe("WorkspaceShell", () => {
     );
   });
 
+  test("routes command palette close actions to the close callback", () => {
+    const application = createDesktopApplication();
+    const calls: string[] = [];
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+
+    act(() => {
+      root.render(
+        <WorkspaceShell
+          shellState={application.getShellState()}
+          commands={application.listCommands()}
+          commandPaletteOpen={true}
+          onCommandPaletteOpen={() => calls.push("open")}
+          onCommandPaletteClose={() => calls.push("close")}
+        />
+      );
+    });
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="关闭命令面板"]')?.click());
+
+    expect(calls).toEqual(["close"]);
+    act(() => root.unmount());
+    host.remove();
+  });
+
   test("keeps project activities above bottom activities", () => {
     const application = createDesktopApplication();
     const groups = workspaceActivitiesFor(application.getShellState());
@@ -297,9 +322,9 @@ describe("WorkspaceShell", () => {
     // Exactly one Agent Conversation View and one composer region, always present.
     expect(html.match(/aria-label="Agent 会话主视图"/g) ?? []).toHaveLength(1);
     expect(html.match(/aria-label="会话输入区"/g) ?? []).toHaveLength(1);
-    // The Composer's controls must be inert with a precise disabled reason, not absent.
+    // The Composer stays visible but inert; first-run conversation creation is not a UI gate.
     expect(html).toMatch(/aria-label="启动 Agent 运行"[^>]*disabled/);
-    expect(html).toMatch(/aria-label="新建会话"[^>]*disabled/);
+    expect(html).not.toContain('aria-label="新建会话"');
     // No virtual conversation/run should ever be synthesized for the unbound state.
     expect(html).not.toContain("prj_minimal_chapter");
   });
@@ -420,7 +445,7 @@ describe("WorkspaceShell", () => {
     );
 
     expect(html).toContain('aria-label="打开命令面板"');
-    expect(html).toContain('title="打开命令面板"');
+    expect(html).toContain('title="搜索项目或运行命令 Ctrl/Cmd+K"');
     expect(html).toContain('aria-label="打开的文档"');
     expect(html).not.toContain("标签切换会在后续里程碑补齐");
     expect(html).not.toContain('aria-disabled="true"');
@@ -1324,7 +1349,7 @@ describe("WorkspaceShell", () => {
       commandPaletteOpen: true,
       onCommandExecute: (commandId) => executedCommands.push(commandId)
     });
-    const command = findElementByAriaLabel(tree, "Execute command: Audit Outline");
+    const command = findElementByAriaLabel(tree, "执行命令：Audit Outline");
 
     expect(command).toBeDefined();
     expect(command?.props.disabled).toBe(true);

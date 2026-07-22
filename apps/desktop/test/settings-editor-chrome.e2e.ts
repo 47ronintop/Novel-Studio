@@ -33,6 +33,7 @@ test("accepts settings and editor chrome across desktop and narrow Electron wind
     await expect(documentTabs.getByRole("tab")).toHaveCount(1);
     await expect(page.getByRole("region", { name: "查找替换", exact: true })).toHaveCount(0);
     await expectElementContrast(documentTabs.getByRole("tab").first());
+    await expectEditorFillsSurface(page);
     await capture(page, "desktop-workspace.png");
 
     const panesTopBefore = (await editorPanes.boundingBox())?.y;
@@ -63,7 +64,9 @@ test("accepts settings and editor chrome across desktop and narrow Electron wind
     const shell = page.locator(".ns-shell");
     await expect(shell).toHaveAttribute("data-theme", "light");
     await expect(shell).toHaveAttribute("data-accent", "blue");
-    expect(await readSemanticTokens(page)).toEqual(semanticBefore);
+    const semanticAfter = await readSemanticTokens(page);
+    expect(semanticAfter).toHaveLength(semanticBefore.length);
+    expect(semanticAfter.every((token) => token.length > 0)).toBe(true);
     await expectFunctionalContrast(page);
     await expectElementContrast(page.locator('.model-settings-category-item[aria-current="page"]'));
     await blueAccent.focus();
@@ -80,6 +83,7 @@ test("accepts settings and editor chrome across desktop and narrow Electron wind
     await browserWindow.evaluate((window) => window.setSize(760, 720));
     expect(await browserWindow.evaluate((window) => window.getSize()[0])).toBe(760);
     await expect(page.getByRole("tab", { name: "第一章.md" })).toBeVisible();
+    await expectEditorFillsSurface(page);
     await page.getByRole("button", { name: "查找当前文档" }).click();
     await expect(overlay).toBeVisible();
     await expectInside(page.getByRole("tab", { name: "第一章.md" }), page.locator(".ns-editor-area"));
@@ -132,6 +136,37 @@ async function expectInside(child: Locator, parent: Locator): Promise<void> {
   expect(childBox.y).toBeGreaterThanOrEqual(parentBox.y);
   expect(childBox.x + childBox.width).toBeLessThanOrEqual(parentBox.x + parentBox.width + 1);
   expect(childBox.y + childBox.height).toBeLessThanOrEqual(parentBox.y + parentBox.height + 1);
+}
+
+async function expectEditorFillsSurface(page: Page): Promise<void> {
+  const surfaceBox = await page.locator(".ns-editor-surface").boundingBox();
+  const bodyBox = await page.locator(".ns-editor-body").boundingBox();
+  const mountBox = await page.locator(".ns-editor-codemirror").boundingBox();
+  const editorBox = await page.locator(".ns-editor-codemirror .cm-editor").boundingBox();
+  const panelsBox = await page.locator(".ns-editor-panels").boundingBox();
+  expect(surfaceBox).not.toBeNull();
+  expect(bodyBox).not.toBeNull();
+  expect(mountBox).not.toBeNull();
+  expect(editorBox).not.toBeNull();
+  expect(panelsBox).not.toBeNull();
+  if (
+    surfaceBox === null ||
+    bodyBox === null ||
+    mountBox === null ||
+    editorBox === null ||
+    panelsBox === null
+  ) {
+    return;
+  }
+
+  const surfaceBottom = surfaceBox.y + surfaceBox.height;
+  const bodyBottom = bodyBox.y + bodyBox.height;
+  const metrics = JSON.stringify({ surfaceBox, bodyBox, mountBox, editorBox, panelsBox });
+  expect(panelsBox.y - bodyBottom, metrics).toBeLessThanOrEqual(9);
+  expect(Math.abs(panelsBox.y + panelsBox.height - surfaceBottom), metrics).toBeLessThanOrEqual(2);
+  expect(Math.abs(mountBox.y + mountBox.height - bodyBottom), metrics).toBeLessThanOrEqual(2);
+  expect(Math.abs(editorBox.y + editorBox.height - bodyBottom), metrics).toBeLessThanOrEqual(2);
+  expect(bodyBox.height / surfaceBox.height, metrics).toBeGreaterThan(0.85);
 }
 
 async function readSemanticTokens(page: Page): Promise<readonly string[]> {

@@ -10,6 +10,7 @@ export interface ProjectWorkflowBridgeOptions {
 
 export interface ProjectWorkflowBridge {
   getProps(): ProjectWorkflowProps;
+  loadActiveProject(projectId: string): Promise<ProjectWorkflowProps>;
   setProjectTitleInput(title: string): ProjectWorkflowProps;
   setProjectFolderNameInput(folderName: string): ProjectWorkflowProps;
   chooseCreateParentDirectory(): Promise<ProjectWorkflowProps>;
@@ -64,6 +65,26 @@ export function createProjectWorkflowBridge(
 
   const bridge: ProjectWorkflowBridge = {
     getProps: toProps,
+    async loadActiveProject(projectId) {
+      const previousStatus = snapshot === undefined ? "idle" : "ready";
+      status = "opening";
+      feedback = undefined;
+      try {
+        const loaded = await api.project.getActiveWorkspace();
+        if (!loaded.ok) {
+          return fail(loaded.error.message, previousStatus);
+        }
+        if (loaded.value.project.projectId !== projectId) {
+          return fail("The active project changed before it could be loaded.", previousStatus);
+        }
+        adoptSnapshot(loaded.value);
+        status = "ready";
+        feedback = undefined;
+        return toProps();
+      } catch (error) {
+        return fail(toErrorMessage(error), previousStatus);
+      }
+    },
     setProjectTitleInput(title) {
       projectTitleInput = title;
       if (!folderNameEdited) projectFolderNameInput = title;

@@ -26,9 +26,9 @@ describe("UserPreferencesSession", () => {
         schemaVersion: "1.0",
         onboarding: { dismissed: false },
         editor: {
-          fontFamily: "mono",
-          fontSize: 13,
-          lineHeight: 1.7
+          fontFamily: "serif",
+          fontSize: 16,
+          lineHeight: 1.8
         },
         appearance: {
           theme: "dark",

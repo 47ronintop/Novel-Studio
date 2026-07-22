@@ -18,6 +18,7 @@ const MAX_FACT_TEXT_BYTES = 512;
 const MAX_SUMMARY_SOURCE_RUNS = 100;
 
 export type AgentConversationStatus = "active" | "archived";
+type PersistedAgentConversationStatus = AgentConversationStatus | "deleted";
 export type AgentConversationSummaryFreshness = "fresh" | "stale" | "unavailable";
 
 export interface AgentConversationDiagnostic {
@@ -72,6 +73,13 @@ export interface ChangeAgentConversationStatusCommand {
   readonly expectedConversationRevision: number;
 }
 
+export type DeleteAgentConversationCommand = ChangeAgentConversationStatusCommand;
+
+export interface AgentConversationDeletion {
+  readonly conversationId: string;
+  readonly revision: number;
+}
+
 export interface ListAgentConversationsQuery {
   readonly projectId: string;
   readonly includeArchived?: boolean;
@@ -99,6 +107,14 @@ export interface AgentConversationContextMessage {
 
 export type AgentConversationCommandResult =
   | { readonly ok: true; readonly value: AgentConversationSummary }
+  | {
+      readonly ok: false;
+      readonly error: UnifiedError;
+      readonly latestConversation?: AgentConversationSummary;
+    };
+
+export type AgentConversationDeleteResult =
+  | { readonly ok: true; readonly value: AgentConversationDeletion }
   | {
       readonly ok: false;
       readonly error: UnifiedError;
@@ -173,6 +189,9 @@ export interface AgentConversationSession {
   restoreConversation(
     command: ChangeAgentConversationStatusCommand
   ): Promise<AgentConversationCommandResult>;
+  deleteConversation(
+    command: DeleteAgentConversationCommand
+  ): Promise<AgentConversationDeleteResult>;
   searchConversations(
     query: SearchAgentConversationsQuery
   ): Promise<Result<AgentConversationSearchPage, UnifiedError>>;
@@ -206,7 +225,7 @@ interface ParsedConversationRecord {
   readonly projectId: string;
   readonly revision: number;
   readonly title: string;
-  readonly status: AgentConversationStatus;
+  readonly status: PersistedAgentConversationStatus;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly createdByCommandId?: string;
@@ -292,7 +311,11 @@ export function createAgentConversationSession(
     record: JsonObject
   ): Promise<Result<AgentConversationSummary, UnifiedError>> {
     const parsed = parseConversationRecord(record);
-    if (parsed === undefined || parsed.projectId !== options.projectId) {
+    if (
+      parsed === undefined ||
+      parsed.projectId !== options.projectId ||
+      !isVisibleConversationRecord(parsed)
+    ) {
       return failure("AGENT_CONVERSATION_RECORD_INVALID");
     }
     const runs = await runsFor(parsed.conversationId);
@@ -322,7 +345,11 @@ export function createAgentConversationSession(
     const record = await options.repository.readConversation(conversationId);
     if (!record.ok) return record;
     const parsed = parseConversationRecord(record.value);
-    if (parsed === undefined || parsed.projectId !== options.projectId) {
+    if (
+      parsed === undefined ||
+      parsed.projectId !== options.projectId ||
+      !isVisibleConversationRecord(parsed)
+    ) {
       return failure("AGENT_CONVERSATION_NOT_FOUND");
     }
     const runs = await runsFor(conversationId);
@@ -412,6 +439,36 @@ export function createAgentConversationSession(
       : failure("AGENT_CONVERSATION_RECEIPT_INVALID");
   }
 
+  async function persistDeletionReceipt(
+    conversationId: string,
+    commandId: string,
+    deletion: AgentConversationDeletion
+  ): Promise<AgentConversationDeleteResult> {
+    const result = ok(deletion);
+    const receipt = await options.repository.writeCommandReceipt(
+      conversationId,
+      commandId,
+      asJsonObject(result)
+    );
+    return receipt.ok ? result : err(receipt.error);
+  }
+
+  async function readDeletionReceipt(
+    conversationId: string,
+    commandId: string
+  ): Promise<Result<AgentConversationDeletion | undefined, UnifiedError>> {
+    const prior = await options.repository.readCommandReceipt(conversationId, commandId);
+    if (!prior.ok) return prior;
+    const value = readObject(prior.value, "value");
+    const receiptConversationId =
+      value === undefined ? undefined : readSafeId(value, "conversationId");
+    const revision = value === undefined ? undefined : readPositiveInteger(value, "revision");
+    if (prior.value?.["ok"] !== true || value === undefined) return ok(undefined);
+    return receiptConversationId === conversationId && revision !== undefined
+      ? ok({ conversationId, revision })
+      : failure("AGENT_CONVERSATION_RECEIPT_INVALID");
+  }
+
   async function changeStatus(
     command: ChangeAgentConversationStatusCommand,
     status: AgentConversationStatus
@@ -440,6 +497,9 @@ export function createAgentConversationSession(
       if (!current.ok) return current;
       const parsed = parseConversationRecord(current.value);
       if (parsed === undefined || parsed.projectId !== options.projectId) {
+        return failure("AGENT_CONVERSATION_NOT_FOUND");
+      }
+      if (!isVisibleConversationRecord(parsed)) {
         return failure("AGENT_CONVERSATION_NOT_FOUND");
       }
 
@@ -504,6 +564,88 @@ export function createAgentConversationSession(
       const summary = await summaryFor(updated.value);
       if (!summary.ok) return summary;
       return persistReceipt(command.conversationId, command.commandId, summary.value);
+    });
+  }
+
+  async function deleteConversation(
+    command: DeleteAgentConversationCommand
+  ): Promise<AgentConversationDeleteResult> {
+    const project = requireBoundProject(command.projectId);
+    if (!project.ok) return project;
+    if (!isSafeId(command.conversationId) || !isSafeId(command.commandId)) {
+      return failure("AGENT_CONVERSATION_COMMAND_INVALID");
+    }
+    if (command.conversationId === LEGACY_AGENT_CONVERSATION_ID) {
+      return failure("AGENT_CONVERSATION_READ_ONLY");
+    }
+    if (
+      !Number.isSafeInteger(command.expectedConversationRevision) ||
+      command.expectedConversationRevision < 0
+    ) {
+      return failure("AGENT_CONVERSATION_COMMAND_INVALID");
+    }
+
+    return withConversationMutation(command.conversationId, async () => {
+      const prior = await readDeletionReceipt(command.conversationId, command.commandId);
+      if (!prior.ok) return prior;
+      if (prior.value !== undefined) return ok(prior.value);
+
+      const current = await options.repository.readConversation(command.conversationId);
+      if (!current.ok) return current;
+      const parsed = parseConversationRecord(current.value);
+      if (parsed === undefined || parsed.projectId !== options.projectId) {
+        return failure("AGENT_CONVERSATION_NOT_FOUND");
+      }
+      if (
+        parsed.status === "deleted" &&
+        parsed.lastMutationCommandId === command.commandId &&
+        parsed.revision === command.expectedConversationRevision + 1
+      ) {
+        return persistDeletionReceipt(command.conversationId, command.commandId, {
+          conversationId: command.conversationId,
+          revision: parsed.revision
+        });
+      }
+      if (parsed.status === "deleted") return failure("AGENT_CONVERSATION_NOT_FOUND");
+      if (parsed.status !== "archived") {
+        return failure("AGENT_CONVERSATION_DELETE_REQUIRES_ARCHIVE");
+      }
+      if (parsed.revision !== command.expectedConversationRevision) {
+        const latest = await summaryFor(current.value as JsonObject);
+        return latest.ok
+          ? {
+              ok: false,
+              error: conversationError("AGENT_CONVERSATION_REVISION_CONFLICT"),
+              latestConversation: latest.value
+            }
+          : failure("AGENT_CONVERSATION_REVISION_CONFLICT");
+      }
+
+      const updated = await options.repository.updateConversation({
+        conversationId: command.conversationId,
+        projectId: options.projectId,
+        expectedRevision: command.expectedConversationRevision,
+        status: "deleted",
+        updatedAt: laterTimestamp(parsed.updatedAt, now()),
+        mutationCommandId: command.commandId
+      });
+      if (!updated.ok) {
+        if (updated.error.code !== "AGENT_CONVERSATION_REVISION_CONFLICT") return updated;
+        const latest = await options.repository.readConversation(command.conversationId);
+        if (!latest.ok || latest.value === undefined) return updated;
+        const latestSummary = await summaryFor(latest.value);
+        return latestSummary.ok
+          ? { ok: false, error: updated.error, latestConversation: latestSummary.value }
+          : updated;
+      }
+      const deleted = parseConversationRecord(updated.value);
+      if (deleted === undefined || deleted.status !== "deleted") {
+        return failure("AGENT_CONVERSATION_RECORD_INVALID");
+      }
+      return persistDeletionReceipt(command.conversationId, command.commandId, {
+        conversationId: command.conversationId,
+        revision: deleted.revision
+      });
     });
   }
 
@@ -582,6 +724,7 @@ export function createAgentConversationSession(
           });
           continue;
         }
+        if (!isVisibleConversationRecord(parsed)) continue;
         const summary = await summaryFor(record);
         if (!summary.ok) {
           diagnostics.push({
@@ -625,7 +768,11 @@ export function createAgentConversationSession(
       const record = await options.repository.readConversation(query.conversationId);
       if (!record.ok) return record;
       const parsed = parseConversationRecord(record.value);
-      if (parsed === undefined || parsed.projectId !== options.projectId) {
+      if (
+        parsed === undefined ||
+        parsed.projectId !== options.projectId ||
+        !isVisibleConversationRecord(parsed)
+      ) {
         return failure("AGENT_CONVERSATION_NOT_FOUND");
       }
       const runs = await runsFor(query.conversationId);
@@ -639,7 +786,7 @@ export function createAgentConversationSession(
       if (latestSummary?.ok === false) {
         diagnostics.push({ conversationId: query.conversationId, code: latestSummary.error.code });
       } else if (latestSummary?.value !== undefined) {
-        contextSummary = readString(latestSummary.value, "content");
+        contextSummary = displayableContextSummary(latestSummary.value["content"]);
         summaryFreshness = isSummaryCurrent(latestSummary.value, runs.value[0]) ? "fresh" : "stale";
       }
       return ok({
@@ -656,6 +803,10 @@ export function createAgentConversationSession(
 
     restoreConversation(command) {
       return changeStatus(command, "active");
+    },
+
+    deleteConversation(command) {
+      return deleteConversation(command);
     },
 
     async searchConversations(query) {
@@ -698,6 +849,7 @@ export function createAgentConversationSession(
           });
           continue;
         }
+        if (!isVisibleConversationRecord(parsed)) continue;
         const runs = await runsFor(parsed.conversationId);
         if (!runs.ok) {
           diagnostics.push({ conversationId: parsed.conversationId, code: runs.error.code });
@@ -773,6 +925,7 @@ export function createAgentConversationSession(
         if (parsed === undefined || parsed.projectId !== options.projectId) {
           return failure("AGENT_CONVERSATION_NOT_FOUND");
         }
+        if (parsed.status === "deleted") return failure("AGENT_CONVERSATION_NOT_FOUND");
         if (parsed.status === "archived") return failure("AGENT_CONVERSATION_ARCHIVED");
         const summary = await summaryFor(record.value as JsonObject);
         if (summary.ok) startReservations.add(input.conversationId);
@@ -816,6 +969,8 @@ export function createAgentConversationSession(
         if (parsed === undefined || parsed.projectId !== options.projectId) {
           return failure("AGENT_CONVERSATION_NOT_FOUND");
         }
+        if (parsed.status === "deleted") return failure("AGENT_CONVERSATION_NOT_FOUND");
+        if (parsed.status === "archived") return failure("AGENT_CONVERSATION_ARCHIVED");
         const title =
           parsed.title === "新会话"
             ? titleFromRequest(readString(snapshot, "userRequest") ?? "")
@@ -864,6 +1019,16 @@ export function createAgentConversationSession(
       if (!isSafeId(input.conversationId)) return failure("AGENT_CONVERSATION_ID_INVALID");
       if (input.conversationId === LEGACY_AGENT_CONVERSATION_ID) {
         return failure("AGENT_CONVERSATION_READ_ONLY");
+      }
+      const record = await options.repository.readConversation(input.conversationId);
+      if (!record.ok) return record;
+      const parsed = parseConversationRecord(record.value);
+      if (
+        parsed === undefined ||
+        parsed.projectId !== options.projectId ||
+        !isVisibleConversationRecord(parsed)
+      ) {
+        return failure("AGENT_CONVERSATION_NOT_FOUND");
       }
       const runs = await runsFor(input.conversationId);
       if (!runs.ok) return runs;
@@ -1230,6 +1395,20 @@ function isBoundedSummaryContent(value: unknown): value is string {
   return typeof value === "string" && byteLength(value) <= MAX_CONTEXT_BYTES;
 }
 
+/** Conversation summaries are model context by default, not UI copy. */
+function displayableContextSummary(value: unknown): string | undefined {
+  if (!isBoundedSummaryContent(value)) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (isJsonObject(parsed) && parsed["kind"] === "agent_conversation_context") {
+      return undefined;
+    }
+  } catch {
+    // Plain-text summaries remain displayable for compatible persisted data.
+  }
+  return value;
+}
+
 function boundedFactText(value: string, maxBytes: number = MAX_FACT_TEXT_BYTES): string {
   const normalized = value.trim().replace(/\s+/gu, " ");
   if (byteLength(normalized) <= maxBytes) return normalized;
@@ -1284,7 +1463,7 @@ function parseConversationRecord(value: unknown): ParsedConversationRecord | und
     updatedAt === undefined ||
     !Number.isSafeInteger(revision) ||
     Number(revision) < 1 ||
-    (status !== "active" && status !== "archived") ||
+    (status !== "active" && status !== "archived" && status !== "deleted") ||
     createdByCommandId === null ||
     lastMutationCommandId === null
   ) {
@@ -1304,8 +1483,14 @@ function parseConversationRecord(value: unknown): ParsedConversationRecord | und
   };
 }
 
+function isVisibleConversationRecord(
+  record: ParsedConversationRecord
+): record is ParsedConversationRecord & { readonly status: AgentConversationStatus } {
+  return record.status === "active" || record.status === "archived";
+}
+
 function toSummary(
-  record: ParsedConversationRecord,
+  record: ParsedConversationRecord & { readonly status: AgentConversationStatus },
   runs: readonly JsonObject[],
   summaryFreshness: AgentConversationSummaryFreshness = "unavailable"
 ): AgentConversationSummary {
@@ -1353,7 +1538,13 @@ function legacySummary(projectId: string, runs: readonly JsonObject[]): AgentCon
 
 function parseSummary(value: JsonObject): AgentConversationSummary | undefined {
   const record = parseConversationRecord(value);
-  if (record === undefined || !Number.isSafeInteger(value["runCount"])) return undefined;
+  if (
+    record === undefined ||
+    !isVisibleConversationRecord(record) ||
+    !Number.isSafeInteger(value["runCount"])
+  ) {
+    return undefined;
+  }
   const freshness = value["summaryFreshness"];
   return {
     ...toSummary(record, []),

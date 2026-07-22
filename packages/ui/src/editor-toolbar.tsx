@@ -17,9 +17,9 @@ export interface WritingMetrics {
 const READING_UNITS_PER_MINUTE = 500;
 
 export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
-  fontFamily: "mono",
-  fontSize: 13,
-  lineHeight: 1.7
+  fontFamily: "serif",
+  fontSize: 16,
+  lineHeight: 1.8
 };
 
 export function calculateWritingMetrics(body: string): WritingMetrics {
@@ -46,7 +46,7 @@ export function editorFontFamilyValue(fontFamily: EditorFontFamily): string {
     case "mono":
       return '"Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace';
     case "serif":
-      return '"Noto Serif SC", "Source Han Serif SC", Georgia, serif';
+      return '"Noto Serif SC", "Source Han Serif SC", "Songti SC", STSong, SimSun, Georgia, serif';
     case "sans":
       return 'Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif';
   }

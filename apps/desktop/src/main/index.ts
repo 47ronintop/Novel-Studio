@@ -99,7 +99,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         syncSavedEditor: async (relativePath, options) => {
           await syncSavedEditorForPath(activeDesktopApplication, relativePath, options);
         },
-        resolveModelProfile: async (profileId) => {
+        resolveModelProfile: async (profileId, modelNameOverride) => {
           const profiles = await activeDesktopApplication?.listModelProfiles();
           if (profiles === undefined || !profiles.ok) return undefined;
           const profile = profiles.value.profiles.find((entry) => entry.id === profileId);
@@ -108,7 +108,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
             id: profile.id,
             provider: profile.provider as LlmProviderId,
             displayName: profile.displayName,
-            modelName: profile.modelName,
+            modelName: modelNameOverride ?? profile.modelName,
             ...(profile.baseUrl === undefined ? {} : { baseUrl: profile.baseUrl }),
             ...(profile.apiKeyRef.length === 0 ? {} : { apiKeyRef: profile.apiKeyRef }),
             timeoutMs: profile.timeoutMs
@@ -122,33 +122,69 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
             }
           };
         },
-        resolveModelStartFacts: async (profileId) => {
-          // Server-authoritative model facts: provider/model come from the stored profile, context
-          // window + reasoning strength from discovery. The renderer never authors these.
+        resolveModelStartFacts: async (profileId, modelNameOverride) => {
+          // Server-authoritative facts: the connection comes from the stored profile; the selected
+          // model name is a user choice on that connection. Context window and reasoning strength
+          // are always resolved here, never trusted from IPC.
           const profiles = await activeDesktopApplication?.listModelProfiles();
           if (profiles === undefined || !profiles.ok) return undefined;
           const profile = profiles.value.profiles.find((entry) => entry.id === profileId);
           if (profile === undefined) return undefined;
+          const selectedModelName = modelNameOverride?.trim() || profile.modelName;
+
+          // A fresh installation has a model profile before it has a stored key. Keep the Agent
+          // usable in that state by binding the run to the local scripted driver. This is distinct
+          // from a real provider failure: once a key exists, missing/unknown capabilities remain a
+          // server-side validation error instead of being silently treated as a mock response.
+          const storedSecret =
+            profile.apiKeyRef.trim().length === 0
+              ? ({ ok: true as const, value: undefined } as const)
+              : await modelSecretStore.readSecret(profile.apiKeyRef);
+          const useScriptedAgent =
+            profile.provider === "demo" ||
+            profile.apiKeyRef.trim().length === 0 ||
+            (storedSecret.ok && storedSecret.value === undefined);
+          if (useScriptedAgent) {
+            return {
+              profileId: profile.id,
+              provider: "demo",
+              modelName: "desktop-scripted-agent",
+              capabilities: {
+                streaming: true,
+                toolCalling: true,
+                structuredArguments: true,
+                contextWindow: 128_000
+              },
+              requiredContextTokens: 8_000,
+              reasoningStrength: reasoningStrengthForModel("demo", "desktop-scripted-agent")
+            };
+          }
+
           const discovery = await activeDesktopApplication?.discoverModelOptions(profileId);
           const discovered =
             discovery !== undefined && discovery.ok
-              ? discovery.value.models.find((model) => model.id === profile.modelName)
+              ? discovery.value.models.find((model) => model.id === selectedModelName)
               : undefined;
           const contextWindow =
-            discovered?.contextWindow ?? (profile.provider === "demo" ? 128_000 : 0);
+            discovered?.contextWindow !== undefined && discovered.contextWindow > 0
+              ? discovered.contextWindow
+              : profile.provider === "demo"
+                ? 128_000
+                : 0;
           const reasoningStrength =
-            discovery !== undefined && discovery.ok
+            discovered?.reasoningStrength ??
+            (selectedModelName === profile.modelName && discovery !== undefined && discovery.ok
               ? discovery.value.reasoningStrength
               : reasoningStrengthForModel(
                   profile.provider,
-                  profile.modelName,
+                  selectedModelName,
                   profile.baseUrl,
                   profile.reasoningEffortEnabled
-                );
+                ));
           return {
             profileId: profile.id,
             provider: profile.provider,
-            modelName: profile.modelName,
+            modelName: selectedModelName,
             capabilities: {
               streaming: true,
               toolCalling: true,

@@ -142,7 +142,13 @@ export function ChangeSetReview({ review }: { readonly review: ChangeSetReviewPr
       tabIndex={review.onOpen === undefined ? undefined : 0}
     >
       <header className="ns-change-set-summary-header">
-        <span className="ns-change-set-state">{written ? "已写入" : "尚未写入"}</span>
+        <span
+          aria-label={written ? "AI 修改已写入" : undefined}
+          className={written ? "ns-change-set-state ns-ai-applied-stamp" : "ns-change-set-state"}
+          data-status={review.changeSet.status}
+        >
+          {written ? "已写入" : "尚未写入"}
+        </span>
         <span>v{review.changeSet.revision}</span>
       </header>
       <div className="ns-change-set-summary-stats">

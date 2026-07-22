@@ -94,7 +94,7 @@ test("binds compact permissions to a persisted plan execution and restores revis
 
     await selectOperationMode(composer, "execution");
     await composer.getByLabel("Agent 请求").fill("先规划，再核对开篇");
-    const permissionTrigger = composer.getByLabel("修改权限：每次修改前确认");
+    const permissionTrigger = composer.getByLabel("修改权限：只读");
     await permissionTrigger.click();
     const permissionMenu = composer.getByRole("dialog", { name: "修改权限与摘要" });
     const permissionSummary = permissionMenu.locator('details[aria-label="本次权限摘要"]');
@@ -106,8 +106,7 @@ test("binds compact permissions to a persisted plan execution and restores revis
     await expect(permissionSummary).toContainText("网络");
 
     await permissionMenu.getByRole("radio", { name: "本次运行自动修改" }).check();
-    await expect(composer.getByLabel("启动 Agent 运行")).toBeDisabled();
-    await permissionMenu.getByRole("checkbox", { name: "确认本次运行自动修改风险" }).check();
+    await expect(permissionMenu.getByRole("checkbox")).toHaveCount(0);
     await expect(composer.getByLabel("启动 Agent 运行")).toBeEnabled();
     await expect(permissionSummary).toContainText("服务端事实");
     await permissionMenu.press("Escape");
@@ -119,9 +118,7 @@ test("binds compact permissions to a persisted plan execution and restores revis
     await expect(planReview).toBeVisible();
     await expect(planReview).toContainText("每次修改前确认");
     await planReview.getByRole("radio", { name: "本次运行自动修改" }).check();
-    await planReview
-      .getByRole("checkbox", { name: /我理解本次运行可自动修改项目文件/ })
-      .check();
+    await expect(planReview.getByRole("checkbox")).toHaveCount(0);
     await planReview.getByRole("button", { name: "按此方案执行" }).click();
 
     const planStep = page.locator('[data-plan-step-id="step-stage5b-01"]');
@@ -130,7 +127,7 @@ test("binds compact permissions to a persisted plan execution and restores revis
     const planExecutionId = await planStep.getAttribute("data-plan-execution-id");
     expect(planExecutionId).toMatch(/^plan_execution_/);
 
-    const boundPermission = composer.getByLabel("修改权限：本次运行自动修改");
+    const boundPermission = composer.getByLabel("修改权限：自动");
     await expect(boundPermission).toBeVisible();
     await boundPermission.click();
     const boundSummary = composer.locator('details[aria-label="本次权限摘要"]');
@@ -174,7 +171,8 @@ test("binds compact permissions to a persisted plan execution and restores revis
 async function seedMaterialDeviation(projectRoot: string, runId: string): Promise<void> {
   const repository = new AgentRunFileRepository({ projectRoot, traceId: "stage5b-e2e" });
   const snapshotRead = await repository.readSnapshot(runId);
-  if (!snapshotRead.ok || snapshotRead.value === undefined) throw new Error("Execution run missing");
+  if (!snapshotRead.ok || snapshotRead.value === undefined)
+    throw new Error("Execution run missing");
   const snapshot = snapshotRead.value;
   const planExecutionId = stringField(snapshot, "planExecutionId");
   const recordRead = await repository.readPlanExecutionRecord(runId, planExecutionId);
@@ -280,15 +278,12 @@ async function selectOperationMode(
   composer: ReturnType<Page["getByLabel"]>,
   mode: "planning" | "execution"
 ): Promise<void> {
-  const expected = mode === "planning" ? /^规划 · / : /^执行 · /;
-  if ((await composer.getByRole("button", { name: expected }).count()) > 0) return;
-  await composer
-    .getByRole("button", { name: /^(规划|执行) · (写作上下文|文件上下文)$/ })
-    .click();
+  const expected = mode === "planning" ? "规划" : "只读";
+  const trigger = composer.getByTitle("选择运行方式");
+  if ((await trigger.getAttribute("aria-label")) === expected) return;
+  await trigger.click();
   const modes = composer.getByLabel("运行方式");
-  await modes
-    .getByRole("button", { name: mode === "planning" ? "规划（只读）" : "执行", exact: true })
-    .click();
+  await modes.getByRole("button", { name: expected, exact: true }).click();
 }
 
 async function latestExecutionRunId(page: Page): Promise<string> {

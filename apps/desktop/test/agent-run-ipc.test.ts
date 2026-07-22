@@ -620,6 +620,16 @@ describe("Agent Run IPC", () => {
           calls.push(`${projectId}:restore:${String(command["expectedConversationRevision"])}`);
           return { ok: true, value: conversationSummary(projectId) };
         },
+        async deleteConversation(command: Record<string, unknown>) {
+          calls.push(`${projectId}:delete:${String(command["expectedConversationRevision"])}`);
+          return {
+            ok: true,
+            value: {
+              conversationId: String(command["conversationId"]),
+              revision: Number(command["expectedConversationRevision"]) + 1
+            }
+          };
+        },
         async searchConversations(query: Record<string, unknown>) {
           calls.push(`${projectId}:search:${String(query["query"])}`);
           return {
@@ -678,6 +688,12 @@ describe("Agent Run IPC", () => {
       commandId: "restore-01",
       expectedConversationRevision: 2
     });
+    await handlers["application:agent-conversation:delete"]?.({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      commandId: "delete-01",
+      expectedConversationRevision: 3
+    });
     await handlers["application:agent-conversation:search"]?.({
       projectId: "project-01",
       query: "Opening",
@@ -711,6 +727,12 @@ describe("Agent Run IPC", () => {
         conversationId: "conversation-01",
         commandId: "archive-invalid",
         expectedConversationRevision: -1
+      }),
+      handlers["application:agent-conversation:delete"]?.({
+        projectId: "project-02",
+        conversationId: "conversation-01",
+        commandId: "delete-invalid",
+        expectedConversationRevision: -1
       })
     ]);
 
@@ -725,6 +747,7 @@ describe("Agent Run IPC", () => {
       "project-01:read:conversation-01",
       "project-01:archive:1",
       "project-01:restore:2",
+      "project-01:delete:3",
       "project-01:search:Opening",
       "project-02:list:5"
     ]);
@@ -749,6 +772,7 @@ describe("Agent Run IPC", () => {
     await conversations["read"]?.({});
     await conversations["archive"]?.({});
     await conversations["restore"]?.({});
+    await conversations["delete"]?.({});
     await conversations["search"]?.({});
 
     expect(invoked).toEqual([
@@ -757,6 +781,7 @@ describe("Agent Run IPC", () => {
       "application:agent-conversation:read",
       "application:agent-conversation:archive",
       "application:agent-conversation:restore",
+      "application:agent-conversation:delete",
       "application:agent-conversation:search"
     ]);
   });

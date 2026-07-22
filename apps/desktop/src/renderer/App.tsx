@@ -117,6 +117,10 @@ export function App() {
     shellState.workspaceContext.kind === "none"
       ? undefined
       : shellState.workspaceContext.workspaceId;
+  const activeCreativeProjectId =
+    shellState.workspaceContext.kind === "creativeProject"
+      ? shellState.workspaceContext.projectId
+      : undefined;
   const [pendingMainReview, setPendingMainReview] = useState<
     PendingAgentConversationMainReview | undefined
   >();
@@ -189,6 +193,24 @@ export function App() {
     const next = ensureCreativeWorkspaceContext(shellState, projectWorkflow?.projectId);
     if (next !== shellState) setShellState(next);
   }, [projectWorkflow?.projectId, shellState.projectTitle, shellState.workspaceContext.kind]);
+
+  useEffect(() => {
+    if (
+      projectWorkflowBridge === undefined ||
+      activeCreativeProjectId === undefined ||
+      projectWorkflow?.projectId === activeCreativeProjectId
+    ) {
+      return;
+    }
+
+    let active = true;
+    void projectWorkflowBridge.loadActiveProject(activeCreativeProjectId).then((next) => {
+      if (active) setProjectWorkflow(next);
+    });
+    return () => {
+      active = false;
+    };
+  }, [activeCreativeProjectId, projectWorkflow?.projectId, projectWorkflowBridge]);
 
   useEffect(
     () => engineeringWorkspaceBridge?.subscribe((next) => setEngineeringWorkspace(next.workspace)),
@@ -412,6 +434,16 @@ export function App() {
     setShortcutState((current) => ({
       ...current,
       commandPaletteOpen: true
+    }));
+  }, []);
+
+  const handleCommandPaletteClose = useCallback(() => {
+    setCommandPaletteFeedback(undefined);
+    setCommandPaletteQuery("");
+    setCommandPaletteSelectedCommandId(undefined);
+    setShortcutState((current) => ({
+      ...current,
+      commandPaletteOpen: false
     }));
   }, []);
 
@@ -936,6 +968,7 @@ export function App() {
       onSaveStoryBibleDraft={handleSaveStoryBibleDraft}
       onCommandExecute={handleCommandExecute}
       onCommandPaletteActiveCommandChange={handleCommandPaletteActiveCommandChange}
+      onCommandPaletteClose={handleCommandPaletteClose}
       onCommandPaletteOpen={handleCommandPaletteOpen}
       onCommandPaletteQueryChange={handleCommandPaletteQueryChange}
       onBottomPanelTabSelect={handleBottomPanelTabSelect}

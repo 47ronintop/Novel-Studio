@@ -34,26 +34,29 @@ test("auto-applies two versioned Change Sets and reviews a conflicting run undo"
     await startAutonomousExecution(scenario.page);
 
     await expect
-      .poll(async () => {
-        const read = await readLatestAgentRun(scenario.page);
-        if (
-          read.ok === true &&
-          isRecord(read.value) &&
-          isRecord(read.value["snapshot"]) &&
-          read.value["snapshot"]["status"] === "failed"
-        ) {
-          throw new Error(`Agent run failed: ${JSON.stringify(read.value["events"])}`);
-        }
-        if (
-          read.ok === true &&
-          isRecord(read.value) &&
-          isRecord(read.value["snapshot"]) &&
-          read.value["snapshot"]["status"] === "awaiting_context_refresh"
-        ) {
-          await resolveContextRefreshIfVisible(scenario.page);
-        }
-        return read;
-      }, { timeout: 30_000 })
+      .poll(
+        async () => {
+          const read = await readLatestAgentRun(scenario.page);
+          if (
+            read.ok === true &&
+            isRecord(read.value) &&
+            isRecord(read.value["snapshot"]) &&
+            read.value["snapshot"]["status"] === "failed"
+          ) {
+            throw new Error(`Agent run failed: ${JSON.stringify(read.value["events"])}`);
+          }
+          if (
+            read.ok === true &&
+            isRecord(read.value) &&
+            isRecord(read.value["snapshot"]) &&
+            read.value["snapshot"]["status"] === "awaiting_context_refresh"
+          ) {
+            await resolveContextRefreshIfVisible(scenario.page);
+          }
+          return read;
+        },
+        { timeout: 30_000 }
+      )
       .toMatchObject({
         ok: true,
         value: {
@@ -261,27 +264,19 @@ async function startAutonomousExecution(page: Page): Promise<void> {
   const createConversation = page.getByRole("button", { name: "新建会话" }).first();
   if (await createConversation.isVisible()) await createConversation.click();
   const composer = page.getByLabel("会话输入区");
-  await selectExecutionMode(composer);
-  await composer.getByLabel("修改权限：每次修改前确认").click();
-  const policy = composer.getByRole("dialog", { name: "修改权限与摘要" });
-  await policy.getByRole("radio", { name: "本次运行自动修改" }).check();
-  await expect(policy).toContainText("每次实际写入仍会生成差异、校验并创建版本点");
-  await policy.getByRole("checkbox", { name: "确认本次运行自动修改风险" }).check();
-  await policy.press("Escape");
+  await selectAutomaticMode(composer);
+  await expect(composer.getByLabel("修改权限：自动")).toBeVisible();
+  await expect(composer.getByRole("checkbox")).toHaveCount(0);
   await composer.getByLabel("Agent 请求").fill("连续修改两章并完成运行");
   await composer.getByLabel("启动 Agent 运行").click();
   await resolveContextRefreshIfVisible(page);
 }
 
-async function selectExecutionMode(composer: ReturnType<Page["getByLabel"]>): Promise<void> {
-  if ((await composer.getByRole("button", { name: /^执行 · / }).count()) > 0) return;
-  await composer
-    .getByRole("button", { name: /^(规划|执行) · (写作上下文|文件上下文)$/ })
-    .click();
-  await composer
-    .getByLabel("运行方式")
-    .getByRole("button", { name: "执行", exact: true })
-    .click();
+async function selectAutomaticMode(composer: ReturnType<Page["getByLabel"]>): Promise<void> {
+  const trigger = composer.getByTitle("选择运行方式");
+  if ((await trigger.getAttribute("aria-label")) === "自动") return;
+  await trigger.click();
+  await composer.getByLabel("运行方式").getByRole("button", { name: "自动", exact: true }).click();
 }
 
 async function resolveContextRefreshIfVisible(page: Page): Promise<void> {

@@ -95,7 +95,8 @@ export interface DesktopAgentRunSessionOptions {
   readonly now?: () => string;
   readonly modelDriver?: AgentRunModelDriver;
   readonly resolveModelProfile?: (
-    profileId: string
+    profileId: string,
+    modelName?: string
   ) => Promise<
     { readonly modelProfile: LlmModelProfile; readonly parameters?: LlmParameters } | undefined
   >;
@@ -104,7 +105,8 @@ export interface DesktopAgentRunSessionOptions {
     readonly parameters?: LlmParameters;
   }) => AgentRunModelDriver;
   readonly resolveModelStartFacts?: (
-    profileId: string
+    profileId: string,
+    modelName?: string
   ) => Promise<AgentRunStartModelFacts | undefined>;
   readonly readEditorBuffer?: (refId: string) => Promise<string | undefined>;
   readonly readEditorState?: (relativePath: string) => Promise<
@@ -612,7 +614,7 @@ function createDesktopAgentContextSession(input: {
       if (input.resolveModelStartFacts === undefined) {
         return err(runtimeError("AGENT_MODEL_CAPABILITY_UNSUPPORTED"));
       }
-      const model = await input.resolveModelStartFacts(draft.modelProfileId);
+      const model = await input.resolveModelStartFacts(draft.modelProfileId, draft.modelName);
       if (model === undefined) {
         return err(runtimeError("AGENT_MODEL_CAPABILITY_UNSUPPORTED"));
       }
@@ -1168,20 +1170,70 @@ function checksumText(content: string): string {
 }
 
 function runtimeError(code: string, redactedDetail?: JsonObject): UnifiedError {
+  const descriptor = runtimeErrorDescriptor(code);
   return createUnifiedError({
     code,
-    category: code.includes("WRITE") ? "StorageError" : "ValidationError",
-    message:
-      code === "AGENT_VERSION_GROUP_PARTIAL_FAILURE"
-        ? "Agent writing partially failed and requires transaction recovery review."
-        : code === "AGENT_VERSION_GROUP_WRITE_ROLLED_BACK"
-          ? "Agent writing failed and applied files were rolled back."
-          : "The Agent write request could not be completed safely.",
+    category: descriptor.category,
+    message: descriptor.message,
     recoverability: "user-action",
-    suggestedAction: "Review the Change Set, current files, and transaction recovery status.",
+    suggestedAction: descriptor.suggestedAction,
     traceId: "desktop-agent-run-runtime",
     ...(redactedDetail === undefined ? {} : { redactedDetail })
   });
+}
+
+function runtimeErrorDescriptor(code: string): {
+  readonly category: "StorageError" | "ValidationError";
+  readonly message: string;
+  readonly suggestedAction: string;
+} {
+  if (code === "AGENT_MODEL_CAPABILITY_UNSUPPORTED") {
+    return {
+      category: "ValidationError",
+      message: "The selected Agent model does not expose the context capabilities required to start this request.",
+      suggestedAction: "Choose a supported model in Settings, refresh its model list, then retry."
+    };
+  }
+  if (code === "AGENT_CONTEXT_MODE_UNAVAILABLE") {
+    return {
+      category: "ValidationError",
+      message: "The selected Agent context mode is not available in the current workspace.",
+      suggestedAction: "Open a compatible project or choose a context mode supported by this workspace."
+    };
+  }
+  if (code.startsWith("CHANGE_SET_")) {
+    return {
+      category: "ValidationError",
+      message: "The proposed change set no longer matches the current project state.",
+      suggestedAction: "Refresh the affected files, review the Change Set, and retry."
+    };
+  }
+  if (code === "AGENT_VERSION_GROUP_PARTIAL_FAILURE") {
+    return {
+      category: "StorageError",
+      message: "Agent writing partially failed and requires transaction recovery review.",
+      suggestedAction: "Review the transaction recovery details before making further edits."
+    };
+  }
+  if (code === "AGENT_VERSION_GROUP_WRITE_ROLLED_BACK") {
+    return {
+      category: "StorageError",
+      message: "Agent writing failed and applied files were rolled back.",
+      suggestedAction: "Review the Change Set and current files, then retry."
+    };
+  }
+  if (code.includes("WRITE")) {
+    return {
+      category: "StorageError",
+      message: "The Agent could not safely apply the requested file changes.",
+      suggestedAction: "Review the affected files and Change Set, then retry."
+    };
+  }
+  return {
+    category: "ValidationError",
+    message: "The Agent request could not be validated before it started.",
+    suggestedAction: "Review the selected model, workspace, and context, then retry."
+  };
 }
 
 /**
@@ -1289,7 +1341,7 @@ async function resolveStartFromDraft(
   if (input.resolveModelStartFacts === undefined) {
     return err(runtimeError("AGENT_MODEL_CAPABILITY_UNSUPPORTED"));
   }
-  const model = await input.resolveModelStartFacts(runDraft.modelProfileId);
+  const model = await input.resolveModelStartFacts(runDraft.modelProfileId, runDraft.modelName);
   if (model === undefined) {
     return err(runtimeError("AGENT_MODEL_CAPABILITY_UNSUPPORTED"));
   }
@@ -1411,7 +1463,8 @@ function createDesktopAdaptiveAgentDriver(input: {
         return;
       }
       const profile = await input.resolveModelProfile(
-        roundInput.snapshot.providerCapabilitySnapshot.profileId
+        roundInput.snapshot.providerCapabilitySnapshot.profileId,
+        roundInput.snapshot.providerCapabilitySnapshot.modelName
       );
       if (profile === undefined) {
         throw new Error("The selected Agent model profile is unavailable.");

@@ -193,11 +193,16 @@ export function resolveAgentConversationWorkspacePresentation(
   activeProjectId: string | undefined,
   pendingMainReview: PendingAgentConversationMainReview | undefined
 ): AgentConversationWorkspacePresentation {
+  if (activeProjectId === undefined) {
+    return {
+      workspace: undefined,
+      shouldClearPendingMainReview: pendingMainReview !== undefined
+    };
+  }
   if (pendingMainReview === undefined) {
     return { workspace, shouldClearPendingMainReview: false };
   }
   if (
-    activeProjectId === undefined ||
     pendingMainReview.projectId !== activeProjectId ||
     workspace?.mainReview !== undefined
   ) {
@@ -281,6 +286,8 @@ export function useAgentConversationWorkspace(input: {
           apply(bridge?.archive(conversationId) ?? Promise.resolve(conversation)),
         onRestore: (conversationId) =>
           apply(bridge?.restore(conversationId) ?? Promise.resolve(conversation)),
+        onDelete: (conversationId) =>
+          apply(bridge?.delete(conversationId) ?? Promise.resolve(conversation)),
         onSearchQueryChange: (query) =>
           apply(
             bridge?.search(query, conversation.includeArchived) ?? Promise.resolve(conversation)

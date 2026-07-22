@@ -446,7 +446,39 @@ describe("AgentConversationBridge", () => {
     expect(searched.selectedConversation?.conversationId).toBe("conv_01");
   });
 
-  test("resets the current selection when the project changes", async () => {
+  test("deletes an archived conversation and moves selection to the next available conversation", async () => {
+    const fixture = createApiFixture([
+      conversation("conv_active", "run_active", "completed", "2026-07-14T01:00:00.000Z"),
+      {
+        ...conversation("conv_archived", "run_archived", "completed", "2026-07-14T00:00:00.000Z"),
+        status: "archived" as const
+      }
+    ]);
+    const bridge = createAgentConversationBridge(fixture.api, {
+      createCommandId: (action) => `cmd_${action}`
+    });
+    await bridge.load("project_01");
+    await bridge.search("", true);
+    await bridge.select("conv_archived");
+
+    const deleted = await bridge.delete("conv_archived");
+
+    expect(fixture.deleteCommands).toEqual([
+      {
+        projectId: "project_01",
+        conversationId: "conv_archived",
+        commandId: "cmd_delete",
+        expectedConversationRevision: 1
+      }
+    ]);
+    expect(deleted.conversations.map((conversation) => conversation.conversationId)).not.toContain(
+      "conv_archived"
+    );
+    expect(deleted.selectedConversationId).toBe("conv_active");
+    expect(deleted.selectedConversation?.conversationId).toBe("conv_active");
+  });
+
+  test("resets the current selection and prepares a first conversation when the project changes", async () => {
     const fixture = createApiFixture([
       conversation("conv_01", "run_01", "completed", "2026-07-14T00:00:00.000Z")
     ]);
@@ -461,14 +493,17 @@ describe("AgentConversationBridge", () => {
     fixture.setProjectConversations("project_02", []);
     const state = await bridge.load("project_02");
 
-    expect(state).toEqual({
+    expect(state).toMatchObject({
       projectId: "project_02",
-      conversations: [],
+      selectedConversationId: "conv_created",
+      selectedConversation: { conversationId: "conv_created" },
       searchQuery: "",
       includeArchived: false,
       loading: false,
       diagnostics: []
     });
+    expect(state.conversations).toHaveLength(1);
+    expect(fixture.createCommands.at(-1)).toMatchObject({ projectId: "project_02" });
     expect(resets).toBeGreaterThanOrEqual(2);
   });
 
@@ -531,6 +566,7 @@ function createApiFixture(initial: readonly AgentConversationSummary[]) {
   const createCommands: Record<string, unknown>[] = [];
   const archiveCommands: Record<string, unknown>[] = [];
   const restoreCommands: Record<string, unknown>[] = [];
+  const deleteCommands: Record<string, unknown>[] = [];
   const searchQueries: Record<string, unknown>[] = [];
 
   const summaries = (projectId: string) => byProject.get(projectId) ?? [];
@@ -602,6 +638,24 @@ function createApiFixture(initial: readonly AgentConversationSummary[]) {
         replace(projectId, value);
         return { ok: true as const, value };
       },
+      async delete(command: Record<string, unknown>) {
+        deleteCommands.push(command);
+        const projectId = String(command["projectId"]);
+        const current = summaries(projectId).find(
+          (entry) => entry.conversationId === command["conversationId"]
+        );
+        if (current === undefined) throw new Error("Missing delete target");
+        byProject.set(
+          projectId,
+          summaries(projectId).filter(
+            (entry) => entry.conversationId !== command["conversationId"]
+          )
+        );
+        return {
+          ok: true as const,
+          value: { conversationId: current.conversationId, revision: current.revision + 1 }
+        };
+      },
       async search(query: Record<string, unknown>) {
         searchQueries.push(query);
         const normalized = String(query["query"]).toLocaleLowerCase();
@@ -642,6 +696,7 @@ function createApiFixture(initial: readonly AgentConversationSummary[]) {
     createCommands,
     archiveCommands,
     restoreCommands,
+    deleteCommands,
     searchQueries,
     emit(event: AgentRunEvent) {
       for (const listener of eventListeners) listener(event);

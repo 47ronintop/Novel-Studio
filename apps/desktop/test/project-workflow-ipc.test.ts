@@ -19,6 +19,7 @@ describe("Task 5 explicit workspace IPC", () => {
       }
     });
 
+    await api.project.getActiveWorkspace();
     await api.project.chooseOpenCreativeDirectory();
     await api.project.openCreativeProject("selection_1");
     await api.project.chooseCreateParentDirectory();
@@ -45,6 +46,7 @@ describe("Task 5 explicit workspace IPC", () => {
     });
 
     expect(calls.map(({ channel }) => channel)).toEqual([
+      "application:project:get-active-workspace",
       "application:project:choose-open-creative-directory",
       "application:project:open-creative-project",
       "application:project:choose-create-parent-directory",
@@ -112,6 +114,7 @@ describe("Task 5 explicit workspace IPC", () => {
       versions: []
     };
     const handlers = createApplicationIpcHandlers({
+      getActiveProjectWorkspace: () => ok(snapshot),
       createProjectChapter: async () => ok(snapshot),
       selectProjectChapterAndLoad: async () => ok({ workspace: snapshot, chapterEditor }),
       applyRecoveryDraft: async () =>
@@ -121,6 +124,7 @@ describe("Task 5 explicit workspace IPC", () => {
         })
     } as unknown as DesktopApplication);
 
+    const activeWorkspace = await handlers["application:project:get-active-workspace"]();
     const chapter = await handlers["application:project:create-chapter"]({
       chapterId: "chapter_1",
       title: "One"
@@ -128,6 +132,11 @@ describe("Task 5 explicit workspace IPC", () => {
     const selected = await handlers["application:project:select-chapter-and-load"]("chapter_1");
     const recovered = await handlers["application:project:apply-recovery-draft"]("recovery_1");
 
+    expect(JSON.stringify(activeWorkspace)).not.toContain("projectRoot");
+    expect(activeWorkspace).toMatchObject({
+      ok: true,
+      value: { project: { projectId: "prj_secret" } }
+    });
     expect(JSON.stringify(chapter)).not.toContain("projectRoot");
     expect(JSON.stringify(selected)).not.toContain("projectRoot");
     expect(selected).toMatchObject({

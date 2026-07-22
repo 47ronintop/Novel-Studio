@@ -1,5 +1,5 @@
 import type { ChapterDocument } from "@novel-studio/shared";
-import { Eye, History, RotateCcw } from "lucide-react";
+import { ChevronRight, Eye, History, RotateCcw } from "lucide-react";
 import { useCallback, useMemo, useRef, type CSSProperties } from "react";
 import {
   CodeMirrorDocumentEditor,
@@ -243,46 +243,56 @@ export function ChapterEditor({
       </div>
 
       <div className="ns-editor-panels">
-        <section className="ns-editor-panel" aria-label="版本历史">
-          <div className="ns-editor-panel-header">
-            <History aria-hidden="true" size={14} />
-            <span>版本历史</span>
+        <details className="ns-editor-history" aria-label="版本历史">
+          <summary aria-label="展开或收起版本历史">
+            <span className="ns-editor-history-label">
+              <History aria-hidden="true" size={14} />
+              <span>版本历史</span>
+              <span className="ns-editor-history-count">{versionHistory.length}</span>
+            </span>
+            <ChevronRight aria-hidden="true" className="ns-editor-history-chevron" size={14} />
+          </summary>
+          <div className="ns-editor-history-content">
+            {versionHistory.length === 0 ? (
+              <p className="ns-editor-history-empty">暂无版本记录</p>
+            ) : (
+              <ul className="ns-version-list">
+                {versionHistory.map((entry) => (
+                  <li className="ns-version-item" key={entry.versionId}>
+                    <div className="ns-version-main">
+                      <span>{entry.label}</span>
+                      <span>{entry.createdAt}</span>
+                    </div>
+                    <div className="ns-version-actions">
+                      <button
+                        aria-label={`预览版本 ${entry.label}`}
+                        className="ns-icon-button"
+                        onClick={() => {
+                          onVersionPreview?.(entry.versionId);
+                        }}
+                        title={`预览版本 ${entry.label}`}
+                        type="button"
+                      >
+                        <Eye aria-hidden="true" size={13} />
+                      </button>
+                      <button
+                        aria-label={`恢复版本 ${entry.label}`}
+                        className="ns-icon-button"
+                        onClick={() => {
+                          onVersionRestore?.(entry.versionId);
+                        }}
+                        title={`恢复版本 ${entry.label}`}
+                        type="button"
+                      >
+                        <RotateCcw aria-hidden="true" size={13} />
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
-          <ul className="ns-version-list">
-            {versionHistory.map((entry) => (
-              <li className="ns-version-item" key={entry.versionId}>
-                <div className="ns-version-main">
-                  <span>{entry.label}</span>
-                  <span>{entry.createdAt}</span>
-                </div>
-                <div className="ns-version-actions">
-                  <button
-                    aria-label={`预览版本 ${entry.label}`}
-                    className="ns-icon-button"
-                    onClick={() => {
-                      onVersionPreview?.(entry.versionId);
-                    }}
-                    title={`预览版本 ${entry.label}`}
-                    type="button"
-                  >
-                    <Eye aria-hidden="true" size={13} />
-                  </button>
-                  <button
-                    aria-label={`恢复版本 ${entry.label}`}
-                    className="ns-icon-button"
-                    onClick={() => {
-                      onVersionRestore?.(entry.versionId);
-                    }}
-                    title={`恢复版本 ${entry.label}`}
-                    type="button"
-                  >
-                    <RotateCcw aria-hidden="true" size={13} />
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </section>
+        </details>
 
         {diffPreview ? (
           <section className="ns-editor-panel" aria-label="AI 建议差异">
@@ -357,7 +367,13 @@ function SelectionReviewPanel({
     <section className="ns-editor-panel" aria-label="Selection AI review">
       <div className="ns-editor-panel-header">
         <span>Selection review</span>
-        <span className="ns-preview-only">{review.status}</span>
+        <span
+          aria-label={review.status === "applied" ? "AI 修改已应用" : undefined}
+          className={review.status === "applied" ? "ns-ai-applied-stamp" : "ns-preview-only"}
+          data-status={review.status}
+        >
+          {review.status === "applied" ? "已应用" : review.status}
+        </span>
       </div>
       <p className="ns-diff-summary">
         Range {review.rangeLabel}: {review.compareLabel}

@@ -3,6 +3,7 @@ import type {
   ApplicationCommand,
   ApplicationIpcChannel,
   AgentConversationCommandResult,
+  AgentConversationDeleteResult,
   AgentConversationListPage,
   AgentConversationReadResult,
   AgentConversationSearchPage,
@@ -28,6 +29,7 @@ import type {
   ConfigVersionSummary,
   CreateCreativeProjectRequest,
   CreateAgentConversationCommand,
+  DeleteAgentConversationCommand,
   ChangeAgentConversationStatusCommand,
   ListAgentConversationsQuery,
   ReadAgentConversationQuery,
@@ -111,6 +113,10 @@ const api: NovelStudioApi = {
       invokeTyped<Result<DesktopShellState, UnifiedError>>("application:execute-command", commandId)
   },
   project: {
+    getActiveWorkspace: () =>
+      invokeTyped<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>(
+        "application:project:get-active-workspace"
+      ),
     chooseOpenCreativeDirectory: () =>
       invokeTyped<Result<ProjectDirectorySelectionDto, UnifiedError>>(
         "application:project:choose-open-creative-directory"
@@ -358,6 +364,8 @@ const api: NovelStudioApi = {
         "application:agent-conversation:restore",
         command
       ),
+    delete: (command: DeleteAgentConversationCommand) =>
+      invokeTyped<AgentConversationDeleteResult>("application:agent-conversation:delete", command),
     search: (query: SearchAgentConversationsQuery) =>
       invokeTyped<Result<AgentConversationSearchPage, UnifiedError>>(
         "application:agent-conversation:search",

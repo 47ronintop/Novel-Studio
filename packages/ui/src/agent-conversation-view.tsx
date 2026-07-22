@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Bot, ChevronDown, CornerUpLeft, History, MessageSquare, MoreHorizontal, Plus, User } from "lucide-react";
+import { ArchiveRestore, Bot, ChevronDown, CornerUpLeft, History, MessageSquare, MoreHorizontal, Plus, User } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 
 import { AgentComposer } from "./agent-composer.js";
@@ -13,6 +13,7 @@ import type {
 
 export function AgentConversationView(props: AgentConversationViewProps) {
   const conversation = props.conversation;
+  const contextSummary = visibleContextSummary(conversation?.contextSummary);
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyButtonRef = useRef<HTMLButtonElement>(null);
   const closeHistory = useCallback(() => {
@@ -38,6 +39,9 @@ export function AgentConversationView(props: AgentConversationViewProps) {
     ) : null;
 
   if (conversation === undefined) {
+    const composerDisabledReason = props.loading
+      ? "正在准备会话…"
+      : (props.composer?.disabledReason ?? "打开工作区后，Agent 会在这里保持可用。");
     return (
       <section className="ns-agent-conversation-view" aria-label="Agent 会话主视图">
         <header className="ns-agent-conversation-view-header ns-agent-conversation-view-header-empty">
@@ -52,28 +56,18 @@ export function AgentConversationView(props: AgentConversationViewProps) {
             {props.errorMessage}
           </p>
         )}
-        <div className="ns-agent-conversation-view-empty">
-          <strong>{props.loading ? "正在加载会话…" : "开始一次写作会话"}</strong>
-          <p>新建会话后开始规划或执行写作任务。</p>
-          <button
-            aria-label="新建会话"
-            className="ns-icon-text-button"
-            disabled={props.loading || props.createDisabled === true}
-            onClick={props.onCreate}
-            type="button"
-          >
-            <Plus aria-hidden="true" size={14} />
-            新建会话
-          </button>
+        <div className="ns-agent-conversation-view-empty ns-agent-conversation-view-empty-preparing">
+          <strong>{props.loading ? "正在准备会话…" : "Agent"}</strong>
+          <p>{props.loading ? "正在恢复当前工作区的会话与上下文。" : composerDisabledReason}</p>
         </div>
-        {historyDrawer}
         {props.composer === undefined ? null : (
           <AgentComposer
             {...props.composer}
             disabled={true}
-            disabledReason={props.composer.disabledReason ?? "打开工作区后即可开始对话。"}
+            disabledReason={composerDisabledReason}
           />
         )}
+        {historyDrawer}
       </section>
     );
   }
@@ -156,8 +150,8 @@ export function AgentConversationView(props: AgentConversationViewProps) {
         </div>
       ) : null}
 
-      {conversation.contextSummary === undefined ? null : (
-        <p className="ns-agent-conversation-summary">{conversation.contextSummary}</p>
+      {contextSummary === undefined ? null : (
+        <p className="ns-agent-conversation-summary">{contextSummary}</p>
       )}
 
       {props.mainReview === undefined ? null : (
@@ -185,6 +179,24 @@ export function AgentConversationView(props: AgentConversationViewProps) {
       {historyDrawer}
     </section>
   );
+}
+
+function visibleContextSummary(summary: string | undefined): string | undefined {
+  if (summary === undefined) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(summary);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed) &&
+      (parsed as Record<string, unknown>)["kind"] === "agent_conversation_context"
+    ) {
+      return undefined;
+    }
+  } catch {
+    // Human-readable summaries are not JSON and should continue to render.
+  }
+  return summary;
 }
 
 function AgentConversationReviewSummary({

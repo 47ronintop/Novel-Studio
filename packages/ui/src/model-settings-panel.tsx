@@ -12,7 +12,7 @@ import {
 import { createContext, useContext, useState, type MouseEvent, type ReactNode } from "react";
 import type { ModelDiscoverySnapshot } from "@novel-studio/application";
 import type { UserAppearancePreferences } from "@novel-studio/shared";
-import type { EditorPreferences } from "./editor-toolbar.js";
+import { DEFAULT_EDITOR_PREFERENCES, type EditorPreferences } from "./editor-toolbar.js";
 import { AgentUsageSettings, type AgentUsageSettingsProps } from "./agent-usage-settings.js";
 export type { AgentUsageSettingsProps } from "./agent-usage-settings.js";
 import {
@@ -194,11 +194,8 @@ export function ModelSettingsPanel({
   const [settingsSearchQuery, setSettingsSearchQuery] = useState("");
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
   const resolvedEditorPreferences = editorPreferences ??
-    appearancePreferences?.editor ?? {
-      fontFamily: "mono" as const,
-      fontSize: 13,
-      lineHeight: 1.7
-    };
+    appearancePreferences?.editor ??
+    DEFAULT_EDITOR_PREFERENCES;
   const canSave =
     saveStatus !== "saving" &&
     draft.id.trim().length > 0 &&
@@ -511,22 +508,22 @@ function ModelProfileSettingsSection({
                 </button>
               </div>
             </ModelField>
-            <ModelField label="推理强度" note="声明该端点是否支持 reasoning_effort 参数。">
-              <label className="model-settings-checkbox">
-                <input
-                  aria-label="确认该端点支持 reasoning_effort"
-                  checked={draft.reasoningEffortEnabled}
-                  onChange={(event) =>
-                    onDraftChange?.({ reasoningEffortEnabled: event.currentTarget.checked })
-                  }
-                  type="checkbox"
-                />
-                <span>该第三方端点支持 reasoning_effort</span>
-              </label>
-            </ModelField>
             <details className="model-settings-advanced" aria-label="高级模型设置">
               <summary>高级设置</summary>
               <div className="model-profile-form-grid" data-field-layout="stacked">
+                <ModelField label="推理强度" note="声明该端点是否支持 reasoning_effort 参数。">
+                  <label className="model-settings-checkbox">
+                    <input
+                      aria-label="确认该端点支持 reasoning_effort"
+                      checked={draft.reasoningEffortEnabled}
+                      onChange={(event) =>
+                        onDraftChange?.({ reasoningEffortEnabled: event.currentTarget.checked })
+                      }
+                      type="checkbox"
+                    />
+                    <span>该第三方端点支持 reasoning_effort</span>
+                  </label>
+                </ModelField>
                 <ModelField label="Profile ID" note="当前模型配置在项目中的稳定标识。">
                   <input
                     aria-label="模型 Profile ID"
@@ -630,11 +627,7 @@ function AppearanceSettingsSection({
   readonly onEditorPreferencesChange: ModelSettingsPanelProps["onEditorPreferencesChange"];
   readonly preferences: ModelSettingsAppearancePreferences;
 }) {
-  const editor = preferences.editor ?? {
-    fontFamily: "mono" as const,
-    fontSize: 13,
-    lineHeight: 1.7
-  };
+  const editor = preferences.editor ?? DEFAULT_EDITOR_PREFERENCES;
   const updateAppearance = (next: Partial<Omit<ModelSettingsAppearancePreferences, "editor">>) => {
     onAppearancePreferencesChange?.({
       theme: next.theme ?? preferences.theme,
@@ -979,5 +972,5 @@ function accentLabel(accentColor: ModelSettingsAppearancePreferences["accentColo
     return "蓝色";
   }
 
-  return accentColor === "amber" ? "琥珀色" : "青绿色";
+  return accentColor === "amber" ? "琥珀色" : "朱红色";
 }

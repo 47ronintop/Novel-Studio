@@ -37,6 +37,7 @@ export interface AgentRunDraftSessionRepository {
 /** Defaults for a brand-new Conversation, applied only when no draft exists yet. */
 export interface AgentRunDraftInitialization {
   readonly modelProfileId: string;
+  readonly modelName?: string;
   readonly reasoningEffort?: AgentReasoningEffort;
   readonly operationMode: AgentOperationMode;
   readonly contextMode: AgentContextMode;
@@ -101,6 +102,7 @@ export interface SyncStartDraftCommand {
   readonly writePolicy: AgentWritePolicy;
   readonly writePolicyAcknowledged: boolean;
   readonly modelProfileId: string;
+  readonly modelName?: string;
   readonly reasoningEffort?: AgentReasoningEffort;
   readonly contextRefs: readonly ContextDraftRef[];
 }
@@ -159,7 +161,9 @@ export function createAgentRunDraftSession(
     });
   }
 
-  async function persist(view: AgentRunDraftView): Promise<Result<AgentRunDraftView, UnifiedError>> {
+  async function persist(
+    view: AgentRunDraftView
+  ): Promise<Result<AgentRunDraftView, UnifiedError>> {
     // Context draft first so a crash never leaves a run draft pointing at an unwritten context revision.
     const contextWritten = await options.repository.writeContextDraft(
       view.contextDraft as unknown as JsonObject
@@ -199,6 +203,7 @@ export function createAgentRunDraftSession(
       writePolicy: init.writePolicy,
       writePolicyAcknowledged: init.writePolicyAcknowledged ?? false,
       modelProfileId: init.modelProfileId,
+      ...(init.modelName === undefined ? {} : { modelName: init.modelName }),
       ...(init.reasoningEffort === undefined ? {} : { reasoningEffort: init.reasoningEffort }),
       contextDraftId,
       contextDraftRevision: contextDraft.revision,
@@ -210,7 +215,11 @@ export function createAgentRunDraftSession(
   }
 
   function runOnce(
-    command: { readonly projectId: string; readonly conversationId: string; readonly commandId: string },
+    command: {
+      readonly projectId: string;
+      readonly conversationId: string;
+      readonly commandId: string;
+    },
     execute: () => Promise<AgentRunDraftResult>
   ): Promise<AgentRunDraftResult> {
     const key = `${command.projectId}:${command.conversationId}:${command.commandId}`;
@@ -317,10 +326,7 @@ export function createAgentRunDraftSession(
       // Read-only: a run start references an already-persisted draft; it never initializes one.
       const loaded = await load(command.conversationId);
       if (!loaded.ok) return err(loaded.error);
-      if (
-        loaded.value === undefined ||
-        loaded.value.runDraft.runDraftId !== command.runDraftId
-      ) {
+      if (loaded.value === undefined || loaded.value.runDraft.runDraftId !== command.runDraftId) {
         return err(
           draftError(
             "AGENT_RUN_DRAFT_NOT_FOUND",
@@ -354,6 +360,7 @@ export function createAgentRunDraftSession(
             conversationId: command.conversationId,
             initialize: {
               modelProfileId: command.modelProfileId,
+              ...(command.modelName === undefined ? {} : { modelName: command.modelName }),
               ...(command.reasoningEffort === undefined
                 ? {}
                 : { reasoningEffort: command.reasoningEffort }),
@@ -399,6 +406,7 @@ function syncToIntent(
     {
       kind: "set_model",
       modelProfileId: command.modelProfileId,
+      ...(command.modelName === undefined ? {} : { modelName: command.modelName }),
       ...(command.reasoningEffort === undefined ? {} : { reasoningEffort: command.reasoningEffort })
     },
     {

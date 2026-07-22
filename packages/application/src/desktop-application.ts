@@ -207,6 +207,7 @@ export interface DesktopShellState {
 export interface DesktopApplication {
   shutdown(): Promise<Result<void, UnifiedError>>;
   getShellState(): DesktopShellState;
+  getActiveProjectWorkspace(): Result<ProjectWorkspaceSnapshot, UnifiedError>;
   listCommands(): readonly ApplicationCommand[];
   executeCommand(commandId: string): Result<DesktopShellState, UnifiedError>;
   prepareOpenCreativeProject(
@@ -462,6 +463,10 @@ export function createDesktopApplication(
         ),
         getActiveChapterEditorSession()?.getState()
       ),
+    getActiveProjectWorkspace() {
+      const snapshot = activeProjectWorkspaceSession?.getSnapshot();
+      return snapshot === undefined ? projectWorkspaceUnavailable() : ok(snapshot);
+    },
     listCommands: () => [
       ...DEFAULT_APPLICATION_COMMANDS,
       ...(pluginRuntimeSession?.listCommands() ?? [])
@@ -1229,6 +1234,18 @@ function withProjectWorkspaceState(
   return {
     ...shellState,
     projectTitle: workspaceSnapshot.project.title,
+    workspaceContext: toWorkspaceContextDto({
+      kind: "creativeProject",
+      workspaceId: workspaceSnapshot.project.projectId,
+      projectId: workspaceSnapshot.project.projectId,
+      displayName: workspaceSnapshot.project.title,
+      contentRoot: workspaceSnapshot.projectRoot,
+      stateRoot: workspaceSnapshot.projectRoot,
+      capabilities: ["creativeWorkbench", "writingContext", "creativeSearch", "creativeStudio"],
+      ...(workspaceSnapshot.activeChapterId === undefined
+        ? {}
+        : { activeChapterId: workspaceSnapshot.activeChapterId })
+    }),
     navigatorSections: shellState.navigatorSections.map((section) => {
       switch (section.id) {
         case "chapters":

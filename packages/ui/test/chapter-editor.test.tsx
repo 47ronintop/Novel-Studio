@@ -62,6 +62,37 @@ describe("ChapterEditor", () => {
     expect(html).not.toMatch(/fs|filesystem|node:/i);
   });
 
+  test("keeps version history collapsed until its summary is opened", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+
+    act(() => {
+      root.render(
+        <ChapterEditor
+          chapter={chapter}
+          saveStatus="Saved"
+          dirty={false}
+          versionHistory={[
+            {
+              versionId: "ver_01",
+              label: "Manual save",
+              createdAt: "2026-07-04T00:00:00.000Z"
+            }
+          ]}
+        />
+      );
+    });
+
+    const history = host.querySelector<HTMLDetailsElement>('[aria-label="版本历史"]');
+    expect(history?.open).toBe(false);
+    act(() => history?.querySelector("summary")?.click());
+    expect(history?.open).toBe(true);
+
+    act(() => root.unmount());
+    host.remove();
+  });
+
   test("renders callback-driven save, version preview, restore, and preview-only AI diff controls", () => {
     const html = renderToStaticMarkup(
       <ChapterEditor

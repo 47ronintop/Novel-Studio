@@ -93,6 +93,21 @@ describe("AgentConversationNavigator", () => {
     expect(onRestore).toHaveBeenCalledWith("conv-archived");
   });
 
+  test("deletes an archived conversation only after confirmation", () => {
+    const onDelete = vi.fn();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const { host } = renderNavigator({ filter: "archived", onDelete });
+
+    act(() =>
+      host.querySelector<HTMLButtonElement>('[aria-label="删除会话：已归档的节奏审阅"]')?.click()
+    );
+
+    expect(confirm).toHaveBeenCalledWith(
+      "确定删除归档会话“已归档的节奏审阅”吗？会话将从列表中移除，历史运行与审计记录会保留。"
+    );
+    expect(onDelete).toHaveBeenCalledWith("conv-archived");
+  });
+
   test("archives from the row menu and keeps the legacy virtual item read only", () => {
     const onArchive = vi.fn();
     const { host } = renderNavigator({ onArchive });
@@ -156,6 +171,7 @@ function renderNavigator(overrides: Partial<AgentConversationNavigatorProps> = {
       onSelect: () => undefined,
       onArchive: () => undefined,
       onRestore: () => undefined,
+      onDelete: () => undefined,
       ...overrides,
       ...nextOverrides
     };

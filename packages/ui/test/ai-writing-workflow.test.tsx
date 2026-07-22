@@ -13,9 +13,11 @@ import {
   type AiWritingWorkflowProps
 } from "../src/index.js";
 
-(globalThis as typeof globalThis & {
-  IS_REACT_ACT_ENVIRONMENT?: boolean;
-}).IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as typeof globalThis & {
+    IS_REACT_ACT_ENVIRONMENT?: boolean;
+  }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("AI writing workflow compatibility UI", () => {
   test("projects selection review and workflow history without a legacy assistant surface", () => {
@@ -124,7 +126,7 @@ describe("AI writing workflow compatibility UI", () => {
     expect(html).not.toContain('aria-label="AI 写作指令"');
   });
 
-  test("keeps model, reasoning, and the send slot inside the single Agent Composer", () => {
+  test("keeps the combined model/reasoning control and send slot inside one Agent Composer", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
@@ -158,18 +160,16 @@ describe("AI writing workflow compatibility UI", () => {
     );
 
     const conversationIndex = html.indexOf('aria-label="会话运行历史"');
-    const composerIndex = html.indexOf(
-      'class="ns-agent-conversation-composer ns-agent-composer"'
-    );
-    const modelIndex = html.indexOf('class="ns-agent-composer-model-trigger"');
-    const reasoningIndex = html.indexOf('class="ns-agent-composer-reasoning-trigger"');
+    const composerIndex = html.indexOf('class="ns-agent-conversation-composer ns-agent-composer"');
+    const modelAndReasoningIndex = html.indexOf('aria-label="模型与推理：gpt-5 · 中"');
     const sendIndex = html.indexOf('aria-label="启动 Agent 运行"');
 
     expect(conversationIndex).toBeGreaterThan(-1);
     expect(composerIndex).toBeGreaterThan(conversationIndex);
-    expect(modelIndex).toBeGreaterThan(composerIndex);
-    expect(reasoningIndex).toBeGreaterThan(modelIndex);
-    expect(sendIndex).toBeGreaterThan(reasoningIndex);
+    expect(modelAndReasoningIndex).toBeGreaterThan(composerIndex);
+    expect(sendIndex).toBeGreaterThan(modelAndReasoningIndex);
+    expect(html.match(/ns-agent-composer-model-trigger/g) ?? []).toHaveLength(1);
+    expect(html).not.toContain("ns-agent-composer-reasoning-trigger");
     expect(html.match(/aria-label="启动 Agent 运行"/g) ?? []).toHaveLength(1);
     expect(html).not.toContain('class="ns-ai-composer ns-ai-vscode-composer"');
     expect(html).not.toContain('aria-label="AI model controls"');
@@ -200,7 +200,7 @@ describe("AI writing workflow compatibility UI", () => {
       />
     );
 
-    expect(html).toContain('aria-label="模型：manual-proxy-model"');
+    expect(html).toContain('aria-label="模型与推理：manual-proxy-model · 中"');
     expect(html.match(/ns-agent-composer-model-trigger/g) ?? []).toHaveLength(1);
     expect(html).not.toContain("fetch failed");
     expect(html).not.toContain("legacy-model");
@@ -252,15 +252,22 @@ describe("AI writing workflow compatibility UI", () => {
       );
     });
 
+    const modelAndReasoningTrigger = host.querySelector<HTMLButtonElement>(
+      '[aria-label="模型与推理：gpt-5 · 中"]'
+    );
+    expect(modelAndReasoningTrigger).not.toBeNull();
     await act(async () => {
-      host
-        .querySelector<HTMLButtonElement>('[aria-label="推理强度：中"]')
-        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      modelAndReasoningTrigger?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     await act(async () => {
-      host
-        .querySelector<HTMLButtonElement>('[data-reasoning-option="high"]')
-        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      host.querySelector<HTMLButtonElement>('[data-model-menu="reasoning"]')?.click();
+    });
+    const highReasoningOption = host.querySelector<HTMLButtonElement>(
+      '[data-reasoning-option="high"]'
+    );
+    expect(highReasoningOption).not.toBeNull();
+    await act(async () => {
+      highReasoningOption?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
 
     expect(calls).toEqual(["high"]);

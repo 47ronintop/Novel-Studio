@@ -274,6 +274,8 @@ export function createApplicationIpcHandlers(
       chooseDirectory("creative-open", options.chooseOpenProjectDirectory),
     "application:project:choose-create-parent-directory": () =>
       chooseDirectory("creative-create-parent", options.chooseCreateProjectDirectory),
+    "application:project:get-active-workspace": () =>
+      Promise.resolve(projectSnapshotResultToDto(application.getActiveProjectWorkspace())),
     "application:project:open-creative-project": async (selectionId: unknown) => {
       const selection = resolveDirectorySelection(selectionId, "creative-open");
       if (!selection.ok) return selection;
@@ -761,6 +763,13 @@ export function createApplicationIpcHandlers(
         ? Promise.resolve(err(agentConversationUnavailable()))
         : session.restoreConversation(parsed);
     },
+    "application:agent-conversation:delete": (command: unknown) => {
+      const parsed = toChangeAgentConversationStatusCommand(command);
+      const session = currentAgentConversationSession();
+      return parsed === undefined || session === undefined
+        ? Promise.resolve(err(agentConversationUnavailable()))
+        : session.deleteConversation(parsed);
+    },
     "application:agent-conversation:search": (query: unknown) => {
       const parsed = toSearchAgentConversationsQuery(query);
       const session = currentAgentConversationSession();
@@ -966,6 +975,7 @@ function toSyncStartDraftCommand(value: unknown): SyncStartDraftCommand | undefi
       "writePolicy",
       "writePolicyAcknowledged",
       "modelProfileId",
+      "modelName",
       "reasoningEffort",
       "contextRefs"
     ]) ||
@@ -979,7 +989,8 @@ function toSyncStartDraftCommand(value: unknown): SyncStartDraftCommand | undefi
       value["writePolicy"] !== "user_preapproved_run") ||
     typeof value["writePolicyAcknowledged"] !== "boolean" ||
     !isNonEmptyString(value["modelProfileId"]) ||
-    (value["reasoningEffort"] !== undefined && typeof value["reasoningEffort"] !== "string") ||
+    (value["modelName"] !== undefined && !isNonEmptyString(value["modelName"])) ||
+    (value["reasoningEffort"] !== undefined && !isNonEmptyString(value["reasoningEffort"])) ||
     !Array.isArray(value["contextRefs"])
   ) {
     return undefined;
@@ -1000,8 +1011,9 @@ function toReadAgentRunDraftCommand(value: unknown): ReadAgentRunDraftCommand | 
   const initialize = value["initialize"];
   if (
     !isNonEmptyString(initialize["modelProfileId"]) ||
+    (initialize["modelName"] !== undefined && !isNonEmptyString(initialize["modelName"])) ||
     (initialize["reasoningEffort"] !== undefined &&
-      typeof initialize["reasoningEffort"] !== "string") ||
+      !isNonEmptyString(initialize["reasoningEffort"])) ||
     (initialize["operationMode"] !== "planning" && initialize["operationMode"] !== "execution") ||
     (initialize["contextMode"] !== "writing" && initialize["contextMode"] !== "general_file") ||
     (initialize["writePolicy"] !== "write_before_confirmation" &&
@@ -1144,12 +1156,13 @@ function isAgentRunDraftMutation(value: unknown): boolean {
     case "set_model":
       return (
         isNonEmptyString(value["modelProfileId"]) &&
-        (value["reasoningEffort"] === undefined || typeof value["reasoningEffort"] === "string") &&
-        hasOnlyKeys(value, ["kind", "modelProfileId", "reasoningEffort"])
+        (value["modelName"] === undefined || isNonEmptyString(value["modelName"])) &&
+        (value["reasoningEffort"] === undefined || isNonEmptyString(value["reasoningEffort"])) &&
+        hasOnlyKeys(value, ["kind", "modelProfileId", "modelName", "reasoningEffort"])
       );
     case "set_reasoning":
       return (
-        typeof value["reasoningEffort"] === "string" &&
+        isNonEmptyString(value["reasoningEffort"]) &&
         hasOnlyKeys(value, ["kind", "reasoningEffort"])
       );
     default:
@@ -2185,14 +2198,7 @@ function toAiWritingSuggestionStreamStartRequest(
 function isLlmReasoningEffort(
   value: unknown
 ): value is NonNullable<AiWritingSuggestionRequest["reasoningEffort"]> {
-  return (
-    value === "none" ||
-    value === "minimal" ||
-    value === "low" ||
-    value === "medium" ||
-    value === "high" ||
-    value === "xhigh"
-  );
+  return isNonEmptyString(value);
 }
 
 function toAiWritingSelectionPreviewRequest(value: unknown): AiWritingSelectionPreviewRequest {

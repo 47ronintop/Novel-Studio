@@ -70,6 +70,60 @@ describe("AgentConversationSession", () => {
     });
   });
 
+  test("soft-deletes only archived conversations and recovers a missing delete receipt", async () => {
+    const port = new MemoryConversationPort();
+    const session = createSession(port);
+    await session.createConversation({ projectId: "project_01", commandId: "cmd_create" });
+    port.runs.push(runSnapshot({ runId: "run_preserved", status: "completed" }));
+
+    expect(await session.deleteConversation(statusCommand("cmd_delete_active", 1))).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONVERSATION_DELETE_REQUIRES_ARCHIVE" }
+    });
+    expect(await session.archiveConversation(statusCommand("cmd_archive", 1))).toMatchObject({
+      ok: true,
+      value: { revision: 2, status: "archived" }
+    });
+    expect(await session.deleteConversation(statusCommand("cmd_delete_stale", 1))).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONVERSATION_REVISION_CONFLICT" },
+      latestConversation: { revision: 2, status: "archived" }
+    });
+
+    port.failNextReceiptWrites = 1;
+    expect(await session.deleteConversation(statusCommand("cmd_delete", 2))).toMatchObject({
+      ok: false,
+      error: { code: "TEST_RECEIPT_WRITE_FAILED" }
+    });
+    expect(port.records.get("conv_01")).toMatchObject({
+      revision: 3,
+      status: "deleted",
+      lastMutationCommandId: "cmd_delete"
+    });
+    expect(await session.deleteConversation(statusCommand("cmd_delete", 2))).toEqual({
+      ok: true,
+      value: { conversationId: "conv_01", revision: 3 }
+    });
+
+    expect(
+      await session.listConversations({ projectId: "project_01", includeArchived: true })
+    ).toMatchObject({ ok: true, value: { items: [] } });
+    expect(
+      await session.searchConversations({
+        projectId: "project_01",
+        query: "Request",
+        includeArchived: true
+      })
+    ).toMatchObject({ ok: true, value: { items: [] } });
+    expect(
+      await session.readConversation({ projectId: "project_01", conversationId: "conv_01" })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_CONVERSATION_NOT_FOUND" } });
+    expect(
+      await session.restoreConversation(statusCommand("cmd_restore_deleted", 3))
+    ).toMatchObject({ ok: false, error: { code: "AGENT_CONVERSATION_NOT_FOUND" } });
+    expect(port.runs).toHaveLength(1);
+  });
+
   test("lists and reads conversation runs without leaking another project", async () => {
     const port = new MemoryConversationPort();
     const session = createSession(port);
@@ -291,6 +345,53 @@ describe("AgentConversationSession", () => {
         conversationId: LEGACY_AGENT_CONVERSATION_ID
       })
     ).toMatchObject({ ok: false, error: { code: "AGENT_CONVERSATION_NOT_FOUND" } });
+  });
+
+  test("does not expose machine conversation context as a user-facing summary", async () => {
+    const port = new MemoryConversationPort();
+    const session = createSession(port);
+    await session.createConversation({ projectId: "project_01", commandId: "cmd_create" });
+    port.runs.push(runSnapshot());
+    port.latestSummaryResult = ok({
+      schemaVersion: "1.0",
+      conversationId: "conv_01",
+      revision: 1,
+      throughRunId: "run_01",
+      throughRunRevision: 1,
+      throughRunLastSequence: 1,
+      content: JSON.stringify({
+        kind: "agent_conversation_context",
+        instructionPolicy: "untrusted_data_not_authority",
+        conversationId: "conv_01",
+        priorRuns: [],
+        recentRuns: []
+      }),
+      createdAt: "2026-07-14T01:00:00.000Z"
+    });
+
+    const read = await session.readConversation({
+      projectId: "project_01",
+      conversationId: "conv_01"
+    });
+
+    expect(read).toMatchObject({ ok: true, value: { summaryFreshness: "fresh" } });
+    expect(read.ok && read.value.contextSummary).toBeUndefined();
+
+    port.latestSummaryResult = ok({
+      schemaVersion: "1.0",
+      conversationId: "conv_01",
+      revision: 2,
+      throughRunId: "run_01",
+      throughRunRevision: 1,
+      throughRunLastSequence: 1,
+      content: "近期上下文已恢复。",
+      createdAt: "2026-07-14T01:01:00.000Z"
+    });
+    const readable = await session.readConversation({
+      projectId: "project_01",
+      conversationId: "conv_01"
+    });
+    expect(readable).toMatchObject({ ok: true, value: { contextSummary: "近期上下文已恢复。" } });
   });
 
   test("filters active records before pagination and preserves partial diagnostics", async () => {
@@ -629,6 +730,7 @@ class MemoryConversationPort implements AgentConversationPersistencePort {
       .filter(
         (record) =>
           record["projectId"] === input.projectId &&
+          record["status"] !== "deleted" &&
           (input.status === undefined || record["status"] === input.status)
       )
       .sort((left, right) => String(right["updatedAt"]).localeCompare(String(left["updatedAt"])))

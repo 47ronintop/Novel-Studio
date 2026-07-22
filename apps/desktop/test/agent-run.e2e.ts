@@ -16,7 +16,7 @@ const electronMain = join(repositoryRoot, "apps", "desktop", "dist", "main", "in
 const fixtureRoot = join(repositoryRoot, "fixtures", "projects", "minimal-chapter");
 const activeChapterId = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D0";
 
-test("blocks an Agent run when the selected model fails capability preflight", async () => {
+test("uses the local scripted Agent when the configured profile has no stored key", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-agent-preflight-e2e-"));
   const projectRoot = join(tempRoot, "Project");
   await cp(fixtureRoot, projectRoot, { recursive: true });
@@ -36,8 +36,12 @@ test("blocks an Agent run when the selected model fails capability preflight", a
     await composer.getByLabel("Agent 请求").fill("检查当前章节");
     await composer.getByLabel("启动 Agent 运行").click();
 
-    await expect(page.getByRole("alert")).toContainText("cannot start an Agent run");
-    await expect(page.getByLabel("Agent 运行时间线")).toHaveCount(0);
+    await expect(page.locator(".ns-agent-assistant-text")).toContainText(
+      "我会先读取项目结构和当前章节。"
+    );
+    await expect(page.getByLabel("Agent 运行时间线")).toHaveCount(1);
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(page.getByText("LLM_PROVIDER_ERROR", { exact: false })).toHaveCount(0);
   } finally {
     await electronApp.close();
     await rm(tempRoot, { recursive: true, force: true });

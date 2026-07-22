@@ -18,7 +18,15 @@ export function DiffReview({ review }: { readonly review: ChangeSetReviewProps }
     <section className="ns-diff-review" aria-label="变更集差异审阅">
       <header className="ns-diff-review-header">
         <div>
-          <span className="ns-change-set-state">
+          <span
+            aria-label={review.changeSet.status === "applied" ? "AI 修改已写入" : undefined}
+            className={
+              review.changeSet.status === "applied"
+                ? "ns-change-set-state ns-ai-applied-stamp"
+                : "ns-change-set-state"
+            }
+            data-status={review.changeSet.status}
+          >
             {review.changeSet.status === "applied" ? "已写入" : "尚未写入"}
           </span>
           <strong>{review.changeSet.files.length} 个文件</strong>

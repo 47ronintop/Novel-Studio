@@ -62,7 +62,8 @@ export interface LlmParameters {
   readonly reasoningEffort?: LlmReasoningEffort;
 }
 
-export type LlmReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+/** Provider-declared string; callers must validate it against the selected model's capabilities. */
+export type LlmReasoningEffort = string;
 
 export interface LlmRequest {
   readonly schemaVersion: "1.0";

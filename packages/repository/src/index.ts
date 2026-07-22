@@ -32,6 +32,7 @@ export type {
   AgentConversationListDiagnostic,
   AgentConversationListPage,
   AgentConversationRecord,
+  AgentConversationRecordStatus,
   AgentConversationSummaryRevision,
   UpdateAgentConversationRecordInput
 } from "./agent-conversation-repository.js";

@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, MoreHorizontal, Plus, Search } from "lucide-react";
+import { Archive, ArchiveRestore, MoreHorizontal, Plus, Search, Trash2 } from "lucide-react";
 import type { KeyboardEvent } from "react";
 
 import type {
@@ -93,6 +93,7 @@ function ConversationRow(
   }
 ) {
   const { conversation } = props;
+  const onDelete = props.onDelete;
   const selected = conversation.conversationId === props.selectedConversationId;
   const busy = conversation.conversationId === props.busyConversationId;
   const activeRun = conversation.conversationId === props.activeConversationId;
@@ -133,16 +134,30 @@ function ConversationRow(
           只读
         </span>
       ) : conversation.status === "archived" ? (
-        <button
-          aria-label={`恢复会话：${conversation.title}`}
-          className="ns-icon-button ns-agent-conversation-row-action"
-          disabled={busy}
-          onClick={() => props.onRestore(conversation.conversationId)}
-          title="恢复会话"
-          type="button"
-        >
-          <ArchiveRestore aria-hidden="true" size={14} />
-        </button>
+        <div className="ns-agent-conversation-row-actions">
+          <button
+            aria-label={`恢复会话：${conversation.title}`}
+            className="ns-icon-button ns-agent-conversation-row-action"
+            disabled={busy}
+            onClick={() => props.onRestore(conversation.conversationId)}
+            title="恢复会话"
+            type="button"
+          >
+            <ArchiveRestore aria-hidden="true" size={14} />
+          </button>
+          {onDelete === undefined ? null : (
+            <button
+              aria-label={`删除会话：${conversation.title}`}
+              className="ns-icon-button ns-agent-conversation-row-action ns-agent-conversation-delete"
+              disabled={busy}
+              onClick={() => confirmConversationDeletion(conversation, onDelete)}
+              title="删除会话"
+              type="button"
+            >
+              <Trash2 aria-hidden="true" size={14} />
+            </button>
+          )}
+        </div>
       ) : (
         <details className="ns-agent-conversation-menu">
           <summary aria-label={`会话操作：${conversation.title}`} title="会话操作">
@@ -162,6 +177,16 @@ function ConversationRow(
       )}
     </li>
   );
+}
+
+function confirmConversationDeletion(
+  conversation: AgentConversationListItemProps,
+  onDelete: (conversationId: string) => void
+): void {
+  const confirmed = window.confirm(
+    `确定删除归档会话“${conversation.title}”吗？会话将从列表中移除，历史运行与审计记录会保留。`
+  );
+  if (confirmed) onDelete(conversation.conversationId);
 }
 
 function ConversationListEmpty({

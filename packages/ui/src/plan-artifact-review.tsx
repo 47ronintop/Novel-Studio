@@ -13,17 +13,11 @@ export interface PlanArtifactReviewProps {
   ) => void;
 }
 
-export function PlanArtifactReview({
-  contextMode,
-  plan,
-  onDecision
-}: PlanArtifactReviewProps) {
-  const [executionContextMode, setExecutionContextMode] =
-    useState<AgentContextMode>(contextMode);
-  const [executionWritePolicy, setExecutionWritePolicy] =
-    useState<AgentWritePolicy>("write_before_confirmation");
-  const [executionWritePolicyAcknowledged, setExecutionWritePolicyAcknowledged] =
-    useState(false);
+export function PlanArtifactReview({ contextMode, plan, onDecision }: PlanArtifactReviewProps) {
+  const [executionContextMode, setExecutionContextMode] = useState<AgentContextMode>(contextMode);
+  const [executionWritePolicy, setExecutionWritePolicy] = useState<AgentWritePolicy>(
+    "write_before_confirmation"
+  );
   const blockingQuestions = plan.openQuestions.filter(
     (question) => question.blocking && question.resolution === undefined
   );
@@ -33,14 +27,10 @@ export function PlanArtifactReview({
   useEffect(() => {
     setExecutionContextMode(contextMode);
     setExecutionWritePolicy("write_before_confirmation");
-    setExecutionWritePolicyAcknowledged(false);
   }, [contextMode, plan.planId, plan.revision]);
 
   function selectWritePolicy(policy: AgentWritePolicy): void {
     setExecutionWritePolicy(policy);
-    if (policy === "write_before_confirmation") {
-      setExecutionWritePolicyAcknowledged(false);
-    }
   }
 
   return (
@@ -117,18 +107,6 @@ export function PlanArtifactReview({
                 <span>本次运行自动修改</span>
               </label>
             </fieldset>
-            {!automaticWriteSelected ? null : (
-              <label className="ns-agent-write-acknowledgement">
-                <input
-                  checked={executionWritePolicyAcknowledged}
-                  onChange={(event) =>
-                    setExecutionWritePolicyAcknowledged(event.currentTarget.checked)
-                  }
-                  type="checkbox"
-                />
-                <span>我理解本次运行可自动修改项目文件，并会在写入前创建 Version Group。</span>
-              </label>
-            )}
           </section>
           <footer>
             <button
@@ -143,17 +121,12 @@ export function PlanArtifactReview({
             <button
               aria-label="按此方案执行"
               className="ns-ai-send-button ns-agent-plan-approve"
-              disabled={
-                blockingQuestions.length > 0 ||
-                (automaticWriteSelected && !executionWritePolicyAcknowledged)
-              }
+              disabled={blockingQuestions.length > 0}
               onClick={() =>
                 onDecision("approve", {
                   executionContextMode,
                   executionWritePolicy,
-                  ...(automaticWriteSelected && executionWritePolicyAcknowledged
-                    ? { executionWritePolicyAcknowledged: true }
-                    : {})
+                  ...(automaticWriteSelected ? { executionWritePolicyAcknowledged: true } : {})
                 })
               }
               type="button"
