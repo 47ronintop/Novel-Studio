@@ -91,7 +91,7 @@ export function createSettingsBridge(
 
       defaultProfileId = result.value.defaultProfileId;
       profiles = result.value.profiles;
-      const selected = profiles.find((profile) => profile.id === defaultProfileId) ?? profiles[0];
+      const selected = profiles.find((profile) => profile.id === defaultProfileId);
       selectedProfileId = selected?.id;
       draft = selected === undefined ? newDraft(createProfileId()) : draftFromProfile(selected);
       modelDiscovery = undefined;
@@ -99,7 +99,13 @@ export function createSettingsBridge(
         await discoverModels(selected.id);
       }
       saveStatus = "idle";
-      feedback = { kind: "info", message: "模型配置已加载。" };
+      feedback =
+        selected === undefined && profiles.length > 0
+          ? {
+              kind: "error",
+              message: "默认模型配置不存在。请明确选择一个模型并将其设为默认模型。"
+            }
+          : { kind: "info", message: "模型配置已加载。" };
       return toProps();
     },
     async loadPlugins() {
@@ -295,12 +301,17 @@ export function createSettingsBridge(
   function profileFromDraft(nextDraft: ModelSettingsDraft): ModelProfile | undefined {
     const temperature = parseNumber(nextDraft.temperature);
     const maxTokens = parseInteger(nextDraft.maxTokens);
+    const contextWindow =
+      nextDraft.contextWindow.trim().length === 0
+        ? undefined
+        : parsePositiveInteger(nextDraft.contextWindow);
     const topP = nextDraft.topP.trim().length === 0 ? undefined : parseNumber(nextDraft.topP);
     const timeoutMs = parseInteger(nextDraft.timeoutMs);
     if (
       temperature === undefined ||
       maxTokens === undefined ||
       timeoutMs === undefined ||
+      (nextDraft.contextWindow.trim().length > 0 && contextWindow === undefined) ||
       (nextDraft.topP.trim().length > 0 && topP === undefined)
     ) {
       return undefined;
@@ -326,6 +337,7 @@ export function createSettingsBridge(
     return {
       ...baseProfile,
       ...(nextDraft.baseUrl.trim().length === 0 ? {} : { baseUrl: nextDraft.baseUrl.trim() }),
+      ...(contextWindow === undefined ? {} : { contextWindow }),
       ...(topP === undefined ? {} : { topP }),
       ...(nextDraft.reasoningEffortEnabled ? { reasoningEffortEnabled: true } : {})
     };
@@ -528,6 +540,7 @@ function draftFromProfile(profile: ModelProfile): ModelSettingsDraft {
     displayName: profile.displayName,
     baseUrl: profile.baseUrl ?? "",
     modelName: profile.modelName,
+    contextWindow: profile.contextWindow === undefined ? "" : String(profile.contextWindow),
     apiKeyRefInput: "",
     temperature: String(profile.temperature),
     maxTokens: String(profile.maxTokens),
@@ -544,6 +557,7 @@ function newDraft(profileId: string): ModelSettingsDraft {
     displayName: "新模型配置",
     baseUrl: "",
     modelName: "",
+    contextWindow: "",
     apiKeyRefInput: "",
     temperature: "0.7",
     maxTokens: "4096",
@@ -575,6 +589,11 @@ function apiKeyRefFromDraft(
 function parseInteger(value: string): number | undefined {
   const parsed = Number(value);
   return Number.isInteger(parsed) ? parsed : undefined;
+}
+
+function parsePositiveInteger(value: string): number | undefined {
+  const parsed = parseInteger(value);
+  return parsed !== undefined && parsed > 0 ? parsed : undefined;
 }
 
 function redactSettingsDetail(detail: string): string {

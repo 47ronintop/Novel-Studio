@@ -54,10 +54,7 @@ test("accepts settings and editor chrome across desktop and narrow Electron wind
     await expect(page.locator('[data-region="status-bar"]')).toHaveCount(1);
     await capture(page, "desktop-settings.png");
 
-    await page
-      .locator(".model-settings-category-list")
-      .getByText("外观", { exact: true })
-      .click();
+    await page.locator(".model-settings-category-list").getByText("外观", { exact: true }).click();
     await page.getByRole("button", { name: "浅色主题" }).click();
     const blueAccent = page.getByRole("button", { name: "强调色 蓝色" });
     await blueAccent.click();
@@ -72,21 +69,43 @@ test("accepts settings and editor chrome across desktop and narrow Electron wind
     await blueAccent.focus();
     await expect(blueAccent).toBeFocused();
     await expectElementContrast(blueAccent);
-    const swatchColors = await page.locator(".model-settings-swatch").evaluateAll((swatches) =>
-      swatches.map((swatch) => getComputedStyle(swatch).backgroundColor)
-    );
+    const swatchColors = await page
+      .locator(".model-settings-swatch")
+      .evaluateAll((swatches) =>
+        swatches.map((swatch) => getComputedStyle(swatch).backgroundColor)
+      );
     expect(new Set(swatchColors).size).toBe(3);
     expect(swatchColors.every((color) => color !== "rgba(0, 0, 0, 0)")).toBe(true);
     await capture(page, "desktop-light-blue.png");
 
-    await page.getByRole("button", { name: "关闭设置" }).click();
+    await page.getByRole("button", { name: "水墨鎏金主题" }).click();
+    await expect(shell).toHaveAttribute("data-theme", "ink-gold");
+    await expectFunctionalContrast(page);
+    await expectElementContrast(page.getByRole("button", { name: "水墨鎏金主题" }));
+    await capture(page, "desktop-ink-gold.png");
+    await expect
+      .poll(async () =>
+        page.evaluate(async () => {
+          const loaded = await window.novelStudio?.preferences.load();
+          return loaded?.ok === true ? loaded.value.appearance.theme : undefined;
+        })
+      )
+      .toBe("ink-gold");
+    await page.reload();
+    await expect(page.locator(".ns-shell")).toHaveAttribute("data-theme", "ink-gold");
+
+    const closeSettings = page.getByRole("button", { name: "关闭设置" });
+    if (await closeSettings.isVisible()) await closeSettings.click();
     await browserWindow.evaluate((window) => window.setSize(760, 720));
     expect(await browserWindow.evaluate((window) => window.getSize()[0])).toBe(760);
     await expect(page.getByRole("tab", { name: "第一章.md" })).toBeVisible();
     await expectEditorFillsSurface(page);
     await page.getByRole("button", { name: "查找当前文档" }).click();
     await expect(overlay).toBeVisible();
-    await expectInside(page.getByRole("tab", { name: "第一章.md" }), page.locator(".ns-editor-area"));
+    await expectInside(
+      page.getByRole("tab", { name: "第一章.md" }),
+      page.locator(".ns-editor-area")
+    );
     await expectInside(overlay, editorSurface);
     await capture(page, "narrow-workspace.png");
     await page.keyboard.press("Escape");
@@ -108,6 +127,7 @@ test("accepts settings and editor chrome across desktop and narrow Electron wind
       "desktop-replace-overlay.png",
       "desktop-settings.png",
       "desktop-light-blue.png",
+      "desktop-ink-gold.png",
       "narrow-workspace.png",
       "narrow-settings.png"
     ]) {
@@ -232,7 +252,10 @@ function contrastRatio(foreground: string, background: string): number {
 
 function relativeLuminance(color: string): number {
   if (color.startsWith("oklch(")) {
-    const values = color.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+    const values = color
+      .match(/[\d.]+/g)
+      ?.slice(0, 3)
+      .map(Number);
     if (values === undefined || values.length !== 3) {
       throw new Error(`Expected an OKLCH color, received: ${color}`);
     }
@@ -254,16 +277,17 @@ function relativeLuminance(color: string): number {
     );
   }
 
-  const channels = color.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+  const channels = color
+    .match(/[\d.]+/g)
+    ?.slice(0, 3)
+    .map(Number);
   if (channels === undefined || channels.length !== 3) {
     throw new Error(`Expected an RGB color, received: ${color}`);
   }
 
   const linear = channels.map((channel) => {
     const normalized = channel / 255;
-    return normalized <= 0.04045
-      ? normalized / 12.92
-      : ((normalized + 0.055) / 1.055) ** 2.4;
+    return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
   });
   return 0.2126 * (linear[0] ?? 0) + 0.7152 * (linear[1] ?? 0) + 0.0722 * (linear[2] ?? 0);
 }

@@ -163,7 +163,19 @@ async function launchScenario(): Promise<{
   const server = createServer(async (request, response) => {
     const body = await readJsonBody(request);
     if (request.method === "GET" && request.url === "/v1/models") {
-      json(response, { data: [{ id: "local-agent", context_window: 128000 }] });
+      json(response, {
+        data: [
+          {
+            id: "local-agent",
+            context_window: 128000,
+            capabilities: {
+              streaming: true,
+              tool_calling: true,
+              structured_arguments: true
+            }
+          }
+        ]
+      });
       return;
     }
     if (request.method !== "POST" || body["stream"] !== true) {
@@ -209,7 +221,7 @@ async function launchScenario(): Promise<{
   const electronApp = await electron.launch({
     args: [electronMain],
     env: electronEnv({
-      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Bootstrap Project"),
+      NOVEL_STUDIO_PROJECT_ROOT: projectRoot,
       NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
     })
   });
@@ -264,19 +276,31 @@ async function startAutonomousExecution(page: Page): Promise<void> {
   const createConversation = page.getByRole("button", { name: "新建会话" }).first();
   if (await createConversation.isVisible()) await createConversation.click();
   const composer = page.getByLabel("会话输入区");
-  await selectAutomaticMode(composer);
-  await expect(composer.getByLabel("修改权限：自动")).toBeVisible();
+  await selectAutomaticMode(page, composer);
+  await expect(composer.getByLabel("添加引用与执行审批")).toBeVisible();
   await expect(composer.getByRole("checkbox")).toHaveCount(0);
   await composer.getByLabel("Agent 请求").fill("连续修改两章并完成运行");
   await composer.getByLabel("启动 Agent 运行").click();
   await resolveContextRefreshIfVisible(page);
 }
 
-async function selectAutomaticMode(composer: ReturnType<Page["getByLabel"]>): Promise<void> {
-  const trigger = composer.getByTitle("选择运行方式");
-  if ((await trigger.getAttribute("aria-label")) === "自动") return;
-  await trigger.click();
-  await composer.getByLabel("运行方式").getByRole("button", { name: "自动", exact: true }).click();
+async function selectAutomaticMode(
+  page: Page,
+  composer: ReturnType<Page["getByLabel"]>
+): Promise<void> {
+  const trigger = composer.getByTitle("选择计划或执行模式");
+  if ((await trigger.getAttribute("aria-label")) !== "执行") {
+    await trigger.click();
+    await page
+      .getByLabel("计划或执行模式")
+      .getByRole("button", { name: "执行", exact: true })
+      .click();
+  }
+  await composer.getByLabel("添加引用与执行审批").click();
+  const menu = page.getByRole("dialog", { name: "添加引用与执行审批" });
+  await menu.getByRole("radio", { name: "替我审批" }).check();
+  await expect(menu.getByRole("checkbox")).toHaveCount(0);
+  await menu.press("Escape");
 }
 
 async function resolveContextRefreshIfVisible(page: Page): Promise<void> {
@@ -298,9 +322,11 @@ async function configureLocalModel(page: Page, baseUrl: string): Promise<void> {
   await page.getByRole("button", { name: "保存模型配置" }).click();
   await expect(page.getByText("模型配置已保存。", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "测试连接", exact: true }).click();
-  await expect(page.locator(".ns-project-feedback")).toContainText(
-    "Connected to openai-compatible/local-agent"
-  );
+  await expect(
+    page
+      .locator(".ns-project-feedback")
+      .filter({ hasText: "Connected to openai-compatible/local-agent" })
+  ).toContainText("Connected to openai-compatible/local-agent");
   await page.getByRole("button", { name: "关闭设置" }).click();
 }
 

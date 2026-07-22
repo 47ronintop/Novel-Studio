@@ -371,7 +371,7 @@ describe("Agent Run renderer bridge", () => {
     expect(startCommand).not.toHaveProperty("providerCapabilitySnapshot");
   });
 
-  test("binds execution auto-write policy to an explicit per-run acknowledgement", async () => {
+  test("treats selecting execution auto-write as the per-run acknowledgement", async () => {
     let received: Record<string, unknown> | undefined;
     const executionSnapshot = {
       ...snapshot,
@@ -398,7 +398,6 @@ describe("Agent Run renderer bridge", () => {
     composer?.onOperationModeChange("execution");
     composer = bridge.getComposerProps();
     composer?.onWritePolicyChange("user_preapproved_run");
-    bridge.getComposerProps()?.onWritePolicyAcknowledgedChange(true);
 
     await bridge.send("自动修订当前章节");
 
@@ -476,7 +475,6 @@ describe("Agent Run renderer bridge", () => {
     composer?.onOperationModeChange("execution");
     composer = bridge.getComposerProps();
     composer?.onWritePolicyChange("user_preapproved_run");
-    bridge.getComposerProps()?.onWritePolicyAcknowledgedChange(true);
 
     const props = await bridge.send("自动修订当前章节");
 
@@ -529,7 +527,6 @@ describe("Agent Run renderer bridge", () => {
     composer?.onOperationModeChange("execution");
     composer = bridge.getComposerProps();
     composer?.onWritePolicyChange("user_preapproved_run");
-    bridge.getComposerProps()?.onWritePolicyAcknowledgedChange(true);
     await bridge.send("自动修订当前章节");
 
     listener?.({
@@ -829,7 +826,74 @@ describe("Agent Run renderer bridge", () => {
 
     expect(prepared).toBe(false);
     expect(called).toBe(false);
-    expect(props?.errorMessage).toContain("cannot start an Agent run");
+    expect(props?.errorMessage).toContain("未选择可用的模型配置");
+    expect(props?.errorMessage).toContain("设置");
+  });
+
+  test("surfaces the exact missing model fact and its Settings action", async () => {
+    let started = false;
+    const api = createApi({
+      prepareStart: async () =>
+        err(
+          createUnifiedError({
+            code: "AGENT_MODEL_CAPABILITY_UNSUPPORTED",
+            category: "UserError",
+            message: "The selected provider/model cannot start an Agent run.",
+            recoverability: "user-action",
+            suggestedAction: "Enter the verified context window in Settings.",
+            traceId: "agent-run-bridge-capability",
+            redactedDetail: {
+              profileId: "profile-01",
+              provider: "openai-compatible",
+              modelName: "custom-model",
+              missingCapabilities: ["contextWindow"],
+              contextWindowStatus: "missing"
+            }
+          })
+        ),
+      start: async () => {
+        started = true;
+        return ok(snapshot);
+      }
+    });
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      settings
+    });
+
+    const props = await bridge.send("检查当前章节");
+
+    expect(started).toBe(false);
+    expect(props.errorMessage).toContain("custom-model");
+    expect(props.errorMessage).toContain("上下文窗口信息未验证");
+    expect(props.errorMessage).toContain("Max Tokens");
+  });
+
+  test("restores the Act preapproval choice without a second acknowledgement", () => {
+    const bridge = createAgentRunBridge(createApi());
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      settings
+    });
+    bridge.getComposerProps()?.onOperationModeChange("execution");
+    bridge.getComposerProps()?.onWritePolicyChange("user_preapproved_run");
+
+    bridge.getComposerProps()?.onOperationModeChange("planning");
+    expect(bridge.getComposerProps()).toMatchObject({
+      operationMode: "planning",
+      writePolicy: "user_preapproved_run",
+      writePolicyAcknowledged: false
+    });
+
+    bridge.getComposerProps()?.onOperationModeChange("execution");
+    expect(bridge.getComposerProps()).toMatchObject({
+      operationMode: "execution",
+      writePolicy: "user_preapproved_run",
+      writePolicyAcknowledged: true
+    });
   });
 
   test("uses the current editor buffer for context refresh without saving", async () => {

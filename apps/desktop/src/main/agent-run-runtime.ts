@@ -10,6 +10,7 @@ import {
   createChangeSetSession,
   createVersionGroupSession,
   estimateAgentSystemReserveTokens,
+  preflightAgentModelCapabilities,
   type AgentContextBudgetInputs,
   type AgentContextBudgetInputsPort,
   type AgentContextSession,
@@ -616,15 +617,29 @@ function createDesktopAgentContextSession(input: {
       }
       const model = await input.resolveModelStartFacts(draft.modelProfileId, draft.modelName);
       if (model === undefined) {
-        return err(runtimeError("AGENT_MODEL_CAPABILITY_UNSUPPORTED"));
+        return err(
+          runtimeError("AGENT_MODEL_CAPABILITY_UNSUPPORTED", {
+            profileId: draft.modelProfileId,
+            modelName: draft.modelName ?? null,
+            missingCapabilities: ["modelProfile"]
+          })
+        );
       }
+      const capability = preflightAgentModelCapabilities({
+        profileId: model.profileId,
+        provider: model.provider,
+        modelName: model.modelName,
+        capabilities: model.capabilities,
+        requiredContextTokens: model.requiredContextTokens
+      });
+      if (!capability.ok) return err(capability.error);
       const sources = await resolveContextDraftSources(contextDraft.refs, input);
       if (!sources.ok) return err(sources.error);
       const inputs: AgentContextBudgetInputs = {
         model: {
           provider: model.provider,
           model: model.modelName,
-          contextWindow: model.capabilities.contextWindow ?? 0,
+          contextWindow: capability.value.contextWindow,
           toolReserve: 0,
           // Count the mode-specific system guidance the run will inject (Task 1.7) so the safe input
           // budget reserves room for it. The estimator here mirrors the deterministic fallback the
@@ -1190,7 +1205,8 @@ function runtimeErrorDescriptor(code: string): {
   if (code === "AGENT_MODEL_CAPABILITY_UNSUPPORTED") {
     return {
       category: "ValidationError",
-      message: "The selected Agent model does not expose the context capabilities required to start this request.",
+      message:
+        "The selected Agent model does not expose the context capabilities required to start this request.",
       suggestedAction: "Choose a supported model in Settings, refresh its model list, then retry."
     };
   }
@@ -1198,7 +1214,8 @@ function runtimeErrorDescriptor(code: string): {
     return {
       category: "ValidationError",
       message: "The selected Agent context mode is not available in the current workspace.",
-      suggestedAction: "Open a compatible project or choose a context mode supported by this workspace."
+      suggestedAction:
+        "Open a compatible project or choose a context mode supported by this workspace."
     };
   }
   if (code.startsWith("CHANGE_SET_")) {
@@ -1343,7 +1360,13 @@ async function resolveStartFromDraft(
   }
   const model = await input.resolveModelStartFacts(runDraft.modelProfileId, runDraft.modelName);
   if (model === undefined) {
-    return err(runtimeError("AGENT_MODEL_CAPABILITY_UNSUPPORTED"));
+    return err(
+      runtimeError("AGENT_MODEL_CAPABILITY_UNSUPPORTED", {
+        profileId: runDraft.modelProfileId,
+        modelName: runDraft.modelName ?? null,
+        missingCapabilities: ["modelProfile"]
+      })
+    );
   }
   const sources = await resolveContextDraftSources(contextDraft.refs, input);
   if (!sources.ok) return err(sources.error);

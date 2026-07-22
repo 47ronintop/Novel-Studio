@@ -171,7 +171,16 @@ describe("M95 real provider runtime", () => {
       secretStore,
       fetch: createModelsFetch(calls, {
         data: [
-          { id: "deepseek-chat", object: "model", context_window: 64000 },
+          {
+            id: "deepseek-chat",
+            object: "model",
+            context_window: 64000,
+            capabilities: {
+              streaming: true,
+              tool_calling: true,
+              structured_arguments: true
+            }
+          },
           {
             id: "deepseek-reasoner",
             object: "model",
@@ -195,7 +204,10 @@ describe("M95 real provider runtime", () => {
             id: "deepseek-chat",
             displayName: "deepseek-chat",
             provider: "deepseek",
-            contextWindow: 64000
+            contextWindow: 64000,
+            streaming: true,
+            toolCalling: true,
+            structuredArguments: true
           },
           {
             id: "deepseek-reasoner",

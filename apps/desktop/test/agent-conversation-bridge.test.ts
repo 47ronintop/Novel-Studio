@@ -31,7 +31,6 @@ describe("AgentConversationBridge", () => {
       onOperationModeChange: () => undefined,
       onContextModeChange: () => undefined,
       onWritePolicyChange: () => undefined,
-      onWritePolicyAcknowledgedChange: () => undefined,
       onSend: () => undefined,
       onStop: () => undefined
     };
@@ -106,7 +105,6 @@ describe("AgentConversationBridge", () => {
       onOperationModeChange: () => undefined,
       onContextModeChange: () => undefined,
       onWritePolicyChange: () => undefined,
-      onWritePolicyAcknowledgedChange: () => undefined,
       onSend: () => undefined,
       onStop: () => undefined
     };

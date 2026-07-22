@@ -21,7 +21,19 @@ test("surfaces draft-backed context controls and round-trips a reference through
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-agent-context-e2e-"));
   const server = createServer(async (request, response) => {
     if (request.method === "GET" && request.url === "/v1/models") {
-      json(response, { data: [{ id: "gpt-5", context_window: 128000 }] });
+      json(response, {
+        data: [
+          {
+            id: "gpt-5",
+            context_window: 128000,
+            capabilities: {
+              streaming: true,
+              tool_calling: true,
+              structured_arguments: true
+            }
+          }
+        ]
+      });
       return;
     }
     json(response, {
@@ -39,7 +51,7 @@ test("surfaces draft-backed context controls and round-trips a reference through
   const electronApp = await electron.launch({
     args: [electronMain],
     env: electronEnv({
-      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Bootstrap Project"),
+      NOVEL_STUDIO_PROJECT_ROOT: projectRoot,
       NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
     })
   });
@@ -56,12 +68,14 @@ test("surfaces draft-backed context controls and round-trips a reference through
     const modelTrigger = composer.getByLabel(/^模型与推理：/);
     await expect(modelTrigger).toBeVisible();
     await modelTrigger.click();
-    await composer.locator('[data-model-menu="model"]').hover();
+    const modelMenu = page.getByRole("dialog", { name: "选择模型与推理强度" });
+    await modelMenu.locator('[data-model-menu="model"]').click();
     const modelOptions = page.getByRole("listbox", { name: "模型", exact: true });
     await expect(modelOptions).toBeVisible();
     await expect(modelOptions.getByRole("button", { name: /gpt-5/ })).toBeVisible();
 
-    await composer.locator('[data-model-menu="reasoning"]').hover();
+    await modelMenu.getByRole("button", { name: "返回模型与推理选项" }).click();
+    await modelMenu.locator('[data-model-menu="reasoning"]').click();
     const reasoningOptions = page.getByRole("listbox", {
       name: "推理强度",
       exact: true
@@ -263,6 +277,8 @@ async function configureLocalModel(page: Page, baseUrl: string): Promise<void> {
   await page.getByLabel("模型 Base URL").fill(baseUrl);
   await page.getByLabel("模型名称").fill("gpt-5");
   await page.getByLabel("密钥引用").fill("local-context-e2e-key");
+  await page.getByLabel("高级模型设置").locator(":scope > summary").click();
+  await page.getByLabel("确认该端点支持 reasoning_effort").check();
   await page.getByRole("button", { name: "保存模型配置" }).click();
   await expect(page.getByText("模型配置已保存。", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "测试连接", exact: true }).click();

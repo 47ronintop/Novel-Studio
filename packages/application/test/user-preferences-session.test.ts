@@ -143,6 +143,40 @@ describe("UserPreferencesSession", () => {
     }
   });
 
+  test("round-trips the ink-gold appearance while unknown themes still fall back", async () => {
+    let saved: UserPreferencesSnapshot | undefined;
+    const session = createUserPreferencesSession({
+      preferencesPort: {
+        readUserPreferences: async () => ok(saved),
+        writeUserPreferences: async (preferences) => {
+          saved = preferences;
+          return ok(preferences);
+        }
+      }
+    });
+
+    const written = await session.save({
+      appearance: { theme: "ink-gold", accentColor: "amber" }
+    });
+    expect(written).toMatchObject({
+      ok: true,
+      value: { appearance: { theme: "ink-gold", accentColor: "amber" } }
+    });
+    expect(await session.load()).toMatchObject({
+      ok: true,
+      value: { appearance: { theme: "ink-gold", accentColor: "amber" } }
+    });
+
+    saved = {
+      ...createDefaultUserPreferences(),
+      appearance: { theme: "unknown", accentColor: "teal" }
+    } as unknown as UserPreferencesSnapshot;
+    expect(await session.load()).toMatchObject({
+      ok: true,
+      value: { appearance: { theme: "dark", accentColor: "teal" } }
+    });
+  });
+
   test("normalizes legacy density preferences without changing editor or shell values", async () => {
     const persisted = {
       schemaVersion: "1.0",

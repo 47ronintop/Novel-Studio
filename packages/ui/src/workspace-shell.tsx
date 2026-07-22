@@ -320,7 +320,6 @@ function WorkspaceShellContent({
                 onOperationModeChange: () => undefined,
                 onContextModeChange: () => undefined,
                 onWritePolicyChange: () => undefined,
-                onWritePolicyAcknowledgedChange: () => undefined,
                 onSend: () => undefined,
                 onStop: () => undefined
               }}

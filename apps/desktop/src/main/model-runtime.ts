@@ -663,6 +663,9 @@ function normalizeOpenAiCompatibleModels(payload: unknown): readonly {
   readonly id: string;
   readonly displayName: string;
   readonly contextWindow?: number;
+  readonly streaming?: boolean;
+  readonly toolCalling?: boolean;
+  readonly structuredArguments?: boolean;
   readonly reasoningStrength?: ModelReasoningStrengthControl;
 }[] {
   if (!isJsonRecord(payload) || !Array.isArray(payload["data"])) {
@@ -681,15 +684,52 @@ function normalizeOpenAiCompatibleModels(payload: unknown): readonly {
         return undefined;
       }
       const contextWindow = optionalNumber(entry["context_window"] ?? entry["contextWindow"]);
+      const streaming = capabilityBooleanFromModelMetadata(entry, [
+        "streaming",
+        "supports_streaming",
+        "supportsStreaming"
+      ]);
+      const toolCalling = capabilityBooleanFromModelMetadata(entry, [
+        "tool_calling",
+        "toolCalling",
+        "supports_tools",
+        "supportsTools"
+      ]);
+      const structuredArguments = capabilityBooleanFromModelMetadata(entry, [
+        "structured_arguments",
+        "structuredArguments",
+        "supports_structured_arguments",
+        "supportsStructuredArguments"
+      ]);
       const reasoningStrength = reasoningStrengthFromModelMetadata(entry);
       return {
         id,
         displayName: id,
         ...(contextWindow === undefined ? {} : { contextWindow }),
+        ...(streaming === undefined ? {} : { streaming }),
+        ...(toolCalling === undefined ? {} : { toolCalling }),
+        ...(structuredArguments === undefined ? {} : { structuredArguments }),
         ...(reasoningStrength === undefined ? {} : { reasoningStrength })
       };
     })
     .filter((entry): entry is ModelDiscoveryModelInput => entry !== undefined);
+}
+
+function capabilityBooleanFromModelMetadata(
+  entry: JsonObject,
+  keys: readonly string[]
+): boolean | undefined {
+  for (const key of keys) {
+    if (typeof entry[key] === "boolean") return entry[key];
+  }
+  for (const nestedKey of ["capabilities", "metadata"]) {
+    const nested = entry[nestedKey];
+    if (!isJsonRecord(nested)) continue;
+    for (const key of keys) {
+      if (typeof nested[key] === "boolean") return nested[key];
+    }
+  }
+  return undefined;
 }
 
 /** Normalize common provider metadata spellings into one model capability shape. */

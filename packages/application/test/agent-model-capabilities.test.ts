@@ -59,6 +59,41 @@ describe("agent model capability preflight", () => {
       }
     });
   });
+
+  test("distinguishes missing context metadata and never catalogs custom endpoints", () => {
+    const preflight = applicationExports.preflightAgentModelCapabilities({
+      profileId: "model_unknown_context",
+      provider: "openai-compatible",
+      modelName: "gpt-4.1",
+      capabilities: {
+        streaming: true,
+        toolCalling: true,
+        structuredArguments: true
+      },
+      requiredContextTokens: 8_000
+    });
+
+    expect(preflight).toMatchObject({
+      ok: false,
+      error: {
+        code: "AGENT_MODEL_CAPABILITY_UNSUPPORTED",
+        suggestedAction: expect.stringContaining("verified context window"),
+        redactedDetail: {
+          missingCapabilities: ["contextWindow"],
+          contextWindowStatus: "missing"
+        }
+      }
+    });
+    expect(
+      applicationExports.resolveCatalogAgentModelCapabilities("openai", "gpt-4.1")
+    ).toMatchObject({
+      contextWindow: 1_000_000,
+      toolCalling: true
+    });
+    expect(
+      applicationExports.resolveCatalogAgentModelCapabilities("openai-compatible", "gpt-4.1")
+    ).toBeUndefined();
+  });
 });
 
 describe("agent reasoning effort resolution", () => {

@@ -18,7 +18,9 @@ export {
 } from "./ipc-contract.js";
 export {
   preflightAgentModelCapabilities,
+  resolveCatalogAgentModelCapabilities,
   resolveAgentReasoningEffort,
+  type AgentModelCapabilityCatalogEntry,
   type AgentModelCapabilityDeclaration,
   type AgentModelCapabilityPreflightInput,
   type AgentModelCapabilitySnapshot,

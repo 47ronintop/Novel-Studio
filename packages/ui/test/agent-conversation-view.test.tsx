@@ -281,7 +281,6 @@ function composer(overrides: Partial<AgentComposerProps> = {}): AgentComposerPro
     onOperationModeChange: () => undefined,
     onContextModeChange: () => undefined,
     onWritePolicyChange: () => undefined,
-    onWritePolicyAcknowledgedChange: () => undefined,
     onSend: () => undefined,
     onStop: () => undefined,
     ...overrides

@@ -29,6 +29,7 @@ export interface ModelSettingsProfile {
   readonly displayName: string;
   readonly baseUrl?: string;
   readonly modelName: string;
+  readonly contextWindow?: number;
   readonly apiKeyRef: string;
   readonly temperature: number;
   readonly maxTokens: number;
@@ -46,6 +47,7 @@ export interface ModelSettingsDraft {
   readonly displayName: string;
   readonly baseUrl: string;
   readonly modelName: string;
+  readonly contextWindow: string;
   readonly apiKeyRefInput: string;
   readonly temperature: string;
   readonly maxTokens: string;
@@ -193,9 +195,8 @@ export function ModelSettingsPanel({
   const effectiveSection: SettingsPanelActiveSection = activeSection ?? "models";
   const [settingsSearchQuery, setSettingsSearchQuery] = useState("");
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
-  const resolvedEditorPreferences = editorPreferences ??
-    appearancePreferences?.editor ??
-    DEFAULT_EDITOR_PREFERENCES;
+  const resolvedEditorPreferences =
+    editorPreferences ?? appearancePreferences?.editor ?? DEFAULT_EDITOR_PREFERENCES;
   const canSave =
     saveStatus !== "saving" &&
     draft.id.trim().length > 0 &&
@@ -428,7 +429,18 @@ function ModelProfileSettingsSection({
                 <select
                   aria-label="Discovered model name"
                   className="model-settings-select"
-                  onChange={(event) => onDraftChange?.({ modelName: event.currentTarget.value })}
+                  onChange={(event) => {
+                    const modelName = event.currentTarget.value;
+                    const discovered = modelDiscovery.models.find(
+                      (model) => model.id === modelName
+                    );
+                    onDraftChange?.({
+                      modelName,
+                      ...(discovered?.contextWindow === undefined
+                        ? {}
+                        : { contextWindow: String(discovered.contextWindow) })
+                    });
+                  }}
                   value={draft.modelName}
                 >
                   {modelDiscovery.models.map((model) => (
@@ -562,6 +574,23 @@ function ModelProfileSettingsSection({
                     value={draft.maxTokens}
                   />
                 </ModelField>
+                <ModelField
+                  label="上下文窗口"
+                  note="该模型可接收的总 token 数；这不是单次响应的 Max Tokens。未知模型启动 Agent 前必须填写已验证的正整数。"
+                >
+                  <input
+                    aria-label="模型上下文窗口"
+                    className="ns-search-input"
+                    inputMode="numeric"
+                    min={1}
+                    onChange={(event) =>
+                      onDraftChange?.({ contextWindow: event.currentTarget.value })
+                    }
+                    placeholder="例如 128000"
+                    type="number"
+                    value={draft.contextWindow}
+                  />
+                </ModelField>
                 <ModelField label="Top P" note="控制 nucleus sampling 的采样范围。">
                   <input
                     aria-label="Top P"
@@ -662,10 +691,10 @@ function AppearanceSettingsSection({
         <ModelField
           category="外观"
           label="主题策略"
-          note="控制工作台使用固定深色、浅色主题，或跟随系统主题策略。"
+          note="控制工作台使用固定深色、浅色、水墨鎏金主题，或跟随系统主题策略。"
         >
           <div className="model-settings-segmented" aria-label="外观主题">
-            {(["dark", "light", "system"] as const).map((theme) => (
+            {(["dark", "light", "system", "ink-gold"] as const).map((theme) => (
               <button
                 aria-label={`${themeLabel(theme)}主题`}
                 aria-pressed={preferences.theme === theme}
@@ -960,6 +989,9 @@ function statusLabel(status: ModelConnectionStatusValue): string {
 }
 
 function themeLabel(theme: ModelSettingsAppearancePreferences["theme"]): string {
+  if (theme === "ink-gold") {
+    return "水墨鎏金";
+  }
   if (theme === "system") {
     return "跟随系统";
   }

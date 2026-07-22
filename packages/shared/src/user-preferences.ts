@@ -19,7 +19,7 @@ export interface UserEditorPreferences {
   readonly lineHeight: number;
 }
 
-export type UserThemePreference = "dark" | "light" | "system";
+export type UserThemePreference = "dark" | "light" | "system" | "ink-gold";
 export type UserAccentColorPreference = "teal" | "blue" | "amber";
 
 export interface UserAppearancePreferences {

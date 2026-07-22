@@ -173,7 +173,9 @@ function normalizeAppearancePreferences(
 ): UserAppearancePreferences {
   return {
     theme:
-      preferences?.theme === "light" || preferences?.theme === "system"
+      preferences?.theme === "light" ||
+      preferences?.theme === "system" ||
+      preferences?.theme === "ink-gold"
         ? preferences.theme
         : "dark",
     accentColor:

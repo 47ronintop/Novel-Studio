@@ -16,7 +16,11 @@ import { createWorkspaceActivationCoordinator } from "./workspace-activation.js"
 import { createApplicationMenuTemplate } from "./menu.js";
 import { createDesktopModelRuntime, createEncryptedFileModelSecretStore } from "./model-runtime.js";
 import { createSecureWebPreferences } from "./security.js";
-import { createAgentPricingRegistry, reasoningStrengthForModel } from "@novel-studio/application";
+import {
+  createAgentPricingRegistry,
+  reasoningStrengthForModel,
+  resolveCatalogAgentModelCapabilities
+} from "@novel-studio/application";
 import type { DesktopApplication } from "@novel-studio/application";
 import type { LlmModelProfile, LlmProviderId } from "@novel-studio/llm-adapter";
 import { createUnifiedError } from "@novel-studio/shared";
@@ -165,12 +169,22 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
             discovery !== undefined && discovery.ok
               ? discovery.value.models.find((model) => model.id === selectedModelName)
               : undefined;
+          const catalogCapabilities = resolveCatalogAgentModelCapabilities(
+            profile.provider,
+            selectedModelName
+          );
           const contextWindow =
             discovered?.contextWindow !== undefined && discovered.contextWindow > 0
               ? discovered.contextWindow
-              : profile.provider === "demo"
-                ? 128_000
-                : 0;
+              : selectedModelName === profile.modelName &&
+                  profile.contextWindow !== undefined &&
+                  profile.contextWindow > 0
+                ? profile.contextWindow
+                : catalogCapabilities?.contextWindow;
+          const streaming = discovered?.streaming ?? catalogCapabilities?.streaming;
+          const toolCalling = discovered?.toolCalling ?? catalogCapabilities?.toolCalling;
+          const structuredArguments =
+            discovered?.structuredArguments ?? catalogCapabilities?.structuredArguments;
           const reasoningStrength =
             discovered?.reasoningStrength ??
             (selectedModelName === profile.modelName && discovery !== undefined && discovery.ok
@@ -186,10 +200,10 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
             provider: profile.provider,
             modelName: selectedModelName,
             capabilities: {
-              streaming: true,
-              toolCalling: true,
-              structuredArguments: true,
-              contextWindow
+              ...(streaming === undefined ? {} : { streaming }),
+              ...(toolCalling === undefined ? {} : { toolCalling }),
+              ...(structuredArguments === undefined ? {} : { structuredArguments }),
+              ...(contextWindow === undefined ? {} : { contextWindow })
             },
             requiredContextTokens: 8_000,
             reasoningStrength

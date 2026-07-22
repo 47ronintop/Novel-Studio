@@ -302,7 +302,6 @@ export interface AgentComposerProps {
   readonly onOperationModeChange: (mode: AgentOperationMode) => void;
   readonly onContextModeChange: (mode: AgentContextMode) => void;
   readonly onWritePolicyChange: (policy: AgentWritePolicy) => void;
-  readonly onWritePolicyAcknowledgedChange: (acknowledged: boolean) => void;
   readonly onSend: (request: string) => void;
   readonly onStop: () => void;
 }

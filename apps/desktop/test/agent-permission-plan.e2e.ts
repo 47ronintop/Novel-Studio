@@ -34,7 +34,19 @@ test("binds compact permissions to a persisted plan execution and restores revis
   const server = createServer(async (request, response) => {
     const body = await readJsonBody(request);
     if (request.method === "GET" && request.url === "/v1/models") {
-      json(response, { data: [{ id: "local-agent", context_window: 128000 }] });
+      json(response, {
+        data: [
+          {
+            id: "local-agent",
+            context_window: 128000,
+            capabilities: {
+              streaming: true,
+              tool_calling: true,
+              structured_arguments: true
+            }
+          }
+        ]
+      });
       return;
     }
     if (request.method !== "POST" || body["stream"] !== true) {
@@ -75,7 +87,7 @@ test("binds compact permissions to a persisted plan execution and restores revis
   if (address === null || typeof address === "string") throw new Error("Expected server address");
   const baseUrl = `http://127.0.0.1:${address.port}/v1`;
   const env = electronEnv({
-    NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Bootstrap Project"),
+    NOVEL_STUDIO_PROJECT_ROOT: projectRoot,
     NOVEL_STUDIO_USER_DATA_ROOT: userDataRoot
   });
   let firstApp: ElectronApplication | undefined;
@@ -88,15 +100,18 @@ test("binds compact permissions to a persisted plan execution and restores revis
     await openAgentPanel(page);
     await configureLocalModel(page, baseUrl);
     const composer = page.getByLabel("会话输入区");
-    await selectOperationMode(composer, "planning");
-    await expect(composer.getByText("只读规划", { exact: true })).toBeVisible();
-    await expect(composer.getByLabel(/^修改权限：/)).toHaveCount(0);
+    await selectOperationMode(page, composer, "planning");
+    await expect(composer.getByRole("button", { name: "计划", exact: true })).toBeVisible();
+    await composer.getByLabel("添加引用与执行审批").click();
+    const planningOptions = page.getByRole("dialog", { name: "添加引用与执行审批" });
+    await expect(planningOptions.getByLabel("执行审批")).toHaveCount(0);
+    await planningOptions.press("Escape");
 
-    await selectOperationMode(composer, "execution");
+    await selectOperationMode(page, composer, "execution");
     await composer.getByLabel("Agent 请求").fill("先规划，再核对开篇");
-    const permissionTrigger = composer.getByLabel("修改权限：只读");
+    const permissionTrigger = composer.getByLabel("添加引用与执行审批");
     await permissionTrigger.click();
-    const permissionMenu = composer.getByRole("dialog", { name: "修改权限与摘要" });
+    const permissionMenu = page.getByRole("dialog", { name: "添加引用与执行审批" });
     const permissionSummary = permissionMenu.locator('details[aria-label="本次权限摘要"]');
     await expect(permissionSummary).not.toHaveAttribute("open", "");
     await expect(permissionSummary).toContainText("服务端事实");
@@ -105,13 +120,12 @@ test("binds compact permissions to a persisted plan execution and restores revis
     await expect(permissionSummary).toContainText("Git");
     await expect(permissionSummary).toContainText("网络");
 
-    await permissionMenu.getByRole("radio", { name: "本次运行自动修改" }).check();
+    await permissionMenu.getByRole("radio", { name: "替我审批" }).check();
     await expect(permissionMenu.getByRole("checkbox")).toHaveCount(0);
     await expect(composer.getByLabel("启动 Agent 运行")).toBeEnabled();
     await expect(permissionSummary).toContainText("服务端事实");
     await permissionMenu.press("Escape");
-    await selectOperationMode(composer, "planning");
-    await expect(composer.getByLabel(/^修改权限：/)).toHaveCount(0);
+    await selectOperationMode(page, composer, "planning");
     await composer.getByLabel("启动 Agent 运行").click();
 
     const planReview = page.getByLabel("Plan Artifact 审阅");
@@ -127,13 +141,16 @@ test("binds compact permissions to a persisted plan execution and restores revis
     const planExecutionId = await planStep.getAttribute("data-plan-execution-id");
     expect(planExecutionId).toMatch(/^plan_execution_/);
 
-    const boundPermission = composer.getByLabel("修改权限：自动");
+    const boundPermission = composer.getByLabel("添加引用与执行审批");
     await expect(boundPermission).toBeVisible();
     await boundPermission.click();
-    const boundSummary = composer.locator('details[aria-label="本次权限摘要"]');
+    const boundSummary = page
+      .getByRole("dialog", { name: "添加引用与执行审批" })
+      .locator('details[aria-label="本次权限摘要"]');
     await expect(boundSummary).toContainText("服务端事实");
 
     const executionRunId = await latestExecutionRunId(page);
+    await waitForPersistedExecutionRun(projectRoot, executionRunId);
     await firstApp.close();
     firstApp = undefined;
     heldExecutionResponse?.destroy();
@@ -171,8 +188,8 @@ test("binds compact permissions to a persisted plan execution and restores revis
 async function seedMaterialDeviation(projectRoot: string, runId: string): Promise<void> {
   const repository = new AgentRunFileRepository({ projectRoot, traceId: "stage5b-e2e" });
   const snapshotRead = await repository.readSnapshot(runId);
-  if (!snapshotRead.ok || snapshotRead.value === undefined)
-    throw new Error("Execution run missing");
+  if (!snapshotRead.ok) throw new Error(`Execution run unreadable: ${snapshotRead.error.message}`);
+  if (snapshotRead.value === undefined) throw new Error("Execution run missing");
   const snapshot = snapshotRead.value;
   const planExecutionId = stringField(snapshot, "planExecutionId");
   const recordRead = await repository.readPlanExecutionRecord(runId, planExecutionId);
@@ -274,15 +291,27 @@ async function seedMaterialDeviation(projectRoot: string, runId: string): Promis
   if (!snapshotWritten.ok) throw new Error(snapshotWritten.error.message);
 }
 
+async function waitForPersistedExecutionRun(projectRoot: string, runId: string): Promise<void> {
+  const repository = new AgentRunFileRepository({ projectRoot, traceId: "stage5b-e2e-wait" });
+  await expect
+    .poll(async () => {
+      const read = await repository.readSnapshot(runId);
+      if (!read.ok) throw new Error(`Execution run unreadable: ${read.error.message}`);
+      return read.value?.runId;
+    })
+    .toBe(runId);
+}
+
 async function selectOperationMode(
+  page: Page,
   composer: ReturnType<Page["getByLabel"]>,
   mode: "planning" | "execution"
 ): Promise<void> {
-  const expected = mode === "planning" ? "规划" : "只读";
-  const trigger = composer.getByTitle("选择运行方式");
+  const expected = mode === "planning" ? "计划" : "执行";
+  const trigger = composer.getByTitle("选择计划或执行模式");
   if ((await trigger.getAttribute("aria-label")) === expected) return;
   await trigger.click();
-  const modes = composer.getByLabel("运行方式");
+  const modes = page.getByLabel("计划或执行模式");
   await modes.getByRole("button", { name: expected, exact: true }).click();
 }
 
@@ -346,9 +375,11 @@ async function configureLocalModel(page: Page, baseUrl: string): Promise<void> {
   await page.getByRole("button", { name: "保存模型配置" }).click();
   await expect(page.getByText("模型配置已保存。", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "测试连接", exact: true }).click();
-  await expect(page.locator(".ns-project-feedback")).toContainText(
-    "Connected to openai-compatible/local-agent"
-  );
+  await expect(
+    page
+      .locator(".ns-project-feedback")
+      .filter({ hasText: "Connected to openai-compatible/local-agent" })
+  ).toContainText("Connected to openai-compatible/local-agent");
   await page.getByRole("button", { name: "关闭设置" }).click();
 }
 

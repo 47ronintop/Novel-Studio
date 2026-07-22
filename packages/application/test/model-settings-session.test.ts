@@ -58,6 +58,7 @@ const secondaryProfile = {
   baseUrl: "https://api.example.com/v1",
   apiKeyRef: "secret://model_secondary/api_key",
   modelName: "example-secondary",
+  contextWindow: 32_000,
   temperature: 0.4,
   maxTokens: 2048,
   topP: 1,
@@ -166,6 +167,7 @@ describe("model settings session", () => {
       "model_default",
       "model_secondary"
     ]);
+    expect(saved.value.profiles[1]?.contextWindow).toBe(32_000);
     expect(JSON.stringify(writes)).toContain("secret://model_secondary/api_key");
     expect(JSON.stringify(writes)).not.toContain("sk-");
   });

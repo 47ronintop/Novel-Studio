@@ -12,6 +12,62 @@ export interface AgentModelCapabilityDeclaration {
   readonly contextWindow?: number;
 }
 
+export interface AgentModelCapabilityCatalogEntry extends AgentModelCapabilityDeclaration {
+  readonly provider: string;
+  readonly modelName: string;
+  readonly streaming: true;
+  readonly toolCalling: true;
+  readonly structuredArguments: true;
+  readonly contextWindow: number;
+}
+
+const AGENT_MODEL_CAPABILITY_CATALOG: readonly AgentModelCapabilityCatalogEntry[] = [
+  {
+    provider: "openai",
+    modelName: "gpt-4.1",
+    streaming: true,
+    toolCalling: true,
+    structuredArguments: true,
+    contextWindow: 1_000_000
+  },
+  {
+    provider: "anthropic",
+    modelName: "claude-3-5-sonnet",
+    streaming: true,
+    toolCalling: true,
+    structuredArguments: true,
+    contextWindow: 200_000
+  },
+  {
+    provider: "google-gemini",
+    modelName: "gemini-1.5-pro",
+    streaming: true,
+    toolCalling: true,
+    structuredArguments: true,
+    contextWindow: 2_000_000
+  },
+  {
+    provider: "deepseek",
+    modelName: "deepseek-chat",
+    streaming: true,
+    toolCalling: true,
+    structuredArguments: true,
+    contextWindow: 64_000
+  }
+] as const;
+
+/** Exact provider/model facts only; custom OpenAI-compatible endpoints never receive a fallback. */
+export function resolveCatalogAgentModelCapabilities(
+  provider: string,
+  modelName: string
+): AgentModelCapabilityCatalogEntry | undefined {
+  const normalizedProvider = provider.trim().toLowerCase();
+  const normalizedModel = modelName.trim().toLowerCase();
+  return AGENT_MODEL_CAPABILITY_CATALOG.find(
+    (entry) => entry.provider === normalizedProvider && entry.modelName === normalizedModel
+  );
+}
+
 export interface AgentModelCapabilityPreflightInput {
   readonly profileId: string;
   readonly provider: string;
@@ -45,11 +101,13 @@ export function preflightAgentModelCapabilities(
     missingCapabilities.push("structuredArguments");
   }
   const contextWindow = input.capabilities.contextWindow;
-  if (
-    contextWindow === undefined ||
-    !Number.isFinite(contextWindow) ||
-    contextWindow < input.requiredContextTokens
-  ) {
+  const contextWindowMissing =
+    contextWindow === undefined || !Number.isFinite(contextWindow) || contextWindow <= 0;
+  const contextWindowInsufficient =
+    !contextWindowMissing &&
+    contextWindow !== undefined &&
+    contextWindow < input.requiredContextTokens;
+  if (contextWindowMissing || contextWindowInsufficient) {
     missingCapabilities.push("contextWindow");
   }
 
@@ -60,14 +118,18 @@ export function preflightAgentModelCapabilities(
         category: "UserError",
         message: "The selected provider/model cannot start an Agent run.",
         recoverability: "user-action",
-        suggestedAction:
-          "Choose a model that supports streaming, tool calls, structured arguments, and the required context window.",
+        suggestedAction: contextWindowMissing
+          ? "Refresh the model list or enter the model's verified context window in Settings; Max Tokens is only the output limit."
+          : contextWindowInsufficient
+            ? `Choose a model with at least ${input.requiredContextTokens} context tokens or correct the verified context-window setting.`
+            : "Choose a model that explicitly supports the missing Agent capabilities.",
         traceId: "agent-model-capability-preflight",
         redactedDetail: {
           profileId: input.profileId,
           provider: input.provider,
           modelName: input.modelName,
           missingCapabilities,
+          contextWindowStatus: contextWindowMissing ? "missing" : "insufficient",
           requiredContextTokens: input.requiredContextTokens,
           availableContextTokens: contextWindow ?? 0
         }

@@ -81,14 +81,33 @@ describe("M15 desktop model profile settings", () => {
         baseUrl: "http://localhost:11434/v1",
         apiKeyRef: "secret://model_ollama/api_key",
         modelName: "llama3.1",
+        contextWindow: 128000,
         temperature: 0.2,
         maxTokens: 2048,
-        timeoutMs: 30000
+        timeoutMs: 30000,
+        reasoningEffortEnabled: true
       },
       { makeDefault: true }
     );
     assertOk<ModelSettingsSnapshot>(saved);
     expect(saved.value.defaultProfileId).toBe("model_ollama");
+    expect(saved.value.profiles).toContainEqual(
+      expect.objectContaining({
+        id: "model_ollama",
+        contextWindow: 128000,
+        reasoningEffortEnabled: true
+      })
+    );
+
+    const relisted = await handlers["application:settings:list-model-profiles"]();
+    assertOk<ModelSettingsSnapshot>(relisted);
+    expect(relisted.value.profiles).toContainEqual(
+      expect.objectContaining({
+        id: "model_ollama",
+        contextWindow: 128000,
+        reasoningEffortEnabled: true
+      })
+    );
 
     const connection = await handlers["application:settings:test-model-profile"]("model_ollama");
     assertOk<ModelConnectionResult>(connection);
@@ -97,11 +116,18 @@ describe("M15 desktop model profile settings", () => {
       provider: "ollama",
       modelName: "llama3.1"
     });
-    expect(testedProfiles).toHaveLength(1);
+    expect(testedProfiles).toEqual([
+      expect.objectContaining({
+        contextWindow: 128000,
+        reasoningEffortEnabled: true
+      })
+    ]);
 
     const settingsJson = await readFile(join(projectRoot, "settings.json"), "utf8");
     expect(settingsJson).toContain('"provider": "ollama"');
     expect(settingsJson).toContain('"apiKeyRef": "secret://model_ollama/api_key"');
+    expect(settingsJson).toContain('"contextWindow": 128000');
+    expect(settingsJson).toContain('"reasoningEffortEnabled": true');
     expect(settingsJson).not.toMatch(/\bsk-[A-Za-z0-9_-]+/);
 
     const secretSaved = await handlers["application:settings:save-model-secret"](

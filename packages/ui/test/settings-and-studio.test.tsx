@@ -39,6 +39,8 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).not.toContain("自动保存与历史");
     expect(html).not.toContain("隐私与安全");
     expect(modelHtml).not.toContain('aria-label="完整 URL"');
+    expect(modelHtml).toContain('aria-label="模型上下文窗口"');
+    expect(modelHtml).toContain("这不是单次响应的 Max Tokens");
   });
 
   test("renders VSCode settings structure with editor preferences in appearance", () => {
@@ -140,6 +142,7 @@ describe("M8 Settings and Studio UI", () => {
     expect(appearanceHtml).toContain('aria-label="深色主题"');
     expect(appearanceHtml).toContain('aria-label="浅色主题"');
     expect(appearanceHtml).toContain('aria-label="跟随系统主题"');
+    expect(appearanceHtml).toContain('aria-label="水墨鎏金主题"');
     expect(appearanceHtml).toContain("外观: 强调色");
     expect(appearanceHtml).toContain('aria-label="外观强调色"');
     expect(appearanceHtml).toContain('data-accent="teal"');
@@ -270,6 +273,7 @@ describe("M8 Settings and Studio UI", () => {
           displayName: "Default Model",
           baseUrl: "https://api.example.com/v1",
           modelName: "example-model",
+          contextWindow: "",
           apiKeyRefInput: "",
           temperature: "0.7",
           maxTokens: "4096",
@@ -743,6 +747,7 @@ function createModelSettingsPanelProps(): Parameters<typeof ModelSettingsPanel>[
       displayName: "Default Model",
       baseUrl: "https://api.example.com/v1",
       modelName: "example-model",
+      contextWindow: "",
       apiKeyRefInput: "",
       temperature: "0.7",
       maxTokens: "4096",

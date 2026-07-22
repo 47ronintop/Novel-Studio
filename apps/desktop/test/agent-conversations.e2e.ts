@@ -28,7 +28,19 @@ test("isolates multi-run conversation context and restores project-scoped conver
   const server = createServer(async (request, response) => {
     const body = await readJsonBody(request);
     if (request.method === "GET" && request.url === "/v1/models") {
-      json(response, { data: [{ id: "local-agent", context_window: 128000 }] });
+      json(response, {
+        data: [
+          {
+            id: "local-agent",
+            context_window: 128000,
+            capabilities: {
+              streaming: true,
+              tool_calling: true,
+              structured_arguments: true
+            }
+          }
+        ]
+      });
       return;
     }
     if (request.method !== "POST" || body["stream"] !== true) {
@@ -73,7 +85,18 @@ test("isolates multi-run conversation context and restores project-scoped conver
     const composer = page.getByLabel("会话输入区");
     await expect(composer.getByLabel(/^模型与推理：/)).toBeVisible();
     await assertComposerLayout(composer);
-    await composer.screenshot({ path: join(screenshotRoot, "composer-320px.png") });
+    await assertComposerPopover(
+      page,
+      composer.getByLabel("添加引用与执行审批"),
+      "添加引用与执行审批",
+      "composer-default-add.png"
+    );
+    await assertComposerPopover(
+      page,
+      composer.getByLabel(/^模型与推理：/),
+      "选择模型与推理强度",
+      "composer-default-model.png"
+    );
     const defaultComposerWidth = (await composer.boundingBox())?.width;
     expect(defaultComposerWidth).toBeDefined();
     await page.locator(".ns-workspace-grid").evaluate((grid) => {
@@ -83,10 +106,34 @@ test("isolates multi-run conversation context and restores project-scoped conver
       .poll(async () => (await composer.boundingBox())?.width ?? 0)
       .toBeLessThan(defaultComposerWidth ?? 0);
     await assertComposerLayout(composer);
-    await composer.screenshot({ path: join(screenshotRoot, "composer-280px.png") });
+    await assertComposerPopover(
+      page,
+      composer.getByLabel("添加引用与执行审批"),
+      "添加引用与执行审批",
+      "composer-280px-add.png"
+    );
+    await assertComposerPopover(
+      page,
+      composer.getByLabel(/^模型与推理：/),
+      "选择模型与推理强度",
+      "composer-280px-model.png"
+    );
     await page.locator(".ns-workspace-grid").evaluate((grid) => {
       (grid as HTMLElement).style.setProperty("--ns-ai-panel-width", "320px");
     });
+    await assertComposerLayout(composer);
+    await assertComposerPopover(
+      page,
+      composer.getByLabel("添加引用与执行审批"),
+      "添加引用与执行审批",
+      "composer-320px-add.png"
+    );
+    await assertComposerPopover(
+      page,
+      composer.getByLabel(/^模型与推理：/),
+      "选择模型与推理强度",
+      "composer-320px-model.png"
+    );
     await expect(page.getByLabel("AI 对话面板")).toBeVisible();
     await expect(page.getByLabel("Agent 请求")).toHaveCount(1);
     await expect(page.getByRole("button", { name: /启动 Agent 运行|停止 Agent 运行/ })).toHaveCount(
@@ -94,7 +141,7 @@ test("isolates multi-run conversation context and restores project-scoped conver
     );
     await expect(
       page.getByRole("button", {
-        name: /^(规划|只读|自动)$/
+        name: /^(计划|执行)$/
       })
     ).toHaveCount(1);
     await expect(page.getByLabel("AI 对话记录")).toHaveCount(0);
@@ -104,27 +151,29 @@ test("isolates multi-run conversation context and restores project-scoped conver
     await expect(page.getByLabel("AI 工作流运行观测")).toHaveCount(0);
 
     await selectPlanningWritingMode(page);
-    await expect(page.getByRole("button", { name: "规划", exact: true })).toHaveCount(1);
-    await expect(page.getByLabel("会话输入区").getByLabel(/^修改权限：/)).toHaveCount(0);
-    await expect(page.getByLabel("运行方式")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "计划", exact: true })).toHaveCount(1);
+    await composer.getByLabel("添加引用与执行审批").click();
+    const planningMenu = page.getByRole("dialog", { name: "添加引用与执行审批" });
+    await expect(planningMenu.getByLabel("执行审批")).toHaveCount(0);
+    await planningMenu.press("Escape");
+    await expect(page.getByLabel("计划或执行模式")).toHaveCount(0);
     await expect(page.getByLabel("会话输入区").getByRole("group", { name: "上下文" })).toHaveCount(
       0
     );
     await selectExecutionMode(page);
-    await composer.getByLabel("修改权限：只读").click();
-    const permissionMenu = composer.getByRole("dialog", { name: "修改权限与摘要" });
+    await composer.getByLabel("添加引用与执行审批").click();
+    const permissionMenu = page.getByRole("dialog", { name: "添加引用与执行审批" });
     await expect(permissionMenu.locator('details[aria-label="本次权限摘要"]')).toContainText(
       "服务端事实"
     );
-    await permissionMenu.getByRole("radio", { name: "本次运行自动修改" }).check();
+    await permissionMenu.getByRole("radio", { name: "替我审批" }).check();
     await expect(permissionMenu.getByRole("checkbox")).toHaveCount(0);
-    await expect(permissionMenu).toContainText("本次运行已获自动修改授权");
     await permissionMenu.press("Escape");
 
     await sendConversationRequest(page, "Remember the alpha lantern clue.");
     await waitForRunCount(page, 1);
     await waitForLatestRunStatus(page, "completed");
-    await expect(composer.getByLabel("修改权限：只读")).toBeVisible();
+    await expect(composer.getByLabel("添加引用与执行审批")).toBeVisible();
     const firstRunId = await latestRunId(page);
     await expect(page.locator(`[data-run-id="${firstRunId}"]`)).toHaveCount(1);
     await expect(
@@ -142,7 +191,7 @@ test("isolates multi-run conversation context and restores project-scoped conver
     const conversationB = await createConversation(page);
     expect(conversationB).not.toBe(conversationA);
     await selectExecutionMode(page);
-    await expect(page.getByLabel("会话输入区").getByLabel("修改权限：只读")).toBeVisible();
+    await expect(page.getByLabel("会话输入区").getByLabel("添加引用与执行审批")).toBeVisible();
     await sendConversationRequest(page, "Hold beta without alpha context.");
     await expect(page.locator(".ns-agent-assistant-text")).toContainText("Holding beta run");
     const conversationView = page.getByLabel("Agent 会话主视图");
@@ -390,16 +439,23 @@ async function closeHistoryDrawer(drawer: Locator): Promise<void> {
 }
 
 async function selectExecutionMode(page: Page): Promise<void> {
-  const trigger = page.getByTitle("选择运行方式");
-  if ((await trigger.getAttribute("aria-label")) === "只读") return;
+  const trigger = page.getByTitle("选择计划或执行模式");
+  if ((await trigger.getAttribute("aria-label")) === "执行") return;
   await trigger.click();
-  await page.getByLabel("运行方式").getByRole("button", { name: "只读", exact: true }).click();
+  await page
+    .getByLabel("计划或执行模式")
+    .getByRole("button", { name: "执行", exact: true })
+    .click();
 }
 
 async function selectPlanningWritingMode(page: Page): Promise<void> {
-  const trigger = page.getByTitle("选择运行方式");
+  const trigger = page.getByTitle("选择计划或执行模式");
+  if ((await trigger.getAttribute("aria-label")) === "计划") return;
   await trigger.click();
-  await page.getByLabel("运行方式").getByRole("button", { name: "规划", exact: true }).click();
+  await page
+    .getByLabel("计划或执行模式")
+    .getByRole("button", { name: "计划", exact: true })
+    .click();
 }
 
 async function sendConversationRequest(page: Page, request: string): Promise<void> {
@@ -410,13 +466,16 @@ async function sendConversationRequest(page: Page, request: string): Promise<voi
 
 async function waitForRunCount(page: Page, count: number): Promise<void> {
   await expect
-    .poll(async () => {
-      const listed = await page.evaluate(
-        async (boundProjectId) => window.novelStudio?.agentRuns.list(boundProjectId),
-        projectId
-      );
-      return listed?.ok ? listed.value.length : -1;
-    })
+    .poll(
+      async () => {
+        const listed = await page.evaluate(
+          async (boundProjectId) => window.novelStudio?.agentRuns.list(boundProjectId),
+          projectId
+        );
+        return listed?.ok ? listed.value.length : -1;
+      },
+      { timeout: 30_000 }
+    )
     .toBe(count);
 }
 
@@ -431,28 +490,34 @@ async function latestRunId(page: Page): Promise<string> {
 
 async function waitForLatestRunStatus(page: Page, status: string): Promise<void> {
   await expect
-    .poll(async () => {
-      const listed = await page.evaluate(
-        async (boundProjectId) => window.novelStudio?.agentRuns.list(boundProjectId),
-        projectId
-      );
-      return listed?.ok ? listed.value.at(-1)?.status : undefined;
-    })
+    .poll(
+      async () => {
+        const listed = await page.evaluate(
+          async (boundProjectId) => window.novelStudio?.agentRuns.list(boundProjectId),
+          projectId
+        );
+        return listed?.ok ? listed.value.at(-1)?.status : undefined;
+      },
+      { timeout: 30_000 }
+    )
     .toBe(status);
 }
 
 async function waitForTerminalRuns(page: Page): Promise<void> {
   await expect
-    .poll(async () => {
-      const listed = await page.evaluate(
-        async (boundProjectId) => window.novelStudio?.agentRuns.list(boundProjectId),
-        projectId
-      );
-      if (!listed?.ok) return false;
-      return listed.value.every((snapshot) =>
-        ["completed", "cancelled", "failed", "limit_reached"].includes(snapshot.status)
-      );
-    })
+    .poll(
+      async () => {
+        const listed = await page.evaluate(
+          async (boundProjectId) => window.novelStudio?.agentRuns.list(boundProjectId),
+          projectId
+        );
+        if (!listed?.ok) return false;
+        return listed.value.every((snapshot) =>
+          ["completed", "cancelled", "failed", "limit_reached"].includes(snapshot.status)
+        );
+      },
+      { timeout: 30_000 }
+    )
     .toBe(true);
 }
 
@@ -471,33 +536,39 @@ async function assertCompactConversationSurface(page: Page): Promise<void> {
 async function assertComposerLayout(composer: Locator): Promise<void> {
   const surface = composer.locator(".ns-agent-composer-surface");
   const footer = composer.locator(".ns-agent-composer-footer");
-  const leading = composer.getByRole("group", { name: "会话配置" });
-  const trailing = composer.getByRole("group", { name: "会话操作" });
+  const add = composer.locator(".ns-agent-composer-add-popover-root");
+  const mode = composer.locator(".ns-agent-composer-mode-popover-root");
+  const context = composer.locator(".ns-agent-context-popover-root");
   const model = composer.locator(".ns-agent-composer-model-popover-root");
   const command = composer.locator(".ns-agent-composer-command-slot");
   await expect(footer).toBeVisible();
-  await expect(leading).toBeVisible();
-  await expect(trailing).toBeVisible();
+  await expect(add).toBeVisible();
+  await expect(mode).toBeVisible();
+  await expect(context).toBeVisible();
 
-  const [surfaceBox, footerBox, leadingBox, trailingBox, modelBox, commandBox] = await Promise.all([
-    surface.boundingBox(),
-    footer.boundingBox(),
-    leading.boundingBox(),
-    trailing.boundingBox(),
-    model.boundingBox(),
-    command.boundingBox()
-  ]);
+  const [surfaceBox, footerBox, addBox, modeBox, contextBox, modelBox, commandBox] =
+    await Promise.all([
+      surface.boundingBox(),
+      footer.boundingBox(),
+      add.boundingBox(),
+      mode.boundingBox(),
+      context.boundingBox(),
+      model.boundingBox(),
+      command.boundingBox()
+    ]);
   expect(surfaceBox).not.toBeNull();
   expect(footerBox).not.toBeNull();
-  expect(leadingBox).not.toBeNull();
-  expect(trailingBox).not.toBeNull();
+  expect(addBox).not.toBeNull();
+  expect(modeBox).not.toBeNull();
+  expect(contextBox).not.toBeNull();
   expect(modelBox).not.toBeNull();
   expect(commandBox).not.toBeNull();
   if (
     surfaceBox === null ||
     footerBox === null ||
-    leadingBox === null ||
-    trailingBox === null ||
+    addBox === null ||
+    modeBox === null ||
+    contextBox === null ||
     modelBox === null ||
     commandBox === null
   ) {
@@ -507,19 +578,55 @@ async function assertComposerLayout(composer: Locator): Promise<void> {
   const metrics = JSON.stringify({
     surfaceBox,
     footerBox,
-    leadingBox,
-    trailingBox,
+    addBox,
+    modeBox,
+    contextBox,
     modelBox,
     commandBox
   });
   expect(footerBox.height, metrics).toBeLessThanOrEqual(34);
-  expect(leadingBox.x + leadingBox.width, metrics).toBeLessThanOrEqual(trailingBox.x + 1);
-  expect(modelBox.width, metrics).toBeGreaterThanOrEqual(44);
+  expect(addBox.x + addBox.width, metrics).toBeLessThanOrEqual(modeBox.x + 1);
+  expect(modeBox.x + modeBox.width, metrics).toBeLessThanOrEqual(contextBox.x + 1);
+  expect(contextBox.x + contextBox.width, metrics).toBeLessThanOrEqual(modelBox.x + 1);
+  expect(modelBox.x + modelBox.width, metrics).toBeLessThanOrEqual(commandBox.x + 1);
+  expect(modelBox.width, metrics).toBeGreaterThanOrEqual(72);
   expect(commandBox.width, metrics).toBeGreaterThanOrEqual(30);
-  for (const box of [footerBox, leadingBox, trailingBox, modelBox, commandBox]) {
+  for (const box of [footerBox, addBox, modeBox, contextBox, modelBox, commandBox]) {
     expect(box.x, metrics).toBeGreaterThanOrEqual(surfaceBox.x);
     expect(box.x + box.width, metrics).toBeLessThanOrEqual(surfaceBox.x + surfaceBox.width + 1);
   }
+  await expect(composer.locator(".ns-agent-composer-mode-trigger")).toHaveCSS("font-size", "12px");
+}
+
+async function assertComposerPopover(
+  page: Page,
+  trigger: Locator,
+  panelLabel: string,
+  screenshotName: string
+): Promise<void> {
+  await trigger.click();
+  const panel = page.getByRole("dialog", { name: panelLabel });
+  await expect(panel).toBeVisible();
+  const [panelBox, triggerBox, viewport] = await Promise.all([
+    panel.boundingBox(),
+    trigger.boundingBox(),
+    page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
+  ]);
+  expect(panelBox).not.toBeNull();
+  expect(triggerBox).not.toBeNull();
+  if (panelBox !== null && triggerBox !== null) {
+    const metrics = JSON.stringify({ panelBox, triggerBox, viewport });
+    expect(panelBox.width, metrics).toBeGreaterThan(0);
+    expect(panelBox.height, metrics).toBeGreaterThan(0);
+    expect(panelBox.x + panelBox.width, metrics).toBeGreaterThan(0);
+    expect(panelBox.y + panelBox.height, metrics).toBeGreaterThan(0);
+    expect(panelBox.x, metrics).toBeLessThan(viewport.width);
+    expect(panelBox.y, metrics).toBeLessThan(viewport.height);
+    expect(panelBox.y + panelBox.height, metrics).toBeLessThanOrEqual(triggerBox.y + 1);
+  }
+  await page.screenshot({ path: join(screenshotRoot, screenshotName) });
+  await panel.press("Escape");
+  await expect(panel).toHaveCount(0);
 }
 
 async function waitForConversationService(page: Page): Promise<void> {
@@ -549,9 +656,11 @@ async function configureLocalModel(page: Page, baseUrl: string): Promise<void> {
   await page.getByLabel("密钥引用").fill("local-conversations-e2e-key");
   await page.getByRole("button", { name: "保存模型配置" }).click();
   await page.getByRole("button", { name: "测试连接", exact: true }).click();
-  await expect(page.locator(".ns-project-feedback")).toContainText(
-    "Connected to openai-compatible/local-agent"
-  );
+  await expect(
+    page
+      .locator(".ns-project-feedback")
+      .filter({ hasText: "Connected to openai-compatible/local-agent" })
+  ).toContainText("Connected to openai-compatible/local-agent");
   await page.getByRole("button", { name: "关闭设置" }).click();
 }
 

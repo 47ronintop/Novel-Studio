@@ -56,6 +56,7 @@ import type {
   RollbackReviewDecision,
   RollbackReviewModel
 } from "@novel-studio/ui";
+import type { UnifiedError } from "@novel-studio/shared";
 
 type AgentPlanExecutionOptions = NonNullable<Parameters<AgentPlanReviewProps["onDecision"]>[1]>;
 
@@ -108,6 +109,8 @@ interface BridgeState {
   readonly operationMode: AgentOperationMode;
   readonly contextMode: AgentContextMode;
   readonly writePolicy: AgentWritePolicy;
+  /** Last Act approval choice; planning runs never write, so their persisted policy is normalized. */
+  readonly executionWritePolicy: AgentWritePolicy;
   readonly writePolicyAcknowledged: boolean;
   readonly userRequest: string;
   readonly snapshot: AgentRunSnapshot | undefined;
@@ -142,6 +145,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     operationMode: "planning",
     contextMode: "writing",
     writePolicy: "write_before_confirmation",
+    executionWritePolicy: "write_before_confirmation",
     writePolicyAcknowledged: false,
     userRequest: "",
     snapshot: undefined,
@@ -201,7 +205,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       events: appendEvent(state.events, event),
       snapshot: nextSnapshot,
       ...(nextSnapshot !== undefined && isTerminalRunStatus(nextSnapshot.status)
-        ? defaultNextRunWriteAuthorization()
+        ? {
+            ...defaultNextRunWriteAuthorization(),
+            executionWritePolicy: "write_before_confirmation" as const
+          }
         : {}),
       assistantText:
         event.type === "assistant_text_delta"
@@ -248,9 +255,13 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     state = { ...state, userRequest: request, errorMessage: undefined };
     // The draft is the source of truth for model/reasoning/refs when the composer is draft-backed;
     // otherwise fall back to the project's selected profile and the active chapter.
-    const profileId = state.runDraft?.modelProfileId ?? selectedModelProfileId(context?.settings);
+    const profileId = selectedRunModelProfileId(state.runDraft, context?.settings);
     if (profileId === undefined) {
-      state = { ...state, errorMessage: "The selected provider/model cannot start an Agent run." };
+      state = {
+        ...state,
+        errorMessage:
+          "未选择可用的模型配置。请在设置中选择一个模型，或将现有模型设为默认模型后重试。"
+      };
       return toProps();
     }
     if (context === undefined) {
@@ -287,7 +298,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       contextRefs
     });
     if (!prepared.ok) {
-      state = { ...state, errorMessage: prepared.error.message };
+      state = { ...state, errorMessage: formatAgentStartError(prepared.error) };
       return toProps();
     }
     const command: StartAgentRunCommand = {
@@ -585,7 +596,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
 
   async function applyCommandResult(result: AgentRunCommandResult): Promise<void> {
     if (!result.ok) {
-      const errorMessage = result.error.message;
+      const errorMessage = formatAgentStartError(result.error);
       state = {
         ...state,
         errorMessage,
@@ -603,6 +614,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       operationMode: result.value.operationMode,
       contextMode: result.value.contextMode,
       ...writeAuthorizationForSnapshot(result.value),
+      executionWritePolicy:
+        isTerminalRunStatus(result.value.status) || result.value.operationMode === "planning"
+          ? "write_before_confirmation"
+          : result.value.writePolicy,
       errorMessage: undefined
     };
     await hydrate(result.value.runId);
@@ -630,6 +645,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       contextMode: read.snapshot.contextMode,
       userRequest: read.snapshot.userRequest,
       ...writeAuthorizationForSnapshot(read.snapshot),
+      executionWritePolicy:
+        isTerminalRunStatus(read.snapshot.status) || read.snapshot.operationMode === "planning"
+          ? "write_before_confirmation"
+          : read.snapshot.writePolicy,
       events: [...read.events],
       assistantText: read.events
         .filter((event) => event.type === "assistant_text_delta")
@@ -935,8 +954,18 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         contextDraft: result.value.contextDraft,
         operationMode: result.value.runDraft.operationMode,
         contextMode: normalizeForEngineering ? "general_file" : result.value.runDraft.contextMode,
-        writePolicy: result.value.runDraft.writePolicy,
-        writePolicyAcknowledged: result.value.runDraft.writePolicyAcknowledged,
+        writePolicy:
+          result.value.runDraft.operationMode === "planning"
+            ? state.executionWritePolicy
+            : result.value.runDraft.writePolicy,
+        executionWritePolicy:
+          result.value.runDraft.operationMode === "execution"
+            ? result.value.runDraft.writePolicy
+            : state.executionWritePolicy,
+        writePolicyAcknowledged: acknowledgementForSelection(
+          result.value.runDraft.operationMode,
+          result.value.runDraft.writePolicy
+        ),
         permissionSummary: undefined,
         permissionError: undefined,
         draftPending: false
@@ -975,7 +1004,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     state = {
       ...state,
       budgetPreview: result.ok ? result.value : undefined,
-      ...(result.ok ? {} : { errorMessage: result.error.message })
+      ...(result.ok ? {} : { errorMessage: formatAgentStartError(result.error) })
     };
     notify();
   }
@@ -1017,6 +1046,50 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       });
       applyDraftResult(result, token);
       if (refreshBudget) await previewBudget(token);
+    }).then(() => {
+      if (permissionSummaryRequested) void loadPermissionSummary();
+    });
+  }
+
+  function updateOperationModeDraft(
+    operationMode: AgentOperationMode,
+    executionWritePolicy: AgentWritePolicy
+  ): void {
+    const updateRunDraft = draftApi.updateRunDraft;
+    if (updateRunDraft === undefined) return;
+    void queueDraftMutation(async () => {
+      const ctx = context;
+      const draft = state.runDraft;
+      const token = draftToken;
+      if (ctx?.conversationId === undefined || draft === undefined) return;
+      const modeResult = await updateRunDraft({
+        projectId: ctx.projectId,
+        conversationId: ctx.conversationId,
+        commandId: createCommandId("draft-mode"),
+        expectedDraftRevision: draft.revision,
+        mutation: { kind: "set_operation_mode", operationMode }
+      });
+      applyDraftResult(modeResult, token);
+      if (!modeResult.ok || token !== draftToken) return;
+
+      // The engine deliberately clears a planning draft's write policy. Restore the remembered Act
+      // choice after switching back; selecting preapproval is itself the current-run acknowledgement.
+      if (operationMode === "execution" && executionWritePolicy === "user_preapproved_run") {
+        const policyResult = await updateRunDraft({
+          projectId: ctx.projectId,
+          conversationId: ctx.conversationId,
+          commandId: createCommandId("draft-mode-policy"),
+          expectedDraftRevision: modeResult.value.runDraft.revision,
+          mutation: {
+            kind: "set_write_policy",
+            writePolicy: executionWritePolicy,
+            acknowledged: true
+          }
+        });
+        applyDraftResult(policyResult, token);
+        if (!policyResult.ok) return;
+      }
+      await previewBudget(token);
     }).then(() => {
       if (permissionSummaryRequested) void loadPermissionSummary();
     });
@@ -1189,8 +1262,18 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       contextDraft: result.value.contextDraft,
       operationMode: result.value.runDraft.operationMode,
       contextMode: result.value.runDraft.contextMode,
-      writePolicy: result.value.runDraft.writePolicy,
-      writePolicyAcknowledged: result.value.runDraft.writePolicyAcknowledged,
+      writePolicy:
+        result.value.runDraft.operationMode === "planning"
+          ? state.executionWritePolicy
+          : result.value.runDraft.writePolicy,
+      executionWritePolicy:
+        result.value.runDraft.operationMode === "execution"
+          ? result.value.runDraft.writePolicy
+          : state.executionWritePolicy,
+      writePolicyAcknowledged: acknowledgementForSelection(
+        result.value.runDraft.operationMode,
+        result.value.runDraft.writePolicy
+      ),
       permissionSummary: undefined,
       permissionPending: false,
       permissionError: undefined,
@@ -1215,9 +1298,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       (draftProfileId !== undefined &&
       settings?.profiles.some((profile) => profile.id === draftProfileId)
         ? draftProfileId
-        : undefined) ??
-      selectedModelProfileId(settings) ??
-      settings?.profiles[0]?.id;
+        : undefined) ?? selectedModelProfileId(settings);
     if (settings === undefined || fallbackProfileId === undefined) return {};
     const choices = composerModelChoices(settings);
     const fallbackModelName = selectedModelName(runDraft, settings, fallbackProfileId);
@@ -1438,18 +1519,18 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         state = {
           ...state,
           operationMode: mode,
-          ...(mode === "planning"
-            ? {
-                writePolicy: "write_before_confirmation",
-                writePolicyAcknowledged: false,
-                permissionSummary: undefined,
-                permissionPending: false,
-                permissionError: undefined
-              }
-            : {})
+          // The engine normalizes planning drafts to request approval because they never write.
+          // Keep the user's Act choice locally so a Plan -> Act switch restores it. Choosing
+          // preapproval is the acknowledgement, so restoring that visible choice restores it too.
+          writePolicy: mode === "execution" ? state.executionWritePolicy : state.writePolicy,
+          writePolicyAcknowledged:
+            mode === "execution" && state.executionWritePolicy === "user_preapproved_run",
+          permissionSummary: undefined,
+          permissionPending: false,
+          permissionError: undefined
         };
         notify();
-        updateRunDraftChoice({ kind: "set_operation_mode", operationMode: mode }, true);
+        updateOperationModeDraft(mode, state.executionWritePolicy);
       },
       onContextModeChange: (mode) => {
         state = { ...state, contextMode: mode };
@@ -1458,32 +1539,18 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       },
       onWritePolicyChange: (writePolicy) => {
         if (state.operationMode !== "execution") return;
+        const writePolicyAcknowledged = writePolicy === "user_preapproved_run";
         state = {
           ...state,
           writePolicy,
-          writePolicyAcknowledged:
-            writePolicy === "user_preapproved_run" && state.writePolicyAcknowledged
+          executionWritePolicy: writePolicy,
+          writePolicyAcknowledged
         };
         notify();
         updateRunDraftChoice(
           {
             kind: "set_write_policy",
             writePolicy,
-            acknowledged: writePolicy === "user_preapproved_run" && state.writePolicyAcknowledged
-          },
-          false
-        );
-      },
-      onWritePolicyAcknowledgedChange: (writePolicyAcknowledged) => {
-        if (state.operationMode !== "execution" || state.writePolicy !== "user_preapproved_run") {
-          return;
-        }
-        state = { ...state, writePolicyAcknowledged };
-        notify();
-        updateRunDraftChoice(
-          {
-            kind: "set_write_policy",
-            writePolicy: state.writePolicy,
             acknowledged: writePolicyAcknowledged
           },
           false
@@ -1620,6 +1687,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       state = {
         ...state,
         writePolicy: "write_before_confirmation",
+        executionWritePolicy: "write_before_confirmation",
         writePolicyAcknowledged: false
       };
       notify();
@@ -1683,6 +1751,7 @@ function resetRunState(state: BridgeState): BridgeState {
     operationMode: "planning",
     contextMode: "writing",
     writePolicy: "write_before_confirmation",
+    executionWritePolicy: "write_before_confirmation",
     writePolicyAcknowledged: false,
     userRequest: "",
     snapshot: undefined,
@@ -1775,6 +1844,13 @@ function defaultNextRunWriteAuthorization(): Pick<
     writePolicy: "write_before_confirmation",
     writePolicyAcknowledged: false
   };
+}
+
+function acknowledgementForSelection(
+  operationMode: AgentOperationMode,
+  writePolicy: AgentWritePolicy
+): boolean {
+  return operationMode === "execution" && writePolicy === "user_preapproved_run";
 }
 
 function writeAuthorizationForSnapshot(
@@ -1923,6 +1999,56 @@ function selectedModelProfileId(settings: ModelSettingsPanelProps | undefined): 
     (entry) => entry.id === (settings.selectedProfileId ?? settings.defaultProfileId)
   );
   return profile?.id;
+}
+
+function selectedRunModelProfileId(
+  runDraft: AgentRunDraft | undefined,
+  settings: ModelSettingsPanelProps | undefined
+): string | undefined {
+  const draftProfile = settings?.profiles.find(
+    (profile) => profile.id === runDraft?.modelProfileId
+  );
+  return draftProfile?.id ?? selectedModelProfileId(settings);
+}
+
+function formatAgentStartError(error: UnifiedError): string {
+  if (error.code === "MODEL_PROFILE_NOT_FOUND") {
+    return "所选模型配置已不存在。请在设置中重新选择模型或设置默认模型后重试。";
+  }
+  if (error.code !== "AGENT_MODEL_CAPABILITY_UNSUPPORTED") return error.message;
+
+  const detail = error.redactedDetail;
+  const missing = Array.isArray(detail?.["missingCapabilities"])
+    ? detail["missingCapabilities"].filter((value): value is string => typeof value === "string")
+    : [];
+  if (missing.includes("modelProfile")) {
+    return "模型配置已失效或无法读取。请在设置中重新选择一个已保存的模型配置。";
+  }
+  const labels = missing.map((capability) => {
+    switch (capability) {
+      case "streaming":
+        return "流式输出";
+      case "toolCalling":
+        return "工具调用";
+      case "structuredArguments":
+        return "结构化工具参数";
+      case "contextWindow":
+        return detail?.["contextWindowStatus"] === "insufficient"
+          ? "上下文窗口容量不足"
+          : "上下文窗口信息未验证";
+      default:
+        return capability;
+    }
+  });
+  const modelName =
+    typeof detail?.["modelName"] === "string" && detail["modelName"].length <= 80
+      ? `“${detail["modelName"]}”`
+      : "当前模型";
+  const reason = labels.length === 0 ? "缺少可验证的 Agent 能力信息" : `缺少${labels.join("、")}`;
+  const action = missing.includes("contextWindow")
+    ? "请在设置的模型高级设置中填写已验证的上下文窗口；Max Tokens 仅限制输出长度。"
+    : "请刷新模型列表，或选择明确支持这些能力的模型。";
+  return `模型${modelName}无法启动 Agent：${reason}。${action}`;
 }
 
 /** The active chapter as the single Context Draft ref; server reads its content at start. */

@@ -55,7 +55,19 @@ test("stops a live Agent run through the real Electron IPC path", async () => {
   const server = createServer(async (request, response) => {
     const body = await readJsonBody(request);
     if (request.method === "GET" && request.url === "/v1/models") {
-      json(response, { data: [{ id: "local-agent", context_window: 128000 }] });
+      json(response, {
+        data: [
+          {
+            id: "local-agent",
+            context_window: 128000,
+            capabilities: {
+              streaming: true,
+              tool_calling: true,
+              structured_arguments: true
+            }
+          }
+        ]
+      });
       return;
     }
     if (request.method !== "POST" || body.stream !== true) {
@@ -149,7 +161,19 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
     requests.push(record);
 
     if (request.method === "GET" && request.url === "/v1/models") {
-      json(response, { data: [{ id: "local-agent", context_window: 128000 }] });
+      json(response, {
+        data: [
+          {
+            id: "local-agent",
+            context_window: 128000,
+            capabilities: {
+              streaming: true,
+              tool_calling: true,
+              structured_arguments: true
+            }
+          }
+        ]
+      });
       return;
     }
     if (request.method !== "POST") {
@@ -365,9 +389,11 @@ async function configureLocalModel(page: Page, baseUrl: string): Promise<void> {
   await page.getByRole("button", { name: "保存模型配置" }).click();
   await expect(page.getByText("模型配置已保存。", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "测试连接", exact: true }).click();
-  await expect(page.locator(".ns-project-feedback")).toContainText(
-    "Connected to openai-compatible/local-agent"
-  );
+  await expect(
+    page
+      .locator(".ns-project-feedback")
+      .filter({ hasText: "Connected to openai-compatible/local-agent" })
+  ).toContainText("Connected to openai-compatible/local-agent");
   await page.getByRole("button", { name: "关闭设置" }).click();
 }
 

@@ -25,6 +25,9 @@ export interface ModelDiscoveryOption extends JsonObject {
   readonly displayName: string;
   readonly provider: string;
   readonly contextWindow?: number;
+  readonly streaming?: boolean;
+  readonly toolCalling?: boolean;
+  readonly structuredArguments?: boolean;
   readonly reasoningStrength?: ModelReasoningStrengthControl;
 }
 
@@ -32,6 +35,9 @@ export interface ModelDiscoveryModelInput {
   readonly id: string;
   readonly displayName: string;
   readonly contextWindow?: number;
+  readonly streaming?: boolean;
+  readonly toolCalling?: boolean;
+  readonly structuredArguments?: boolean;
   readonly reasoningStrength?: ModelReasoningStrengthControl;
 }
 

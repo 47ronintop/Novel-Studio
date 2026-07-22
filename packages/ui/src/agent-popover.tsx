@@ -1,12 +1,14 @@
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
   type ReactNode,
   type RefObject
 } from "react";
+import { createPortal } from "react-dom";
 
 /**
  * Where focus lands when the popover opens: an explicit element ref (e.g. the currently-selected
@@ -50,12 +52,38 @@ export interface AgentPopoverProps {
  */
 export function AgentPopover(props: AgentPopoverProps): ReactNode {
   const [open, setOpen] = useState(false);
+  const [floatingHost, setFloatingHost] = useState<HTMLElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const panelId = useId();
   const disabled = props.disabled === true;
   const initialFocus = props.initialFocus ?? "first";
   const onOpenChange = props.onOpenChange;
+
+  useLayoutEffect(() => {
+    if (!open || triggerRef.current === null) return;
+    setFloatingHost(ensureFloatingLayer(triggerRef.current));
+  }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open || floatingHost === null) return;
+    const trigger = triggerRef.current;
+    const panel = panelRef.current;
+    if (trigger === null || panel === null) return;
+
+    const updatePosition = (): void => positionFloatingPanel(trigger, panel);
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    document.addEventListener("scroll", updatePosition, true);
+    const observer =
+      typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(updatePosition);
+    observer?.observe(panel);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", updatePosition);
+      document.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [floatingHost, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -65,7 +93,19 @@ export function AgentPopover(props: AgentPopoverProps): ReactNode {
       return;
     }
     initialFocus.current?.focus();
-  }, [open, initialFocus]);
+  }, [floatingHost, open, initialFocus]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsidePointer = (event: PointerEvent): void => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (triggerRef.current?.contains(target) || panelRef.current?.contains(target)) return;
+      change(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer, true);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer, true);
+  });
 
   useEffect(() => {
     if (disabled && open) {
@@ -85,47 +125,105 @@ export function AgentPopover(props: AgentPopoverProps): ReactNode {
     triggerRef.current?.focus();
   }
 
+  const panel =
+    open && floatingHost !== null
+      ? createPortal(
+          <div
+            aria-label={props.panelLabel}
+            className={["ns-agent-floating-popover", props.panelClassName]
+              .filter(Boolean)
+              .join(" ")}
+            id={panelId}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                close();
+              }
+            }}
+            ref={panelRef}
+            role="dialog"
+            style={{ visibility: "hidden" }}
+            tabIndex={-1}
+          >
+            {props.children({ close })}
+          </div>,
+          floatingHost
+        )
+      : null;
+
   return (
-    <div className={["ns-agent-popover", props.rootClassName].filter(Boolean).join(" ")}>
-      <button
-        aria-controls={open ? panelId : undefined}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        aria-label={props.triggerLabel}
-        className={props.triggerClassName}
-        disabled={disabled}
-        onClick={() => change(!open)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            change(true);
-          }
-        }}
-        ref={triggerRef}
-        title={props.triggerTitle ?? props.triggerLabel}
-        type="button"
-      >
-        {props.triggerContent}
-      </button>
-      {open ? (
-        <div
-          aria-label={props.panelLabel}
-          className={props.panelClassName}
-          id={panelId}
+    <>
+      <div className={["ns-agent-popover", props.rootClassName].filter(Boolean).join(" ")}>
+        <button
+          aria-controls={open ? panelId : undefined}
+          aria-expanded={open}
+          aria-haspopup="dialog"
+          aria-label={props.triggerLabel}
+          className={props.triggerClassName}
+          disabled={disabled}
+          onClick={() => change(!open)}
           onKeyDown={(event) => {
-            if (event.key === "Escape") {
+            if (event.key === "Enter" || event.key === " ") {
               event.preventDefault();
-              close();
+              change(true);
             }
           }}
-          ref={panelRef}
-          role="dialog"
+          ref={triggerRef}
+          title={props.triggerTitle ?? props.triggerLabel}
+          type="button"
         >
-          {props.children({ close })}
-        </div>
-      ) : null}
-    </div>
+          {props.triggerContent}
+        </button>
+      </div>
+      {panel}
+    </>
   );
+}
+
+function ensureFloatingLayer(trigger: HTMLElement): HTMLElement {
+  const owner = trigger.closest<HTMLElement>(".ns-shell") ?? document.body;
+  const existing = Array.from(owner.children).find((child) =>
+    child.classList.contains("ns-agent-popover-layer")
+  );
+  if (existing instanceof HTMLElement) return existing;
+  const layer = document.createElement("div");
+  layer.className = "ns-agent-popover-layer";
+  owner.append(layer);
+  return layer;
+}
+
+function positionFloatingPanel(trigger: HTMLElement, panel: HTMLElement): void {
+  const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+  const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+  const margin = 8;
+  const gap = 6;
+
+  panel.style.left = "0px";
+  panel.style.top = "0px";
+  panel.style.maxWidth = `${Math.max(0, viewportWidth - margin * 2)}px`;
+  panel.style.maxHeight = "";
+  const triggerRect = trigger.getBoundingClientRect();
+  const initialPanelRect = panel.getBoundingClientRect();
+  const spaceAbove = Math.max(0, triggerRect.top - margin - gap);
+  const spaceBelow = Math.max(0, viewportHeight - triggerRect.bottom - margin - gap);
+  const placeAbove =
+    initialPanelRect.height <= spaceAbove ||
+    (initialPanelRect.height > spaceBelow && spaceAbove >= spaceBelow);
+  panel.style.maxHeight = `${Math.max(0, Math.floor(placeAbove ? spaceAbove : spaceBelow))}px`;
+
+  const panelRect = panel.getBoundingClientRect();
+  const maxLeft = Math.max(margin, viewportWidth - margin - panelRect.width);
+  const left = Math.min(Math.max(triggerRect.left, margin), maxLeft);
+  const preferredTop = placeAbove
+    ? triggerRect.top - gap - panelRect.height
+    : triggerRect.bottom + gap;
+  const maxTop = Math.max(margin, viewportHeight - margin - panelRect.height);
+  const top = Math.min(Math.max(preferredTop, margin), maxTop);
+
+  panel.dataset.placement = placeAbove ? "top" : "bottom";
+  panel.style.left = `${Math.round(left)}px`;
+  panel.style.top = `${Math.round(top)}px`;
+  panel.style.visibility = "visible";
 }
 
 /**

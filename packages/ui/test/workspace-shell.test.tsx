@@ -200,6 +200,8 @@ describe("WorkspaceShell", () => {
 
     expect(css).toContain('.ns-shell[data-theme="light"]');
     expect(css).toContain('.ns-shell[data-theme="system"]');
+    expect(css).toContain('.ns-shell[data-theme="ink-gold"]');
+    expect(css).toContain("--ns-gilded-accent: linear-gradient");
     expect(css).toContain('.ns-shell[data-accent="blue"]');
     expect(css).toContain('.ns-shell[data-accent="amber"]');
 
@@ -209,6 +211,20 @@ describe("WorkspaceShell", () => {
       .map((match) => match[1])
       .join("\n");
     expect(accentScopes).not.toMatch(/--ns-(?:danger|warning|success|info)/);
+  });
+
+  test("applies the ink-gold theme value to the workbench root", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        appearancePreferences={{ theme: "ink-gold", accentColor: "teal" }}
+        shellState={application.getShellState()}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+      />
+    );
+
+    expect(html).toContain('data-theme="ink-gold"');
   });
 
   test("positions find replace as a responsive editor overlay", () => {
@@ -1116,6 +1132,7 @@ describe("WorkspaceShell", () => {
         displayName: "Default Model",
         baseUrl: "https://api.example.com/v1",
         modelName: "example-model",
+        contextWindow: "",
         apiKeyRefInput: "",
         temperature: "0.7",
         maxTokens: "4096",
@@ -1975,6 +1992,7 @@ function createSettingsProps(): ModelSettingsPanelProps {
       displayName: "Default Model",
       baseUrl: "",
       modelName: "example-model",
+      contextWindow: "",
       apiKeyRefInput: "",
       temperature: "0.7",
       maxTokens: "4096",

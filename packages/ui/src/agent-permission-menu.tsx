@@ -1,84 +1,53 @@
-import { ShieldOff, ShieldCheck } from "lucide-react";
 import type { AgentWritePolicy } from "@novel-studio/application";
 
-import { AgentPopover } from "./agent-popover.js";
 import type { AgentComposerPermissionControl } from "./workspace-shell-types.js";
 
 export interface AgentPermissionMenuProps {
   readonly writePolicy: AgentWritePolicy;
-  readonly writePolicyAcknowledged: boolean;
   readonly policyDisabled: boolean;
   readonly control?: AgentComposerPermissionControl;
   readonly onWritePolicyChange: (policy: AgentWritePolicy) => void;
-  readonly onWritePolicyAcknowledgedChange: (acknowledged: boolean) => void;
 }
 
 export function AgentPermissionMenu(props: AgentPermissionMenuProps) {
   const automatic = props.writePolicy === "user_preapproved_run";
-  const policyLabel = automatic ? "自动" : "只读";
-  const PolicyIcon = automatic ? ShieldCheck : ShieldOff;
 
   return (
-    <AgentPopover
-      onOpenChange={(open) => {
-        if (open) props.control?.onOpen();
-      }}
-      panelClassName="ns-agent-permission-popover"
-      panelLabel="修改权限与摘要"
-      triggerClassName={`ns-agent-permission-trigger ${
-        automatic ? "is-automatic" : "is-confirmation"
-      }`}
-      triggerContent={<PolicyIcon aria-hidden="true" size={14} />}
-      triggerLabel={`修改权限：${policyLabel}`}
-      triggerTitle="修改权限与本次权限摘要"
-    >
-      {() => (
-        <>
-          <fieldset className="ns-agent-permission-policy">
-            <legend>修改策略</legend>
-            <label>
-              <input
-                checked={!automatic}
-                disabled={props.policyDisabled}
-                name="agent-write-policy"
-                onChange={() => props.onWritePolicyChange("write_before_confirmation")}
-                type="radio"
-              />
-              <span>
-                <strong>每次修改前确认</strong>
-                <small>每个 Change Set 都先进入差异审阅。</small>
-              </span>
-            </label>
-            <label>
-              <input
-                checked={automatic}
-                disabled={props.policyDisabled}
-                name="agent-write-policy"
-                onChange={() => {
-                  props.onWritePolicyChange("user_preapproved_run");
-                  props.onWritePolicyAcknowledgedChange(true);
-                }}
-                type="radio"
-              />
-              <span>
-                <strong>本次运行自动修改</strong>
-                <small>只预授权当前 run，不扩大工具或路径范围。</small>
-              </span>
-            </label>
-          </fieldset>
-
-          {!automatic ? null : (
-            <div className="ns-agent-permission-risk">
-              <p>本次运行已获自动修改授权；每次写入仍会生成差异、校验并创建版本点。</p>
-            </div>
-          )}
-
-          <PermissionSummaryDetails
-            {...(props.control === undefined ? {} : { control: props.control })}
+    <section aria-label="执行审批" className="ns-agent-permission-menu">
+      <fieldset className="ns-agent-permission-policy">
+        <legend>执行审批</legend>
+        <label>
+          <input
+            checked={!automatic}
+            disabled={props.policyDisabled}
+            name="agent-write-policy"
+            onChange={() => props.onWritePolicyChange("write_before_confirmation")}
+            type="radio"
           />
-        </>
-      )}
-    </AgentPopover>
+          <span>
+            <strong>请求批准</strong>
+            <small>每个 Change Set 都先进入差异审阅。</small>
+          </span>
+        </label>
+        <label>
+          <input
+            checked={automatic}
+            disabled={props.policyDisabled}
+            name="agent-write-policy"
+            onChange={() => props.onWritePolicyChange("user_preapproved_run")}
+            type="radio"
+          />
+          <span>
+            <strong>替我审批</strong>
+            <small>只预授权当前运行，不扩大工具或路径范围。</small>
+          </span>
+        </label>
+      </fieldset>
+
+      <PermissionSummaryDetails
+        {...(props.control === undefined ? {} : { control: props.control })}
+      />
+    </section>
   );
 }
 

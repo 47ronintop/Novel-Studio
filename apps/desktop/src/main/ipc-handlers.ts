@@ -2054,9 +2054,11 @@ function toModelProfile(value: unknown): ModelProfile | undefined {
   }
   if (
     !isOptionalString(value.baseUrl) ||
+    !isOptionalPositiveSafeInteger(value.contextWindow) ||
     !isOptionalNumber(value.topP) ||
     !isOptionalNumber(value.frequencyPenalty) ||
-    !isOptionalNumber(value.presencePenalty)
+    !isOptionalNumber(value.presencePenalty) ||
+    !isOptionalBoolean(value.reasoningEffortEnabled)
   ) {
     return undefined;
   }
@@ -2068,12 +2070,16 @@ function toModelProfile(value: unknown): ModelProfile | undefined {
     ...(value.baseUrl === undefined ? {} : { baseUrl: value.baseUrl }),
     apiKeyRef: value.apiKeyRef,
     modelName: value.modelName,
+    ...(value.contextWindow === undefined ? {} : { contextWindow: value.contextWindow }),
     temperature: value.temperature,
     maxTokens: value.maxTokens,
     ...(value.topP === undefined ? {} : { topP: value.topP }),
     timeoutMs: value.timeoutMs,
     ...(value.frequencyPenalty === undefined ? {} : { frequencyPenalty: value.frequencyPenalty }),
-    ...(value.presencePenalty === undefined ? {} : { presencePenalty: value.presencePenalty })
+    ...(value.presencePenalty === undefined ? {} : { presencePenalty: value.presencePenalty }),
+    ...(value.reasoningEffortEnabled === undefined
+      ? {}
+      : { reasoningEffortEnabled: value.reasoningEffortEnabled })
   };
 }
 
@@ -2275,6 +2281,16 @@ function isOptionalStringArray(value: unknown): value is string[] | undefined {
 
 function isOptionalNumber(value: unknown): value is number | undefined {
   return value === undefined || typeof value === "number";
+}
+
+function isOptionalPositiveSafeInteger(value: unknown): value is number | undefined {
+  return (
+    value === undefined || (typeof value === "number" && Number.isSafeInteger(value) && value > 0)
+  );
+}
+
+function isOptionalBoolean(value: unknown): value is boolean | undefined {
+  return value === undefined || typeof value === "boolean";
 }
 
 function isOptionalChapterStatus(value: unknown): value is CreateChapterInput["status"] {

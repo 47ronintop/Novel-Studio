@@ -17,16 +17,17 @@ describe("AgentPopover", () => {
     const trigger = host.querySelector<HTMLButtonElement>('[aria-label="打开"]');
     expect(trigger?.getAttribute("aria-haspopup")).toBe("dialog");
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
-    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
 
     act(() => trigger?.click());
     expect(trigger?.getAttribute("aria-expanded")).toBe("true");
-    const panel = host.querySelector<HTMLElement>('[role="dialog"]');
+    const panel = document.querySelector<HTMLElement>('[role="dialog"]');
     expect(panel?.getAttribute("aria-label")).toBe("面板");
     expect(trigger?.getAttribute("aria-controls")).toBe(panel?.id);
+    expect(panel?.parentElement?.classList).toContain("ns-agent-popover-layer");
 
     act(() => trigger?.click());
-    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
   test("opens with Enter/Space and focuses the first control by default", () => {
@@ -35,52 +36,50 @@ describe("AgentPopover", () => {
     act(() =>
       trigger?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }))
     );
-    expect(document.activeElement).toBe(host.querySelector('[data-option="a"]'));
+    expect(document.activeElement).toBe(document.querySelector('[data-option="a"]'));
   });
 
   test("focuses the initialFocus ref when provided", () => {
     const { host } = render({ initialFocus: "second" });
     const trigger = host.querySelector<HTMLButtonElement>('[aria-label="打开"]');
     act(() => trigger?.click());
-    expect(document.activeElement).toBe(host.querySelector('[data-option="b"]'));
+    expect(document.activeElement).toBe(document.querySelector('[data-option="b"]'));
   });
 
   test("closes on Escape and returns focus to the trigger", () => {
     const { host } = render();
     const trigger = host.querySelector<HTMLButtonElement>('[aria-label="打开"]');
     act(() => trigger?.click());
-    const panel = host.querySelector<HTMLElement>('[role="dialog"]');
-    act(() =>
-      panel?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
-    );
-    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    const panel = document.querySelector<HTMLElement>('[role="dialog"]');
+    act(() => panel?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(document.activeElement).toBe(trigger);
   });
 
   test("closes when disabled becomes true", () => {
     const { host, rerender } = render();
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="打开"]')?.click());
-    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
     rerender({ disabled: true });
-    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(host.querySelector<HTMLButtonElement>('[aria-label="打开"]')?.disabled).toBe(true);
   });
 
   test("does not open while disabled", () => {
     const { host } = render({ disabled: true });
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="打开"]')?.click());
-    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
   test("rovePopoverOptions wraps arrow focus across sibling buttons", () => {
     const { host } = render();
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="打开"]')?.click());
-    const first = host.querySelector<HTMLButtonElement>('[data-option="a"]');
+    const first = document.querySelector<HTMLButtonElement>('[data-option="a"]');
     act(() =>
       first?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }))
     );
-    expect(document.activeElement).toBe(host.querySelector('[data-option="b"]'));
-    const second = host.querySelector<HTMLButtonElement>('[data-option="b"]');
+    expect(document.activeElement).toBe(document.querySelector('[data-option="b"]'));
+    const second = document.querySelector<HTMLButtonElement>('[data-option="b"]');
     act(() =>
       second?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }))
     );

@@ -71,6 +71,7 @@
               "apiKeyRef": { "type": "string", "pattern": "^secret://" },
               "apiKey": false,
               "modelName": { "type": "string", "minLength": 1 },
+              "contextWindow": { "type": "integer", "minimum": 1 },
               "temperature": { "type": "number", "minimum": 0 },
               "maxTokens": { "type": "integer", "minimum": 1 },
               "topP": { "type": "number", "minimum": 0, "maximum": 1 },

@@ -19,6 +19,8 @@ export interface ModelProfile extends JsonObject {
   readonly baseUrl?: string;
   readonly apiKeyRef: string;
   readonly modelName: string;
+  /** Verified input context capacity for the configured model; distinct from output maxTokens. */
+  readonly contextWindow?: number;
   readonly temperature: number;
   readonly maxTokens: number;
   readonly topP?: number;
@@ -310,7 +312,10 @@ async function readModelProfile(
 
 function validateModelProfile(profile: ModelProfile): Result<ModelProvider, UnifiedError> {
   const provider = toSupportedProvider(profile.provider);
-  if (provider === undefined || !profile.apiKeyRef.startsWith("secret://")) {
+  const contextWindowValid =
+    profile.contextWindow === undefined ||
+    (Number.isSafeInteger(profile.contextWindow) && profile.contextWindow > 0);
+  if (provider === undefined || !profile.apiKeyRef.startsWith("secret://") || !contextWindowValid) {
     return err(
       createUnifiedError({
         code: "MODEL_PROFILE_INVALID",
@@ -323,6 +328,7 @@ function validateModelProfile(profile: ModelProfile): Result<ModelProvider, Unif
         redactedDetail: {
           profileId: profile.id,
           provider: profile.provider,
+          contextWindow: profile.contextWindow ?? null,
           apiKeyRef: redactJsonValue("apiKeyRef", profile.apiKeyRef)
         }
       })
