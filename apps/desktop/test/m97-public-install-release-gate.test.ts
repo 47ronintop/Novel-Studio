@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 
@@ -13,17 +12,5 @@ describe("M97 public install release gate", () => {
     expect(document).toContain(
       "No macOS notarization is required unless macOS artifacts enter v1."
     );
-  });
-
-  test("release check validates the public install gate without publishing", () => {
-    const result = spawnSync("npm run release:check", {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      shell: true
-    });
-
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stdout).toContain("Public install release gate passed");
-    expect(result.stdout).not.toMatch(/push|upload|publish/i);
   });
 });

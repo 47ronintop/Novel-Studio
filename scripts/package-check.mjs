@@ -1,6 +1,5 @@
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -16,9 +15,6 @@ await checkElectronBuilderConfig();
 await checkAgentAutonomyPrerequisites();
 await checkAgentConversationPrerequisites();
 await checkAgentStage5Prerequisites();
-if (failures.length === 0) {
-  await checkFreshPackageArtifact();
-}
 
 if (failures.length > 0) {
   for (const failure of failures) {
@@ -39,11 +35,17 @@ async function checkPackageScripts() {
   ) {
     failures.push("Missing package:check script.");
   }
+  if (packageJson.scripts?.["package:verify"] !== "node scripts/package-check.mjs") {
+    failures.push("Missing package:verify script.");
+  }
   if (packageJson.scripts?.["package:artifact-check"] !== "node scripts/artifact-secret-scan.mjs") {
     failures.push("Missing package:artifact-check script.");
   }
   if (packageJson.scripts?.["package:dir"] !== "node scripts/package-dir.mjs") {
     failures.push("package:dir must use the stable package-dir wrapper.");
+  }
+  if (packageJson.scripts?.["package:dir:built"] !== "node scripts/package-dir.mjs --skip-build") {
+    failures.push("package:dir:built must package the existing build.");
   }
   if (packageJson.scripts?.["package:installer"] !== "node scripts/package-installer.mjs") {
     failures.push("Missing package:installer script.");
@@ -220,13 +222,9 @@ async function checkAgentAutonomyPrerequisites() {
     "apps/desktop/test/agent-write.e2e.ts",
     "apps/desktop/test/agent-run-autonomy.e2e.ts"
   ];
-  const existingSafetySuites = new Set();
-
   for (const suite of requiredSafetySuites) {
     if (!(await fileExists(join(root, suite)))) {
       failures.push(`Agent autonomy prerequisite suite is missing: ${suite}`);
-    } else {
-      existingSafetySuites.add(suite);
     }
   }
 
@@ -239,26 +237,6 @@ async function checkAgentAutonomyPrerequisites() {
       !policySuite.includes(`writePolicy: "${manualPolicy}"`)
     ) {
       failures.push("Manual confirmation must remain the default Agent write policy.");
-    }
-  }
-
-  const runnableSafetySuites = requiredSafetySuites.slice(0, 5);
-  if (runnableSafetySuites.every((suite) => existingSafetySuites.has(suite))) {
-    const result = spawnSync(
-      process.execPath,
-      [
-        join(root, "node_modules", "vitest", "vitest.mjs"),
-        "run",
-        "--passWithNoTests",
-        ...runnableSafetySuites
-      ],
-      { cwd: root, encoding: "utf8" }
-    );
-    if (result.status !== 0) {
-      const detail = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim();
-      failures.push(
-        `Agent autonomy prerequisite suites failed.${detail.length === 0 ? "" : `\n${detail}`}`
-      );
     }
   }
 }
@@ -281,35 +259,9 @@ async function checkAgentConversationPrerequisites() {
     "apps/desktop/test/agent-write.e2e.ts",
     "apps/desktop/test/agent-run-autonomy.e2e.ts"
   ];
-  const existingStage4Suites = new Set();
-
   for (const suite of requiredStage4Suites) {
     if (!(await fileExists(join(root, suite)))) {
       failures.push(`Agent conversation prerequisite suite is missing: ${suite}`);
-    } else {
-      existingStage4Suites.add(suite);
-    }
-  }
-
-  const runnableStage4Suites = requiredStage4Suites.filter(
-    (suite) => suite.endsWith(".test.ts") || suite.endsWith(".test.tsx")
-  );
-  if (runnableStage4Suites.every((suite) => existingStage4Suites.has(suite))) {
-    const result = spawnSync(
-      process.execPath,
-      [
-        join(root, "node_modules", "vitest", "vitest.mjs"),
-        "run",
-        "--passWithNoTests",
-        ...runnableStage4Suites
-      ],
-      { cwd: root, encoding: "utf8" }
-    );
-    if (result.status !== 0) {
-      const detail = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim();
-      failures.push(
-        `Agent conversation prerequisite suites failed.${detail.length === 0 ? "" : `\n${detail}`}`
-      );
     }
   }
 }
@@ -368,68 +320,10 @@ async function checkAgentStage5Prerequisites() {
     "apps/desktop/test/agent-diagnostics.e2e.ts",
     "apps/desktop/test/agent-usage-settings.e2e.ts"
   ];
-  const existingStage5Suites = new Set();
-
   for (const suite of requiredStage5Suites) {
     if (!(await fileExists(join(root, suite)))) {
       failures.push(`Agent Stage 5 prerequisite suite is missing: ${suite}`);
-    } else {
-      existingStage5Suites.add(suite);
     }
-  }
-
-  const runnableStage5Suites = requiredStage5Suites.filter(
-    (suite) =>
-      suite === "packages/llm-adapter/test" ||
-      suite.endsWith(".test.ts") ||
-      suite.endsWith(".test.tsx")
-  );
-  if (runnableStage5Suites.every((suite) => existingStage5Suites.has(suite))) {
-    const result = spawnSync(
-      process.execPath,
-      [
-        join(root, "node_modules", "vitest", "vitest.mjs"),
-        "run",
-        "--passWithNoTests",
-        "--no-file-parallelism",
-        ...runnableStage5Suites
-      ],
-      { cwd: root, encoding: "utf8" }
-    );
-    if (result.status !== 0) {
-      const detail = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim();
-      failures.push(
-        `Agent Stage 5 prerequisite suites failed.${detail.length === 0 ? "" : `\n${detail}`}`
-      );
-    }
-  }
-}
-
-async function checkFreshPackageArtifact() {
-  const result = spawnSync("npm", ["run", "package:dir"], {
-    cwd: root,
-    encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
-    shell: true
-  });
-  if (result.status !== 0) {
-    const processError =
-      result.error === undefined
-        ? ""
-        : result.error instanceof Error
-          ? result.error.message
-          : String(result.error);
-    const detail = `${processError}\n${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim();
-    failures.push(
-      `Fresh package artifact creation and scan failed.${detail.length === 0 ? "" : `\n${detail}`}`
-    );
-    return;
-  }
-  if (result.stdout !== null) {
-    process.stdout.write(result.stdout);
-  }
-  if (result.stderr !== null) {
-    process.stderr.write(result.stderr);
   }
 }
 

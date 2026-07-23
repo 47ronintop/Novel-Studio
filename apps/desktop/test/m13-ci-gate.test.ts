@@ -23,24 +23,28 @@ describe("M13 real E2E and CI gate", () => {
     const playwrightConfig = await readFile("playwright.config.ts", "utf8");
 
     expect(packageJson.scripts["test:e2e"]).toBe("npm run build && playwright test");
+    expect(packageJson.scripts["test:e2e:built"]).toBe("playwright test");
     expect(packageJson.scripts["test:e2e"]).not.toContain("--list");
     expect(playwrightConfig).toContain('testMatch: "**/*.e2e.ts"');
   });
 
-  test("adds a GitHub Actions workflow with local quality gates", async () => {
+  test("runs each expensive GitHub Actions quality gate once", async () => {
     const workflow = await readFile(".github/workflows/ci.yml", "utf8");
 
     expect(workflow).toContain("npm ci");
     expect(workflow).toContain("npm run format");
     expect(workflow).toContain("npm run lint");
-    expect(workflow).toContain("npm run typecheck");
+    expect(workflow).toContain("npm run build");
     expect(workflow).toContain("npm run test");
-    expect(workflow).toContain("npm run test:contract");
-    expect(workflow).toContain("npm run test:e2e");
-    expect(workflow).toContain("npm run package:check");
-    expect(workflow).toContain("npm run package:dir");
-    expect(workflow).toContain("npm run package:artifact-check");
+    expect(workflow).toContain("npm run test:e2e:built");
+    expect(workflow).toContain("npm run package:verify");
+    expect(workflow).toContain("npm run release:check");
+    expect(workflow).toContain("npm run alpha:verify");
+    expect(workflow).toContain("npm run package:dir:built");
     expect(workflow).toContain("npm audit");
+    expect(workflow).not.toMatch(
+      /^\s*run: npm run (?:typecheck|test:contract|test:e2e|package:check|alpha:check|package:dir|package:artifact-check)\s*$/mu
+    );
   });
 
   test("points runtime package exports at dist artifacts for Electron", async () => {

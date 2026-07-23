@@ -9,7 +9,11 @@ export default tseslint.config(
       "**/dist/**",
       "coverage/**",
       "playwright-report/**",
-      "test-results/**"
+      "test-results/**",
+      "release/**",
+      ".tmp-novel-studio-*/**",
+      ".playwright-output/**",
+      ".codex-doc-cache/**"
     ]
   },
   js.configs.recommended,

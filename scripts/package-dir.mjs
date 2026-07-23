@@ -3,13 +3,23 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const root = process.cwd();
+const supportedArguments = new Set(["--skip-build"]);
+const unsupportedArguments = process.argv
+  .slice(2)
+  .filter((argument) => !supportedArguments.has(argument));
+if (unsupportedArguments.length > 0) {
+  throw new Error(`Unsupported package-dir argument: ${unsupportedArguments.join(", ")}`);
+}
+const skipBuild = process.argv.includes("--skip-build");
 const runId = createRunId();
 const outputDirectory = `release/package-dir-${runId}`;
 const unpackedDirectory = `${outputDirectory}/win-unpacked`;
 
 await mkdir(join(root, "release"), { recursive: true });
 
-await run("npm", ["run", "build"]);
+if (!skipBuild) {
+  await run("npm", ["run", "build"]);
+}
 await run("electron-builder", ["--dir", "--config", "apps/desktop/electron-builder.config.cjs"], {
   NOVEL_STUDIO_PACKAGE_OUTPUT: outputDirectory
 });

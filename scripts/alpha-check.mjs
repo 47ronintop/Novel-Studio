@@ -57,13 +57,22 @@ async function checkPackageScripts() {
   if (packageJson.scripts?.["alpha:check"] !== "npm run build && node scripts/alpha-check.mjs") {
     failures.push("Root package.json must expose alpha:check script.");
   }
+  if (packageJson.scripts?.["alpha:verify"] !== "node scripts/alpha-check.mjs") {
+    failures.push("Root package.json must expose alpha:verify script.");
+  }
   if (
     packageJson.scripts?.["package:check"] !== "npm run build && node scripts/package-check.mjs"
   ) {
     failures.push("Root package.json must expose package:check script.");
   }
+  if (packageJson.scripts?.["package:verify"] !== "node scripts/package-check.mjs") {
+    failures.push("Root package.json must expose package:verify script.");
+  }
   if (packageJson.scripts?.["package:dir"] !== "node scripts/package-dir.mjs") {
     failures.push("Root package.json must expose package:dir script.");
+  }
+  if (packageJson.scripts?.["package:dir:built"] !== "node scripts/package-dir.mjs --skip-build") {
+    failures.push("Root package.json must expose package:dir:built script.");
   }
   if (packageJson.scripts?.["package:artifact-check"] !== "node scripts/artifact-secret-scan.mjs") {
     failures.push("Root package.json must expose package:artifact-check script.");

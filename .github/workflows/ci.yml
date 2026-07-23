@@ -30,32 +30,26 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Typecheck
-        run: npm run typecheck
+      - name: Build
+        run: npm run build
 
       - name: Unit and integration tests
         run: npm run test
 
-      - name: Schema contract tests
-        run: npm run test:contract
-
       - name: Electron E2E smoke
-        run: npm run test:e2e
+        run: npm run test:e2e:built
 
       - name: Package preflight
-        run: npm run package:check
+        run: npm run package:verify
 
       - name: Release channel check
         run: npm run release:check
 
       - name: Alpha gate
-        run: npm run alpha:check
+        run: npm run alpha:verify
 
       - name: Dependency audit
         run: npm audit
 
       - name: Build unpacked package artifact
-        run: npm run package:dir
-
-      - name: Artifact secret scan
-        run: npm run package:artifact-check
+        run: npm run package:dir:built

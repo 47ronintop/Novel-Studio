@@ -21,19 +21,7 @@ describe("M98 V1 ship readiness", () => {
     expect(document).toContain("Manual Provider Verification Required");
   });
 
-  test("release check validates M98 readiness without publishing", () => {
-    const result = spawnSync("npm run release:check", {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      shell: true
-    });
-
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stdout).toContain("V1 conditional ship readiness gate recorded");
-    expect(result.stdout).not.toMatch(/push|upload|publish/i);
-  });
-
-  test("package check gates autonomy on the Stage 2 safety evidence and manual default", async () => {
+  test("package check inventories Stage 2 safety evidence without rerunning it", async () => {
     const packageCheck = await readFile("scripts/package-check.mjs", "utf8");
     const requiredSuites = [
       "packages/agent-engine/test/full-autonomy-policy.test.ts",
@@ -51,11 +39,11 @@ describe("M98 V1 ship readiness", () => {
     expect(packageCheck).toContain(
       "Manual confirmation must remain the default Agent write policy."
     );
-    expect(packageCheck).toContain("Agent autonomy prerequisite suites failed.");
-    expect(packageCheck).toContain("spawnSync");
+    expect(packageCheck).toContain("Agent autonomy prerequisite suite is missing:");
+    expect(packageCheck).not.toContain("spawnSync");
   });
 
-  test("package check gates Stage 4 conversation isolation and acceptance evidence", async () => {
+  test("package check inventories Stage 4 conversation acceptance evidence", async () => {
     const packageCheck = await readFile("scripts/package-check.mjs", "utf8");
     const requiredSuites = [
       "packages/repository/test/agent-conversation-repository.test.ts",
@@ -77,10 +65,10 @@ describe("M98 V1 ship readiness", () => {
 
     expect(packageCheck).toContain("checkAgentConversationPrerequisites");
     for (const suite of requiredSuites) expect(packageCheck).toContain(suite);
-    expect(packageCheck).toContain("Agent conversation prerequisite suites failed.");
+    expect(packageCheck).toContain("Agent conversation prerequisite suite is missing:");
   });
 
-  test("package check gates the complete Stage 5 acceptance evidence", async () => {
+  test("package check inventories Stage 5 acceptance evidence without nested gates", async () => {
     const packageCheck = await readFile("scripts/package-check.mjs", "utf8");
     const requiredSuites = [
       "packages/ui/test/agent-composer.test.tsx",
@@ -138,14 +126,10 @@ describe("M98 V1 ship readiness", () => {
 
     expect(packageCheck).toContain("checkAgentStage5Prerequisites");
     for (const suite of requiredSuites) expect(packageCheck).toContain(suite);
-    expect(packageCheck).toContain("Agent Stage 5 prerequisite suites failed.");
-    expect(packageCheck).toContain('"--no-file-parallelism"');
-    expect(packageCheck).toContain("spawnSync");
-    expect(packageCheck).toContain("checkFreshPackageArtifact");
-    expect(packageCheck).toContain('["run", "package:dir"]');
-    expect(packageCheck).toContain("Fresh package artifact creation and scan failed.");
-    expect(packageCheck).toContain("maxBuffer");
-    expect(packageCheck).toContain("result.error");
+    expect(packageCheck).toContain("Agent Stage 5 prerequisite suite is missing:");
+    expect(packageCheck).not.toContain('"--no-file-parallelism"');
+    expect(packageCheck).not.toContain("spawnSync");
+    expect(packageCheck).not.toContain("checkFreshPackageArtifact");
   });
 
   test("package check excludes compiled Stage 5 tests from Electron package inputs", async () => {

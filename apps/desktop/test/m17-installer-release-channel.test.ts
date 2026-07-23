@@ -1,5 +1,4 @@
 import { existsSync, readFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -85,16 +84,5 @@ describe("M17 installer and release channel", () => {
     expect(manifest.signing.policy).toBe("unsigned-local-beta");
     expect(readFileSync(manifest.releaseNotesPath, "utf8")).toContain("M17 安装器与发布通道");
     expect(readFileSync(manifest.releaseNotesPath, "utf8")).toContain("M18 插件系统边界");
-  });
-
-  test("release check validates the local M17 publishing contract", () => {
-    const result = spawnSync("npm run release:check", {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      shell: true
-    });
-
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stdout).toContain("Release check passed");
   });
 });

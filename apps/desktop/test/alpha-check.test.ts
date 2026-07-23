@@ -1,8 +1,5 @@
 import { readFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
 import { describe, expect, test } from "vitest";
-
-import { withBuildGateLock } from "./build-gate-lock";
 
 describe("M9 alpha checklist", () => {
   test("exposes build and alpha check scripts", () => {
@@ -20,18 +17,10 @@ describe("M9 alpha checklist", () => {
     expect(packageJson.scripts["alpha:check"]).toBe(
       "npm run build && node scripts/alpha-check.mjs"
     );
+    expect(packageJson.scripts["alpha:verify"]).toBe("node scripts/alpha-check.mjs");
+    expect(packageJson.scripts["package:verify"]).toBe("node scripts/package-check.mjs");
+    expect(packageJson.scripts["package:dir:built"]).toBe(
+      "node scripts/package-dir.mjs --skip-build"
+    );
   });
-
-  test("passes the local alpha check gate", async () => {
-    const result = await withBuildGateLock(() => {
-      return spawnSync("npm run alpha:check", {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        shell: true
-      });
-    });
-
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stdout).toContain("Alpha check passed");
-  }, 90000);
 });

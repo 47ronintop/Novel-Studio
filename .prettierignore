@@ -5,3 +5,7 @@ coverage
 playwright-report
 test-results
 package-lock.json
+release
+.tmp-novel-studio-*
+.playwright-output
+.codex-doc-cache
