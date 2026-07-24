@@ -1,6 +1,6 @@
 ﻿# Novel Studio Roadmap
 
-Version: 1.52 | Status: Active | Last Updated: 2026-07-07
+Version: 1.53 | Status: Active | Last Updated: 2026-07-24
 
 ## 目标
 
@@ -117,7 +117,15 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 | M97       | Public Install Release Gate     | 面向公开安装用户的 installer、签名/证书策略、release channel 和核心旅程验证  | Complete |
 | M98       | V1 Ship Audit                   | 只按核心闭环证据裁决 v1 ship；同步裁决阅读朗读等 v1.1 候选功能               | Complete |
 
-## M15 完成内容
+## Stage 5：Agent 工具补全
+
+| 批次 | 范围              | 主要工作                                                                                                               | 状态     | 提交     |
+| ---- | ----------------- | ---------------------------------------------------------------------------------------------------------------------- | -------- | -------- |
+| 1    | Phase 0.1-0.4     | 工具能力快照、Permission Summary v1.1、执行端口、Run Snapshot/Event v1.2，22 工具 canonical catalog               | Complete | 238a1bf  |
+| 2    | Phase A + B       | 受限项目搜索/引用、Change Set v1.1 操作联合体（create/move/delete/mkdir）、no-follow 文件操作、6 个生命周期工具      | Complete | 9426c5a  |
+| 3    | Phase D + E.3     | SSRF 安全网络策略、`web_search`/`fetch_url`、远程 MCP 客户端（最小 JSON-RPC 2.0，`outcome_unknown` 一等终态）        | Complete | 3885c3e  |
+| 4    | Phase C.0-C.4     | Windows AppContainer 沙箱资格门、Task Catalog、工具调用审批状态机、`run_project_task`、打包 Git runtime、`git_status`/`git_diff` | Complete | 32f6fa4  |
+| 5    | Phase E.1 + E.2   | 插件 tool 贡献类型、`PluginSandboxPort` 合同、注入启动器 adapter、本地 stdio MCP（`McpSettingsFileRepository`、`local-mcp-runtime.ts`）、动态外部工具调度 | Complete | 99bf01f  |
 
 - settings schema 将首批可配置 provider 收敛为 `openai-compatible`、`openai`、`ollama`，并继续拒绝明文 `apiKey`。
 - Application 层新增 profile 保存校验：不支持 provider 或非 `secret://` 密钥引用会在写入前失败，错误信息保持脱敏。

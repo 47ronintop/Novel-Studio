@@ -1,6 +1,6 @@
 # M98 V1 Ship Readiness
 
-Version: 1.1 | Status: CONDITIONAL - live provider manual verification pending | Date: 2026-07-07
+Version: 1.1 | Status: CONDITIONAL - live provider manual verification pending | Date: 2026-07-24
 
 ## Ship Decision
 
@@ -102,3 +102,21 @@ Before changing this document back to GO, a human must verify:
 ## Final Gate
 
 M98 final gate: conditional hold until manual live provider verification passes. Non-core gaps remain deferred, and reading aloud is scoped to v1.1 backlog instead of v1.
+
+## Stage 5 Agent 工具补全状态（2026-07-24）
+
+Stage 5 将 Agent 静态工具从 9 个扩展到 22 个，并引入插件/MCP 动态工具框架。以下是当前发布状态：
+
+| 能力                   | 状态      | 说明                                                                                                                                           |
+| ---------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| 项目搜索/引用 (A)      | Available | `search_project_text`/`find_project_references` 已接线，受 `phaseA_searchEnabled` flag 门控                                                    |
+| 文件生命周期 (B)       | Available | 6 个工具经 Change Set v1.1 暂存，DAG preflight 验证，no-follow 路径校验；受 `phaseB_fileLifecycleEnabled` flag 门控                            |
+| 网络读取 (D)           | Available | SSRF 安全 dialer、`web_search`/`fetch_url`；受 `phaseD_networkReadEnabled` flag 门控                                                           |
+| 远程 MCP (E.3)         | Available | 严格 schema/description 校验，`outcome_unknown` 一等终态；受 `phaseE_remoteMcpEnabled` + Phase D 网络门控                                      |
+| 任务沙箱 (C.0-C.3)    | Fail-closed | 原生 host stub 仍输出 unavailable — 正确行为，等待真实 Windows AppContainer 二进制打包；`run_project_task` 在此之前不可用                       |
+| Git 只读 (C.4)         | Fail-closed | 打包 Git runtime stub（`manifest.json` 占位符）→ `AGENT_GIT_ADAPTER_UNAVAILABLE`，等待真实 Git binary 打包                                    |
+| 插件工具 (E.1)         | Fail-closed | `PluginSandboxPort` 合同和 `authorizePluginToolCall` 已实现；注入启动器 adapter always-unavailable，等待 C.0 真实 host 打包                    |
+| 本地 stdio MCP (E.2)   | Fail-closed | `local-mcp-runtime.ts` 和 `McpSettingsFileRepository` 已实现；`LocalMcpHostLauncher` always-unavailable，等待 C.0 真实 host 打包               |
+| E.4 来源管理 UI        | Partial   | `externalToolDescriptors` 注入口和调度分支已就位；`agent-tool-source-panel.tsx` 和对应 IPC 通道尚未交付（TD-037）                               |
+
+fail-closed 状态是按计划原则9的正确行为（"任一安全能力为 missing 时均按 unavailable 处理"），不是 v1 核心写作旅程的阻塞项。

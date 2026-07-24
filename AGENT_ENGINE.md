@@ -1,6 +1,6 @@
 # AGENT_ENGINE - Novel Studio
 
-Version: 1.0 | Status: Accepted for M7.3 | Phase: 7 Formal Development
+Version: 1.1 | Status: Updated for Stage 5 | Phase: 7 Formal Development
 
 ## 1. 目的
 
@@ -133,3 +133,34 @@ M7.3 测试必须覆盖：
 ## 10. 验收状态
 
 M7.3 已完成并通过本地门禁。后续扩展 multi-agent、repair、tool calling 或 apply flow 时，必须保持 Agent Engine 只生成结构化 handoff，不直接 mutation project files。
+
+## 11. Stage 5 工具补全扩展（2026-07-24）
+
+Stage 5 在保持 M7.3 边界契约不变的前提下，对 Agent Engine 进行了如下扩展：
+
+**工具注册表扩展（`tool-registry.ts`）**
+
+- 新增 22 个静态工具 canonical catalog（`CoreAgentToolName`、`SearchAgentToolName`、`FileLifecycleAgentToolName`、`ControlledExecutionAgentToolName`、`NetworkAgentToolName`）。
+- `ListAgentToolsInput` 加 `capabilitySnapshot?: AgentToolCapabilitySnapshot`（Phase A-E 工具按 flag 门控，关闭时只保留原始 9 工具行为）。
+- `ListAgentToolsInput` 加 `externalToolDescriptors?: readonly AgentToolDescriptor[]`（注入 `plugin:` / `mcp:` 动态描述符，只在 `pluginToolsEnabled` 或 `mcpToolsEnabled` 时生效）。
+
+**能力快照与有效能力状态（`agent-tool-capabilities.ts`、`effective-capability-state.ts`）**
+
+- `AgentToolCapabilitySnapshot`：workspace-kind、Phase A-E 的 boolean flags、sandbox attestation ID、feature flag revision。
+- `EffectiveCapabilityState`：只允许缩权，记录撤销原因和检查时间；不允许由 renderer/model/项目文件构造。
+
+**Permission Summary v1.1（`permission-summary.ts`）**
+
+- 新增 `executeCapabilities`、`externalReadCapabilities`、`externalActionCapabilities`、`dataEgressCapabilities`、`featureFlagRevision`、`extendedChecksum`。
+- v1.0 fixture 可读取；旧 fixture 默认拒绝所有新增能力。
+
+**Run Snapshot/Event 合同（`agent-run-types.ts`）**
+
+- Run Snapshot v1.1：新增 `modelProfileId`、`permissionSummaryId`、`activeErrorId`、`recoveryState`、`usageSummary`、`planExecutionId` 等。
+- Run Event v1.2：新增 `tool_approval_requested`、`tool_approval_resolved`、`capability_revoked`、`process_output`、`external_outcome_unknown`（仅这5个新类型写 v1.2；其余仍写 v1.1）。
+- `ToolApprovalBinding`：discriminated union（`task | network | external`），用于精确绑定每次工具调用审批。
+
+**工具执行端口（`agent-tool-ports.ts`）**
+
+- `AgentSearchToolExecutor`、`AgentTaskSandboxPort`、`AgentNetworkToolExecutor`、`AgentExternalToolExecutor`（plugin:/mcp: 工具）。
+- `AgentExternalToolOutcome = { status: "completed", result } | { status: "outcome_unknown", reason }`：`outcome_unknown` 为一等不可自动重试终态。

@@ -1,6 +1,6 @@
 # PLUGIN_SYSTEM - Novel Studio
 
-Version: 1.0 | Status: Accepted for M18 | Phase: 7 Formal Development
+Version: 1.1 | Status: Updated for Stage 5 (E.1) | Phase: 7 Formal Development
 
 ## 1. 目的
 
@@ -111,3 +111,30 @@ M18 必须覆盖：
 - 插件不能绕过 Repository 写项目文件。
 - 插件不能默认读取全项目。
 - M18 不引入真实第三方插件执行，也不新增网络访问。
+
+## 10. Stage 5 E.1 扩展：插件工具贡献类型（2026-07-24）
+
+**新增能力类型**
+
+- `"tool"` 加入 `capabilities[].type` 枚举：插件可声明供 Agent（LLM）调用的工具贡献，与 UI 命令面板的 `command`/`workflow-step` 完全独立。
+
+**新增权限**
+
+- `"tool:invoke"` 加入 `permissions[].permission` 枚举（scope 规则与现有权限相同，需声明 `project` 或具体资产 scope）。
+
+**`contributes.tools` 数组（可选，向后兼容）**
+
+- 每项必须包含 `id`、`title`、`description`、`inputSchema`（严格子集：顶层必须 `type: "object"` + `additionalProperties: false`，禁止 `$ref`/`definitions`/`$defs`）。
+- 可选 `timeoutMs`（100-30000ms）和 `maxOutputBytes`（1-1048576 bytes），默认 2000ms / 32768 bytes。
+- 对现有不含 `contributes.tools` 的 manifest 向后兼容（代码层默认 `[]`）。
+
+**`PluginSandboxPort` 合同（`packages/application/src/plugin-sandbox-port.ts`）**
+
+- `authorizePluginToolCall`：纯函数、无 I/O 的硬拒绝门，任意缺失/不信任/未验证条件均 deny，无降级路径（按计划原则9）。
+- `PluginSandboxPort.callTool`：端口接口，只有通过授权后才可调用。
+- 生产 adapter（`apps/desktop/src/main/plugin-sandbox-runtime.ts`）通过注入的 `PluginSandboxHostLauncher` 与原生 host 通信，不直接 import `node:child_process`（该文件专属权仍属 `agent-task-sandbox.ts`）。
+
+**真实沙箱执行当前状态**
+
+- 原生 host stub（`apps/desktop/native/agent-task-sandbox/host/src/main.rs`）仍输出 unavailable 并 exit 1 — fail-closed 是正确行为，等待真实 Windows AppContainer 二进制打包。
+- 所有插件工具调用路径均以 `PLUGIN_SANDBOX_UNAVAILABLE` 错误告终，直到打包并签名真实 host binary 后方可通过。

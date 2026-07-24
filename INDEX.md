@@ -1,6 +1,6 @@
 ﻿# INDEX - Novel Studio 文档索引
 
-Version: 1.64 | Last Updated: 2026-07-07
+Version: 1.65 | Last Updated: 2026-07-24
 
 ## 文档优先级
 
@@ -23,10 +23,10 @@ Version: 1.64 | Last Updated: 2026-07-07
 | `UI_GUIDELINES.md`                                                    | 1.0        | Accepted             | UI/UX、布局、交互、设计 tokens、可访问性                   |
 | `CODING_STANDARDS.md`                                                 | 1.0        | Accepted             | 开发规范、语言规则、分层、schema、UI 实现                  |
 | `TESTING.md`                                                          | 1.0        | Accepted             | 测试规范、fixtures、LLM mock、CI 门禁                      |
-| `ROADMAP.md`                                                          | 1.52       | Active               | 当前里程碑、后续路线、完成状态                             |
+| `ROADMAP.md`                                                          | 1.53       | Active               | 当前里程碑、后续路线、完成状态                             |
 | `STORY_BIBLE.md`                                                      | 1.0        | Accepted for M16     | Story Bible 资产、仓储、Context 候选和最小 UI 闭环         |
 | `docs/packaging/m17-installer-release-channel.md`                     | 1.0        | Accepted for M17     | 安装器目标、发布通道 manifest、release notes 和签名策略    |
-| `PLUGIN_SYSTEM.md`                                                    | 1.0        | Accepted for M18     | 插件 manifest、权限、注册表、运行时边界和测试要求          |
+| `PLUGIN_SYSTEM.md`                                                    | 1.1        | Updated for Stage 5  | 插件 manifest、权限、注册表、运行时边界、E.1 tool 贡献类型 |
 | `docs/productization/m19-beta-ux-hardening.md`                        | 1.0        | Complete             | beta 安装版入口、中文菜单、可点击导航和空状态验收标准      |
 | `docs/productization/m20-search-index-ux.md`                          | 1.0        | Complete             | 项目全文搜索、可重建索引、Search UI 和验收标准             |
 | `docs/productization/m21-story-bible-editing-ux.md`                   | 1.0        | Complete             | Story Bible 编辑入口、表单、保存闭环和验收标准             |
@@ -159,6 +159,7 @@ Version: 1.64 | Last Updated: 2026-07-07
 - 当前已完成 M96 Story Bible Consistency Minimum：Story Bible 编辑器显示显式冲突标记驱动的最小一致性提示，并提供条目跳转。
 - 当前已完成 M97 Public Install Release Gate：release check 覆盖公开安装门禁文档、核心 E2E、artifact secret scan、release channel、release notes 和 installer config。
 - 当前已完成 M98 V1 Ship Audit：`docs/releases/m98-v1-ship-readiness.md` 记录 v1 ship decision、核心闭环证据、已知限制、v2/backlog 延期清单和阅读朗读 v1.1 裁决；未授权 M99/M100。
+- 当前已完成 Stage 5 Agent 工具补全（批次1-5）：静态工具从9扩展到22、Change Set v1.1 操作联合体、SSRF 安全网络读取、远程 MCP（`outcome_unknown` 一等终态）、Windows AppContainer 沙箱资格门（fail-closed，等待真实 host 打包）、`run_project_task`/`git_status`/`git_diff`、插件工具贡献类型（E.1）和本地 stdio MCP（E.2）；动态外部工具调度已接线（`plugin:` / `mcp:` 前缀）。
 - 当前 `Complete` 只表示里程碑切片完成；产品完整度以 M35 的 `Product Ready` 口径为准。
 - 当前 M92-M98 已按用户确认的 v1 ship 范围完成：公开安装、常见 provider 支持、textarea 暂可接受、Story Bible 最小冲突提示和 M98 ship audit；阅读预览/角色朗读已裁决为 v1.1 backlog，不抢占 v1；M94/M95、M96/M97 与 M98 后 Scope Review 已写入 `ROADMAP.md`；`docs/superpowers/plans/2026-07-06-product-ready-remaining-work.md` 仅作为候选缺口清单，不得直接执行。
 - 未经用户确认不得 push。
