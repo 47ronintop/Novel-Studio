@@ -376,6 +376,43 @@ function inputSchemaFor(name: AgentToolName | StaticAgentToolName): JsonObject {
       }
     };
   }
+  // Phase C: run_project_task
+  if (name === "run_project_task") {
+    return {
+      type: "object",
+      additionalProperties: false,
+      required: ["taskId"],
+      properties: {
+        taskId: { type: "string", minLength: 1, maxLength: 256, pattern: "^[A-Za-z0-9_-]+$" },
+        parameters: {
+          type: "object",
+          additionalProperties: true
+        }
+      }
+    };
+  }
+  // Phase C: git_status
+  if (name === "git_status") {
+    return {
+      type: "object",
+      additionalProperties: false,
+      properties: {}
+    };
+  }
+  // Phase C: git_diff
+  if (name === "git_diff") {
+    return {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        paths: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 1024 },
+          maxItems: 50
+        }
+      }
+    };
+  }
   return { type: "object", additionalProperties: true };
 }
 

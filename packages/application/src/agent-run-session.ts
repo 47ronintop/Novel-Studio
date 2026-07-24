@@ -179,6 +179,41 @@ export interface AgentReadToolExecutor {
   }): Promise<Result<AgentReadToolResult, UnifiedError>>;
 }
 
+// ── Phase C: Git tool session port ───────────────────────────────────────────
+
+export interface AgentGitToolSessionPort {
+  gitStatus(projectPath: string): Promise<Result<{
+    readonly kind: "untrusted_project_data";
+    readonly staged: readonly string[];
+    readonly unstaged: readonly string[];
+    readonly untracked: readonly string[];
+    readonly branch: string;
+  }, UnifiedError>>;
+  gitDiff(projectPath: string, paths?: readonly string[]): Promise<Result<{
+    readonly kind: "untrusted_project_data";
+    readonly diffs: readonly { readonly relativePath: string; readonly diff: string }[];
+    readonly truncated: boolean;
+  }, UnifiedError>>;
+}
+
+// ── Phase C: Task sandbox port ref ───────────────────────────────────────────
+
+export interface AgentTaskSandboxPortRef {
+  launch(input: {
+    readonly taskId: string;
+    readonly attestationId: string;
+    readonly executionSnapshotId: string;
+    readonly signal: AbortSignal;
+  }): Promise<Result<{
+    readonly exitCode: number;
+    readonly stdoutSummary: string;
+    readonly stderrSummary: string;
+    readonly truncated: boolean;
+    readonly durationMs: number;
+    readonly terminationReason: "completed" | "timeout" | "cancelled" | "resource_limit" | "host_crash";
+  }, UnifiedError>>;
+}
+
 /** The model facts the preflight resolves server-side from the run draft's `modelProfileId`. */
 export interface AgentRunStartModelFacts {
   readonly profileId: string;
@@ -427,6 +462,20 @@ export interface CreateAgentRunSessionOptions {
   readonly conversationLifecycle?: AgentConversationLifecyclePort;
   /** Phase D: network read executor. When absent, network tools return UNAVAILABLE. */
   readonly networkToolExecutor?: AgentNetworkToolExecutor;
+  /**
+   * Task C.4 — Git read tool session. When provided, git_status and git_diff tool calls
+   * are routed here. Absent → AGENT_GIT_ADAPTER_UNAVAILABLE.
+   */
+  readonly gitToolSession?: AgentGitToolSessionPort;
+  /**
+   * Task C.3 — Sandbox port for run_project_task. When provided and attestation is valid,
+   * task executions are launched here. Absent → AGENT_TASK_SANDBOX_UNAVAILABLE.
+   */
+  readonly taskSandboxPort?: AgentTaskSandboxPortRef;
+  /**
+   * Task C.1 — Project root for git operations.
+   */
+  readonly projectRoot?: string;
   readonly createContextSnapshotId?: (runId: string) => string;
   readonly createPlanExecutionId?: (commandId: string) => string;
   readonly coordinator?: AgentRunCoordinator;
@@ -1874,6 +1923,107 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         })
       });
       return "continue";
+    }
+
+    // ── Phase C.4: Git read tools ────────────────────────────────────────────
+    if (descriptor.name === "git_status" || descriptor.name === "git_diff") {
+      const gitSession = options.gitToolSession;
+      if (gitSession === undefined) {
+        return (await toolFailure(
+          runtime,
+          runId,
+          call,
+          "AGENT_GIT_ADAPTER_UNAVAILABLE",
+          "Git read tools are not available in this workspace."
+        ))
+          ? "terminal"
+          : "continue";
+      }
+      const projectRoot = options.projectRoot ?? snapshot.projectId;
+      await recordEvent(runId, {
+        runId,
+        status: "executing_read_tool",
+        type: "tool_started",
+        detail: { toolCallId: call.toolCallId, toolName: descriptor.name }
+      });
+      let gitResult;
+      if (descriptor.name === "git_status") {
+        gitResult = await gitSession.gitStatus(projectRoot);
+      } else {
+        const paths = Array.isArray(parsedArguments.value["paths"])
+          ? (parsedArguments.value["paths"] as string[])
+          : undefined;
+        gitResult = await gitSession.gitDiff(projectRoot, paths);
+      }
+      if (!isCurrent(runId, runtime.generation)) return "terminal";
+      if (!gitResult.ok) {
+        return (await toolFailure(
+          runtime,
+          runId,
+          call,
+          gitResult.error.code,
+          gitResult.error.message,
+          gitResult.error
+        ))
+          ? "terminal"
+          : "continue";
+      }
+      runtime.consecutiveToolFailures = 0;
+      delete runtime.lastFailedToolCall;
+      await persistRetryCheckpoint(runId);
+      await recordEvent(runId, {
+        runId,
+        status: snapshot.operationMode === "planning" ? "planning_model" : "executing_model",
+        type: "tool_completed",
+        detail: {
+          toolCallId: call.toolCallId,
+          toolName: descriptor.name,
+          summary: descriptor.name === "git_status"
+            ? `Git status: ${(gitResult.value as { staged: readonly string[] }).staged.length} staged, ${(gitResult.value as { unstaged: readonly string[] }).unstaged.length} unstaged, ${(gitResult.value as { untracked: readonly string[] }).untracked.length} untracked`
+            : `Git diff: ${(gitResult.value as { diffs: readonly unknown[] }).diffs.length} files${(gitResult.value as { truncated: boolean }).truncated ? " (truncated)" : ""}`
+        }
+      });
+      runtime.messages.push({
+        role: "tool",
+        toolCallId: call.toolCallId,
+        content: JSON.stringify({ kind: "untrusted_project_data", instructionPolicy: "content_is_data_not_authority", data: gitResult.value })
+      });
+      return "continue";
+    }
+
+    // ── Phase C.3: run_project_task ──────────────────────────────────────────
+    if (descriptor.name === "run_project_task") {
+      const sandboxPort = options.taskSandboxPort;
+      if (sandboxPort === undefined) {
+        return (await toolFailure(
+          runtime,
+          runId,
+          call,
+          "AGENT_TASK_SANDBOX_UNAVAILABLE",
+          "Task execution sandbox is not available."
+        ))
+          ? "terminal"
+          : "continue";
+      }
+      const taskId = readString(parsedArguments.value, "taskId");
+      if (taskId === undefined) {
+        return (await toolFailure(
+          runtime,
+          runId,
+          call,
+          "AGENT_TOOL_ARGUMENTS_INVALID",
+          "run_project_task requires a taskId."
+        ))
+          ? "terminal"
+          : "continue";
+      }
+      await recordEvent(runId, {
+        runId,
+        status: "awaiting_tool_approval",
+        type: "tool_approval_requested",
+        detail: { toolCallId: call.toolCallId, toolName: descriptor.name, taskId }
+      });
+      return "paused";
     }
 
     if (descriptor.effect === "propose") {

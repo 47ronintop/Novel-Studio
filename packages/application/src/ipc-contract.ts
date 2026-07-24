@@ -100,7 +100,9 @@ export const APPLICATION_IPC_CHANNELS = [
   "application:agent-mcp:add-server",
   "application:agent-mcp:remove-server",
   "application:agent-mcp:test-connection",
-  "application:agent-mcp:revoke-server"
+  "application:agent-mcp:revoke-server",
+  "application:agent-tasks:list",
+  "application:agent-tasks:revoke"
 ] as const;
 
 export type ApplicationIpcChannel = (typeof APPLICATION_IPC_CHANNELS)[number];

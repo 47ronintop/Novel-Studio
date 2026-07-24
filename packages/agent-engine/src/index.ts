@@ -293,6 +293,7 @@ export type {
   AgentRunStatusV12,
   AgentRunUsageSummary,
   AgentWritePolicy,
+  ToolApprovalBinding,
   RecordAgentRunEventInput,
   RecordTerminalAgentRunAuditEventInput,
   RefreshAgentContextCommand,
@@ -314,3 +315,12 @@ export type {
   AgentSchemaValidator,
   AgentStatus
 } from "./types.js";
+export {
+  createTaskExecutionSnapshot
+} from "./task-execution-snapshot.js";
+export type {
+  CreateTaskExecutionSnapshotInput,
+  ProjectionFile,
+  ProjectionManifest,
+  TaskExecutionSnapshot
+} from "./task-execution-snapshot.js";

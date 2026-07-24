@@ -158,3 +158,10 @@ export type {
   ChapterVersionSnapshotInput,
   ChapterVersionSummary
 } from "@novel-studio/shared";
+export {
+  ProjectTaskCatalogRepository
+} from "./project-task-catalog-repository.js";
+export type {
+  AuthorizedTask,
+  ProjectTaskCandidate
+} from "./project-task-catalog-repository.js";

@@ -96,6 +96,10 @@ export interface ApplicationIpcHandlerOptions {
   readonly agentWriteSaveCoordinator?: AgentWriteSaveCoordinator;
   readonly agentNetworkSettingsSession?: AgentNetworkSettingsSession;
   readonly agentMcpSettingsSession?: McpSettingsSession;
+  readonly agentTaskCatalogPort?: {
+    listAuthorizedTasks(projectId: string): Promise<import("@novel-studio/shared").Result<readonly import("@novel-studio/repository").AuthorizedTask[], import("@novel-studio/shared").UnifiedError>>;
+    revokeTask(projectId: string, taskId: string): Promise<import("@novel-studio/shared").Result<void, import("@novel-studio/shared").UnifiedError>>;
+  };
 }
 
 export interface AgentWriteSaveCoordinator {
@@ -1031,7 +1035,18 @@ export function createApplicationIpcHandlers(
     "application:agent-mcp:revoke-server": (serverId: unknown) =>
       options.agentMcpSettingsSession?.revokeServer(
         typeof serverId === "string" ? serverId : ""
-      ) ?? Promise.resolve(ok(DEFAULT_MCP_SETTINGS))
+      ) ?? Promise.resolve(ok(DEFAULT_MCP_SETTINGS)),
+    "application:agent-tasks:list": (projectId: unknown) =>
+      options.agentTaskCatalogPort?.listAuthorizedTasks(
+        typeof projectId === "string" ? projectId : ""
+      ) ?? Promise.resolve(ok([])),
+    "application:agent-tasks:revoke": (input: unknown) => {
+      if (isRecord(input) && typeof input["projectId"] === "string" && typeof input["taskId"] === "string") {
+        return options.agentTaskCatalogPort?.revokeTask(input["projectId"], input["taskId"]) ??
+          Promise.resolve(ok(undefined));
+      }
+      return Promise.resolve(ok(undefined));
+    }
   };
 }
 

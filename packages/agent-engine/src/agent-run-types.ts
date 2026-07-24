@@ -218,6 +218,48 @@ export type AgentRunEventTypeV12 =
   | "process_output"
   | "external_outcome_unknown";
 
+/**
+ * Task C.2 — ToolApprovalBinding discriminated union.
+ * Binds a tool call requiring approval to its specific execution context.
+ */
+export type ToolApprovalBinding =
+  | {
+      readonly kind: "task";
+      readonly bindingId: string;
+      readonly runId: string;
+      readonly runRevision: number;
+      readonly toolCallId: string;
+      readonly taskId: string;
+      readonly snapshotDigest: string;
+      readonly parametersDigest: string;
+      readonly catalogRevision: string;
+      readonly attestationRef: string;
+      readonly expiresAt: string;
+    }
+  | {
+      readonly kind: "network";
+      readonly bindingId: string;
+      readonly runId: string;
+      readonly runRevision: number;
+      readonly toolCallId: string;
+      readonly destination: string;
+      readonly requestDigest: string;
+      readonly egressClass: string;
+      readonly expiresAt: string;
+    }
+  | {
+      readonly kind: "external";
+      readonly bindingId: string;
+      readonly runId: string;
+      readonly runRevision: number;
+      readonly toolCallId: string;
+      readonly sourceId: string;
+      readonly descriptorDigest: string;
+      readonly argumentDigest: string;
+      readonly idempotencyKey?: string;
+      readonly expiresAt: string;
+    };
+
 export interface AgentRunSnapshotPatch {
   readonly pendingUserInputId?: string | null;
   readonly contextSnapshotId?: string | null;
@@ -241,8 +283,8 @@ export interface AgentRunSnapshotPatch {
 
 export interface RecordAgentRunEventInput {
   readonly runId: string;
-  readonly status: AgentRunStatusV11;
-  readonly type: AgentRunEventTypeV11;
+  readonly status: AgentRunStatusV12;
+  readonly type: AgentRunEventTypeV12;
   readonly detail?: JsonObject;
   readonly snapshotPatch?: AgentRunSnapshotPatch;
 }

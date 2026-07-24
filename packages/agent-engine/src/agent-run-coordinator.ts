@@ -5,7 +5,7 @@ import type {
   AgentRunCommandResult,
   AgentRunCoordinator,
   AgentRunEvent,
-  AgentRunEventTypeV11,
+  AgentRunEventTypeV12,
   AgentRunLimits,
   AgentRunSnapshot
 } from "./agent-run-types.js";
@@ -187,7 +187,7 @@ export function createAgentRunCoordinator(
       const next: AgentRunSnapshot = {
         ...snapshot,
         ...input.snapshotPatch,
-        status: input.status,
+        status: input.status as AgentRunSnapshot["status"],
         runRevision: snapshot.runRevision + 1,
         lastSequence: snapshot.lastSequence + 1,
         updatedAt: timestamp
@@ -284,11 +284,11 @@ export function createAgentRunCoordinator(
 
 function toEvent(
   snapshot: AgentRunSnapshot,
-  type: AgentRunEventTypeV11,
+  type: AgentRunEventTypeV12,
   createdAt: string
 ): AgentRunEvent {
   return {
-    schemaVersion: "1.1",
+    schemaVersion: "1.2",
     runId: snapshot.runId,
     projectId: snapshot.projectId,
     sequence: snapshot.lastSequence,

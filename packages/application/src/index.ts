@@ -597,6 +597,8 @@ export {
 export type {
   AgentNetworkReadResult,
   AgentNetworkToolExecutor,
+  AgentTaskExecutionOutput,
+  AgentTaskSandboxPort,
   AgentExternalToolExecutor,
   AgentExternalToolOutcome
 } from "./agent-tool-ports.js";
