@@ -1672,7 +1672,7 @@ async function findStoryBibleAsset(repository: StoryBibleFileRepository, assetId
     : ok(asset);
 }
 
-function invalidToolArguments(name: AgentToolName) {
+function invalidToolArguments(name: string) {
   return err(
     createUnifiedError({
       code: "AGENT_TOOL_ARGUMENTS_INVALID",

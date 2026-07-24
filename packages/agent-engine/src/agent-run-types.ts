@@ -28,6 +28,12 @@ export type AgentRunStatus =
 /** Stage 5 (v1.1) widens the run status with the compaction/plan-revision waits. */
 export type AgentRunStatusV11 = AgentRunStatus | "context_compacting" | "awaiting_plan_revision";
 
+/**
+ * Task 0.4 (v1.2) — widens the run status with tool-approval wait.
+ * Used when an execute/external_action/destructive tool call needs explicit human confirmation.
+ */
+export type AgentRunStatusV12 = AgentRunStatusV11 | "awaiting_tool_approval";
+
 export type AgentRunRecoveryState =
   "none" | "retryable" | "awaiting_context_refresh" | "recovery_review" | "terminal";
 
@@ -136,12 +142,19 @@ export interface AgentRunEventV11 extends Omit<AgentRunEventV10, "schemaVersion"
   readonly type: AgentRunEventTypeV11;
 }
 
+/** Task 0.4 (v1.2) run event — carries the v1.2 event type union. */
+export interface AgentRunEventV12 extends Omit<AgentRunEventV10, "schemaVersion" | "type"> {
+  readonly schemaVersion: "1.2";
+  readonly type: AgentRunEventTypeV12;
+}
+
 /**
  * The active run event type. Unlike the snapshot, the v1.1 event added no required fields — only
  * new event-type union members — so a persisted v1.0 event is structurally valid here. The alias
  * accepts both versions; `normalizeAgentRunEvent` still lifts persisted events to the v1.1 view.
+ * Task 0.4: v1.2 events are accepted here for new runs but written as v1.2 on disk.
  */
-export type AgentRunEvent = AgentRunEventV10 | AgentRunEventV11;
+export type AgentRunEvent = AgentRunEventV10 | AgentRunEventV11 | AgentRunEventV12;
 
 export type AgentRunEventType =
   | "run_started"
@@ -191,6 +204,19 @@ export type AgentRunEventTypeV11 =
   | "plan_deviation_recorded"
   | "plan_revision_requested"
   | "error_recorded";
+
+/**
+ * Task 0.4 (v1.2) — extends v1.1 with tool-approval, capability-revocation, process-output,
+ * and outcome-unknown events for Phase C/D/E tools.
+ * New events must NOT be added to the v1.1 enum; they live here only.
+ */
+export type AgentRunEventTypeV12 =
+  | AgentRunEventTypeV11
+  | "tool_approval_requested"
+  | "tool_approval_resolved"
+  | "capability_revoked"
+  | "process_output"
+  | "external_outcome_unknown";
 
 export interface AgentRunSnapshotPatch {
   readonly pendingUserInputId?: string | null;
@@ -431,9 +457,9 @@ export function normalizeAgentRunSnapshot(value: JsonObject): AgentRunSnapshotV1
   } as unknown as AgentRunSnapshotV11;
 }
 
-/** Normalize a persisted run event (v1.0 or v1.1) into the v1.1 view. */
+/** Normalize a persisted run event (v1.0, v1.1, or v1.2) into the v1.1 view for backward compat. */
 export function normalizeAgentRunEvent(value: JsonObject): AgentRunEventV11 {
-  return value["schemaVersion"] === "1.1"
+  return value["schemaVersion"] === "1.1" || value["schemaVersion"] === "1.2"
     ? (value as unknown as AgentRunEventV11)
     : ({ ...value, schemaVersion: "1.1" } as unknown as AgentRunEventV11);
 }

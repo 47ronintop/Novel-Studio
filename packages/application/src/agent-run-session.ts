@@ -30,7 +30,6 @@ import {
   type AgentUsageSink,
   type AgentContextSnapshot,
   type AgentContextSourceInput,
-  type AgentToolName,
   type AgentToolDescriptor,
   type AgentWritePolicy,
   type CompactContextCommand,
@@ -173,7 +172,7 @@ export interface AgentReadToolExecutor {
   execute(input: {
     readonly runId: string;
     readonly projectId: string;
-    readonly name: AgentToolName;
+    readonly name: string;
     readonly arguments: JsonObject;
     readonly signal: AbortSignal;
   }): Promise<Result<AgentReadToolResult, UnifiedError>>;
@@ -484,7 +483,7 @@ interface AssembledToolCall {
   argumentsText: string;
 }
 
-const readToolNames = new Set<AgentToolName>([
+const readToolNames = new Set<string>([
   "list_project_entries",
   "read_chapter",
   "read_story_bible",

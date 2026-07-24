@@ -5,6 +5,7 @@ import type {
   AgentRunCommandResult,
   AgentRunCoordinator,
   AgentRunEvent,
+  AgentRunEventTypeV11,
   AgentRunLimits,
   AgentRunSnapshot
 } from "./agent-run-types.js";
@@ -283,7 +284,7 @@ export function createAgentRunCoordinator(
 
 function toEvent(
   snapshot: AgentRunSnapshot,
-  type: AgentRunEvent["type"],
+  type: AgentRunEventTypeV11,
   createdAt: string
 ): AgentRunEvent {
   return {

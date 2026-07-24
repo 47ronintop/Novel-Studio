@@ -3,22 +3,64 @@ export { createAgentRunCoordinator } from "./agent-run-coordinator.js";
 export { listAgentTools, validateAgentToolArguments } from "./tool-registry.js";
 export type {
   AgentToolArgumentsValidation,
+  AgentToolDataEgress,
   AgentToolDescriptor,
+  AgentToolEffect,
+  AgentToolKind,
   AgentToolName,
-  ListAgentToolsInput
+  AgentToolRetrySemantics,
+  CoreAgentToolName,
+  ControlledExecutionAgentToolName,
+  FileLifecycleAgentToolName,
+  ListAgentToolsInput,
+  NamespacedExternalToolId,
+  NetworkAgentToolName,
+  SearchAgentToolName,
+  StaticAgentToolName
 } from "./tool-registry.js";
+export {
+  createDefaultCapabilitySnapshot
+} from "./agent-tool-capabilities.js";
+export type {
+  AgentToolCapabilitySnapshot,
+  AgentWorkspaceKind
+} from "./agent-tool-capabilities.js";
+export {
+  validateStrictToolSchema,
+  validateToolText,
+  computeToolDirectoryBytes,
+  TOOL_SCHEMA_MAX_BYTES,
+  TOOL_DESCRIPTION_MAX_BYTES,
+  TOOL_DIRECTORY_MAX_TOTAL_BYTES
+} from "./agent-tool-schema.js";
+export type { SchemaValidationResult } from "./agent-tool-schema.js";
+export {
+  createEffectiveCapabilityState,
+  revokeCapability,
+  deactivateCapabilityState,
+  isCapabilityEffective
+} from "./effective-capability-state.js";
+export type {
+  CapabilityRevocationReason,
+  EffectiveCapabilityState,
+  RevokedCapability
+} from "./effective-capability-state.js";
 export { validateAgentRelativePath } from "./path-guard.js";
 export type { AgentRelativePath } from "./path-guard.js";
 export {
   AGENT_FORBIDDEN_CAPABILITIES,
   findPermissionSummaryDrift,
-  generatePermissionSummary
+  generatePermissionSummary,
+  isPermissionSummaryV11,
+  normalizePermissionSummaryV10
 } from "./permission-summary.js";
 export type {
   AgentToolLister,
   GeneratePermissionSummaryInput,
   PermissionSummary,
-  PermissionSummaryFieldDrift
+  PermissionSummaryFieldDrift,
+  PermissionSummaryV10,
+  PermissionSummaryV11
 } from "./permission-summary.js";
 export {
   applyAgentRunDraftMutation,
@@ -236,8 +278,10 @@ export type {
   AgentRunEvent,
   AgentRunEventType,
   AgentRunEventTypeV11,
+  AgentRunEventTypeV12,
   AgentRunEventV10,
   AgentRunEventV11,
+  AgentRunEventV12,
   AgentRunLimits,
   AgentRunRecoveryState,
   AgentRunSnapshot,
@@ -246,6 +290,7 @@ export type {
   AgentRunSnapshotV11,
   AgentRunStatus,
   AgentRunStatusV11,
+  AgentRunStatusV12,
   AgentRunUsageSummary,
   AgentWritePolicy,
   RecordAgentRunEventInput,

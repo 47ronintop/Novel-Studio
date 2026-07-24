@@ -12,6 +12,7 @@ import {
  * denial list surfaced verbatim in the permission summary so the UI cannot dress a Stage 5 run up as
  * a "fully authorized" Shell/Git/network agent. The generator always emits exactly this list; no
  * caller (renderer, model, or file content) can widen, narrow, or reorder it.
+ * @since v1.0 — kept for backward compatibility; v1.1 computes forbidden list from server-side phase state.
  */
 export const AGENT_FORBIDDEN_CAPABILITIES = Object.freeze([
   "shell",
@@ -28,8 +29,9 @@ export const AGENT_FORBIDDEN_CAPABILITIES = Object.freeze([
  * It is generated from the actual Tool Registry, canonical project root, and the user's draft
  * choices — never authored by the renderer, model, or file content. The `checksum` binds the
  * capability facts so a run-start regeneration can detect any drift or tampering.
+ * @since v1.0
  */
-export interface PermissionSummary {
+export interface PermissionSummaryV10 {
   readonly schemaVersion: "1.0";
   readonly permissionSummaryId: string;
   readonly projectId: string;
@@ -45,6 +47,36 @@ export interface PermissionSummary {
   readonly checksum: string;
   readonly generatedAt: string;
 }
+
+/**
+ * Task 0.2 — v1.1 Permission Summary with extended capability groups and workspace context.
+ * New runs write v1.1; old v1.0 records remain readable via `normalizePermissionSummary`.
+ * The `checksum` covers the same v1.0 core fields for backward compatibility; the extended
+ * fields are separately recorded in `extendedChecksum`.
+ * @since v1.1
+ */
+export interface PermissionSummaryV11 extends Omit<PermissionSummaryV10, "schemaVersion"> {
+  readonly schemaVersion: "1.1";
+  /** Task 0.1: workspace kind used to compute this summary. */
+  readonly workspaceKind: import("./agent-tool-capabilities.js").AgentWorkspaceKind;
+  /** operation mode stored for audit; v1.0 did not persist this. */
+  readonly operationMode: AgentOperationMode;
+  /** Phase A–D execution capability names. */
+  readonly executeCapabilities: readonly string[];
+  /** Phase D external-read capability names. */
+  readonly externalReadCapabilities: readonly string[];
+  /** Phase E external-action capability names. */
+  readonly externalActionCapabilities: readonly string[];
+  /** Data-egress authorization classes present in this run. */
+  readonly dataEgressCapabilities: readonly string[];
+  /** Task 0.1: feature-flag revision used to build the capability snapshot. */
+  readonly featureFlagRevision: string;
+  /** SHA-256 of the extended fields (all capabilities + featureFlagRevision). */
+  readonly extendedChecksum: string;
+}
+
+/** Active summary type — v1.1 is preferred; v1.0 is kept for read compat. */
+export type PermissionSummary = PermissionSummaryV10 | PermissionSummaryV11;
 
 export type AgentToolLister = (input: ListAgentToolsInput) => readonly AgentToolDescriptor[];
 
@@ -133,7 +165,7 @@ const COMPARABLE_PERMISSION_SUMMARY_FIELDS = [
   "proposalCapabilities",
   "forbiddenCapabilities",
   "checksum"
-] as const satisfies readonly (keyof PermissionSummary)[];
+] as const satisfies readonly (keyof PermissionSummaryV10)[];
 
 /**
  * Field-by-field comparison between a stored Permission Summary and one freshly regenerated at run
@@ -207,4 +239,35 @@ function stableSerialize(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+/**
+ * Task 0.2 — Normalize a persisted Permission Summary (v1.0 or v1.1) to the v1.0 read shape.
+ * Used by consumers that only need the core capability fields and don't need v1.1 extensions.
+ * Returns the value as-is for v1.0; for v1.1 returns a view of the v1.0 fields.
+ */
+export function normalizePermissionSummaryV10(summary: PermissionSummary): PermissionSummaryV10 {
+  return {
+    schemaVersion: "1.0",
+    permissionSummaryId: summary.permissionSummaryId,
+    projectId: summary.projectId,
+    runDraftId: summary.runDraftId,
+    ...(summary.runId === undefined ? {} : { runId: summary.runId }),
+    contextMode: summary.contextMode,
+    writePolicy: summary.writePolicy,
+    toolRegistryRevision: summary.toolRegistryRevision,
+    rootFingerprint: summary.rootFingerprint,
+    readCapabilities: summary.readCapabilities,
+    proposalCapabilities: summary.proposalCapabilities,
+    forbiddenCapabilities: summary.forbiddenCapabilities,
+    checksum: summary.checksum,
+    generatedAt: summary.generatedAt
+  };
+}
+
+/** Type guard — check if a summary is v1.1. */
+export function isPermissionSummaryV11(
+  summary: PermissionSummary
+): summary is PermissionSummaryV11 {
+  return summary.schemaVersion === "1.1";
 }
