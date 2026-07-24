@@ -165,6 +165,122 @@ describe("schema contract coverage", () => {
     expect([...providers].sort()).toEqual([...requiredModelProviders].sort());
   });
 
+  test("accepts a plugin manifest with a tools contribution", () => {
+    const fixture = {
+      ...(readFixture("valid", "plugin-manifest") as Record<string, unknown>),
+      capabilities: [
+        {
+          type: "command",
+          id: "test-tools.open-character-map",
+          title: "Open Character Map"
+        },
+        {
+          type: "tool",
+          id: "test-tools.summarise",
+          title: "Summarise Chapter"
+        }
+      ],
+      permissions: [
+        { permission: "asset:read", scopes: ["characters"] },
+        { permission: "tool:invoke", scopes: ["project"] }
+      ],
+      contributes: {
+        commands: [
+          { id: "test-tools.open-character-map", title: "Open Character Map" }
+        ],
+        workflowSteps: [],
+        tools: [
+          {
+            id: "test-tools.summarise",
+            title: "Summarise Chapter",
+            description: "Summarises the active chapter into a short synopsis.",
+            inputSchema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                chapterId: { type: "string" }
+              },
+              required: ["chapterId"]
+            },
+            timeoutMs: 5000,
+            maxOutputBytes: 65536
+          }
+        ]
+      }
+    };
+    const validate = createSchemaValidator(readSchema("plugin-manifest"));
+
+    const result = validate(fixture);
+
+    expect(result.valid).toBe(true);
+    expect(result.issues).toEqual([]);
+  });
+
+  test("accepts a plugin manifest that omits contributes.tools for backward compatibility", () => {
+    const fixture = readFixture("valid", "plugin-manifest") as Record<string, unknown>;
+    expect((fixture["contributes"] as Record<string, unknown>)["tools"]).toBeUndefined();
+
+    const validate = createSchemaValidator(readSchema("plugin-manifest"));
+    const result = validate(fixture);
+
+    expect(result.valid).toBe(true);
+    expect(result.issues).toEqual([]);
+  });
+
+  test("rejects a plugin manifest tool schema that uses $ref", () => {
+    const fixture = {
+      ...(readFixture("valid", "plugin-manifest") as Record<string, unknown>),
+      contributes: {
+        commands: [],
+        workflowSteps: [],
+        tools: [
+          {
+            id: "test-tools.summarise",
+            title: "Summarise Chapter",
+            description: "Summarises the active chapter into a short synopsis.",
+            inputSchema: {
+              type: "object",
+              additionalProperties: false,
+              $ref: "#/definitions/summariseInput"
+            }
+          }
+        ]
+      }
+    };
+    const validate = createSchemaValidator(readSchema("plugin-manifest"));
+
+    const result = validate(fixture);
+
+    expect(result.valid).toBe(false);
+    expect(result.issues.length).toBeGreaterThan(0);
+  });
+
+  test("rejects a plugin manifest tool schema missing additionalProperties: false", () => {
+    const fixture = {
+      ...(readFixture("valid", "plugin-manifest") as Record<string, unknown>),
+      contributes: {
+        commands: [],
+        workflowSteps: [],
+        tools: [
+          {
+            id: "test-tools.summarise",
+            title: "Summarise Chapter",
+            description: "Summarises the active chapter into a short synopsis.",
+            inputSchema: {
+              type: "object"
+            }
+          }
+        ]
+      }
+    };
+    const validate = createSchemaValidator(readSchema("plugin-manifest"));
+
+    const result = validate(fixture);
+
+    expect(result.valid).toBe(false);
+    expect(result.issues.length).toBeGreaterThan(0);
+  });
+
   test("workflow valid fixture covers branch step metadata", () => {
     const fixture = readFixture("valid", "workflow-definition") as {
       readonly steps?: readonly {

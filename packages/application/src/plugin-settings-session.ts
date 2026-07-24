@@ -21,7 +21,7 @@ export interface PluginSettingsEntry {
       readonly max?: string;
     };
     readonly capabilities: readonly {
-      readonly type: "command" | "workflow-step" | "asset-view";
+      readonly type: "command" | "workflow-step" | "asset-view" | "tool";
       readonly id: string;
       readonly title: string;
     }[];
@@ -34,6 +34,18 @@ export interface PluginSettingsEntry {
       readonly workflowSteps: readonly {
         readonly id: string;
         readonly title: string;
+      }[];
+      /**
+       * Task E.1 — Agent-callable tool contributions. Optional so snapshots produced
+       * before Task E.1 (or by callers that never populate it) remain assignable.
+       */
+      readonly tools?: readonly {
+        readonly id: string;
+        readonly title: string;
+        readonly description: string;
+        readonly inputSchema: Readonly<Record<string, unknown>>;
+        readonly timeoutMs?: number;
+        readonly maxOutputBytes?: number;
       }[];
     };
   };

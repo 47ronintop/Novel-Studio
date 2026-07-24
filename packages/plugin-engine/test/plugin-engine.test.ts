@@ -137,6 +137,99 @@ describe("M18 plugin engine", () => {
     expect(result.error.code).toBe("PLUGIN_PERMISSION_DENIED");
   });
 
+  test("authorizes a tool capability when tool:invoke permission is granted", () => {
+    const toolManifest: PluginManifest = {
+      ...baseManifest,
+      capabilities: [
+        ...baseManifest.capabilities,
+        {
+          type: "tool",
+          id: "test-tools.summarise",
+          title: "Summarise Chapter"
+        }
+      ],
+      permissions: [
+        ...baseManifest.permissions,
+        { permission: "tool:invoke", scopes: ["project"] }
+      ],
+      contributes: {
+        ...baseManifest.contributes,
+        tools: [
+          {
+            id: "test-tools.summarise",
+            title: "Summarise Chapter",
+            description: "Summarises the active chapter.",
+            inputSchema: { type: "object", additionalProperties: false }
+          }
+        ]
+      }
+    };
+    const toolEntry: PluginRegistryEntry = {
+      ...baseEntry,
+      grantedPermissions: [
+        ...baseEntry.grantedPermissions,
+        { permission: "tool:invoke", scopes: ["project"] }
+      ]
+    };
+
+    const result = authorizePluginAction({
+      manifest: toolManifest,
+      entry: toolEntry,
+      action: {
+        capability: "tool",
+        permission: "tool:invoke",
+        scope: "project"
+      }
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  test("denies a tool capability call when tool:invoke permission is not granted", () => {
+    const toolManifest: PluginManifest = {
+      ...baseManifest,
+      capabilities: [
+        ...baseManifest.capabilities,
+        {
+          type: "tool",
+          id: "test-tools.summarise",
+          title: "Summarise Chapter"
+        }
+      ],
+      permissions: [
+        ...baseManifest.permissions,
+        { permission: "tool:invoke", scopes: ["project"] }
+      ],
+      contributes: {
+        ...baseManifest.contributes,
+        tools: [
+          {
+            id: "test-tools.summarise",
+            title: "Summarise Chapter",
+            description: "Summarises the active chapter.",
+            inputSchema: { type: "object", additionalProperties: false }
+          }
+        ]
+      }
+    };
+
+    const result = authorizePluginAction({
+      manifest: toolManifest,
+      entry: baseEntry,
+      action: {
+        capability: "tool",
+        permission: "tool:invoke",
+        scope: "project"
+      }
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error.code).toBe("PLUGIN_PERMISSION_DENIED");
+  });
+
   test("denies disabled plugins before checking permissions", () => {
     const result = authorizePluginAction({
       manifest: baseManifest,

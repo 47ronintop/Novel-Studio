@@ -120,15 +120,21 @@ export async function connectRemoteMcp(input: {
 }): Promise<Result<RemoteMcpConnection, UnifiedError>> {
   const { config, policy } = input;
 
+  // Narrow to the remote_http variant — local_stdio configs are not valid here.
+  if (config.transport !== "remote_http") {
+    return err(mcpError("MCP_INVALID_TRANSPORT", "connectRemoteMcp requires a remote_http server config."));
+  }
+  const remoteConfig = config;
+
   if (!policy.enabled) {
     return err(mcpError("NETWORK_POLICY_DISABLED", "Agent network access is disabled."));
   }
 
   let endpointHostname: string;
   try {
-    endpointHostname = new URL(config.endpointUrl).hostname.toLowerCase();
+    endpointHostname = new URL(remoteConfig.endpointUrl).hostname.toLowerCase();
   } catch {
-    return err(mcpError("MCP_INVALID_ENDPOINT", `Invalid endpoint URL: ${config.endpointUrl}`));
+    return err(mcpError("MCP_INVALID_ENDPOINT", `Invalid endpoint URL: ${remoteConfig.endpointUrl}`));
   }
 
   if (!isHostAllowed(policy, endpointHostname)) {
@@ -140,7 +146,7 @@ export async function connectRemoteMcp(input: {
     );
   }
 
-  const apiKey = input.resolveApiKey?.(config.apiKeyRef);
+  const apiKey = input.resolveApiKey?.(remoteConfig.apiKeyRef);
   const authHeader = apiKey ? { authorization: `Bearer ${apiKey}` } : {};
 
   const fetch_ = input.controlledFetch ?? createControlledFetch(policy);
@@ -152,7 +158,7 @@ export async function connectRemoteMcp(input: {
   let initResponse: JsonRpcResponse;
   try {
     const resp = await fetch_({
-      url: config.endpointUrl,
+      url: remoteConfig.endpointUrl,
       headers: {
         "content-type": "application/json",
         accept: "application/json",
@@ -189,7 +195,7 @@ export async function connectRemoteMcp(input: {
   let toolListResponse: JsonRpcResponse;
   try {
     const resp = await fetch_({
-      url: config.endpointUrl,
+      url: remoteConfig.endpointUrl,
       headers: {
         "content-type": "application/json",
         accept: "application/json",
@@ -256,7 +262,7 @@ export async function connectRemoteMcp(input: {
   }
 
   const connection: RemoteMcpConnection = {
-    serverId: config.serverId,
+    serverId: remoteConfig.serverId,
     tools,
 
     async callTool(toolId, args, idempotencyKey, signal) {
@@ -270,7 +276,7 @@ export async function connectRemoteMcp(input: {
 
       try {
         const resp = await fetch_({
-          url: config.endpointUrl,
+          url: remoteConfig.endpointUrl,
           headers: {
             "content-type": "application/json",
             accept: "application/json",

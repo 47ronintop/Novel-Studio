@@ -25,19 +25,39 @@ export interface PluginRegistrySnapshot {
 }
 
 export interface PluginManifestCapability {
-  readonly type: "command" | "workflow-step" | "asset-view";
+  readonly type: "command" | "workflow-step" | "asset-view" | "tool";
   readonly id: string;
   readonly title: string;
 }
 
 export interface PluginManifestPermission {
-  readonly permission: "project:read" | "asset:read" | "asset:write" | "workflow:invoke";
+  readonly permission:
+    | "project:read"
+    | "asset:read"
+    | "asset:write"
+    | "workflow:invoke"
+    | "tool:invoke";
   readonly scopes: readonly string[];
 }
 
 export interface PluginManifestContribution {
   readonly id: string;
   readonly title: string;
+}
+
+/**
+ * Task E.1 — a plugin-declared tool the Agent (LLM) may call. `inputSchema` is a
+ * validated strict JSON Schema object; `timeoutMs`/`maxOutputBytes` are optional
+ * per-tool overrides (defaults of 2000ms / 32768 bytes are applied by callers,
+ * not here, so this type carries the manifest's raw declared values).
+ */
+export interface PluginManifestToolContribution {
+  readonly id: string;
+  readonly title: string;
+  readonly description: string;
+  readonly inputSchema: Readonly<Record<string, unknown>>;
+  readonly timeoutMs?: number;
+  readonly maxOutputBytes?: number;
 }
 
 export interface PluginManifestSummary {
@@ -54,6 +74,8 @@ export interface PluginManifestSummary {
   readonly contributes: {
     readonly commands: readonly PluginManifestContribution[];
     readonly workflowSteps: readonly PluginManifestContribution[];
+    /** Defaults to [] when the source manifest predates Task E.1. */
+    readonly tools: readonly PluginManifestToolContribution[];
   };
 }
 
@@ -262,7 +284,12 @@ export class PluginRegistryFileRepository {
         compatibleAppVersion: manifest.compatibleAppVersion,
         capabilities: manifest.capabilities,
         requestedPermissions: manifest.permissions,
-        contributes: manifest.contributes
+        contributes: {
+          commands: manifest.contributes.commands,
+          workflowSteps: manifest.contributes.workflowSteps,
+          // Manifests written before Task E.1 have no `tools` field; default to [].
+          tools: manifest.contributes.tools ?? []
+        }
       }
     };
   }
@@ -286,5 +313,7 @@ interface PluginManifestFile {
   readonly contributes: {
     readonly commands: readonly PluginManifestContribution[];
     readonly workflowSteps: readonly PluginManifestContribution[];
+    /** Optional on disk for manifests written before Task E.1. */
+    readonly tools?: readonly PluginManifestToolContribution[];
   };
 }

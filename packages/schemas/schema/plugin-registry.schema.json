@@ -26,7 +26,13 @@
               "properties": {
                 "permission": {
                   "type": "string",
-                  "enum": ["project:read", "asset:read", "asset:write", "workflow:invoke"]
+                  "enum": [
+                    "project:read",
+                    "asset:read",
+                    "asset:write",
+                    "workflow:invoke",
+                    "tool:invoke"
+                  ]
                 },
                 "scopes": {
                   "type": "array",

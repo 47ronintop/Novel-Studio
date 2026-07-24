@@ -174,3 +174,9 @@ export type {
 } from "./agent-project-search-repository.js";
 export { NoFollowFileOperations } from "./no-follow-file-operations.js";
 export type { NoFollowFileError } from "./no-follow-file-operations.js";
+export { McpSettingsFileRepository } from "./mcp-settings-repository.js";
+export type {
+  LocalMcpServerLaunchConfig,
+  LocalMcpServerSummary,
+  McpSettingsFileRepositoryOptions
+} from "./mcp-settings-repository.js";

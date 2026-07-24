@@ -602,3 +602,23 @@ export type {
   AgentExternalToolExecutor,
   AgentExternalToolOutcome
 } from "./agent-tool-ports.js";
+export {
+  authorizePluginToolCall,
+  type AuthorizePluginToolCallInput,
+  type PluginSandboxPort,
+  type PluginSandboxToolCallInput,
+  type PluginSandboxToolCallOutcome,
+  type PluginSandboxToolTrustState,
+  type PluginSandboxToolManifestLike,
+  type PluginSandboxToolRegistryEntryLike,
+  type PluginSandboxToolDeclaration,
+  type PluginSandboxToolCapability,
+  type PluginSandboxToolPermissionGrant
+} from "./plugin-sandbox-port.js";
+export {
+  createPluginSandboxToolAdapter,
+  type PluginSandboxToolAdapterOptions
+} from "./plugin-runtime-session.js";
+export type {
+  LocalMcpSettingsPort
+} from "./mcp-settings-session.js";

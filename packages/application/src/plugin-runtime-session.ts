@@ -3,6 +3,10 @@ import type { JsonObject, Result, UnifiedError } from "@novel-studio/shared";
 
 import type { ApplicationCommand } from "./command-registry.js";
 import type { PluginSettingsEntry, PluginSettingsSnapshot } from "./plugin-settings-session.js";
+import type { PluginSandboxPort, PluginSandboxToolCallOutcome } from "./plugin-sandbox-port.js";
+import {
+  authorizePluginToolCall
+} from "./plugin-sandbox-port.js";
 
 const PLUGIN_COMMAND_PREFIX = "plugin:";
 const PROJECT_SCOPE = "project";
@@ -933,4 +937,76 @@ function runtimeError(input: {
       ...(input.redactedDetail === undefined ? {} : { redactedDetail: input.redactedDetail })
     })
   );
+}
+
+// ── Task E.1: Plugin sandbox tool adapter ─────────────────────────────────────
+
+export interface PluginSandboxToolAdapterOptions {
+  readonly port: PluginSandboxPort;
+}
+
+/**
+ * Builds an adapter that authorizes + executes a plugin tool call via the real
+ * PluginSandboxPort. Authorization (authorizePluginToolCall) is performed first —
+ * any missing/untrusted/unverified precondition is a hard deny, per plan principle 9.
+ * Only call this after the capability snapshot confirms pluginToolsEnabled.
+ */
+export function createPluginSandboxToolAdapter(options: PluginSandboxToolAdapterOptions) {
+  return {
+    async callTool(input: {
+      readonly pluginId: string;
+      readonly toolId: string;
+      readonly toolArguments: JsonObject;
+      readonly idempotencyKey?: string;
+      readonly signal: AbortSignal;
+      readonly snapshot: PluginSettingsSnapshot;
+      readonly sandboxProfileVerified: boolean;
+    }): Promise<Result<PluginSandboxToolCallOutcome, UnifiedError>> {
+      const entry = input.snapshot.plugins.find((plugin) => plugin.pluginId === input.pluginId);
+      if (entry === undefined) {
+        return err(
+          createUnifiedError({
+            code: "PLUGIN_SANDBOX_TOOL_NOT_DECLARED",
+            category: "PluginError",
+            message: "Plugin is not registered in the current plugin settings snapshot.",
+            recoverability: "user-action",
+            suggestedAction: "Refresh the plugin registry and retry.",
+            traceId: "plugin-sandbox-tool-adapter"
+          })
+        );
+      }
+
+      const manifest = entry.manifest;
+      const authorized = authorizePluginToolCall({
+        pluginId: input.pluginId,
+        toolId: input.toolId,
+        entry: {
+          enabled: entry.enabled,
+          grantedPermissions: entry.grantedPermissions
+        },
+        manifest: manifest === undefined
+          ? undefined
+          : {
+              capabilities: manifest.capabilities,
+              requestedPermissions: manifest.requestedPermissions,
+              contributes: {
+                tools: manifest.contributes.tools ?? []
+              }
+            },
+        manifestStatus: entry.manifestStatus,
+        trustState: defaultTrustState(entry),
+        sandboxProfileVerified: input.sandboxProfileVerified
+      });
+
+      if (!authorized.ok) return authorized;
+
+      return options.port.callTool({
+        pluginId: input.pluginId,
+        toolId: input.toolId,
+        toolArguments: input.toolArguments,
+        ...(input.idempotencyKey !== undefined ? { idempotencyKey: input.idempotencyKey } : {}),
+        signal: input.signal
+      });
+    }
+  };
 }

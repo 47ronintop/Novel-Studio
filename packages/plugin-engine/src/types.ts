@@ -1,8 +1,9 @@
 import type { UnifiedError } from "@novel-studio/shared";
 
-export type PluginCapabilityType = "command" | "workflow-step" | "asset-view";
+export type PluginCapabilityType = "command" | "workflow-step" | "asset-view" | "tool";
 
-export type PluginPermission = "project:read" | "asset:read" | "asset:write" | "workflow:invoke";
+export type PluginPermission =
+  "project:read" | "asset:read" | "asset:write" | "workflow:invoke" | "tool:invoke";
 
 export type PluginScope =
   "project" | "chapters" | "characters" | "world" | "outline" | "timeline" | "memories";
@@ -33,6 +34,22 @@ export interface PluginContribution {
   title: string;
 }
 
+/**
+ * Task E.1 — a plugin-declared tool the Agent (LLM) may call, distinct from the
+ * UI-facing command/workflow-step contributions above. `inputSchema` is a strict
+ * JSON Schema object subset (validated by the manifest schema); `timeoutMs` and
+ * `maxOutputBytes` are optional per-tool overrides with code-level defaults of
+ * 2000ms / 32768 bytes when absent.
+ */
+export interface PluginToolContribution {
+  id: string;
+  title: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  timeoutMs?: number;
+  maxOutputBytes?: number;
+}
+
 export interface PluginManifest {
   schemaVersion: "1.0";
   id: string;
@@ -45,6 +62,8 @@ export interface PluginManifest {
   contributes: {
     commands: PluginContribution[];
     workflowSteps: PluginContribution[];
+    /** Optional for backward compatibility with manifests written before Task E.1. */
+    tools?: PluginToolContribution[];
   };
 }
 

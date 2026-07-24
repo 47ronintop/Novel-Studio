@@ -87,13 +87,101 @@ describe("plugin registry repository", () => {
               requestedPermissions: [{ permission: "asset:read", scopes: ["timeline"] }],
               contributes: {
                 commands: [{ id: "timeline.open-map", title: "Open timeline map" }],
-                workflowSteps: []
+                workflowSteps: [],
+                tools: []
               }
             }
           }
         ]
       }
     });
+  });
+
+  test("defaults contributes.tools to an empty array for manifests written before Task E.1", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-plugin-manifest-legacy-"));
+    await writePluginRegistryProject(projectRoot, true);
+    const repository = new PluginRegistryFileRepository({ projectRoot });
+
+    const result = await repository.readPluginSettings();
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const manifest = result.value.plugins[0]?.manifest;
+    expect(manifest?.contributes.tools).toEqual([]);
+  });
+
+  test("carries plugin tool contributions through to PluginSettingsEntry.manifest.contributes.tools", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-plugin-manifest-tools-"));
+    await mkdir(join(projectRoot, "plugins", "novel.tool-plugin"), { recursive: true });
+    await writeFile(
+      join(projectRoot, "plugins", "plugins.json"),
+      JSON.stringify(
+        {
+          schemaVersion: "1.0",
+          plugins: [
+            {
+              pluginId: "novel.tool-plugin",
+              enabled: true,
+              manifestPath: "plugins/novel.tool-plugin/plugin.json",
+              grantedPermissions: [{ permission: "tool:invoke", scopes: ["project"] }]
+            }
+          ]
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    await writeFile(
+      join(projectRoot, "plugins", "novel.tool-plugin", "plugin.json"),
+      JSON.stringify(
+        {
+          schemaVersion: "1.0",
+          id: "novel.tool-plugin",
+          displayName: "Tool Plugin",
+          version: "1.0.0",
+          entry: { kind: "none", command: "plugin.js" },
+          compatibleAppVersion: { min: "0.1.0" },
+          capabilities: [
+            { type: "tool", id: "tool-plugin.summarise", title: "Summarise" }
+          ],
+          permissions: [{ permission: "tool:invoke", scopes: ["project"] }],
+          contributes: {
+            commands: [],
+            workflowSteps: [],
+            tools: [
+              {
+                id: "tool-plugin.summarise",
+                title: "Summarise",
+                description: "Summarises the active chapter.",
+                inputSchema: { type: "object", additionalProperties: false },
+                timeoutMs: 5000,
+                maxOutputBytes: 65536
+              }
+            ]
+          }
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    const repository = new PluginRegistryFileRepository({ projectRoot });
+
+    const result = await repository.readPluginSettings();
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.plugins[0]?.manifest?.contributes.tools).toEqual([
+      {
+        id: "tool-plugin.summarise",
+        title: "Summarise",
+        description: "Summarises the active chapter.",
+        inputSchema: { type: "object", additionalProperties: false },
+        timeoutMs: 5000,
+        maxOutputBytes: 65536
+      }
+    ]);
   });
 
   test("persists plugin enabled state changes through schema-validated registry writes", async () => {

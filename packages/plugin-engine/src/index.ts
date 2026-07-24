@@ -16,5 +16,6 @@ export type {
   PluginResult,
   PluginRuntimeRecord,
   PluginRuntimeStatus,
-  PluginScope
+  PluginScope,
+  PluginToolContribution
 } from "./types.js";

@@ -90,7 +90,7 @@ export interface PluginSettingsEntry {
       readonly max?: string;
     };
     readonly capabilities: readonly {
-      readonly type: "command" | "workflow-step" | "asset-view";
+      readonly type: "command" | "workflow-step" | "asset-view" | "tool";
       readonly id: string;
       readonly title: string;
     }[];
@@ -103,6 +103,14 @@ export interface PluginSettingsEntry {
       readonly workflowSteps: readonly {
         readonly id: string;
         readonly title: string;
+      }[];
+      readonly tools?: readonly {
+        readonly id: string;
+        readonly title: string;
+        readonly description: string;
+        readonly inputSchema: Readonly<Record<string, unknown>>;
+        readonly timeoutMs?: number;
+        readonly maxOutputBytes?: number;
       }[];
     };
   };

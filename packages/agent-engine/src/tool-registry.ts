@@ -131,6 +131,13 @@ export interface ListAgentToolsInput {
    * behaviour — exactly the original 9 tools, preserving all pre-Phase-0 test contracts.
    */
   readonly capabilitySnapshot?: AgentToolCapabilitySnapshot;
+  /**
+   * Phase E: Dynamic external tool descriptors (plugin:/mcp: namespaced) that have been
+   * validated and frozen by the runtime before this call. When present and the capability
+   * snapshot enables plugin/mcp tools, these are appended after all static tools.
+   * Callers are responsible for validating descriptors before injection.
+   */
+  readonly externalToolDescriptors?: readonly AgentToolDescriptor[];
 }
 
 export function listAgentTools(input: ListAgentToolsInput): readonly AgentToolDescriptor[] {
@@ -207,6 +214,13 @@ export function listAgentTools(input: ListAgentToolsInput): readonly AgentToolDe
         ]
       : [];
 
+  // Phase E: dynamic external tools (plugin:/mcp: namespaced, injected by runtime)
+  const externalTools: AgentToolDescriptor[] =
+    input.externalToolDescriptors !== undefined &&
+    (cap?.pluginToolsEnabled === true || cap?.mcpToolsEnabled === true)
+      ? [...input.externalToolDescriptors]
+      : [];
+
   return [
     ...readTools,
     ...searchTools,
@@ -219,6 +233,7 @@ export function listAgentTools(input: ListAgentToolsInput): readonly AgentToolDe
     ...executionTools,
     ...gitTools,
     ...networkTools,
+    ...externalTools,
     coreTool("finish", "protocol_action", "control"),
     coreTool("request_user_input", "protocol_action", "control")
   ];
