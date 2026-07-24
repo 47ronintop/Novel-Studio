@@ -556,3 +556,47 @@ export type {
   PlanOpenQuestion,
   PermissionSummary
 } from "@novel-studio/agent-engine";
+export {
+  DEFAULT_NETWORK_POLICY,
+  createControlledFetch,
+  isHostAllowed,
+  validateNetworkPolicy,
+  ControlledFetchError,
+  NETWORK_MAX_RESPONSE_BYTES,
+  NETWORK_MAX_REDIRECTS,
+  type AgentNetworkPolicy,
+  type AgentNetworkProviderProfile,
+  type NetworkPolicyValidationResult,
+  type ControlledFetch,
+  type ControlledFetchRequest,
+  type ControlledFetchResponse
+} from "./agent-network-policy.js";
+export {
+  createAgentNetworkToolSession,
+  type AgentNetworkToolSessionOptions
+} from "./agent-network-tool-session.js";
+export {
+  DEFAULT_NETWORK_SETTINGS,
+  createAgentNetworkSettingsSession,
+  type AgentNetworkSettingsData,
+  type AgentNetworkSettingsPort,
+  type AgentNetworkSettingsSession
+} from "./agent-network-settings-session.js";
+export {
+  DEFAULT_MCP_SETTINGS,
+  createMcpSettingsSession,
+  type McpServerConfig,
+  type McpSettingsData,
+  type McpSettingsPort,
+  type McpSettingsSession
+} from "./mcp-settings-session.js";
+export {
+  createAgentExternalToolSession,
+  type ExternalToolDispatchPort
+} from "./agent-external-tool-session.js";
+export type {
+  AgentNetworkReadResult,
+  AgentNetworkToolExecutor,
+  AgentExternalToolExecutor,
+  AgentExternalToolOutcome
+} from "./agent-tool-ports.js";

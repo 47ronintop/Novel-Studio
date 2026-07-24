@@ -625,6 +625,61 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           if (isNativeMenuCommandId(payload)) listener(payload);
         });
       }
+    },
+    agentNetwork: {
+      getSettings: () =>
+        invokeTyped<Result<import("@novel-studio/application").AgentNetworkSettingsData, UnifiedError>>(
+          ipc,
+          "application:agent-network:get-settings"
+        ),
+      updateSettings: (partial: Partial<import("@novel-studio/application").AgentNetworkSettingsData>) =>
+        invokeTyped<Result<import("@novel-studio/application").AgentNetworkSettingsData, UnifiedError>>(
+          ipc,
+          "application:agent-network:update-settings",
+          partial
+        ),
+      testConnection: (profileId: string) =>
+        invokeTyped<Result<{ readonly latencyMs: number }, UnifiedError>>(
+          ipc,
+          "application:agent-network:test-connection",
+          profileId
+        ),
+      revoke: () =>
+        invokeTyped<Result<import("@novel-studio/application").AgentNetworkSettingsData, UnifiedError>>(
+          ipc,
+          "application:agent-network:revoke"
+        )
+    },
+    agentMcp: {
+      listServers: () =>
+        invokeTyped<Result<readonly import("@novel-studio/application").McpServerConfig[], UnifiedError>>(
+          ipc,
+          "application:agent-mcp:list-servers"
+        ),
+      addServer: (config: import("@novel-studio/application").McpServerConfig) =>
+        invokeTyped<Result<import("@novel-studio/application").McpSettingsData, UnifiedError>>(
+          ipc,
+          "application:agent-mcp:add-server",
+          config
+        ),
+      removeServer: (serverId: string) =>
+        invokeTyped<Result<import("@novel-studio/application").McpSettingsData, UnifiedError>>(
+          ipc,
+          "application:agent-mcp:remove-server",
+          serverId
+        ),
+      testConnection: (serverId: string) =>
+        invokeTyped<Result<{ readonly latencyMs: number }, UnifiedError>>(
+          ipc,
+          "application:agent-mcp:test-connection",
+          serverId
+        ),
+      revokeServer: (serverId: string) =>
+        invokeTyped<Result<import("@novel-studio/application").McpSettingsData, UnifiedError>>(
+          ipc,
+          "application:agent-mcp:revoke-server",
+          serverId
+        )
     }
   };
 }

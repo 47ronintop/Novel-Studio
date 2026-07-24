@@ -128,7 +128,16 @@ describe("Electron security baseline", () => {
       "application:studio:save-config-asset",
       "application:studio:restore-config-version",
       "application:preferences:load",
-      "application:preferences:save"
+      "application:preferences:save",
+      "application:agent-network:get-settings",
+      "application:agent-network:update-settings",
+      "application:agent-network:test-connection",
+      "application:agent-network:revoke",
+      "application:agent-mcp:list-servers",
+      "application:agent-mcp:add-server",
+      "application:agent-mcp:remove-server",
+      "application:agent-mcp:test-connection",
+      "application:agent-mcp:revoke-server"
     ]);
     expect(isApplicationIpcChannel("application:list-commands")).toBe(true);
     expect(isApplicationIpcChannel("application:project:preview-recovery-draft")).toBe(true);

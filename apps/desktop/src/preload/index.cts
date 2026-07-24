@@ -521,6 +521,52 @@ const api: NovelStudioApi = {
       ipcRenderer.on("application:menu:native-command", wrapped);
       return () => ipcRenderer.removeListener("application:menu:native-command", wrapped);
     }
+  },
+  agentNetwork: {
+    getSettings: () =>
+      invokeTyped<Result<import("@novel-studio/application").AgentNetworkSettingsData, UnifiedError>>(
+        "application:agent-network:get-settings"
+      ),
+    updateSettings: (partial: Partial<import("@novel-studio/application").AgentNetworkSettingsData>) =>
+      invokeTyped<Result<import("@novel-studio/application").AgentNetworkSettingsData, UnifiedError>>(
+        "application:agent-network:update-settings",
+        partial
+      ),
+    testConnection: (profileId: string) =>
+      invokeTyped<Result<{ readonly latencyMs: number }, UnifiedError>>(
+        "application:agent-network:test-connection",
+        profileId
+      ),
+    revoke: () =>
+      invokeTyped<Result<import("@novel-studio/application").AgentNetworkSettingsData, UnifiedError>>(
+        "application:agent-network:revoke"
+      )
+  },
+  agentMcp: {
+    listServers: () =>
+      invokeTyped<Result<readonly import("@novel-studio/application").McpServerConfig[], UnifiedError>>(
+        "application:agent-mcp:list-servers"
+      ),
+    addServer: (config: import("@novel-studio/application").McpServerConfig) =>
+      invokeTyped<Result<import("@novel-studio/application").McpSettingsData, UnifiedError>>(
+        "application:agent-mcp:add-server",
+        config
+      ),
+    removeServer: (serverId: string) =>
+      invokeTyped<Result<import("@novel-studio/application").McpSettingsData, UnifiedError>>(
+        "application:agent-mcp:remove-server",
+        serverId
+      ),
+    testConnection: (serverId: string) =>
+      invokeTyped<Result<{ readonly latencyMs: number }, UnifiedError>>(
+        "application:agent-mcp:test-connection",
+        serverId
+      ),
+    revokeServer: (serverId: string) =>
+      invokeTyped<Result<import("@novel-studio/application").McpSettingsData, UnifiedError>>(
+        "application:agent-mcp:revoke-server",
+        serverId
+      )
   }
 };
 

@@ -85,6 +85,66 @@
         }
       },
       "additionalProperties": true
+    },
+    "agentNetwork": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "allowedHosts": {
+          "type": "array",
+          "items": { "type": "string", "maxLength": 253 },
+          "maxItems": 100
+        },
+        "dataEgressPolicy": {
+          "type": "string",
+          "enum": ["require_confirmation", "auto_approve_search_queries"]
+        },
+        "policyRevision": { "type": "string" },
+        "providerProfiles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["providerId", "name", "apiKeyRef", "endpoint", "policyRevision"],
+            "properties": {
+              "providerId": { "type": "string", "minLength": 1 },
+              "name": { "type": "string", "minLength": 1 },
+              "apiKeyRef": { "type": "string", "pattern": "^secret://" },
+              "apiKey": false,
+              "endpoint": { "type": "string" },
+              "policyRevision": { "type": "string" }
+            },
+            "additionalProperties": true
+          },
+          "maxItems": 10
+        }
+      },
+      "additionalProperties": true
+    },
+    "agentMcp": {
+      "type": "object",
+      "properties": {
+        "revision": { "type": "string" },
+        "servers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["serverId", "displayName", "transport", "endpointUrl", "apiKeyRef", "enabled"],
+            "properties": {
+              "serverId": { "type": "string", "minLength": 1 },
+              "displayName": { "type": "string", "minLength": 1 },
+              "transport": { "type": "string", "enum": ["remote_http"] },
+              "endpointUrl": { "type": "string" },
+              "apiKeyRef": { "type": "string", "pattern": "^secret://" },
+              "apiKey": false,
+              "tlsFingerprint": { "type": "string" },
+              "enabled": { "type": "boolean" }
+            },
+            "additionalProperties": true
+          },
+          "maxItems": 20
+        }
+      },
+      "additionalProperties": true
     }
   },
   "additionalProperties": true

@@ -61,6 +61,10 @@ import type {
   StoryBibleContextCandidateOptions,
   UserPreferencesSaveInput
 } from "@novel-studio/application";
+import type { AgentNetworkSettingsData, AgentNetworkSettingsSession } from "@novel-studio/application";
+import type { McpServerConfig, McpSettingsSession } from "@novel-studio/application";
+import { DEFAULT_NETWORK_SETTINGS } from "@novel-studio/application";
+import { DEFAULT_MCP_SETTINGS } from "@novel-studio/application";
 import type {
   CreateChapterInput,
   DeleteChapterInput,
@@ -90,6 +94,8 @@ export interface ApplicationIpcHandlerOptions {
   readonly agentRuntimeManager?: DesktopAgentRuntimeManager;
   readonly publishAgentRunEvent?: (event: AgentRunEvent) => void;
   readonly agentWriteSaveCoordinator?: AgentWriteSaveCoordinator;
+  readonly agentNetworkSettingsSession?: AgentNetworkSettingsSession;
+  readonly agentMcpSettingsSession?: McpSettingsSession;
 }
 
 export interface AgentWriteSaveCoordinator {
@@ -968,7 +974,64 @@ export function createApplicationIpcHandlers(
     },
     "application:preferences:load": () => application.loadUserPreferences(),
     "application:preferences:save": (input: unknown) =>
-      application.saveUserPreferences(toUserPreferencesSaveInput(input))
+      application.saveUserPreferences(toUserPreferencesSaveInput(input)),
+    "application:agent-network:get-settings": () =>
+      options.agentNetworkSettingsSession?.getNetworkSettings() ??
+      Promise.resolve(ok(DEFAULT_NETWORK_SETTINGS)),
+    "application:agent-network:update-settings": (input: unknown) =>
+      options.agentNetworkSettingsSession?.updateNetworkSettings(
+        isRecord(input) ? (input as Partial<AgentNetworkSettingsData>) : {}
+      ) ?? Promise.resolve(ok(DEFAULT_NETWORK_SETTINGS)),
+    "application:agent-network:test-connection": (profileId: unknown) =>
+      options.agentNetworkSettingsSession?.testConnection(
+        typeof profileId === "string" ? profileId : ""
+      ) ??
+      Promise.resolve(
+        err(
+          createUnifiedError({
+            code: "NETWORK_SETTINGS_UNAVAILABLE",
+            category: "ValidationError",
+            message: "Network settings are not available.",
+            recoverability: "user-action",
+            suggestedAction: "Enable agent network access in settings.",
+            traceId: "ipc-handlers"
+          })
+        )
+      ),
+    "application:agent-network:revoke": () =>
+      options.agentNetworkSettingsSession?.revokeNetworkAccess() ??
+      Promise.resolve(ok(DEFAULT_NETWORK_SETTINGS)),
+    "application:agent-mcp:list-servers": () =>
+      options.agentMcpSettingsSession?.listServers() ?? Promise.resolve(ok([])),
+    "application:agent-mcp:add-server": (input: unknown) =>
+      isRecord(input)
+        ? (options.agentMcpSettingsSession?.addServer(input as unknown as McpServerConfig) ??
+          Promise.resolve(ok(DEFAULT_MCP_SETTINGS)))
+        : Promise.resolve(ok(DEFAULT_MCP_SETTINGS)),
+    "application:agent-mcp:remove-server": (serverId: unknown) =>
+      options.agentMcpSettingsSession?.removeServer(
+        typeof serverId === "string" ? serverId : ""
+      ) ?? Promise.resolve(ok(DEFAULT_MCP_SETTINGS)),
+    "application:agent-mcp:test-connection": (serverId: unknown) =>
+      options.agentMcpSettingsSession?.testConnection(
+        typeof serverId === "string" ? serverId : ""
+      ) ??
+      Promise.resolve(
+        err(
+          createUnifiedError({
+            code: "MCP_SETTINGS_UNAVAILABLE",
+            category: "ValidationError",
+            message: "MCP settings are not available.",
+            recoverability: "user-action",
+            suggestedAction: "Configure a remote MCP server first.",
+            traceId: "ipc-handlers"
+          })
+        )
+      ),
+    "application:agent-mcp:revoke-server": (serverId: unknown) =>
+      options.agentMcpSettingsSession?.revokeServer(
+        typeof serverId === "string" ? serverId : ""
+      ) ?? Promise.resolve(ok(DEFAULT_MCP_SETTINGS))
   };
 }
 

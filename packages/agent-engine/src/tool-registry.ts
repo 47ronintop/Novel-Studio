@@ -336,7 +336,7 @@ export function validateAgentToolArguments(input: {
     : { ok: false, error: "Tool arguments do not match the registered JSON Schema." };
 }
 
-function inputSchemaFor(name: AgentToolName): JsonObject {
+function inputSchemaFor(name: AgentToolName | StaticAgentToolName): JsonObject {
   if (name === "propose_chapter_write") {
     return proposalSchema("chapterId");
   }
@@ -351,6 +351,29 @@ function inputSchemaFor(name: AgentToolName): JsonObject {
       type: "object",
       additionalProperties: false,
       properties: { path: { type: "string", maxLength: 1024 } }
+    };
+  }
+  // Phase D: network tools
+  if (name === "web_search") {
+    return {
+      type: "object",
+      additionalProperties: false,
+      required: ["query"],
+      properties: {
+        query: { type: "string", minLength: 1, maxLength: 500 },
+        maxResults: { type: "integer", minimum: 1, maximum: 10 }
+      }
+    };
+  }
+  if (name === "fetch_url") {
+    return {
+      type: "object",
+      additionalProperties: false,
+      required: ["url"],
+      properties: {
+        url: { type: "string", minLength: 1, maxLength: 2048 },
+        maxBytes: { type: "integer", minimum: 1, maximum: 1048576 }
+      }
     };
   }
   return { type: "object", additionalProperties: true };

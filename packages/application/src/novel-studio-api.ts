@@ -100,6 +100,10 @@ import type {
   UserPreferencesSaveInput,
   UserPreferencesSnapshot
 } from "./user-preferences-session.js";
+import type {
+  AgentNetworkSettingsData
+} from "./agent-network-settings-session.js";
+import type { McpServerConfig, McpSettingsData } from "./mcp-settings-session.js";
 import type { AgentRunReadResult, AnswerAgentUserInputCommand } from "./agent-run-session.js";
 import type {
   AgentUsageQuery,
@@ -336,6 +340,19 @@ export interface NovelStudioApi {
   };
   menu: {
     onNativeCommand(listener: (commandId: NativeMenuCommandId) => void): () => void;
+  };
+  agentNetwork: {
+    getSettings(): Promise<Result<AgentNetworkSettingsData, UnifiedError>>;
+    updateSettings(partial: Partial<AgentNetworkSettingsData>): Promise<Result<AgentNetworkSettingsData, UnifiedError>>;
+    testConnection(profileId: string): Promise<Result<{ readonly latencyMs: number }, UnifiedError>>;
+    revoke(): Promise<Result<AgentNetworkSettingsData, UnifiedError>>;
+  };
+  agentMcp: {
+    listServers(): Promise<Result<readonly McpServerConfig[], UnifiedError>>;
+    addServer(config: McpServerConfig): Promise<Result<McpSettingsData, UnifiedError>>;
+    removeServer(serverId: string): Promise<Result<McpSettingsData, UnifiedError>>;
+    testConnection(serverId: string): Promise<Result<{ readonly latencyMs: number }, UnifiedError>>;
+    revokeServer(serverId: string): Promise<Result<McpSettingsData, UnifiedError>>;
   };
 }
 

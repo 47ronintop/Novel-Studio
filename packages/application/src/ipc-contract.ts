@@ -91,7 +91,16 @@ export const APPLICATION_IPC_CHANNELS = [
   "application:studio:save-config-asset",
   "application:studio:restore-config-version",
   "application:preferences:load",
-  "application:preferences:save"
+  "application:preferences:save",
+  "application:agent-network:get-settings",
+  "application:agent-network:update-settings",
+  "application:agent-network:test-connection",
+  "application:agent-network:revoke",
+  "application:agent-mcp:list-servers",
+  "application:agent-mcp:add-server",
+  "application:agent-mcp:remove-server",
+  "application:agent-mcp:test-connection",
+  "application:agent-mcp:revoke-server"
 ] as const;
 
 export type ApplicationIpcChannel = (typeof APPLICATION_IPC_CHANNELS)[number];
