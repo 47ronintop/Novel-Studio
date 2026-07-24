@@ -137,7 +137,9 @@ describe("Electron security baseline", () => {
       "application:agent-mcp:add-server",
       "application:agent-mcp:remove-server",
       "application:agent-mcp:test-connection",
-      "application:agent-mcp:revoke-server"
+      "application:agent-mcp:revoke-server",
+      "application:agent-tasks:list",
+      "application:agent-tasks:revoke"
     ]);
     expect(isApplicationIpcChannel("application:list-commands")).toBe(true);
     expect(isApplicationIpcChannel("application:project:preview-recovery-draft")).toBe(true);

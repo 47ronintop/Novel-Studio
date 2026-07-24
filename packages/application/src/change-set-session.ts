@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 
 import {
   appendChangeSetProposal,
+  appendChangeSetOperation,
   checksumChangeSetText,
   createChangeSetRevision,
+  createOperationsChangeSetRevision,
   decideChangeSetApproval,
   selectChangeSetRevision,
   validateAgentRelativePath,
@@ -11,6 +13,7 @@ import {
   type ChangeSetApproval,
   type ChangeSetAssetType,
   type ChangeSetExternalValidation,
+  type ChangeSetOperation,
   type ChangeSetRange,
   type ChangeSetFileSelection,
   type DecideChangeSetCommand,
@@ -92,9 +95,21 @@ export interface SelectChangeSetSessionRevisionInput {
   readonly files: readonly ChangeSetFileSelection[];
 }
 
+export interface ProposeOperationInput {
+  readonly runId: string;
+  readonly projectId: string;
+  readonly checkpointId: string;
+  readonly contextSnapshotId: string;
+  readonly writePolicy?: AgentWritePolicy;
+  readonly toolCallId: string;
+  readonly operation: ChangeSetOperation;
+}
+
 export interface ChangeSetSession {
   proposeChapterWrite(input: ProposeChapterWriteInput): Promise<Result<ChangeSet, UnifiedError>>;
   proposeFileWrite(input: ProposeFileWriteInput): Promise<Result<ChangeSet, UnifiedError>>;
+  /** Task B.3 — stages a lifecycle operation (create/move/delete/mkdir) into the active Change Set. */
+  proposeOperation(input: ProposeOperationInput): Promise<Result<ChangeSet, UnifiedError>>;
   selectRevision(
     input: SelectChangeSetSessionRevisionInput
   ): Promise<Result<ChangeSet, UnifiedError>>;
@@ -306,6 +321,64 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
       return propose(input, target.value);
     },
 
+    async proposeOperation(input) {
+      const checkpointKey = checkpointBindingKey(input);
+      const activeId = activeChangeSetByCheckpoint.get(checkpointKey);
+      try {
+        let existing = activeId === undefined ? undefined : latestRevision(activeId);
+        if (existing === undefined && options.port.readLatestChangeSet !== undefined) {
+          const restored = await options.port.readLatestChangeSet({
+            runId: input.runId,
+            projectId: input.projectId,
+            checkpointId: input.checkpointId
+          });
+          if (!restored.ok) return restored;
+          existing = restored.value;
+          if (existing !== undefined) {
+            rememberRevision(existing);
+            activeChangeSetByCheckpoint.set(checkpointKey, existing.changeSetId);
+          }
+        }
+        const duplicateOp = existing?.operations?.find(
+          (candidate) => candidate.toolCallIdempotencyKey === input.toolCallId
+        );
+        if (duplicateOp !== undefined) return { ok: true, value: existing as ChangeSet };
+        if (
+          existing !== undefined &&
+          (existing.runId !== input.runId ||
+            existing.projectId !== input.projectId ||
+            existing.checkpointId !== input.checkpointId ||
+            existing.contextSnapshotId !== input.contextSnapshotId)
+        ) {
+          return failure(
+            "CHANGE_SET_CONTEXT_MISMATCH",
+            "The active Change Set is bound to a different checkpoint or context snapshot.",
+            "Refresh context and create a new checkpoint proposal."
+          );
+        }
+        const revision =
+          existing === undefined
+            ? createOperationsChangeSetRevision({
+                changeSetId: createChangeSetId(),
+                runId: input.runId,
+                projectId: input.projectId,
+                checkpointId: input.checkpointId,
+                contextSnapshotId: input.contextSnapshotId,
+                writePolicy: input.writePolicy ?? "write_before_confirmation",
+                operation: input.operation,
+                createdAt: now()
+              })
+            : appendChangeSetOperation(existing, { operation: input.operation, createdAt: now() });
+        const persisted = await options.port.persistChangeSet(revision);
+        if (!persisted.ok) return persisted;
+        rememberRevision(revision);
+        activeChangeSetByCheckpoint.set(checkpointKey, revision.changeSetId);
+        return { ok: true, value: revision };
+      } catch (error) {
+        return err(asUnifiedError(error));
+      }
+    },
+
     async selectRevision(input) {
       const current = await findRevision(input.changeSetId, input.revision);
       if (!current.ok) return current;
@@ -427,7 +500,9 @@ function validateTarget(
   return undefined;
 }
 
-function checkpointBindingKey(input: ChangeSetProposalBinding): string {
+function checkpointBindingKey(
+  input: Pick<ChangeSetProposalBinding, "runId" | "projectId" | "checkpointId">
+): string {
   return `${input.projectId}:${input.runId}:${input.checkpointId}`;
 }
 

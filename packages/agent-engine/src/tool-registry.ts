@@ -263,6 +263,7 @@ function isDestructive(name: StaticAgentToolName): boolean {
   return (
     name === "propose_file_delete" ||
     name === "propose_file_move" ||
+    name === "propose_directory_create" ||
     name === "run_project_task"
   );
 }
@@ -351,6 +352,128 @@ function inputSchemaFor(name: AgentToolName | StaticAgentToolName): JsonObject {
       type: "object",
       additionalProperties: false,
       properties: { path: { type: "string", maxLength: 1024 } }
+    };
+  }
+  // Phase A: search tools
+  if (name === "search_project_text") {
+    return {
+      type: "object",
+      additionalProperties: false,
+      required: ["query"],
+      properties: {
+        query: { type: "string", minLength: 1, maxLength: 500 },
+        includeGlobs: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 256 },
+          maxItems: 20
+        },
+        excludeGlobs: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 256 },
+          maxItems: 20
+        },
+        maxResults: { type: "integer", minimum: 1, maximum: 200 }
+      }
+    };
+  }
+  if (name === "find_project_references") {
+    return strictStringObject("stableRef");
+  }
+  // Phase B: file lifecycle tools
+  if (name === "propose_chapter_create") {
+    return {
+      type: "object",
+      additionalProperties: false,
+      required: ["title"],
+      properties: {
+        title: { type: "string", minLength: 1, maxLength: 512 },
+        content: { type: "string", maxLength: 1_000_000 },
+        dependsOn: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 256 },
+          maxItems: 50
+        }
+      }
+    };
+  }
+  if (name === "propose_story_bible_write") {
+    return {
+      type: "object",
+      additionalProperties: false,
+      required: ["assetType", "content"],
+      properties: {
+        assetType: { type: "string", minLength: 1, maxLength: 128 },
+        content: { type: "string", minLength: 1, maxLength: 1_048_576 },
+        dependsOn: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 256 },
+          maxItems: 50
+        }
+      }
+    };
+  }
+  if (name === "propose_file_create") {
+    return {
+      type: "object",
+      additionalProperties: false,
+      required: ["relativePath", "content"],
+      properties: {
+        relativePath: { type: "string", minLength: 1, maxLength: 1024 },
+        content: { type: "string", maxLength: 10_485_760 },
+        dependsOn: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 256 },
+          maxItems: 50
+        }
+      }
+    };
+  }
+  if (name === "propose_file_move") {
+    return {
+      type: "object",
+      additionalProperties: false,
+      required: ["sourcePath", "targetPath", "sourceChecksum"],
+      properties: {
+        sourcePath: { type: "string", minLength: 1, maxLength: 1024 },
+        targetPath: { type: "string", minLength: 1, maxLength: 1024 },
+        sourceChecksum: { type: "string", pattern: "^[a-f0-9]{64}$" },
+        dependsOn: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 256 },
+          maxItems: 50
+        }
+      }
+    };
+  }
+  if (name === "propose_file_delete") {
+    return {
+      type: "object",
+      additionalProperties: false,
+      required: ["relativePath", "baseChecksum"],
+      properties: {
+        relativePath: { type: "string", minLength: 1, maxLength: 1024 },
+        baseChecksum: { type: "string", pattern: "^[a-f0-9]{64}$" },
+        dependsOn: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 256 },
+          maxItems: 50
+        }
+      }
+    };
+  }
+  if (name === "propose_directory_create") {
+    return {
+      type: "object",
+      additionalProperties: false,
+      required: ["relativePath"],
+      properties: {
+        relativePath: { type: "string", minLength: 1, maxLength: 1024 },
+        dependsOn: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 256 },
+          maxItems: 50
+        }
+      }
     };
   }
   // Phase D: network tools

@@ -18,6 +18,62 @@ export type ChangeSetRangeUnit = "character" | "line" | "paragraph";
 export type ChangeSetStatus =
   "awaiting_approval" | "approved" | "rejected" | "stale" | "applied" | "abandoned";
 
+// ── Change Set v1.1: Operation types ─────────────────────────────────────────
+
+/** The kind of file lifecycle operation in a v1.1 Change Set. */
+export type ChangeSetOperationKind =
+  | "modify"
+  | "create_file"
+  | "move_file"
+  | "delete_file"
+  | "create_directory";
+
+/** Base fields shared by all operation kinds. */
+interface ChangeSetOperationBase {
+  /** Stable ID allocated by the session; used to express dependencies. */
+  readonly operationId: string;
+  /** IDs of operations that must be committed before this one. */
+  readonly dependsOn?: readonly string[];
+  /** Idempotency key binding this operation to the originating tool call. */
+  readonly toolCallIdempotencyKey: string;
+}
+
+export interface ChangeSetModifyOperation extends ChangeSetOperationBase {
+  readonly kind: "modify";
+  readonly relativePath: string;
+}
+
+export interface ChangeSetCreateFileOperation extends ChangeSetOperationBase {
+  readonly kind: "create_file";
+  readonly relativePath: string;
+  readonly content: string;
+}
+
+export interface ChangeSetMoveFileOperation extends ChangeSetOperationBase {
+  readonly kind: "move_file";
+  readonly sourcePath: string;
+  readonly targetPath: string;
+  readonly sourceChecksum: string;
+}
+
+export interface ChangeSetDeleteFileOperation extends ChangeSetOperationBase {
+  readonly kind: "delete_file";
+  readonly relativePath: string;
+  readonly baseChecksum: string;
+}
+
+export interface ChangeSetCreateDirectoryOperation extends ChangeSetOperationBase {
+  readonly kind: "create_directory";
+  readonly relativePath: string;
+}
+
+export type ChangeSetOperation =
+  | ChangeSetModifyOperation
+  | ChangeSetCreateFileOperation
+  | ChangeSetMoveFileOperation
+  | ChangeSetDeleteFileOperation
+  | ChangeSetCreateDirectoryOperation;
+
 export interface ChangeSetRange {
   readonly unit: ChangeSetRangeUnit;
   readonly start: number;
@@ -76,6 +132,12 @@ export interface ChangeSet {
   readonly approvalToken: string;
   readonly files: readonly ChangeSetFileChange[];
   readonly createdAt: string;
+  /**
+   * Change Set v1.1: optional lifecycle operations appended alongside file changes.
+   * When present, `operationsSchemaVersion` is "1.1". Absent for backward-compat v1.0 change sets.
+   */
+  readonly operationsSchemaVersion?: "1.1";
+  readonly operations?: readonly ChangeSetOperation[];
 }
 
 export interface ChangeSetProposal {
@@ -582,4 +644,273 @@ function deepFreeze<T>(value: T): T {
     Object.freeze(value);
   }
   return value;
+}
+
+// ── Change Set v1.1: Operation creation helpers ───────────────────────────────
+
+/** Create a modify operation (wraps an existing file hunk). */
+export function createModifyOperation(input: {
+  readonly operationId: string;
+  readonly relativePath: string;
+  readonly toolCallIdempotencyKey: string;
+  readonly dependsOn?: readonly string[];
+}): ChangeSetModifyOperation {
+  return Object.freeze({
+    kind: "modify",
+    operationId: input.operationId,
+    relativePath: input.relativePath,
+    toolCallIdempotencyKey: input.toolCallIdempotencyKey,
+    ...(input.dependsOn === undefined ? {} : { dependsOn: Object.freeze([...input.dependsOn]) })
+  });
+}
+
+/** Create a create_file operation. */
+export function createFileOperation(input: {
+  readonly operationId: string;
+  readonly relativePath: string;
+  readonly content: string;
+  readonly toolCallIdempotencyKey: string;
+  readonly dependsOn?: readonly string[];
+}): ChangeSetCreateFileOperation {
+  return Object.freeze({
+    kind: "create_file",
+    operationId: input.operationId,
+    relativePath: input.relativePath,
+    content: input.content,
+    toolCallIdempotencyKey: input.toolCallIdempotencyKey,
+    ...(input.dependsOn === undefined ? {} : { dependsOn: Object.freeze([...input.dependsOn]) })
+  });
+}
+
+/** Create a move_file operation. */
+export function moveFileOperation(input: {
+  readonly operationId: string;
+  readonly sourcePath: string;
+  readonly targetPath: string;
+  readonly sourceChecksum: string;
+  readonly toolCallIdempotencyKey: string;
+  readonly dependsOn?: readonly string[];
+}): ChangeSetMoveFileOperation {
+  return Object.freeze({
+    kind: "move_file",
+    operationId: input.operationId,
+    sourcePath: input.sourcePath,
+    targetPath: input.targetPath,
+    sourceChecksum: input.sourceChecksum,
+    toolCallIdempotencyKey: input.toolCallIdempotencyKey,
+    ...(input.dependsOn === undefined ? {} : { dependsOn: Object.freeze([...input.dependsOn]) })
+  });
+}
+
+/** Create a delete_file operation. */
+export function deleteFileOperation(input: {
+  readonly operationId: string;
+  readonly relativePath: string;
+  readonly baseChecksum: string;
+  readonly toolCallIdempotencyKey: string;
+  readonly dependsOn?: readonly string[];
+}): ChangeSetDeleteFileOperation {
+  return Object.freeze({
+    kind: "delete_file",
+    operationId: input.operationId,
+    relativePath: input.relativePath,
+    baseChecksum: input.baseChecksum,
+    toolCallIdempotencyKey: input.toolCallIdempotencyKey,
+    ...(input.dependsOn === undefined ? {} : { dependsOn: Object.freeze([...input.dependsOn]) })
+  });
+}
+
+/** Create a create_directory operation. */
+export function createDirectoryOperation(input: {
+  readonly operationId: string;
+  readonly relativePath: string;
+  readonly toolCallIdempotencyKey: string;
+  readonly dependsOn?: readonly string[];
+}): ChangeSetCreateDirectoryOperation {
+  return Object.freeze({
+    kind: "create_directory",
+    operationId: input.operationId,
+    relativePath: input.relativePath,
+    toolCallIdempotencyKey: input.toolCallIdempotencyKey,
+    ...(input.dependsOn === undefined ? {} : { dependsOn: Object.freeze([...input.dependsOn]) })
+  });
+}
+
+/** Build the first revision of an operations-only Change Set (Task B.3 lifecycle tools). */
+export function createOperationsChangeSetRevision(input: {
+  readonly changeSetId: string;
+  readonly runId: string;
+  readonly projectId: string;
+  readonly checkpointId: string;
+  readonly contextSnapshotId: string;
+  readonly writePolicy?: AgentWritePolicy;
+  readonly operation: ChangeSetOperation;
+  readonly createdAt: string;
+}): ChangeSet {
+  return finalizeOperationsChangeSet({
+    changeSetId: input.changeSetId,
+    runId: input.runId,
+    projectId: input.projectId,
+    checkpointId: input.checkpointId,
+    contextSnapshotId: input.contextSnapshotId,
+    writePolicy: input.writePolicy ?? "write_before_confirmation",
+    revision: 1,
+    createdAt: input.createdAt,
+    operations: [input.operation],
+    files: []
+  });
+}
+
+/** Append one more lifecycle operation onto an existing Change Set revision. */
+export function appendChangeSetOperation(
+  current: ChangeSet,
+  input: { readonly operation: ChangeSetOperation; readonly createdAt: string }
+): ChangeSet {
+  const operations = [...(current.operations ?? []), input.operation];
+  const preflight = preflightChangeSetOperations(operations);
+  if (!preflight.ok) {
+    throw changeSetError(
+      "CHANGE_SET_OPERATION_INVALID",
+      preflight.error,
+      "Resolve the operation conflict and retry with a new proposal."
+    );
+  }
+  return finalizeOperationsChangeSet({
+    changeSetId: current.changeSetId,
+    runId: current.runId,
+    projectId: current.projectId,
+    checkpointId: current.checkpointId,
+    contextSnapshotId: current.contextSnapshotId,
+    writePolicy: current.writePolicy ?? "write_before_confirmation",
+    revision: current.revision + 1,
+    createdAt: input.createdAt,
+    operations,
+    files: current.files
+  });
+}
+
+function finalizeOperationsChangeSet(input: {
+  readonly changeSetId: string;
+  readonly runId: string;
+  readonly projectId: string;
+  readonly checkpointId: string;
+  readonly contextSnapshotId: string;
+  readonly writePolicy: AgentWritePolicy;
+  readonly revision: number;
+  readonly createdAt: string;
+  readonly operations: readonly ChangeSetOperation[];
+  readonly files: readonly ChangeSetFileChange[];
+}): ChangeSet {
+  const checksum = checksumChangeSetText(
+    stableSerialize({
+      changeSetId: input.changeSetId,
+      revision: input.revision,
+      runId: input.runId,
+      checkpointId: input.checkpointId,
+      contextSnapshotId: input.contextSnapshotId,
+      writePolicy: input.writePolicy,
+      operations: input.operations.map((operation) => ({ ...operation }))
+    })
+  );
+  const approvalToken = checksumChangeSetText(`${input.changeSetId}:${input.revision}:${checksum}`);
+  return deepFreeze({
+    schemaVersion: "1.0",
+    changeSetId: input.changeSetId,
+    revision: input.revision,
+    runId: input.runId,
+    projectId: input.projectId,
+    checkpointId: input.checkpointId,
+    contextSnapshotId: input.contextSnapshotId,
+    writePolicy: input.writePolicy,
+    status: "awaiting_approval",
+    checksum,
+    approvalToken,
+    files: input.files,
+    createdAt: input.createdAt,
+    operationsSchemaVersion: "1.1" as const,
+    operations: input.operations
+  });
+}
+
+/**
+ * DAG preflight for Change Set operations. Returns an error if:
+ * - There are duplicate operationIds.
+ * - There are cycles in the dependency graph.
+ * - A dependsOn references an unknown operationId.
+ * - There are path conflicts (same path used in create+delete at same level, etc.).
+ */
+export function preflightChangeSetOperations(
+  operations: readonly ChangeSetOperation[]
+): { readonly ok: true } | { readonly ok: false; readonly error: string } {
+  const ids = new Set<string>();
+  const duplicates: string[] = [];
+  for (const op of operations) {
+    if (ids.has(op.operationId)) duplicates.push(op.operationId);
+    ids.add(op.operationId);
+  }
+  if (duplicates.length > 0) {
+    return { ok: false, error: `Duplicate operation IDs: ${duplicates.join(", ")}` };
+  }
+
+  // Verify all dependsOn references known IDs
+  for (const op of operations) {
+    for (const dep of op.dependsOn ?? []) {
+      if (!ids.has(dep)) {
+        return { ok: false, error: `Operation ${op.operationId} depends on unknown ID: ${dep}` };
+      }
+    }
+  }
+
+  // Detect cycles via DFS
+  const visited = new Set<string>();
+  const inStack = new Set<string>();
+  const adjacency = new Map<string, readonly string[]>(
+    operations.map((op) => [op.operationId, op.dependsOn ?? []])
+  );
+
+  function hasCycle(nodeId: string): boolean {
+    if (inStack.has(nodeId)) return true;
+    if (visited.has(nodeId)) return false;
+    visited.add(nodeId);
+    inStack.add(nodeId);
+    for (const dep of adjacency.get(nodeId) ?? []) {
+      if (hasCycle(dep)) return true;
+    }
+    inStack.delete(nodeId);
+    return false;
+  }
+
+  for (const op of operations) {
+    if (hasCycle(op.operationId)) {
+      return { ok: false, error: `Cycle detected in operation dependencies involving: ${op.operationId}` };
+    }
+  }
+
+  // Detect path conflicts: same target path in create+delete, or two creates to same path
+  const createPaths = new Set<string>();
+  const deletePaths = new Set<string>();
+  for (const op of operations) {
+    if (op.kind === "create_file" || op.kind === "create_directory") {
+      const path = op.relativePath;
+      if (createPaths.has(path)) {
+        return { ok: false, error: `Path conflict: multiple create operations for ${path}` };
+      }
+      if (deletePaths.has(path)) {
+        return { ok: false, error: `Path conflict: create and delete for same path ${path}` };
+      }
+      createPaths.add(path);
+    }
+    if (op.kind === "delete_file") {
+      const path = op.relativePath;
+      if (deletePaths.has(path)) {
+        return { ok: false, error: `Path conflict: multiple delete operations for ${path}` };
+      }
+      if (createPaths.has(path)) {
+        return { ok: false, error: `Path conflict: create and delete for same path ${path}` };
+      }
+      deletePaths.add(path);
+    }
+  }
+
+  return { ok: true };
 }

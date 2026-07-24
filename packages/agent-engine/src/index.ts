@@ -183,7 +183,15 @@ export {
   appendChangeSetProposal,
   checksumChangeSetText,
   createChangeSetRevision,
-  selectChangeSetRevision
+  selectChangeSetRevision,
+  createModifyOperation,
+  createFileOperation,
+  moveFileOperation,
+  deleteFileOperation,
+  createDirectoryOperation,
+  preflightChangeSetOperations,
+  createOperationsChangeSetRevision,
+  appendChangeSetOperation
 } from "./change-set.js";
 export type {
   AppendChangeSetProposalInput,
@@ -203,7 +211,14 @@ export type {
   ChangeSetValidation,
   ChangeSetValidationCheck,
   CreateChangeSetRevisionInput,
-  SelectChangeSetRevisionInput
+  SelectChangeSetRevisionInput,
+  ChangeSetCreateDirectoryOperation,
+  ChangeSetCreateFileOperation,
+  ChangeSetDeleteFileOperation,
+  ChangeSetModifyOperation,
+  ChangeSetMoveFileOperation,
+  ChangeSetOperation,
+  ChangeSetOperationKind
 } from "./change-set.js";
 export { decideChangeSetApproval } from "./approval-gate.js";
 export type {

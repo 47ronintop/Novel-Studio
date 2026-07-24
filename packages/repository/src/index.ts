@@ -165,3 +165,12 @@ export type {
   AuthorizedTask,
   ProjectTaskCandidate
 } from "./project-task-catalog-repository.js";
+export { AgentProjectSearchRepository } from "./agent-project-search-repository.js";
+export type {
+  AgentProjectSearchRepositoryOptions,
+  AgentSearchResult,
+  AgentSearchResultRange,
+  AgentSearchResults
+} from "./agent-project-search-repository.js";
+export { NoFollowFileOperations } from "./no-follow-file-operations.js";
+export type { NoFollowFileError } from "./no-follow-file-operations.js";

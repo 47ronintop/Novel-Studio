@@ -5,6 +5,7 @@ import type {
   AgentRunCommandResult,
   AgentRunCoordinator,
   AgentRunEvent,
+  AgentRunEventTypeV11,
   AgentRunEventTypeV12,
   AgentRunLimits,
   AgentRunSnapshot
@@ -282,20 +283,31 @@ export function createAgentRunCoordinator(
   };
 }
 
+const V12_ONLY_EVENT_TYPES = new Set<AgentRunEventTypeV12>([
+  "tool_approval_requested",
+  "tool_approval_resolved",
+  "capability_revoked",
+  "process_output",
+  "external_outcome_unknown"
+]);
+
+/** Writes v1.2 only for the 5 new Task 0.4 event types; every existing v1.1 type stays v1.1. */
 function toEvent(
   snapshot: AgentRunSnapshot,
   type: AgentRunEventTypeV12,
   createdAt: string
 ): AgentRunEvent {
-  return {
-    schemaVersion: "1.2",
+  const base = {
     runId: snapshot.runId,
     projectId: snapshot.projectId,
     sequence: snapshot.lastSequence,
     runRevision: snapshot.runRevision,
-    type,
     createdAt
   };
+  if (V12_ONLY_EVENT_TYPES.has(type)) {
+    return { ...base, schemaVersion: "1.2", type };
+  }
+  return { ...base, schemaVersion: "1.1", type: type as AgentRunEventTypeV11 };
 }
 
 function failure(code: string, message: string): AgentRunCommandResult {
