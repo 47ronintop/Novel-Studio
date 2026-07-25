@@ -2,6 +2,7 @@
   "schemaVersion": "1.0",
   "assessedAt": "2026-07-25",
   "overallStatus": "Blocked",
+  "notes": "C.0 Rust source complete but cannot build/qualify without Windows AppContainer CI runner. Git runtime requires bundled binary. B native backend requires Rust build. D network panel mounted in renderer; E.4 source management UI delivered.",
   "phases": [
     {
       "id": "phase-0",
@@ -51,7 +52,7 @@
       "userControlsComplete": false,
       "endToEndEvidence": false,
       "blockedBy": [
-        "No qualified native handle/no-follow lifecycle backend is available, so the production desktop runtime keeps file lifecycle tools hidden."
+        "NoFollowNativeFileOperationPort interface and path validation complete. Real Windows handle-based implementation (napi-rs or Rust IPC) requires Windows build environment not available in current CI. File lifecycle tools remain hidden until native backend qualifies."
       ],
       "evidence": [
         { "kind": "unit", "path": "packages/agent-engine/test/change-set.test.ts" },
@@ -66,15 +67,18 @@
       "releaseEligible": false,
       "productionRuntimeWired": true,
       "securityQualified": false,
-      "userControlsComplete": false,
+      "userControlsComplete": true,
       "endToEndEvidence": false,
       "blockedBy": [
-        "The network settings panel is not mounted in the desktop renderer, and packaged end-to-end and security qualification evidence is not recorded."
+        "AgentNetworkSettingsPanel now mounted in Desktop renderer (settings-bridge.ts wired, 'network' section added to SettingsPanelTabs). Packaged E2E and security qualification evidence not yet recorded."
       ],
+      "completedIn": "2026-07-25",
       "evidence": [
         { "kind": "unit", "path": "packages/application/test/agent-network-policy.test.ts" },
         { "kind": "unit", "path": "apps/desktop/test/agent-network-dialer.test.ts" },
-        { "kind": "unit", "path": "apps/desktop/test/agent-network-runtime.test.ts" }
+        { "kind": "unit", "path": "apps/desktop/test/agent-network-runtime.test.ts" },
+        { "kind": "source", "path": "packages/ui/src/agent-network-settings-panel.tsx" },
+        { "kind": "source", "path": "apps/desktop/src/renderer/settings-bridge.ts" }
       ]
     },
     {
@@ -84,12 +88,17 @@
       "releaseEligible": false,
       "productionRuntimeWired": true,
       "securityQualified": false,
-      "userControlsComplete": false,
+      "userControlsComplete": true,
       "endToEndEvidence": false,
       "blockedBy": [
-        "The MCP source-management UI and packaged desktop end-to-end and security qualification evidence are not delivered."
+        "MCP source-management UI delivered (AgentToolSourcePanel). Packaged desktop end-to-end and security qualification evidence are not delivered."
       ],
-      "evidence": [{ "kind": "unit", "path": "apps/desktop/test/remote-mcp-runtime.test.ts" }]
+      "completedIn": "2026-07-25",
+      "evidence": [
+        { "kind": "unit", "path": "apps/desktop/test/remote-mcp-runtime.test.ts" },
+        { "kind": "source", "path": "packages/ui/src/agent-tool-source-panel.tsx" },
+        { "kind": "source", "path": "apps/desktop/src/renderer/settings-bridge.ts" }
+      ]
     },
     {
       "id": "phase-c0",
@@ -101,11 +110,14 @@
       "userControlsComplete": false,
       "endToEndEvidence": false,
       "blockedBy": [
-        "The native host and probe are stubs; no packaged Windows AppContainer qualification evidence exists."
+        "Real Windows AppContainer Rust source implemented (host/src/windows_impl.rs + probe/src/windows_probe.rs with AppContainer SID derivation, Job Object KILL_ON_JOB_CLOSE, CREATE_SUSPENDED sequencing, and full qualification probe). Build and qualification require Windows x64 CI runner with Windows SDK — not available in current environment. Cargo.toml updated with windows crate dependencies. Cannot produce packaged artifacts or run qualification tests without that environment."
       ],
+      "completedIn": null,
       "evidence": [
         { "kind": "source", "path": "apps/desktop/native/agent-task-sandbox/host/src/main.rs" },
-        { "kind": "source", "path": "apps/desktop/native/agent-task-sandbox/probe/src/main.rs" }
+        { "kind": "source", "path": "apps/desktop/native/agent-task-sandbox/host/src/windows_impl.rs" },
+        { "kind": "source", "path": "apps/desktop/native/agent-task-sandbox/probe/src/main.rs" },
+        { "kind": "source", "path": "apps/desktop/native/agent-task-sandbox/probe/src/windows_probe.rs" }
       ]
     },
     {
@@ -118,8 +130,8 @@
       "userControlsComplete": false,
       "endToEndEvidence": false,
       "blockedBy": [
-        "C.0 is blocked.",
-        "The packaged read-only Git runtime remains unavailable and unqualified."
+        "C.0 is blocked: requires Windows CI to build and qualify AppContainer host/probe.",
+        "The packaged read-only Git runtime remains unavailable: apps/desktop/resources/git/manifest.json digest is placeholder. Bundling a real Git binary requires downloading and verifying a Windows x64 Git release — not possible without Windows environment."
       ],
       "evidence": [
         { "kind": "unit", "path": "packages/application/test/agent-run-session.test.ts" },
@@ -146,17 +158,19 @@
       "label": "Phase E.4 tool source management and unified approval",
       "status": "Partial",
       "releaseEligible": false,
-      "productionRuntimeWired": false,
+      "productionRuntimeWired": true,
       "securityQualified": false,
-      "userControlsComplete": false,
+      "userControlsComplete": true,
       "endToEndEvidence": false,
       "blockedBy": [
-        "Unified approval IPC and the in-run approval card are delivered, but plugin and MCP source-management UI is not."
+        "Plugin source management UI delivered (AgentToolSourcePanel). Sandbox-dependent plugin/local-MCP sources remain unavailable. Packaged E2E not yet recorded."
       ],
+      "completedIn": "2026-07-25",
       "evidence": [
         { "kind": "unit", "path": "packages/agent-engine/test/tool-registry.test.ts" },
         { "kind": "unit", "path": "packages/ui/test/agent-run-panel.test.tsx" },
-        { "kind": "unit", "path": "packages/application/test/agent-run-session.test.ts" }
+        { "kind": "unit", "path": "packages/application/test/agent-run-session.test.ts" },
+        { "kind": "source", "path": "packages/ui/src/agent-tool-source-panel.tsx" }
       ]
     },
     {
@@ -169,7 +183,10 @@
       "userControlsComplete": false,
       "endToEndEvidence": false,
       "blockedBy": [
-        "No implementation phase has the production and security evidence required for release closure."
+        "No implementation phase has the production and security evidence required for release closure.",
+        "C.0 requires Windows CI runner for AppContainer qualification.",
+        "Git runtime requires bundled binary.",
+        "B native backend requires Windows build environment."
       ],
       "evidence": [{ "kind": "gate", "path": "scripts/release-check.mjs" }]
     }

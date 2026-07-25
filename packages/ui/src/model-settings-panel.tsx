@@ -20,6 +20,10 @@ import {
   type SettingsPanelActiveSection,
   type SettingsPanelSection
 } from "./settings-panel-tabs.js";
+import type { AgentNetworkSettingsPanelProps } from "./agent-network-settings-panel.js";
+import { AgentNetworkSettingsPanel } from "./agent-network-settings-panel.js";
+import type { AgentToolSourcePanelProps } from "./agent-tool-source-panel.js";
+import { AgentToolSourcePanel } from "./agent-tool-source-panel.js";
 
 const SettingsSearchQueryContext = createContext("");
 
@@ -159,6 +163,8 @@ export interface ModelSettingsPanelProps {
   readonly modelDiscovery?: ModelDiscoverySnapshot;
   readonly plugins?: PluginSettingsPanelProps;
   readonly usage?: AgentUsageSettingsProps | undefined;
+  readonly network?: AgentNetworkSettingsPanelProps | undefined;
+  readonly toolSources?: AgentToolSourcePanelProps | undefined;
   readonly feedback?: { readonly kind: "info" | "error"; readonly message: string };
   readonly onSelectProfile?: (profileId: string) => void;
   readonly onDraftChange?: (draft: Partial<ModelSettingsDraft>) => void;
@@ -188,6 +194,8 @@ export function ModelSettingsPanel({
   modelDiscovery,
   plugins,
   usage,
+  network,
+  toolSources,
   feedback,
   onSelectProfile,
   onDraftChange,
@@ -281,6 +289,26 @@ export function ModelSettingsPanel({
             {effectiveSection === "plugins" ? <PluginSettingsSection plugins={plugins} /> : null}
             {effectiveSection === "usage" ? (
               <AgentUsageSettings {...(usage ?? defaultUsageProps)} />
+            ) : null}
+            {effectiveSection === "network" && network !== undefined ? (
+              <AgentNetworkSettingsPanel {...network} />
+            ) : null}
+            {effectiveSection === "network" && network === undefined ? (
+              <section className="model-settings-section" aria-label="Agent 网络">
+                <p style={{ color: "#888", padding: "16px" }}>
+                  网络访问设置不可用。请确认 Desktop 运行时已连接。
+                </p>
+              </section>
+            ) : null}
+            {effectiveSection === "mcp" && toolSources !== undefined ? (
+              <AgentToolSourcePanel {...toolSources} />
+            ) : null}
+            {effectiveSection === "mcp" && toolSources === undefined ? (
+              <section className="model-settings-section" aria-label="工具来源">
+                <p style={{ color: "#888", padding: "16px" }}>
+                  工具来源管理不可用。请确认 Desktop 运行时已连接。
+                </p>
+              </section>
             ) : null}
           </SettingsSearchQueryContext.Provider>
         </div>

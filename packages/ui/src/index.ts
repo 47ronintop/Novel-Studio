@@ -55,6 +55,10 @@ export type {
   PluginSettingsPermissionGrant,
   PluginSettingsStatus
 } from "./model-settings-panel.js";
+export { AgentToolSourcePanel } from "./agent-tool-source-panel.js";
+export type { AgentToolSourcePanelProps, AgentToolSourceEntry } from "./agent-tool-source-panel.js";
+export { AgentNetworkSettingsPanel } from "./agent-network-settings-panel.js";
+export type { AgentNetworkSettingsPanelProps } from "./agent-network-settings-panel.js";
 export { WorkspaceShell } from "./workspace-shell.js";
 export { AgentRunPanel } from "./agent-run-panel.js";
 export { AgentErrorCard } from "./agent-error-card.js";

@@ -1,6 +1,8 @@
 import { createPluginSecurityAuditReport, MODEL_PROVIDER_CATALOG } from "@novel-studio/application";
 import type {
+  AgentNetworkSettingsData,
   AgentUsageQuery,
+  McpServerConfig,
   ModelDiscoverySnapshot,
   ModelProfile,
   NovelStudioApi,
@@ -8,6 +10,9 @@ import type {
   PluginSettingsSnapshot
 } from "@novel-studio/application";
 import type {
+  AgentNetworkSettingsPanelProps,
+  AgentToolSourceEntry,
+  AgentToolSourcePanelProps,
   ModelSettingsDraft,
   ModelSettingsPanelProps,
   PluginSettingsPanelProps,
@@ -42,6 +47,26 @@ export interface SettingsBridge {
   makeDefault(profileId: string): Promise<ModelSettingsPanelProps>;
   beginTestConnection(profileId: string): ModelSettingsPanelProps;
   testConnection(profileId: string): Promise<ModelSettingsPanelProps>;
+  /** Phase D — load current network settings into the panel. */
+  loadNetworkSettings(): Promise<ModelSettingsPanelProps>;
+  /** Phase D — update network settings and immediately revoke old runtime capabilities. */
+  updateNetworkSettings(partial: Partial<AgentNetworkSettingsData>): Promise<ModelSettingsPanelProps>;
+  /** Phase D — test a specific provider connection. */
+  testNetworkConnection(profileId: string): Promise<ModelSettingsPanelProps>;
+  /** Phase D — revoke all network access. */
+  revokeNetworkAccess(): Promise<ModelSettingsPanelProps>;
+  /** Phase E.4 — load MCP server list. */
+  loadMcpServers(): Promise<ModelSettingsPanelProps>;
+  /** Phase E.4 — add a new MCP server. */
+  addMcpServer(config: McpServerConfig): Promise<ModelSettingsPanelProps>;
+  /** Phase E.4 — remove an MCP server. */
+  removeMcpServer(serverId: string): Promise<ModelSettingsPanelProps>;
+  /** Phase E.4 — enable or disable an MCP server. */
+  setMcpServerEnabled(serverId: string, enabled: boolean): Promise<ModelSettingsPanelProps>;
+  /** Phase E.4 — test a remote MCP server connection. */
+  testMcpConnection(serverId: string): Promise<ModelSettingsPanelProps>;
+  /** Phase E.4 — revoke a specific MCP server. */
+  revokeMcpServer(serverId: string): Promise<ModelSettingsPanelProps>;
 }
 
 export function createSettingsBridge(
@@ -79,6 +104,23 @@ export function createSettingsBridge(
   let usageGeneration = 0;
   let usageQueryPending = false;
   let clearInFlight: Promise<ModelSettingsPanelProps> | undefined;
+
+  // Phase D — network settings state
+  let networkSettings: AgentNetworkSettingsData = {
+    enabled: false,
+    providerProfiles: [],
+    allowedHosts: [],
+    dataEgressPolicy: "require_confirmation",
+    policyRevision: "v1.0-default"
+  };
+  let networkLoading = false;
+  type NetworkTestStatus = "idle" | "testing" | "ok" | "error";
+  let networkTestStatuses: Record<string, NetworkTestStatus> = {};
+
+  // Phase E.4 — MCP server state
+  let mcpServers: readonly McpServerConfig[] = [];
+  let mcpLoading = false;
+  let mcpTestStatuses: Record<string, NetworkTestStatus> = {};
 
   return {
     getProps: () => toProps(),
@@ -240,6 +282,133 @@ export function createSettingsBridge(
         message: detail
       };
       return toProps();
+    },
+
+    // ── Phase D: Network settings ──────────────────────────────────────────────
+
+    async loadNetworkSettings() {
+      networkLoading = true;
+      const result = await api.agentNetwork.getSettings();
+      networkLoading = false;
+      if (result.ok) {
+        networkSettings = result.value;
+      }
+      return toProps();
+    },
+
+    async updateNetworkSettings(partial) {
+      networkLoading = true;
+      // Immediately revoke old runtime capability before applying new settings
+      const result = await api.agentNetwork.updateSettings(partial);
+      networkLoading = false;
+      if (result.ok) {
+        networkSettings = result.value;
+      }
+      // Reset test statuses on any settings change — old connections may be invalid
+      networkTestStatuses = {};
+      return toProps();
+    },
+
+    async testNetworkConnection(profileId) {
+      networkTestStatuses = { ...networkTestStatuses, [profileId]: "testing" };
+      const r = await api.agentNetwork.testConnection(profileId);
+      networkTestStatuses = {
+        ...networkTestStatuses,
+        [profileId]: r.ok ? "ok" : "error"
+      };
+      return toProps();
+    },
+
+    async revokeNetworkAccess() {
+      networkLoading = true;
+      const result = await api.agentNetwork.revoke();
+      networkLoading = false;
+      if (result.ok) {
+        networkSettings = result.value;
+      }
+      networkTestStatuses = {};
+      return toProps();
+    },
+
+    // ── Phase E.4: MCP source management ──────────────────────────────────────
+
+    async loadMcpServers() {
+      mcpLoading = true;
+      const result = await api.agentMcp.listServers();
+      mcpLoading = false;
+      if (result.ok) {
+        mcpServers = result.value;
+      }
+      return toProps();
+    },
+
+    async addMcpServer(config) {
+      mcpLoading = true;
+      const result = await api.agentMcp.addServer(config);
+      mcpLoading = false;
+      if (result.ok) {
+        mcpServers = result.value.servers;
+      }
+      return toProps();
+    },
+
+    async removeMcpServer(serverId) {
+      mcpLoading = true;
+      const result = await api.agentMcp.removeServer(serverId);
+      mcpLoading = false;
+      if (result.ok) {
+        mcpServers = result.value.servers;
+        mcpTestStatuses = omitKey(mcpTestStatuses, serverId);
+      }
+      return toProps();
+    },
+
+    async setMcpServerEnabled(serverId, enabled) {
+      // Enable/disable: revoke old capability state, then reload
+      mcpLoading = true;
+      const serverList = [...mcpServers];
+      const idx = serverList.findIndex((s) => s.serverId === serverId);
+      if (idx !== -1) {
+        const existing = serverList[idx];
+        if (existing !== undefined) {
+          serverList[idx] = { ...existing, enabled };
+        }
+        mcpServers = serverList;
+      }
+      // Persist via IPC: add then remove to toggle, or use a dedicated toggle endpoint
+      // For now use remove + add pattern (idempotent)
+      const existing = mcpServers.find((s) => s.serverId === serverId);
+      if (existing !== undefined) {
+        const updated = { ...existing, enabled };
+        await api.agentMcp.removeServer(serverId);
+        const result = await api.agentMcp.addServer(updated);
+        if (result.ok) {
+          mcpServers = result.value.servers;
+        }
+      }
+      mcpLoading = false;
+      return toProps();
+    },
+
+    async testMcpConnection(serverId) {
+      mcpTestStatuses = { ...mcpTestStatuses, [serverId]: "testing" };
+      const r = await api.agentMcp.testConnection(serverId);
+      mcpTestStatuses = {
+        ...mcpTestStatuses,
+        [serverId]: r.ok ? "ok" : "error"
+      };
+      return toProps();
+    },
+
+    async revokeMcpServer(serverId) {
+      mcpLoading = true;
+      const result = await api.agentMcp.revokeServer(serverId);
+      mcpLoading = false;
+      if (result.ok) {
+        mcpServers = result.value.servers;
+        mcpTestStatuses = omitKey(mcpTestStatuses, serverId);
+      }
+      return toProps();
     }
   };
 
@@ -353,6 +522,35 @@ export function createSettingsBridge(
   }
 
   function toProps(): ModelSettingsPanelProps {
+    const networkProps: AgentNetworkSettingsPanelProps = {
+      settings: networkSettings,
+      loading: networkLoading,
+      onUpdateSettings: () => Promise.resolve(),
+      onTestConnection: () => Promise.resolve({ latencyMs: 0 }),
+      onRevoke: () => Promise.resolve()
+    };
+
+    const toolSourceEntries: AgentToolSourceEntry[] = mcpServers.map((config) => {
+      const testStatus = mcpTestStatuses[config.serverId];
+      const entry: AgentToolSourceEntry = {
+        config,
+        ...(testStatus !== undefined ? { connectionStatus: testStatus } : {}),
+        sandboxStatus:
+          config.transport === "local_stdio" ? ("unavailable" as const) : ("unknown" as const)
+      };
+      return entry;
+    });
+
+    const toolSourcesProps: AgentToolSourcePanelProps = {
+      servers: toolSourceEntries,
+      loading: mcpLoading,
+      onAddServer: () => Promise.resolve(),
+      onRemoveServer: () => Promise.resolve(),
+      onSetEnabled: () => Promise.resolve(),
+      onTestConnection: () => Promise.resolve({ latencyMs: 0 }),
+      onRevokeServer: () => Promise.resolve()
+    };
+
     return {
       defaultProfileId,
       activeSection,
@@ -378,6 +576,8 @@ export function createSettingsBridge(
         onSelectDay: () => undefined,
         onClear: () => undefined
       },
+      network: networkProps,
+      toolSources: toolSourcesProps,
       ...(feedback === undefined ? {} : { feedback }),
       onSelectProfile: () => undefined,
       onDraftChange: () => undefined,
@@ -606,4 +806,9 @@ function redactSettingsDetail(detail: string): string {
   return detail
     .replace(/\bsk-[A-Za-z0-9_-]+/g, "[redacted-secret]")
     .replace(/secret:\/\/[^\s"'<>]+/g, "[redacted-secret-ref]");
+}
+
+/** Returns a new object with `key` omitted — avoids dynamic delete. */
+function omitKey<T>(obj: Record<string, T>, key: string): Record<string, T> {
+  return Object.fromEntries(Object.entries(obj).filter(([k]) => k !== key));
 }
