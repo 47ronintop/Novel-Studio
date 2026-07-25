@@ -7,9 +7,11 @@ const ROOT = resolve("D:/projects/workspace");
 
 function makeGitAdapter(overrides = {}) {
   return {
-    gitStatus: vi.fn().mockResolvedValue(
-      ok({ staged: ["src/a.ts"], unstaged: [], untracked: ["tmp.txt"], branch: "main" })
-    ),
+    gitStatus: vi
+      .fn()
+      .mockResolvedValue(
+        ok({ staged: ["src/a.ts"], unstaged: [], untracked: ["tmp.txt"], branch: "main" })
+      ),
     gitDiff: vi.fn().mockResolvedValue(
       ok({
         diffs: [{ relativePath: "src/a.ts", diff: "diff --git a/src/a.ts b/src/a.ts\n+added" }],

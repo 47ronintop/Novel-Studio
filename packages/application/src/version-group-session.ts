@@ -2,6 +2,7 @@ import type {
   AgentWritePolicy,
   ChangeSet,
   ChangeSetApproval,
+  ChangeSetOperation,
   VersionGroup,
   VersionGroupPostCommitHook
 } from "@novel-studio/agent-engine";
@@ -28,6 +29,8 @@ export interface VersionGroupTransactionApplyInput {
   readonly approvalSource: "human_confirmation" | "user_preapproved_run";
   readonly approvalToken: string;
   readonly files: readonly VersionGroupTransactionApplyFile[];
+  /** Selected v1.1 lifecycle operations; text files may legitimately be empty. */
+  readonly operations?: readonly ChangeSetOperation[];
 }
 
 export interface VersionGroupSessionTransactionPort {
@@ -128,11 +131,24 @@ export function createVersionGroupSession(
       const binding = validateApprovalBinding(input.changeSet, input.approval);
       if (!binding.ok) return binding;
       const selectedFiles = input.changeSet.files.filter((file) => file.selected);
-      if (selectedFiles.length === 0 || selectedFiles.some((file) => !file.validation.valid)) {
+      const selectedOperations = (input.changeSet.operations ?? []).filter(
+        (operation) => operation.selected !== false
+      );
+      if (
+        (selectedFiles.length === 0 && selectedOperations.length === 0) ||
+        selectedFiles.some((file) => !file.validation.valid) ||
+        (input.approval.approvalSource === "user_preapproved_run" &&
+          selectedOperations.some(isDestructiveOperation))
+      ) {
         return err(versionGroupError("VERSION_GROUP_SELECTION_INVALID"));
       }
 
-      const relativePaths = selectedFiles.map((file) => file.relativePath);
+      const relativePaths = [
+        ...new Set([
+          ...selectedFiles.map((file) => file.relativePath),
+          ...selectedOperations.flatMap(operationPaths)
+        ])
+      ];
       const failedHooks: VersionGroupPostCommitHook[] = [];
       let committedGroup: VersionGroup | undefined;
       let result: Result<VersionGroup, UnifiedError> | undefined;
@@ -155,7 +171,8 @@ export function createVersionGroupSession(
             candidateChecksum: file.candidateChecksum,
             baseContent: file.baseContent,
             candidateContent: file.candidateContent
-          }))
+          })),
+          ...(selectedOperations.length === 0 ? {} : { operations: selectedOperations })
         });
         if (!result.ok) {
           await options.hooks.preserveDirtyBuffers(relativePaths);
@@ -271,9 +288,7 @@ export function createVersionGroupSession(
             runId: input.runId,
             ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
             ...(input.reviewId === undefined ? {} : { reviewId: input.reviewId }),
-            ...(currentEditorContents === undefined
-              ? {}
-              : { currentEditorContents }),
+            ...(currentEditorContents === undefined ? {} : { currentEditorContents }),
             ...(input.decisions === undefined ? {} : { decisions: input.decisions }),
             ...(input.retryFailedOnly === undefined
               ? {}
@@ -322,9 +337,7 @@ async function runUndo(
           }
         }
       } else {
-        const completedWrites = appliedGroup.writes.filter(
-          (write) => write.status === "completed"
-        );
+        const completedWrites = appliedGroup.writes.filter((write) => write.status === "completed");
         const synchronizedPaths: string[] = [];
         for (const write of completedWrites) {
           const expectedDirtyChecksum = reviewedDirtyEditorChecksum(
@@ -337,9 +350,7 @@ async function runUndo(
               hooks.syncSavedEditor({
                 relativePath: write.relativePath,
                 checksum: write.afterChecksum,
-                ...(expectedDirtyChecksum === undefined
-                  ? {}
-                  : { expectedDirtyChecksum }),
+                ...(expectedDirtyChecksum === undefined ? {} : { expectedDirtyChecksum }),
                 saveStatus: "Saved"
               }),
             failedHooks
@@ -395,9 +406,7 @@ async function runUndo(
               hooks.syncSavedEditor({
                 relativePath: write.relativePath,
                 checksum: write.afterChecksum,
-                ...(expectedDirtyChecksum === undefined
-                  ? {}
-                  : { expectedDirtyChecksum }),
+                ...(expectedDirtyChecksum === undefined ? {} : { expectedDirtyChecksum }),
                 saveStatus: "Saved"
               }),
             failedHooks
@@ -557,6 +566,20 @@ function validateApprovalBinding(
     return err(versionGroupError("VERSION_GROUP_APPROVAL_MISMATCH"));
   }
   return ok(undefined);
+}
+
+function isDestructiveOperation(operation: ChangeSetOperation): boolean {
+  return (
+    operation.kind === "move_file" ||
+    operation.kind === "delete_file" ||
+    operation.kind === "create_directory"
+  );
+}
+
+function operationPaths(operation: ChangeSetOperation): readonly string[] {
+  return operation.kind === "move_file"
+    ? [operation.sourcePath, operation.targetPath]
+    : [operation.relativePath];
 }
 
 function versionGroupError(code: string): UnifiedError {

@@ -20,9 +20,9 @@ function makeUnavailableError(code = "PLUGIN_SANDBOX_UNAVAILABLE") {
 }
 
 function makeLauncher(
-  factory: (input: { readonly signal: AbortSignal }) => Promise<
-    ReturnType<PluginSandboxHostLauncher["launchPluginTool"]>
-  >
+  factory: (input: {
+    readonly signal: AbortSignal;
+  }) => Promise<ReturnType<PluginSandboxHostLauncher["launchPluginTool"]>>
 ): PluginSandboxHostLauncher {
   return {
     launchPluginTool: (input) => factory({ signal: input.signal })

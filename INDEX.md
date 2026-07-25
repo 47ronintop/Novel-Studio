@@ -87,7 +87,8 @@ Version: 1.65 | Last Updated: 2026-07-24
 | `docs/performance/m9-alpha-baseline.md`                               | 1.0        | Accepted for M9      | 大型项目 fixture 与 alpha 性能基线                         |
 | `docs/packaging/m10-beta-packaging.md`                                | 1.2        | Accepted for M10-M13 | 打包配置、artifact 稳定化、真实 e2e 与 CI gate             |
 | `docs/packaging/m97-public-install-release-gate.md`                   | 1.0        | Complete             | 公开 Windows 安装门禁、签名策略和发布检查要求              |
-| `docs/releases/m98-v1-ship-readiness.md`                              | 1.0        | Complete             | M98 v1 ship readiness、已知限制、v2/backlog 和阅读朗读裁决 |
+| `docs/releases/m98-v1-ship-readiness.md`                              | 1.1        | Conditional Hold     | M98 v1 ship readiness、Stage 5 真实状态和已知限制          |
+| `docs/releases/stage5-agent-tool-evidence.json`                       | 1.0        | Active               | Stage 5 唯一机器可读状态源与发布证据                       |
 | `docs/releases/v0.1.0-beta-readiness.md`                              | 1.0        | Review Complete      | v0.1.0 beta 发布验收记录、产物、验证证据和剩余风险         |
 | `adr/ADR-0001-engine-runtime-language.md`                             | 1.0        | Accepted             | Core Engine 运行时语言决策                                 |
 | `CHANGELOG.md`                                                        | 0.1.0-docs | Active               | 变更记录                                                   |
@@ -159,7 +160,7 @@ Version: 1.65 | Last Updated: 2026-07-24
 - 当前已完成 M96 Story Bible Consistency Minimum：Story Bible 编辑器显示显式冲突标记驱动的最小一致性提示，并提供条目跳转。
 - 当前已完成 M97 Public Install Release Gate：release check 覆盖公开安装门禁文档、核心 E2E、artifact secret scan、release channel、release notes 和 installer config。
 - 当前已完成 M98 V1 Ship Audit：`docs/releases/m98-v1-ship-readiness.md` 记录 v1 ship decision、核心闭环证据、已知限制、v2/backlog 延期清单和阅读朗读 v1.1 裁决；未授权 M99/M100。
-- 当前已完成 Stage 5 Agent 工具补全（批次1-5）：静态工具从9扩展到22、Change Set v1.1 操作联合体、SSRF 安全网络读取、远程 MCP（`outcome_unknown` 一等终态）、Windows AppContainer 沙箱资格门（fail-closed，等待真实 host 打包）、`run_project_task`/`git_status`/`git_diff`、插件工具贡献类型（E.1）和本地 stdio MCP（E.2）；动态外部工具调度已接线（`plugin:` / `mcp:` 前缀）。
+- Stage 5 批次1-5已实现合同与条件运行时：静态工具目录扩展到22、Change Set v1.1、受控搜索/网络、远程 MCP 和统一审批已接线；整体发布状态仍为 `Blocked`，文件生命周期、任务/Git、插件和本地 MCP 在缺合格原生后端或产物时保持 fail-closed，详见机器证据清单。
 - 当前 `Complete` 只表示里程碑切片完成；产品完整度以 M35 的 `Product Ready` 口径为准。
 - 当前 M92-M98 已按用户确认的 v1 ship 范围完成：公开安装、常见 provider 支持、textarea 暂可接受、Story Bible 最小冲突提示和 M98 ship audit；阅读预览/角色朗读已裁决为 v1.1 backlog，不抢占 v1；M94/M95、M96/M97 与 M98 后 Scope Review 已写入 `ROADMAP.md`；`docs/superpowers/plans/2026-07-06-product-ready-remaining-work.md` 仅作为候选缺口清单，不得直接执行。
 - 未经用户确认不得 push。

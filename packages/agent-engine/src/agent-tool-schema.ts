@@ -63,7 +63,10 @@ function isDangerousRegex(pattern: string): SchemaValidationResult {
       if (pattern[j] === "(") depth++;
       else if (pattern[j] === ")") {
         depth--;
-        if (depth === 0) { closeIdx = j; break; }
+        if (depth === 0) {
+          closeIdx = j;
+          break;
+        }
       } else if ((pattern[j] === "+" || pattern[j] === "*") && depth === 1) {
         innerHasQuantifier = true;
       }
@@ -111,8 +114,7 @@ function isDangerousRegex(pattern: string): SchemaValidationResult {
 }
 
 export type SchemaValidationResult =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly reason: string };
+  { readonly ok: true } | { readonly ok: false; readonly reason: string };
 
 /**
  * Validate a JSON Schema object against the strict subset allowed for Agent tools.
@@ -121,7 +123,10 @@ export type SchemaValidationResult =
 export function validateStrictToolSchema(schema: unknown): SchemaValidationResult {
   const bytes = JSON.stringify(schema).length;
   if (bytes > TOOL_SCHEMA_MAX_BYTES) {
-    return { ok: false, reason: `Schema exceeds ${TOOL_SCHEMA_MAX_BYTES} byte limit (${bytes} bytes).` };
+    return {
+      ok: false,
+      reason: `Schema exceeds ${TOOL_SCHEMA_MAX_BYTES} byte limit (${bytes} bytes).`
+    };
   }
   return validateSchemaNode(schema, 0, new Set());
 }
@@ -230,7 +235,11 @@ function hasDisallowedControlChars(text: string): boolean {
 }
 
 /** Validate tool description/name text: enforces length and rejects disallowed control chars. */
-export function validateToolText(text: string, maxBytes: number, field: string): SchemaValidationResult {
+export function validateToolText(
+  text: string,
+  maxBytes: number,
+  field: string
+): SchemaValidationResult {
   if (hasDisallowedControlChars(text)) {
     return { ok: false, reason: `${field} contains disallowed control characters.` };
   }

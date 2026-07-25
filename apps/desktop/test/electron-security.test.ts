@@ -93,6 +93,7 @@ describe("Electron security baseline", () => {
       "application:agent-run:decide-plan-revision",
       "application:agent-run:refresh-context",
       "application:agent-run:decide-change-set",
+      "application:agent-run:decide-tool-approval",
       "application:agent-run:undo",
       "application:agent-run:read",
       "application:agent-run:list",
@@ -145,6 +146,7 @@ describe("Electron security baseline", () => {
     expect(isApplicationIpcChannel("application:project:preview-recovery-draft")).toBe(true);
     expect(isApplicationIpcChannel("application:chapter:save")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-run:decide-change-set")).toBe(true);
+    expect(isApplicationIpcChannel("application:agent-run:decide-tool-approval")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-run:read-permission-summary")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-run:decide-plan-revision")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-run:undo")).toBe(true);
@@ -205,6 +207,14 @@ describe("Electron security baseline", () => {
     await api.ai.applyChapterSuggestion("sug_01");
     await api.ai.listWorkflowRuns();
     await api.ai.readWorkflowRun("run_01");
+    await api.agentRuns.decideToolApproval({
+      projectId: "project_security",
+      runId: "run_security",
+      commandId: "reject_tool_security",
+      expectedRunRevision: 1,
+      bindingId: "binding_security",
+      decision: "reject"
+    });
     await api.chapter.edit("updated chapter body");
     await api.chapter.save();
     await api.chapter.listVersions();
@@ -297,6 +307,7 @@ describe("Electron security baseline", () => {
       "application:ai:apply-chapter-suggestion",
       "application:ai:list-workflow-runs",
       "application:ai:read-workflow-run",
+      "application:agent-run:decide-tool-approval",
       "application:chapter:edit",
       "application:chapter:save",
       "application:chapter:list-versions",

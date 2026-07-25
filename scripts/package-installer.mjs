@@ -20,6 +20,7 @@ await run(
   }
 );
 await run("node", ["scripts/artifact-secret-scan.mjs", unpackedDirectory]);
+await run("node", ["scripts/release-check.mjs", "--strict", "--package-dir", unpackedDirectory]);
 
 const installerPath = await findInstaller(outputDirectory);
 await writeFile(join(root, "release", "latest-package-dir.txt"), `${unpackedDirectory}\n`, "utf8");

@@ -150,7 +150,9 @@ describe("McpSettingsFileRepository", () => {
     const repository = new McpSettingsFileRepository({ userDataRoot: root });
     const filePath = join(root, "agent-mcp", "local-servers.json");
 
-    await import("node:fs/promises").then((fs) => fs.mkdir(join(root, "agent-mcp"), { recursive: true }));
+    await import("node:fs/promises").then((fs) =>
+      fs.mkdir(join(root, "agent-mcp"), { recursive: true })
+    );
     await writeFile(filePath, "{ invalid json", "utf8");
 
     const result = await repository.readLocalServers();

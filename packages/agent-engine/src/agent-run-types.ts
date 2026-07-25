@@ -1,5 +1,5 @@
 import type { JsonObject, UnifiedError } from "@novel-studio/shared";
-import type { ChangeSetFileSelection } from "./change-set.js";
+import type { ChangeSetFileSelection, ChangeSetOperationSelection } from "./change-set.js";
 import type { AgentContextSourceInput } from "./context-snapshot.js";
 
 export type AgentOperationMode = "planning" | "execution";
@@ -32,7 +32,8 @@ export type AgentRunStatusV11 = AgentRunStatus | "context_compacting" | "awaitin
  * Task 0.4 (v1.2) — widens the run status with tool-approval wait.
  * Used when an execute/external_action/destructive tool call needs explicit human confirmation.
  */
-export type AgentRunStatusV12 = AgentRunStatusV11 | "awaiting_tool_approval";
+export type AgentRunStatusV12 =
+  AgentRunStatusV11 | "awaiting_tool_approval" | "awaiting_external_outcome_resolution";
 
 export type AgentRunRecoveryState =
   "none" | "retryable" | "awaiting_context_refresh" | "recovery_review" | "terminal";
@@ -104,7 +105,8 @@ export interface AgentRunSnapshotV10 {
  */
 export interface AgentRunSnapshotV11 extends Omit<AgentRunSnapshotV10, "schemaVersion" | "status"> {
   readonly schemaVersion: "1.1";
-  readonly status: AgentRunStatusV11;
+  /** v1.2 added pause states while keeping the v1.1 snapshot envelope. */
+  readonly status: AgentRunStatusV12;
   readonly modelProfileId: string;
   readonly reasoningEffort?: AgentReasoningEffort;
   readonly permissionSummaryId: string | null;
@@ -116,6 +118,12 @@ export interface AgentRunSnapshotV11 extends Omit<AgentRunSnapshotV10, "schemaVe
   readonly activeErrorId: string | null;
   readonly recoveryState: AgentRunRecoveryState;
   readonly usageSummary: AgentRunUsageSummary;
+  /**
+   * Durable resumption record for an effectful tool that is waiting for a user decision. The
+   * original arguments are retained only so an approved call can be verified and executed without
+   * trusting a fresh renderer/model payload after restart.
+   */
+  readonly pendingToolApproval?: PendingToolApproval | null;
 }
 
 /**
@@ -234,6 +242,10 @@ export type ToolApprovalBinding =
       readonly parametersDigest: string;
       readonly catalogRevision: string;
       readonly attestationRef: string;
+      /** Immutable task execution snapshot prepared before approval. */
+      readonly executionSnapshotId: string;
+      /** Effective capability revision at the time the request was shown. */
+      readonly effectiveCapabilityRevision: number;
       readonly expiresAt: string;
     }
   | {
@@ -245,6 +257,7 @@ export type ToolApprovalBinding =
       readonly destination: string;
       readonly requestDigest: string;
       readonly egressClass: string;
+      readonly effectiveCapabilityRevision: number;
       readonly expiresAt: string;
     }
   | {
@@ -256,9 +269,19 @@ export type ToolApprovalBinding =
       readonly sourceId: string;
       readonly descriptorDigest: string;
       readonly argumentDigest: string;
-      readonly idempotencyKey?: string;
+      readonly idempotencyKey: string;
+      readonly effectiveCapabilityRevision: number;
       readonly expiresAt: string;
     };
+
+/** A pending effectful tool call, persisted with the run snapshot until resolved. */
+export interface PendingToolApproval {
+  readonly binding: ToolApprovalBinding;
+  readonly canonicalToolId: string;
+  readonly providerToolName: string;
+  readonly argumentsText: string;
+  readonly requestedAt: string;
+}
 
 export interface AgentRunSnapshotPatch {
   readonly pendingUserInputId?: string | null;
@@ -279,6 +302,7 @@ export interface AgentRunSnapshotPatch {
   readonly activeErrorId?: string | null;
   readonly recoveryState?: AgentRunRecoveryState;
   readonly usageSummary?: AgentRunUsageSummary;
+  readonly pendingToolApproval?: PendingToolApproval | null;
 }
 
 export interface RecordAgentRunEventInput {
@@ -363,6 +387,16 @@ export interface ResumeAgentRunCommand {
   readonly expectedRunRevision: number;
 }
 
+/** A durable, idempotent decision for exactly one displayed effectful tool binding. */
+export interface DecideToolApprovalCommand {
+  readonly runId: string;
+  readonly projectId: string;
+  readonly commandId: string;
+  readonly expectedRunRevision: number;
+  readonly bindingId: string;
+  readonly decision: "approve" | "reject";
+}
+
 export interface RetryAgentRunStepCommand {
   readonly runId: string;
   readonly projectId: string;
@@ -419,6 +453,7 @@ export type DecideChangeSetCommand = DecideChangeSetCommandBase &
     | {
         readonly decision: "update_selection";
         readonly files: readonly ChangeSetFileSelection[];
+        readonly operations?: readonly ChangeSetOperationSelection[];
       }
     | {
         readonly decision: "apply_selected" | "reject_all";
@@ -495,7 +530,8 @@ export function normalizeAgentRunSnapshot(value: JsonObject): AgentRunSnapshotV1
     planExecutionRevision: null,
     activeErrorId: null,
     recoveryState: "none",
-    usageSummary: EMPTY_AGENT_RUN_USAGE_SUMMARY
+    usageSummary: EMPTY_AGENT_RUN_USAGE_SUMMARY,
+    pendingToolApproval: null
   } as unknown as AgentRunSnapshotV11;
 }
 

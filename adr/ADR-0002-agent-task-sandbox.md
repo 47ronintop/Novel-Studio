@@ -24,6 +24,7 @@ A compromised project file, adversarially-crafted model output, or untrusted plu
 - Open network connections to exfiltrate data
 
 **Mitigations:**
+
 - Task input is only `taskId` + structured parameters — no raw command strings
 - launcher/argv come exclusively from the app-local authorized task catalog (never from the model)
 - AppContainer/LowBox file isolation: task can only access declared projection paths

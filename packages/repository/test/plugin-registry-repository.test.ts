@@ -142,9 +142,7 @@ describe("plugin registry repository", () => {
           version: "1.0.0",
           entry: { kind: "none", command: "plugin.js" },
           compatibleAppVersion: { min: "0.1.0" },
-          capabilities: [
-            { type: "tool", id: "tool-plugin.summarise", title: "Summarise" }
-          ],
+          capabilities: [{ type: "tool", id: "tool-plugin.summarise", title: "Summarise" }],
           permissions: [{ permission: "tool:invoke", scopes: ["project"] }],
           contributes: {
             commands: [],

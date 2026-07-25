@@ -47,9 +47,7 @@ export const DEFAULT_AGENT_FEATURE_FLAGS: AgentFeatureFlags = Object.freeze<Agen
   revision: "v1.0-default"
 });
 
-export function createAgentFeatureFlags(
-  overrides?: Partial<AgentFeatureFlags>
-): AgentFeatureFlags {
+export function createAgentFeatureFlags(overrides?: Partial<AgentFeatureFlags>): AgentFeatureFlags {
   if (overrides === undefined) return DEFAULT_AGENT_FEATURE_FLAGS;
   const merged = { ...DEFAULT_AGENT_FEATURE_FLAGS, ...overrides };
   // Enforce dependency constraints: C product requires C gate; E local/plugin require C gate;
@@ -59,12 +57,9 @@ export function createAgentFeatureFlags(
     phaseC_controlledExecutionEnabled:
       merged.phaseC_controlledExecutionEnabled && merged.phaseC_sandboxQualified,
     phaseC_gitReadEnabled: merged.phaseC_gitReadEnabled && merged.phaseC_sandboxQualified,
-    phaseE_pluginToolsEnabled:
-      merged.phaseE_pluginToolsEnabled && merged.phaseC_sandboxQualified,
-    phaseE_localMcpEnabled:
-      merged.phaseE_localMcpEnabled && merged.phaseC_sandboxQualified,
-    phaseE_remoteMcpEnabled:
-      merged.phaseE_remoteMcpEnabled && merged.phaseD_networkReadEnabled
+    phaseE_pluginToolsEnabled: merged.phaseE_pluginToolsEnabled && merged.phaseC_sandboxQualified,
+    phaseE_localMcpEnabled: merged.phaseE_localMcpEnabled && merged.phaseC_sandboxQualified,
+    phaseE_remoteMcpEnabled: merged.phaseE_remoteMcpEnabled && merged.phaseD_networkReadEnabled
   };
   return Object.freeze(flags);
 }

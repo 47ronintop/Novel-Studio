@@ -41,10 +41,62 @@ describe("AgentFileOperationSession", () => {
 
   test("proposeFileCreate rejects invalid paths", () => {
     const session = createAgentFileOperationSession();
-    expect(session.proposeFileCreate({ toolCallId: "c1", relativePath: "../outside.md", content: "" }).ok).toBe(false);
-    expect(session.proposeFileCreate({ toolCallId: "c2", relativePath: "", content: "" }).ok).toBe(false);
-    expect(session.proposeFileCreate({ toolCallId: "c3", relativePath: "src\\file.ts", content: "" }).ok).toBe(false);
+    expect(
+      session.proposeFileCreate({ toolCallId: "c1", relativePath: "../outside.md", content: "" }).ok
+    ).toBe(false);
+    expect(session.proposeFileCreate({ toolCallId: "c2", relativePath: "", content: "" }).ok).toBe(
+      false
+    );
+    expect(
+      session.proposeFileCreate({ toolCallId: "c3", relativePath: "src\\file.ts", content: "" }).ok
+    ).toBe(false);
   });
+
+  test.each([
+    "nested/../outside.md",
+    "/tmp/outside.md",
+    "C:/Windows/win.ini",
+    "D:/other-volume/outside.md",
+    "C:drive-relative.md",
+    "\\\\server\\share\\outside.md",
+    "\\\\?\\C:\\Windows\\win.ini",
+    "report.md:secret",
+    "CON",
+    "nested/PRN.txt",
+    "trailing.",
+    "trailing ",
+    "nested//file.md"
+  ])(
+    "rejects non-canonical project-relative path %s for every lifecycle proposal",
+    (relativePath) => {
+      const session = createAgentFileOperationSession();
+      const create = session.proposeFileCreate({
+        toolCallId: `create-${relativePath}`,
+        relativePath,
+        content: ""
+      });
+      const move = session.proposeFileMove({
+        toolCallId: `move-${relativePath}`,
+        sourcePath: relativePath,
+        targetPath: "valid-target.md",
+        sourceChecksum: validChecksum
+      });
+      const remove = session.proposeFileDelete({
+        toolCallId: `delete-${relativePath}`,
+        relativePath,
+        baseChecksum: validChecksum
+      });
+      const mkdir = session.proposeDirectoryCreate({
+        toolCallId: `mkdir-${relativePath}`,
+        relativePath
+      });
+
+      for (const result of [create, move, remove, mkdir]) {
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.error.code).toBe("FILE_OP_PATH_INVALID");
+      }
+    }
+  );
 
   test("proposeFileMove returns a move_file operation", () => {
     const session = createAgentFileOperationSession();

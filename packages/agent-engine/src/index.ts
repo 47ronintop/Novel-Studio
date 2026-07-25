@@ -1,6 +1,11 @@
 export { runAgent } from "./agent-engine.js";
 export { createAgentRunCoordinator } from "./agent-run-coordinator.js";
-export { listAgentTools, validateAgentToolArguments } from "./tool-registry.js";
+export {
+  computeAgentToolDescriptorDigest,
+  listAgentTools,
+  validateAgentToolArguments,
+  validateExternalToolDescriptors
+} from "./tool-registry.js";
 export type {
   AgentToolArgumentsValidation,
   AgentToolDataEgress,
@@ -9,6 +14,7 @@ export type {
   AgentToolKind,
   AgentToolName,
   AgentToolRetrySemantics,
+  ExternalToolDescriptorValidation,
   CoreAgentToolName,
   ControlledExecutionAgentToolName,
   FileLifecycleAgentToolName,
@@ -19,18 +25,17 @@ export type {
   StaticAgentToolName
 } from "./tool-registry.js";
 export {
-  createDefaultCapabilitySnapshot
+  createDefaultCapabilitySnapshot,
+  freezeAgentToolCapabilitySnapshot
 } from "./agent-tool-capabilities.js";
-export type {
-  AgentToolCapabilitySnapshot,
-  AgentWorkspaceKind
-} from "./agent-tool-capabilities.js";
+export type { AgentToolCapabilitySnapshot, AgentWorkspaceKind } from "./agent-tool-capabilities.js";
 export {
   validateStrictToolSchema,
   validateToolText,
   computeToolDirectoryBytes,
   TOOL_SCHEMA_MAX_BYTES,
   TOOL_DESCRIPTION_MAX_BYTES,
+  TOOL_DISPLAY_NAME_MAX_BYTES,
   TOOL_DIRECTORY_MAX_TOTAL_BYTES
 } from "./agent-tool-schema.js";
 export type { SchemaValidationResult } from "./agent-tool-schema.js";
@@ -38,6 +43,7 @@ export {
   createEffectiveCapabilityState,
   revokeCapability,
   deactivateCapabilityState,
+  effectiveCapabilityRevision,
   isCapabilityEffective
 } from "./effective-capability-state.js";
 export type {
@@ -51,14 +57,19 @@ export {
   AGENT_FORBIDDEN_CAPABILITIES,
   findPermissionSummaryDrift,
   generatePermissionSummary,
+  hasValidPermissionSummaryChecksums,
   isPermissionSummaryV11,
-  normalizePermissionSummaryV10
+  normalizePermissionSummaryV10,
+  resolvePermissionSummaryCapabilities,
+  computeDescriptorRevision,
+  computeProviderMappingRevision
 } from "./permission-summary.js";
 export type {
   AgentToolLister,
   GeneratePermissionSummaryInput,
   PermissionSummary,
   PermissionSummaryFieldDrift,
+  ResolvedPermissionSummaryCapabilities,
   PermissionSummaryV10,
   PermissionSummaryV11
 } from "./permission-summary.js";
@@ -218,7 +229,8 @@ export type {
   ChangeSetModifyOperation,
   ChangeSetMoveFileOperation,
   ChangeSetOperation,
-  ChangeSetOperationKind
+  ChangeSetOperationKind,
+  ChangeSetOperationSelection
 } from "./change-set.js";
 export { decideChangeSetApproval } from "./approval-gate.js";
 export type {
@@ -233,6 +245,8 @@ export type {
   VersionGroupAssetType,
   VersionGroupBaseline,
   VersionGroupFailureKind,
+  VersionGroupOperation,
+  VersionGroupOperationKind,
   VersionGroupPostCommitHook,
   VersionGroupSynchronization,
   VersionGroupTransactionStatus,
@@ -283,6 +297,7 @@ export {
 export type {
   AgentContextMode,
   DecideChangeSetCommand,
+  DecideToolApprovalCommand,
   DecideAgentPlanCommand,
   DecidePlanRevisionCommand,
   AgentOperationMode,
@@ -309,6 +324,7 @@ export type {
   AgentRunUsageSummary,
   AgentWritePolicy,
   ToolApprovalBinding,
+  PendingToolApproval,
   RecordAgentRunEventInput,
   RecordTerminalAgentRunAuditEventInput,
   RefreshAgentContextCommand,
@@ -330,9 +346,7 @@ export type {
   AgentSchemaValidator,
   AgentStatus
 } from "./types.js";
-export {
-  createTaskExecutionSnapshot
-} from "./task-execution-snapshot.js";
+export { createTaskExecutionSnapshot } from "./task-execution-snapshot.js";
 export type {
   CreateTaskExecutionSnapshotInput,
   ProjectionFile,

@@ -4,7 +4,14 @@ import { describe, expect, test, vi } from "vitest";
 
 import {
   appendChangeSetProposal,
+  appendChangeSetOperation,
+  createDirectoryOperation,
   createChangeSetRevision,
+  createFileOperation,
+  createOperationsChangeSetRevision,
+  deleteFileOperation,
+  moveFileOperation,
+  preflightChangeSetOperations,
   selectChangeSetRevision,
   type ChangeSetProposal
 } from "../src/index.js";
@@ -240,9 +247,9 @@ describe("immutable Change Set revisions", () => {
       ...baseBinding,
       proposal: characterProposal(
         "notes/settings.toml",
-        "title = \"old\"\n",
+        'title = "old"\n',
         0,
-        "title = \"old\"\n".length,
+        'title = "old"\n'.length,
         "title = [\n"
       )
     });
@@ -272,10 +279,10 @@ describe("immutable Change Set revisions", () => {
       ...baseBinding,
       proposal: characterProposal(
         "notes/settings.toml",
-        "title = \"old\"\n",
+        'title = "old"\n',
         0,
-        "title = \"old\"\n".length,
-        "title = \"new\"\n"
+        'title = "old"\n'.length,
+        'title = "new"\n'
       )
     });
     expect(toml.files[0]?.validation).toMatchObject({
@@ -296,6 +303,171 @@ describe("immutable Change Set revisions", () => {
       schema: { status: "not_applicable" },
       asset: { status: "not_applicable" }
     });
+  });
+
+  test("records lifecycle operation metadata in a v1.1 Change Set and binds it into approval", async () => {
+    const created = createOperationsChangeSetRevision({
+      ...baseBinding,
+      writePolicy: "user_preapproved_run",
+      operation: createFileOperation({
+        operationId: "create-outline",
+        relativePath: "notes/outline.md",
+        content: "New outline",
+        toolCallIdempotencyKey: "tool-call-01"
+      })
+    });
+
+    expect(created).toMatchObject({
+      schemaVersion: "1.1",
+      operationsSchemaVersion: "1.1",
+      writePolicy: "user_preapproved_run",
+      files: [],
+      operations: [
+        {
+          operationId: "create-outline",
+          kind: "create_file",
+          relativePath: "notes/outline.md",
+          content: "New outline",
+          toolCallIdempotencyKey: "tool-call-01",
+          selected: true
+        }
+      ]
+    });
+    expect(Object.isFrozen(created.operations?.[0])).toBe(true);
+
+    const changedContent = createOperationsChangeSetRevision({
+      ...baseBinding,
+      operation: createFileOperation({
+        operationId: "create-outline",
+        relativePath: "notes/outline.md",
+        content: "Changed outline",
+        toolCallIdempotencyKey: "tool-call-01"
+      })
+    });
+    expect(changedContent.approvalToken).not.toBe(created.approvalToken);
+
+    const withTextProposal = await appendChangeSetProposal(created, {
+      createdAt: "2026-07-13T01:01:00.000Z",
+      proposal: characterProposal("notes/other.md", "old", 0, 3, "new")
+    });
+    expect(withTextProposal).toMatchObject({
+      schemaVersion: "1.1",
+      operations: [{ operationId: "create-outline" }],
+      files: [{ relativePath: "notes/other.md", candidateContent: "new" }]
+    });
+  });
+
+  test("forces destructive lifecycle operations to require human confirmation", () => {
+    const moved = createOperationsChangeSetRevision({
+      ...baseBinding,
+      writePolicy: "user_preapproved_run",
+      operation: moveFileOperation({
+        operationId: "move-outline",
+        sourcePath: "notes/outline.md",
+        targetPath: "notes/outline-renamed.md",
+        sourceChecksum: sha256("outline"),
+        toolCallIdempotencyKey: "tool-call-02"
+      })
+    });
+    expect(moved.writePolicy).toBe("write_before_confirmation");
+
+    const created = createOperationsChangeSetRevision({
+      ...baseBinding,
+      writePolicy: "user_preapproved_run",
+      operation: createFileOperation({
+        operationId: "create-file",
+        relativePath: "notes/new.md",
+        content: "new",
+        toolCallIdempotencyKey: "tool-call-03"
+      })
+    });
+    const withDirectory = appendChangeSetOperation(created, {
+      createdAt: "2026-07-13T01:01:00.000Z",
+      operation: createDirectoryOperation({
+        operationId: "mkdir-assets",
+        relativePath: "assets",
+        toolCallIdempotencyKey: "tool-call-04"
+      })
+    });
+    expect(withDirectory.writePolicy).toBe("write_before_confirmation");
+  });
+
+  test("requires selected lifecycle operations to include their dependency closure", async () => {
+    const directory = createDirectoryOperation({
+      operationId: "mkdir-notes",
+      relativePath: "notes",
+      toolCallIdempotencyKey: "tool-call-05"
+    });
+    const changeSet = appendChangeSetOperation(
+      createOperationsChangeSetRevision({ ...baseBinding, operation: directory }),
+      {
+        createdAt: "2026-07-13T01:01:00.000Z",
+        operation: createFileOperation({
+          operationId: "create-note",
+          relativePath: "notes/new.md",
+          content: "new",
+          toolCallIdempotencyKey: "tool-call-06",
+          dependsOn: ["mkdir-notes"]
+        })
+      }
+    );
+
+    await expect(
+      selectChangeSetRevision(changeSet, {
+        createdAt: "2026-07-13T01:02:00.000Z",
+        files: [],
+        operations: [
+          { operationId: "mkdir-notes", selected: false },
+          { operationId: "create-note", selected: true }
+        ]
+      })
+    ).rejects.toMatchObject({ code: "CHANGE_SET_SELECTION_DEPENDENCY_MISSING" });
+
+    const selected = await selectChangeSetRevision(changeSet, {
+      createdAt: "2026-07-13T01:02:00.000Z",
+      files: [],
+      operations: [
+        { operationId: "mkdir-notes", selected: true },
+        { operationId: "create-note", selected: true }
+      ]
+    });
+    expect(selected.operations?.every((operation) => operation.selected)).toBe(true);
+  });
+
+  test("rejects complete move source and target conflicts before a Change Set is created", () => {
+    const firstMove = moveFileOperation({
+      operationId: "move-a-b",
+      sourcePath: "notes/a.md",
+      targetPath: "notes/b.md",
+      sourceChecksum: sha256("a"),
+      toolCallIdempotencyKey: "tool-call-07"
+    });
+    const swapMove = moveFileOperation({
+      operationId: "move-b-a",
+      sourcePath: "notes/b.md",
+      targetPath: "notes/a.md",
+      sourceChecksum: sha256("b"),
+      toolCallIdempotencyKey: "tool-call-08",
+      dependsOn: ["move-a-b"]
+    });
+    expect(preflightChangeSetOperations([firstMove, swapMove])).toMatchObject({ ok: false });
+
+    const sameTarget = moveFileOperation({
+      operationId: "move-c-b",
+      sourcePath: "notes/c.md",
+      targetPath: "notes/b.md",
+      sourceChecksum: sha256("c"),
+      toolCallIdempotencyKey: "tool-call-09"
+    });
+    expect(preflightChangeSetOperations([firstMove, sameTarget])).toMatchObject({ ok: false });
+
+    const deletion = deleteFileOperation({
+      operationId: "delete-a",
+      relativePath: "notes/a.md",
+      baseChecksum: sha256("a"),
+      toolCallIdempotencyKey: "tool-call-10"
+    });
+    expect(preflightChangeSetOperations([firstMove, deletion])).toMatchObject({ ok: false });
   });
 });
 

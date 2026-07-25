@@ -28,6 +28,7 @@ import type {
 import type {
   AgentRunEvent,
   DecideChangeSetCommand,
+  DecideToolApprovalCommand,
   DecideAgentPlanCommand,
   DecidePlanRevisionCommand,
   RefreshAgentContextCommand,
@@ -61,7 +62,10 @@ import type {
   StoryBibleContextCandidateOptions,
   UserPreferencesSaveInput
 } from "@novel-studio/application";
-import type { AgentNetworkSettingsData, AgentNetworkSettingsSession } from "@novel-studio/application";
+import type {
+  AgentNetworkSettingsData,
+  AgentNetworkSettingsSession
+} from "@novel-studio/application";
 import type { McpServerConfig, McpSettingsSession } from "@novel-studio/application";
 import { DEFAULT_NETWORK_SETTINGS } from "@novel-studio/application";
 import { DEFAULT_MCP_SETTINGS } from "@novel-studio/application";
@@ -97,9 +101,23 @@ export interface ApplicationIpcHandlerOptions {
   readonly agentNetworkSettingsSession?: AgentNetworkSettingsSession;
   readonly agentMcpSettingsSession?: McpSettingsSession;
   readonly agentTaskCatalogPort?: {
-    listAuthorizedTasks(projectId: string): Promise<import("@novel-studio/shared").Result<readonly import("@novel-studio/repository").AuthorizedTask[], import("@novel-studio/shared").UnifiedError>>;
-    revokeTask(projectId: string, taskId: string): Promise<import("@novel-studio/shared").Result<void, import("@novel-studio/shared").UnifiedError>>;
+    listAuthorizedTasks(
+      projectId: string
+    ): Promise<
+      import("@novel-studio/shared").Result<
+        readonly import("@novel-studio/repository").AuthorizedTask[],
+        import("@novel-studio/shared").UnifiedError
+      >
+    >;
+    revokeTask(
+      projectId: string,
+      taskId: string
+    ): Promise<
+      import("@novel-studio/shared").Result<void, import("@novel-studio/shared").UnifiedError>
+    >;
   };
+  /** Rebuilds settings-backed capability state after a successful Agent settings mutation. */
+  readonly onAgentSettingsChanged?: () => Promise<Result<void, UnifiedError>>;
 }
 
 export interface AgentWriteSaveCoordinator {
@@ -215,6 +233,32 @@ export function createApplicationIpcHandlers(
   options.agentRuntimeManager?.subscribeAgentRunEvents(publishAgentRunEvent);
   const currentAgentRunSession = (): AgentRunSession | undefined =>
     options.agentRuntimeManager?.current()?.agentRunSession ?? options.agentRunSession;
+  const notifyAgentSettingsChanged = async <T>(
+    request: Promise<Result<T, UnifiedError>>
+  ): Promise<Result<T, UnifiedError>> => {
+    const result = await request;
+    if (result.ok) {
+      try {
+        const refreshed = await options.onAgentSettingsChanged?.();
+        if (refreshed !== undefined && !refreshed.ok) return err(refreshed.error);
+      } catch (error) {
+        return err(
+          createUnifiedError({
+            code: "AGENT_RUNTIME_SETTINGS_REFRESH_FAILED",
+            category: "AgentError",
+            message:
+              error instanceof Error
+                ? error.message
+                : "The Agent runtime could not apply the updated settings.",
+            recoverability: "user-action",
+            suggestedAction: "Retry the settings update after the active Agent run has stopped.",
+            traceId: "ipc-handlers"
+          })
+        );
+      }
+    }
+    return result;
+  };
   const currentAgentConversationSession = (): AgentConversationSession | undefined =>
     options.agentRuntimeManager?.current()?.agentConversationSession;
   const currentAgentRunDraftSession = (): AgentRunDraftSession | undefined =>
@@ -765,6 +809,13 @@ export function createApplicationIpcHandlers(
         ? Promise.resolve(invalidAgentRunCommand())
         : session.decideChangeSet(parsed);
     },
+    "application:agent-run:decide-tool-approval": (command: unknown) => {
+      const parsed = toDecideToolApprovalCommand(command);
+      const session = currentAgentRunSession();
+      return parsed === undefined || session === undefined
+        ? Promise.resolve(invalidAgentRunCommand())
+        : session.decideToolApproval(parsed);
+    },
     "application:agent-run:undo": (command: unknown) => {
       const parsed = toUndoAgentRunCommand(command);
       const session = currentAgentRunSession();
@@ -983,9 +1034,11 @@ export function createApplicationIpcHandlers(
       options.agentNetworkSettingsSession?.getNetworkSettings() ??
       Promise.resolve(ok(DEFAULT_NETWORK_SETTINGS)),
     "application:agent-network:update-settings": (input: unknown) =>
-      options.agentNetworkSettingsSession?.updateNetworkSettings(
-        isRecord(input) ? (input as Partial<AgentNetworkSettingsData>) : {}
-      ) ?? Promise.resolve(ok(DEFAULT_NETWORK_SETTINGS)),
+      notifyAgentSettingsChanged(
+        options.agentNetworkSettingsSession?.updateNetworkSettings(
+          isRecord(input) ? (input as Partial<AgentNetworkSettingsData>) : {}
+        ) ?? Promise.resolve(ok(DEFAULT_NETWORK_SETTINGS))
+      ),
     "application:agent-network:test-connection": (profileId: unknown) =>
       options.agentNetworkSettingsSession?.testConnection(
         typeof profileId === "string" ? profileId : ""
@@ -1003,19 +1056,25 @@ export function createApplicationIpcHandlers(
         )
       ),
     "application:agent-network:revoke": () =>
-      options.agentNetworkSettingsSession?.revokeNetworkAccess() ??
-      Promise.resolve(ok(DEFAULT_NETWORK_SETTINGS)),
+      notifyAgentSettingsChanged(
+        options.agentNetworkSettingsSession?.revokeNetworkAccess() ??
+          Promise.resolve(ok(DEFAULT_NETWORK_SETTINGS))
+      ),
     "application:agent-mcp:list-servers": () =>
       options.agentMcpSettingsSession?.listServers() ?? Promise.resolve(ok([])),
     "application:agent-mcp:add-server": (input: unknown) =>
-      isRecord(input)
-        ? (options.agentMcpSettingsSession?.addServer(input as unknown as McpServerConfig) ??
-          Promise.resolve(ok(DEFAULT_MCP_SETTINGS)))
-        : Promise.resolve(ok(DEFAULT_MCP_SETTINGS)),
+      notifyAgentSettingsChanged(
+        isRecord(input)
+          ? (options.agentMcpSettingsSession?.addServer(input as unknown as McpServerConfig) ??
+              Promise.resolve(ok(DEFAULT_MCP_SETTINGS)))
+          : Promise.resolve(ok(DEFAULT_MCP_SETTINGS))
+      ),
     "application:agent-mcp:remove-server": (serverId: unknown) =>
-      options.agentMcpSettingsSession?.removeServer(
-        typeof serverId === "string" ? serverId : ""
-      ) ?? Promise.resolve(ok(DEFAULT_MCP_SETTINGS)),
+      notifyAgentSettingsChanged(
+        options.agentMcpSettingsSession?.removeServer(
+          typeof serverId === "string" ? serverId : ""
+        ) ?? Promise.resolve(ok(DEFAULT_MCP_SETTINGS))
+      ),
     "application:agent-mcp:test-connection": (serverId: unknown) =>
       options.agentMcpSettingsSession?.testConnection(
         typeof serverId === "string" ? serverId : ""
@@ -1033,17 +1092,25 @@ export function createApplicationIpcHandlers(
         )
       ),
     "application:agent-mcp:revoke-server": (serverId: unknown) =>
-      options.agentMcpSettingsSession?.revokeServer(
-        typeof serverId === "string" ? serverId : ""
-      ) ?? Promise.resolve(ok(DEFAULT_MCP_SETTINGS)),
+      notifyAgentSettingsChanged(
+        options.agentMcpSettingsSession?.revokeServer(
+          typeof serverId === "string" ? serverId : ""
+        ) ?? Promise.resolve(ok(DEFAULT_MCP_SETTINGS))
+      ),
     "application:agent-tasks:list": (projectId: unknown) =>
       options.agentTaskCatalogPort?.listAuthorizedTasks(
         typeof projectId === "string" ? projectId : ""
       ) ?? Promise.resolve(ok([])),
     "application:agent-tasks:revoke": (input: unknown) => {
-      if (isRecord(input) && typeof input["projectId"] === "string" && typeof input["taskId"] === "string") {
-        return options.agentTaskCatalogPort?.revokeTask(input["projectId"], input["taskId"]) ??
-          Promise.resolve(ok(undefined));
+      if (
+        isRecord(input) &&
+        typeof input["projectId"] === "string" &&
+        typeof input["taskId"] === "string"
+      ) {
+        return notifyAgentSettingsChanged(
+          options.agentTaskCatalogPort?.revokeTask(input["projectId"], input["taskId"]) ??
+            Promise.resolve(ok(undefined))
+        );
       }
       return Promise.resolve(ok(undefined));
     }
@@ -1517,7 +1584,8 @@ function toDecideChangeSetCommand(value: unknown): DecideChangeSetCommand | unde
     "revision",
     "checksum",
     "decision",
-    "files"
+    "files",
+    "operations"
   ]);
   if (Object.keys(value).some((key) => !allowedKeys.has(key))) return undefined;
   if (
@@ -1532,9 +1600,18 @@ function toDecideChangeSetCommand(value: unknown): DecideChangeSetCommand | unde
   ) {
     return undefined;
   }
-  if (decision !== "update_selection" && value["files"] !== undefined) return undefined;
+  if (
+    decision !== "update_selection" &&
+    (value["files"] !== undefined || value["operations"] !== undefined)
+  ) {
+    return undefined;
+  }
   const files =
     decision === "update_selection" ? toChangeSetFileSelections(value["files"]) : undefined;
+  const operations =
+    decision === "update_selection"
+      ? toChangeSetOperationSelections(value["operations"])
+      : undefined;
   if (decision === "update_selection" && files === undefined) return undefined;
   const base = {
     runId: value["runId"],
@@ -1546,8 +1623,49 @@ function toDecideChangeSetCommand(value: unknown): DecideChangeSetCommand | unde
     checksum: value["checksum"]
   };
   return decision === "update_selection"
-    ? { ...base, decision, files: files ?? [] }
+    ? { ...base, decision, files: files ?? [], ...(operations === undefined ? {} : { operations }) }
     : { ...base, decision };
+}
+
+function toChangeSetOperationSelections(value: unknown) {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return undefined;
+  const seen = new Set<string>();
+  const selections: Array<{ readonly operationId: string; readonly selected: boolean }> = [];
+  for (const entry of value) {
+    if (
+      !isRecord(entry) ||
+      !hasOnlyKeys(entry, ["operationId", "selected"]) ||
+      !isNonEmptyString(entry["operationId"]) ||
+      typeof entry["selected"] !== "boolean" ||
+      seen.has(entry["operationId"])
+    ) {
+      return undefined;
+    }
+    seen.add(entry["operationId"]);
+    selections.push({ operationId: entry["operationId"], selected: entry["selected"] });
+  }
+  return selections;
+}
+
+function toDecideToolApprovalCommand(value: unknown): DecideToolApprovalCommand | undefined {
+  return isRecord(value) &&
+    hasOnlyKeys(value, [
+      "runId",
+      "projectId",
+      "commandId",
+      "expectedRunRevision",
+      "bindingId",
+      "decision"
+    ]) &&
+    isSafeId(value["runId"]) &&
+    isSafeId(value["projectId"]) &&
+    isSafeId(value["commandId"]) &&
+    isSafeId(value["bindingId"]) &&
+    isNonNegativeInteger(value["expectedRunRevision"]) &&
+    (value["decision"] === "approve" || value["decision"] === "reject")
+    ? (value as unknown as DecideToolApprovalCommand)
+    : undefined;
 }
 
 function toChangeSetFileSelections(value: unknown) {

@@ -1,0 +1,177 @@
+{
+  "schemaVersion": "1.0",
+  "assessedAt": "2026-07-25",
+  "overallStatus": "Blocked",
+  "phases": [
+    {
+      "id": "phase-0",
+      "label": "Phase 0.1-0.4 foundation",
+      "status": "Partial",
+      "releaseEligible": false,
+      "productionRuntimeWired": true,
+      "securityQualified": false,
+      "userControlsComplete": false,
+      "endToEndEvidence": false,
+      "blockedBy": [
+        "Packaged desktop end-to-end and security qualification evidence for capability revocation and Permission Summary persistence is not recorded."
+      ],
+      "evidence": [
+        { "kind": "unit", "path": "packages/agent-engine/test/agent-tool-capabilities.test.ts" },
+        { "kind": "unit", "path": "packages/agent-engine/test/tool-registry.test.ts" },
+        { "kind": "unit", "path": "apps/desktop/test/desktop-agent-run-runtime.test.ts" }
+      ]
+    },
+    {
+      "id": "phase-a",
+      "label": "Phase A project search and references",
+      "status": "Partial",
+      "releaseEligible": false,
+      "productionRuntimeWired": true,
+      "securityQualified": false,
+      "userControlsComplete": false,
+      "endToEndEvidence": false,
+      "blockedBy": [
+        "A mounted user control plus packaged desktop end-to-end and security qualification evidence are not recorded."
+      ],
+      "evidence": [
+        {
+          "kind": "unit",
+          "path": "packages/repository/test/agent-project-search-repository.test.ts"
+        },
+        { "kind": "unit", "path": "apps/desktop/test/desktop-agent-run-runtime.test.ts" }
+      ]
+    },
+    {
+      "id": "phase-b",
+      "label": "Phase B file lifecycle",
+      "status": "Partial",
+      "releaseEligible": false,
+      "productionRuntimeWired": false,
+      "securityQualified": false,
+      "userControlsComplete": false,
+      "endToEndEvidence": false,
+      "blockedBy": [
+        "No qualified native handle/no-follow lifecycle backend is available, so the production desktop runtime keeps file lifecycle tools hidden."
+      ],
+      "evidence": [
+        { "kind": "unit", "path": "packages/agent-engine/test/change-set.test.ts" },
+        { "kind": "unit", "path": "packages/repository/test/agent-write-transaction.test.ts" },
+        { "kind": "unit", "path": "packages/repository/test/no-follow-file-operations.test.ts" }
+      ]
+    },
+    {
+      "id": "phase-d",
+      "label": "Phase D network read",
+      "status": "Partial",
+      "releaseEligible": false,
+      "productionRuntimeWired": true,
+      "securityQualified": false,
+      "userControlsComplete": false,
+      "endToEndEvidence": false,
+      "blockedBy": [
+        "The network settings panel is not mounted in the desktop renderer, and packaged end-to-end and security qualification evidence is not recorded."
+      ],
+      "evidence": [
+        { "kind": "unit", "path": "packages/application/test/agent-network-policy.test.ts" },
+        { "kind": "unit", "path": "apps/desktop/test/agent-network-dialer.test.ts" },
+        { "kind": "unit", "path": "apps/desktop/test/agent-network-runtime.test.ts" }
+      ]
+    },
+    {
+      "id": "phase-e3",
+      "label": "Phase E.3 remote MCP",
+      "status": "Partial",
+      "releaseEligible": false,
+      "productionRuntimeWired": true,
+      "securityQualified": false,
+      "userControlsComplete": false,
+      "endToEndEvidence": false,
+      "blockedBy": [
+        "The MCP source-management UI and packaged desktop end-to-end and security qualification evidence are not delivered."
+      ],
+      "evidence": [{ "kind": "unit", "path": "apps/desktop/test/remote-mcp-runtime.test.ts" }]
+    },
+    {
+      "id": "phase-c0",
+      "label": "Phase C.0 sandbox qualification",
+      "status": "Blocked",
+      "releaseEligible": false,
+      "productionRuntimeWired": false,
+      "securityQualified": false,
+      "userControlsComplete": false,
+      "endToEndEvidence": false,
+      "blockedBy": [
+        "The native host and probe are stubs; no packaged Windows AppContainer qualification evidence exists."
+      ],
+      "evidence": [
+        { "kind": "source", "path": "apps/desktop/native/agent-task-sandbox/host/src/main.rs" },
+        { "kind": "source", "path": "apps/desktop/native/agent-task-sandbox/probe/src/main.rs" }
+      ]
+    },
+    {
+      "id": "phase-c1-c4",
+      "label": "Phase C.1-C.4 tasks and Git",
+      "status": "Blocked",
+      "releaseEligible": false,
+      "productionRuntimeWired": false,
+      "securityQualified": false,
+      "userControlsComplete": false,
+      "endToEndEvidence": false,
+      "blockedBy": [
+        "C.0 is blocked.",
+        "The packaged read-only Git runtime remains unavailable and unqualified."
+      ],
+      "evidence": [
+        { "kind": "unit", "path": "packages/application/test/agent-run-session.test.ts" },
+        { "kind": "unit", "path": "apps/desktop/test/git-read-adapter.test.ts" }
+      ]
+    },
+    {
+      "id": "phase-e1-e2",
+      "label": "Phase E.1 plugin tools and E.2 local stdio MCP",
+      "status": "Blocked",
+      "releaseEligible": false,
+      "productionRuntimeWired": false,
+      "securityQualified": false,
+      "userControlsComplete": false,
+      "endToEndEvidence": false,
+      "blockedBy": ["C.0 is blocked, so plugin and local MCP launchers must remain unavailable."],
+      "evidence": [
+        { "kind": "unit", "path": "packages/application/test/plugin-sandbox-port.test.ts" },
+        { "kind": "unit", "path": "apps/desktop/test/local-mcp-runtime.test.ts" }
+      ]
+    },
+    {
+      "id": "phase-e4",
+      "label": "Phase E.4 tool source management and unified approval",
+      "status": "Partial",
+      "releaseEligible": false,
+      "productionRuntimeWired": false,
+      "securityQualified": false,
+      "userControlsComplete": false,
+      "endToEndEvidence": false,
+      "blockedBy": [
+        "Unified approval IPC and the in-run approval card are delivered, but plugin and MCP source-management UI is not."
+      ],
+      "evidence": [
+        { "kind": "unit", "path": "packages/agent-engine/test/tool-registry.test.ts" },
+        { "kind": "unit", "path": "packages/ui/test/agent-run-panel.test.tsx" },
+        { "kind": "unit", "path": "packages/application/test/agent-run-session.test.ts" }
+      ]
+    },
+    {
+      "id": "phase-f",
+      "label": "Phase F release closure",
+      "status": "Blocked",
+      "releaseEligible": false,
+      "productionRuntimeWired": false,
+      "securityQualified": false,
+      "userControlsComplete": false,
+      "endToEndEvidence": false,
+      "blockedBy": [
+        "No implementation phase has the production and security evidence required for release closure."
+      ],
+      "evidence": [{ "kind": "gate", "path": "scripts/release-check.mjs" }]
+    }
+  ]
+}

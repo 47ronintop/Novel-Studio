@@ -3,7 +3,11 @@
  * Reads/writes agentNetwork settings; testConnection does a minimal controlled fetch.
  */
 import { ok, err, createUnifiedError, type Result, type UnifiedError } from "@novel-studio/shared";
-import type { AgentNetworkPolicy, AgentNetworkProviderProfile } from "./agent-network-policy.js";
+import type {
+  AgentNetworkPolicy,
+  AgentNetworkProviderProfile,
+  ControlledFetch
+} from "./agent-network-policy.js";
 import { createControlledFetch, ControlledFetchError } from "./agent-network-policy.js";
 
 export interface AgentNetworkSettingsData {
@@ -56,8 +60,14 @@ function bumpRevision(): string {
 
 export function createAgentNetworkSettingsSession(input: {
   readonly port: AgentNetworkSettingsPort;
-  /** Injectable for tests — resolves API keys by ref for testConnection. */
-  readonly resolveApiKey?: (apiKeyRef: string) => string | undefined;
+  /**
+   * Main supplies the pinned dialer (and, if needed, an origin-bound provider
+   * credential) for connection tests. Application never handles plaintext keys.
+   */
+  readonly createControlledFetch?: (
+    policy: AgentNetworkPolicy,
+    profile: AgentNetworkProviderProfile
+  ) => ControlledFetch;
   readonly now?: () => string;
 }): AgentNetworkSettingsSession {
   async function readSettings(): Promise<Result<AgentNetworkSettingsData, UnifiedError>> {
@@ -101,19 +111,16 @@ export function createAgentNetworkSettingsSession(input: {
         dataEgressPolicy: settings.value.dataEgressPolicy,
         revision: settings.value.policyRevision
       };
-      const apiKey = input.resolveApiKey?.(profile.apiKeyRef) ?? "";
-      const controlled = createControlledFetch(policy);
-
       const start = Date.now();
       try {
+        const controlled =
+          input.createControlledFetch?.(policy, profile) ?? createControlledFetch(policy);
         await controlled({
-          url: profile.endpoint,
-          headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {}
+          url: profile.endpoint
         });
         return ok({ latencyMs: Date.now() - start });
       } catch (error) {
-        const code =
-          error instanceof ControlledFetchError ? error.code : "NETWORK_TEST_FAILED";
+        const code = error instanceof ControlledFetchError ? error.code : "NETWORK_TEST_FAILED";
         const msg = error instanceof Error ? error.message : "Connection test failed.";
         return err(settingsError(code, msg));
       }

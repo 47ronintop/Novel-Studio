@@ -10,6 +10,14 @@
  */
 import { ok, err, createUnifiedError, type Result, type UnifiedError } from "@novel-studio/shared";
 import type { JsonObject } from "@novel-studio/shared";
+import {
+  TOOL_DESCRIPTION_MAX_BYTES,
+  TOOL_DIRECTORY_MAX_TOTAL_BYTES,
+  TOOL_DISPLAY_NAME_MAX_BYTES,
+  computeToolDirectoryBytes,
+  validateStrictToolSchema,
+  validateToolText
+} from "@novel-studio/agent-engine";
 import type { ExternalToolDispatchPort } from "@novel-studio/application";
 
 // ── Injected process launcher (no node:child_process import here) ──────────
@@ -17,8 +25,11 @@ import type { ExternalToolDispatchPort } from "@novel-studio/application";
 export interface LocalMcpProcessHandle {
   writeLine(line: string): void;
   onLine(handler: (line: string) => void): void;
+  /** Receives decoded stderr chunks from the verified native host. */
+  onStderr(handler: (chunk: string) => void): void;
   onExit(handler: (code: number | null) => void): void;
-  kill(): void;
+  /** Must terminate the entire sandboxed process tree before resolving. */
+  kill(): void | Promise<void>;
 }
 
 export interface LocalMcpHostLauncher {
@@ -45,12 +56,21 @@ interface JsonRpcResponse {
 const LOCAL_MCP_PROTOCOL_VERSION = "2024-11-05";
 const LOCAL_MCP_HANDSHAKE_TIMEOUT_MS = 30_000;
 const LOCAL_MCP_CALL_TIMEOUT_MS = 60_000;
+const LOCAL_MCP_TERMINATION_TIMEOUT_MS = 5_000;
+const LOCAL_MCP_MAX_LINE_BYTES = 512 * 1024;
+const LOCAL_MCP_MAX_OUTPUT_BYTES = 1024 * 1024;
+const LOCAL_MCP_MAX_RESULT_BYTES = 512 * 1024;
 
 type SendOutcome =
   | { readonly kind: "response"; readonly response: JsonRpcResponse }
   | { readonly kind: "exited"; readonly code: number | null }
   | { readonly kind: "timeout" }
-  | { readonly kind: "aborted" };
+  | { readonly kind: "aborted" }
+  | { readonly kind: "malformed" }
+  | { readonly kind: "disposed" };
+
+type NotifyOutcome =
+  Exclude<SendOutcome, { readonly kind: "response" }> | { readonly kind: "sent" };
 
 interface StdioJsonRpcClient {
   send(
@@ -59,7 +79,8 @@ interface StdioJsonRpcClient {
     timeoutMs: number,
     signal: AbortSignal
   ): Promise<SendOutcome>;
-  dispose(): void;
+  notify(method: string, params: JsonObject, signal: AbortSignal): Promise<NotifyOutcome>;
+  dispose(): Promise<void>;
 }
 
 /**
@@ -70,9 +91,94 @@ interface StdioJsonRpcClient {
 function createStdioJsonRpcClient(handle: LocalMcpProcessHandle): StdioJsonRpcClient {
   let nextId = 1;
   let exitedWith: { readonly code: number | null } | undefined;
+  let disposed = false;
+  let quarantined = false;
+  let termination: Promise<boolean> | undefined;
+  let outputBytes = 0;
   const pending = new Map<number, (outcome: SendOutcome) => void>();
 
+  function settleAll(outcome: SendOutcome): void {
+    const resolvers = [...pending.values()];
+    pending.clear();
+    for (const resolver of resolvers) resolver(outcome);
+  }
+
+  function isValidResponse(obj: Record<string, unknown>, id: number): boolean {
+    if (obj["jsonrpc"] !== "2.0" || obj["id"] !== id) return false;
+    const hasResult = Object.hasOwn(obj, "result");
+    const hasError = Object.hasOwn(obj, "error");
+    if (hasResult === hasError) return false;
+    if (!hasError) {
+      try {
+        return (
+          Buffer.byteLength(JSON.stringify(obj["result"]), "utf8") <= LOCAL_MCP_MAX_RESULT_BYTES
+        );
+      } catch {
+        return false;
+      }
+    }
+    const error = obj["error"];
+    return (
+      isRecord(error) && typeof error["code"] === "number" && typeof error["message"] === "string"
+    );
+  }
+
+  function awaitWithDeadline(promise: Promise<void>): Promise<boolean> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), LOCAL_MCP_TERMINATION_TIMEOUT_MS);
+      void promise.then(
+        () => {
+          clearTimeout(timer);
+          resolve(true);
+        },
+        () => {
+          clearTimeout(timer);
+          resolve(false);
+        }
+      );
+    });
+  }
+
+  function terminateTree(): Promise<boolean> {
+    if (termination !== undefined) return termination;
+    let killed: void | Promise<void>;
+    try {
+      killed = handle.kill();
+    } catch {
+      quarantined = true;
+      termination = Promise.resolve(false);
+      return termination;
+    }
+    termination = awaitWithDeadline(Promise.resolve(killed)).then((confirmed) => {
+      if (!confirmed) quarantined = true;
+      return confirmed;
+    });
+    return termination;
+  }
+
+  function quarantine(outcome: SendOutcome): void {
+    quarantined = true;
+    disposed = true;
+    settleAll(outcome);
+    void terminateTree();
+  }
+
+  function terminateMalformed(): void {
+    quarantine({ kind: "malformed" });
+  }
+
+  function recordOutput(chunk: string): boolean {
+    const bytes = Buffer.byteLength(chunk, "utf8");
+    if (bytes > LOCAL_MCP_MAX_LINE_BYTES || outputBytes + bytes > LOCAL_MCP_MAX_OUTPUT_BYTES) {
+      terminateMalformed();
+      return false;
+    }
+    outputBytes += bytes;
+    return true;
+  }
+
   handle.onLine((line) => {
+    if (disposed || !recordOutput(line)) return;
     const trimmed = line.trim();
     if (trimmed.length === 0) return;
 
@@ -80,29 +186,43 @@ function createStdioJsonRpcClient(handle: LocalMcpProcessHandle): StdioJsonRpcCl
     try {
       parsed = JSON.parse(trimmed);
     } catch {
-      // Malformed line: fail closed by ignoring it rather than crashing.
+      terminateMalformed();
       return;
     }
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return;
+    if (!isRecord(parsed)) {
+      terminateMalformed();
+      return;
+    }
 
-    const obj = parsed as Record<string, unknown>;
+    const obj = parsed;
     const id = obj["id"];
-    // Unsolicited notifications (no numeric id, or id we never sent) are
-    // ignored — the client never acts on unknown server-initiated messages.
-    if (typeof id !== "number") return;
+    // Well-formed server notifications have no id and are deliberately ignored.
+    if (id === undefined && obj["jsonrpc"] === "2.0" && typeof obj["method"] === "string") return;
+    if (typeof id !== "number") {
+      terminateMalformed();
+      return;
+    }
 
     const resolver = pending.get(id);
     if (resolver === undefined) return;
+    if (!isValidResponse(obj, id)) {
+      terminateMalformed();
+      return;
+    }
     pending.delete(id);
     resolver({ kind: "response", response: obj as unknown as JsonRpcResponse });
   });
 
+  handle.onStderr((chunk) => {
+    if (disposed) return;
+    // Stderr is diagnostic-only, but it remains untrusted process output and
+    // shares the connection-wide byte budget with stdout.
+    recordOutput(chunk);
+  });
+
   handle.onExit((code) => {
     exitedWith = { code };
-    for (const resolver of pending.values()) {
-      resolver({ kind: "exited", code });
-    }
-    pending.clear();
+    settleAll({ kind: "exited", code });
   });
 
   return {
@@ -114,6 +234,10 @@ function createStdioJsonRpcClient(handle: LocalMcpProcessHandle): StdioJsonRpcCl
         }
         if (exitedWith !== undefined) {
           resolve({ kind: "exited", code: exitedWith.code });
+          return;
+        }
+        if (disposed || quarantined) {
+          resolve({ kind: "disposed" });
           return;
         }
 
@@ -149,13 +273,38 @@ function createStdioJsonRpcClient(handle: LocalMcpProcessHandle): StdioJsonRpcCl
         }
       });
     },
-    dispose() {
-      pending.clear();
+    async notify(method, params, signal) {
+      if (signal.aborted) return { kind: "aborted" };
+      if (exitedWith !== undefined) return { kind: "exited", code: exitedWith.code };
+      if (disposed || quarantined) return { kind: "disposed" };
+      try {
+        handle.writeLine(JSON.stringify({ jsonrpc: "2.0", method, params }));
+        return { kind: "sent" };
+      } catch {
+        return { kind: "exited", code: null };
+      }
+    },
+    async dispose() {
+      if (disposed) {
+        if (termination !== undefined) {
+          const terminated = await termination;
+          if (!terminated) quarantined = true;
+        }
+        return;
+      }
+      disposed = true;
+      settleAll({ kind: "disposed" });
+      const terminated = await terminateTree();
+      if (!terminated) quarantined = true;
     }
   };
 }
 
-function toHandshakeError(outcome: SendOutcome, code: string, phase: string): UnifiedError | undefined {
+function toHandshakeError(
+  outcome: SendOutcome,
+  code: string,
+  phase: string
+): UnifiedError | undefined {
   if (outcome.kind === "response") return undefined;
   if (outcome.kind === "aborted") {
     return mcpError("MCP_CONNECT_ABORTED", `Local MCP ${phase} was aborted before completion.`);
@@ -166,41 +315,13 @@ function toHandshakeError(outcome: SendOutcome, code: string, phase: string): Un
       `Local MCP server process exited (code ${String(outcome.code)}) during ${phase}.`
     );
   }
+  if (outcome.kind === "malformed") {
+    return mcpError(code, `Local MCP server sent a malformed JSON-RPC response during ${phase}.`);
+  }
+  if (outcome.kind === "disposed") {
+    return mcpError(code, `Local MCP connection was disposed during ${phase}.`);
+  }
   return mcpError(code, `Local MCP ${phase} timed out.`);
-}
-
-// ── Tool schema validation (strict subset — mirrors remote-mcp-runtime.ts) ──
-
-const FORBIDDEN_SCHEMA_KEYS = new Set(["$ref", "definitions", "$defs", "if", "then", "else"]);
-const MAX_SCHEMA_DESCRIPTION_BYTES = 4096;
-const MAX_TOOL_COUNT = 64;
-
-function validateStrictToolSchema(schema: unknown): boolean {
-  if (typeof schema !== "object" || schema === null || Array.isArray(schema)) return false;
-  const obj = schema as Record<string, unknown>;
-  for (const key of Object.keys(obj)) {
-    if (FORBIDDEN_SCHEMA_KEYS.has(key)) return false;
-  }
-  if (typeof obj["description"] === "string") {
-    if (new TextEncoder().encode(obj["description"]).byteLength > MAX_SCHEMA_DESCRIPTION_BYTES) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function validateToolDescription(description: unknown): boolean {
-  if (typeof description !== "string") return false;
-  if (new TextEncoder().encode(description).byteLength > MAX_SCHEMA_DESCRIPTION_BYTES) return false;
-  // Reject control characters (except \n \r \t) using numeric codes to avoid no-control-regex
-  for (let i = 0; i < description.length; i++) {
-    const code = description.charCodeAt(i);
-    if (code >= 0 && code <= 8) return false;
-    if (code === 11 || code === 12) return false;
-    if (code >= 14 && code <= 31) return false;
-    if (code === 127) return false;
-  }
-  return true;
 }
 
 // ── Local MCP descriptor ─────────────────────────────────────────────────────
@@ -245,6 +366,99 @@ function mcpError(code: string, message: string): UnifiedError {
   });
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validateLocalTools(
+  rawTools: unknown,
+  serverId: string
+): Result<readonly LocalMcpToolDescriptor[], UnifiedError> {
+  if (!Array.isArray(rawTools)) {
+    return err(
+      mcpError("MCP_TOOL_SOURCE_INVALID", "MCP tools/list result did not contain a tools array.")
+    );
+  }
+  if (rawTools.length > 64) {
+    return err(mcpError("MCP_TOO_MANY_TOOLS", "Local MCP server advertised more than 64 tools."));
+  }
+
+  const seenIds = new Set<string>();
+  const tools: LocalMcpToolDescriptor[] = [];
+  for (const raw of rawTools) {
+    if (!isRecord(raw))
+      return err(mcpError("MCP_TOOL_SOURCE_INVALID", "MCP tool descriptor must be an object."));
+    const toolId = raw["name"];
+    const description = raw["description"];
+    const inputSchema = raw["inputSchema"];
+    const title = raw["title"];
+    if (
+      typeof toolId !== "string" ||
+      toolId.length === 0 ||
+      toolId.includes(":") ||
+      toolId.includes("/")
+    ) {
+      return err(mcpError("MCP_TOOL_SOURCE_INVALID", "MCP tool has an invalid or reserved name."));
+    }
+    if (seenIds.has(toolId))
+      return err(mcpError("MCP_TOOL_SOURCE_INVALID", `MCP tool '${toolId}' is duplicated.`));
+    seenIds.add(toolId);
+    const nameCheck = validateToolText(toolId, TOOL_DISPLAY_NAME_MAX_BYTES, "Tool name");
+    if (!nameCheck.ok) return err(mcpError("MCP_TOOL_SOURCE_INVALID", nameCheck.reason));
+    if (typeof description !== "string") {
+      return err(
+        mcpError("MCP_TOOL_SOURCE_INVALID", `MCP tool '${toolId}' is missing a description.`)
+      );
+    }
+    const descriptionCheck = validateToolText(
+      description,
+      TOOL_DESCRIPTION_MAX_BYTES,
+      "Tool description"
+    );
+    if (!descriptionCheck.ok)
+      return err(mcpError("MCP_TOOL_SOURCE_INVALID", descriptionCheck.reason));
+    if (title !== undefined && typeof title !== "string") {
+      return err(mcpError("MCP_TOOL_SOURCE_INVALID", `MCP tool '${toolId}' has an invalid title.`));
+    }
+    const displayName = typeof title === "string" ? title : toolId;
+    const titleCheck = validateToolText(displayName, TOOL_DISPLAY_NAME_MAX_BYTES, "Tool title");
+    if (!titleCheck.ok) return err(mcpError("MCP_TOOL_SOURCE_INVALID", titleCheck.reason));
+    if (!isRecord(inputSchema)) {
+      return err(
+        mcpError("MCP_TOOL_SOURCE_INVALID", `MCP tool '${toolId}' has no object inputSchema.`)
+      );
+    }
+    const schemaCheck = validateStrictToolSchema(inputSchema);
+    if (!schemaCheck.ok) return err(mcpError("MCP_TOOL_SOURCE_INVALID", schemaCheck.reason));
+    tools.push({
+      canonicalId: `mcp:${serverId}/${toolId}`,
+      serverId,
+      toolId,
+      displayName,
+      description,
+      inputSchema: inputSchema as JsonObject,
+      effect: "external_action",
+      retrySemantics: "never_automatic",
+      source: "local_mcp"
+    });
+  }
+
+  const totalBytes = computeToolDirectoryBytes(
+    tools.map((tool) => ({
+      name: tool.toolId,
+      inputSchema: tool.inputSchema,
+      description: tool.description,
+      displayName: tool.displayName
+    }))
+  );
+  if (totalBytes > TOOL_DIRECTORY_MAX_TOTAL_BYTES) {
+    return err(
+      mcpError("MCP_TOOL_SOURCE_INVALID", "MCP tool directory exceeds the configured byte budget.")
+    );
+  }
+  return ok(tools);
+}
+
 /**
  * Connect to a local stdio MCP server via an injected LocalMcpHostLauncher.
  * Performs initialize + tools/list only on connect. Connection is bound to a
@@ -284,13 +498,14 @@ export async function connectLocalMcp(input: {
   );
   const initHandshakeError = toHandshakeError(initOutcome, "MCP_CONNECT_FAILED", "initialize");
   if (initHandshakeError !== undefined) {
-    handle.kill();
+    await client.dispose();
     return err(initHandshakeError);
   }
-  const initResponse = (initOutcome as { readonly kind: "response"; readonly response: JsonRpcResponse })
-    .response;
+  const initResponse = (
+    initOutcome as { readonly kind: "response"; readonly response: JsonRpcResponse }
+  ).response;
   if (initResponse.error !== undefined) {
-    handle.kill();
+    await client.dispose();
     return err(
       mcpError("MCP_INIT_FAILED", `Local MCP server returned error: ${initResponse.error.message}`)
     );
@@ -298,10 +513,29 @@ export async function connectLocalMcp(input: {
   const serverVersion = (initResponse.result as Record<string, unknown> | undefined)?.[
     "protocolVersion"
   ];
-  if (typeof serverVersion !== "string") {
-    handle.kill();
+  if (serverVersion !== LOCAL_MCP_PROTOCOL_VERSION) {
+    await client.dispose();
     return err(
-      mcpError("MCP_PROTOCOL_MISMATCH", "Local MCP server did not return a protocol version.")
+      mcpError(
+        "MCP_PROTOCOL_MISMATCH",
+        "Local MCP server did not select the requested protocol version."
+      )
+    );
+  }
+
+  const initialized = await client.notify("notifications/initialized", {}, signal);
+  if (initialized.kind !== "sent") {
+    await client.dispose();
+    return err(
+      toHandshakeError(
+        initialized,
+        "MCP_INITIALIZED_NOTIFICATION_FAILED",
+        "initialized notification"
+      ) ??
+        mcpError(
+          "MCP_INITIALIZED_NOTIFICATION_FAILED",
+          "Local MCP initialized notification failed."
+        )
     );
   }
 
@@ -309,61 +543,26 @@ export async function connectLocalMcp(input: {
   const toolsOutcome = await client.send("tools/list", {}, LOCAL_MCP_HANDSHAKE_TIMEOUT_MS, signal);
   const toolsHandshakeError = toHandshakeError(toolsOutcome, "MCP_TOOLS_LIST_FAILED", "tools/list");
   if (toolsHandshakeError !== undefined) {
-    handle.kill();
+    await client.dispose();
     return err(toolsHandshakeError);
   }
   const toolsResponse = (
     toolsOutcome as { readonly kind: "response"; readonly response: JsonRpcResponse }
   ).response;
   if (toolsResponse.error !== undefined) {
-    handle.kill();
+    await client.dispose();
     return err(
       mcpError("MCP_TOOLS_LIST_ERROR", `Local MCP tools/list error: ${toolsResponse.error.message}`)
     );
   }
 
-  const rawTools = (
-    (toolsResponse.result as Record<string, unknown> | undefined)?.["tools"] ?? []
-  ) as unknown[];
-
-  if (rawTools.length > MAX_TOOL_COUNT) {
-    handle.kill();
-    return err(
-      mcpError(
-        "MCP_TOO_MANY_TOOLS",
-        `Local MCP server advertised ${rawTools.length} tools, exceeding limit of ${MAX_TOOL_COUNT}.`
-      )
-    );
+  const rawTools = isRecord(toolsResponse.result) ? toolsResponse.result["tools"] : undefined;
+  const validatedTools = validateLocalTools(rawTools, input.serverId);
+  if (!validatedTools.ok) {
+    await client.dispose();
+    return validatedTools;
   }
-
-  const tools: LocalMcpToolDescriptor[] = [];
-  for (const raw of rawTools) {
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) continue;
-    const tool = raw as Record<string, unknown>;
-    const toolId = typeof tool["name"] === "string" ? tool["name"] : undefined;
-    if (!toolId) continue;
-
-    const description = tool["description"];
-    if (!validateToolDescription(description)) continue;
-
-    const inputSchema = tool["inputSchema"];
-    if (!validateStrictToolSchema(inputSchema)) continue;
-
-    // Reject reserved/namespaced collision
-    if (toolId.includes(":") || toolId.includes("/")) continue;
-
-    tools.push({
-      canonicalId: `mcp:${input.serverId}/${toolId}`,
-      serverId: input.serverId,
-      toolId,
-      displayName: typeof tool["title"] === "string" ? tool["title"] : toolId,
-      description: String(description),
-      inputSchema: inputSchema as JsonObject,
-      effect: "external_action",
-      retrySemantics: "never_automatic",
-      source: "local_mcp"
-    });
-  }
+  const tools = validatedTools.value;
 
   let closed = false;
 
@@ -401,6 +600,8 @@ export async function connectLocalMcp(input: {
       );
 
       if (outcome.kind === "aborted") {
+        closed = true;
+        await client.dispose();
         return {
           status: "outcome_unknown",
           reason:
@@ -408,16 +609,29 @@ export async function connectLocalMcp(input: {
         };
       }
       if (outcome.kind === "exited") {
+        closed = true;
+        await client.dispose();
         return {
           status: "outcome_unknown",
           reason: `The local MCP server process exited (code ${String(outcome.code)}) before confirming delivery. Delivery unconfirmed — do not auto-retry.`
         };
       }
       if (outcome.kind === "timeout") {
+        closed = true;
+        await client.dispose();
         return {
           status: "outcome_unknown",
           reason:
             "The local MCP tool call timed out before confirming delivery. Delivery unconfirmed — do not auto-retry."
+        };
+      }
+      if (outcome.kind === "malformed" || outcome.kind === "disposed") {
+        closed = true;
+        await client.dispose();
+        return {
+          status: "outcome_unknown",
+          reason:
+            "The local MCP connection became invalid before delivery could be confirmed. Delivery unconfirmed — do not auto-retry."
         };
       }
 
@@ -432,16 +646,22 @@ export async function connectLocalMcp(input: {
         };
       }
 
+      if (!isRecord(response.result)) {
+        return {
+          status: "error",
+          error: mcpError("MCP_INVALID_RESPONSE", "Local MCP tool result must be an object.")
+        };
+      }
+
       return {
         status: "completed",
-        result: (response.result ?? {}) as JsonObject
+        result: response.result as JsonObject
       };
     },
 
     close() {
       closed = true;
-      client.dispose();
-      handle.kill();
+      void client.dispose();
     }
   };
 

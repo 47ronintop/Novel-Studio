@@ -143,7 +143,9 @@ describe("createControlledFetch — SSRF rejection", () => {
   it("rejects localhost URL", async () => {
     const policy = makePolicy({ allowedHosts: ["localhost"] });
     const fetch_ = createControlledFetch(policy, makeOkFetch());
-    await expect(fetch_({ url: "http://localhost/foo" })).rejects.toBeInstanceOf(ControlledFetchError);
+    await expect(fetch_({ url: "http://localhost/foo" })).rejects.toBeInstanceOf(
+      ControlledFetchError
+    );
   });
 
   it("rejects 127.0.0.1", async () => {
@@ -173,7 +175,9 @@ describe("createControlledFetch — SSRF rejection", () => {
   it("rejects 169.254 link-local", async () => {
     const policy = makePolicy({ allowedHosts: ["169.254.1.1"] });
     const fetch_ = createControlledFetch(policy, makeOkFetch());
-    await expect(fetch_({ url: "http://169.254.1.1/" })).rejects.toBeInstanceOf(ControlledFetchError);
+    await expect(fetch_({ url: "http://169.254.1.1/" })).rejects.toBeInstanceOf(
+      ControlledFetchError
+    );
   });
 
   it("rejects ::1 IPv6 loopback", async () => {
@@ -253,6 +257,55 @@ describe("createControlledFetch — redirect limits", () => {
     await expect(fetch_({ url: "https://api.example.com/start" })).rejects.toSatisfy(
       (e: unknown) =>
         e instanceof ControlledFetchError && e.code === "NETWORK_REDIRECT_HOST_NOT_ALLOWED"
+    );
+  });
+});
+
+describe("createControlledFetch — request contract", () => {
+  it("passes a bounded POST body to an injected transport", async () => {
+    const policy = makePolicy({ allowedHosts: ["api.example.com"] });
+    const mockFetch = makeOkFetch("{}", "application/json");
+    const fetch_ = createControlledFetch(policy, mockFetch);
+
+    await fetch_({
+      url: "https://api.example.com/rpc",
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: '{"jsonrpc":"2.0"}'
+    });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      "https://api.example.com/rpc",
+      expect.objectContaining({ method: "POST", body: '{"jsonrpc":"2.0"}' })
+    );
+  });
+
+  it("rejects credentials and bodies on generic GET requests", async () => {
+    const policy = makePolicy({ allowedHosts: ["api.example.com"] });
+    const fetch_ = createControlledFetch(policy, makeOkFetch());
+
+    await expect(
+      fetch_({ url: "https://api.example.com/data", headers: { authorization: "Bearer canary" } })
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof ControlledFetchError && error.code === "NETWORK_REQUEST_HEADER_REJECTED"
+    );
+    await expect(
+      fetch_({ url: "https://api.example.com/data", body: "not allowed" })
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof ControlledFetchError && error.code === "NETWORK_GET_BODY_REJECTED"
+    );
+  });
+
+  it("requires an explicit allowlist port for a non-default endpoint", async () => {
+    const fetch_ = createControlledFetch(
+      makePolicy({ allowedHosts: ["api.example.com"] }),
+      makeOkFetch()
+    );
+    await expect(fetch_({ url: "https://api.example.com:8443/data" })).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof ControlledFetchError && error.code === "NETWORK_PORT_NOT_ALLOWED"
     );
   });
 });

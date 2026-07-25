@@ -16,6 +16,7 @@ import type {
   CompactContextCommand,
   ContextBudgetSnapshot,
   DecideChangeSetCommand,
+  DecideToolApprovalCommand,
   DecideAgentPlanCommand,
   DecidePlanRevisionCommand,
   PermissionSummary,
@@ -100,9 +101,7 @@ import type {
   UserPreferencesSaveInput,
   UserPreferencesSnapshot
 } from "./user-preferences-session.js";
-import type {
-  AgentNetworkSettingsData
-} from "./agent-network-settings-session.js";
+import type { AgentNetworkSettingsData } from "./agent-network-settings-session.js";
 import type { McpServerConfig, McpSettingsData } from "./mcp-settings-session.js";
 import type { AgentRunReadResult, AnswerAgentUserInputCommand } from "./agent-run-session.js";
 import type {
@@ -253,6 +252,7 @@ export interface NovelStudioApi {
     decidePlanRevision(command: DecidePlanRevisionCommand): Promise<AgentRunCommandResult>;
     refreshContext(command: RefreshAgentContextCommand): Promise<AgentRunCommandResult>;
     decideChangeSet(command: DecideChangeSetCommand): Promise<AgentRunCommandResult>;
+    decideToolApproval(command: DecideToolApprovalCommand): Promise<AgentRunCommandResult>;
     undoRun(command: UndoRunCommand): Promise<AgentRunCommandResult>;
     read(runId: string): Promise<Result<AgentRunReadResult, UnifiedError>>;
     list(projectId: string): Promise<Result<readonly AgentRunSnapshot[], UnifiedError>>;
@@ -343,8 +343,12 @@ export interface NovelStudioApi {
   };
   agentNetwork: {
     getSettings(): Promise<Result<AgentNetworkSettingsData, UnifiedError>>;
-    updateSettings(partial: Partial<AgentNetworkSettingsData>): Promise<Result<AgentNetworkSettingsData, UnifiedError>>;
-    testConnection(profileId: string): Promise<Result<{ readonly latencyMs: number }, UnifiedError>>;
+    updateSettings(
+      partial: Partial<AgentNetworkSettingsData>
+    ): Promise<Result<AgentNetworkSettingsData, UnifiedError>>;
+    testConnection(
+      profileId: string
+    ): Promise<Result<{ readonly latencyMs: number }, UnifiedError>>;
     revoke(): Promise<Result<AgentNetworkSettingsData, UnifiedError>>;
   };
   agentMcp: {

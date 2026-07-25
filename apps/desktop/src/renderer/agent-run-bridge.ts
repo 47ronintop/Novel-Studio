@@ -15,6 +15,7 @@ import type {
   DecideChangeSetCommand,
   DecideAgentPlanCommand,
   DecidePlanRevisionCommand,
+  DecideToolApprovalCommand,
   PermissionSummary,
   PlanExecutionRecord,
   RefreshAgentContextCommand,
@@ -101,6 +102,7 @@ export interface AgentRunBridge {
   updateChangeSetSelection(selection: ChangeSetSelection): Promise<AgentRunPanelProps>;
   applyChangeSet(): Promise<AgentRunPanelProps>;
   rejectChangeSet(): Promise<AgentRunPanelProps>;
+  decideToolApproval(decision: "approve" | "reject"): Promise<AgentRunPanelProps>;
   undoRun(): Promise<AgentRunPanelProps>;
   subscribe(listener: () => void): () => void;
 }
@@ -174,6 +176,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   };
   const listeners = new Set<() => void>();
   let approvalInFlight: Promise<AgentRunPanelProps> | undefined;
+  let toolApprovalInFlight: Promise<AgentRunPanelProps> | undefined;
   let selectionInFlight: Promise<AgentRunPanelProps> | undefined;
   let undoInFlight: Promise<AgentRunPanelProps> | undefined;
   let undoInFlightAction: "request" | "resolve" | "retry" | undefined;
@@ -239,6 +242,8 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       event.type === "approval_resolved" ||
       event.type === "write_applied" ||
       event.type === "write_failed" ||
+      event.type === "tool_approval_requested" ||
+      event.type === "tool_approval_resolved" ||
       event.type === "permission_summary_ready" ||
       event.type === "plan_step_started" ||
       event.type === "plan_step_completed" ||
@@ -549,6 +554,40 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     return request;
   }
 
+  function decidePendingToolApproval(decision: "approve" | "reject"): Promise<AgentRunPanelProps> {
+    if (toolApprovalInFlight !== undefined) return toolApprovalInFlight;
+    const snapshot = requireSnapshot();
+    const pending = snapshot?.pendingToolApproval;
+    if (
+      snapshot === undefined ||
+      pending === undefined ||
+      pending === null ||
+      snapshot.status !== "awaiting_tool_approval"
+    ) {
+      return Promise.resolve(toProps());
+    }
+    const command: DecideToolApprovalCommand = {
+      runId: snapshot.runId,
+      projectId: snapshot.projectId,
+      commandId: createCommandId("tool-approval"),
+      expectedRunRevision: snapshot.runRevision,
+      bindingId: pending.binding.bindingId,
+      decision
+    };
+    const request = (async () => {
+      try {
+        await applyCommandResult(await api.agentRuns.decideToolApproval(command));
+      } finally {
+        toolApprovalInFlight = undefined;
+        notify();
+      }
+      return toProps();
+    })();
+    toolApprovalInFlight = request;
+    notify();
+    return request;
+  }
+
   function undoAgentRun(): Promise<AgentRunPanelProps> {
     if (undoInFlight !== undefined) return undoInFlight;
     const snapshot = requireSnapshot();
@@ -840,6 +879,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   function toProps(): AgentRunPanelProps {
     const planExecution = planExecutionControl();
     const conversationId = context?.conversationId ?? state.snapshot?.conversationId ?? undefined;
+    const pendingToolApproval = pendingToolApprovalProps(
+      state.snapshot,
+      toolApprovalInFlight !== undefined
+    );
     return {
       projectId: context?.projectId ?? state.snapshot?.projectId ?? "",
       ...(conversationId === undefined ? {} : { conversationId }),
@@ -849,6 +892,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       assistantText: state.assistantText,
       events: state.events,
       ...(state.pendingUserInput === undefined ? {} : { pendingUserInput: state.pendingUserInput }),
+      ...(pendingToolApproval === undefined ? {} : { pendingToolApproval }),
       ...(state.diagnostic === undefined ? {} : { diagnostic: state.diagnostic }),
       ...(state.changeSet === undefined
         ? {}
@@ -939,7 +983,13 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       onResume: () => void resumeRun().then(notify),
       onRetryStep: () => void retryRun().then(notify),
       onRetryTarget: (target) => void retryTargetRun(target).then(notify),
-      onRefreshContext: (decision) => void refreshRun(decision).then(notify)
+      onRefreshContext: (decision) => void refreshRun(decision).then(notify),
+      ...(pendingToolApproval === undefined
+        ? {}
+        : {
+            onDecideToolApproval: (decision: "approve" | "reject") =>
+              void decidePendingToolApproval(decision).then(notify)
+          })
     };
   }
 
@@ -1807,6 +1857,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     updateChangeSetSelection,
     applyChangeSet: () => decideChangeSet("apply_selected"),
     rejectChangeSet: () => decideChangeSet("reject_all"),
+    decideToolApproval: decidePendingToolApproval,
     undoRun: undoAgentRun,
     subscribe(listener) {
       listeners.add(listener);
@@ -2327,6 +2378,10 @@ function eventStatus(eventType: AgentRunEvent["type"]): AgentRunSnapshot["status
       return "executing_model";
     case "change_set_ready":
       return "awaiting_write_approval";
+    case "tool_approval_requested":
+      return "awaiting_tool_approval";
+    case "external_outcome_unknown":
+      return "awaiting_external_outcome_resolution";
     case "write_started":
     case "run_undo_started":
       return "applying_changes";
@@ -2359,6 +2414,9 @@ function eventStatus(eventType: AgentRunEvent["type"]): AgentRunSnapshot["status
     case "tool_completed":
     case "tool_failed":
     case "tool_retry_requested":
+    case "tool_approval_resolved":
+    case "capability_revoked":
+    case "process_output":
     case "assistant_text_delta":
     case "assistant_text_completed":
       return undefined;
@@ -2471,6 +2529,24 @@ function pendingInputFromDetail(
     reason,
     options,
     allowFreeText: detail["allowFreeText"] === true
+  };
+}
+
+function pendingToolApprovalProps(
+  snapshot: AgentRunSnapshot | undefined,
+  deciding: boolean
+): AgentRunPanelProps["pendingToolApproval"] {
+  const pending = snapshot?.pendingToolApproval;
+  if (snapshot?.status !== "awaiting_tool_approval" || pending === undefined || pending === null) {
+    return undefined;
+  }
+  return {
+    bindingId: pending.binding.bindingId,
+    canonicalToolId: pending.canonicalToolId,
+    kind: pending.binding.kind,
+    requestedAt: pending.requestedAt,
+    expiresAt: pending.binding.expiresAt,
+    deciding
   };
 }
 

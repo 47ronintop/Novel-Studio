@@ -22,11 +22,7 @@ export type ChangeSetStatus =
 
 /** The kind of file lifecycle operation in a v1.1 Change Set. */
 export type ChangeSetOperationKind =
-  | "modify"
-  | "create_file"
-  | "move_file"
-  | "delete_file"
-  | "create_directory";
+  "modify" | "create_file" | "move_file" | "delete_file" | "create_directory";
 
 /** Base fields shared by all operation kinds. */
 interface ChangeSetOperationBase {
@@ -36,6 +32,8 @@ interface ChangeSetOperationBase {
   readonly dependsOn?: readonly string[];
   /** Idempotency key binding this operation to the originating tool call. */
   readonly toolCallIdempotencyKey: string;
+  /** Operations are selected as an indivisible unit during Change Set review. */
+  readonly selected?: boolean;
 }
 
 export interface ChangeSetModifyOperation extends ChangeSetOperationBase {
@@ -119,7 +117,7 @@ export interface ChangeSetFileChange {
 }
 
 export interface ChangeSet {
-  readonly schemaVersion: "1.0";
+  readonly schemaVersion: "1.0" | "1.1";
   readonly changeSetId: string;
   readonly revision: number;
   readonly runId: string;
@@ -172,8 +170,16 @@ export interface ChangeSetFileSelection {
   readonly selectedHunkIds?: readonly string[];
 }
 
+/** Selection for one indivisible v1.1 lifecycle operation. */
+export interface ChangeSetOperationSelection {
+  readonly operationId: string;
+  readonly selected: boolean;
+}
+
 export interface SelectChangeSetRevisionInput {
   readonly files: readonly ChangeSetFileSelection[];
+  /** Omitted operations retain their selection from the reviewed revision. */
+  readonly operations?: readonly ChangeSetOperationSelection[];
   readonly createdAt: string;
 }
 
@@ -266,7 +272,7 @@ export async function appendChangeSetProposal(
     files[index] = { ...proposed, hunks: mergedHunks };
   }
 
-  return finalizeChangeSet(
+  const revised = await finalizeChangeSet(
     {
       changeSetId: current.changeSetId,
       runId: current.runId,
@@ -280,6 +286,22 @@ export async function appendChangeSetProposal(
     },
     options.validateCandidate
   );
+  if ((current.operations?.length ?? 0) === 0) return revised;
+  return finalizeOperationsChangeSet({
+    changeSetId: current.changeSetId,
+    runId: current.runId,
+    projectId: current.projectId,
+    checkpointId: current.checkpointId,
+    contextSnapshotId: current.contextSnapshotId,
+    writePolicy: effectiveOperationsWritePolicy(
+      current.writePolicy ?? "write_before_confirmation",
+      current.operations ?? []
+    ),
+    revision: current.revision + 1,
+    createdAt: input.createdAt,
+    files: revised.files,
+    operations: current.operations ?? []
+  });
 }
 
 export async function selectChangeSetRevision(
@@ -322,6 +344,42 @@ export async function selectChangeSetRevision(
       }))
     };
   });
+
+  const selectedOperations = selectChangeSetOperations(current.operations ?? [], input.operations);
+  if (selectedOperations.length > 0) {
+    const selectedFiles = await finalizeChangeSet(
+      {
+        changeSetId: current.changeSetId,
+        runId: current.runId,
+        projectId: current.projectId,
+        checkpointId: current.checkpointId,
+        contextSnapshotId: current.contextSnapshotId,
+        writePolicy: effectiveOperationsWritePolicy(
+          current.writePolicy ?? "write_before_confirmation",
+          selectedOperations
+        ),
+        revision: current.revision + 1,
+        createdAt: input.createdAt,
+        files
+      },
+      options.validateCandidate
+    );
+    return finalizeOperationsChangeSet({
+      changeSetId: current.changeSetId,
+      runId: current.runId,
+      projectId: current.projectId,
+      checkpointId: current.checkpointId,
+      contextSnapshotId: current.contextSnapshotId,
+      writePolicy: effectiveOperationsWritePolicy(
+        current.writePolicy ?? "write_before_confirmation",
+        selectedOperations
+      ),
+      revision: current.revision + 1,
+      createdAt: input.createdAt,
+      files: selectedFiles.files,
+      operations: selectedOperations
+    });
+  }
 
   return finalizeChangeSet(
     {
@@ -655,11 +713,12 @@ export function createModifyOperation(input: {
   readonly toolCallIdempotencyKey: string;
   readonly dependsOn?: readonly string[];
 }): ChangeSetModifyOperation {
-  return Object.freeze({
+  return freezeOperation({
     kind: "modify",
     operationId: input.operationId,
     relativePath: input.relativePath,
     toolCallIdempotencyKey: input.toolCallIdempotencyKey,
+    selected: true,
     ...(input.dependsOn === undefined ? {} : { dependsOn: Object.freeze([...input.dependsOn]) })
   });
 }
@@ -672,12 +731,13 @@ export function createFileOperation(input: {
   readonly toolCallIdempotencyKey: string;
   readonly dependsOn?: readonly string[];
 }): ChangeSetCreateFileOperation {
-  return Object.freeze({
+  return freezeOperation({
     kind: "create_file",
     operationId: input.operationId,
     relativePath: input.relativePath,
     content: input.content,
     toolCallIdempotencyKey: input.toolCallIdempotencyKey,
+    selected: true,
     ...(input.dependsOn === undefined ? {} : { dependsOn: Object.freeze([...input.dependsOn]) })
   });
 }
@@ -691,13 +751,14 @@ export function moveFileOperation(input: {
   readonly toolCallIdempotencyKey: string;
   readonly dependsOn?: readonly string[];
 }): ChangeSetMoveFileOperation {
-  return Object.freeze({
+  return freezeOperation({
     kind: "move_file",
     operationId: input.operationId,
     sourcePath: input.sourcePath,
     targetPath: input.targetPath,
     sourceChecksum: input.sourceChecksum,
     toolCallIdempotencyKey: input.toolCallIdempotencyKey,
+    selected: true,
     ...(input.dependsOn === undefined ? {} : { dependsOn: Object.freeze([...input.dependsOn]) })
   });
 }
@@ -710,12 +771,13 @@ export function deleteFileOperation(input: {
   readonly toolCallIdempotencyKey: string;
   readonly dependsOn?: readonly string[];
 }): ChangeSetDeleteFileOperation {
-  return Object.freeze({
+  return freezeOperation({
     kind: "delete_file",
     operationId: input.operationId,
     relativePath: input.relativePath,
     baseChecksum: input.baseChecksum,
     toolCallIdempotencyKey: input.toolCallIdempotencyKey,
+    selected: true,
     ...(input.dependsOn === undefined ? {} : { dependsOn: Object.freeze([...input.dependsOn]) })
   });
 }
@@ -727,11 +789,12 @@ export function createDirectoryOperation(input: {
   readonly toolCallIdempotencyKey: string;
   readonly dependsOn?: readonly string[];
 }): ChangeSetCreateDirectoryOperation {
-  return Object.freeze({
+  return freezeOperation({
     kind: "create_directory",
     operationId: input.operationId,
     relativePath: input.relativePath,
     toolCallIdempotencyKey: input.toolCallIdempotencyKey,
+    selected: true,
     ...(input.dependsOn === undefined ? {} : { dependsOn: Object.freeze([...input.dependsOn]) })
   });
 }
@@ -747,16 +810,21 @@ export function createOperationsChangeSetRevision(input: {
   readonly operation: ChangeSetOperation;
   readonly createdAt: string;
 }): ChangeSet {
+  const operations = [normalizeChangeSetOperation(input.operation)];
+  assertOperationsPreflight(operations);
   return finalizeOperationsChangeSet({
     changeSetId: input.changeSetId,
     runId: input.runId,
     projectId: input.projectId,
     checkpointId: input.checkpointId,
     contextSnapshotId: input.contextSnapshotId,
-    writePolicy: input.writePolicy ?? "write_before_confirmation",
+    writePolicy: effectiveOperationsWritePolicy(
+      input.writePolicy ?? "write_before_confirmation",
+      operations
+    ),
     revision: 1,
     createdAt: input.createdAt,
-    operations: [input.operation],
+    operations,
     files: []
   });
 }
@@ -766,22 +834,21 @@ export function appendChangeSetOperation(
   current: ChangeSet,
   input: { readonly operation: ChangeSetOperation; readonly createdAt: string }
 ): ChangeSet {
-  const operations = [...(current.operations ?? []), input.operation];
-  const preflight = preflightChangeSetOperations(operations);
-  if (!preflight.ok) {
-    throw changeSetError(
-      "CHANGE_SET_OPERATION_INVALID",
-      preflight.error,
-      "Resolve the operation conflict and retry with a new proposal."
-    );
-  }
+  const operations = [
+    ...(current.operations ?? []).map(normalizeChangeSetOperation),
+    normalizeChangeSetOperation(input.operation)
+  ];
+  assertOperationsPreflight(operations);
   return finalizeOperationsChangeSet({
     changeSetId: current.changeSetId,
     runId: current.runId,
     projectId: current.projectId,
     checkpointId: current.checkpointId,
     contextSnapshotId: current.contextSnapshotId,
-    writePolicy: current.writePolicy ?? "write_before_confirmation",
+    writePolicy: effectiveOperationsWritePolicy(
+      current.writePolicy ?? "write_before_confirmation",
+      operations
+    ),
     revision: current.revision + 1,
     createdAt: input.createdAt,
     operations,
@@ -801,6 +868,8 @@ function finalizeOperationsChangeSet(input: {
   readonly operations: readonly ChangeSetOperation[];
   readonly files: readonly ChangeSetFileChange[];
 }): ChangeSet {
+  const operations = input.operations.map(normalizeChangeSetOperation);
+  assertOperationsPreflight(operations);
   const checksum = checksumChangeSetText(
     stableSerialize({
       changeSetId: input.changeSetId,
@@ -809,12 +878,13 @@ function finalizeOperationsChangeSet(input: {
       checkpointId: input.checkpointId,
       contextSnapshotId: input.contextSnapshotId,
       writePolicy: input.writePolicy,
-      operations: input.operations.map((operation) => ({ ...operation }))
+      files: serializeChangeSetFiles(input.files),
+      operations: operations.map((operation) => ({ ...operation }))
     })
   );
   const approvalToken = checksumChangeSetText(`${input.changeSetId}:${input.revision}:${checksum}`);
   return deepFreeze({
-    schemaVersion: "1.0",
+    schemaVersion: "1.1",
     changeSetId: input.changeSetId,
     revision: input.revision,
     runId: input.runId,
@@ -828,7 +898,7 @@ function finalizeOperationsChangeSet(input: {
     files: input.files,
     createdAt: input.createdAt,
     operationsSchemaVersion: "1.1" as const,
-    operations: input.operations
+    operations
   });
 }
 
@@ -842,6 +912,10 @@ function finalizeOperationsChangeSet(input: {
 export function preflightChangeSetOperations(
   operations: readonly ChangeSetOperation[]
 ): { readonly ok: true } | { readonly ok: false; readonly error: string } {
+  for (const operation of operations) {
+    const validationError = validateChangeSetOperation(operation);
+    if (validationError !== undefined) return { ok: false, error: validationError };
+  }
   const ids = new Set<string>();
   const duplicates: string[] = [];
   for (const op of operations) {
@@ -882,35 +956,359 @@ export function preflightChangeSetOperations(
 
   for (const op of operations) {
     if (hasCycle(op.operationId)) {
-      return { ok: false, error: `Cycle detected in operation dependencies involving: ${op.operationId}` };
+      return {
+        ok: false,
+        error: `Cycle detected in operation dependencies involving: ${op.operationId}`
+      };
     }
   }
 
-  // Detect path conflicts: same target path in create+delete, or two creates to same path
-  const createPaths = new Set<string>();
-  const deletePaths = new Set<string>();
-  for (const op of operations) {
-    if (op.kind === "create_file" || op.kind === "create_directory") {
-      const path = op.relativePath;
-      if (createPaths.has(path)) {
-        return { ok: false, error: `Path conflict: multiple create operations for ${path}` };
+  const operationById = new Map(operations.map((operation) => [operation.operationId, operation]));
+  const creates = new Map<string, ChangeSetOperation>();
+  const deletes = new Map<string, ChangeSetOperation>();
+  const moveSources = new Map<string, ChangeSetMoveFileOperation>();
+  const moveTargets = new Map<string, ChangeSetMoveFileOperation>();
+
+  for (const operation of operations) {
+    if (operation.kind === "create_file" || operation.kind === "create_directory") {
+      const existing = creates.get(operation.relativePath);
+      if (existing !== undefined) {
+        return {
+          ok: false,
+          error: `Path conflict: ${existing.operationId} and ${operation.operationId} both create ${operation.relativePath}`
+        };
       }
-      if (deletePaths.has(path)) {
-        return { ok: false, error: `Path conflict: create and delete for same path ${path}` };
-      }
-      createPaths.add(path);
+      creates.set(operation.relativePath, operation);
     }
-    if (op.kind === "delete_file") {
-      const path = op.relativePath;
-      if (deletePaths.has(path)) {
-        return { ok: false, error: `Path conflict: multiple delete operations for ${path}` };
+    if (operation.kind === "delete_file") {
+      const existing = deletes.get(operation.relativePath);
+      if (existing !== undefined) {
+        return {
+          ok: false,
+          error: `Path conflict: ${existing.operationId} and ${operation.operationId} both delete ${operation.relativePath}`
+        };
       }
-      if (createPaths.has(path)) {
-        return { ok: false, error: `Path conflict: create and delete for same path ${path}` };
+      deletes.set(operation.relativePath, operation);
+    }
+    if (operation.kind === "move_file") {
+      const source = moveSources.get(operation.sourcePath);
+      if (source !== undefined) {
+        return {
+          ok: false,
+          error: `Move conflict: ${source.operationId} and ${operation.operationId} share source ${operation.sourcePath}`
+        };
       }
-      deletePaths.add(path);
+      const target = moveTargets.get(operation.targetPath);
+      if (target !== undefined) {
+        return {
+          ok: false,
+          error: `Move conflict: ${target.operationId} and ${operation.operationId} share target ${operation.targetPath}`
+        };
+      }
+      moveSources.set(operation.sourcePath, operation);
+      moveTargets.set(operation.targetPath, operation);
+    }
+  }
+
+  for (const [path, create] of creates) {
+    const deletion = deletes.get(path);
+    if (deletion !== undefined) {
+      return {
+        ok: false,
+        error: `Path conflict: ${create.operationId} creates and ${deletion.operationId} deletes ${path}`
+      };
+    }
+    const moveSource = moveSources.get(path);
+    const moveTarget = moveTargets.get(path);
+    if (moveSource !== undefined || moveTarget !== undefined) {
+      return {
+        ok: false,
+        error: `Path conflict: ${create.operationId} creates path ${path} used by move ${
+          (moveSource ?? moveTarget)?.operationId
+        }`
+      };
+    }
+  }
+
+  for (const [path, deletion] of deletes) {
+    const moveSource = moveSources.get(path);
+    const moveTarget = moveTargets.get(path);
+    if (moveSource !== undefined || moveTarget !== undefined) {
+      return {
+        ok: false,
+        error: `Path conflict: ${deletion.operationId} deletes path ${path} used by move ${
+          (moveSource ?? moveTarget)?.operationId
+        }`
+      };
+    }
+  }
+
+  // A move chain is valid only when the move that frees the destination is a dependency.
+  // This rejects accidental overwrites and leaves a swap as a dependency cycle above.
+  for (const move of moveTargets.values()) {
+    const sourceOwner = moveSources.get(move.targetPath);
+    if (
+      sourceOwner !== undefined &&
+      !operationDependsOn(move, sourceOwner.operationId, operationById)
+    ) {
+      return {
+        ok: false,
+        error: `Move conflict: ${move.operationId} targets ${move.targetPath} before ${sourceOwner.operationId} frees it`
+      };
+    }
+  }
+
+  for (const operation of operations) {
+    const targetPath = operationTargetPath(operation);
+    if (targetPath === undefined) continue;
+    const parentDirectory = parentPath(targetPath);
+    const creator = creates.get(parentDirectory);
+    if (
+      creator?.kind === "create_directory" &&
+      !operationDependsOn(operation, creator.operationId, operationById)
+    ) {
+      return {
+        ok: false,
+        error: `Operation ${operation.operationId} must depend on directory creation ${creator.operationId} for ${parentDirectory}`
+      };
     }
   }
 
   return { ok: true };
+}
+
+function assertOperationsPreflight(operations: readonly ChangeSetOperation[]): void {
+  const preflight = preflightChangeSetOperations(operations);
+  if (!preflight.ok) {
+    throw changeSetError(
+      "CHANGE_SET_OPERATION_INVALID",
+      preflight.error,
+      "Resolve the operation conflict and retry with a new proposal."
+    );
+  }
+}
+
+function freezeOperation<T extends ChangeSetOperation>(operation: T): T {
+  const normalized = normalizeChangeSetOperation(operation) as T;
+  return deepFreeze(normalized);
+}
+
+function normalizeChangeSetOperation(operation: ChangeSetOperation): ChangeSetOperation {
+  const validationError = validateChangeSetOperation(operation);
+  if (validationError !== undefined) {
+    throw changeSetError(
+      "CHANGE_SET_OPERATION_INVALID",
+      validationError,
+      "Use a canonical path and complete lifecycle-operation metadata."
+    );
+  }
+  return {
+    ...operation,
+    selected: operation.selected !== false,
+    ...(operation.dependsOn === undefined ? {} : { dependsOn: [...operation.dependsOn] })
+  };
+}
+
+function validateChangeSetOperation(operation: ChangeSetOperation): string | undefined {
+  if (!isOperationIdentifier(operation.operationId)) {
+    return "Operation IDs must be stable non-empty identifiers up to 128 characters.";
+  }
+  if (!isOperationIdentifier(operation.toolCallIdempotencyKey)) {
+    return `Operation ${operation.operationId} has an invalid idempotency binding.`;
+  }
+  if (
+    operation.dependsOn !== undefined &&
+    operation.dependsOn.some((dependency) => !isOperationIdentifier(dependency))
+  ) {
+    return `Operation ${operation.operationId} has an invalid dependency ID.`;
+  }
+
+  switch (operation.kind) {
+    case "modify":
+    case "create_file":
+      return validateOperationPath(operation.relativePath, true);
+    case "delete_file":
+      return (
+        validateOperationPath(operation.relativePath, true) ??
+        validateChecksum(operation.baseChecksum, operation.operationId)
+      );
+    case "move_file":
+      return (
+        validateOperationPath(operation.sourcePath, true) ??
+        validateOperationPath(operation.targetPath, true) ??
+        (operation.sourcePath === operation.targetPath
+          ? `Move operation ${operation.operationId} must use different source and target paths.`
+          : undefined) ??
+        validateChecksum(operation.sourceChecksum, operation.operationId)
+      );
+    case "create_directory":
+      return validateOperationPath(operation.relativePath, false);
+    default:
+      return "Operation has an unsupported kind.";
+  }
+}
+
+function validateOperationPath(path: string, filePath: boolean): string | undefined {
+  if (filePath) {
+    const result = validateAgentRelativePath(path);
+    return result.ok
+      ? undefined
+      : "Operation paths must be canonical project-relative text-file paths.";
+  }
+  const segments = path.split("/");
+  const blockedRoots = new Set([
+    ".git",
+    ".novel-studio",
+    "node_modules",
+    "history",
+    "dist",
+    "build",
+    ".cache"
+  ]);
+  const windowsDeviceName = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
+  if (
+    path.length === 0 ||
+    path !== path.trim() ||
+    path.includes("\0") ||
+    path.includes("\\") ||
+    path.includes(":") ||
+    path.startsWith("/") ||
+    path.startsWith("//") ||
+    segments.some((segment) => segment.length === 0 || segment === "." || segment === "..") ||
+    segments.some((segment) => windowsDeviceName.test(segment)) ||
+    blockedRoots.has((segments[0] ?? "").toLowerCase())
+  ) {
+    return "Operation paths must be canonical project-relative paths.";
+  }
+  return undefined;
+}
+
+function validateChecksum(checksum: string, operationId: string): string | undefined {
+  return /^[a-f0-9]{64}$/.test(checksum)
+    ? undefined
+    : `Operation ${operationId} must include a lowercase SHA-256 base checksum.`;
+}
+
+function isOperationIdentifier(value: string): boolean {
+  return /^[A-Za-z0-9_-]{1,128}$/.test(value);
+}
+
+function operationTargetPath(operation: ChangeSetOperation): string | undefined {
+  switch (operation.kind) {
+    case "modify":
+    case "create_file":
+    case "create_directory":
+      return operation.relativePath;
+    case "move_file":
+      return operation.targetPath;
+    case "delete_file":
+      return undefined;
+  }
+}
+
+function parentPath(path: string): string {
+  const separator = path.lastIndexOf("/");
+  return separator === -1 ? "" : path.slice(0, separator);
+}
+
+function operationDependsOn(
+  operation: ChangeSetOperation,
+  dependencyId: string,
+  operations: ReadonlyMap<string, ChangeSetOperation>
+): boolean {
+  const visited = new Set<string>();
+  const visit = (current: ChangeSetOperation): boolean => {
+    for (const dependency of current.dependsOn ?? []) {
+      if (dependency === dependencyId) return true;
+      if (visited.has(dependency)) continue;
+      visited.add(dependency);
+      const target = operations.get(dependency);
+      if (target !== undefined && visit(target)) return true;
+    }
+    return false;
+  };
+  return visit(operation);
+}
+
+function selectChangeSetOperations(
+  operations: readonly ChangeSetOperation[],
+  selections: readonly ChangeSetOperationSelection[] | undefined
+): readonly ChangeSetOperation[] {
+  if (operations.length === 0) {
+    if ((selections?.length ?? 0) > 0) {
+      throw changeSetError(
+        "CHANGE_SET_SELECTION_INVALID",
+        "The selection references lifecycle operations outside this Change Set revision.",
+        "Refresh the Change Set before changing the selection."
+      );
+    }
+    return [];
+  }
+  const byId = new Map(operations.map((operation) => [operation.operationId, operation]));
+  const selectedById = new Map(
+    (selections ?? []).map((selection) => [selection.operationId, selection])
+  );
+  for (const selection of selections ?? []) {
+    if (!byId.has(selection.operationId)) {
+      throw changeSetError(
+        "CHANGE_SET_SELECTION_INVALID",
+        "The selection references a lifecycle operation outside this Change Set revision.",
+        "Refresh the Change Set before changing the selection."
+      );
+    }
+  }
+  const selected = operations.map((operation) => ({
+    ...operation,
+    selected: selectedById.get(operation.operationId)?.selected ?? operation.selected !== false
+  }));
+  const selectedIds = new Set(
+    selected
+      .filter((operation) => operation.selected !== false)
+      .map((operation) => operation.operationId)
+  );
+  for (const operation of selected) {
+    if (operation.selected === false) continue;
+    for (const dependency of operation.dependsOn ?? []) {
+      if (!selectedIds.has(dependency)) {
+        throw changeSetError(
+          "CHANGE_SET_SELECTION_DEPENDENCY_MISSING",
+          `Selected operation ${operation.operationId} requires selected dependency ${dependency}.`,
+          "Select the operation dependency closure before approval."
+        );
+      }
+    }
+  }
+  return selected.map(normalizeChangeSetOperation);
+}
+
+function effectiveOperationsWritePolicy(
+  policy: AgentWritePolicy,
+  operations: readonly ChangeSetOperation[]
+): AgentWritePolicy {
+  return operations.some(
+    (operation) =>
+      operation.kind === "move_file" ||
+      operation.kind === "delete_file" ||
+      operation.kind === "create_directory"
+  )
+    ? "write_before_confirmation"
+    : policy;
+}
+
+function serializeChangeSetFiles(files: readonly ChangeSetFileChange[]): readonly unknown[] {
+  return files.map((file) => ({
+    relativePath: file.relativePath,
+    assetType: file.assetType,
+    assetId: file.assetId ?? null,
+    baseChecksum: file.baseChecksum,
+    candidateChecksum: file.candidateChecksum,
+    selected: file.selected,
+    validation: file.validation,
+    hunks: file.hunks.map((hunk) => ({
+      hunkId: hunk.hunkId,
+      characterRange: hunk.characterRange,
+      replacement: hunk.replacement,
+      selected: hunk.selected
+    }))
+  }));
 }

@@ -3,7 +3,9 @@ import { describe, expect, test } from "vitest";
 import {
   findPermissionSummaryDrift,
   generatePermissionSummary,
+  hasValidPermissionSummaryChecksums,
   listAgentTools,
+  resolvePermissionSummaryCapabilities,
   type AgentContextMode,
   type AgentOperationMode,
   type AgentToolDescriptor,
@@ -51,12 +53,8 @@ describe("generatePermissionSummary capability derivation", () => {
             contextMode,
             writePolicy: effectiveWritePolicy
           });
-          expect([...summary.readCapabilities]).toEqual(
-            sortedNames(expectedTools, "read")
-          );
-          expect([...summary.proposalCapabilities]).toEqual(
-            sortedNames(expectedTools, "propose")
-          );
+          expect([...summary.readCapabilities]).toEqual(sortedNames(expectedTools, "read"));
+          expect([...summary.proposalCapabilities]).toEqual(sortedNames(expectedTools, "propose"));
           expect(summary.writePolicy).toBe(effectiveWritePolicy);
         });
       }
@@ -98,8 +96,12 @@ describe("generatePermissionSummary capability derivation", () => {
 
 describe("generatePermissionSummary checksum stability and drift sensitivity", () => {
   test("regenerating from identical inputs produces an identical checksum", () => {
-    const first = generatePermissionSummary(baseInput({ permissionSummaryId: "a", generatedAt: "t1" }));
-    const second = generatePermissionSummary(baseInput({ permissionSummaryId: "b", generatedAt: "t2" }));
+    const first = generatePermissionSummary(
+      baseInput({ permissionSummaryId: "a", generatedAt: "t1" })
+    );
+    const second = generatePermissionSummary(
+      baseInput({ permissionSummaryId: "b", generatedAt: "t2" })
+    );
     expect(first.checksum).toBe(second.checksum);
   });
 
@@ -141,7 +143,11 @@ describe("generatePermissionSummary checksum stability and drift sensitivity", (
   test("ignores an out-of-band permissionSummaryId/runId/generatedAt difference (expected to vary across generations)", () => {
     const stored = generatePermissionSummary(baseInput({ runId: "run_01" }));
     const regenerated = generatePermissionSummary(
-      baseInput({ permissionSummaryId: "regenerated_id", runId: "run_02", generatedAt: "2026-07-16T02:00:00.000Z" })
+      baseInput({
+        permissionSummaryId: "regenerated_id",
+        runId: "run_02",
+        generatedAt: "2026-07-16T02:00:00.000Z"
+      })
     );
     expect(findPermissionSummaryDrift(stored, regenerated)).toEqual([]);
   });
@@ -180,9 +186,17 @@ describe("generatePermissionSummary rejects renderer-authored capability facts",
     // policy can never smuggle in extra capabilities — the Tool Registry only ever returns the
     // fixed, known tool set regardless of what string writePolicy carries.
     const knownToolNames = new Set(
-      listAgentTools({ operationMode: "execution", contextMode: "writing", writePolicy: "write_before_confirmation" })
+      listAgentTools({
+        operationMode: "execution",
+        contextMode: "writing",
+        writePolicy: "write_before_confirmation"
+      })
         .concat(
-          listAgentTools({ operationMode: "execution", contextMode: "writing", writePolicy: "user_preapproved_run" })
+          listAgentTools({
+            operationMode: "execution",
+            contextMode: "writing",
+            writePolicy: "user_preapproved_run"
+          })
         )
         .map((tool) => tool.name)
     );
@@ -193,9 +207,9 @@ describe("generatePermissionSummary rejects renderer-authored capability facts",
 });
 
 describe("PermissionSummary schema", () => {
-  test("carries the fixed schemaVersion and the runDraftId/projectId facts verbatim", () => {
+  test("writes v1.1 for new runs and carries the runDraftId/projectId facts verbatim", () => {
     const summary: PermissionSummary = generatePermissionSummary(baseInput());
-    expect(summary.schemaVersion).toBe("1.0");
+    expect(summary.schemaVersion).toBe("1.1");
     expect(summary.projectId).toBe("project_01");
     expect(summary.runDraftId).toBe("run_draft_01");
     expect(summary.runId).toBeUndefined();
@@ -204,6 +218,67 @@ describe("PermissionSummary schema", () => {
   test("binds an optional runId when provided", () => {
     const summary = generatePermissionSummary(baseInput({ runId: "run_01" }));
     expect(summary.runId).toBe("run_01");
+  });
+});
+
+describe("PermissionSummary v1.1 migration and integrity", () => {
+  test("binds workspace, operation, extended effects, descriptor, and provider revisions into the extended checksum", () => {
+    const summary = generatePermissionSummary(
+      baseInput({
+        capabilitySnapshot: {
+          workspaceKind: "engineeringWorkspace",
+          searchEnabled: true,
+          fileLifecycleEnabled: true,
+          controlledExecutionEnabled: true,
+          sandboxAttestationId: "attestation_01",
+          gitReadEnabled: true,
+          networkReadEnabled: true,
+          pluginToolsEnabled: false,
+          mcpToolsEnabled: false,
+          featureFlagRevision: "flags_27"
+        },
+        contextMode: "general_file",
+        providerMappingRevision: "a".repeat(64)
+      })
+    );
+    expect(summary.workspaceKind).toBe("engineeringWorkspace");
+    expect(summary.executeCapabilities).toEqual(["run_project_task"]);
+    expect(summary.externalReadCapabilities).toEqual(["fetch_url", "web_search"]);
+    expect(summary.dataEgressCapabilities).toEqual(["provider_query"]);
+    expect(summary.providerMappingRevision).toBe("a".repeat(64));
+    expect(summary.descriptorRevision).toMatch(/^[a-f0-9]{64}$/);
+    expect(hasValidPermissionSummaryChecksums(summary)).toBe(true);
+
+    const tampered = { ...summary, externalReadCapabilities: [] };
+    expect(hasValidPermissionSummaryChecksums(tampered)).toBe(false);
+  });
+
+  test("treats readable v1.0 records as deny-all for post-v1.0 capabilities", () => {
+    const v11 = generatePermissionSummary(baseInput());
+    const v10: PermissionSummary = {
+      ...v11,
+      schemaVersion: "1.0",
+      checksum: v11.checksum
+    };
+    const legacy = resolvePermissionSummaryCapabilities(v10);
+    expect(legacy.operationMode).toBe("planning");
+    expect(legacy.executeCapabilities).toEqual([]);
+    expect(legacy.externalReadCapabilities).toEqual([]);
+    expect(legacy.externalActionCapabilities).toEqual([]);
+    expect(legacy.dataEgressCapabilities).toEqual([]);
+    expect(hasValidPermissionSummaryChecksums(v10)).toBe(true);
+  });
+
+  test("reports descriptor and provider mapping revision drift", () => {
+    const stored = generatePermissionSummary(
+      baseInput({ providerMappingRevision: "a".repeat(64) })
+    );
+    const regenerated = generatePermissionSummary(
+      baseInput({ providerMappingRevision: "b".repeat(64) })
+    );
+    const fields = findPermissionSummaryDrift(stored, regenerated).map((entry) => entry.field);
+    expect(fields).toContain("providerMappingRevision");
+    expect(fields).toContain("extendedChecksum");
   });
 });
 

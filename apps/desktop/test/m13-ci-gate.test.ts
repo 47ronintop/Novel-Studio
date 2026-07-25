@@ -30,9 +30,14 @@ describe("M13 real E2E and CI gate", () => {
 
   test("runs each expensive GitHub Actions quality gate once", async () => {
     const workflow = await readFile(".github/workflows/ci.yml", "utf8");
+    const packageJson = JSON.parse(await readFile("package.json", "utf8")) as {
+      readonly scripts: Record<string, string>;
+    };
 
     expect(workflow).toContain("npm ci");
-    expect(workflow).toContain("npm run format");
+    expect(workflow).toContain("npm run format:changed");
+    expect(workflow).toContain("fetch-depth: 0");
+    expect(workflow).toContain("FORMAT_BASE_SHA");
     expect(workflow).toContain("npm run lint");
     expect(workflow).toContain("npm run build");
     expect(workflow).toContain("npm run test");
@@ -42,6 +47,10 @@ describe("M13 real E2E and CI gate", () => {
     expect(workflow).toContain("npm run alpha:verify");
     expect(workflow).toContain("npm run package:dir:built");
     expect(workflow).toContain("npm audit");
+    expect(workflow).toContain("--omit=dev --audit-level=high");
+    expect(workflow).not.toContain("--release --package-dir");
+    expect(packageJson.scripts["format:changed"]).toBe("node scripts/format-changed.mjs");
+    expect(packageJson.scripts["format:full-debt"]).toBe("prettier --check .");
     expect(workflow).not.toMatch(
       /^\s*run: npm run (?:typecheck|test:contract|test:e2e|package:check|alpha:check|package:dir|package:artifact-check)\s*$/mu
     );

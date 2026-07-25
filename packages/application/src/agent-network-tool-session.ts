@@ -18,8 +18,13 @@ import {
 export interface AgentNetworkToolSessionOptions {
   readonly policy: AgentNetworkPolicy;
   readonly searchProfile?: AgentNetworkProviderProfile;
-  /** Injectable for tests. */
+  /** Generic, credential-free fetch used exclusively by fetch_url. */
   readonly controlledFetch?: ControlledFetch;
+  /**
+   * Main-owned provider fetch. It may contain an origin-bound credential and is
+   * deliberately not reused for arbitrary fetch_url calls.
+   */
+  readonly providerFetch?: ControlledFetch;
   readonly now?: () => string;
 }
 
@@ -61,16 +66,22 @@ function networkError(code: string, message: string): UnifiedError {
 export function createAgentNetworkToolSession(
   options: AgentNetworkToolSessionOptions
 ): AgentNetworkToolExecutor {
-  const fetch_ = options.controlledFetch ?? createControlledFetch(options.policy);
+  const genericFetch = options.controlledFetch ?? createControlledFetch(options.policy);
+  const providerFetch = options.providerFetch ?? genericFetch;
 
   return {
     async webSearch(input): Promise<Result<AgentNetworkReadResult, UnifiedError>> {
       if (!options.policy.enabled) {
-        return err(unavailableError("NETWORK_POLICY_DISABLED", "Agent network access is disabled."));
+        return err(
+          unavailableError("NETWORK_POLICY_DISABLED", "Agent network access is disabled.")
+        );
       }
       if (options.searchProfile === undefined) {
         return err(
-          unavailableError("NETWORK_SEARCH_PROVIDER_UNAVAILABLE", "No search provider is configured.")
+          unavailableError(
+            "NETWORK_SEARCH_PROVIDER_UNAVAILABLE",
+            "No search provider is configured."
+          )
         );
       }
 
@@ -102,11 +113,16 @@ export function createAgentNetworkToolSession(
         if (typeof (input as { maxResults?: number }).maxResults === "number") {
           searchUrl.searchParams.set(
             "count",
-            String(Math.min((input as { maxResults?: number }).maxResults ?? MAX_SEARCH_RESULTS, MAX_SEARCH_RESULTS))
+            String(
+              Math.min(
+                (input as { maxResults?: number }).maxResults ?? MAX_SEARCH_RESULTS,
+                MAX_SEARCH_RESULTS
+              )
+            )
           );
         }
 
-        const response = await fetch_({
+        const response = await providerFetch({
           url: searchUrl.toString(),
           headers: {
             accept: "application/json",
@@ -130,8 +146,7 @@ export function createAgentNetworkToolSession(
           summary = results
             .slice(0, MAX_SEARCH_RESULTS)
             .map(
-              (r, i) =>
-                `[${i + 1}] ${r.title}\n${r.url}\n${r.snippet.slice(0, MAX_SNIPPET_CHARS)}`
+              (r, i) => `[${i + 1}] ${r.title}\n${r.url}\n${r.snippet.slice(0, MAX_SNIPPET_CHARS)}`
             )
             .join("\n\n");
           if (results.length > MAX_SEARCH_RESULTS) truncated = true;
@@ -169,7 +184,9 @@ export function createAgentNetworkToolSession(
 
     async fetchUrl(input): Promise<Result<AgentNetworkReadResult, UnifiedError>> {
       if (!options.policy.enabled) {
-        return err(unavailableError("NETWORK_POLICY_DISABLED", "Agent network access is disabled."));
+        return err(
+          unavailableError("NETWORK_POLICY_DISABLED", "Agent network access is disabled.")
+        );
       }
 
       let hostname: string;
@@ -189,7 +206,9 @@ export function createAgentNetworkToolSession(
       }
 
       try {
-        const response = await fetch_({ url: input.url, signal: input.signal });
+        // fetch_url must always use the credential-free transport. Provider
+        // credentials are scoped to webSearch in Desktop Main.
+        const response = await genericFetch({ url: input.url, signal: input.signal });
         const fetchedAt = nowIso(options);
         const bodyDigest = digestText(response.body);
         const urlDigest = digestText(input.url);

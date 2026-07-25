@@ -11,6 +11,16 @@ import {
 import { createDesktopAgentRuntime } from "./agent-run-runtime.js";
 import { createDesktopAgentRuntimeManager } from "./agent-runtime-manager.js";
 import type { DesktopAgentRuntimeManager } from "./agent-runtime-manager.js";
+import {
+  createDesktopNetworkSettingsSession,
+  createDesktopNetworkToolExecutor
+} from "./agent-network-runtime.js";
+import { createAgentFeatureFlags } from "./agent-feature-flags.js";
+import {
+  createDesktopAgentNetworkSettingsPort,
+  createDesktopMcpSettingsPort
+} from "./agent-tool-settings-store.js";
+import { connectRemoteMcp, createRemoteMcpDispatch } from "./remote-mcp-runtime.js";
 import { createAgentWriteSaveCoordinator, createApplicationIpcHandlers } from "./ipc-handlers.js";
 import { createWorkspaceActivationCoordinator } from "./workspace-activation.js";
 import { createApplicationMenuTemplate } from "./menu.js";
@@ -18,12 +28,37 @@ import { createDesktopModelRuntime, createEncryptedFileModelSecretStore } from "
 import { createSecureWebPreferences } from "./security.js";
 import {
   createAgentPricingRegistry,
+  createAgentExternalToolSession,
+  createMcpSettingsSession,
+  mangleToolId,
   reasoningStrengthForModel,
   resolveCatalogAgentModelCapabilities
 } from "@novel-studio/application";
-import type { DesktopApplication } from "@novel-studio/application";
+import type {
+  AgentNetworkSettingsPort,
+  AgentNetworkSettingsSession,
+  AgentNetworkToolExecutor,
+  AgentExternalToolExecutor,
+  DesktopApplication,
+  McpServerConfig,
+  McpSettingsData,
+  McpSettingsSession
+} from "@novel-studio/application";
 import type { LlmModelProfile, LlmProviderId } from "@novel-studio/llm-adapter";
-import { createUnifiedError } from "@novel-studio/shared";
+import {
+  computeAgentToolDescriptorDigest,
+  validateExternalToolDescriptors
+} from "@novel-studio/agent-engine";
+import type { AgentToolDescriptor } from "@novel-studio/agent-engine";
+import {
+  createUnifiedError,
+  err,
+  ok,
+  type JsonObject,
+  type Result,
+  type UnifiedError
+} from "@novel-studio/shared";
+import type { ModelSecretStore } from "./model-runtime.js";
 
 const currentDirectory = fileURLToPath(new URL(".", import.meta.url));
 let activeDesktopApplication: DesktopApplication | undefined;
@@ -49,6 +84,24 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     version: "stage-5-2026-07-15",
     entries: []
   });
+  const agentNetworkSettingsPort = createDesktopAgentNetworkSettingsPort({ userDataRoot });
+  const agentNetworkSettingsSession = createDesktopNetworkSettingsSession({
+    settingsPort: agentNetworkSettingsPort,
+    // This path intentionally uses the Main pinned-IP dialer even when a test profile has no
+    // credential cached yet. Runtime construction resolves and binds provider credentials separately.
+    resolveSecret: () => undefined
+  });
+  const agentMcpSettingsPort = createDesktopMcpSettingsPort({ userDataRoot });
+  const agentMcpSettingsSession = createMcpSettingsSession({
+    port: agentMcpSettingsPort,
+    testRemoteConnection: (config) =>
+      testDesktopRemoteMcpConnection({
+        config,
+        networkSettingsSession: agentNetworkSettingsSession,
+        readMcpSettings: () => agentMcpSettingsPort.readMcpSettings(),
+        modelSecretStore
+      })
+  });
   const bootstrapped = await createBootstrappedDefaultDesktopApplicationWithSnapshot({
     projectRoot,
     userDataRoot,
@@ -62,8 +115,24 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     process.env["NOVEL_STUDIO_TEST_AGENT_WRITE_FAIL_AT"]
   );
   const agentRuntimeManager = createDesktopAgentRuntimeManager({
-    createRuntime: (binding) =>
-      createDesktopAgentRuntime({
+    createRuntime: async (binding) => {
+      const networkRuntime = await resolveDesktopNetworkRuntime({
+        settingsSession: agentNetworkSettingsSession,
+        settingsPort: agentNetworkSettingsPort,
+        modelSecretStore
+      });
+      const mcpRuntime = await resolveDesktopMcpRuntime({
+        settingsSession: agentMcpSettingsSession,
+        networkSettingsSession: agentNetworkSettingsSession,
+        modelSecretStore
+      });
+      const featureFlags = createAgentFeatureFlags({
+        phaseA_searchEnabled: true,
+        phaseD_networkReadEnabled: networkRuntime.executor !== undefined,
+        phaseE_remoteMcpEnabled: mcpRuntime.executor !== undefined,
+        revision: `desktop-main:${networkRuntime.policyRevision}:${mcpRuntime.settingsRevision}`
+      });
+      return createDesktopAgentRuntime({
         workspaceKind: binding.kind,
         projectId: binding.workspaceId,
         contentRoot: binding.contentRoot,
@@ -72,6 +141,17 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
           ? {}
           : { activeChapterId: binding.activeChapterId }),
         userDataRoot,
+        featureFlags,
+        ...(networkRuntime.executor === undefined
+          ? {}
+          : { networkToolExecutor: networkRuntime.executor }),
+        ...(mcpRuntime.executor === undefined
+          ? {}
+          : {
+              externalToolExecutor: mcpRuntime.executor,
+              externalToolDescriptors: mcpRuntime.descriptors,
+              disposeExternalTools: mcpRuntime.dispose
+            }),
         pricingRegistry: agentPricingRegistry,
         projectLockOwnerId,
         pauseAutosave: agentWriteSaveCoordinator.pauseAutosave,
@@ -209,7 +289,8 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
             reasoningStrength
           };
         }
-      })
+      });
+    }
   });
   const initialBinding = await agentRuntimeManager.bindWorkspace({
     kind: "creativeProject",
@@ -254,6 +335,15 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     },
     agentRuntimeManager,
     agentWriteSaveCoordinator,
+    agentNetworkSettingsSession,
+    agentMcpSettingsSession,
+    onAgentSettingsChanged: async () => {
+      // The durable setting has already changed. Revoke Main-owned network/MCP access before any
+      // asynchronous stop/list/refresh work so the prior frozen runtime cannot dispatch again.
+      agentRuntimeManager.revokeCurrentSettingsCapabilities();
+      const refreshed = await agentRuntimeManager.refreshCurrentWorkspace();
+      return refreshed;
+    },
     publishAgentRunEvent: (event) => {
       for (const window of BrowserWindow.getAllWindows()) {
         if (!window.isDestroyed()) {
@@ -272,6 +362,314 @@ function readPositiveInteger(value: string | undefined): number | undefined {
   if (value === undefined || !/^[1-9][0-9]*$/.test(value)) return undefined;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+async function resolveDesktopNetworkRuntime(input: {
+  readonly settingsSession: AgentNetworkSettingsSession;
+  readonly settingsPort: AgentNetworkSettingsPort;
+  readonly modelSecretStore: ModelSecretStore;
+}): Promise<{
+  readonly executor?: AgentNetworkToolExecutor;
+  readonly policyRevision: string;
+}> {
+  const settings = await input.settingsSession.getNetworkSettings();
+  if (!settings.ok || !settings.value.enabled || settings.value.allowedHosts.length === 0) {
+    return { policyRevision: settings.ok ? settings.value.policyRevision : "unavailable" };
+  }
+
+  const secrets = new Map<string, string>();
+  await Promise.all(
+    [...new Set(settings.value.providerProfiles.map((profile) => profile.apiKeyRef))].map(
+      async (secretRef) => {
+        const secret = await input.modelSecretStore.readSecret(secretRef);
+        if (secret.ok && secret.value !== undefined) secrets.set(secretRef, secret.value);
+      }
+    )
+  );
+  const created = await createDesktopNetworkToolExecutor({
+    settingsPort: input.settingsPort,
+    resolveSecret: (secretRef) => secrets.get(secretRef)
+  });
+  return {
+    ...(created.ok ? { executor: created.value } : {}),
+    policyRevision: settings.value.policyRevision
+  };
+}
+
+interface DesktopMcpRuntime {
+  readonly settingsRevision: string;
+  readonly executor?: AgentExternalToolExecutor;
+  readonly descriptors?: readonly AgentToolDescriptor[];
+  readonly dispose?: () => void;
+}
+
+async function resolveDesktopMcpRuntime(input: {
+  readonly settingsSession: McpSettingsSession;
+  readonly networkSettingsSession: AgentNetworkSettingsSession;
+  readonly modelSecretStore: ModelSecretStore;
+}): Promise<DesktopMcpRuntime> {
+  const [settings, policy] = await Promise.all([
+    input.settingsSession.getMcpSettings(),
+    input.networkSettingsSession.getEffectivePolicy()
+  ]);
+  const settingsRevision = settings.ok ? settings.value.revision : "unavailable";
+  if (!settings.ok || !policy.ok || !policy.value.enabled) return { settingsRevision };
+  const remoteServers = settings.value.servers.filter(isEnabledRemoteMcpServer);
+  if (remoteServers.length === 0) return { settingsRevision };
+
+  const secrets = await resolveMcpSecrets(remoteServers, input.modelSecretStore);
+  const attempts = await Promise.all(
+    remoteServers.map(async (config) =>
+      connectRemoteMcp({
+        config,
+        policy: policy.value,
+        resolveApiKey: (secretRef) => secrets.get(secretRef),
+        configRevision: settings.value.revision,
+        readCurrentConfig: async () =>
+          readCurrentRemoteMcpConfig(input.settingsSession, config.serverId)
+      })
+    )
+  );
+  const connections = attempts.filter(
+    (attempt): attempt is Extract<(typeof attempts)[number], { readonly ok: true }> => attempt.ok
+  );
+  if (connections.length === 0) return { settingsRevision };
+
+  const descriptors = createRemoteMcpAgentDescriptors(
+    connections.flatMap((connection) => connection.value.tools)
+  );
+  const valid = validateExternalToolDescriptors(descriptors);
+  if (!valid.ok) {
+    for (const connection of connections) connection.value.close();
+    return { settingsRevision };
+  }
+
+  const dispatches = new Map(
+    connections.map((connection) => [
+      connection.value.serverId,
+      createRemoteMcpDispatch(connection.value)
+    ])
+  );
+  const executor = createAgentExternalToolSession({
+    dispatch: {
+      async callTool(call) {
+        const currentPolicy = await input.networkSettingsSession.getEffectivePolicy();
+        if (
+          !currentPolicy.ok ||
+          !currentPolicy.value.enabled ||
+          currentPolicy.value.revision !== policy.value.revision
+        ) {
+          return {
+            status: "error" as const,
+            error: mcpRuntimeError(
+              "MCP_NETWORK_POLICY_CHANGED",
+              "Network access changed after this MCP runtime was created."
+            )
+          };
+        }
+        const serverId = remoteServerIdForCanonicalTool(call.canonicalToolId);
+        const dispatch = serverId === undefined ? undefined : dispatches.get(serverId);
+        if (dispatch === undefined) {
+          return {
+            status: "error" as const,
+            error: mcpRuntimeError(
+              "MCP_TOOL_NOT_CONFIGURED",
+              "The requested remote MCP tool is not part of this trusted runtime snapshot."
+            )
+          };
+        }
+        return dispatch.callTool(call);
+      }
+    }
+  });
+  return {
+    settingsRevision,
+    executor,
+    descriptors,
+    dispose: () => {
+      for (const connection of connections) connection.value.close();
+    }
+  };
+}
+
+async function testDesktopRemoteMcpConnection(input: {
+  readonly config: McpServerConfig;
+  readonly networkSettingsSession: AgentNetworkSettingsSession;
+  readonly readMcpSettings: () => Promise<Result<McpSettingsData, UnifiedError>>;
+  readonly modelSecretStore: ModelSecretStore;
+}): Promise<Result<{ readonly latencyMs: number }, UnifiedError>> {
+  if (!isEnabledRemoteMcpServer(input.config)) {
+    return err(
+      mcpRuntimeError(
+        "MCP_TEST_UNAVAILABLE",
+        "Only enabled remote HTTP MCP servers can be tested in this build."
+      )
+    );
+  }
+  const [policy, settings] = await Promise.all([
+    input.networkSettingsSession.getEffectivePolicy(),
+    input.readMcpSettings()
+  ]);
+  if (!policy.ok) return policy;
+  if (!settings.ok) return settings;
+  const current = settings.value.servers.find(
+    (server) => server.serverId === input.config.serverId
+  );
+  if (!isEnabledRemoteMcpServer(current)) {
+    return err(
+      mcpRuntimeError("MCP_CONFIG_CHANGED", "The MCP server configuration is no longer current.")
+    );
+  }
+  const secrets = await resolveMcpSecrets([current], input.modelSecretStore);
+  const startedAt = Date.now();
+  const connected = await connectRemoteMcp({
+    config: current,
+    policy: policy.value,
+    resolveApiKey: (secretRef) => secrets.get(secretRef),
+    configRevision: settings.value.revision,
+    readCurrentConfig: async () =>
+      readCurrentRemoteMcpConfigFromPort(input.readMcpSettings, current.serverId)
+  });
+  if (!connected.ok) return connected;
+  connected.value.close();
+  return ok({ latencyMs: Date.now() - startedAt });
+}
+
+function isEnabledRemoteMcpServer(
+  config: McpServerConfig | undefined
+): config is Extract<McpServerConfig, { readonly transport: "remote_http" }> {
+  return config?.transport === "remote_http" && config.enabled;
+}
+
+async function resolveMcpSecrets(
+  configs: readonly Extract<McpServerConfig, { readonly transport: "remote_http" }>[],
+  store: ModelSecretStore
+): Promise<Map<string, string>> {
+  const secrets = new Map<string, string>();
+  await Promise.all(
+    [...new Set(configs.map((config) => config.apiKeyRef).filter((value) => value.length > 0))].map(
+      async (secretRef) => {
+        const secret = await store.readSecret(secretRef);
+        if (secret.ok && secret.value !== undefined) secrets.set(secretRef, secret.value);
+      }
+    )
+  );
+  return secrets;
+}
+
+async function readCurrentRemoteMcpConfig(
+  settingsSession: McpSettingsSession,
+  serverId: string
+): Promise<
+  Result<{ readonly revision: string; readonly config: McpServerConfig | undefined }, UnifiedError>
+> {
+  return readCurrentRemoteMcpConfigFromPort(() => settingsSession.getMcpSettings(), serverId);
+}
+
+async function readCurrentRemoteMcpConfigFromPort(
+  readSettings: () => Promise<Result<McpSettingsData, UnifiedError>>,
+  serverId: string
+): Promise<
+  Result<{ readonly revision: string; readonly config: McpServerConfig | undefined }, UnifiedError>
+> {
+  const current = await readSettings();
+  if (!current.ok) return current;
+  return ok({
+    revision: current.value.revision,
+    config: current.value.servers.find((server) => server.serverId === serverId)
+  });
+}
+
+function createRemoteMcpAgentDescriptors(
+  tools: readonly {
+    readonly canonicalId: string;
+    readonly serverId: string;
+    readonly displayName: string;
+    readonly description: string;
+    readonly inputSchema: JsonObject;
+    readonly effect: "external_action";
+    readonly retrySemantics: "never_automatic";
+  }[]
+): readonly AgentToolDescriptor[] {
+  const providerNames = new Set<string>();
+  const descriptors: AgentToolDescriptor[] = [];
+  for (const tool of [...tools].sort((left, right) =>
+    left.canonicalId.localeCompare(right.canonicalId)
+  )) {
+    if (!isCanonicalRemoteMcpToolId(tool.canonicalId)) continue;
+    const canonicalId = tool.canonicalId as NonNullable<AgentToolDescriptor["id"]>;
+    const providerName = uniqueMcpProviderName(tool.canonicalId, providerNames);
+    const inputSchema = cloneJsonObject(tool.inputSchema);
+    const source = Object.freeze({ kind: "mcp" as const, id: tool.serverId });
+    const base: Omit<AgentToolDescriptor, "descriptorDigest"> = {
+      id: canonicalId,
+      name: providerName,
+      providerName,
+      displayName: tool.displayName,
+      description: tool.description,
+      kind: "external_tool",
+      effect: tool.effect,
+      dataEgress: "remote_tool_arguments",
+      destructive: false,
+      retrySemantics: tool.retrySemantics,
+      source,
+      inputSchema
+    };
+    const descriptor: AgentToolDescriptor = Object.freeze({
+      ...base,
+      source,
+      inputSchema: deepFreezeJson(inputSchema),
+      descriptorDigest: computeAgentToolDescriptorDigest(base)
+    });
+    descriptors.push(descriptor);
+  }
+  return Object.freeze(descriptors);
+}
+
+function uniqueMcpProviderName(canonicalId: string, used: Set<string>): string {
+  const initial = mangleToolId(canonicalId);
+  if (!used.has(initial)) {
+    used.add(initial);
+    return initial;
+  }
+  const digest = createHash("sha256").update(canonicalId, "utf8").digest("hex").slice(0, 10);
+  const prefix = initial.slice(0, Math.max(1, 64 - digest.length - 1));
+  const candidate = `${prefix}_${digest}`;
+  if (used.has(candidate)) {
+    throw new Error("Remote MCP provider tool names collided after digest mangling.");
+  }
+  used.add(candidate);
+  return candidate;
+}
+
+function isCanonicalRemoteMcpToolId(value: string): boolean {
+  return /^mcp:[A-Za-z0-9][A-Za-z0-9._-]{0,63}\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(value);
+}
+
+function remoteServerIdForCanonicalTool(canonicalToolId: string): string | undefined {
+  const match = /^mcp:([A-Za-z0-9][A-Za-z0-9._-]{0,63})\//u.exec(canonicalToolId);
+  return match?.[1];
+}
+
+function cloneJsonObject(value: JsonObject): JsonObject {
+  return JSON.parse(JSON.stringify(value)) as JsonObject;
+}
+
+function deepFreezeJson<T>(value: T): T {
+  if (value === null || typeof value !== "object") return value;
+  for (const child of Object.values(value as Record<string, unknown>)) deepFreezeJson(child);
+  return Object.freeze(value);
+}
+
+function mcpRuntimeError(code: string, message: string): UnifiedError {
+  return createUnifiedError({
+    code,
+    category: "AgentError",
+    message,
+    recoverability: "user-action",
+    suggestedAction: "Review the remote MCP and network settings.",
+    traceId: "desktop-remote-mcp-runtime"
+  });
 }
 
 export async function syncSavedEditorForPath(

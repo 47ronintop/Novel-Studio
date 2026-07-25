@@ -15,11 +15,14 @@
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "format": "prettier --check .",
+    "format:changed": "node scripts/format-changed.mjs",
+    "format:full-debt": "prettier --check .",
     "format:write": "prettier --write .",
     "test": "vitest run --passWithNoTests",
     "test:contract": "vitest run packages/schemas/test --passWithNoTests",
     "test:e2e": "npm run build && playwright test",
     "test:e2e:built": "playwright test",
+    "agent-sandbox:audit": "node scripts/agent-sandbox-audit.mjs",
     "alpha:check": "npm run build && node scripts/alpha-check.mjs",
     "alpha:verify": "node scripts/alpha-check.mjs",
     "package:check": "npm run build && node scripts/package-check.mjs",
@@ -29,7 +32,8 @@
     "package:dir:built": "node scripts/package-dir.mjs --skip-build",
     "package:installer": "node scripts/package-installer.mjs",
     "release:notes": "node scripts/release-notes.mjs",
-    "release:check": "node scripts/release-check.mjs"
+    "release:check": "node scripts/release-check.mjs",
+    "release:gate": "node scripts/release-check.mjs --strict --package-dir"
   },
   "engines": {
     "node": ">=20.20.0",

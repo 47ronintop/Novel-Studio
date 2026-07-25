@@ -128,7 +128,14 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["serverId", "displayName", "transport", "endpointUrl", "apiKeyRef", "enabled"],
+            "required": [
+              "serverId",
+              "displayName",
+              "transport",
+              "endpointUrl",
+              "apiKeyRef",
+              "enabled"
+            ],
             "properties": {
               "serverId": { "type": "string", "minLength": 1 },
               "displayName": { "type": "string", "minLength": 1 },

@@ -30,7 +30,11 @@ interface SearchRepositoryResult {
   readonly items: ReadonlyArray<{
     readonly relativePath: string;
     readonly stableRef: string;
-    readonly range: { readonly unit: "utf16_offset" | "line_column"; readonly start: number; readonly end: number };
+    readonly range: {
+      readonly unit: "utf16_offset" | "line_column";
+      readonly start: number;
+      readonly end: number;
+    };
     readonly snippet: string;
     readonly sourceChecksum: string;
     readonly resultDigest: string;

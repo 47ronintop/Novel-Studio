@@ -5,6 +5,8 @@ import {
   createAgentPermissionSession,
   createAgentPlanExecutionSession,
   createAgentRunDraftSession,
+  createAgentSearchToolSession,
+  freezeProviderNameMapping,
   createAgentRunSession,
   createAgentUsageSession,
   createChangeSetSession,
@@ -22,6 +24,13 @@ import {
   type AgentConversationPersistencePort,
   type AgentConversationSession,
   type AgentReadToolExecutor,
+  type AgentSearchToolExecutor,
+  type AgentNetworkToolExecutor,
+  type AgentExternalToolExecutor,
+  type AgentFileOperationSessionPort,
+  type AgentGitToolSessionPort,
+  type AgentTaskSandboxPortRef,
+  type AgentTaskApprovalResolver,
   type AgentRunModelDriver,
   type AgentRunSession,
   type AgentRunStartFacts,
@@ -37,17 +46,27 @@ import {
 import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { createDesktopCompactionSources } from "./agent-compaction-composer.js";
+import { DEFAULT_AGENT_FEATURE_FLAGS, type AgentFeatureFlags } from "./agent-feature-flags.js";
 import type { LlmModelProfile, LlmParameters } from "@novel-studio/llm-adapter";
 import type {
   AgentContextSourceInput,
   AgentRunSnapshot,
   AgentUsageRecord,
+  AgentToolCapabilitySnapshot,
+  AgentToolDescriptor,
   AgentToolName,
   ChangeSet,
   StartAgentRunCommand,
   VersionGroup
 } from "@novel-studio/agent-engine";
-import { calculateContextBudget } from "@novel-studio/agent-engine";
+import {
+  calculateContextBudget,
+  createEffectiveCapabilityState,
+  freezeAgentToolCapabilitySnapshot,
+  listAgentTools,
+  revokeCapability,
+  type EffectiveCapabilityState
+} from "@novel-studio/agent-engine";
 import type { AgentRunDraftSession } from "@novel-studio/application";
 import {
   createUnifiedError,
@@ -60,7 +79,9 @@ import {
 import {
   AgentConversationFileRepository,
   AgentWriteTransaction,
+  type AgentWriteLifecycleOperationPort,
   AgentProjectReadRepository,
+  AgentProjectSearchRepository,
   AgentRunFileRepository,
   AgentUsageFileRepository,
   ChapterFileRepository,
@@ -69,10 +90,8 @@ import {
   RecoveryRepository,
   StoryBibleFileRepository,
   validateWithSchema,
-  writeTextAtomically,
   type AgentTransactionJournal,
   type AgentConversationRecord,
-  type AgentWriteReplaceInput,
   type AgentWriteTransactionInput,
   type UpdateAgentConversationRecordInput
 } from "@novel-studio/repository";
@@ -127,6 +146,32 @@ export interface DesktopAgentRunSessionOptions {
   readonly surfaceTransactionRecoveryReview?: (group: VersionGroup) => Promise<void>;
   readonly projectLockOwnerId?: string;
   readonly failAgentWriteAt?: number;
+  /**
+   * Main-owned release gates. These only request a capability; the runtime also requires the
+   * corresponding concrete port to be present before exposing a tool to the model.
+   */
+  readonly featureFlags?: AgentFeatureFlags;
+  /**
+   * Explicit snapshot for deterministic composition tests and pre-qualified hosts. It is reduced
+   * against the supplied concrete ports before being frozen into the run session.
+   */
+  readonly capabilitySnapshot?: AgentToolCapabilitySnapshot;
+  /** Test/host override. Production constructs a repository-backed search executor. */
+  readonly searchToolExecutor?: AgentSearchToolExecutor;
+  /** Only inject a network executor that has already passed the Main security qualification. */
+  readonly networkToolExecutor?: AgentNetworkToolExecutor;
+  /** File lifecycle stays hidden unless the host has an atomic no-follow transaction backend. */
+  readonly fileOperationSession?: AgentFileOperationSessionPort;
+  readonly lifecycleOperations?: AgentWriteLifecycleOperationPort;
+  /** External capabilities are hidden unless the Main-owned sandbox transport is injected. */
+  readonly externalToolExecutor?: AgentExternalToolExecutor;
+  readonly externalToolDescriptors?: readonly AgentToolDescriptor[];
+  /** Closes Main-owned external transports when this workspace runtime is replaced. */
+  readonly disposeExternalTools?: () => void;
+  readonly gitToolSession?: AgentGitToolSessionPort;
+  readonly taskSandboxPort?: AgentTaskSandboxPortRef;
+  readonly taskApprovalResolver?: AgentTaskApprovalResolver;
+  readonly sandboxAttestationId?: string;
 }
 
 export interface PreparedAgentRunStart {
@@ -150,6 +195,9 @@ export interface DesktopAgentRuntimeServices {
   /** Present only when the Electron user-data usage store is configured. */
   readonly agentUsageSession?: AgentUsageSession;
   readonly prepare: () => Promise<Result<void, UnifiedError>>;
+  readonly dispose?: () => void;
+  /** Immediately fail-close network and external tool capabilities after a settings mutation. */
+  readonly revokeSettingsCapabilities: () => void;
 }
 
 export function createDesktopAgentRunSession(
@@ -164,10 +212,127 @@ export function createDesktopAgentRuntime(
   return createDesktopAgentRuntimeServices(options, true);
 }
 
+function requestedCapabilitySnapshot(
+  options: DesktopAgentRunSessionOptions
+): AgentToolCapabilitySnapshot {
+  const explicit = options.capabilitySnapshot;
+  if (explicit !== undefined) {
+    if (explicit.workspaceKind !== options.workspaceKind) {
+      throw new Error(
+        "Desktop Agent capability snapshot workspace kind does not match the runtime."
+      );
+    }
+    return freezeAgentToolCapabilitySnapshot(explicit);
+  }
+
+  const flags = options.featureFlags ?? DEFAULT_AGENT_FEATURE_FLAGS;
+  return freezeAgentToolCapabilitySnapshot({
+    workspaceKind: options.workspaceKind,
+    searchEnabled: flags.phaseA_searchEnabled,
+    fileLifecycleEnabled: flags.phaseB_fileLifecycleEnabled,
+    controlledExecutionEnabled:
+      flags.phaseC_controlledExecutionEnabled && options.sandboxAttestationId !== undefined,
+    ...(options.sandboxAttestationId === undefined
+      ? {}
+      : { sandboxAttestationId: options.sandboxAttestationId }),
+    gitReadEnabled: flags.phaseC_gitReadEnabled,
+    networkReadEnabled: flags.phaseD_networkReadEnabled,
+    pluginToolsEnabled: flags.phaseE_pluginToolsEnabled,
+    mcpToolsEnabled: flags.phaseE_localMcpEnabled || flags.phaseE_remoteMcpEnabled,
+    featureFlagRevision: flags.revision
+  });
+}
+
+function buildRuntimeCapabilitySnapshot(input: {
+  readonly requested: AgentToolCapabilitySnapshot;
+  readonly searchToolExecutor?: AgentSearchToolExecutor;
+  readonly networkToolExecutor?: AgentNetworkToolExecutor;
+  readonly fileOperationSession?: AgentFileOperationSessionPort;
+  readonly lifecycleOperations?: AgentWriteLifecycleOperationPort;
+  readonly hasVersionGroupExecutor: boolean;
+  readonly externalToolExecutor?: AgentExternalToolExecutor;
+  readonly externalToolDescriptors?: readonly AgentToolDescriptor[];
+  readonly gitToolSession?: AgentGitToolSessionPort;
+  readonly taskSandboxPort?: AgentTaskSandboxPortRef;
+  readonly taskApprovalResolver?: AgentTaskApprovalResolver;
+  readonly sandboxAttestationId?: string;
+}): AgentToolCapabilitySnapshot {
+  const descriptors = input.externalToolDescriptors ?? [];
+  const hasPluginDescriptor = descriptors.some((descriptor) =>
+    descriptor.id?.startsWith("plugin:")
+  );
+  const hasMcpDescriptor = descriptors.some((descriptor) => descriptor.id?.startsWith("mcp:"));
+  const controlledExecutionEnabled =
+    input.requested.controlledExecutionEnabled &&
+    input.taskSandboxPort !== undefined &&
+    input.taskApprovalResolver !== undefined &&
+    input.sandboxAttestationId !== undefined &&
+    input.requested.sandboxAttestationId === input.sandboxAttestationId;
+
+  return freezeAgentToolCapabilitySnapshot({
+    workspaceKind: input.requested.workspaceKind,
+    searchEnabled: input.requested.searchEnabled && input.searchToolExecutor !== undefined,
+    fileLifecycleEnabled:
+      input.requested.fileLifecycleEnabled &&
+      input.fileOperationSession !== undefined &&
+      input.lifecycleOperations !== undefined &&
+      input.hasVersionGroupExecutor,
+    controlledExecutionEnabled,
+    ...(controlledExecutionEnabled ? { sandboxAttestationId: input.sandboxAttestationId } : {}),
+    gitReadEnabled: input.requested.gitReadEnabled && input.gitToolSession !== undefined,
+    networkReadEnabled:
+      input.requested.networkReadEnabled && input.networkToolExecutor !== undefined,
+    pluginToolsEnabled:
+      input.requested.pluginToolsEnabled &&
+      input.externalToolExecutor !== undefined &&
+      hasPluginDescriptor,
+    mcpToolsEnabled:
+      input.requested.mcpToolsEnabled &&
+      input.externalToolExecutor !== undefined &&
+      hasMcpDescriptor,
+    featureFlagRevision: input.requested.featureFlagRevision
+  });
+}
+
+function buildRuntimeProviderNameMapping(
+  capabilitySnapshot: AgentToolCapabilitySnapshot,
+  externalToolDescriptors: readonly AgentToolDescriptor[] | undefined
+) {
+  const descriptors = new Map<string, AgentToolDescriptor>();
+  for (const variant of [
+    { operationMode: "planning" as const, contextMode: "writing" as const },
+    { operationMode: "planning" as const, contextMode: "general_file" as const },
+    { operationMode: "execution" as const, contextMode: "writing" as const },
+    { operationMode: "execution" as const, contextMode: "general_file" as const }
+  ]) {
+    for (const descriptor of listAgentTools({
+      ...variant,
+      writePolicy: "write_before_confirmation",
+      capabilitySnapshot,
+      ...(externalToolDescriptors === undefined ? {} : { externalToolDescriptors })
+    })) {
+      descriptors.set(String(descriptor.id ?? descriptor.name), descriptor);
+    }
+  }
+  return freezeProviderNameMapping(
+    [...descriptors.values()].map((descriptor) => {
+      const id = String(descriptor.id ?? descriptor.name);
+      const candidate = descriptor.providerName ?? descriptor.name;
+      return {
+        id,
+        providerName: /^[A-Za-z0-9_-]+$/u.test(candidate)
+          ? candidate
+          : id.replace(/[^A-Za-z0-9_-]/gu, "__").slice(0, 64)
+      };
+    })
+  );
+}
+
 function createDesktopAgentRuntimeServices(
   options: DesktopAgentRunSessionOptions,
   enforceConversationBinding: boolean
 ): DesktopAgentRuntimeServices {
+  const requestedCapabilities = requestedCapabilitySnapshot(options);
   const projectReads = new AgentProjectReadRepository({
     projectRoot: options.contentRoot,
     traceId: "desktop-agent-project-read"
@@ -209,6 +374,16 @@ function createDesktopAgentRuntimeServices(
           traceId: "desktop-agent-chapter"
         })
       : undefined;
+  const searchToolExecutor = requestedCapabilities.searchEnabled
+    ? (options.searchToolExecutor ??
+      createAgentSearchToolSession({
+        searchRepository: new AgentProjectSearchRepository({
+          projectRoot: options.contentRoot,
+          workspaceKind: options.workspaceKind,
+          traceId: "desktop-agent-project-search"
+        })
+      }))
+    : undefined;
   const readToolExecutor = createDesktopReadToolExecutor(
     projectReads,
     chapterRepository,
@@ -229,6 +404,9 @@ function createDesktopAgentRuntimeServices(
           stateRoot: options.stateRoot,
           projectId: options.projectId,
           projectLockOwnerId: options.projectLockOwnerId,
+          ...(options.lifecycleOperations === undefined
+            ? {}
+            : { lifecycleOperations: options.lifecycleOperations }),
           projectReads,
           ...(chapterRepository === undefined ? {} : { chapterRepository }),
           ...(options.readEditorState === undefined
@@ -251,6 +429,38 @@ function createDesktopAgentRuntimeServices(
             ? {}
             : { failAgentWriteAt: options.failAgentWriteAt })
         });
+
+  const capabilitySnapshot = buildRuntimeCapabilitySnapshot({
+    requested: requestedCapabilities,
+    ...(searchToolExecutor === undefined ? {} : { searchToolExecutor }),
+    ...(options.networkToolExecutor === undefined
+      ? {}
+      : { networkToolExecutor: options.networkToolExecutor }),
+    ...(options.fileOperationSession === undefined
+      ? {}
+      : { fileOperationSession: options.fileOperationSession }),
+    ...(options.lifecycleOperations === undefined
+      ? {}
+      : { lifecycleOperations: options.lifecycleOperations }),
+    hasVersionGroupExecutor: versionGroupServices !== undefined,
+    ...(options.externalToolExecutor === undefined
+      ? {}
+      : { externalToolExecutor: options.externalToolExecutor }),
+    ...(options.externalToolDescriptors === undefined
+      ? {}
+      : { externalToolDescriptors: options.externalToolDescriptors }),
+    ...(options.gitToolSession === undefined ? {} : { gitToolSession: options.gitToolSession }),
+    ...(options.taskSandboxPort === undefined ? {} : { taskSandboxPort: options.taskSandboxPort }),
+    ...(options.taskApprovalResolver === undefined
+      ? {}
+      : { taskApprovalResolver: options.taskApprovalResolver }),
+    ...((options.sandboxAttestationId ?? requestedCapabilities.sandboxAttestationId) === undefined
+      ? {}
+      : {
+          sandboxAttestationId:
+            options.sandboxAttestationId ?? requestedCapabilities.sandboxAttestationId
+        })
+  });
 
   const scriptedDriver = createDesktopScriptedAgentDriver(options.activeChapterId);
   const modelDriver =
@@ -396,14 +606,58 @@ function createDesktopAgentRuntimeServices(
     ...(options.now === undefined ? {} : { now: options.now })
   });
   const planExecutionSession = createAgentPlanExecutionSession({ repository });
+  let effectiveCapabilityState: EffectiveCapabilityState =
+    createEffectiveCapabilityState(capabilitySnapshot);
+  const revokeSettingsCapabilities = (): void => {
+    const revokedAt = options.now?.() ?? new Date().toISOString();
+    effectiveCapabilityState = revokeCapability(
+      effectiveCapabilityState,
+      "network",
+      "user_revoked",
+      revokedAt
+    );
+    effectiveCapabilityState = revokeCapability(
+      effectiveCapabilityState,
+      "mcp_tools",
+      "user_revoked",
+      revokedAt
+    );
+  };
+  const providerNameMapping = buildRuntimeProviderNameMapping(
+    capabilitySnapshot,
+    options.externalToolDescriptors
+  );
   const session = createAgentRunSession({
     repository,
     modelDriver,
     readToolExecutor,
     startPreflight,
+    capabilitySnapshot,
+    effectiveCapabilityState,
+    getEffectiveCapabilityState: () => effectiveCapabilityState,
+    providerNameMapping,
     permission: permissionSession,
     planExecutionSession,
     changeSetSession,
+    ...(searchToolExecutor === undefined ? {} : { searchToolExecutor }),
+    ...(options.networkToolExecutor === undefined
+      ? {}
+      : { networkToolExecutor: options.networkToolExecutor }),
+    ...(options.fileOperationSession === undefined
+      ? {}
+      : { fileOperationSession: options.fileOperationSession }),
+    ...(options.externalToolExecutor === undefined
+      ? {}
+      : { externalToolExecutor: options.externalToolExecutor }),
+    ...(options.externalToolDescriptors === undefined
+      ? {}
+      : { externalToolDescriptors: options.externalToolDescriptors }),
+    ...(options.gitToolSession === undefined ? {} : { gitToolSession: options.gitToolSession }),
+    ...(options.taskSandboxPort === undefined ? {} : { taskSandboxPort: options.taskSandboxPort }),
+    ...(options.taskApprovalResolver === undefined
+      ? {}
+      : { taskApprovalResolver: options.taskApprovalResolver }),
+    ...(options.taskSandboxPort === undefined ? {} : { projectRoot: options.contentRoot }),
     ...(usageRepository === undefined
       ? {}
       : {
@@ -512,7 +766,9 @@ function createDesktopAgentRuntimeServices(
     agentPermissionSession: permissionSession,
     agentPlanExecutionSession: planExecutionSession,
     ...(usageSession === undefined ? {} : { agentUsageSession: usageSession }),
-    prepare
+    prepare,
+    revokeSettingsCapabilities,
+    ...(options.disposeExternalTools === undefined ? {} : { dispose: options.disposeExternalTools })
   };
 }
 
@@ -821,6 +1077,7 @@ function createDesktopVersionGroupServices(input: {
   readonly stateRoot: string;
   readonly projectId: string;
   readonly projectLockOwnerId: string;
+  readonly lifecycleOperations?: AgentWriteLifecycleOperationPort;
   readonly projectReads: AgentProjectReadRepository;
   readonly chapterRepository?: ChapterFileRepository;
   readonly readEditorState?: DesktopAgentRunSessionOptions["readEditorState"];
@@ -850,10 +1107,16 @@ function createDesktopVersionGroupServices(input: {
       traceId: "desktop-agent-history"
     }),
     recoveryRepository,
-    ...(input.failAgentWriteAt === undefined
+    ...(input.lifecycleOperations === undefined
       ? {}
       : {
-          replaceFile: createFailureInjectingReplaceFile(input.failAgentWriteAt)
+          lifecycleOperations:
+            input.failAgentWriteAt === undefined
+              ? input.lifecycleOperations
+              : createFailureInjectingLifecycleOperations(
+                  input.lifecycleOperations,
+                  input.failAgentWriteAt
+                )
         }),
     traceId: "desktop-agent-write"
   });
@@ -1009,8 +1272,27 @@ function recoveredVersionGroup(
       beforeVersionId: entry.beforeVersionId,
       status: entry.status,
       ...(entry.errorCode === undefined ? {} : { errorCode: entry.errorCode })
-    }))
+    })),
+    ...(journal.operations === undefined
+      ? {}
+      : {
+          operations: journal.operations.map((entry) => ({
+            operationId: entry.operationId,
+            kind: entry.operation.kind,
+            relativePaths: lifecycleOperationPaths(entry.operation),
+            status: entry.status,
+            ...(entry.errorCode === undefined ? {} : { errorCode: entry.errorCode })
+          }))
+        })
   });
+}
+
+function lifecycleOperationPaths(
+  operation: NonNullable<AgentTransactionJournal["operations"]>[number]["operation"]
+): readonly string[] {
+  return operation.kind === "move_file"
+    ? [operation.sourcePath, operation.targetPath]
+    : [operation.relativePath];
 }
 
 async function prepareTransactionInput(
@@ -1070,7 +1352,8 @@ async function prepareTransactionInput(
     writePolicy: input.writePolicy,
     approvalSource: input.approvalSource,
     approvalToken: input.approvalToken,
-    files
+    files,
+    ...(input.operations === undefined ? {} : { operations: input.operations })
   });
 }
 
@@ -1157,26 +1440,26 @@ function versionGroupFailure(group: VersionGroup): UnifiedError {
   );
 }
 
-function createFailureInjectingReplaceFile(failAt: number) {
+function createFailureInjectingLifecycleOperations(
+  lifecycle: AgentWriteLifecycleOperationPort,
+  failAt: number
+): AgentWriteLifecycleOperationPort {
   let applyCount = 0;
-  return async (input: AgentWriteReplaceInput): Promise<Result<void, UnifiedError>> => {
-    if (input.phase === "apply") {
-      applyCount += 1;
-      if (applyCount === failAt) {
-        return err(
-          runtimeError("AGENT_WRITE_INJECTED_FAILURE", {
-            relativePath: input.relativePath,
-            failAt
-          })
-        );
+  return {
+    async mutate(input) {
+      if (input.kind === "replace_file" && input.phase === "apply") {
+        applyCount += 1;
+        if (applyCount === failAt) {
+          return err(
+            runtimeError("AGENT_WRITE_INJECTED_FAILURE", {
+              relativePath: input.relativePath,
+              failAt
+            })
+          );
+        }
       }
+      return lifecycle.mutate(input);
     }
-    return writeTextAtomically({
-      targetPath: input.targetPath,
-      content: input.content,
-      traceId: "desktop-agent-write",
-      beforeReplace: input.verifyImmediatelyBeforeReplace
-    });
   };
 }
 

@@ -56,6 +56,15 @@ async function checkPackageScripts() {
   if (packageJson.scripts?.["release:check"] !== "node scripts/release-check.mjs") {
     failures.push("Missing release:check script.");
   }
+  if (
+    packageJson.scripts?.["release:gate"] !==
+    "node scripts/release-check.mjs --strict --package-dir"
+  ) {
+    failures.push("release:gate must run the strict packaged runtime gate.");
+  }
+  if (packageJson.scripts?.["agent-sandbox:audit"] !== "node scripts/agent-sandbox-audit.mjs") {
+    failures.push("agent-sandbox:audit must run the locked native sandbox audit wrapper.");
+  }
 }
 
 async function checkPackagingEnvironment() {
@@ -157,17 +166,52 @@ async function checkElectronBuilderConfig() {
   if (!Array.isArray(config.files) || !config.files.includes("packages/*/dist/**")) {
     failures.push("Electron package files must include workspace package dist artifacts.");
   }
-  const compiledTestExclusion = "!packages/*/dist/test{,/**}";
-  if (!Array.isArray(config.files) || !config.files.includes(compiledTestExclusion)) {
+  const compiledTestExclusions = ["!apps/desktop/dist/test{,/**}", "!packages/*/dist/test{,/**}"];
+  if (
+    !Array.isArray(config.files) ||
+    compiledTestExclusions.some((exclusion) => !config.files.includes(exclusion))
+  ) {
     failures.push("Package files must exclude tests and fixtures.");
   }
   if (!Array.isArray(config.files) || !config.files.includes("packages/schemas/schema/**")) {
     failures.push("Electron package files must include JSON Schema runtime contracts.");
   }
+  const expectedExtraResources = [
+    { from: "apps/desktop/resources/git", to: "git" },
+    {
+      from: "apps/desktop/resources/native/agent-task-sandbox",
+      to: "native/agent-task-sandbox"
+    }
+  ];
+  if (
+    !Array.isArray(config.extraResources) ||
+    config.extraResources.length !== expectedExtraResources.length ||
+    expectedExtraResources.some(
+      (expected, index) =>
+        config.extraResources[index]?.from !== expected.from ||
+        config.extraResources[index]?.to !== expected.to
+    )
+  ) {
+    failures.push(
+      "Electron package must ship fixed Git and sandbox resources through extraResources."
+    );
+  }
+  for (const requiredResource of [
+    "apps/desktop/resources/git/manifest.json",
+    "apps/desktop/resources/native/agent-task-sandbox/manifest.json",
+    "scripts/verify-packaged-git-runtime.mjs",
+    "scripts/verify-packaged-agent-sandbox.mjs",
+    "scripts/agent-sandbox-audit.mjs"
+  ]) {
+    if (!(await fileExists(join(root, requiredResource)))) {
+      failures.push(`Agent runtime packaging prerequisite is missing: ${requiredResource}`);
+    }
+  }
   const allowedPackageFiles = new Set([
     "apps/desktop/dist/**",
+    "!apps/desktop/dist/test{,/**}",
     "packages/*/dist/**",
-    compiledTestExclusion,
+    "!packages/*/dist/test{,/**}",
     "packages/schemas/schema/**",
     "package.json",
     "package-lock.json"

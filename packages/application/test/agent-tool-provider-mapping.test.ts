@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   checkProviderNameCollisions,
+  freezeProviderNameMapping,
   mangleToolId,
   buildFrozenProviderNameMapping
 } from "../src/agent-tool-provider-mapping.js";
@@ -68,6 +69,26 @@ describe("buildFrozenProviderNameMapping", () => {
       buildFrozenProviderNameMapping([
         { id: "tool_a", providerName: "same" },
         { id: "tool_b", providerName: "same" }
+      ])
+    ).toThrow(/collision/i);
+  });
+
+  test("exposes a stable bidirectional frozen mapping revision", () => {
+    const mapping = freezeProviderNameMapping([
+      { id: "plugin:acme/summarise", providerName: "plugin__acme__summarise" },
+      { id: "mcp:docs/search", providerName: "mcp__docs__search" }
+    ]);
+    expect(mapping.providerNameFor("plugin:acme/summarise")).toBe("plugin__acme__summarise");
+    expect(mapping.canonicalIdFor("mcp__docs__search")).toBe("mcp:docs/search");
+    expect(mapping.revision).toMatch(/^[a-f0-9]{64}$/);
+    expect(Object.isFrozen(mapping)).toBe(true);
+  });
+
+  test("rejects duplicate canonical ids even with different provider names", () => {
+    expect(() =>
+      freezeProviderNameMapping([
+        { id: "plugin:acme/summarise", providerName: "first" },
+        { id: "plugin:acme/summarise", providerName: "second" }
       ])
     ).toThrow(/collision/i);
   });

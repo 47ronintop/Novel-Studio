@@ -41,6 +41,51 @@ describe("VersionGroupSession", () => {
     ]);
   });
 
+  test("accepts an operations-only Change Set and forwards selected lifecycle operations", async () => {
+    const operations: string[] = [];
+    let appliedInput: Parameters<VersionGroupSessionTransactionPort["apply"]>[0] | undefined;
+    const session = createSession(operations, {
+      async apply(input) {
+        appliedInput = input;
+        return ok({
+          ...appliedGroup(),
+          writes: [],
+          baselineByPath: {},
+          undoMetadata: {
+            ...appliedGroup().undoMetadata,
+            baselineVersionIds: {},
+            lastWriteChecksums: {}
+          }
+        });
+      }
+    });
+    const operationChangeSet: ChangeSet = {
+      ...changeSet(),
+      schemaVersion: "1.1",
+      files: [],
+      operationsSchemaVersion: "1.1",
+      operations: [
+        {
+          kind: "create_directory",
+          operationId: "mkdir_drafts",
+          toolCallIdempotencyKey: "tool_mkdir",
+          relativePath: "drafts",
+          selected: true
+        }
+      ]
+    };
+
+    const result = await session.applyApproved({
+      changeSet: operationChangeSet,
+      approval: approval()
+    });
+
+    expect(result.ok).toBe(true);
+    expect(appliedInput?.files).toEqual([]);
+    expect(appliedInput?.operations).toEqual(operationChangeSet.operations);
+    expect(operations).toEqual(["pause:drafts", "recovery-clean:drafts", "resume:drafts"]);
+  });
+
   test("rejects a publicly forged preapproved-run source before the transaction port", async () => {
     const operations: string[] = [];
     const apply = vi.fn(async () =>
@@ -272,7 +317,10 @@ describe("VersionGroupSession", () => {
 
   test("re-reads dirty editor content after pausing autosave", async () => {
     const operations: string[] = [];
-    let receivedEditorContents: readonly { readonly relativePath: string; readonly content: string }[] = [];
+    let receivedEditorContents: readonly {
+      readonly relativePath: string;
+      readonly content: string;
+    }[] = [];
     const session = createSession(
       operations,
       {

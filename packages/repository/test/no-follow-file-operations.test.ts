@@ -1,14 +1,18 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ok } from "@novel-studio/shared";
 import { afterEach, describe, expect, test } from "vitest";
 
 import {
-  noFollowStat,
-  noFollowRename,
-  noFollowUnlink,
   noFollowMkdir,
-  NoFollowFileOperations
+  noFollowRename,
+  noFollowRmdir,
+  noFollowStat,
+  noFollowUnlink,
+  noFollowWriteFile,
+  NoFollowFileOperations,
+  type NoFollowNativeFileOperationPort
 } from "../src/no-follow-file-operations.js";
 
 const roots: string[] = [];
@@ -33,7 +37,30 @@ describe("noFollowStat", () => {
     expect(result.value.isFile()).toBe(true);
   });
 
-  test("rejects symlink at target", async () => {
+  test.each([
+    "../outside.txt",
+    "nested/../outside.txt",
+    "/tmp/outside.txt",
+    "C:/Windows/win.ini",
+    "D:/outside.txt",
+    "C:relative.txt",
+    "\\\\server\\share\\outside.txt",
+    "\\\\?\\C:\\Windows\\win.ini",
+    "report.txt:secret",
+    "CON",
+    "nested/PRN.txt",
+    "trailing.",
+    "trailing ",
+    "nested//file.txt"
+  ])("rejects unsafe or cross-volume path %s", async (targetPath) => {
+    const root = await makeRoot();
+    const result = await noFollowStat(root, targetPath);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe("NO_FOLLOW_PATH_REJECTED");
+  });
+
+  test("rejects a symlink or junction at the target", async () => {
     const root = await makeRoot();
     const outside = await mkdtemp(join(tmpdir(), "novel-studio-nf-outside-"));
     roots.push(outside);
@@ -45,11 +72,11 @@ describe("noFollowStat", () => {
       if (result.ok) return;
       expect(result.error.code).toBe("NO_FOLLOW_SYMLINK_REJECTED");
     } catch {
-      // symlink creation may fail in some environments
+      // Symlink creation can require elevated Windows privileges.
     }
   });
 
-  test("rejects junction/directory symlink in path segment", async () => {
+  test("rejects a junction in a parent segment", async () => {
     const root = await makeRoot();
     const outside = await mkdtemp(join(tmpdir(), "novel-studio-nf-outside2-"));
     roots.push(outside);
@@ -61,112 +88,103 @@ describe("noFollowStat", () => {
       if (result.ok) return;
       expect(result.error.code).toBe("NO_FOLLOW_SYMLINK_REJECTED");
     } catch {
-      // junction creation may fail
+      // Junction creation can be unavailable in restricted test environments.
     }
   });
 });
 
-describe("noFollowRename", () => {
-  test("renames a regular file", async () => {
+describe("mutation operations", () => {
+  test("fail closed without a native handle-based implementation", async () => {
     const root = await makeRoot();
     await writeFile(join(root, "old.txt"), "content", "utf8");
-    const result = await noFollowRename(root, "old.txt", "new.txt");
-    expect(result.ok).toBe(true);
-    // Verify file was actually renamed
-    const statResult = await noFollowStat(root, "new.txt");
-    expect(statResult.ok).toBe(true);
-  });
 
-  test("rejects rename when source is a symlink segment", async () => {
-    const root = await makeRoot();
-    const outside = await mkdtemp(join(tmpdir(), "novel-studio-nf-outside3-"));
-    roots.push(outside);
-    await writeFile(join(outside, "file.txt"), "content", "utf8");
-    try {
-      await symlink(outside, join(root, "linked"), "junction");
-      const result = await noFollowRename(root, "linked/file.txt", "moved.txt");
+    const renameResult = await noFollowRename(root, "old.txt", "new.txt");
+    const unlinkResult = await noFollowUnlink(root, "old.txt");
+    const mkdirResult = await noFollowMkdir(root, "new-dir");
+    const rmdirResult = await noFollowRmdir(root, "old-dir");
+    const writeResult = await noFollowWriteFile(root, "new.txt", "content");
+
+    for (const result of [renameResult, unlinkResult, mkdirResult, rmdirResult, writeResult]) {
       expect(result.ok).toBe(false);
-    } catch {
-      // junction creation may fail
+      if (!result.ok) expect(result.error.code).toBe("NO_FOLLOW_NATIVE_REQUIRED");
     }
-  });
-});
-
-describe("noFollowUnlink", () => {
-  test("deletes a regular file", async () => {
-    const root = await makeRoot();
-    await writeFile(join(root, "to-delete.txt"), "content", "utf8");
-    const result = await noFollowUnlink(root, "to-delete.txt");
-    expect(result.ok).toBe(true);
+    expect((await noFollowStat(root, "old.txt")).ok).toBe(true);
+    expect((await noFollowStat(root, "new.txt")).ok).toBe(false);
+    expect((await noFollowStat(root, "new-dir")).ok).toBe(false);
   });
 
-  test("returns error for non-existent file", async () => {
+  test("does not invoke the native port for an unsafe path", async () => {
     const root = await makeRoot();
-    const result = await noFollowUnlink(root, "nonexistent.txt");
+    let calls = 0;
+    const nativePort: NoFollowNativeFileOperationPort = {
+      async rename() {
+        calls += 1;
+        return ok(undefined);
+      },
+      async unlink() {
+        calls += 1;
+        return ok(undefined);
+      },
+      async mkdir() {
+        calls += 1;
+        return ok(undefined);
+      },
+      async rmdir() {
+        calls += 1;
+        return ok(undefined);
+      },
+      async writeFile() {
+        calls += 1;
+        return ok(undefined);
+      }
+    };
+
+    const result = await noFollowRename(root, "C:/Windows/win.ini", "new.txt", nativePort);
     expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("NO_FOLLOW_PATH_REJECTED");
+    expect(calls).toBe(0);
   });
 
-  test("rejects symlink at target", async () => {
+  test("delegates only validated relative paths to the native provider", async () => {
     const root = await makeRoot();
-    const outside = await mkdtemp(join(tmpdir(), "novel-studio-nf-outside4-"));
-    roots.push(outside);
-    await writeFile(join(outside, "file.txt"), "content", "utf8");
-    try {
-      await symlink(join(outside, "file.txt"), join(root, "link.txt"));
-      const result = await noFollowUnlink(root, "link.txt");
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.error.code).toBe("NO_FOLLOW_SYMLINK_REJECTED");
-    } catch {
-      // symlink creation may fail
-    }
-  });
-});
+    const calls: string[] = [];
+    const nativePort: NoFollowNativeFileOperationPort = {
+      async rename(_root, sourcePath, targetPath) {
+        calls.push(`rename:${sourcePath}:${targetPath}`);
+        return ok(undefined);
+      },
+      async unlink(_root, targetPath) {
+        calls.push(`unlink:${targetPath}`);
+        return ok(undefined);
+      },
+      async mkdir(_root, targetPath) {
+        calls.push(`mkdir:${targetPath}`);
+        return ok(undefined);
+      },
+      async rmdir(_root, targetPath) {
+        calls.push(`rmdir:${targetPath}`);
+        return ok(undefined);
+      },
+      async writeFile(_root, targetPath, content, options) {
+        calls.push(`write:${targetPath}:${content}:${options?.createOnly ?? false}`);
+        return ok(undefined);
+      }
+    };
+    const operations = new NoFollowFileOperations(root, nativePort);
 
-describe("noFollowMkdir", () => {
-  test("creates a directory", async () => {
-    const root = await makeRoot();
-    const result = await noFollowMkdir(root, "newdir");
-    expect(result.ok).toBe(true);
-    const statResult = await noFollowStat(root, "newdir");
-    expect(statResult.ok).toBe(true);
-    if (!statResult.ok) return;
-    expect(statResult.value.isDirectory()).toBe(true);
-  });
-
-  test("returns error if directory already exists", async () => {
-    const root = await makeRoot();
-    await mkdir(join(root, "existing"), { recursive: true });
-    const result = await noFollowMkdir(root, "existing");
-    expect(result.ok).toBe(false);
-  });
-
-  test("rejects junction in parent path", async () => {
-    const root = await makeRoot();
-    const outside = await mkdtemp(join(tmpdir(), "novel-studio-nf-outside5-"));
-    roots.push(outside);
-    try {
-      await symlink(outside, join(root, "linked"), "junction");
-      const result = await noFollowMkdir(root, "linked/newdir");
-      expect(result.ok).toBe(false);
-    } catch {
-      // junction creation may fail
-    }
-  });
-});
-
-describe("NoFollowFileOperations class", () => {
-  test("exposes stat, rename, unlink, mkdir methods", async () => {
-    const root = await makeRoot();
-    await writeFile(join(root, "test.txt"), "content", "utf8");
-    const ops = new NoFollowFileOperations(root);
-    const stat = await ops.stat("test.txt");
-    expect(stat.ok).toBe(true);
-    const mk = await ops.mkdir("subdir");
-    expect(mk.ok).toBe(true);
-    const ren = await ops.rename("test.txt", "subdir/renamed.txt");
-    expect(ren.ok).toBe(true);
-    const unl = await ops.unlink("subdir/renamed.txt");
-    expect(unl.ok).toBe(true);
+    expect((await operations.rename("old.txt", "new.txt")).ok).toBe(true);
+    expect((await operations.unlink("new.txt")).ok).toBe(true);
+    expect((await operations.mkdir("dir")).ok).toBe(true);
+    expect((await operations.rmdir("dir")).ok).toBe(true);
+    expect((await operations.writeFile("dir/file.txt", "content", { createOnly: true })).ok).toBe(
+      true
+    );
+    expect(calls).toEqual([
+      "rename:old.txt:new.txt",
+      "unlink:new.txt",
+      "mkdir:dir",
+      "rmdir:dir",
+      "write:dir/file.txt:content:true"
+    ]);
   });
 });

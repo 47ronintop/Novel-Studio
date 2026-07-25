@@ -10,14 +10,36 @@ import { randomUUID } from "node:crypto";
 
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
+const WINDOWS_RESERVED_NAMES = new Set([
+  "CON",
+  "PRN",
+  "AUX",
+  "NUL",
+  "CLOCK$",
+  "COM1",
+  "COM2",
+  "COM3",
+  "COM4",
+  "COM5",
+  "COM6",
+  "COM7",
+  "COM8",
+  "COM9",
+  "LPT1",
+  "LPT2",
+  "LPT3",
+  "LPT4",
+  "LPT5",
+  "LPT6",
+  "LPT7",
+  "LPT8",
+  "LPT9"
+]);
+
 // ── Local operation type definitions (match packages/agent-engine/src/change-set.ts v1.1) ──
 
 export type ChangeSetOperationKind =
-  | "modify"
-  | "create_file"
-  | "move_file"
-  | "delete_file"
-  | "create_directory";
+  "modify" | "create_file" | "move_file" | "delete_file" | "create_directory";
 
 interface ChangeSetOperationBase {
   readonly operationId: string;
@@ -186,7 +208,9 @@ export interface AgentFileOperationSession {
   proposeDirectoryCreate(
     input: ProposeDirectoryCreateInput
   ): Result<FileOperationProposal, UnifiedError>;
-  proposeChapterCreate(input: ProposeChapterCreateInput): Result<FileOperationProposal, UnifiedError>;
+  proposeChapterCreate(
+    input: ProposeChapterCreateInput
+  ): Result<FileOperationProposal, UnifiedError>;
   proposeStoryBibleWrite(
     input: ProposeStoryBibleWriteInput
   ): Result<FileOperationProposal, UnifiedError>;
@@ -216,7 +240,11 @@ export function createAgentFileOperationSession(
   }
 
   function store(toolCallId: string, operation: ChangeSetOperation): FileOperationProposal {
-    const proposal: FileOperationProposal = { operation, operationId: operation.operationId, toolCallId };
+    const proposal: FileOperationProposal = {
+      operation,
+      operationId: operation.operationId,
+      toolCallId
+    };
     proposals.set(toolCallId, proposal);
     operations.push(operation);
     return proposal;
@@ -232,14 +260,18 @@ export function createAgentFileOperationSession(
   }
 
   function isValidRelativePath(p: string): boolean {
-    return (
-      p.length > 0 &&
-      p.length <= 1024 &&
-      !p.includes("..") &&
-      !p.includes("\\") &&
-      !p.startsWith("/") &&
-      !p.startsWith("//")
-    );
+    if (typeof p !== "string" || p.length === 0 || p.length > 1024) return false;
+    // Accept one canonical form so later filesystem layers never need to normalize user input.
+    if (p.includes("\\") || p.includes("\0") || p.startsWith("/") || /^[a-zA-Z]:/.test(p)) {
+      return false;
+    }
+    return p.split("/").every((segment) => {
+      if (segment.length === 0 || segment === "." || segment === "..") return false;
+      // ':' selects an NTFS alternate data stream and also covers drive-relative paths.
+      if (segment.includes(":") || /[. ]$/.test(segment)) return false;
+      const deviceName = segment.split(".", 1)[0]?.toUpperCase();
+      return deviceName !== undefined && !WINDOWS_RESERVED_NAMES.has(deviceName);
+    });
   }
 
   return {
@@ -335,13 +367,19 @@ export function createAgentFileOperationSession(
         "timeline.events"
       ];
       if (!validAssetTypes.includes(input.assetType))
-        return err(operationError("FILE_OP_ASSET_TYPE_INVALID", `Unknown asset type: ${input.assetType}`));
+        return err(
+          operationError("FILE_OP_ASSET_TYPE_INVALID", `Unknown asset type: ${input.assetType}`)
+        );
       if (input.content.length === 0 || input.content.length > 1024 * 1024)
-        return err(operationError("FILE_OP_CONTENT_INVALID", "Content must be non-empty and ≤1 MB."));
+        return err(
+          operationError("FILE_OP_CONTENT_INVALID", "Content must be non-empty and ≤1 MB.")
+        );
       try {
         JSON.parse(input.content);
       } catch {
-        return err(operationError("FILE_OP_CONTENT_INVALID", "Story Bible content must be valid JSON."));
+        return err(
+          operationError("FILE_OP_CONTENT_INVALID", "Story Bible content must be valid JSON.")
+        );
       }
       const existing = proposals.get(input.toolCallId);
       if (existing !== undefined) return ok(existing);

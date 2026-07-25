@@ -102,8 +102,69 @@ function mcpError(code: string, message: string): UnifiedError {
   });
 }
 
+let lastRevisionTick = 0;
+
 function bumpRevision(): string {
-  return `v1.0-${Date.now()}`;
+  lastRevisionTick = Math.max(Date.now(), lastRevisionTick + 1);
+  return `v1.0-${String(lastRevisionTick)}`;
+}
+
+function hasDisallowedControlCharacters(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if ((code < 32 && code !== 9 && code !== 10 && code !== 13) || code === 127) return true;
+  }
+  return false;
+}
+
+function validateServerConfig(config: McpServerConfig): Result<void, UnifiedError> {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(config.serverId)) {
+    return err(
+      mcpError("MCP_SERVER_ID_INVALID", "MCP serverId must be 1-128 safe identifier characters.")
+    );
+  }
+  if (
+    config.displayName.length === 0 ||
+    config.displayName.length > 256 ||
+    hasDisallowedControlCharacters(config.displayName)
+  ) {
+    return err(mcpError("MCP_SERVER_DISPLAY_NAME_INVALID", "MCP server displayName is invalid."));
+  }
+  if (config.transport === "local_stdio") return ok(undefined);
+
+  let endpoint: URL;
+  try {
+    endpoint = new URL(config.endpointUrl);
+  } catch {
+    return err(mcpError("MCP_REMOTE_ENDPOINT_INVALID", "Remote MCP endpointUrl is invalid."));
+  }
+  if (
+    endpoint.protocol !== "https:" ||
+    endpoint.username !== "" ||
+    endpoint.password !== "" ||
+    endpoint.hash !== ""
+  ) {
+    return err(
+      mcpError(
+        "MCP_REMOTE_ENDPOINT_INVALID",
+        "Remote MCP endpointUrl must be credential-free HTTPS without a fragment."
+      )
+    );
+  }
+  if (hasDisallowedControlCharacters(config.apiKeyRef) || config.apiKeyRef.length > 512) {
+    return err(mcpError("MCP_REMOTE_API_KEY_REF_INVALID", "Remote MCP apiKeyRef is invalid."));
+  }
+  if (
+    config.tlsFingerprint !== undefined &&
+    (config.tlsFingerprint.length === 0 ||
+      config.tlsFingerprint.length > 512 ||
+      hasDisallowedControlCharacters(config.tlsFingerprint))
+  ) {
+    return err(
+      mcpError("MCP_REMOTE_TLS_FINGERPRINT_INVALID", "Remote MCP TLS fingerprint is invalid.")
+    );
+  }
+  return ok(undefined);
 }
 
 export function createMcpSettingsSession(input: {
@@ -123,6 +184,17 @@ export function createMcpSettingsSession(input: {
     const stored = await input.port.readMcpSettings();
     if (!stored.ok) return stored;
     if (!stored.value) return ok(DEFAULT_MCP_SETTINGS);
+    const seenServerIds = new Set<string>();
+    for (const config of stored.value.servers) {
+      const valid = validateServerConfig(config);
+      if (!valid.ok) return valid;
+      if (seenServerIds.has(config.serverId)) {
+        return err(
+          mcpError("MCP_SERVER_ID_DUPLICATE", `MCP server '${config.serverId}' is duplicated.`)
+        );
+      }
+      seenServerIds.add(config.serverId);
+    }
     return ok(stored.value);
   }
 
@@ -141,6 +213,8 @@ export function createMcpSettingsSession(input: {
     },
 
     async addServer(config) {
+      const valid = validateServerConfig(config);
+      if (!valid.ok) return valid;
       const settings = await readSettings();
       if (!settings.ok) return settings;
       const existing = settings.value.servers.findIndex((s) => s.serverId === config.serverId);

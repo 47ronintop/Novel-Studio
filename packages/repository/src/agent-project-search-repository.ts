@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, readdir, realpath } from "node:fs/promises";
+import { constants, type Stats } from "node:fs";
+import { lstat, open, readdir, realpath, type FileHandle } from "node:fs/promises";
 import { extname, isAbsolute, join, relative } from "node:path";
 
 import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
@@ -15,6 +16,10 @@ const MAX_RESULTS_HARD_LIMIT = 200;
 const MAX_SNIPPET_BYTES = 512;
 const MAX_TOTAL_RESULT_BYTES = 256 * 1024;
 const MAX_FILE_SIZE_BYTES = 1024 * 1024; // 1 MB
+const MAX_DIRECTORIES = 2_000;
+const MAX_FILES = 10_000;
+const MAX_TOTAL_SCANNED_BYTES = 16 * 1024 * 1024;
+const SEARCH_DEADLINE_MS = 5_000;
 
 /** Blocked directory roots for engineering workspace traversal. */
 const blockedRoots = new Set([
@@ -34,17 +39,98 @@ const blockedRoots = new Set([
   ".nyc_output"
 ]);
 
-/** Extensions considered binary / not searchable. */
-const binaryExtensions = new Set([
-  ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico",
-  ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
-  ".zip", ".tar", ".gz", ".bz2", ".7z", ".rar",
-  ".exe", ".dll", ".so", ".dylib", ".bin",
-  ".mp3", ".mp4", ".avi", ".mov", ".mkv",
-  ".woff", ".woff2", ".eot", ".ttf", ".otf",
-  ".pyc", ".class", ".o", ".a",
-  ".db", ".sqlite", ".sqlite3"
+/** Text formats that are safe and useful for engineering search. */
+const searchableTextExtensions = new Set([
+  ".astro",
+  ".bash",
+  ".c",
+  ".cc",
+  ".cjs",
+  ".conf",
+  ".cpp",
+  ".cs",
+  ".css",
+  ".cts",
+  ".cxx",
+  ".fs",
+  ".fsx",
+  ".go",
+  ".gql",
+  ".graphql",
+  ".h",
+  ".hpp",
+  ".htm",
+  ".html",
+  ".ini",
+  ".java",
+  ".js",
+  ".json",
+  ".jsonc",
+  ".jsx",
+  ".kt",
+  ".kts",
+  ".less",
+  ".md",
+  ".mdx",
+  ".mjs",
+  ".mts",
+  ".php",
+  ".prisma",
+  ".proto",
+  ".ps1",
+  ".py",
+  ".rb",
+  ".rs",
+  ".sass",
+  ".scss",
+  ".sh",
+  ".svelte",
+  ".sql",
+  ".swift",
+  ".toml",
+  ".ts",
+  ".tsx",
+  ".txt",
+  ".vue",
+  ".xml",
+  ".yaml",
+  ".yml",
+  ".zsh"
 ]);
+
+const searchableExtensionlessNames = new Set([
+  ".editorconfig",
+  ".eslintrc",
+  ".gitattributes",
+  ".gitignore",
+  ".prettierrc",
+  "changelog",
+  "codeowners",
+  "contributing",
+  "dockerfile",
+  "license",
+  "makefile",
+  "readme"
+]);
+
+/** Names conventionally used for secrets, credentials, or private keys. */
+const sensitiveFileNames = new Set([
+  ".authinfo",
+  ".gitconfig",
+  ".netrc",
+  ".npmrc",
+  ".pypirc",
+  "credentials",
+  "credential",
+  "id_dsa",
+  "id_ecdsa",
+  "id_ed25519",
+  "id_rsa",
+  "secrets",
+  "secret"
+]);
+
+const sensitiveFileSuffixes = [".key", ".pem", ".p12", ".pfx"];
 
 const windowsDeviceNames = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
 
@@ -100,7 +186,65 @@ function resultDigestFor(
 function truncateSnippet(text: string, maxBytes = MAX_SNIPPET_BYTES): string {
   const encoded = new TextEncoder().encode(text);
   if (encoded.byteLength <= maxBytes) return text;
-  return text.slice(0, maxBytes) + "…";
+  const suffix = "...";
+  const contentBudget = Math.max(0, maxBytes - suffix.length);
+  let result = "";
+  let usedBytes = 0;
+  for (const character of text) {
+    const characterBytes = new TextEncoder().encode(character).byteLength;
+    if (usedBytes + characterBytes > contentBudget) break;
+    result += character;
+    usedBytes += characterBytes;
+  }
+  return result + suffix;
+}
+
+function isWithinRoot(canonicalRoot: string, candidate: string): boolean {
+  const pathRelative = relative(canonicalRoot, candidate);
+  return pathRelative === "" || (!pathRelative.startsWith("..") && !isAbsolute(pathRelative));
+}
+
+function isSearchableEngineeringFile(fileName: string): boolean {
+  const lowerName = fileName.toLowerCase();
+  if (
+    lowerName === ".env" ||
+    lowerName.startsWith(".env.") ||
+    sensitiveFileNames.has(lowerName) ||
+    sensitiveFileSuffixes.some((suffix) => lowerName.endsWith(suffix)) ||
+    /(?:^|[._-])(credential|credentials|key|keys|secret|secrets)(?:[._-]|$)/.test(lowerName)
+  ) {
+    return false;
+  }
+
+  return (
+    searchableTextExtensions.has(extname(lowerName)) || searchableExtensionlessNames.has(lowerName)
+  );
+}
+
+function hasSameIdentity(left: Stats, right: Stats): boolean {
+  return (
+    left.dev !== 0 &&
+    left.ino !== 0 &&
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.isFile() &&
+    right.isFile()
+  );
+}
+
+async function readBoundedFile(
+  handle: FileHandle,
+  expectedSize: number
+): Promise<Uint8Array | undefined> {
+  if (expectedSize < 0 || expectedSize > MAX_FILE_SIZE_BYTES) return undefined;
+  const bytes = Buffer.allocUnsafe(expectedSize);
+  let bytesRead = 0;
+  while (bytesRead < bytes.length) {
+    const result = await handle.read(bytes, bytesRead, bytes.length - bytesRead, bytesRead);
+    if (result.bytesRead === 0) return undefined;
+    bytesRead += result.bytesRead;
+  }
+  return bytes;
 }
 
 function extractSnippetWithLineRange(
@@ -318,7 +462,15 @@ export class AgentProjectSearchRepository {
     }
 
     const items: AgentSearchResult[] = [];
-    const state = { totalBytes: 0, totalHits: 0, truncated: false };
+    const state = {
+      totalBytes: 0,
+      totalHits: 0,
+      scannedBytes: 0,
+      directoriesVisited: 0,
+      filesVisited: 0,
+      deadlineAt: Date.now() + SEARCH_DEADLINE_MS,
+      truncated: false
+    };
 
     await this.traverseDirectory(
       canonicalRoot,
@@ -354,23 +506,48 @@ export class AgentProjectSearchRepository {
     excludeGlobs: readonly string[] | undefined,
     maxResults: number,
     items: AgentSearchResult[],
-    state: { totalBytes: number; totalHits: number; truncated: boolean },
+    state: {
+      totalBytes: number;
+      totalHits: number;
+      scannedBytes: number;
+      directoriesVisited: number;
+      filesVisited: number;
+      deadlineAt: number;
+      truncated: boolean;
+    },
     signal?: AbortSignal
   ): Promise<void> {
     if (signal?.aborted || state.truncated) return;
+    if (Date.now() >= state.deadlineAt || state.directoriesVisited >= MAX_DIRECTORIES) {
+      state.truncated = true;
+      return;
+    }
+
+    let resolvedDirectory: string;
+    try {
+      resolvedDirectory = await realpath(dirPath);
+    } catch {
+      return;
+    }
+    if (!isWithinRoot(canonicalRoot, resolvedDirectory)) return;
+    state.directoriesVisited++;
 
     let entries;
     try {
-      entries = await readdir(dirPath, { withFileTypes: true });
+      entries = await readdir(resolvedDirectory, { withFileTypes: true });
     } catch {
       return;
     }
 
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       if (signal?.aborted || state.truncated) break;
+      if (Date.now() >= state.deadlineAt) {
+        state.truncated = true;
+        break;
+      }
       if (entry.isSymbolicLink() || windowsDeviceNames.test(entry.name)) continue;
 
-      const fullPath = join(dirPath, entry.name);
+      const fullPath = join(resolvedDirectory, entry.name);
       const entryRelative = relative(canonicalRoot, fullPath).replaceAll("\\", "/");
 
       if (entry.isDirectory()) {
@@ -387,22 +564,21 @@ export class AgentProjectSearchRepository {
           signal
         );
       } else if (entry.isFile()) {
-        const ext = extname(entry.name).toLowerCase();
-        if (binaryExtensions.has(ext)) continue;
+        if (state.filesVisited >= MAX_FILES) {
+          state.truncated = true;
+          break;
+        }
+        state.filesVisited++;
+        if (!isSearchableEngineeringFile(entry.name)) continue;
         if (!matchesGlobs(entryRelative, includeGlobs, excludeGlobs)) continue;
 
-        let fileStat;
-        try {
-          fileStat = await lstat(fullPath);
-        } catch {
+        const bytes = await this.readVerifiedEngineeringFile(fullPath, canonicalRoot, state);
+        if (bytes === undefined) {
+          if (state.scannedBytes >= MAX_TOTAL_SCANNED_BYTES) state.truncated = true;
           continue;
         }
-        if (fileStat.isSymbolicLink() || fileStat.size > MAX_FILE_SIZE_BYTES) continue;
-
-        let bytes: Uint8Array;
         let content: string;
         try {
-          bytes = await readFile(fullPath);
           content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
         } catch {
           continue;
@@ -442,5 +618,59 @@ export class AgentProjectSearchRepository {
         if (state.truncated) break;
       }
     }
+  }
+
+  private async readVerifiedEngineeringFile(
+    fullPath: string,
+    canonicalRoot: string,
+    state: { scannedBytes: number; truncated: boolean }
+  ): Promise<Uint8Array | undefined> {
+    if (state.scannedBytes >= MAX_TOTAL_SCANNED_BYTES) {
+      state.truncated = true;
+      return undefined;
+    }
+
+    let handle: FileHandle | undefined;
+    try {
+      // O_NOFOLLOW closes the final-component symlink race. The identity checks below
+      // reject path swaps and traversal through a reparse point before any bytes are read.
+      handle = await open(fullPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const openedStat = await handle.stat();
+      if (!openedStat.isFile() || openedStat.size > MAX_FILE_SIZE_BYTES) return undefined;
+      if (state.scannedBytes + openedStat.size > MAX_TOTAL_SCANNED_BYTES) {
+        state.truncated = true;
+        return undefined;
+      }
+
+      const [pathStat, resolvedPath] = await Promise.all([lstat(fullPath), realpath(fullPath)]);
+      if (!hasSameIdentity(openedStat, pathStat) || !isWithinRoot(canonicalRoot, resolvedPath)) {
+        return undefined;
+      }
+
+      await this.afterPathIdentityVerified(fullPath);
+      const bytes = await readBoundedFile(handle, openedStat.size);
+      if (bytes === undefined) return undefined;
+      const postReadStat = await handle.stat();
+      if (
+        !hasSameIdentity(openedStat, postReadStat) ||
+        postReadStat.size !== openedStat.size ||
+        postReadStat.mtimeMs !== openedStat.mtimeMs ||
+        postReadStat.ctimeMs !== openedStat.ctimeMs
+      ) {
+        return undefined;
+      }
+      state.scannedBytes += bytes.byteLength;
+      return bytes;
+    } catch {
+      return undefined;
+    } finally {
+      await handle?.close().catch(() => undefined);
+    }
+  }
+
+  /** Allows a specialized repository implementation to observe a verified file path identity. */
+  protected async afterPathIdentityVerified(_fullPath: string): Promise<void> {
+    // Default implementation deliberately has no side effect.
+    void _fullPath;
   }
 }

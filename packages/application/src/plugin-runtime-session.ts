@@ -4,9 +4,7 @@ import type { JsonObject, Result, UnifiedError } from "@novel-studio/shared";
 import type { ApplicationCommand } from "./command-registry.js";
 import type { PluginSettingsEntry, PluginSettingsSnapshot } from "./plugin-settings-session.js";
 import type { PluginSandboxPort, PluginSandboxToolCallOutcome } from "./plugin-sandbox-port.js";
-import {
-  authorizePluginToolCall
-} from "./plugin-sandbox-port.js";
+import { authorizePluginToolCall } from "./plugin-sandbox-port.js";
 
 const PLUGIN_COMMAND_PREFIX = "plugin:";
 const PROJECT_SCOPE = "project";
@@ -984,15 +982,16 @@ export function createPluginSandboxToolAdapter(options: PluginSandboxToolAdapter
           enabled: entry.enabled,
           grantedPermissions: entry.grantedPermissions
         },
-        manifest: manifest === undefined
-          ? undefined
-          : {
-              capabilities: manifest.capabilities,
-              requestedPermissions: manifest.requestedPermissions,
-              contributes: {
-                tools: manifest.contributes.tools ?? []
-              }
-            },
+        manifest:
+          manifest === undefined
+            ? undefined
+            : {
+                capabilities: manifest.capabilities,
+                requestedPermissions: manifest.requestedPermissions,
+                contributes: {
+                  tools: manifest.contributes.tools ?? []
+                }
+              },
         manifestStatus: entry.manifestStatus,
         trustState: defaultTrustState(entry),
         sandboxProfileVerified: input.sandboxProfileVerified

@@ -4,7 +4,7 @@
 
 **设计依据：** `docs/superpowers/specs/2026-07-23-agent-tool-completion-design.md`  
 **实现基线：** `5a9a72b`<br>
-**计划状态：** Candidate，设计合同与阶段门禁已对齐，未实施
+**计划状态：** Candidate。本文定义目标合同和验收门槛，不是实施完成记录；当前实现评估以 `docs/releases/stage5-agent-tool-evidence.json` 为准。
 
 ## 范围锁定
 

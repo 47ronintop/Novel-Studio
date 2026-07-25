@@ -113,6 +113,76 @@ const settings = {
 } as ModelSettingsPanelProps;
 
 describe("Agent Run renderer bridge", () => {
+  test("projects pending tool approval and sends its durable binding decision", async () => {
+    const pendingSnapshot = {
+      ...snapshot,
+      status: "awaiting_tool_approval" as const,
+      runRevision: 12,
+      lastSequence: 12,
+      pendingToolApproval: {
+        canonicalToolId: "mcp:trusted/send_message",
+        providerToolName: "mcp__trusted__send_message",
+        argumentsText: '{"message":"hello"}',
+        requestedAt: "2026-07-25T00:00:00.000Z",
+        binding: {
+          kind: "external" as const,
+          bindingId: "tool_approval_bridge_01",
+          runId: "run-bridge",
+          runRevision: 11,
+          toolCallId: "tool-call-01",
+          sourceId: "trusted",
+          descriptorDigest: "a".repeat(64),
+          argumentDigest: "b".repeat(64),
+          idempotencyKey: "agent:run-bridge:tool-call-01",
+          effectiveCapabilityRevision: 1,
+          expiresAt: "2026-07-25T00:05:00.000Z"
+        }
+      }
+    } as AgentRunSnapshot;
+    const resolvedSnapshot = {
+      ...pendingSnapshot,
+      status: "executing_model" as const,
+      runRevision: 13,
+      lastSequence: 13,
+      pendingToolApproval: null
+    } as AgentRunSnapshot;
+    let current = pendingSnapshot;
+    const decisions: Record<string, unknown>[] = [];
+    const api = {
+      agentRuns: {
+        onEvent: () => () => undefined,
+        list: async () => ok([current]),
+        read: async () => ok({ snapshot: current, events: [] }),
+        decideToolApproval: async (command: Record<string, unknown>) => {
+          decisions.push(structuredClone(command));
+          current = resolvedSnapshot;
+          return ok(resolvedSnapshot);
+        }
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({ projectId: "project-01", settings });
+
+    const loaded = await bridge.load("project-01");
+    expect(loaded.pendingToolApproval).toMatchObject({
+      bindingId: "tool_approval_bridge_01",
+      canonicalToolId: "mcp:trusted/send_message",
+      kind: "external"
+    });
+    await bridge.decideToolApproval("approve");
+
+    expect(decisions).toEqual([
+      expect.objectContaining({
+        runId: "run-bridge",
+        projectId: "project-01",
+        expectedRunRevision: 12,
+        bindingId: "tool_approval_bridge_01",
+        decision: "approve"
+      })
+    ]);
+    expect(bridge.getProps()?.pendingToolApproval).toBeUndefined();
+  });
+
   test("coalesces duplicate explicit retries and sends only the persisted target", async () => {
     const retryableSnapshot = {
       ...snapshot,

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "1.0",
+  "status": "unavailable",
+  "protocolVersion": "1.0",
+  "policyRevision": "v1.0-windows-appcontainer",
+  "testVectorRevision": "tv-2026-07-23",
+  "artifacts": [
+    {
+      "kind": "host",
+      "path": "native/agent-task-sandbox/agent-task-sandbox-host.exe",
+      "digest": "placeholder"
+    },
+    {
+      "kind": "probe",
+      "path": "native/agent-task-sandbox/agent-task-sandbox-probe.exe",
+      "digest": "placeholder"
+    }
+  ]
+}

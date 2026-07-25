@@ -14,6 +14,7 @@ import {
   type ChangeSetAssetType,
   type ChangeSetExternalValidation,
   type ChangeSetOperation,
+  type ChangeSetOperationSelection,
   type ChangeSetRange,
   type ChangeSetFileSelection,
   type DecideChangeSetCommand,
@@ -93,6 +94,7 @@ export interface SelectChangeSetSessionRevisionInput {
   readonly changeSetId: string;
   readonly revision: number;
   readonly files: readonly ChangeSetFileSelection[];
+  readonly operations?: readonly ChangeSetOperationSelection[];
 }
 
 export interface ProposeOperationInput {
@@ -356,6 +358,12 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
             "Refresh context and create a new checkpoint proposal."
           );
         }
+        const writePolicy =
+          isDestructiveOperation(input.operation) || input.writePolicy !== "user_preapproved_run"
+            ? "write_before_confirmation"
+            : consumeAgentRunProposalAuthorization(input)
+              ? "user_preapproved_run"
+              : "write_before_confirmation";
         const revision =
           existing === undefined
             ? createOperationsChangeSetRevision({
@@ -364,7 +372,7 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
                 projectId: input.projectId,
                 checkpointId: input.checkpointId,
                 contextSnapshotId: input.contextSnapshotId,
-                writePolicy: input.writePolicy ?? "write_before_confirmation",
+                writePolicy,
                 operation: input.operation,
                 createdAt: now()
               })
@@ -392,7 +400,11 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
       try {
         const selected = await selectChangeSetRevision(
           current.value,
-          { files: input.files, createdAt: now() },
+          {
+            files: input.files,
+            ...(input.operations === undefined ? {} : { operations: input.operations }),
+            createdAt: now()
+          },
           { validateCandidate: candidateValidator(input) }
         );
         const persisted = await options.port.persistChangeSet(selected);
@@ -437,7 +449,11 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
         try {
           const selected = await selectChangeSetRevision(
             current.value,
-            { files: command.files, createdAt: now() },
+            {
+              files: command.files,
+              ...(command.operations === undefined ? {} : { operations: command.operations }),
+              createdAt: now()
+            },
             { validateCandidate: candidateValidator(command) }
           );
           const persisted = await options.port.persistChangeSet(selected);
@@ -504,6 +520,14 @@ function checkpointBindingKey(
   input: Pick<ChangeSetProposalBinding, "runId" | "projectId" | "checkpointId">
 ): string {
   return `${input.projectId}:${input.runId}:${input.checkpointId}`;
+}
+
+function isDestructiveOperation(operation: ChangeSetOperation): boolean {
+  return (
+    operation.kind === "move_file" ||
+    operation.kind === "delete_file" ||
+    operation.kind === "create_directory"
+  );
 }
 
 function failure(

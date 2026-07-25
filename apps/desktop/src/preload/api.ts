@@ -73,6 +73,7 @@ import type {
   CompactContextCommand,
   ContextBudgetSnapshot,
   DecideChangeSetCommand,
+  DecideToolApprovalCommand,
   DecideAgentPlanCommand,
   DecidePlanRevisionCommand,
   PermissionSummary,
@@ -385,6 +386,12 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
         invokeTyped<AgentRunCommandResult>(ipc, "application:agent-run:refresh-context", command),
       decideChangeSet: (command: DecideChangeSetCommand) =>
         invokeTyped<AgentRunCommandResult>(ipc, "application:agent-run:decide-change-set", command),
+      decideToolApproval: (command: DecideToolApprovalCommand) =>
+        invokeTyped<AgentRunCommandResult>(
+          ipc,
+          "application:agent-run:decide-tool-approval",
+          command
+        ),
       undoRun: (command: UndoRunCommand) =>
         invokeTyped<AgentRunCommandResult>(ipc, "application:agent-run:undo", command),
       read: (runId: string) =>
@@ -628,16 +635,15 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
     },
     agentNetwork: {
       getSettings: () =>
-        invokeTyped<Result<import("@novel-studio/application").AgentNetworkSettingsData, UnifiedError>>(
-          ipc,
-          "application:agent-network:get-settings"
-        ),
-      updateSettings: (partial: Partial<import("@novel-studio/application").AgentNetworkSettingsData>) =>
-        invokeTyped<Result<import("@novel-studio/application").AgentNetworkSettingsData, UnifiedError>>(
-          ipc,
-          "application:agent-network:update-settings",
-          partial
-        ),
+        invokeTyped<
+          Result<import("@novel-studio/application").AgentNetworkSettingsData, UnifiedError>
+        >(ipc, "application:agent-network:get-settings"),
+      updateSettings: (
+        partial: Partial<import("@novel-studio/application").AgentNetworkSettingsData>
+      ) =>
+        invokeTyped<
+          Result<import("@novel-studio/application").AgentNetworkSettingsData, UnifiedError>
+        >(ipc, "application:agent-network:update-settings", partial),
       testConnection: (profileId: string) =>
         invokeTyped<Result<{ readonly latencyMs: number }, UnifiedError>>(
           ipc,
@@ -645,17 +651,15 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           profileId
         ),
       revoke: () =>
-        invokeTyped<Result<import("@novel-studio/application").AgentNetworkSettingsData, UnifiedError>>(
-          ipc,
-          "application:agent-network:revoke"
-        )
+        invokeTyped<
+          Result<import("@novel-studio/application").AgentNetworkSettingsData, UnifiedError>
+        >(ipc, "application:agent-network:revoke")
     },
     agentMcp: {
       listServers: () =>
-        invokeTyped<Result<readonly import("@novel-studio/application").McpServerConfig[], UnifiedError>>(
-          ipc,
-          "application:agent-mcp:list-servers"
-        ),
+        invokeTyped<
+          Result<readonly import("@novel-studio/application").McpServerConfig[], UnifiedError>
+        >(ipc, "application:agent-mcp:list-servers"),
       addServer: (config: import("@novel-studio/application").McpServerConfig) =>
         invokeTyped<Result<import("@novel-studio/application").McpSettingsData, UnifiedError>>(
           ipc,

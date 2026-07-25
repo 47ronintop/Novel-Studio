@@ -6,7 +6,7 @@ import { describe, it, expect } from "vitest";
 describe("AgentTaskSandbox process tree cleanup", () => {
   it("process handle cancel terminates the host process", async () => {
     const { AgentTaskSandboxHost } = await import("../src/main/agent-task-sandbox.js");
-    const host = new AgentTaskSandboxHost({
+    const host = AgentTaskSandboxHost.forTesting({
       hostBinaryPath: "/missing/host.exe",
       expectedHostDigest: "a".repeat(64)
     });
@@ -32,7 +32,7 @@ describe("AgentTaskSandbox process tree cleanup", () => {
 
   it("AbortSignal cancellation is wired through launch()", async () => {
     const { AgentTaskSandboxHost } = await import("../src/main/agent-task-sandbox.js");
-    const host = new AgentTaskSandboxHost({
+    const host = AgentTaskSandboxHost.forTesting({
       hostBinaryPath: "/missing/host.exe",
       expectedHostDigest: "a".repeat(64)
     });

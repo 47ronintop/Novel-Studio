@@ -33,6 +33,8 @@ export interface DesktopAgentRuntime {
   readonly agentUsageSession?: AgentUsageSession;
   readonly prepare: () => Promise<Result<void, UnifiedError>>;
   readonly dispose?: () => void;
+  /** Fail-close settings-backed capability/executor access without waiting for a rebuild. */
+  readonly revokeSettingsCapabilities?: () => void;
 }
 
 export interface PreparedDesktopAgentWorkspace {
@@ -57,13 +59,24 @@ export interface DesktopAgentRuntimeManager {
         readonly stateRoot: string;
       }
     | undefined;
+  /**
+   * Rebuild the current workspace runtime after a Main-owned Agent setting changes.
+   * Any active run is stopped first so a revoked Main-owned executor cannot remain reachable from
+   * its frozen capability snapshot. Write transactions still finish through their own stop barrier;
+   * in that case refresh remains deferred until the transaction becomes terminal.
+   */
+  refreshCurrentWorkspace(): Promise<Result<void, UnifiedError>>;
+  /** Fail-close settings-backed capability/executor access in the current runtime. */
+  revokeCurrentSettingsCapabilities(): void;
   hasActiveRun(): Promise<Result<boolean, UnifiedError>>;
   subscribeAgentRunEvents(listener: (event: AgentRunEvent) => void): () => void;
   dispose(): void;
 }
 
 export interface CreateDesktopAgentRuntimeManagerOptions {
-  readonly createRuntime: (binding: DesktopAgentWorkspaceBinding) => DesktopAgentRuntime;
+  readonly createRuntime: (
+    binding: DesktopAgentWorkspaceBinding
+  ) => DesktopAgentRuntime | Promise<DesktopAgentRuntime>;
 }
 
 export function createDesktopAgentRuntimeManager(
@@ -73,11 +86,16 @@ export function createDesktopAgentRuntimeManager(
   let currentBinding: DesktopAgentWorkspaceBinding | undefined;
   let unsubscribeRuntime: (() => void) | undefined;
   const listeners = new Set<(event: AgentRunEvent) => void>();
-  const preparedStates = new Map<PreparedDesktopAgentWorkspace, {
-    readonly unsubscribe: () => void;
-    state: "prepared" | "committed" | "discarded";
-  }>();
+  const preparedStates = new Map<
+    PreparedDesktopAgentWorkspace,
+    {
+      readonly unsubscribe: () => void;
+      state: "prepared" | "committed" | "discarded";
+    }
+  >();
   const pendingPreparations = new Set<PreparedDesktopAgentWorkspace>();
+  let settingsRefreshGeneration = 0;
+  let settingsRefreshTail: Promise<void> = Promise.resolve();
 
   async function hasActiveRun(): Promise<Result<boolean, UnifiedError>> {
     if (runtime === undefined) return ok(false);
@@ -87,7 +105,69 @@ export function createDesktopAgentRuntimeManager(
       : err(listed.error);
   }
 
-  return {
+  async function stopActiveRunsForSettingsRefresh(
+    generation: number
+  ): Promise<Result<void, UnifiedError>> {
+    // A concurrent user command may advance the run revision while settings are being persisted.
+    // Re-list and retry a bounded number of times; never replace the runtime while a run remains.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (generation !== settingsRefreshGeneration) return ok(undefined);
+      const currentRuntime = runtime;
+      if (currentRuntime === undefined) return ok(undefined);
+      const listed = await currentRuntime.agentRunSession.listAgentRuns(currentRuntime.workspaceId);
+      if (!listed.ok) return err(listed.error);
+      const active = listed.value.filter((snapshot) => !isTerminal(snapshot.status));
+      if (active.length === 0) return ok(undefined);
+
+      let shouldRetry = false;
+      for (const snapshot of active) {
+        if (generation !== settingsRefreshGeneration) return ok(undefined);
+        const stopped = await currentRuntime.agentRunSession.stopAgentRun({
+          runId: snapshot.runId,
+          projectId: snapshot.projectId,
+          commandId: `settings-refresh-${String(generation)}-${snapshot.runId}-${String(snapshot.runRevision)}`,
+          expectedRunRevision: snapshot.runRevision
+        });
+        if (stopped.ok) continue;
+        if (stopped.error.code === "AGENT_RUN_REVISION_CONFLICT") {
+          shouldRetry = true;
+          continue;
+        }
+        if (stopped.error.code === "AGENT_RUN_ALREADY_TERMINAL") continue;
+        return err(stopped.error);
+      }
+      if (!shouldRetry) {
+        const remaining = await hasActiveRun();
+        if (!remaining.ok) return remaining;
+        if (!remaining.value) return ok(undefined);
+      }
+    }
+    return err(runtimeError("AGENT_RUNTIME_SETTINGS_REFRESH_DEFERRED"));
+  }
+
+  async function refreshWorkspaceAtGeneration(
+    generation: number
+  ): Promise<Result<void, UnifiedError>> {
+    const binding = currentBinding;
+    if (binding === undefined || generation !== settingsRefreshGeneration) return ok(undefined);
+    const stopped = await stopActiveRunsForSettingsRefresh(generation);
+    if (!stopped.ok || generation !== settingsRefreshGeneration) return stopped;
+    if (currentBinding !== binding) return ok(undefined);
+    const prepared = await manager.prepareWorkspace(binding);
+    if (!prepared.ok) return prepared;
+    if (generation !== settingsRefreshGeneration || currentBinding !== binding) {
+      manager.discardPreparedWorkspace(prepared.value);
+      return ok(undefined);
+    }
+    manager.commitPreparedWorkspace(prepared.value);
+    return ok(undefined);
+  }
+
+  function revokeCurrentSettingsCapabilities(): void {
+    runtime?.revokeSettingsCapabilities?.();
+  }
+
+  const manager: DesktopAgentRuntimeManager = {
     async bindWorkspace(binding) {
       if (
         runtime !== undefined &&
@@ -129,7 +209,7 @@ export function createDesktopAgentRuntimeManager(
 
       let candidate: DesktopAgentRuntime;
       try {
-        candidate = options.createRuntime(canonicalBinding);
+        candidate = await options.createRuntime(canonicalBinding);
       } catch {
         return err(runtimeError("AGENT_RUNTIME_CREATE_FAILED"));
       }
@@ -196,6 +276,23 @@ export function createDesktopAgentRuntimeManager(
             contentRoot: runtime.contentRoot,
             stateRoot: runtime.stateRoot
           },
+    async refreshCurrentWorkspace() {
+      const generation = ++settingsRefreshGeneration;
+      const previous = settingsRefreshTail;
+      const result = (async () => {
+        await previous;
+        if (generation !== settingsRefreshGeneration) return ok(undefined);
+        const refreshed = await refreshWorkspaceAtGeneration(generation);
+        if (!refreshed.ok) revokeCurrentSettingsCapabilities();
+        return refreshed;
+      })();
+      settingsRefreshTail = result.then(
+        () => undefined,
+        () => undefined
+      );
+      return result;
+    },
+    revokeCurrentSettingsCapabilities,
     hasActiveRun,
     subscribeAgentRunEvents(listener) {
       listeners.add(listener);
@@ -213,6 +310,7 @@ export function createDesktopAgentRuntimeManager(
       listeners.clear();
     }
   };
+  return manager;
 }
 
 function isSameBinding(

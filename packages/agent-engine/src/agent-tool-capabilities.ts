@@ -37,11 +37,55 @@ export interface AgentToolCapabilitySnapshot {
   readonly featureFlagRevision: string;
 }
 
+/**
+ * Validate and detach a capability snapshot before it is associated with a run.  The snapshot is
+ * an authorization fact, so retaining a caller-owned object would allow a later mutation to widen
+ * a run after its Permission Summary has been generated.
+ */
+export function freezeAgentToolCapabilitySnapshot(
+  snapshot: AgentToolCapabilitySnapshot
+): AgentToolCapabilitySnapshot {
+  if (
+    (snapshot.workspaceKind !== "creativeProject" &&
+      snapshot.workspaceKind !== "engineeringWorkspace") ||
+    typeof snapshot.searchEnabled !== "boolean" ||
+    typeof snapshot.fileLifecycleEnabled !== "boolean" ||
+    typeof snapshot.controlledExecutionEnabled !== "boolean" ||
+    typeof snapshot.gitReadEnabled !== "boolean" ||
+    typeof snapshot.networkReadEnabled !== "boolean" ||
+    typeof snapshot.pluginToolsEnabled !== "boolean" ||
+    typeof snapshot.mcpToolsEnabled !== "boolean" ||
+    typeof snapshot.featureFlagRevision !== "string" ||
+    snapshot.featureFlagRevision.length === 0 ||
+    (snapshot.sandboxAttestationId !== undefined &&
+      typeof snapshot.sandboxAttestationId !== "string")
+  ) {
+    throw new Error("Invalid Agent tool capability snapshot.");
+  }
+  if (snapshot.controlledExecutionEnabled && !snapshot.sandboxAttestationId) {
+    throw new Error("Controlled execution requires a sandbox attestation.");
+  }
+  return Object.freeze({
+    workspaceKind: snapshot.workspaceKind,
+    searchEnabled: snapshot.searchEnabled,
+    fileLifecycleEnabled: snapshot.fileLifecycleEnabled,
+    controlledExecutionEnabled: snapshot.controlledExecutionEnabled,
+    ...(snapshot.sandboxAttestationId === undefined
+      ? {}
+      : { sandboxAttestationId: snapshot.sandboxAttestationId }),
+    gitReadEnabled: snapshot.gitReadEnabled,
+    networkReadEnabled: snapshot.networkReadEnabled,
+    pluginToolsEnabled: snapshot.pluginToolsEnabled,
+    mcpToolsEnabled: snapshot.mcpToolsEnabled,
+    featureFlagRevision: snapshot.featureFlagRevision
+  });
+}
+
 /** The minimum capability snapshot that reproduces Stage-5 v1.0 behaviour (9 static tools only). */
 export function createDefaultCapabilitySnapshot(
   workspaceKind: AgentWorkspaceKind = "creativeProject"
 ): AgentToolCapabilitySnapshot {
-  return Object.freeze<AgentToolCapabilitySnapshot>({
+  return freezeAgentToolCapabilitySnapshot({
     workspaceKind,
     searchEnabled: false,
     fileLifecycleEnabled: false,

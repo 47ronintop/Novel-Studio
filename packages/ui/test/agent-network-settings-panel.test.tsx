@@ -45,8 +45,10 @@ function renderPanel(
   document.body.appendChild(container);
   root = createRoot(container);
 
-  const onUpdateSettings = overrideCallbacks?.onUpdateSettings ?? vi.fn().mockResolvedValue(undefined);
-  const onTestConnection = overrideCallbacks?.onTestConnection ?? vi.fn().mockResolvedValue({ latencyMs: 50 });
+  const onUpdateSettings =
+    overrideCallbacks?.onUpdateSettings ?? vi.fn().mockResolvedValue(undefined);
+  const onTestConnection =
+    overrideCallbacks?.onTestConnection ?? vi.fn().mockResolvedValue({ latencyMs: 50 });
   const onRevoke = overrideCallbacks?.onRevoke ?? vi.fn().mockResolvedValue(undefined);
 
   act(() => {

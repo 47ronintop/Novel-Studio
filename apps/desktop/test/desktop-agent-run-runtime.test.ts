@@ -1,11 +1,18 @@
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { AgentUsageFileRepository, ProjectLockFileRepository } from "@novel-studio/repository";
+import {
+  AgentUsageFileRepository,
+  ProjectLockFileRepository,
+  type AgentOperationPathSnapshot,
+  type AgentWriteLifecycleOperationPort
+} from "@novel-studio/repository";
+import { err, ok, type UnifiedError } from "@novel-studio/shared";
 
 import * as runtimeExports from "../src/main/agent-run-runtime.js";
+import { createAgentFeatureFlags } from "../src/main/agent-feature-flags.js";
 
 const roots: string[] = [];
 
@@ -176,12 +183,17 @@ describe("desktop Agent Run runtime", () => {
         strictPlanningCommand(conversationId, "start-strict-conversation")
       )
     ).toMatchObject({ ok: true });
-    await vi.waitFor(async () => {
-      expect(await runtime.agentRunSession.readAgentRun("run-strict-conversation")).toMatchObject({
-        ok: true,
-        value: { snapshot: { conversationId, status: "plan_ready" } }
-      });
-    });
+    await vi.waitFor(
+      async () => {
+        expect(await runtime.agentRunSession.readAgentRun("run-strict-conversation")).toMatchObject(
+          {
+            ok: true,
+            value: { snapshot: { conversationId, status: "plan_ready" } }
+          }
+        );
+      },
+      { timeout: 10_000 }
+    );
     expect(
       JSON.parse(
         await readFile(
@@ -503,7 +515,47 @@ describe("desktop Agent Run runtime", () => {
       contentRoot: projectRoot,
       stateRoot: projectRoot,
       activeChapterId: chapterId,
-      createRunId: () => "run-desktop-plan"
+      createRunId: () => "run-desktop-plan",
+      modelDriver: {
+        async *streamRound(input: { readonly messages: readonly { readonly role: string }[] }) {
+          const toolResultCount = input.messages.filter(
+            (message) => message.role === "tool"
+          ).length;
+          if (toolResultCount === 0) {
+            yield { type: "assistant_text_delta" as const, delta: "先读取项目结构。" };
+            yield runtimeToolCall("plan-list-entries", "list_project_entries", {
+              path: "chapters"
+            });
+          } else if (toolResultCount === 1) {
+            yield runtimeToolCall("plan-read-chapter", "read_chapter", { chapterId });
+          } else {
+            yield runtimeToolCall("plan-finish", "finish_plan", {
+              planId: "plan-desktop-read-only",
+              goal: "检查章节并制定修订计划。",
+              successCriteria: ["完成只读上下文核对"],
+              nonGoals: ["不修改任何项目文件"],
+              facts: ["已读取项目结构和当前章节"],
+              assumptions: [],
+              openQuestions: [],
+              targetRefs: [{ refId: `chapter:${chapterId}`, intent: "核对当前章节" }],
+              steps: [
+                {
+                  stepId: "review-current-chapter",
+                  title: "复核当前章节",
+                  verification: "重新读取并核对目标与上下文"
+                }
+              ],
+              risks: ["执行前上下文可能变化"],
+              verification: ["执行前刷新 Context Snapshot"],
+              sourceRefs: [`chapter:${chapterId}`]
+            });
+          }
+          yield {
+            type: "round_completed" as const,
+            finishReason: toolResultCount < 2 ? "tool_calls" : "stop"
+          };
+        }
+      }
     });
     await session.startAgentRun({
       projectId: "project-01",
@@ -525,37 +577,43 @@ describe("desktop Agent Run runtime", () => {
         requiredContextTokens: 8000
       }
     });
-    await vi.waitFor(async () => {
-      expect(await session.readAgentRun("run-desktop-plan")).toMatchObject({
-        ok: true,
-        value: {
-          snapshot: { status: "plan_ready" },
-          events: expect.arrayContaining([
-            expect.objectContaining({ type: "assistant_text_delta" }),
-            expect.objectContaining({
-              type: "tool_completed",
-              detail: expect.objectContaining({ toolName: "list_project_entries" })
-            }),
-            expect.objectContaining({
-              type: "tool_completed",
-              detail: expect.objectContaining({ toolName: "read_chapter" })
-            }),
-            expect.objectContaining({ type: "plan_ready" })
-          ])
-        }
-      });
-    });
+    await vi.waitFor(
+      async () => {
+        expect(await session.readAgentRun("run-desktop-plan")).toMatchObject({
+          ok: true,
+          value: {
+            snapshot: { status: "plan_ready" },
+            events: expect.arrayContaining([
+              expect.objectContaining({ type: "assistant_text_delta" }),
+              expect.objectContaining({
+                type: "tool_completed",
+                detail: expect.objectContaining({ toolName: "list_project_entries" })
+              }),
+              expect.objectContaining({
+                type: "tool_completed",
+                detail: expect.objectContaining({ toolName: "read_chapter" })
+              }),
+              expect.objectContaining({ type: "plan_ready" })
+            ])
+          }
+        });
+      },
+      { timeout: 10_000 }
+    );
     expect(await readFile(chapterPath, "utf8")).toBe(original);
-    await vi.waitFor(async () => {
-      expect(
-        JSON.parse(
-          await readFile(
-            join(projectRoot, "history", "agent-runs", "run-desktop-plan", "run.json"),
-            "utf8"
+    await vi.waitFor(
+      async () => {
+        expect(
+          JSON.parse(
+            await readFile(
+              join(projectRoot, "history", "agent-runs", "run-desktop-plan", "run.json"),
+              "utf8"
+            )
           )
-        )
-      ).toMatchObject({ runId: "run-desktop-plan", status: "plan_ready" });
-    });
+        ).toMatchObject({ runId: "run-desktop-plan", status: "plan_ready" });
+      },
+      { timeout: 10_000 }
+    );
   });
 
   test("stages a chapter-body proposal without writing, then applies it through one Version Group", async () => {
@@ -593,6 +651,7 @@ describe("desktop Agent Run runtime", () => {
       activeChapterId: chapterId,
       projectLockOwnerId: lockOwnerId,
       createRunId: () => "run-desktop-write",
+      lifecycleOperations: createTestingReplaceLifecyclePort(projectRoot),
       pauseAutosave: async (relativePaths: readonly string[]) => {
         operations.push(`pause:${relativePaths.join(",")}`);
         expect(await readFile(chapterPath, "utf8")).toBe(original);
@@ -797,6 +856,7 @@ describe("desktop Agent Run runtime", () => {
       activeChapterId: chapterId,
       projectLockOwnerId: lockOwnerId,
       createRunId: () => "run-desktop-dirty-undo",
+      lifecycleOperations: createTestingReplaceLifecyclePort(projectRoot),
       readEditorState: async (path: string) => {
         editorReads.push(editorDirty);
         return path === relativePath
@@ -1031,6 +1091,102 @@ describe("desktop Agent Run runtime", () => {
     });
     expect(await readFile(settingsPath, "utf8")).toBe(settings);
   });
+
+  test("composes the repository-backed search executor into the production runtime", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-agent-search-"));
+    roots.push(projectRoot);
+    await mkdir(join(projectRoot, "src"), { recursive: true });
+    await writeFile(join(projectRoot, "src", "needle.ts"), "export const needle = true;\n", "utf8");
+    const observedToolLists: string[][] = [];
+    let round = 0;
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      workspaceKind: "engineeringWorkspace",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      createRunId: () => "run-desktop-search",
+      featureFlags: createAgentFeatureFlags({
+        phaseA_searchEnabled: true,
+        revision: "desktop-search-test"
+      }),
+      modelDriver: {
+        async *streamRound(input) {
+          observedToolLists.push(input.tools.map((tool) => tool.name));
+          round += 1;
+          if (round === 1) {
+            yield runtimeToolCall("search-needle", "search_project_text", {
+              query: "needle",
+              maxResults: 10
+            });
+          } else {
+            yield runtimeToolCall("finish-search", "finish", { summary: "Search complete." });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+    const conversation = await runtime.agentConversationSession.createConversation({
+      projectId: "project-01",
+      commandId: "create-desktop-search-conversation"
+    });
+    expect(conversation).toMatchObject({ ok: true });
+    if (!conversation.ok) return;
+
+    await runtime.agentRunSession.startAgentRun({
+      ...executionCommand("general_file"),
+      conversationId: conversation.value.conversationId,
+      commandId: "start-desktop-search"
+    });
+    await vi.waitFor(async () => {
+      expect(await runtime.agentRunSession.readAgentRun("run-desktop-search")).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+    expect(observedToolLists[0]).toEqual(
+      expect.arrayContaining(["search_project_text", "find_project_references"])
+    );
+  });
+
+  test("keeps search tools hidden in the production runtime without the Main feature gate", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-agent-search-off-"));
+    roots.push(projectRoot);
+    const observedToolLists: string[][] = [];
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      workspaceKind: "engineeringWorkspace",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      createRunId: () => "run-desktop-search-off",
+      modelDriver: {
+        async *streamRound(input) {
+          observedToolLists.push(input.tools.map((tool) => tool.name));
+          yield runtimeToolCall("finish-search-off", "finish", { summary: "No search." });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+    const conversation = await runtime.agentConversationSession.createConversation({
+      projectId: "project-01",
+      commandId: "create-desktop-search-off-conversation"
+    });
+    expect(conversation).toMatchObject({ ok: true });
+    if (!conversation.ok) return;
+
+    await runtime.agentRunSession.startAgentRun({
+      ...executionCommand("general_file"),
+      conversationId: conversation.value.conversationId,
+      commandId: "start-desktop-search-off"
+    });
+    await vi.waitFor(async () => {
+      expect(await runtime.agentRunSession.readAgentRun("run-desktop-search-off")).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+    expect(observedToolLists[0]).not.toContain("search_project_text");
+    expect(observedToolLists[0]).not.toContain("find_project_references");
+  });
 });
 
 function createDesktopRuntime(options: Record<string, unknown>) {
@@ -1121,4 +1277,79 @@ function strictPlanningCommand(conversationId: string, commandId: string) {
 
 function sha256(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+function createTestingReplaceLifecyclePort(projectRoot: string): AgentWriteLifecycleOperationPort {
+  return {
+    async mutate(input) {
+      if (input.kind !== "replace_file") {
+        return err(testLifecycleError("TEST_LIFECYCLE_MUTATION_UNSUPPORTED"));
+      }
+      if (!(await testingSnapshotsMatch(projectRoot, input.before))) {
+        return err(testLifecycleError("TEST_LIFECYCLE_PRECONDITION_FAILED"));
+      }
+      const targetPath = testingProjectPath(projectRoot, input.relativePath);
+      if (targetPath === undefined) return err(testLifecycleError("TEST_LIFECYCLE_PATH_INVALID"));
+      await writeFile(targetPath, input.content, "utf8");
+      return (await testingSnapshotsMatch(projectRoot, input.after))
+        ? ok(undefined)
+        : err(testLifecycleError("TEST_LIFECYCLE_POSTCONDITION_FAILED"));
+    }
+  };
+}
+
+async function testingSnapshotsMatch(
+  projectRoot: string,
+  expected: readonly AgentOperationPathSnapshot[]
+): Promise<boolean> {
+  for (const snapshot of expected) {
+    const targetPath = testingProjectPath(projectRoot, snapshot.relativePath);
+    if (targetPath === undefined) return false;
+    let actual: AgentOperationPathSnapshot;
+    try {
+      const content = await readFile(targetPath, "utf8");
+      actual = {
+        kind: "file",
+        relativePath: snapshot.relativePath,
+        content,
+        checksum: sha256(content)
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+      actual = { kind: "missing", relativePath: snapshot.relativePath };
+    }
+    if (
+      actual.kind !== snapshot.kind ||
+      actual.relativePath !== snapshot.relativePath ||
+      (actual.kind === "file" &&
+        (snapshot.kind !== "file" ||
+          actual.checksum !== snapshot.checksum ||
+          actual.content !== snapshot.content))
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function testingProjectPath(projectRoot: string, relativePath: string): string | undefined {
+  if (isAbsolute(relativePath)) return undefined;
+  const targetPath = join(projectRoot, relativePath);
+  const pathFromRoot = relative(projectRoot, targetPath);
+  return pathFromRoot === "" || (!pathFromRoot.startsWith("..") && !isAbsolute(pathFromRoot))
+    ? targetPath
+    : undefined;
+}
+
+function testLifecycleError(code: string): UnifiedError {
+  return {
+    schemaVersion: "1.0",
+    errorId: "err_desktop_agent_lifecycle_test",
+    code,
+    category: "StorageError",
+    message: code,
+    recoverability: "user-action",
+    suggestedAction: "Fix the lifecycle test setup.",
+    traceId: "desktop-agent-run-runtime-test"
+  };
 }

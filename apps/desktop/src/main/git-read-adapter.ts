@@ -1,7 +1,6 @@
-import { spawn } from "node:child_process";
-import { stat, realpath } from "node:fs/promises";
-import { join, resolve, isAbsolute, sep } from "node:path";
-import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { lstat, readFile, realpath } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { ok, err, createUnifiedError, type Result, type UnifiedError } from "@novel-studio/shared";
 
 export interface GitStatusResult {
@@ -21,38 +20,105 @@ export interface GitDiffResult {
   readonly truncated: boolean;
 }
 
-export interface GitManifest {
+export interface GitRuntimeManifest {
+  readonly schemaVersion: "1.0";
   readonly version: string;
   readonly digest: string;
+  /** Path relative to Electron's process.resourcesPath, never to the package root. */
   readonly path: string;
   readonly license: string;
 }
 
-const MAX_DIFF_BYTES = 256 * 1024; // 256 KiB
+export interface VerifiedGitRuntime extends GitRuntimeManifest {
+  readonly executablePath: string;
+}
+
+export interface GitReadSandboxQualification {
+  readonly attestationId: string;
+  readonly expiresAt: string;
+  readonly hostDigest: string;
+  readonly gitRuntimeDigest: string;
+  readonly profile: "git-readonly-v1";
+  readonly capabilities: {
+    readonly fileIsolation: "verified";
+    readonly networkIsolation: "verified";
+    readonly jobObjectKillOnClose: "verified";
+    readonly appContainerOrLowBox: "verified";
+  };
+}
+
+export interface GitReadSandboxLaunchInput {
+  readonly profile: "git-readonly-v1";
+  readonly attestationId: string;
+  readonly runtime: VerifiedGitRuntime;
+  readonly worktreePath: string;
+  readonly gitDirectoryPath: string;
+  readonly argv: readonly string[];
+  readonly environment: Readonly<Record<string, string>>;
+  readonly maxOutputBytes: number;
+}
+
+export interface GitReadSandboxOutput {
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly exitCode: number | null;
+  readonly truncated: boolean;
+}
 
 /**
- * GitReadAdapter — executes git status/diff using the packaged Git binary.
- *
- * Security invariants:
- *  - Git binary comes from packaged resources, never PATH discovery.
- *  - All git env vars are cleared before exec.
- *  - Arguments are passed as arrays (never shell interpolation).
- *  - Worktree must be within project root; no external gitdir/symlinks.
- *  - Fail-closed: missing binary → AGENT_GIT_ADAPTER_UNAVAILABLE.
+ * Main-process implementation must route this to the qualified native sandbox
+ * profile. GitReadAdapter deliberately has no child_process import or fallback.
+ */
+export interface GitReadSandboxPort {
+  getQualification(): Promise<Result<GitReadSandboxQualification, UnifiedError>>;
+  executeGitRead(
+    input: GitReadSandboxLaunchInput
+  ): Promise<Result<GitReadSandboxOutput, UnifiedError>>;
+}
+
+const MAX_DIFF_BYTES = 256 * 1024;
+const GIT_MANIFEST_SCHEMA_VERSION = "1.0";
+const GIT_READ_PROFILE = "git-readonly-v1" as const;
+
+const SAFE_GIT_ENV: Readonly<Record<string, string>> = Object.freeze({
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_CONFIG_GLOBAL: "NUL",
+  GIT_CONFIG_COUNT: "0",
+  GIT_ATTR_NOSYSTEM: "1",
+  GIT_TERMINAL_PROMPT: "0",
+  GIT_ASKPASS: "",
+  SSH_ASKPASS: "",
+  GCM_INTERACTIVE: "Never",
+  GIT_OPTIONAL_LOCKS: "0",
+  GIT_PAGER: "cat",
+  PAGER: "cat",
+  GIT_LITERAL_PATHSPECS: "1",
+  GIT_NO_REPLACE_OBJECTS: "1",
+  HOME: "NUL",
+  USERPROFILE: "NUL",
+  HOMEDRIVE: "",
+  HOMEPATH: "",
+  XDG_CONFIG_HOME: "NUL"
+});
+
+/**
+ * Git read adapter. This class only validates a fixed runtime and forwards a
+ * declarative invocation to a qualified read-only sandbox. It never spawns Git.
  */
 export class GitReadAdapter {
   private readonly manifestPath: string;
   private readonly resourcesBase: string;
-  private cachedBinaryPath: string | undefined;
+  private readonly sandbox: GitReadSandboxPort | undefined;
+  private cachedRuntime: VerifiedGitRuntime | undefined;
 
-  constructor(options: { readonly resourcesBase: string }) {
+  constructor(options: { readonly resourcesBase: string; readonly sandbox?: GitReadSandboxPort }) {
     this.resourcesBase = resolve(options.resourcesBase);
     this.manifestPath = join(this.resourcesBase, "git", "manifest.json");
+    this.sandbox = options.sandbox;
   }
 
-  /** Resolve the Git binary path from the packaged manifest. */
-  private async resolveGitBinary(): Promise<Result<string, UnifiedError>> {
-    if (this.cachedBinaryPath !== undefined) return ok(this.cachedBinaryPath);
+  private async resolveGitRuntime(): Promise<Result<VerifiedGitRuntime, UnifiedError>> {
+    if (this.cachedRuntime !== undefined) return ok(this.cachedRuntime);
 
     let manifestContent: string;
     try {
@@ -61,90 +127,154 @@ export class GitReadAdapter {
       return err(unavailableError("Git runtime manifest not found in packaged resources."));
     }
 
-    let manifest: GitManifest;
+    let manifestValue: unknown;
     try {
-      manifest = JSON.parse(manifestContent) as GitManifest;
+      manifestValue = JSON.parse(manifestContent);
     } catch {
       return err(unavailableError("Git runtime manifest is malformed."));
     }
-
-    if (manifest.digest === "placeholder") {
-      // Development placeholder — git adapter is unavailable
-      return err(
-        unavailableError(
-          "Git runtime manifest is a placeholder. A real packaged Git binary is required."
-        )
-      );
+    const manifest = parseGitRuntimeManifest(manifestValue);
+    if (manifest === undefined) {
+      return err(unavailableError("Git runtime manifest does not match the required schema."));
+    }
+    if (manifest.version === "unavailable") {
+      return err(unavailableError("Git runtime is explicitly marked unavailable."));
     }
 
-    const binaryPath = resolve(join(this.resourcesBase, manifest.path));
-
-    // Verify it stays within resourcesBase
-    if (!binaryPath.startsWith(this.resourcesBase + sep)) {
-      return err(unavailableError("Git binary path escapes resources directory."));
-    }
-
+    let resolvedResourcesBase: string;
     try {
-      await stat(binaryPath);
+      resolvedResourcesBase = await realpath(this.resourcesBase);
     } catch {
-      return err(unavailableError("Packaged Git binary not found."));
+      return err(unavailableError("Cannot resolve the packaged resources directory."));
+    }
+    const executablePath = resolve(resolvedResourcesBase, manifest.path);
+    if (!isContainedPath(resolvedResourcesBase, executablePath)) {
+      return err(unavailableError("Git runtime path escapes packaged resources."));
     }
 
-    this.cachedBinaryPath = binaryPath;
-    return ok(binaryPath);
+    let executableStat: Awaited<ReturnType<typeof lstat>>;
+    try {
+      executableStat = await lstat(executablePath);
+    } catch {
+      return err(unavailableError("Packaged Git runtime is missing."));
+    }
+    if (!executableStat.isFile() || executableStat.isSymbolicLink()) {
+      return err(unavailableError("Packaged Git runtime must be a regular file."));
+    }
+
+    let resolvedExecutablePath: string;
+    try {
+      resolvedExecutablePath = await realpath(executablePath);
+    } catch {
+      return err(unavailableError("Cannot resolve the packaged Git runtime."));
+    }
+    if (!isContainedPath(resolvedResourcesBase, resolvedExecutablePath)) {
+      return err(unavailableError("Packaged Git runtime resolves outside packaged resources."));
+    }
+
+    const actualDigest = createHash("sha256")
+      .update(await readFile(resolvedExecutablePath))
+      .digest("hex");
+    if (actualDigest !== manifest.digest) {
+      return err(unavailableError("Packaged Git runtime digest mismatch."));
+    }
+
+    const runtime = { ...manifest, executablePath: resolvedExecutablePath };
+    this.cachedRuntime = runtime;
+    return ok(runtime);
   }
 
   /**
-   * Validate that projectRoot is a safe Git worktree.
-   * Rejects: symlinks in gitdir path, external gitdir, workspace-external paths.
+   * Accept only a normal, self-contained repository. Linked worktrees, gitdir
+   * files, alternates, config includes, and reparse points are rejected before
+   * the native profile receives any filesystem grant.
    */
-  private async validateWorktree(projectRoot: string): Promise<Result<string, UnifiedError>> {
+  private async validateWorktree(
+    projectRoot: string
+  ): Promise<Result<{ worktreePath: string; gitDirectoryPath: string }, UnifiedError>> {
     const resolvedRoot = resolve(projectRoot);
-
-    // Verify the path exists and is a directory
-    let rootStat: Awaited<ReturnType<typeof stat>>;
+    let rootStat: Awaited<ReturnType<typeof lstat>>;
     try {
-      rootStat = await stat(resolvedRoot);
+      rootStat = await lstat(resolvedRoot);
     } catch {
       return err(unavailableError("Project root does not exist."));
     }
-    if (!rootStat.isDirectory()) {
-      return err(unavailableError("Project root is not a directory."));
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+      return err(
+        unavailableError("Project root must be a regular directory without reparse points.")
+      );
     }
 
-    // Verify via realpath that root has no symlinks
+    let worktreePath: string;
     try {
-      const real = await realpath(resolvedRoot);
-      if (real !== resolvedRoot) {
+      worktreePath = await realpath(resolvedRoot);
+    } catch {
+      return err(unavailableError("Cannot resolve project root."));
+    }
+    // Use the canonical path for every later grant. The input may use a Windows
+    // 8.3 alias even when the directory itself is not a reparse point.
+
+    const gitDirectoryPath = join(worktreePath, ".git");
+    let gitDirectoryStat: Awaited<ReturnType<typeof lstat>>;
+    try {
+      gitDirectoryStat = await lstat(gitDirectoryPath);
+    } catch {
+      return err(unavailableError("Project root is not a self-contained Git worktree."));
+    }
+    if (!gitDirectoryStat.isDirectory() || gitDirectoryStat.isSymbolicLink()) {
+      return err(
+        unavailableError("Linked worktrees and reparse-point Git directories are not supported.")
+      );
+    }
+
+    let resolvedGitDirectory: string;
+    try {
+      resolvedGitDirectory = await realpath(gitDirectoryPath);
+    } catch {
+      return err(unavailableError("Cannot resolve the Git directory."));
+    }
+    if (!isContainedPath(worktreePath, resolvedGitDirectory)) {
+      return err(unavailableError("Git directory resolves outside the worktree."));
+    }
+
+    for (const blockedPath of [
+      "commondir",
+      "config.worktree",
+      join("objects", "info", "alternates"),
+      "worktrees",
+      "modules"
+    ]) {
+      if (await pathExists(join(resolvedGitDirectory, blockedPath))) {
         return err(
-          unavailableError("Project root contains symlinks or reparse points; rejected for safety.")
+          unavailableError(`Unsupported Git repository feature detected: ${blockedPath}.`)
         );
       }
-    } catch {
-      // If realpath fails, we can't verify — fail closed
-      return err(unavailableError("Cannot resolve real path of project root."));
     }
 
-    return ok(resolvedRoot);
+    const configResult = await validateGitConfig(join(resolvedGitDirectory, "config"));
+    if (!configResult.ok) return configResult;
+
+    return ok({ worktreePath, gitDirectoryPath: resolvedGitDirectory });
   }
 
-  /**
-   * Validate that a set of paths are safe for git diff pathspecs.
-   * Rejects absolute paths, traversal, pathspec magic, null bytes.
-   */
-  private validatePaths(
-    projectRoot: string,
-    paths: readonly string[]
-  ): Result<readonly string[], UnifiedError> {
-    for (const p of paths) {
-      if (!p || isAbsolute(p) || p.includes("..") || p.includes("\0") || p.startsWith(":")) {
+  private validatePaths(paths: readonly string[]): Result<readonly string[], UnifiedError> {
+    for (const path of paths) {
+      if (
+        !path ||
+        isAbsolute(path) ||
+        /^[a-zA-Z]:/.test(path) ||
+        path.startsWith("\\\\") ||
+        path.includes("\0") ||
+        path.startsWith(":") ||
+        path.split(/[\\/]+/).some((segment) => segment === ".." || segment === ".")
+      ) {
         return err(
           createUnifiedError({
             code: "AGENT_GIT_PATHSPEC_INVALID",
             category: "ValidationError",
-            message: `Invalid git pathspec: ${p}`,
+            message: `Invalid Git pathspec: ${path}`,
             recoverability: "user-action",
-            suggestedAction: "Use project-relative paths without traversal or pathspec magic.",
+            suggestedAction: "Use a project-relative path without traversal or Git pathspec magic.",
             traceId: "git-read-adapter"
           })
         );
@@ -153,159 +283,245 @@ export class GitReadAdapter {
     return ok(paths);
   }
 
-  /**
-   * Run a git command in the project root with all dangerous env vars cleared.
-   */
   private async runGit(
     projectRoot: string,
-    args: readonly string[],
+    commandArgs: readonly string[],
     maxOutputBytes = MAX_DIFF_BYTES
   ): Promise<Result<{ stdout: string; truncated: boolean }, UnifiedError>> {
-    const binaryResult = await this.resolveGitBinary();
-    if (!binaryResult.ok) return binaryResult;
+    const runtime = await this.resolveGitRuntime();
+    if (!runtime.ok) return runtime;
+    const worktree = await this.validateWorktree(projectRoot);
+    if (!worktree.ok) return worktree;
+    const qualification = await this.getQualification(runtime.value);
+    if (!qualification.ok) return qualification;
 
-    const gitBinary = binaryResult.value;
-    const worktreeResult = await this.validateWorktree(projectRoot);
-    if (!worktreeResult.ok) return worktreeResult;
-
-    return new Promise<Result<{ stdout: string; truncated: boolean }, UnifiedError>>((resolve) => {
-      // Cleared dangerous env vars
-      const safeEnv: Record<string, string> = {
-        GIT_TERMINAL_PROMPT: "0",
-        GIT_OPTIONAL_LOCKS: "0"
-        // HOME, XDG_CONFIG_HOME, GIT_* are NOT inherited
-      };
-
-      const child = spawn(gitBinary, [
+    if (this.sandbox === undefined) {
+      return err(
+        unavailableError("Git reads require a qualified native read-only sandbox profile.")
+      );
+    }
+    const execution = await this.sandbox.executeGitRead({
+      profile: GIT_READ_PROFILE,
+      attestationId: qualification.value.attestationId,
+      runtime: runtime.value,
+      worktreePath: worktree.value.worktreePath,
+      gitDirectoryPath: worktree.value.gitDirectoryPath,
+      argv: [
         "--no-pager",
-        "--no-config",
-        "-c", "core.fsmonitor=false",
-        "-c", "core.autocrlf=false",
-        "-C", worktreeResult.value,
-        ...args
-      ], {
-        shell: false,
-        env: safeEnv,
-        stdio: ["ignore", "pipe", "pipe"]
-      });
-
-      let stdout = "";
-      let stderr = "";
-      let truncated = false;
-
-      child.on("error", () => {
-        resolve(err(unavailableError("Git process failed to start.")));
-      });
-
-      child.stdout?.on("data", (chunk: Buffer) => {
-        if (truncated) return;
-        stdout += chunk.toString("utf8");
-        if (stdout.length > maxOutputBytes) {
-          stdout = stdout.slice(0, maxOutputBytes);
-          truncated = true;
-          child.kill("SIGTERM");
-        }
-      });
-
-      child.stderr?.on("data", (chunk: Buffer) => {
-        stderr += chunk.toString("utf8");
-      });
-
-      child.on("close", (code) => {
-        if (code !== 0 && !truncated) {
-          resolve(
-            err(
-              unavailableError(`Git exited with code ${code ?? "unknown"}: ${stderr.slice(0, 256)}`)
-            )
-          );
-          return;
-        }
-        resolve(ok({ stdout, truncated }));
-      });
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.hooksPath=NUL",
+        "-c",
+        "credential.helper=",
+        "-c",
+        "core.pager=cat",
+        "-c",
+        "diff.external=",
+        "-c",
+        "diff.trustExitCode=false",
+        "--git-dir",
+        worktree.value.gitDirectoryPath,
+        "--work-tree",
+        worktree.value.worktreePath,
+        ...commandArgs
+      ],
+      environment: SAFE_GIT_ENV,
+      maxOutputBytes
     });
+    if (!execution.ok) return execution;
+    if (execution.value.exitCode !== 0 && !execution.value.truncated) {
+      return err(
+        unavailableError(
+          `Git read failed with code ${execution.value.exitCode ?? "unknown"}: ${execution.value.stderr.slice(0, 256)}`
+        )
+      );
+    }
+    return ok({ stdout: execution.value.stdout, truncated: execution.value.truncated });
   }
 
-  /** Run `git status --porcelain=v1` and parse the result. */
+  private async getQualification(
+    runtime: VerifiedGitRuntime
+  ): Promise<Result<GitReadSandboxQualification, UnifiedError>> {
+    if (this.sandbox === undefined) {
+      return err(
+        unavailableError("Git reads require a qualified native read-only sandbox profile.")
+      );
+    }
+    const result = await this.sandbox.getQualification();
+    if (!result.ok) return err(unavailableError("Git sandbox qualification is unavailable."));
+    const qualification = result.value;
+    if (
+      qualification.profile !== GIT_READ_PROFILE ||
+      qualification.gitRuntimeDigest !== runtime.digest ||
+      !isSha256(qualification.hostDigest) ||
+      !qualification.attestationId ||
+      new Date(qualification.expiresAt).getTime() <= Date.now() ||
+      qualification.capabilities.fileIsolation !== "verified" ||
+      qualification.capabilities.networkIsolation !== "verified" ||
+      qualification.capabilities.jobObjectKillOnClose !== "verified" ||
+      qualification.capabilities.appContainerOrLowBox !== "verified"
+    ) {
+      return err(
+        unavailableError(
+          "Git sandbox qualification is stale, incomplete, or bound to another runtime."
+        )
+      );
+    }
+    return ok(qualification);
+  }
+
   async gitStatus(projectRoot: string): Promise<Result<GitStatusResult, UnifiedError>> {
     const result = await this.runGit(projectRoot, [
       "status",
       "--porcelain=v1",
       "--branch",
-      "--literal-pathspecs"
+      "--untracked-files=all"
     ]);
     if (!result.ok) return result;
 
-    const lines = result.value.stdout.split("\n").filter((l) => l.trim());
     const staged: string[] = [];
     const unstaged: string[] = [];
     const untracked: string[] = [];
     let branch = "unknown";
-
-    for (const line of lines) {
+    for (const line of result.value.stdout.split("\n").filter((candidate) => candidate.trim())) {
       if (line.startsWith("## ")) {
-        // Branch line: "## main...origin/main" or "## HEAD (no branch)"
         const branchPart = (line.slice(3).split("...")[0] ?? "").split(" ")[0] ?? "";
         branch = branchPart || "unknown";
         continue;
       }
-      if (line.length < 2) continue;
+      if (line.length < 3) continue;
       const xy = line.slice(0, 2);
       const file = line.slice(3).trim();
-      const x = xy[0];
-      const y = xy[1];
-
-      if (x === "?") {
+      if (xy[0] === "?") {
         untracked.push(file);
       } else {
-        if (x !== " " && x !== "?") staged.push(file);
-        if (y !== " " && y !== "?") unstaged.push(file);
+        if (xy[0] !== " ") staged.push(file);
+        if (xy[1] !== " ") unstaged.push(file);
       }
     }
-
     return ok({ staged, unstaged, untracked, branch });
   }
 
-  /** Run `git diff` (or `git diff --cached`) for specific paths. */
   async gitDiff(
     projectRoot: string,
     paths?: readonly string[]
   ): Promise<Result<GitDiffResult, UnifiedError>> {
-    const pathsResult = paths !== undefined ? this.validatePaths(projectRoot, paths) : ok([]);
+    const pathsResult = paths === undefined ? ok([]) : this.validatePaths(paths);
     if (!pathsResult.ok) return pathsResult;
-
-    const validPaths = pathsResult.value;
-    const args: string[] = [
+    const result = await this.runGit(projectRoot, [
       "diff",
-      "--literal-pathspecs",
+      "--no-ext-diff",
+      "--no-textconv",
       "--",
-      ...validPaths
-    ];
-
-    const result = await this.runGit(projectRoot, args, MAX_DIFF_BYTES);
+      ...pathsResult.value
+    ]);
     if (!result.ok) return result;
-
-    // Parse per-file diffs
-    const diffText = result.value.stdout;
-    const diffs = parseDiffOutput(diffText);
-
-    return ok({ diffs, truncated: result.value.truncated });
+    return ok({ diffs: parseDiffOutput(result.value.stdout), truncated: result.value.truncated });
   }
+}
+
+export function parseGitRuntimeManifest(value: unknown): GitRuntimeManifest | undefined {
+  if (!isRecord(value)) return undefined;
+  const expectedKeys = new Set(["schemaVersion", "version", "digest", "path", "license"]);
+  if (Object.keys(value).some((key) => !expectedKeys.has(key))) return undefined;
+  if (
+    value.schemaVersion !== GIT_MANIFEST_SCHEMA_VERSION ||
+    !isNonEmptyString(value.version) ||
+    !isSha256(value.digest) ||
+    !isSafeResourcePath(value.path) ||
+    !isNonEmptyString(value.license)
+  ) {
+    return undefined;
+  }
+  return {
+    schemaVersion: GIT_MANIFEST_SCHEMA_VERSION,
+    version: value.version,
+    digest: value.digest,
+    path: value.path,
+    license: value.license
+  };
 }
 
 function parseDiffOutput(diffText: string): GitDiffFile[] {
   if (!diffText.trim()) return [];
-  // Split on "diff --git" boundaries
-  const parts = diffText.split(/^(?=diff --git )/m);
   const diffs: GitDiffFile[] = [];
-  for (const part of parts) {
-    if (!part.trim()) continue;
-    // Extract filename from "diff --git a/<path> b/<path>"
+  for (const part of diffText.split(/^(?=diff --git )/m)) {
     const match = /^diff --git a\/(.*?) b\//m.exec(part);
-    if (match?.[1]) {
-      diffs.push({ relativePath: match[1], diff: part });
-    }
+    if (match?.[1]) diffs.push({ relativePath: match[1], diff: part });
   }
   return diffs;
+}
+
+async function validateGitConfig(configPath: string): Promise<Result<void, UnifiedError>> {
+  let config: string;
+  try {
+    config = await readFile(configPath, "utf8");
+  } catch {
+    return err(unavailableError("Git config is missing or unreadable."));
+  }
+  const forbidden =
+    /(?:^|\n)\s*(?:\[\s*(?:include(?:if)?|credential|diff|filter)\b|(?:path|worktree|fsmonitor|hookspath|pager|external|textconv|helper)\s*=)/im;
+  if (forbidden.test(config)) {
+    return err(
+      unavailableError("Git config contains unsupported executable or external-path behavior.")
+    );
+  }
+  return ok(undefined);
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isSafeResourcePath(value: unknown): value is string {
+  if (!isNonEmptyString(value) || value.includes("\0") || isAbsolute(value)) return false;
+  if (/^[a-zA-Z]:/.test(value) || value.startsWith("\\\\") || value.startsWith("//")) return false;
+  return value
+    .split(/[\\/]+/)
+    .every(
+      (segment) =>
+        segment.length > 0 && segment !== "." && segment !== ".." && !segment.includes(":")
+    );
+}
+
+function isContainedPath(base: string, candidate: string): boolean {
+  const relativePath = relative(
+    normalizePathForComparison(base),
+    normalizePathForComparison(candidate)
+  );
+  return (
+    relativePath !== "" &&
+    !relativePath.startsWith(`..${sep}`) &&
+    relativePath !== ".." &&
+    !isAbsolute(relativePath)
+  );
+}
+
+function normalizePathForComparison(path: string): string {
+  const withoutDevicePrefix = path.startsWith("\\\\?\\UNC\\")
+    ? `\\\\${path.slice("\\\\?\\UNC\\".length)}`
+    : path.startsWith("\\\\?\\")
+      ? path.slice("\\\\?\\".length)
+      : path;
+  return process.platform === "win32" ? withoutDevicePrefix.toLowerCase() : withoutDevicePrefix;
+}
+
+function isSha256(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/i.test(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function unavailableError(message: string): UnifiedError {
@@ -315,7 +531,7 @@ function unavailableError(message: string): UnifiedError {
     message,
     recoverability: "user-action",
     suggestedAction:
-      "Ensure the project is an initialized Git repository and the packaged Git runtime is present.",
+      "Install a verified Git runtime and re-run Windows sandbox qualification before using Git tools.",
     traceId: "git-read-adapter"
   });
 }

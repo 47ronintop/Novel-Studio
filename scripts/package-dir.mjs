@@ -24,6 +24,8 @@ await run("electron-builder", ["--dir", "--config", "apps/desktop/electron-build
   NOVEL_STUDIO_PACKAGE_OUTPUT: outputDirectory
 });
 await run("node", ["scripts/artifact-secret-scan.mjs", unpackedDirectory]);
+await run("node", ["scripts/verify-packaged-agent-sandbox.mjs", unpackedDirectory]);
+await run("node", ["scripts/verify-packaged-git-runtime.mjs", unpackedDirectory]);
 await writeFile(join(root, "release", "latest-package-dir.txt"), `${unpackedDirectory}\n`, "utf8");
 
 console.log(`Package directory ready: ${unpackedDirectory}`);

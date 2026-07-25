@@ -1,6 +1,7 @@
 {
-  "version": "placeholder",
+  "schemaVersion": "1.0",
+  "version": "unavailable",
   "digest": "placeholder",
-  "path": "resources/git/git.exe",
+  "path": "git/git.exe",
   "license": "GPL-2.0"
 }

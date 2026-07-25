@@ -9,8 +9,11 @@ import {
   type ProjectPathGuard
 } from "./atomic-write.js";
 import { storageError, validationError } from "./errors.js";
+import { isSafeProjectRelativePath } from "./no-follow-file-operations.js";
 import type {
+  AgentOperationPathSnapshot,
   AgentTransactionJournal,
+  AgentWriteTransactionOperation,
   AgentWriteRecoveryPort,
   RollbackReviewRecord,
   RecoveryRecord,
@@ -190,9 +193,7 @@ export class RecoveryRepository implements RecoveryRepositoryPort, AgentWriteRec
         this.traceId
       );
       if (!pathValidation.ok) return pathValidation;
-      const parsed = JSON.parse(
-        await readFile(journalPath, "utf8")
-      ) as unknown;
+      const parsed = JSON.parse(await readFile(journalPath, "utf8")) as unknown;
       const normalized = normalizeAgentTransactionJournal(parsed);
       if (!isAgentTransactionJournal(normalized) || normalized.transactionId !== transactionId) {
         return err(
@@ -226,11 +227,7 @@ export class RecoveryRepository implements RecoveryRepositoryPort, AgentWriteRec
     Result<readonly AgentTransactionJournal[], UnifiedError>
   > {
     const directory = join(this.options.projectRoot, "history", "agent-transactions");
-    const pathValidation = await verifyProjectStoragePath(
-      this.pathGuard,
-      directory,
-      this.traceId
-    );
+    const pathValidation = await verifyProjectStoragePath(this.pathGuard, directory, this.traceId);
     if (!pathValidation.ok) return pathValidation;
     let entries: readonly string[];
     try {
@@ -389,8 +386,7 @@ function isSafeRunId(runId: string): boolean {
 function isRollbackReviewRecord(value: unknown): value is RollbackReviewRecord {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const review = value as Partial<RollbackReviewRecord>;
-  if (
-    !(
+  if (!(
     review.schemaVersion === "1.0" &&
     typeof review.reviewId === "string" &&
     typeof review.runId === "string" &&
@@ -404,8 +400,10 @@ function isRollbackReviewRecord(value: unknown): value is RollbackReviewRecord {
     review.sourceVersionGroupIds.length <= 64 &&
     review.sourceVersionGroupIds.every((id) => typeof id === "string" && isSafeRunId(id)) &&
     new Set(review.sourceVersionGroupIds).size === review.sourceVersionGroupIds.length &&
-    typeof review.createdAt === "string" && review.createdAt.length > 0 &&
-    typeof review.updatedAt === "string" && review.updatedAt.length > 0 &&
+    typeof review.createdAt === "string" &&
+    review.createdAt.length > 0 &&
+    typeof review.updatedAt === "string" &&
+    review.updatedAt.length > 0 &&
     Array.isArray(review.processedCommandIds) &&
     review.processedCommandIds.length <= 1024 &&
     review.processedCommandIds.every(
@@ -417,8 +415,7 @@ function isRollbackReviewRecord(value: unknown): value is RollbackReviewRecord {
     review.files.length <= 64 &&
     review.files.every(isRollbackReviewFileRecord) &&
     new Set(review.files.map((file) => file.relativePath)).size === review.files.length
-    )
-  ) {
+  )) {
     return false;
   }
   return rollbackReviewRecordStatus(review.files) === review.status;
@@ -441,7 +438,8 @@ function isRollbackReviewFileRecord(value: unknown): boolean {
     (file["baselineHistoryContent"] === undefined ||
       (typeof file["baselineHistoryContent"] === "string" &&
         rollbackContentFits(file["baselineHistoryContent"]))) &&
-    typeof file["baselineVersionId"] === "string" && file["baselineVersionId"].length > 0 &&
+    typeof file["baselineVersionId"] === "string" &&
+    file["baselineVersionId"].length > 0 &&
     typeof file["runLastWriteContent"] === "string" &&
     rollbackContentFits(file["runLastWriteContent"]) &&
     typeof file["runLastWriteChecksum"] === "string" &&
@@ -475,7 +473,8 @@ function isRollbackReviewFileRecord(value: unknown): boolean {
       file["status"] === "kept") &&
     (file["snapshotVersionId"] === undefined || typeof file["snapshotVersionId"] === "string") &&
     (file["errorCode"] === undefined || typeof file["errorCode"] === "string")
-  )) return false;
+  ))
+    return false;
   const assetType = file["assetType"] as "chapter" | "text";
   const current =
     (file["reviewedCurrentHistoryContent"] as string | undefined) ??
@@ -488,9 +487,12 @@ function isRollbackReviewFileRecord(value: unknown): boolean {
     rollbackHistoryContent(assetType, file["baselineContent"] as string);
   const typedDiff = diff as Record<string, unknown>;
   return (
-    typedDiff["currentToLastWrite"] === rollbackDisplayableDiff("current", current, "ai-last-write", lastWrite) &&
-    typedDiff["currentToBaseline"] === rollbackDisplayableDiff("current", current, "baseline", baseline) &&
-    typedDiff["lastWriteToBaseline"] === rollbackDisplayableDiff("ai-last-write", lastWrite, "baseline", baseline) &&
+    typedDiff["currentToLastWrite"] ===
+      rollbackDisplayableDiff("current", current, "ai-last-write", lastWrite) &&
+    typedDiff["currentToBaseline"] ===
+      rollbackDisplayableDiff("current", current, "baseline", baseline) &&
+    typedDiff["lastWriteToBaseline"] ===
+      rollbackDisplayableDiff("ai-last-write", lastWrite, "baseline", baseline) &&
     rollbackFileStateIsValid(file)
   );
 }
@@ -606,9 +608,53 @@ function isAgentTransactionJournal(value: unknown): value is AgentTransactionJou
   }
   if (!hasValidApprovalBinding(journal)) return false;
   if (!journal.entries.every(isAgentTransactionJournalEntry)) return false;
+  if (journal.operations !== undefined) {
+    if (
+      !Array.isArray(journal.operations) ||
+      !journal.operations.every(isAgentTransactionJournalOperationEntry)
+    ) {
+      return false;
+    }
+    const operationIds = new Set(journal.operations.map((entry) => entry.operationId));
+    if (operationIds.size !== journal.operations.length) return false;
+    if (
+      journal.approvalSource === "user_preapproved_run" &&
+      journal.operations.some((entry) => isDestructiveOperation(entry.operation.kind))
+    ) {
+      return false;
+    }
+  }
+  if (!hasValidMutationOrder(journal)) return false;
   const writeIds = new Set(journal.entries.map((entry) => entry.writeId));
-  const relativePaths = new Set(journal.entries.map((entry) => entry.relativePath));
-  return writeIds.size === journal.entries.length && relativePaths.size === journal.entries.length;
+  return writeIds.size === journal.entries.length;
+}
+
+function hasValidMutationOrder(journal: Partial<AgentTransactionJournal>): boolean {
+  if (journal.mutationOrder === undefined) return true;
+  if (!Array.isArray(journal.mutationOrder)) return false;
+  const expected = new Set([
+    ...(journal.entries ?? []).map((entry) => `write:${entry.writeId}`),
+    ...(journal.operations ?? []).map((entry) => `operation:${entry.operationId}`)
+  ]);
+  if (journal.mutationOrder.length !== expected.size) return false;
+  const actual = new Set<string>();
+  for (const mutation of journal.mutationOrder) {
+    if (
+      typeof mutation !== "object" ||
+      mutation === null ||
+      ((mutation as { readonly kind?: unknown }).kind !== "write" &&
+        (mutation as { readonly kind?: unknown }).kind !== "operation") ||
+      typeof (mutation as { readonly id?: unknown }).id !== "string"
+    ) {
+      return false;
+    }
+    const key = `${(mutation as { readonly kind: string }).kind}:${
+      (mutation as { readonly id: string }).id
+    }`;
+    if (!expected.has(key) || actual.has(key)) return false;
+    actual.add(key);
+  }
+  return actual.size === expected.size;
 }
 
 function hasValidApprovalBinding(journal: Partial<AgentTransactionJournal>): boolean {
@@ -658,6 +704,213 @@ function isAgentTransactionJournalEntry(value: unknown): boolean {
       entry.status === "applied" ||
       entry.status === "rolled_back" ||
       entry.status === "rollback_failed")
+  );
+}
+
+function isAgentTransactionJournalOperationEntry(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const entry = value as Partial<NonNullable<AgentTransactionJournal["operations"]>[number]>;
+  return (
+    typeof entry.operationId === "string" &&
+    entry.operationId.length > 0 &&
+    isJournalOperation(entry.operation) &&
+    Array.isArray(entry.before) &&
+    entry.before.every(isOperationPathSnapshot) &&
+    Array.isArray(entry.after) &&
+    entry.after.every(isOperationPathSnapshot) &&
+    new Set([...entry.before, ...entry.after].map((snapshot) => snapshot.relativePath)).size >= 1 &&
+    hasValidOperationTransition(
+      entry.operation as AgentWriteTransactionOperation,
+      entry.before as readonly AgentOperationPathSnapshot[],
+      entry.after as readonly AgentOperationPathSnapshot[]
+    ) &&
+    (entry.beforeVersionId === undefined || typeof entry.beforeVersionId === "string") &&
+    (entry.status === "pending" ||
+      entry.status === "applied" ||
+      entry.status === "rolled_back" ||
+      entry.status === "rollback_failed") &&
+    (entry.errorCode === undefined || typeof entry.errorCode === "string")
+  );
+}
+
+function isJournalOperation(value: unknown): value is AgentWriteTransactionOperation {
+  if (typeof value !== "object" || value === null) return false;
+  const operation = value as {
+    readonly kind?: unknown;
+    readonly operationId?: unknown;
+    readonly toolCallIdempotencyKey?: unknown;
+    readonly dependsOn?: unknown;
+    readonly selected?: unknown;
+    readonly relativePath?: unknown;
+    readonly sourcePath?: unknown;
+    readonly targetPath?: unknown;
+    readonly sourceChecksum?: unknown;
+    readonly baseChecksum?: unknown;
+    readonly content?: unknown;
+  };
+  if (
+    typeof operation.operationId !== "string" ||
+    operation.operationId.length === 0 ||
+    typeof operation.toolCallIdempotencyKey !== "string" ||
+    operation.toolCallIdempotencyKey.length === 0 ||
+    (operation.dependsOn !== undefined &&
+      (!Array.isArray(operation.dependsOn) ||
+        operation.dependsOn.some((dependency) => typeof dependency !== "string"))) ||
+    (operation.selected !== undefined && operation.selected !== true)
+  ) {
+    return false;
+  }
+  switch (operation.kind) {
+    case "modify":
+    case "create_directory":
+    case "remove_directory":
+      return (
+        typeof operation.relativePath === "string" && isSafeJournalPath(operation.relativePath)
+      );
+    case "create_file":
+      return (
+        typeof operation.relativePath === "string" &&
+        isSafeJournalPath(operation.relativePath) &&
+        typeof operation.content === "string" &&
+        operation.content.length <= 10 * 1024 * 1024
+      );
+    case "delete_file":
+      return (
+        typeof operation.relativePath === "string" &&
+        isSafeJournalPath(operation.relativePath) &&
+        typeof operation.baseChecksum === "string" &&
+        /^[a-f0-9]{64}$/.test(operation.baseChecksum)
+      );
+    case "move_file":
+      return (
+        typeof operation.sourcePath === "string" &&
+        isSafeJournalPath(operation.sourcePath) &&
+        typeof operation.targetPath === "string" &&
+        isSafeJournalPath(operation.targetPath) &&
+        operation.sourcePath !== operation.targetPath &&
+        typeof operation.sourceChecksum === "string" &&
+        /^[a-f0-9]{64}$/.test(operation.sourceChecksum)
+      );
+    default:
+      return false;
+  }
+}
+
+function hasValidOperationTransition(
+  operation: AgentWriteTransactionOperation,
+  before: readonly AgentOperationPathSnapshot[],
+  after: readonly AgentOperationPathSnapshot[]
+): boolean {
+  switch (operation.kind) {
+    case "create_file": {
+      const prior = exactSnapshot(before, operation.relativePath, "missing");
+      const next = exactSnapshot(after, operation.relativePath, "file");
+      return (
+        prior !== undefined &&
+        next?.kind === "file" &&
+        next.content === operation.content &&
+        before.length === 1 &&
+        after.length === 1
+      );
+    }
+    case "delete_file": {
+      const prior = exactSnapshot(before, operation.relativePath, "file");
+      const next = exactSnapshot(after, operation.relativePath, "missing");
+      return (
+        prior?.kind === "file" &&
+        prior.checksum === operation.baseChecksum &&
+        next !== undefined &&
+        before.length === 1 &&
+        after.length === 1
+      );
+    }
+    case "move_file": {
+      const source = exactSnapshot(before, operation.sourcePath, "file");
+      const target = exactSnapshot(before, operation.targetPath, "missing");
+      const sourceAfter = exactSnapshot(after, operation.sourcePath, "missing");
+      const targetAfter = exactSnapshot(after, operation.targetPath, "file");
+      return (
+        source?.kind === "file" &&
+        source.checksum === operation.sourceChecksum &&
+        target !== undefined &&
+        sourceAfter !== undefined &&
+        targetAfter?.kind === "file" &&
+        targetAfter.content === source.content &&
+        before.length === 2 &&
+        after.length === 2
+      );
+    }
+    case "create_directory":
+      return (
+        exactSnapshot(before, operation.relativePath, "missing") !== undefined &&
+        exactSnapshot(after, operation.relativePath, "directory") !== undefined &&
+        before.length === 1 &&
+        after.length === 1
+      );
+    case "remove_directory":
+      return (
+        exactSnapshot(before, operation.relativePath, "directory") !== undefined &&
+        exactSnapshot(after, operation.relativePath, "missing") !== undefined &&
+        before.length === 1 &&
+        after.length === 1
+      );
+    case "modify":
+      return false;
+  }
+}
+
+function exactSnapshot(
+  snapshots: readonly AgentOperationPathSnapshot[],
+  relativePath: string,
+  kind: AgentOperationPathSnapshot["kind"]
+): AgentOperationPathSnapshot | undefined {
+  const matches = snapshots.filter(
+    (snapshot) => snapshot.relativePath === relativePath && snapshot.kind === kind
+  );
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function isOperationPathSnapshot(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const snapshot = value as {
+    readonly kind?: unknown;
+    readonly relativePath?: unknown;
+    readonly content?: unknown;
+    readonly checksum?: unknown;
+  };
+  if (typeof snapshot.relativePath !== "string" || !isSafeJournalPath(snapshot.relativePath)) {
+    return false;
+  }
+  if (snapshot.kind === "missing" || snapshot.kind === "directory") return true;
+  return (
+    snapshot.kind === "file" &&
+    typeof snapshot.content === "string" &&
+    typeof snapshot.checksum === "string" &&
+    /^[a-f0-9]{64}$/.test(snapshot.checksum) &&
+    checksum(snapshot.content) === snapshot.checksum
+  );
+}
+
+function isSafeJournalPath(relativePath: string): boolean {
+  const first = relativePath.split("/", 1)[0]?.toLowerCase();
+  return (
+    isSafeProjectRelativePath(relativePath) &&
+    first !== ".git" &&
+    first !== ".novel-studio" &&
+    first !== "node_modules" &&
+    first !== "history" &&
+    first !== "dist" &&
+    first !== "build" &&
+    first !== ".cache"
+  );
+}
+
+function isDestructiveOperation(kind: unknown): boolean {
+  return (
+    kind === "move_file" ||
+    kind === "delete_file" ||
+    kind === "create_directory" ||
+    kind === "remove_directory"
   );
 }
 

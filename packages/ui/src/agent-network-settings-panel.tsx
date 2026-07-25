@@ -4,7 +4,10 @@
  * API key status (by ref only — no plaintext), egress policy, and test connection.
  */
 import React, { useState, useCallback } from "react";
-import type { AgentNetworkSettingsData, AgentNetworkProviderProfile } from "@novel-studio/application";
+import type {
+  AgentNetworkSettingsData,
+  AgentNetworkProviderProfile
+} from "@novel-studio/application";
 
 export interface AgentNetworkSettingsPanelProps {
   readonly settings: AgentNetworkSettingsData;
@@ -15,9 +18,13 @@ export interface AgentNetworkSettingsPanelProps {
   readonly loading?: boolean;
 }
 
-export function AgentNetworkSettingsPanel(props: AgentNetworkSettingsPanelProps): React.ReactElement {
+export function AgentNetworkSettingsPanel(
+  props: AgentNetworkSettingsPanelProps
+): React.ReactElement {
   const { settings, onUpdateSettings, onTestConnection, onRevoke, loading = false } = props;
-  const [testStatus, setTestStatus] = useState<Record<string, "idle" | "testing" | "ok" | "error">>({});
+  const [testStatus, setTestStatus] = useState<Record<string, "idle" | "testing" | "ok" | "error">>(
+    {}
+  );
   const [newHost, setNewHost] = useState("");
 
   const handleToggleEnabled = useCallback(async () => {

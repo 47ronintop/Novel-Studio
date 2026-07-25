@@ -1,8 +1,11 @@
 import {
   findPermissionSummaryDrift,
   generatePermissionSummary,
+  hasValidPermissionSummaryChecksums,
   type AgentContextMode,
   type AgentOperationMode,
+  type AgentToolCapabilitySnapshot,
+  type AgentToolDescriptor,
   type AgentToolLister,
   type AgentWritePolicy,
   type PermissionSummary,
@@ -23,7 +26,10 @@ import {
  * conflict semantics (a run creates its summary exactly once).
  */
 export interface AgentPermissionSessionRepository {
-  writePermissionSummary(runId: string, summary: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
+  writePermissionSummary(
+    runId: string,
+    summary: JsonObject
+  ): Promise<Result<JsonObject, UnifiedError>>;
   readPermissionSummary?(
     runId: string,
     permissionSummaryId: string
@@ -46,6 +52,12 @@ export interface PreparePermissionSummaryInput {
   readonly operationMode: AgentOperationMode;
   readonly contextMode: AgentContextMode;
   readonly writePolicy: AgentWritePolicy;
+  /** Frozen Main-process capability fact for this pending run. */
+  readonly capabilitySnapshot?: AgentToolCapabilitySnapshot;
+  /** Frozen, server-validated plugin/MCP descriptor directory for this pending run. */
+  readonly externalToolDescriptors?: readonly AgentToolDescriptor[];
+  /** Revision from the immutable canonical-id <-> provider-name mapping. */
+  readonly providerMappingRevision?: string;
 }
 
 export type VerifyPermissionSummaryForStartInput = PreparePermissionSummaryInput;
@@ -90,7 +102,9 @@ export interface AgentPermissionSession {
     input: PreparePermissionSummaryForPlanHandoffInput
   ): Promise<Result<PermissionSummary, UnifiedError>>;
   /** Persist the summary under the now-existing run, stamping `runId` onto the bound copy. */
-  bindToRun(input: BindPermissionSummaryToRunInput): Promise<Result<PermissionSummary, UnifiedError>>;
+  bindToRun(
+    input: BindPermissionSummaryToRunInput
+  ): Promise<Result<PermissionSummary, UnifiedError>>;
   /** Read the immutable, server-persisted summary bound to an existing run. */
   readForRun(
     input: ReadPermissionSummaryForRunInput
@@ -131,6 +145,15 @@ export function createAgentPermissionSession(
         writePolicy: input.writePolicy,
         rootFingerprint: fingerprint.value,
         generatedAt: now(),
+        ...(input.capabilitySnapshot === undefined
+          ? {}
+          : { capabilitySnapshot: input.capabilitySnapshot }),
+        ...(input.externalToolDescriptors === undefined
+          ? {}
+          : { externalToolDescriptors: input.externalToolDescriptors }),
+        ...(input.providerMappingRevision === undefined
+          ? {}
+          : { providerMappingRevision: input.providerMappingRevision }),
         ...(options.listTools === undefined ? {} : { listTools: options.listTools })
       })
     );
@@ -193,7 +216,8 @@ function permissionSummaryDriftError(drift: readonly PermissionSummaryFieldDrift
   return createUnifiedError({
     code: "AGENT_PERMISSION_SUMMARY_STALE",
     category: "AgentError",
-    message: "The Agent run's permission summary is stale and no longer matches the current Tool Registry or project root.",
+    message:
+      "The Agent run's permission summary is stale and no longer matches the current Tool Registry or project root.",
     recoverability: "user-action",
     suggestedAction: "Reopen the permission summary and retry.",
     traceId: "agent-permission-session",
@@ -205,27 +229,48 @@ function createDefaultPermissionSummaryId(): string {
   return `permission_summary_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function isPermissionSummary(
-  value: JsonObject,
-  input: ReadPermissionSummaryForRunInput
-): boolean {
-  return (
-    value["schemaVersion"] === "1.0" &&
-    value["runId"] === input.runId &&
-    value["permissionSummaryId"] === input.permissionSummaryId &&
-    typeof value["projectId"] === "string" &&
-    typeof value["runDraftId"] === "string" &&
-    (value["contextMode"] === "writing" || value["contextMode"] === "general_file") &&
-    (value["writePolicy"] === "write_before_confirmation" ||
-      value["writePolicy"] === "user_preapproved_run") &&
-    typeof value["toolRegistryRevision"] === "string" &&
-    typeof value["rootFingerprint"] === "string" &&
-    Array.isArray(value["readCapabilities"]) &&
-    Array.isArray(value["proposalCapabilities"]) &&
-    Array.isArray(value["forbiddenCapabilities"]) &&
-    typeof value["checksum"] === "string" &&
-    typeof value["generatedAt"] === "string"
-  );
+function isPermissionSummary(value: JsonObject, input: ReadPermissionSummaryForRunInput): boolean {
+  if (
+    (value["schemaVersion"] !== "1.0" && value["schemaVersion"] !== "1.1") ||
+    value["permissionSummaryId"] !== input.permissionSummaryId ||
+    value["runId"] !== input.runId ||
+    typeof value["projectId"] !== "string" ||
+    typeof value["runDraftId"] !== "string" ||
+    (value["contextMode"] !== "writing" && value["contextMode"] !== "general_file") ||
+    (value["writePolicy"] !== "write_before_confirmation" &&
+      value["writePolicy"] !== "user_preapproved_run") ||
+    typeof value["toolRegistryRevision"] !== "string" ||
+    typeof value["rootFingerprint"] !== "string" ||
+    !isStringArray(value["readCapabilities"]) ||
+    !isStringArray(value["proposalCapabilities"]) ||
+    !isStringArray(value["forbiddenCapabilities"]) ||
+    typeof value["checksum"] !== "string" ||
+    typeof value["generatedAt"] !== "string"
+  ) {
+    return false;
+  }
+  if (value["schemaVersion"] === "1.1") {
+    if (
+      (value["workspaceKind"] !== "creativeProject" &&
+        value["workspaceKind"] !== "engineeringWorkspace") ||
+      (value["operationMode"] !== "planning" && value["operationMode"] !== "execution") ||
+      !isStringArray(value["executeCapabilities"]) ||
+      !isStringArray(value["externalReadCapabilities"]) ||
+      !isStringArray(value["externalActionCapabilities"]) ||
+      !isStringArray(value["dataEgressCapabilities"]) ||
+      typeof value["featureFlagRevision"] !== "string" ||
+      typeof value["descriptorRevision"] !== "string" ||
+      typeof value["providerMappingRevision"] !== "string" ||
+      typeof value["extendedChecksum"] !== "string"
+    ) {
+      return false;
+    }
+  }
+  return hasValidPermissionSummaryChecksums(value as unknown as PermissionSummary);
+}
+
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
 function permissionSummaryReadUnavailable(): UnifiedError {

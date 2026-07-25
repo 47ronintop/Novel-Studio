@@ -111,6 +111,42 @@ describe("AgentProjectSearchRepository — engineering workspace", () => {
     }
   });
 
+  test("searches allowlisted source formats but excludes credentials and private keys", async () => {
+    const root = await makeProjectRoot();
+    await Promise.all([
+      writeFile(join(root, "app.ts"), "const marker = 'public searchable marker';", "utf8"),
+      writeFile(join(root, "README.md"), "public searchable marker", "utf8"),
+      writeFile(join(root, "package.json"), '{"marker":"public searchable marker"}', "utf8"),
+      writeFile(join(root, ".env"), "TOKEN=classified marker", "utf8"),
+      writeFile(join(root, ".npmrc"), "//registry/:_authToken=classified marker", "utf8"),
+      writeFile(join(root, ".gitconfig"), "[credential]\nhelper=classified marker", "utf8"),
+      writeFile(join(root, "id_rsa"), "classified marker", "utf8"),
+      writeFile(join(root, "deploy.pem"), "classified marker", "utf8"),
+      writeFile(join(root, "server.key"), "classified marker", "utf8"),
+      writeFile(join(root, "api-key.json"), '{"key":"classified marker"}', "utf8"),
+      writeFile(join(root, "credentials.json"), '{"token":"classified marker"}', "utf8")
+    ]);
+
+    const repo = new AgentProjectSearchRepository({
+      projectRoot: root,
+      workspaceKind: "engineeringWorkspace"
+    });
+
+    const publicResult = await repo.searchText({ query: "public searchable marker" });
+    expect(publicResult.ok).toBe(true);
+    if (!publicResult.ok) return;
+    expect(publicResult.value.items.map((item) => item.relativePath)).toEqual([
+      "app.ts",
+      "package.json",
+      "README.md"
+    ]);
+
+    const secretResult = await repo.searchText({ query: "classified marker" });
+    expect(secretResult.ok).toBe(true);
+    if (!secretResult.ok) return;
+    expect(secretResult.value.items).toHaveLength(0);
+  });
+
   test("does not follow symlinks", async () => {
     const root = await makeProjectRoot();
     const outside = await mkdtemp(join(tmpdir(), "novel-studio-search-outside-"));
@@ -178,6 +214,104 @@ describe("AgentProjectSearchRepository — engineering workspace", () => {
     if (!result.ok) return;
     expect(result.value.items.length).toBeLessThanOrEqual(3);
     expect(result.value.truncated).toBe(true);
+  });
+
+  test("truncates a no-match search when the scanned-byte budget is exhausted", async () => {
+    const root = await makeProjectRoot();
+    const megabyte = "x".repeat(1024 * 1024);
+    for (let index = 0; index < 17; index++) {
+      await writeFile(join(root, `source-${index}.ts`), megabyte, "utf8");
+    }
+
+    const repo = new AgentProjectSearchRepository({
+      projectRoot: root,
+      workspaceKind: "engineeringWorkspace"
+    });
+    const result = await repo.searchText({ query: "not-present" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.items).toHaveLength(0);
+    expect(result.value.truncated).toBe(true);
+  });
+
+  test("does not scan a file larger than the per-file handle read limit", async () => {
+    const root = await makeProjectRoot();
+    await writeFile(
+      join(root, "too-large.ts"),
+      `${"x".repeat(1024 * 1024)} outside marker`,
+      "utf8"
+    );
+
+    const repo = new AgentProjectSearchRepository({
+      projectRoot: root,
+      workspaceKind: "engineeringWorkspace"
+    });
+    const result = await repo.searchText({ query: "outside marker" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.items).toHaveLength(0);
+  });
+
+  test("rejects a symlinked text file rather than searching its target", async () => {
+    const root = await makeProjectRoot();
+    const outside = await mkdtemp(join(tmpdir(), "novel-studio-search-outside-file-"));
+    roots.push(outside);
+    await writeFile(join(outside, "secret.md"), "outside swapped target marker", "utf8");
+
+    try {
+      await symlink(join(outside, "secret.md"), join(root, "target.md"), "file");
+    } catch {
+      // Symlink creation may be unavailable in restricted Windows environments.
+      return;
+    }
+    const repo = new AgentProjectSearchRepository({
+      projectRoot: root,
+      workspaceKind: "engineeringWorkspace"
+    });
+    const result = await repo.searchText({ query: "outside swapped target marker" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.items).toHaveLength(0);
+  });
+
+  test("does not read an outside target swapped in after path identity verification", async () => {
+    const root = await makeProjectRoot();
+    const outside = await mkdtemp(join(tmpdir(), "novel-studio-search-race-outside-"));
+    roots.push(outside);
+    const targetPath = join(root, "target.md");
+    const outsidePath = join(outside, "secret.md");
+    await writeFile(targetPath, "inside handle marker", "utf8");
+    await writeFile(outsidePath, "outside swapped marker", "utf8");
+
+    class SwapAfterVerificationRepository extends AgentProjectSearchRepository {
+      public constructor() {
+        super({ projectRoot: root, workspaceKind: "engineeringWorkspace" });
+      }
+
+      protected override async afterPathIdentityVerified(fullPath: string): Promise<void> {
+        if (fullPath !== targetPath) return;
+        await rm(targetPath, { force: true });
+        await symlink(outsidePath, targetPath, "file");
+      }
+    }
+
+    try {
+      const probePath = join(root, "symlink-probe");
+      await symlink(outsidePath, probePath, "file");
+      await rm(probePath, { force: true });
+    } catch {
+      // Symlink creation may be unavailable in restricted Windows environments.
+      return;
+    }
+    const repo = new SwapAfterVerificationRepository();
+    const result = await repo.searchText({ query: "marker" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.items).toHaveLength(1);
+    expect(result.value.items[0]?.snippet).toContain("inside handle marker");
+    expect(result.value.items[0]?.snippet).not.toContain("outside swapped marker");
   });
 
   test("result items are sorted deterministically", async () => {

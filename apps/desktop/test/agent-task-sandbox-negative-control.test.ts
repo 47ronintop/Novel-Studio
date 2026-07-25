@@ -1,58 +1,50 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 
 /**
- * Negative control tests: verify the test infrastructure CAN detect missing sandbox protection.
+ * Negative controls must prove that an invalid prerequisite is rejected. They
+ * do not start an ordinary process and then mistake that for sandbox evidence.
  */
-describe("AgentTaskSandbox negative control tests", () => {
-  it("direct node:child_process spawn can run without sandbox (negative control)", async () => {
-    const { execSync } = await import("node:child_process");
-    try {
-      const result = execSync("node --version", {
-        encoding: "utf8",
-        timeout: 5000,
-        stdio: ["ignore", "pipe", "pipe"],
-        shell: false
-      });
-      expect(result).toMatch(/^v\d+/);
-    } catch {
-      // If node not available, skip
-    }
-  });
-
-  it("negative control: confirms sandbox host path validation catches missing binary", async () => {
+describe("AgentTaskSandbox negative controls", () => {
+  it("rejects a missing native host binary", async () => {
     const { AgentTaskSandboxHost } = await import("../src/main/agent-task-sandbox.js");
-    const host = new AgentTaskSandboxHost({
+    const host = AgentTaskSandboxHost.forTesting({
       hostBinaryPath: "/this/does/not/exist/sandbox.exe",
       expectedHostDigest: "a".repeat(64)
     });
     const result = await host.verifyHostBinary();
     expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("AGENT_TASK_SANDBOX_UNAVAILABLE");
   });
 
-  it("negative control: qualification service never yields partial attestation", async () => {
-    const { SandboxQualificationService } = await import(
-      "../src/main/agent-sandbox-qualification.js"
-    );
-    const svc = new SandboxQualificationService();
-
-    const result = await svc.qualify({
+  it("rejects incomplete or forged qualification evidence", async () => {
+    const { parseSandboxQualificationEvidence } =
+      await import("../src/main/agent-sandbox-qualification.js");
+    const parsed = parseSandboxQualificationEvidence({
+      schemaVersion: "1.0",
+      evidenceId: "forged",
       hostDigest: "a".repeat(64),
-      hostBinaryPresent: false,
-      windowsCapabilitiesVerified: true
+      probeDigest: "b".repeat(64),
+      osVersion: "windows-x64",
+      protocolVersion: "1.0",
+      policyRevision: "policy",
+      testVectorRevision: "vectors",
+      generatedAt: new Date().toISOString(),
+      capabilities: {
+        fileIsolation: "verified",
+        networkIsolation: "unavailable",
+        jobObjectKillOnClose: "verified",
+        appContainerOrLowBox: "verified"
+      },
+      adapterSaysReady: true
     });
+    expect(parsed).toBeUndefined();
+  });
 
-    if (process.platform === "win32") {
-      expect(result.ok).toBe(false);
-    } else {
-      expect(result.ok).toBe(false);
-    }
-
-    if (result.ok) {
-      const caps = result.value.capabilities;
-      expect(caps.fileIsolation).toBe("verified");
-      expect(caps.networkIsolation).toBe("verified");
-      expect(caps.jobObjectKillOnClose).toBe("verified");
-      expect(caps.appContainerOrLowBox).toBe("verified");
-    }
+  it("cannot issue an attestation from a caller-provided verification boolean", async () => {
+    const { SandboxQualificationService } =
+      await import("../src/main/agent-sandbox-qualification.js");
+    const service = new SandboxQualificationService();
+    const result = await service.qualify();
+    expect(result.ok).toBe(false);
   });
 });

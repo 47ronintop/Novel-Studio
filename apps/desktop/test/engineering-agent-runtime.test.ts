@@ -1,16 +1,25 @@
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { ProjectLockFileRepository } from "@novel-studio/repository";
+import {
+  ProjectLockFileRepository,
+  type AgentOperationPathSnapshot,
+  type AgentWriteLifecycleOperationPort
+} from "@novel-studio/repository";
+import { err, ok, type UnifiedError } from "@novel-studio/shared";
 import { createDesktopAgentRuntime } from "../src/main/agent-run-runtime.js";
 
 const roots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  await Promise.all(
+    roots
+      .splice(0)
+      .map((root) => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }))
+  );
 });
 
 describe("engineering Agent runtime", () => {
@@ -30,6 +39,7 @@ describe("engineering Agent runtime", () => {
       stateRoot,
       projectLockOwnerId: lockOwnerId,
       createRunId: () => "run-engineering-write",
+      lifecycleOperations: createTestingReplaceLifecyclePort(contentRoot),
       modelDriver: {
         async *streamRound() {
           round += 1;
@@ -229,5 +239,80 @@ function modelFacts() {
     },
     requiredContextTokens: 8000,
     reasoningStrength: { status: "hidden" as const, reason: "test model" }
+  };
+}
+
+function createTestingReplaceLifecyclePort(projectRoot: string): AgentWriteLifecycleOperationPort {
+  return {
+    async mutate(input) {
+      if (input.kind !== "replace_file") {
+        return err(testLifecycleError("TEST_LIFECYCLE_MUTATION_UNSUPPORTED"));
+      }
+      if (!(await testingSnapshotsMatch(projectRoot, input.before))) {
+        return err(testLifecycleError("TEST_LIFECYCLE_PRECONDITION_FAILED"));
+      }
+      const targetPath = testingProjectPath(projectRoot, input.relativePath);
+      if (targetPath === undefined) return err(testLifecycleError("TEST_LIFECYCLE_PATH_INVALID"));
+      await writeFile(targetPath, input.content, "utf8");
+      return (await testingSnapshotsMatch(projectRoot, input.after))
+        ? ok(undefined)
+        : err(testLifecycleError("TEST_LIFECYCLE_POSTCONDITION_FAILED"));
+    }
+  };
+}
+
+async function testingSnapshotsMatch(
+  projectRoot: string,
+  expected: readonly AgentOperationPathSnapshot[]
+): Promise<boolean> {
+  for (const snapshot of expected) {
+    const targetPath = testingProjectPath(projectRoot, snapshot.relativePath);
+    if (targetPath === undefined) return false;
+    let actual: AgentOperationPathSnapshot;
+    try {
+      const content = await readFile(targetPath, "utf8");
+      actual = {
+        kind: "file",
+        relativePath: snapshot.relativePath,
+        content,
+        checksum: sha256(content)
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+      actual = { kind: "missing", relativePath: snapshot.relativePath };
+    }
+    if (
+      actual.kind !== snapshot.kind ||
+      actual.relativePath !== snapshot.relativePath ||
+      (actual.kind === "file" &&
+        (snapshot.kind !== "file" ||
+          actual.checksum !== snapshot.checksum ||
+          actual.content !== snapshot.content))
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function testingProjectPath(projectRoot: string, relativePath: string): string | undefined {
+  if (isAbsolute(relativePath)) return undefined;
+  const targetPath = join(projectRoot, relativePath);
+  const pathFromRoot = relative(projectRoot, targetPath);
+  return pathFromRoot === "" || (!pathFromRoot.startsWith("..") && !isAbsolute(pathFromRoot))
+    ? targetPath
+    : undefined;
+}
+
+function testLifecycleError(code: string): UnifiedError {
+  return {
+    schemaVersion: "1.0",
+    errorId: "err_engineering_agent_lifecycle_test",
+    code,
+    category: "StorageError",
+    message: code,
+    recoverability: "user-action",
+    suggestedAction: "Fix the lifecycle test setup.",
+    traceId: "engineering-agent-runtime-test"
   };
 }

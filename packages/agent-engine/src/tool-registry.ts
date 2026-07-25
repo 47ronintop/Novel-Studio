@@ -1,6 +1,9 @@
+import { createHash } from "node:crypto";
+
 import type { AgentContextMode, AgentOperationMode, AgentWritePolicy } from "./agent-run-types.js";
 import type { JsonObject } from "@novel-studio/shared";
 import type { AgentToolCapabilitySnapshot } from "./agent-tool-capabilities.js";
+import { validateStrictToolSchema, validateToolText } from "./agent-tool-schema.js";
 
 /** The 9 static tool names that exist in Stage 5 baseline (v1.0). */
 export type CoreAgentToolName =
@@ -74,12 +77,7 @@ export type AgentToolKind =
   | "protocol_action";
 
 export type AgentToolEffect =
-  | "read"
-  | "propose"
-  | "execute"
-  | "external_read"
-  | "external_action"
-  | "control";
+  "read" | "propose" | "execute" | "external_read" | "external_action" | "control";
 
 export type AgentToolDataEgress = "none" | "provider_query" | "remote_tool_arguments";
 export type AgentToolRetrySemantics = "safe" | "idempotency_key_required" | "never_automatic";
@@ -117,10 +115,12 @@ export interface AgentToolDescriptor {
 }
 
 export type AgentToolArgumentsValidation =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly error: string };
+  { readonly ok: true } | { readonly ok: false; readonly error: string };
 
 const MAX_AGENT_TOOL_ARGUMENT_BYTES = 1_048_576;
+const PROVIDER_TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/;
+const EXTERNAL_TOOL_ID =
+  /^(plugin|mcp):([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/;
 
 export interface ListAgentToolsInput {
   readonly operationMode: AgentOperationMode;
@@ -199,10 +199,7 @@ export function listAgentTools(input: ListAgentToolsInput): readonly AgentToolDe
   // Phase C Git: read tools (execution + both context modes)
   const gitTools: AgentToolDescriptor[] =
     cap?.gitReadEnabled === true
-      ? [
-          coreTool("git_status", "vcs_tool", "read"),
-          coreTool("git_diff", "vcs_tool", "read")
-        ]
+      ? [coreTool("git_status", "vcs_tool", "read"), coreTool("git_diff", "vcs_tool", "read")]
       : [];
 
   // Phase D: network read tools (both context modes, execution)
@@ -215,9 +212,11 @@ export function listAgentTools(input: ListAgentToolsInput): readonly AgentToolDe
       : [];
 
   // Phase E: dynamic external tools (plugin:/mcp: namespaced, injected by runtime)
+  const externalValidation = validateExternalToolDescriptors(input.externalToolDescriptors ?? []);
   const externalTools: AgentToolDescriptor[] =
     input.externalToolDescriptors !== undefined &&
-    (cap?.pluginToolsEnabled === true || cap?.mcpToolsEnabled === true)
+    (cap?.pluginToolsEnabled === true || cap?.mcpToolsEnabled === true) &&
+    externalValidation.ok
       ? [...input.externalToolDescriptors]
       : [];
 
@@ -245,7 +244,7 @@ function coreTool(
   kind: AgentToolKind,
   effect: AgentToolEffect
 ): AgentToolDescriptor {
-  return {
+  const descriptor: Omit<AgentToolDescriptor, "descriptorDigest"> = {
     id: name,
     name,
     providerName: name,
@@ -257,9 +256,110 @@ function coreTool(
     destructive: isDestructive(name),
     retrySemantics: retrySemanticsFor(effect),
     source: { kind: "core", id: name },
-    inputSchema: inputSchemaFor(name as AgentToolName),
-    descriptorDigest: ""
+    inputSchema: inputSchemaFor(name as AgentToolName)
   };
+  return { ...descriptor, descriptorDigest: computeAgentToolDescriptorDigest(descriptor) };
+}
+
+export type ExternalToolDescriptorValidation =
+  { readonly ok: true } | { readonly ok: false; readonly error: string };
+
+/**
+ * Strictly validate dynamic descriptors at the registry boundary. Invalid entries are denied
+ * rather than passed through to a model provider. Runtime code should surface the error before
+ * creating a run; `listAgentTools` additionally fails closed when it receives invalid input.
+ */
+export function validateExternalToolDescriptors(
+  descriptors: readonly AgentToolDescriptor[]
+): ExternalToolDescriptorValidation {
+  const ids = new Set<string>();
+  const providerNames = new Set<string>();
+  for (const descriptor of descriptors) {
+    const id = descriptor.id;
+    if (typeof id !== "string") {
+      return { ok: false, error: "Dynamic tool descriptor is missing a canonical id." };
+    }
+    const match = EXTERNAL_TOOL_ID.exec(id);
+    if (match === null) {
+      return { ok: false, error: `Dynamic tool id "${id}" is not a valid plugin: or mcp: id.` };
+    }
+    const sourceKind = match[1];
+    const sourceId = match[2];
+    const source = descriptor.source;
+    if (
+      source === undefined ||
+      source.kind !== sourceKind ||
+      source.id !== sourceId ||
+      descriptor.kind !== "external_tool" ||
+      (descriptor.effect !== "external_read" && descriptor.effect !== "external_action")
+    ) {
+      return { ok: false, error: `Dynamic tool "${id}" has an invalid source or effect.` };
+    }
+    const providerName = descriptor.providerName;
+    if (
+      typeof providerName !== "string" ||
+      descriptor.name !== providerName ||
+      !PROVIDER_TOOL_NAME.test(providerName)
+    ) {
+      return { ok: false, error: `Dynamic tool "${id}" has an invalid provider name.` };
+    }
+    if (
+      typeof descriptor.displayName !== "string" ||
+      typeof descriptor.description !== "string" ||
+      descriptor.dataEgress !== "remote_tool_arguments" ||
+      typeof descriptor.destructive !== "boolean" ||
+      (descriptor.retrySemantics !== "safe" &&
+        descriptor.retrySemantics !== "idempotency_key_required" &&
+        descriptor.retrySemantics !== "never_automatic")
+    ) {
+      return { ok: false, error: `Dynamic tool "${id}" is missing required metadata.` };
+    }
+    const schema = validateStrictToolSchema(descriptor.inputSchema);
+    if (!schema.ok) return { ok: false, error: `Dynamic tool "${id}" schema: ${schema.reason}` };
+    const display = validateToolText(descriptor.displayName, 256, "displayName");
+    if (!display.ok) return { ok: false, error: `Dynamic tool "${id}": ${display.reason}` };
+    const description = validateToolText(descriptor.description, 2_048, "description");
+    if (!description.ok) return { ok: false, error: `Dynamic tool "${id}": ${description.reason}` };
+    const expectedDigest = computeAgentToolDescriptorDigest(descriptor);
+    if (
+      typeof descriptor.descriptorDigest !== "string" ||
+      !/^[a-f0-9]{64}$/.test(descriptor.descriptorDigest) ||
+      descriptor.descriptorDigest !== expectedDigest
+    ) {
+      return { ok: false, error: `Dynamic tool "${id}" descriptor digest does not match.` };
+    }
+    if (ids.has(id) || providerNames.has(providerName)) {
+      return { ok: false, error: `Dynamic tool "${id}" collides with another descriptor.` };
+    }
+    ids.add(id);
+    providerNames.add(providerName);
+  }
+  return { ok: true };
+}
+
+/** Stable SHA-256 digest for a single static or dynamic descriptor. */
+export function computeAgentToolDescriptorDigest(
+  descriptor: Omit<AgentToolDescriptor, "descriptorDigest"> | AgentToolDescriptor
+): string {
+  return createHash("sha256")
+    .update(
+      stableSerialize({
+        id: descriptor.id ?? descriptor.name,
+        name: descriptor.name,
+        providerName: descriptor.providerName ?? descriptor.name,
+        displayName: descriptor.displayName ?? "",
+        description: descriptor.description ?? "",
+        kind: descriptor.kind,
+        effect: descriptor.effect,
+        dataEgress: descriptor.dataEgress ?? "none",
+        destructive: descriptor.destructive ?? false,
+        retrySemantics: descriptor.retrySemantics ?? "safe",
+        source: descriptor.source ?? null,
+        inputSchema: descriptor.inputSchema
+      }),
+      "utf8"
+    )
+    .digest("hex");
 }
 
 function dataEgressFor(effect: AgentToolEffect): AgentToolDataEgress {
@@ -632,4 +732,16 @@ function validateSchemaValue(schema: JsonObject, value: unknown): boolean {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stableSerialize(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, child]) => child !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => `${JSON.stringify(key)}:${stableSerialize(child)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }

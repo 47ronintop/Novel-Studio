@@ -438,6 +438,18 @@ export type {
   TransitionPlanExecutionInput
 } from "./agent-plan-execution-session.js";
 export { createAgentPermissionSession } from "./agent-permission-session.js";
+export {
+  buildFrozenProviderNameMapping,
+  checkProviderNameCollisions,
+  coreToolProviderName,
+  freezeProviderNameMapping,
+  mangleToolId
+} from "./agent-tool-provider-mapping.js";
+export type {
+  CollisionCheckResult,
+  FrozenProviderNameMapping,
+  ProviderNameMapping
+} from "./agent-tool-provider-mapping.js";
 export type {
   AgentPermissionRootFingerprintPort,
   AgentPermissionSession,
@@ -483,6 +495,10 @@ export type {
   AgentContextSourceReader,
   AgentReadToolExecutor,
   AgentReadToolResult,
+  AgentTaskApprovalResolver,
+  AgentGitToolSessionPort,
+  AgentTaskSandboxPortRef,
+  AgentFileOperationSessionPort,
   AgentRunModelDriver,
   AgentRunPersistencePort,
   AgentRunReadResult,
@@ -528,6 +544,7 @@ export type {
   AgentRunSnapshot,
   AgentRunStatus,
   AgentRunStatusV11,
+  AgentRunStatusV12,
   AgentContextMode,
   AgentOperationMode,
   AgentWritePolicy,
@@ -560,16 +577,25 @@ export {
   DEFAULT_NETWORK_POLICY,
   createControlledFetch,
   isHostAllowed,
+  isNetworkEndpointAllowed,
+  isAllowedNetworkContentType,
+  isUnsafeNetworkHostname,
+  validateControlledFetchUrl,
+  normalizeControlledFetchRequest,
   validateNetworkPolicy,
   ControlledFetchError,
   NETWORK_MAX_RESPONSE_BYTES,
+  NETWORK_MAX_REQUEST_BYTES,
+  NETWORK_CONNECT_TIMEOUT_MS,
+  NETWORK_TOTAL_TIMEOUT_MS,
   NETWORK_MAX_REDIRECTS,
   type AgentNetworkPolicy,
   type AgentNetworkProviderProfile,
   type NetworkPolicyValidationResult,
   type ControlledFetch,
   type ControlledFetchRequest,
-  type ControlledFetchResponse
+  type ControlledFetchResponse,
+  type NormalizedControlledFetchRequest
 } from "./agent-network-policy.js";
 export {
   createAgentNetworkToolSession,
@@ -595,6 +621,7 @@ export {
   type ExternalToolDispatchPort
 } from "./agent-external-tool-session.js";
 export type {
+  AgentSearchToolExecutor,
   AgentNetworkReadResult,
   AgentNetworkToolExecutor,
   AgentTaskExecutionOutput,
@@ -602,6 +629,15 @@ export type {
   AgentExternalToolExecutor,
   AgentExternalToolOutcome
 } from "./agent-tool-ports.js";
+export {
+  createAgentSearchToolSession,
+  type AgentSearchToolSessionOptions
+} from "./agent-search-tool-session.js";
+export {
+  createAgentFileOperationSession,
+  type AgentFileOperationSession,
+  type FileOperationSessionOptions
+} from "./agent-file-operation-session.js";
 export {
   authorizePluginToolCall,
   type AuthorizePluginToolCallInput,
@@ -619,6 +655,4 @@ export {
   createPluginSandboxToolAdapter,
   type PluginSandboxToolAdapterOptions
 } from "./plugin-runtime-session.js";
-export type {
-  LocalMcpSettingsPort
-} from "./mcp-settings-session.js";
+export type { LocalMcpSettingsPort } from "./mcp-settings-session.js";

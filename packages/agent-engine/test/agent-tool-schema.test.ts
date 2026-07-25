@@ -21,7 +21,7 @@ describe("validateStrictToolSchema", () => {
   test("rejects unknown keywords", () => {
     const result = validateStrictToolSchema({
       type: "object",
-      "$id": "https://example.com/schema"
+      $id: "https://example.com/schema"
     });
     expect(result.ok).toBe(false);
     expect((result as { ok: false; reason: string }).reason).toMatch(/Unknown schema keyword/);
@@ -30,7 +30,7 @@ describe("validateStrictToolSchema", () => {
   test("rejects $ref", () => {
     const result = validateStrictToolSchema({
       type: "object",
-      "$ref": "#/definitions/foo"
+      $ref: "#/definitions/foo"
     });
     expect(result.ok).toBe(false);
   });

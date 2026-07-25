@@ -103,20 +103,21 @@ Before changing this document back to GO, a human must verify:
 
 M98 final gate: conditional hold until manual live provider verification passes. Non-core gaps remain deferred, and reading aloud is scoped to v1.1 backlog instead of v1.
 
-## Stage 5 Agent 工具补全状态（2026-07-24）
+## Stage 5 Agent 工具补全状态（2026-07-25）
 
-Stage 5 将 Agent 静态工具从 9 个扩展到 22 个，并引入插件/MCP 动态工具框架。以下是当前发布状态：
+Stage 5 的唯一机器可读状态源是 `docs/releases/stage5-agent-tool-evidence.json`。以下表格必须与该清单同步；存在代码、类型或单元测试不等于可在生产运行时或发布版中使用。
 
-| 能力                   | 状态      | 说明                                                                                                                                           |
-| ---------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| 项目搜索/引用 (A)      | Available | `search_project_text`/`find_project_references` 已接线，受 `phaseA_searchEnabled` flag 门控                                                    |
-| 文件生命周期 (B)       | Available | 6 个工具经 Change Set v1.1 暂存，DAG preflight 验证，no-follow 路径校验；受 `phaseB_fileLifecycleEnabled` flag 门控                            |
-| 网络读取 (D)           | Available | SSRF 安全 dialer、`web_search`/`fetch_url`；受 `phaseD_networkReadEnabled` flag 门控                                                           |
-| 远程 MCP (E.3)         | Available | 严格 schema/description 校验，`outcome_unknown` 一等终态；受 `phaseE_remoteMcpEnabled` + Phase D 网络门控                                      |
-| 任务沙箱 (C.0-C.3)    | Fail-closed | 原生 host stub 仍输出 unavailable — 正确行为，等待真实 Windows AppContainer 二进制打包；`run_project_task` 在此之前不可用                       |
-| Git 只读 (C.4)         | Fail-closed | 打包 Git runtime stub（`manifest.json` 占位符）→ `AGENT_GIT_ADAPTER_UNAVAILABLE`，等待真实 Git binary 打包                                    |
-| 插件工具 (E.1)         | Fail-closed | `PluginSandboxPort` 合同和 `authorizePluginToolCall` 已实现；注入启动器 adapter always-unavailable，等待 C.0 真实 host 打包                    |
-| 本地 stdio MCP (E.2)   | Fail-closed | `local-mcp-runtime.ts` 和 `McpSettingsFileRepository` 已实现；`LocalMcpHostLauncher` always-unavailable，等待 C.0 真实 host 打包               |
-| E.4 来源管理 UI        | Partial   | `externalToolDescriptors` 注入口和调度分支已就位；`agent-tool-source-panel.tsx` 和对应 IPC 通道尚未交付（TD-037）                               |
+| Phase                                                 | 状态    | 当前发布判断                                                                              |
+| ----------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------- |
+| Phase 0.1-0.4 foundation                              | Partial | capability snapshot、Permission Summary 与 provider mapping 已接入；缺打包 E2E/安全资格。 |
+| Phase A project search and references                 | Partial | 安全搜索 executor 已进入生产 runtime；缺用户控制、打包 E2E/安全资格。                     |
+| Phase B file lifecycle                                | Partial | 事务/恢复链已完成；缺合格 native handle/no-follow 后端，生产保持隐藏。                    |
+| Phase D network read                                  | Partial | pinned-IP dialer 与 origin 凭据边界已接线；设置 UI 未挂载且缺打包 E2E/安全资格。          |
+| Phase E.3 remote MCP                                  | Partial | JSON-RPC transport 和条件生产调度已接线；缺来源管理 UI 与打包 E2E/安全资格。              |
+| Phase C.0 sandbox qualification                       | Blocked | 原生 host/probe 是 stub；没有打包 Windows AppContainer 资格证据。                         |
+| Phase C.1-C.4 tasks and Git                           | Blocked | 依赖 C.0；统一审批已交付，Git 打包运行时仍 unavailable、未取得资格。                      |
+| Phase E.1 plugin tools and E.2 local stdio MCP        | Blocked | 依赖 C.0，启动器必须保持 fail-closed。                                                    |
+| Phase E.4 tool source management and unified approval | Partial | 统一审批 IPC/审批卡已交付；插件/MCP 来源管理 UI 尚未交付。                                |
+| Phase F release closure                               | Blocked | 尚无 Phase 具备完整生产与安全发布证据。                                                   |
 
-fail-closed 状态是按计划原则9的正确行为（"任一安全能力为 missing 时均按 unavailable 处理"），不是 v1 核心写作旅程的阻塞项。
+`Blocked`/`Partial` 不影响既有 v1 核心写作旅程，但它们禁止将对应工具作为已发布能力宣传或默认开放。

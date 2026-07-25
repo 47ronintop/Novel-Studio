@@ -62,7 +62,8 @@ export interface AgentTaskExecutionOutput {
   readonly stderrSummary: string;
   readonly truncated: boolean;
   readonly durationMs: number;
-  readonly terminationReason: "completed" | "timeout" | "cancelled" | "resource_limit" | "host_crash";
+  readonly terminationReason:
+    "completed" | "timeout" | "cancelled" | "resource_limit" | "host_crash";
 }
 
 export interface AgentTaskSandboxPort {

@@ -10,6 +10,7 @@ import {
   type ChangeSetCandidateValidationPortInput,
   type ChangeSetSessionPort
 } from "../src/change-set-session.js";
+import { authorizeAgentRunProposal } from "../src/agent-write-authorization.js";
 
 describe("Change Set application session", () => {
   test("proposes chapter and file writes through read-only ports without touching target bytes", async () => {
@@ -93,6 +94,34 @@ describe("Change Set application session", () => {
     expect(expectOk(proposed)).toMatchObject({
       changeSetId: "change-set-public-policy",
       writePolicy: "write_before_confirmation"
+    });
+  });
+
+  test("forces destructive lifecycle operations through human confirmation even for an authorized run", async () => {
+    const session = createChangeSetSession({
+      port: targetPort({ chapter: () => "unused", file: () => "alpha", persisted: [] }),
+      createChangeSetId: () => "change-set-lifecycle-policy",
+      now: () => "2026-07-13T03:00:00.000Z"
+    });
+    const proposed = await session.proposeOperation(
+      authorizeAgentRunProposal({
+        ...proposalBinding(),
+        writePolicy: "user_preapproved_run" as const,
+        toolCallId: "tool_move",
+        operation: {
+          kind: "move_file" as const,
+          operationId: "move_notes",
+          toolCallIdempotencyKey: "tool_move",
+          sourcePath: "notes/source.md",
+          targetPath: "notes/renamed.md",
+          sourceChecksum: sha256("source")
+        }
+      })
+    );
+
+    expect(expectOk(proposed)).toMatchObject({
+      writePolicy: "write_before_confirmation",
+      operations: [{ kind: "move_file", selected: true }]
     });
   });
 

@@ -5,6 +5,7 @@ import type {
   Result,
   UnifiedError
 } from "@novel-studio/shared";
+import type { ChangeSetOperation } from "@novel-studio/agent-engine";
 
 export type {
   DraftContentRef,
@@ -212,21 +213,11 @@ export type VersionGroupWriteStatus =
   | "kept"
   | "stale";
 export type VersionGroupUndoStatus =
-  | "available"
-  | "not_available"
-  | "completed"
-  | "conflict"
-  | "partial_failure"
-  | "review_required";
+  "available" | "not_available" | "completed" | "conflict" | "partial_failure" | "review_required";
 
 export type RollbackReviewDecisionRecord = "keep_current" | "restore_baseline";
 export type RollbackReviewFileStatusRecord =
-  | "ready"
-  | "conflict"
-  | "stale"
-  | "failed"
-  | "completed"
-  | "kept";
+  "ready" | "conflict" | "stale" | "failed" | "completed" | "kept";
 export type RollbackReviewStatusRecord = "pending" | "partial_failure" | "completed";
 
 export interface RollbackReviewDiffRecord {
@@ -291,7 +282,40 @@ export interface AgentWriteTransactionInput {
   readonly approvalSource: "human_confirmation" | "user_preapproved_run";
   readonly approvalToken: string;
   readonly files: readonly AgentWriteTransactionFile[];
+  /**
+   * Selected lifecycle operations from a v1.1 Change Set. They are journaled
+   * separately from text replacements because their rollback semantics differ.
+   */
+  readonly operations?: readonly AgentWriteTransactionOperation[];
 }
+
+/** Internal inverse used only by version-group/run undo journals. */
+export interface AgentWriteRemoveDirectoryOperation {
+  readonly kind: "remove_directory";
+  readonly operationId: string;
+  readonly dependsOn?: readonly string[];
+  readonly toolCallIdempotencyKey: string;
+  readonly relativePath: string;
+}
+
+export type AgentWriteTransactionOperation =
+  ChangeSetOperation | AgentWriteRemoveDirectoryOperation;
+
+export type AgentOperationPathSnapshot =
+  | {
+      readonly kind: "missing";
+      readonly relativePath: string;
+    }
+  | {
+      readonly kind: "directory";
+      readonly relativePath: string;
+    }
+  | {
+      readonly kind: "file";
+      readonly relativePath: string;
+      readonly content: string;
+      readonly checksum: string;
+    };
 
 export interface VersionGroupWriteRecord {
   readonly writeId: string;
@@ -301,6 +325,14 @@ export interface VersionGroupWriteRecord {
   readonly afterChecksum: string;
   readonly beforeVersionId: string;
   readonly status: VersionGroupWriteStatus;
+  readonly errorCode?: string;
+}
+
+export interface VersionGroupOperationRecord {
+  readonly operationId: string;
+  readonly kind: AgentWriteTransactionOperation["kind"];
+  readonly relativePaths: readonly string[];
+  readonly status: AgentTransactionJournalEntryStatus;
   readonly errorCode?: string;
 }
 
@@ -330,6 +362,8 @@ export interface VersionGroupRecord {
   readonly approvalSource?: "human_confirmation" | "user_preapproved_run";
   readonly createdAt: string;
   readonly writes: readonly VersionGroupWriteRecord[];
+  /** v1.1 filesystem lifecycle outcomes, independent of text writes. */
+  readonly operations?: readonly VersionGroupOperationRecord[];
   readonly baselineByPath: Readonly<Record<string, VersionGroupBaselineRecord>>;
   readonly transactionStatus: VersionGroupTransactionStatus;
   readonly undoStatus: VersionGroupUndoStatus;
@@ -360,6 +394,29 @@ export interface AgentTransactionJournalEntry {
   readonly errorCode?: string;
 }
 
+/**
+ * A durable lifecycle mutation record. `before` and `after` capture the
+ * objects that the native handle-based executor must observe at mutation time.
+ */
+export interface AgentTransactionJournalOperationEntry {
+  readonly operationId: string;
+  readonly operation: AgentWriteTransactionOperation;
+  readonly before: readonly AgentOperationPathSnapshot[];
+  readonly after: readonly AgentOperationPathSnapshot[];
+  readonly beforeVersionId?: string;
+  readonly status: AgentTransactionJournalEntryStatus;
+  readonly errorCode?: string;
+}
+
+/**
+ * Durable mutation ordering for a transaction journal. Older journals omit
+ * this and retain the legacy entries-then-operations ordering.
+ */
+export interface AgentTransactionJournalMutationRecord {
+  readonly kind: "write" | "operation";
+  readonly id: string;
+}
+
 export interface AgentTransactionJournal {
   readonly schemaVersion: "1.0";
   readonly transactionId: string;
@@ -378,6 +435,10 @@ export interface AgentTransactionJournal {
   readonly updatedAt: string;
   readonly transactionStatus: AgentTransactionJournalStatus;
   readonly entries: readonly AgentTransactionJournalEntry[];
+  /** Optional for backward-compatible v1.0 text-only journals. */
+  readonly operations?: readonly AgentTransactionJournalOperationEntry[];
+  /** Exact mutation order, required for newly written mixed transactions. */
+  readonly mutationOrder?: readonly AgentTransactionJournalMutationRecord[];
   readonly undoOfVersionGroupIds?: readonly string[];
 }
 

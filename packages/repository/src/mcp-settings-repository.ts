@@ -146,7 +146,10 @@ function parseLocalServersFile(value: unknown): readonly LocalMcpServerLaunchCon
     if (config === undefined) return undefined;
     servers.push(config);
   }
-  return servers;
+  // Treat on-disk content as untrusted too. Otherwise a hand-edited config
+  // could bypass the validation performed by writeLocalServers().
+  const validated = validateLocalServers(servers, "trace_repository_mcp_settings_read");
+  return validated.ok ? validated.value : undefined;
 }
 
 function parseLaunchConfig(value: unknown): LocalMcpServerLaunchConfig | undefined {
@@ -196,6 +199,19 @@ function validateLocalServers(
       );
     }
 
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(server.serverId)) {
+      return err(
+        validationError({
+          code: "MCP_LOCAL_SERVER_ID_INVALID",
+          message: `Local MCP server id '${server.serverId}' is invalid.`,
+          suggestedAction:
+            "Use a 1-128 character identifier containing only letters, digits, dot, underscore, or hyphen.",
+          traceId,
+          redactedDetail: { serverId: server.serverId }
+        })
+      );
+    }
+
     if (seenIds.has(server.serverId)) {
       return err(
         validationError({
@@ -215,6 +231,18 @@ function validateLocalServers(
           code: "MCP_LOCAL_SERVER_COMMAND_EMPTY",
           message: `Local MCP server '${server.serverId}' has an empty command.`,
           suggestedAction: "Provide a non-empty launch command.",
+          traceId,
+          redactedDetail: { serverId: server.serverId }
+        })
+      );
+    }
+
+    if (server.command.length > 1024 || hasDisallowedControlCharacters(server.command)) {
+      return err(
+        validationError({
+          code: "MCP_LOCAL_SERVER_COMMAND_INVALID",
+          message: `Local MCP server '${server.serverId}' command is invalid.`,
+          suggestedAction: "Use a direct executable path without control characters.",
           traceId,
           redactedDetail: { serverId: server.serverId }
         })
@@ -246,6 +274,21 @@ function validateLocalServers(
       );
     }
 
+    if (
+      server.argv.length > 128 ||
+      server.argv.some((item) => item.length > 16_384 || hasDisallowedControlCharacters(item))
+    ) {
+      return err(
+        validationError({
+          code: "MCP_LOCAL_SERVER_ARGV_INVALID",
+          message: `Local MCP server '${server.serverId}' argv exceeds configured limits.`,
+          suggestedAction: "Reduce argv size and remove control characters.",
+          traceId,
+          redactedDetail: { serverId: server.serverId }
+        })
+      );
+    }
+
     if (server.cwd.length === 0) {
       return err(
         validationError({
@@ -253,6 +296,34 @@ function validateLocalServers(
           message: `Local MCP server '${server.serverId}' has an empty cwd.`,
           suggestedAction:
             "Provide a project-relative path or an explicit absolute allowlisted path.",
+          traceId,
+          redactedDetail: { serverId: server.serverId }
+        })
+      );
+    }
+
+    if (server.cwd.length > 16_384 || hasDisallowedControlCharacters(server.cwd)) {
+      return err(
+        validationError({
+          code: "MCP_LOCAL_SERVER_CWD_INVALID",
+          message: `Local MCP server '${server.serverId}' cwd is invalid.`,
+          suggestedAction: "Use a non-empty working directory without control characters.",
+          traceId,
+          redactedDetail: { serverId: server.serverId }
+        })
+      );
+    }
+
+    if (
+      server.envAllowlist.length > 128 ||
+      !server.envAllowlist.every((name) => /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(name)) ||
+      new Set(server.envAllowlist).size !== server.envAllowlist.length
+    ) {
+      return err(
+        validationError({
+          code: "MCP_LOCAL_SERVER_ENV_ALLOWLIST_INVALID",
+          message: `Local MCP server '${server.serverId}' has an invalid env allowlist.`,
+          suggestedAction: "Use unique environment-variable names only.",
           traceId,
           redactedDetail: { serverId: server.serverId }
         })
@@ -267,6 +338,14 @@ const SHELL_METACHARACTERS = /[;&|`$(){}<>\n\r]/;
 
 function containsShellMetacharacters(command: string): boolean {
   return SHELL_METACHARACTERS.test(command);
+}
+
+function hasDisallowedControlCharacters(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if ((code < 32 && code !== 9 && code !== 10 && code !== 13) || code === 127) return true;
+  }
+  return false;
 }
 
 function isMissingFileError(error: unknown): boolean {

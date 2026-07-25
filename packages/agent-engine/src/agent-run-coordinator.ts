@@ -122,7 +122,8 @@ export function createAgentRunCoordinator(
         planExecutionRevision: command.planExecutionRevision ?? null,
         activeErrorId: null,
         recoveryState: "none",
-        usageSummary: EMPTY_AGENT_RUN_USAGE_SUMMARY
+        usageSummary: EMPTY_AGENT_RUN_USAGE_SUMMARY,
+        pendingToolApproval: null
       };
       runs.set(runId, snapshot);
       activeRunByProject.set(command.projectId, runId);

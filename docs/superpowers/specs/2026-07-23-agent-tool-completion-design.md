@@ -1,7 +1,7 @@
 # Novel Studio Agent 工具补全设计
 
 **日期：** 2026-07-23  
-**状态：** Candidate，核心合同与 Phase C 安全验证口径已补全，待分期实施<br>
+**状态：** Candidate，核心合同与 Phase C 安全验证口径已补全，待分期实施。本文不是实施完成记录；当前实现评估以 `docs/releases/stage5-agent-tool-evidence.json` 为准。<br>
 **实现基线：** `5a9a72b`<br>
 **实施计划：** `docs/superpowers/plans/2026-07-23-agent-tool-completion.md`  
 **范围：** Agent Tool Registry、权限摘要、搜索、文件生命周期、受控任务、Git 只读、网络读取、插件/MCP 工具接入、审计与恢复

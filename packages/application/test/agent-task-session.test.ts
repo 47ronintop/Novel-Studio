@@ -44,8 +44,7 @@ describe("AgentTaskSession.prepareTaskExecution", () => {
     const attest = makeAttestation("attest_001");
     const session = createAgentTaskSession({
       projectId: "proj_001",
-      getAuthorizedTask: async (taskId) =>
-        taskId === "task_build_001" ? baseTask : undefined,
+      getAuthorizedTask: async (taskId) => (taskId === "task_build_001" ? baseTask : undefined),
       attestationLookup: {
         getAttestation: () => attest,
         getAttestationById: (id) => (id === "attest_001" ? attest : undefined)

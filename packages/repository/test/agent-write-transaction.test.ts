@@ -1,17 +1,33 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdtemp,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  rmdir,
+  symlink,
+  unlink,
+  writeFile
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { err, ok } from "@novel-studio/shared";
 
-import { AgentWriteTransaction } from "../src/agent-write-transaction.js";
+import {
+  AgentWriteTransaction,
+  type AgentWriteLifecycleMutation,
+  type AgentWriteLifecycleOperationPort
+} from "../src/agent-write-transaction.js";
 import { writeTextAtomically } from "../src/atomic-write.js";
 import { HistoryRepository } from "../src/history-repository.js";
 import { ProjectLockFileRepository } from "../src/project-lock-repository.js";
 import type {
   AgentTransactionJournal,
+  AgentOperationPathSnapshot,
   AgentWriteHistoryPort,
   AgentWriteProjectLockPort,
   AgentWriteRecoveryPort,
@@ -463,8 +479,7 @@ describe("AgentWriteTransaction", () => {
     });
     const transaction = createTransaction(projectRoot, {
       recoveryRepository: failingJournalRecoveryFrom(projectRoot, 5),
-      failReplace: ({ phase, relativePath }) =>
-        phase === "apply" && relativePath === "notes/two.md"
+      failReplace: ({ phase, relativePath }) => phase === "apply" && relativePath === "notes/two.md"
     });
 
     const result = await transaction.apply(
@@ -732,53 +747,50 @@ describe("AgentWriteTransaction", () => {
     "mismatched_policy",
     "forged_source",
     "forged_token"
-  ] as const)(
-    "fails closed when an apply recovery journal has %s",
-    async (corruption) => {
-      const projectRoot = await createProject({ "notes/one.md": "candidate" });
-      const journal = appliedJournal({
-        transactionId: `tx_${corruption}`,
-        versionGroupId: `vg_${corruption}`,
-        runSequence: 1,
-        beforeContent: "before",
-        candidateContent: "candidate",
-        beforeVersionId: "ver_before"
-      });
-      const corrupted: Record<string, unknown> = { ...journal, transactionStatus: "applying" };
-      if (corruption === "missing_binding") {
-        delete corrupted.approvalSource;
-        delete corrupted.approvalToken;
-      } else if (corruption === "missing_auto_policy") {
-        delete corrupted.writePolicy;
-        corrupted.approvalSource = "user_preapproved_run";
-      } else if (corruption === "forged_policy") {
-        corrupted.writePolicy = "model_requested_auto_write";
-      } else if (corruption === "mismatched_policy") {
-        corrupted.writePolicy = "write_before_confirmation";
-        corrupted.approvalSource = "user_preapproved_run";
-      } else if (corruption === "forged_source") {
-        corrupted.approvalSource = "model_requested_auto_write";
-      } else {
-        corrupted.approvalToken = "forged-approval-token-must-stay-redacted";
-      }
-      const journalRoot = join(projectRoot, "history", "agent-transactions");
-      await mkdir(journalRoot, { recursive: true });
-      await writeFile(
-        join(journalRoot, `${journal.transactionId}.json`),
-        `${JSON.stringify(corrupted, null, 2)}\n`,
-        "utf8"
-      );
-
-      const result = await createTransaction(projectRoot).recoverIncompleteTransactions();
-
-      expect(result).toMatchObject({
-        ok: false,
-        error: { code: "AGENT_TRANSACTION_JOURNAL_INVALID" }
-      });
-      expect(JSON.stringify(result)).not.toContain("forged-approval-token-must-stay-redacted");
-      expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("candidate");
+  ] as const)("fails closed when an apply recovery journal has %s", async (corruption) => {
+    const projectRoot = await createProject({ "notes/one.md": "candidate" });
+    const journal = appliedJournal({
+      transactionId: `tx_${corruption}`,
+      versionGroupId: `vg_${corruption}`,
+      runSequence: 1,
+      beforeContent: "before",
+      candidateContent: "candidate",
+      beforeVersionId: "ver_before"
+    });
+    const corrupted: Record<string, unknown> = { ...journal, transactionStatus: "applying" };
+    if (corruption === "missing_binding") {
+      delete corrupted.approvalSource;
+      delete corrupted.approvalToken;
+    } else if (corruption === "missing_auto_policy") {
+      delete corrupted.writePolicy;
+      corrupted.approvalSource = "user_preapproved_run";
+    } else if (corruption === "forged_policy") {
+      corrupted.writePolicy = "model_requested_auto_write";
+    } else if (corruption === "mismatched_policy") {
+      corrupted.writePolicy = "write_before_confirmation";
+      corrupted.approvalSource = "user_preapproved_run";
+    } else if (corruption === "forged_source") {
+      corrupted.approvalSource = "model_requested_auto_write";
+    } else {
+      corrupted.approvalToken = "forged-approval-token-must-stay-redacted";
     }
-  );
+    const journalRoot = join(projectRoot, "history", "agent-transactions");
+    await mkdir(journalRoot, { recursive: true });
+    await writeFile(
+      join(journalRoot, `${journal.transactionId}.json`),
+      `${JSON.stringify(corrupted, null, 2)}\n`,
+      "utf8"
+    );
+
+    const result = await createTransaction(projectRoot).recoverIncompleteTransactions();
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_TRANSACTION_JOURNAL_INVALID" }
+    });
+    expect(JSON.stringify(result)).not.toContain("forged-approval-token-must-stay-redacted");
+    expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("candidate");
+  });
 
   test("rejects traversal, reparse paths, and a final base-hash TOCTOU change", async () => {
     const outsideRoot = await createProject({ "secret.md": "outside" });
@@ -873,7 +885,7 @@ describe("AgentWriteTransaction", () => {
     let failUndo = false;
     const transaction = createTransaction(projectRoot, {
       failReplace: ({ phase, relativePath }) =>
-        failUndo && phase === "apply" && relativePath === "notes/two.md"
+        failUndo && phase === "undo" && relativePath === "notes/one.md"
     });
     const applied = await transaction.apply(
       createInput([
@@ -1222,6 +1234,7 @@ describe("AgentWriteTransaction", () => {
     expect(operations.slice(beforeRetry)).toEqual([
       "lock",
       "replace:undo:notes/three.md",
+      "lock",
       "lock"
     ]);
     expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("one baseline");
@@ -1569,6 +1582,559 @@ describe("AgentWriteTransaction", () => {
   });
 });
 
+describe("AgentWriteTransaction lifecycle operations", () => {
+  test("does not mark a dirty rollback review applied until lifecycle inverses complete", async () => {
+    const projectRoot = await createProject({
+      "notes/one.md": "baseline",
+      "notes/source.md": "source"
+    });
+    const transaction = createTransaction(projectRoot, {
+      lifecycleOperations: createTestingLifecyclePort(projectRoot)
+    });
+    const applied = await transaction.apply(
+      createInput([fileChange("notes/one.md", "baseline", "agent", "text")], {
+        operations: [
+          {
+            kind: "delete_file",
+            operationId: "delete_source",
+            toolCallIdempotencyKey: "tool_delete_source",
+            relativePath: "notes/source.md",
+            baseChecksum: checksum("source")
+          }
+        ]
+      })
+    );
+    if (!applied.ok) throw new Error(applied.error.message);
+
+    const pending = await transaction.undoRun({
+      runId: "run_01",
+      commandId: "dirty_undo_request",
+      currentEditorContents: [{ relativePath: "notes/one.md", content: "unsaved user edit" }]
+    });
+
+    expect(pending.ok && pending.value.transactionStatus).toBe("awaiting_review");
+    await expect(readFile(join(projectRoot, "notes/source.md"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT"
+    });
+
+    const resolved = await transaction.undoRun({
+      runId: "run_01",
+      commandId: "dirty_undo_restore",
+      currentEditorContents: [{ relativePath: "notes/one.md", content: "unsaved user edit" }],
+      decisions: [{ relativePath: "notes/one.md", decision: "restore_baseline" }]
+    });
+
+    expect(resolved.ok && resolved.value.transactionStatus).toBe("applied");
+    expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("baseline");
+    expect(await readFile(join(projectRoot, "notes/source.md"), "utf8")).toBe("source");
+    const lifecycleUndo = (await readJournals(projectRoot)).find(
+      (journal) => journal.kind === "run_undo" && journal.operations?.length === 1
+    );
+    expect(lifecycleUndo).toMatchObject({
+      transactionStatus: "applied",
+      operations: [{ status: "applied", operation: { kind: "create_file" } }]
+    });
+  });
+
+  test("does not claim a resolved dirty review is applied when its lifecycle undo fails", async () => {
+    const projectRoot = await createProject({
+      "notes/one.md": "baseline",
+      "notes/source.md": "source"
+    });
+    const transaction = createTransaction(projectRoot, {
+      lifecycleOperations: createTestingLifecyclePort(projectRoot, { failKind: "create_file" })
+    });
+    const applied = await transaction.apply(
+      createInput([fileChange("notes/one.md", "baseline", "agent", "text")], {
+        operations: [
+          {
+            kind: "delete_file",
+            operationId: "delete_source",
+            toolCallIdempotencyKey: "tool_delete_source",
+            relativePath: "notes/source.md",
+            baseChecksum: checksum("source")
+          }
+        ]
+      })
+    );
+    if (!applied.ok) throw new Error(applied.error.message);
+
+    const pending = await transaction.undoRun({
+      runId: "run_01",
+      currentEditorContents: [{ relativePath: "notes/one.md", content: "unsaved user edit" }]
+    });
+    if (!pending.ok) throw new Error(pending.error.message);
+
+    const resolved = await transaction.undoRun({
+      runId: "run_01",
+      currentEditorContents: [{ relativePath: "notes/one.md", content: "unsaved user edit" }],
+      decisions: [{ relativePath: "notes/one.md", decision: "restore_baseline" }]
+    });
+
+    expect(resolved.ok && resolved.value.transactionStatus).not.toBe("applied");
+    expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("agent");
+    await expect(readFile(join(projectRoot, "notes/source.md"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT"
+    });
+  });
+
+  test("restores reviewed text before removing a file and its parent directory", async () => {
+    const projectRoot = await createProject({});
+    const transaction = createTransaction(projectRoot, {
+      lifecycleOperations: createTestingLifecyclePort(projectRoot)
+    });
+    const created = await transaction.apply(
+      createInput([], {
+        operations: [
+          {
+            kind: "create_directory",
+            operationId: "mkdir_drafts",
+            toolCallIdempotencyKey: "tool_mkdir",
+            relativePath: "drafts"
+          },
+          {
+            kind: "create_file",
+            operationId: "create_draft",
+            toolCallIdempotencyKey: "tool_create",
+            dependsOn: ["mkdir_drafts"],
+            relativePath: "drafts/new.md",
+            content: "created"
+          }
+        ]
+      })
+    );
+    if (!created.ok) throw new Error(created.error.message);
+    const writeChecksum = "f".repeat(64);
+    const written = await transaction.apply(
+      createInput([fileChange("drafts/new.md", "created", "edited", "text")], {
+        checkpointId: "checkpoint_02",
+        changeSetId: "changes_02",
+        checksum: writeChecksum,
+        approvalToken: approvalToken("changes_02", 1, writeChecksum)
+      })
+    );
+    if (!written.ok) throw new Error(written.error.message);
+
+    const pending = await transaction.undoRun({
+      runId: "run_01",
+      currentEditorContents: [{ relativePath: "drafts/new.md", content: "unsaved" }]
+    });
+    if (!pending.ok) throw new Error(pending.error.message);
+
+    const resolved = await transaction.undoRun({
+      runId: "run_01",
+      currentEditorContents: [{ relativePath: "drafts/new.md", content: "unsaved" }],
+      decisions: [{ relativePath: "drafts/new.md", decision: "restore_baseline" }]
+    });
+
+    expect(resolved.ok && resolved.value.transactionStatus).toBe("applied");
+    await expect(lstat(join(projectRoot, "drafts"))).rejects.toMatchObject({ code: "ENOENT" });
+    const undo = (await readJournals(projectRoot)).find((journal) => journal.kind === "run_undo");
+    expect(undo?.mutationOrder?.map((mutation) => mutation.kind)).toEqual([
+      "write",
+      "operation",
+      "operation"
+    ]);
+  });
+
+  test("fails closed for text replacements without a native no-follow mutation port", async () => {
+    const projectRoot = await createProject({ "notes/one.md": "before" });
+    const operations: string[] = [];
+    const transaction = createTransaction(projectRoot, {
+      operations,
+      historyRepository: recordingHistory(operations),
+      recoveryRepository: recordingRecovery(operations),
+      disableNativeFileMutations: true
+    });
+
+    const result = await transaction.apply(
+      createInput([fileChange("notes/one.md", "before", "after", "text")])
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_WRITE_NATIVE_FILE_OPERATIONS_REQUIRED" }
+    });
+    expect(operations).toEqual(["lock"]);
+    expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("before");
+  });
+
+  test("rejects a junction swap after text final verification without writing outside the project", async () => {
+    const projectRoot = await createProject({ "notes/one.md": "before" });
+    const outsideRoot = await createProject({ "notes/one.md": "outside" });
+    let swapped = false;
+    const lifecycleOperations = createTestingLifecyclePort(projectRoot, {
+      async beforeMutation(input) {
+        if (input.kind !== "replace_file" || swapped) return;
+        swapped = true;
+        await rename(join(projectRoot, "notes"), join(projectRoot, "notes-original"));
+        await symlink(outsideRoot, join(projectRoot, "notes"), "junction");
+      }
+    });
+    const transaction = createTransaction(projectRoot, { lifecycleOperations });
+
+    const result = await transaction.apply(
+      createInput([fileChange("notes/one.md", "before", "after", "text")])
+    );
+
+    expect(result.ok && result.value.transactionStatus).toBe("rolled_back");
+    expect(swapped).toBe(true);
+    expect(await readFile(join(outsideRoot, "notes/one.md"), "utf8")).toBe("outside");
+    expect(await readFile(join(projectRoot, "notes-original/one.md"), "utf8")).toBe("before");
+  });
+
+  test("undoRun restores a write before a later move across Change Sets in global reverse order", async () => {
+    const projectRoot = await createProject({ "notes/one.md": "baseline" });
+    const transaction = createTransaction(projectRoot, {
+      lifecycleOperations: createTestingLifecyclePort(projectRoot)
+    });
+    const first = await transaction.apply(
+      createInput([fileChange("notes/one.md", "baseline", "agent", "text")])
+    );
+    if (!first.ok) throw new Error(first.error.message);
+    const secondChecksum = "d".repeat(64);
+    const second = await transaction.apply(
+      createInput([], {
+        checkpointId: "checkpoint_02",
+        changeSetId: "changes_02",
+        checksum: secondChecksum,
+        approvalToken: approvalToken("changes_02", 1, secondChecksum),
+        operations: [
+          {
+            kind: "move_file",
+            operationId: "move_one",
+            toolCallIdempotencyKey: "tool_move_one",
+            sourcePath: "notes/one.md",
+            targetPath: "notes/moved.md",
+            sourceChecksum: checksum("agent")
+          }
+        ]
+      })
+    );
+    if (!second.ok) throw new Error(second.error.message);
+
+    const undone = await transaction.undoRun({ runId: "run_01" });
+
+    expect(undone.ok && undone.value.transactionStatus).toBe("applied");
+    expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("baseline");
+    await expect(readFile(join(projectRoot, "notes/moved.md"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT"
+    });
+    const journal = (await readJournals(projectRoot)).find(
+      (candidate) => candidate.kind === "run_undo"
+    );
+    expect(journal?.mutationOrder?.map((mutation) => mutation.kind)).toEqual([
+      "operation",
+      "write"
+    ]);
+  });
+
+  test("undoRun restores a write before a later delete across Change Sets in global reverse order", async () => {
+    const projectRoot = await createProject({ "notes/one.md": "baseline" });
+    const transaction = createTransaction(projectRoot, {
+      lifecycleOperations: createTestingLifecyclePort(projectRoot)
+    });
+    const first = await transaction.apply(
+      createInput([fileChange("notes/one.md", "baseline", "agent", "text")])
+    );
+    if (!first.ok) throw new Error(first.error.message);
+    const secondChecksum = "e".repeat(64);
+    const second = await transaction.apply(
+      createInput([], {
+        checkpointId: "checkpoint_02",
+        changeSetId: "changes_02",
+        checksum: secondChecksum,
+        approvalToken: approvalToken("changes_02", 1, secondChecksum),
+        operations: [
+          {
+            kind: "delete_file",
+            operationId: "delete_one",
+            toolCallIdempotencyKey: "tool_delete_one",
+            relativePath: "notes/one.md",
+            baseChecksum: checksum("agent")
+          }
+        ]
+      })
+    );
+    if (!second.ok) throw new Error(second.error.message);
+
+    const undone = await transaction.undoRun({ runId: "run_01" });
+
+    expect(undone.ok && undone.value.transactionStatus).toBe("applied");
+    expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("baseline");
+    const journal = (await readJournals(projectRoot)).find(
+      (candidate) => candidate.kind === "run_undo"
+    );
+    expect(journal?.mutationOrder?.map((mutation) => mutation.kind)).toEqual([
+      "operation",
+      "write"
+    ]);
+  });
+
+  test("applies operations-only Change Sets and undoes create/move/delete/mkdir in reverse DAG order", async () => {
+    const projectRoot = await createProject({
+      "notes/source.md": "source",
+      "notes/delete.md": "delete me"
+    });
+    const transaction = createTransaction(projectRoot, {
+      lifecycleOperations: createTestingLifecyclePort(projectRoot)
+    });
+
+    const applied = await transaction.apply(
+      createInput([], {
+        operations: [
+          {
+            kind: "create_directory",
+            operationId: "mkdir_drafts",
+            toolCallIdempotencyKey: "tool_mkdir",
+            relativePath: "drafts"
+          },
+          {
+            kind: "create_file",
+            operationId: "create_new",
+            toolCallIdempotencyKey: "tool_create",
+            dependsOn: ["mkdir_drafts"],
+            relativePath: "drafts/new.md",
+            content: "new"
+          },
+          {
+            kind: "move_file",
+            operationId: "move_source",
+            toolCallIdempotencyKey: "tool_move",
+            dependsOn: ["mkdir_drafts"],
+            sourcePath: "notes/source.md",
+            targetPath: "drafts/moved.md",
+            sourceChecksum: checksum("source")
+          },
+          {
+            kind: "delete_file",
+            operationId: "delete_old",
+            toolCallIdempotencyKey: "tool_delete",
+            relativePath: "notes/delete.md",
+            baseChecksum: checksum("delete me")
+          }
+        ]
+      })
+    );
+
+    expect(applied.ok).toBe(true);
+    if (!applied.ok) throw new Error(applied.error.message);
+    expect(applied.value.writes).toEqual([]);
+    expect(applied.value.operations?.map((operation) => operation.status)).toEqual([
+      "applied",
+      "applied",
+      "applied",
+      "applied"
+    ]);
+    expect(await readFile(join(projectRoot, "drafts/new.md"), "utf8")).toBe("new");
+    expect(await readFile(join(projectRoot, "drafts/moved.md"), "utf8")).toBe("source");
+    await expect(readFile(join(projectRoot, "notes/delete.md"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT"
+    });
+
+    const undone = await transaction.undoVersionGroup({
+      versionGroupId: applied.value.versionGroupId
+    });
+
+    expect(undone.ok).toBe(true);
+    expect(await readFile(join(projectRoot, "notes/source.md"), "utf8")).toBe("source");
+    expect(await readFile(join(projectRoot, "notes/delete.md"), "utf8")).toBe("delete me");
+    await expect(readFile(join(projectRoot, "drafts/new.md"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT"
+    });
+    await expect(readFile(join(projectRoot, "drafts/moved.md"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT"
+    });
+  });
+
+  test("fails closed without a native lifecycle executor before snapshots or journal writes", async () => {
+    const projectRoot = await createProject({});
+    const operations: string[] = [];
+    const transaction = createTransaction(projectRoot, {
+      operations,
+      historyRepository: recordingHistory(operations),
+      recoveryRepository: recordingRecovery(operations),
+      disableNativeFileMutations: true
+    });
+
+    const result = await transaction.apply(
+      createInput([], {
+        operations: [
+          {
+            kind: "create_file",
+            operationId: "create_file",
+            toolCallIdempotencyKey: "tool_create",
+            relativePath: "new.md",
+            content: "new"
+          }
+        ]
+      })
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_WRITE_NATIVE_FILE_OPERATIONS_REQUIRED" }
+    });
+    expect(operations).toEqual(["lock"]);
+  });
+
+  test("preflights the first move source and target before it creates snapshots or mutates files", async () => {
+    const projectRoot = await createProject({
+      "notes/source.md": "source",
+      "notes/target.md": "target"
+    });
+    const operations: string[] = [];
+    const transaction = createTransaction(projectRoot, {
+      operations,
+      lifecycleOperations: createTestingLifecyclePort(projectRoot),
+      historyRepository: recordingHistory(operations),
+      recoveryRepository: recordingRecovery(operations)
+    });
+
+    const result = await transaction.apply(
+      createInput([], {
+        operations: [
+          {
+            kind: "move_file",
+            operationId: "move_source",
+            toolCallIdempotencyKey: "tool_move",
+            sourcePath: "notes/source.md",
+            targetPath: "notes/target.md",
+            sourceChecksum: checksum("source")
+          }
+        ]
+      })
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_WRITE_OPERATION_TARGET_EXISTS" }
+    });
+    expect(operations).toEqual(["lock"]);
+    expect(await readFile(join(projectRoot, "notes/source.md"), "utf8")).toBe("source");
+    expect(await readFile(join(projectRoot, "notes/target.md"), "utf8")).toBe("target");
+  });
+
+  test("does not accept destructive lifecycle operations under a preapproved-run approval", async () => {
+    const projectRoot = await createProject({ "notes/source.md": "source" });
+    const transaction = createTransaction(projectRoot, {
+      lifecycleOperations: createTestingLifecyclePort(projectRoot)
+    });
+
+    const result = await transaction.apply(
+      createInput([], {
+        writePolicy: "user_preapproved_run",
+        approvalSource: "user_preapproved_run",
+        operations: [
+          {
+            kind: "delete_file",
+            operationId: "delete_source",
+            toolCallIdempotencyKey: "tool_delete",
+            relativePath: "notes/source.md",
+            baseChecksum: checksum("source")
+          }
+        ]
+      })
+    );
+
+    expect(result).toMatchObject({ ok: false, error: { code: "AGENT_WRITE_INPUT_INVALID" } });
+    expect(await readFile(join(projectRoot, "notes/source.md"), "utf8")).toBe("source");
+  });
+
+  test("compensates applied lifecycle operations after a later operation fails", async () => {
+    const projectRoot = await createProject({});
+    const transaction = createTransaction(projectRoot, {
+      lifecycleOperations: createTestingLifecyclePort(projectRoot, { failKind: "create_file" })
+    });
+
+    const result = await transaction.apply(
+      createInput([], {
+        operations: [
+          {
+            kind: "create_directory",
+            operationId: "mkdir_drafts",
+            toolCallIdempotencyKey: "tool_mkdir",
+            relativePath: "drafts"
+          },
+          {
+            kind: "create_file",
+            operationId: "create_new",
+            toolCallIdempotencyKey: "tool_create",
+            dependsOn: ["mkdir_drafts"],
+            relativePath: "drafts/new.md",
+            content: "new"
+          }
+        ]
+      })
+    );
+
+    expect(result.ok && result.value.transactionStatus).toBe("rolled_back");
+    await expect(readFile(join(projectRoot, "drafts/new.md"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT"
+    });
+    await expect(lstat(join(projectRoot, "drafts"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test("startup recovery reconciles a pending lifecycle journal and compensates it", async () => {
+    const projectRoot = await createProject({ "new.md": "new" });
+    const recovery = new RecoveryRepository({ projectRoot });
+    const journal: AgentTransactionJournal = {
+      schemaVersion: "1.0",
+      transactionId: "tx_lifecycle_recovery",
+      versionGroupId: "vg_lifecycle_recovery",
+      kind: "apply",
+      runId: "run_01",
+      runSequence: 1,
+      checkpointId: "checkpoint_01",
+      changeSetId: "changes_01",
+      changeSetRevision: 1,
+      changeSetChecksum: "c".repeat(64),
+      writePolicy: "write_before_confirmation",
+      approvalSource: "human_confirmation",
+      approvalToken: approvalToken("changes_01", 1, "c".repeat(64)),
+      createdAt: "2026-07-13T01:00:00.000Z",
+      updatedAt: "2026-07-13T01:00:00.000Z",
+      transactionStatus: "applying",
+      entries: [],
+      operations: [
+        {
+          operationId: "create_file",
+          operation: {
+            kind: "create_file",
+            operationId: "create_file",
+            toolCallIdempotencyKey: "tool_create",
+            relativePath: "new.md",
+            content: "new"
+          },
+          before: [{ kind: "missing", relativePath: "new.md" }],
+          after: [
+            {
+              kind: "file",
+              relativePath: "new.md",
+              content: "new",
+              checksum: checksum("new")
+            }
+          ],
+          status: "pending"
+        }
+      ]
+    };
+    const written = await recovery.writeAgentTransactionJournal(journal);
+    if (!written.ok) throw new Error(written.error.message);
+    const transaction = createTransaction(projectRoot, {
+      recoveryRepository: recovery,
+      lifecycleOperations: createTestingLifecyclePort(projectRoot)
+    });
+
+    const recovered = await transaction.recoverIncompleteTransactions();
+
+    expect(recovered.ok && recovered.value[0]?.transactionStatus).toBe("rolled_back");
+    await expect(readFile(join(projectRoot, "new.md"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT"
+    });
+  });
+});
+
 describe("ordinary UTF-8 history", () => {
   test("default version ids remain unique within the same millisecond", async () => {
     const projectRoot = await createProject({});
@@ -1645,6 +2211,8 @@ interface TransactionTestOptions {
   }) => boolean;
   readonly mutateBeforeFinalVerify?: (input: { relativePath: string }) => Promise<void>;
   readonly projectLock?: AgentWriteProjectLockPort;
+  readonly lifecycleOperations?: AgentWriteLifecycleOperationPort;
+  readonly disableNativeFileMutations?: boolean;
 }
 
 function createTransaction(
@@ -1667,6 +2235,11 @@ function createTransaction(
       return ok(undefined);
     }
   };
+  const lifecycleOperations =
+    options.lifecycleOperations ??
+    (options.disableNativeFileMutations === true
+      ? undefined
+      : createTestingLifecyclePort(projectRoot));
 
   return new AgentWriteTransaction({
     projectRoot,
@@ -1677,6 +2250,8 @@ function createTransaction(
     createTransactionId: () => `tx_${++nextId}`,
     createVersionGroupId: () => `vg_${++nextId}`,
     createWriteId: () => `write_${++nextId}`,
+    ...(lifecycleOperations === undefined ? {} : { lifecycleOperations }),
+    allowUnsafeReplaceFileForTesting: true,
     replaceFile: async (input) => {
       operations.push(`replace:${input.phase}:${input.relativePath}`);
       if (options.failReplace?.(input) === true) {
@@ -1698,7 +2273,7 @@ function createTransaction(
       await options.mutateBeforeFinalVerify?.({ relativePath: input.relativePath });
       const verified = await input.verifyImmediatelyBeforeReplace();
       if (!verified.ok) return verified;
-      return writeTextAtomically({ targetPath: input.targetPath, content: input.content });
+      return ok(undefined);
     }
   });
 }
@@ -1838,6 +2413,100 @@ function createInput(
     files,
     ...overrides
   };
+}
+
+function createTestingLifecyclePort(
+  projectRoot: string,
+  options: {
+    readonly failKind?:
+      | "replace_file"
+      | "create_file"
+      | "move_file"
+      | "delete_file"
+      | "create_directory"
+      | "remove_directory";
+    readonly beforeMutation?: (input: AgentWriteLifecycleMutation) => Promise<void>;
+  } = {}
+): AgentWriteLifecycleOperationPort {
+  return {
+    async mutate(input) {
+      await options.beforeMutation?.(input);
+      const beforeMatches = await lifecycleSnapshotsMatch(projectRoot, input.before);
+      if (!beforeMatches) return err(transactionTestError("LIFECYCLE_PRECONDITION_FAILED"));
+      if (options.failKind === input.kind) {
+        return err(transactionTestError("LIFECYCLE_INJECTED_FAILURE"));
+      }
+      try {
+        switch (input.kind) {
+          case "replace_file":
+            await writeFile(join(projectRoot, input.relativePath), input.content, "utf8");
+            break;
+          case "create_file":
+            await writeFile(join(projectRoot, input.relativePath), input.content, {
+              encoding: "utf8",
+              flag: "wx"
+            });
+            break;
+          case "move_file":
+            await rename(join(projectRoot, input.sourcePath), join(projectRoot, input.targetPath));
+            break;
+          case "delete_file":
+            await unlink(join(projectRoot, input.relativePath));
+            break;
+          case "create_directory":
+            await mkdir(join(projectRoot, input.relativePath));
+            break;
+          case "remove_directory":
+            await rmdir(join(projectRoot, input.relativePath));
+            break;
+        }
+      } catch {
+        return err(transactionTestError("LIFECYCLE_IO_FAILURE"));
+      }
+      return (await lifecycleSnapshotsMatch(projectRoot, input.after))
+        ? ok(undefined)
+        : err(transactionTestError("LIFECYCLE_POSTCONDITION_FAILED"));
+    }
+  };
+}
+
+async function lifecycleSnapshotsMatch(
+  projectRoot: string,
+  expected: readonly AgentOperationPathSnapshot[]
+): Promise<boolean> {
+  for (const snapshot of expected) {
+    const current = await testingSnapshot(projectRoot, snapshot.relativePath);
+    if (current.kind !== snapshot.kind || current.relativePath !== snapshot.relativePath)
+      return false;
+    if (
+      current.kind === "file" &&
+      (snapshot.kind !== "file" ||
+        current.checksum !== snapshot.checksum ||
+        current.content !== snapshot.content)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function testingSnapshot(
+  projectRoot: string,
+  relativePath: string
+): Promise<AgentOperationPathSnapshot> {
+  const target = join(projectRoot, relativePath);
+  try {
+    const stats = await lstat(target);
+    if (stats.isDirectory()) return { kind: "directory", relativePath };
+    if (!stats.isFile()) throw new Error("Unexpected test file type.");
+    const content = await readFile(target, "utf8");
+    return { kind: "file", relativePath, content, checksum: checksum(content) };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { kind: "missing", relativePath };
+    }
+    throw error;
+  }
 }
 
 function fileChange(

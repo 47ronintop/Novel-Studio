@@ -5,7 +5,7 @@ import type {
   AgentRunErrorRecord,
   AgentRunEvent,
   AgentRunRetryTarget,
-  AgentRunStatusV11,
+  AgentRunStatusV12,
   AgentWritePolicy,
   ApplicationCommand,
   ApplicationCommandId,
@@ -389,10 +389,11 @@ export interface AgentRunPanelProps {
   readonly runId?: string;
   /** The request currently being started; shown immediately before a persisted run exists. */
   readonly userRequest?: string;
-  readonly status: AgentRunStatusV11 | "idle";
+  readonly status: AgentRunStatusV12 | "idle";
   readonly assistantText: string;
   readonly events: readonly AgentRunEvent[];
   readonly pendingUserInput?: AgentRunPendingUserInputProps;
+  readonly pendingToolApproval?: AgentRunPendingToolApprovalProps;
   readonly diagnostic?: AgentRunErrorRecord;
   readonly errorMessage?: string;
   readonly providerLabel?: string;
@@ -407,6 +408,16 @@ export interface AgentRunPanelProps {
   readonly onRetryStep: () => void;
   readonly onRetryTarget?: (target: AgentRunRetryTarget) => void;
   readonly onRefreshContext: (decision: "refresh" | "exclude" | "cancel") => void;
+  readonly onDecideToolApproval?: (decision: "approve" | "reject") => void;
+}
+
+export interface AgentRunPendingToolApprovalProps {
+  readonly bindingId: string;
+  readonly canonicalToolId: string;
+  readonly kind: "network" | "external" | "task";
+  readonly requestedAt: string;
+  readonly expiresAt: string;
+  readonly deciding: boolean;
 }
 
 export interface AgentPlanRevisionRequestView {

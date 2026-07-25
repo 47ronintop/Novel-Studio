@@ -7,6 +7,7 @@
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.cts"],
   "references": [
+    { "path": "../../packages/agent-engine" },
     { "path": "../../packages/application" },
     { "path": "../../packages/repository" },
     { "path": "../../packages/shared" },

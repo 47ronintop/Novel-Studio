@@ -32,11 +32,7 @@ export interface PluginManifestCapability {
 
 export interface PluginManifestPermission {
   readonly permission:
-    | "project:read"
-    | "asset:read"
-    | "asset:write"
-    | "workflow:invoke"
-    | "tool:invoke";
+    "project:read" | "asset:read" | "asset:write" | "workflow:invoke" | "tool:invoke";
   readonly scopes: readonly string[];
 }
 

@@ -38,6 +38,16 @@ describe("M17 installer and release channel", () => {
     expect(packageJson.scripts["package:installer"]).toBe("node scripts/package-installer.mjs");
     expect(packageJson.scripts["release:notes"]).toBe("node scripts/release-notes.mjs");
     expect(packageJson.scripts["release:check"]).toBe("node scripts/release-check.mjs");
+    expect(packageJson.scripts["release:gate"]).toBe(
+      "node scripts/release-check.mjs --strict --package-dir"
+    );
+    const installer = readFileSync("scripts/package-installer.mjs", "utf8");
+    expect(installer).toContain("scripts/release-check.mjs");
+    expect(installer).toContain('"--strict"');
+    expect(installer).toContain('"--package-dir"');
+    expect(installer.indexOf('"--strict"')).toBeLessThan(
+      installer.indexOf("latest-package-dir.txt")
+    );
   });
 
   test("configures Windows NSIS installer output without requiring signing in CI", () => {

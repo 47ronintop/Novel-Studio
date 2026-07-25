@@ -156,7 +156,10 @@ function assertRequiredAsarFiles(files) {
 
 function assertNoCompiledTestOutput(files) {
   for (const filePath of files.map(normalizeAsarPath)) {
-    if (/^\/packages\/[^/]+\/dist\/test(?:\/|$)/.test(filePath)) {
+    if (
+      /^\/apps\/desktop\/dist\/test(?:\/|$)/.test(filePath) ||
+      /^\/packages\/[^/]+\/dist\/test(?:\/|$)/.test(filePath)
+    ) {
       failures.push(`Compiled test output must not be packaged: ${filePath}`);
     }
   }

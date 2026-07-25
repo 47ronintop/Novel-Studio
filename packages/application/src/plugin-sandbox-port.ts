@@ -177,9 +177,7 @@ export function authorizePluginToolCall(
   return ok(true);
 }
 
-function hasToolInvokePermission(
-  grants: readonly PluginSandboxToolPermissionGrant[]
-): boolean {
+function hasToolInvokePermission(grants: readonly PluginSandboxToolPermissionGrant[]): boolean {
   return grants.some(
     (grant) => grant.permission === TOOL_INVOKE_PERMISSION && grant.scopes.includes(PROJECT_SCOPE)
   );

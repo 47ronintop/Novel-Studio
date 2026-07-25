@@ -2,6 +2,8 @@ export type { AtomicWriteFileSystem, AtomicWriteInput } from "./atomic-write.js"
 export { writeTextAtomically } from "./atomic-write.js";
 export { AgentWriteTransaction } from "./agent-write-transaction.js";
 export type {
+  AgentWriteLifecycleMutation,
+  AgentWriteLifecycleOperationPort,
   AgentWriteReplaceInput,
   AgentWriteTransactionOptions
 } from "./agent-write-transaction.js";
@@ -49,14 +51,19 @@ export type {
   AgentTransactionJournal,
   AgentTransactionJournalEntry,
   AgentTransactionJournalEntryStatus,
+  AgentTransactionJournalMutationRecord,
+  AgentTransactionJournalOperationEntry,
   AgentTransactionJournalKind,
   AgentTransactionJournalStatus,
+  AgentOperationPathSnapshot,
   AgentWriteAssetType,
   AgentWriteHistoryPort,
   AgentWriteProjectLockPort,
   AgentWriteRecoveryPort,
   AgentWriteTransactionFile,
   AgentWriteTransactionInput,
+  AgentWriteTransactionOperation,
+  AgentWriteRemoveDirectoryOperation,
   CacheRepositoryPort,
   CreatedBy,
   HistoryRepositoryPort,
@@ -74,6 +81,7 @@ export type {
   VersionGroupBaselineRecord,
   VersionGroupFailureKind,
   VersionGroupRecord,
+  VersionGroupOperationRecord,
   VersionGroupTransactionStatus,
   VersionGroupUndoMetadataRecord,
   VersionGroupUndoStatus,
@@ -158,13 +166,8 @@ export type {
   ChapterVersionSnapshotInput,
   ChapterVersionSummary
 } from "@novel-studio/shared";
-export {
-  ProjectTaskCatalogRepository
-} from "./project-task-catalog-repository.js";
-export type {
-  AuthorizedTask,
-  ProjectTaskCandidate
-} from "./project-task-catalog-repository.js";
+export { ProjectTaskCatalogRepository } from "./project-task-catalog-repository.js";
+export type { AuthorizedTask, ProjectTaskCandidate } from "./project-task-catalog-repository.js";
 export { AgentProjectSearchRepository } from "./agent-project-search-repository.js";
 export type {
   AgentProjectSearchRepositoryOptions,
@@ -173,7 +176,11 @@ export type {
   AgentSearchResults
 } from "./agent-project-search-repository.js";
 export { NoFollowFileOperations } from "./no-follow-file-operations.js";
-export type { NoFollowFileError } from "./no-follow-file-operations.js";
+export type {
+  NoFollowFileError,
+  NoFollowNativeFileOperationPort,
+  NoFollowWriteFileOptions
+} from "./no-follow-file-operations.js";
 export { McpSettingsFileRepository } from "./mcp-settings-repository.js";
 export type {
   LocalMcpServerLaunchConfig,

@@ -118,6 +118,32 @@ describe("AgentRunPanel", () => {
     expect(html).toContain("保留现有揭示时机？");
   });
 
+  test("renders and dispatches a durable pending tool approval", () => {
+    const onDecideToolApproval = vi.fn();
+    const host = renderPanelHost({
+      status: "awaiting_tool_approval",
+      pendingToolApproval: {
+        bindingId: "tool_approval_01",
+        canonicalToolId: "mcp:trusted/send_message",
+        kind: "external",
+        requestedAt: "2026-07-25T00:00:00.000Z",
+        expiresAt: "2026-07-25T00:05:00.000Z",
+        deciding: false
+      },
+      onDecideToolApproval
+    });
+    const approval = host.querySelector<HTMLElement>('[aria-label="工具执行审批"]');
+
+    expect(approval?.dataset["bindingId"]).toBe("tool_approval_01");
+    expect(approval?.textContent).toContain("外部工具");
+    expect(approval?.textContent).toContain("mcp:trusted/send_message");
+    act(() => approval?.querySelector<HTMLButtonElement>('[aria-label="批准工具执行"]')?.click());
+    act(() => approval?.querySelector<HTMLButtonElement>('[aria-label="拒绝工具执行"]')?.click());
+    expect(onDecideToolApproval.mock.calls).toEqual([["approve"], ["reject"]]);
+
+    disposePanelHost(host);
+  });
+
   test("labels dirty editor context without exposing provider observability or apply controls", () => {
     const html = renderPanel({
       status: "idle",
@@ -248,8 +274,12 @@ describe("AgentRunPanel", () => {
     const steps = timeline?.querySelectorAll('[data-plan-execution-id="plan-execution-01"]');
 
     expect(steps).toHaveLength(3);
-    expect(timeline?.querySelector('[data-plan-step-id="step-running"] details')?.hasAttribute("open")).toBe(true);
-    expect(timeline?.querySelector('[data-plan-step-id="step-completed"] details')?.hasAttribute("open")).toBe(false);
+    expect(
+      timeline?.querySelector('[data-plan-step-id="step-running"] details')?.hasAttribute("open")
+    ).toBe(true);
+    expect(
+      timeline?.querySelector('[data-plan-step-id="step-completed"] details')?.hasAttribute("open")
+    ).toBe(false);
     expect(timeline?.querySelector('[data-plan-step-id="step-completed"]')?.textContent).toContain(
       "已完成并验证"
     );

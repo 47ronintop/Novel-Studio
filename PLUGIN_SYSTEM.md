@@ -138,3 +138,4 @@ M18 必须覆盖：
 
 - 原生 host stub（`apps/desktop/native/agent-task-sandbox/host/src/main.rs`）仍输出 unavailable 并 exit 1 — fail-closed 是正确行为，等待真实 Windows AppContainer 二进制打包。
 - 所有插件工具调用路径均以 `PLUGIN_SANDBOX_UNAVAILABLE` 错误告终，直到打包并签名真实 host binary 后方可通过。
+- 因 C.0 尚未资格认证，E.1 当前状态为 `Blocked`，而非可发布插件工具；权威状态和证据见 `docs/releases/stage5-agent-tool-evidence.json`。

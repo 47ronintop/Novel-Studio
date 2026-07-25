@@ -56,6 +56,7 @@ export const APPLICATION_IPC_CHANNELS = [
   "application:agent-run:decide-plan-revision",
   "application:agent-run:refresh-context",
   "application:agent-run:decide-change-set",
+  "application:agent-run:decide-tool-approval",
   "application:agent-run:undo",
   "application:agent-run:read",
   "application:agent-run:list",

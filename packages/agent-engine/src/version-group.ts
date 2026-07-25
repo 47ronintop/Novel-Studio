@@ -13,12 +13,7 @@ export type VersionGroupWriteStatus =
   | "kept"
   | "stale";
 export type VersionGroupUndoStatus =
-  | "available"
-  | "not_available"
-  | "completed"
-  | "conflict"
-  | "partial_failure"
-  | "review_required";
+  "available" | "not_available" | "completed" | "conflict" | "partial_failure" | "review_required";
 export type VersionGroupPostCommitHook =
   | "syncSavedEditor"
   | "preserveDirtyBuffers"
@@ -42,6 +37,21 @@ export interface VersionGroupWrite {
   readonly errorCode?: string;
 }
 
+export type VersionGroupOperationKind =
+  "modify" | "create_file" | "move_file" | "delete_file" | "create_directory" | "remove_directory";
+
+/** Durable lifecycle outcome accompanying the ordinary text-write history. */
+export interface VersionGroupOperation {
+  readonly operationId: string;
+  readonly kind: VersionGroupOperationKind;
+  readonly relativePaths: readonly string[];
+  readonly status: Extract<
+    VersionGroupWriteStatus,
+    "pending" | "applied" | "rolled_back" | "rollback_failed"
+  >;
+  readonly errorCode?: string;
+}
+
 export interface VersionGroupBaseline {
   readonly relativePath: string;
   readonly checksum: string;
@@ -58,12 +68,7 @@ export interface VersionGroupUndoMetadata {
 
 export type RollbackReviewDecision = "keep_current" | "restore_baseline";
 export type RollbackReviewFileStatus =
-  | "ready"
-  | "conflict"
-  | "stale"
-  | "failed"
-  | "completed"
-  | "kept";
+  "ready" | "conflict" | "stale" | "failed" | "completed" | "kept";
 export type RollbackReviewStatus = "pending" | "partial_failure" | "completed";
 
 export interface RollbackReviewDiff {
@@ -118,6 +123,7 @@ export interface VersionGroup {
   readonly approvalSource?: "human_confirmation" | "user_preapproved_run";
   readonly createdAt: string;
   readonly writes: readonly VersionGroupWrite[];
+  readonly operations?: readonly VersionGroupOperation[];
   readonly baselineByPath: Readonly<Record<string, VersionGroupBaseline>>;
   readonly transactionStatus: VersionGroupTransactionStatus;
   readonly undoStatus: VersionGroupUndoStatus;

@@ -8,11 +8,22 @@ module.exports = {
   },
   files: [
     "apps/desktop/dist/**",
+    "!apps/desktop/dist/test{,/**}",
     "packages/*/dist/**",
     "!packages/*/dist/test{,/**}",
     "packages/schemas/schema/**",
     "package.json",
     "package-lock.json"
+  ],
+  extraResources: [
+    {
+      from: "apps/desktop/resources/git",
+      to: "git"
+    },
+    {
+      from: "apps/desktop/resources/native/agent-task-sandbox",
+      to: "native/agent-task-sandbox"
+    }
   ],
   extraMetadata: {
     main: "apps/desktop/dist/main/index.js"

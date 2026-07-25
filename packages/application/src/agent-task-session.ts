@@ -59,7 +59,9 @@ export interface PrepareTaskExecutionInput {
 /** Minimal attestation lookup interface. */
 export interface AttestationLookup {
   getAttestation(): { attestationId: string; capabilities: Record<string, string> } | undefined;
-  getAttestationById(id: string): { attestationId: string; capabilities: Record<string, string> } | undefined;
+  getAttestationById(
+    id: string
+  ): { attestationId: string; capabilities: Record<string, string> } | undefined;
 }
 
 export interface AgentTaskSessionOptions {
@@ -146,9 +148,7 @@ export function createAgentTaskSession(options: AgentTaskSessionOptions): AgentT
       const snapshot: TaskExecutionSnapshot = Object.freeze({
         snapshotId,
         taskId: input.taskId,
-        canonicalExecutable: createHash("sha256")
-          .update(task.launcherTemplate)
-          .digest("hex"),
+        canonicalExecutable: createHash("sha256").update(task.launcherTemplate).digest("hex"),
         normalizedArgv: Object.freeze([...normalizedArgv]),
         parametersDigest,
         workspaceIdentity: input.workspaceIdentity.identityDigest,
@@ -165,10 +165,7 @@ export function createAgentTaskSession(options: AgentTaskSessionOptions): AgentT
   };
 }
 
-function resolveArgvTemplate(
-  template: readonly string[],
-  parameters: JsonObject
-): string[] {
+function resolveArgvTemplate(template: readonly string[], parameters: JsonObject): string[] {
   return template.map((arg) =>
     arg.replace(/\{\{([a-zA-Z0-9_]+)\}\}/g, (_, key: string) => {
       const val = parameters[key];

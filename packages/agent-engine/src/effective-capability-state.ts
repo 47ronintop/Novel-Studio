@@ -4,7 +4,11 @@
  * Permission Summary is the historical record of what was approved at run start;
  * EffectiveCapabilityState reflects what is currently still valid.
  */
-import type { AgentToolCapabilitySnapshot, AgentWorkspaceKind } from "./agent-tool-capabilities.js";
+import {
+  freezeAgentToolCapabilitySnapshot,
+  type AgentToolCapabilitySnapshot,
+  type AgentWorkspaceKind
+} from "./agent-tool-capabilities.js";
 
 export type CapabilityRevocationReason =
   | "feature_flag_disabled"
@@ -44,13 +48,19 @@ export function createEffectiveCapabilityState(
   snapshot: AgentToolCapabilitySnapshot,
   initialRevision = 1
 ): EffectiveCapabilityState {
+  const capabilitySnapshot = freezeAgentToolCapabilitySnapshot(snapshot);
   return Object.freeze<EffectiveCapabilityState>({
-    workspaceKind: snapshot.workspaceKind,
-    capabilitySnapshot: snapshot,
+    workspaceKind: capabilitySnapshot.workspaceKind,
+    capabilitySnapshot,
     revision: initialRevision,
     revokedCapabilities: Object.freeze([]),
     active: true
   });
+}
+
+/** The opaque revision callers bind to approval records and tool invocations. */
+export function effectiveCapabilityRevision(state: EffectiveCapabilityState): string {
+  return String(state.revision);
 }
 
 /**
@@ -112,5 +122,7 @@ export function isCapabilityEffective(
   capability: string
 ): boolean {
   if (!state.active) return false;
-  return !state.revokedCapabilities.some((rc) => rc.capability === capability || rc.capability === "all");
+  return !state.revokedCapabilities.some(
+    (rc) => rc.capability === capability || rc.capability === "all"
+  );
 }

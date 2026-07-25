@@ -1,13 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, stat, copyFile } from "node:fs/promises";
 import { join, resolve, isAbsolute, sep } from "node:path";
-import {
-  ok,
-  err,
-  createUnifiedError,
-  type Result,
-  type UnifiedError
-} from "@novel-studio/shared";
+import { ok, err, createUnifiedError, type Result, type UnifiedError } from "@novel-studio/shared";
 import type { ProjectionManifest, ProjectionFile } from "@novel-studio/agent-engine";
 
 export interface BuildTaskProjectionInput {
@@ -49,10 +43,7 @@ export async function buildTaskProjection(
     // Guard: must stay within workspaceRoot after resolution
     if (!sourcePath.startsWith(workspaceRoot + sep) && sourcePath !== workspaceRoot) {
       return err(
-        sandboxError(
-          "AGENT_TASK_PROJECTION_PATH_ESCAPE",
-          `Path escapes workspace root: ${rel}`
-        )
+        sandboxError("AGENT_TASK_PROJECTION_PATH_ESCAPE", `Path escapes workspace root: ${rel}`)
       );
     }
 
@@ -61,10 +52,7 @@ export async function buildTaskProjection(
       fileStat = await stat(sourcePath);
     } catch {
       return err(
-        sandboxError(
-          "AGENT_TASK_PROJECTION_FILE_NOT_FOUND",
-          `File not found in workspace: ${rel}`
-        )
+        sandboxError("AGENT_TASK_PROJECTION_FILE_NOT_FOUND", `File not found in workspace: ${rel}`)
       );
     }
     if (!fileStat.isFile()) {
@@ -80,13 +68,17 @@ export async function buildTaskProjection(
     // Ensure output directory exists
     const destPath = resolve(join(outputRoot, rel));
     if (!destPath.startsWith(outputRoot + sep) && destPath !== outputRoot) {
-      return err(sandboxError("AGENT_TASK_PROJECTION_DEST_ESCAPE", `Destination escapes output root: ${rel}`));
+      return err(
+        sandboxError("AGENT_TASK_PROJECTION_DEST_ESCAPE", `Destination escapes output root: ${rel}`)
+      );
     }
     const destDir = destPath.substring(0, destPath.lastIndexOf(sep));
     try {
       await mkdir(destDir, { recursive: true });
     } catch {
-      return err(sandboxError("AGENT_TASK_PROJECTION_MKDIR_FAILED", `Cannot create dir for: ${rel}`));
+      return err(
+        sandboxError("AGENT_TASK_PROJECTION_MKDIR_FAILED", `Cannot create dir for: ${rel}`)
+      );
     }
 
     try {
@@ -121,7 +113,9 @@ async function checksumFile(filePath: string): Promise<Result<string, UnifiedErr
     stream.on("data", (chunk) => hash.update(chunk));
     stream.on("end", () => resolve(ok(hash.digest("hex"))));
     stream.on("error", () =>
-      resolve(err(sandboxError("AGENT_TASK_PROJECTION_CHECKSUM_FAILED", `Checksum failed: ${filePath}`)))
+      resolve(
+        err(sandboxError("AGENT_TASK_PROJECTION_CHECKSUM_FAILED", `Checksum failed: ${filePath}`))
+      )
     );
   });
 }

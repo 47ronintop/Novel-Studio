@@ -19,16 +19,29 @@ export interface AgentGitDiffResult {
 
 /** Minimal git adapter interface consumed by AgentGitToolSession. */
 export interface GitReadAdapterPort {
-  gitStatus(projectRoot: string): Promise<Result<{
-    readonly staged: readonly string[];
-    readonly unstaged: readonly string[];
-    readonly untracked: readonly string[];
-    readonly branch: string;
-  }, UnifiedError>>;
-  gitDiff(projectRoot: string, paths?: readonly string[]): Promise<Result<{
-    readonly diffs: readonly { readonly relativePath: string; readonly diff: string }[];
-    readonly truncated: boolean;
-  }, UnifiedError>>;
+  gitStatus(projectRoot: string): Promise<
+    Result<
+      {
+        readonly staged: readonly string[];
+        readonly unstaged: readonly string[];
+        readonly untracked: readonly string[];
+        readonly branch: string;
+      },
+      UnifiedError
+    >
+  >;
+  gitDiff(
+    projectRoot: string,
+    paths?: readonly string[]
+  ): Promise<
+    Result<
+      {
+        readonly diffs: readonly { readonly relativePath: string; readonly diff: string }[];
+        readonly truncated: boolean;
+      },
+      UnifiedError
+    >
+  >;
 }
 
 export interface AgentGitToolSession {

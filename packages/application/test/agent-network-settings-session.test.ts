@@ -10,7 +10,9 @@ import {
 } from "../src/agent-network-settings-session.js";
 import { ok, err } from "@novel-studio/shared";
 
-function makePort(initial: AgentNetworkSettingsData = DEFAULT_NETWORK_SETTINGS): AgentNetworkSettingsPort {
+function makePort(
+  initial: AgentNetworkSettingsData = DEFAULT_NETWORK_SETTINGS
+): AgentNetworkSettingsPort {
   let stored = initial;
   return {
     readNetworkSettings: vi.fn(() => Promise.resolve(ok(stored))),
@@ -68,7 +70,11 @@ describe("createAgentNetworkSettingsSession", () => {
     const port: AgentNetworkSettingsPort = {
       readNetworkSettings: vi.fn(() =>
         Promise.resolve(
-          err({ code: "STORAGE_READ_FAILED", message: "disk error", category: "StorageError" } as import("@novel-studio/shared").UnifiedError)
+          err({
+            code: "STORAGE_READ_FAILED",
+            message: "disk error",
+            category: "StorageError"
+          } as import("@novel-studio/shared").UnifiedError)
         )
       ),
       writeNetworkSettings: vi.fn(() => Promise.resolve(ok(DEFAULT_NETWORK_SETTINGS)))

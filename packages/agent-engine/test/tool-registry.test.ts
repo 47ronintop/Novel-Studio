@@ -83,7 +83,11 @@ describe("Agent tool registry", () => {
       replacement: "x"
     };
     expect(
-      validate({ descriptor, arguments: validArguments, argumentsText: JSON.stringify(validArguments) })
+      validate({
+        descriptor,
+        arguments: validArguments,
+        argumentsText: JSON.stringify(validArguments)
+      })
     ).toMatchObject({ ok: true });
     expect(
       validate({
@@ -96,5 +100,78 @@ describe("Agent tool registry", () => {
     expect(
       validate({ descriptor, arguments: oversized, argumentsText: JSON.stringify(oversized) })
     ).toMatchObject({ ok: false });
+  });
+
+  test("assigns stable non-empty digests to static descriptors", () => {
+    const listTools = (engineExports as unknown as Record<string, unknown>)["listAgentTools"] as (
+      input: Record<string, unknown>
+    ) => readonly { readonly descriptorDigest?: string }[];
+    const first = listTools({
+      operationMode: "execution",
+      contextMode: "general_file",
+      writePolicy: "write_before_confirmation"
+    });
+    const second = listTools({
+      operationMode: "execution",
+      contextMode: "general_file",
+      writePolicy: "write_before_confirmation"
+    });
+    expect(first.map((tool) => tool.descriptorDigest)).toEqual(
+      second.map((tool) => tool.descriptorDigest)
+    );
+    expect(first.every((tool) => /^[a-f0-9]{64}$/.test(tool.descriptorDigest ?? ""))).toBe(true);
+  });
+
+  test("fails closed for a dynamic descriptor whose source or digest is not attested", () => {
+    const compute = (engineExports as unknown as Record<string, unknown>)[
+      "computeAgentToolDescriptorDigest"
+    ] as (descriptor: Record<string, unknown>) => string;
+    const validate = (engineExports as unknown as Record<string, unknown>)[
+      "validateExternalToolDescriptors"
+    ] as (descriptors: readonly Record<string, unknown>[]) => { readonly ok: boolean };
+    const listTools = (engineExports as unknown as Record<string, unknown>)["listAgentTools"] as (
+      input: Record<string, unknown>
+    ) => readonly { readonly name: string }[];
+    const descriptor = {
+      id: "plugin:acme/summarise",
+      name: "plugin__acme__summarise",
+      providerName: "plugin__acme__summarise",
+      displayName: "Summarise",
+      description: "Summarise a selected document.",
+      kind: "external_tool",
+      effect: "external_action",
+      dataEgress: "remote_tool_arguments",
+      destructive: false,
+      retrySemantics: "idempotency_key_required",
+      source: { kind: "plugin", id: "acme" },
+      inputSchema: { type: "object", additionalProperties: false, properties: {} }
+    };
+    const attested = { ...descriptor, descriptorDigest: compute(descriptor) };
+    expect(validate([attested])).toMatchObject({ ok: true });
+    expect(validate([{ ...attested, source: { kind: "mcp", id: "acme" } }])).toMatchObject({
+      ok: false
+    });
+    expect(validate([{ ...attested, descriptorDigest: "0".repeat(64) }])).toMatchObject({
+      ok: false
+    });
+
+    const names = listTools({
+      operationMode: "execution",
+      contextMode: "general_file",
+      writePolicy: "write_before_confirmation",
+      capabilitySnapshot: {
+        workspaceKind: "engineeringWorkspace",
+        searchEnabled: false,
+        fileLifecycleEnabled: false,
+        controlledExecutionEnabled: false,
+        gitReadEnabled: false,
+        networkReadEnabled: false,
+        pluginToolsEnabled: true,
+        mcpToolsEnabled: false,
+        featureFlagRevision: "flags_01"
+      },
+      externalToolDescriptors: [{ ...attested, descriptorDigest: "0".repeat(64) }]
+    }).map((tool) => tool.name);
+    expect(names).not.toContain("plugin__acme__summarise");
   });
 });

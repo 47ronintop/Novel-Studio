@@ -1,4 +1,9 @@
 import { describe, expect, test, vi } from "vitest";
+import { createHash } from "node:crypto";
+import {
+  computeAgentToolDescriptorDigest,
+  type AgentToolDescriptor
+} from "@novel-studio/agent-engine";
 
 import * as applicationExports from "../src/index.js";
 
@@ -4292,6 +4297,660 @@ describe("AgentRunSession context-engineering profiles", () => {
  * session hands the driver, the untrusted-data envelope messages, and the sources written into the
  * initial Context Snapshot. Used to assert the two context-engineering profiles differ.
  */
+describe("AgentRunSession effectful tool approvals", () => {
+  test("holds a task launch until a durable approval and launches its binding only once", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ] as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      decideToolApproval(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    let rounds = 0;
+    let launches = 0;
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_task_approval" },
+      repository: memoryRepository(),
+      capabilitySnapshot: {
+        workspaceKind: "engineeringWorkspace",
+        searchEnabled: false,
+        fileLifecycleEnabled: false,
+        controlledExecutionEnabled: true,
+        sandboxAttestationId: "attestation_01",
+        gitReadEnabled: false,
+        networkReadEnabled: false,
+        pluginToolsEnabled: false,
+        mcpToolsEnabled: false,
+        featureFlagRevision: "test-1"
+      },
+      modelDriver: {
+        async *streamRound() {
+          rounds += 1;
+          if (rounds === 1) {
+            yield toolCall("task-call-1", "run_project_task", {
+              taskId: "task_lint",
+              parameters: { fix: false }
+            });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      },
+      taskApprovalResolver: {
+        async prepare(input: Record<string, unknown>) {
+          const digest = createHash("sha256")
+            .update(JSON.stringify(input["parameters"]), "utf8")
+            .digest("hex");
+          return {
+            ok: true,
+            value: {
+              kind: "task",
+              bindingId: "task-binding-1",
+              runId: input["runId"],
+              runRevision: input["runRevision"],
+              toolCallId: input["toolCallId"],
+              taskId: input["taskId"],
+              snapshotDigest: "snapshot-digest",
+              parametersDigest: digest,
+              catalogRevision: "catalog-1",
+              attestationRef: "attestation_01",
+              executionSnapshotId: "execution-snapshot-1",
+              effectiveCapabilityRevision: input["effectiveCapabilityRevision"],
+              expiresAt: "2030-01-01T00:00:00.000Z"
+            }
+          };
+        },
+        async validate() {
+          return {
+            ok: true,
+            value: {
+              attestationId: "attestation_01",
+              executionSnapshotId: "execution-snapshot-1"
+            }
+          };
+        }
+      },
+      taskSandboxPort: {
+        async launch(input: Record<string, unknown>) {
+          launches += 1;
+          expect(input).toMatchObject({
+            taskId: "task_lint",
+            attestationId: "attestation_01",
+            executionSnapshotId: "execution-snapshot-1"
+          });
+          return {
+            ok: true,
+            value: {
+              exitCode: 0,
+              stdoutSummary: "ok",
+              stderrSummary: "",
+              truncated: false,
+              durationMs: 4,
+              terminationReason: "completed"
+            }
+          };
+        }
+      }
+    });
+
+    await session.startAgentRun({ ...startCommand(), contextMode: "general_file" });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_task_approval")).toMatchObject({
+        value: {
+          snapshot: {
+            status: "awaiting_tool_approval",
+            pendingToolApproval: { binding: { bindingId: "task-binding-1" } }
+          }
+        }
+      });
+    });
+    expect(launches).toBe(0);
+    const beforeApproval = await session.readAgentRun("run_task_approval");
+    const revision = (beforeApproval["value"] as { snapshot: { runRevision: number } }).snapshot
+      .runRevision;
+    const decision = {
+      projectId: "project-01",
+      runId: "run_task_approval",
+      commandId: "approve-task-1",
+      expectedRunRevision: revision,
+      bindingId: "task-binding-1",
+      decision: "approve"
+    };
+    const first = await session.decideToolApproval(decision);
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_task_approval")).toMatchObject({
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+    expect(launches).toBe(1);
+    expect(await session.decideToolApproval(decision)).toEqual(first);
+    expect(launches).toBe(1);
+  });
+
+  test("uses provider names for external dispatch, requires approval, and pauses outcome_unknown", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ] as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      decideToolApproval(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      resumeAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    const calls: Record<string, unknown>[] = [];
+    const externalToolBase: Omit<AgentToolDescriptor, "descriptorDigest"> = {
+      id: "plugin:acme/send",
+      name: "plugin__acme__send",
+      providerName: "plugin__acme__send",
+      displayName: "Send",
+      description: "Send a remote message.",
+      kind: "external_tool" as const,
+      effect: "external_action" as const,
+      dataEgress: "remote_tool_arguments" as const,
+      destructive: false,
+      retrySemantics: "idempotency_key_required" as const,
+      source: { kind: "plugin" as const, id: "acme" },
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["message"],
+        properties: { message: { type: "string", minLength: 1, maxLength: 100 } }
+      }
+    };
+    const externalTool = {
+      ...externalToolBase,
+      descriptorDigest: computeAgentToolDescriptorDigest(externalToolBase)
+    };
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_external_approval" },
+      repository: memoryRepository(),
+      capabilitySnapshot: {
+        workspaceKind: "engineeringWorkspace",
+        searchEnabled: false,
+        fileLifecycleEnabled: false,
+        controlledExecutionEnabled: false,
+        gitReadEnabled: false,
+        networkReadEnabled: false,
+        pluginToolsEnabled: true,
+        mcpToolsEnabled: false,
+        featureFlagRevision: "test-1"
+      },
+      externalToolDescriptors: [externalTool],
+      modelDriver: {
+        async *streamRound() {
+          yield toolCall("external-call-1", "plugin__acme__send", { message: "hello" });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      },
+      externalToolExecutor: {
+        async callTool(input: Record<string, unknown>) {
+          calls.push(input);
+          return { ok: true, value: { status: "outcome_unknown", reason: "connection reset" } };
+        }
+      }
+    });
+
+    // The caller's descriptor object is no longer authoritative after session construction.
+    // A nested schema mutation would reject this short message if the session re-read it per round.
+    (
+      (externalTool.inputSchema["properties"] as Record<string, unknown>)["message"] as {
+        minLength: number;
+      }
+    ).minLength = 99;
+
+    await session.startAgentRun({ ...startCommand(), contextMode: "general_file" });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_external_approval")).toMatchObject({
+        value: { snapshot: { status: "awaiting_tool_approval" } }
+      });
+    });
+    expect(calls).toEqual([]);
+    const pendingRead = await session.readAgentRun("run_external_approval");
+    const pendingSnapshot = (
+      pendingRead["value"] as {
+        snapshot: { runRevision: number; pendingToolApproval: { binding: { bindingId: string } } };
+      }
+    ).snapshot;
+    expect(
+      await session.resumeAgentRun({
+        projectId: "project-01",
+        runId: "run_external_approval",
+        commandId: "resume-before-approval",
+        expectedRunRevision: pendingSnapshot.runRevision
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_TOOL_APPROVAL_DECISION_REQUIRED" } });
+    await session.decideToolApproval({
+      projectId: "project-01",
+      runId: "run_external_approval",
+      commandId: "approve-external-1",
+      expectedRunRevision: pendingSnapshot.runRevision,
+      bindingId: pendingSnapshot.pendingToolApproval.binding.bindingId,
+      decision: "approve"
+    });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_external_approval")).toMatchObject({
+        value: { snapshot: { status: "awaiting_external_outcome_resolution" } }
+      });
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      canonicalToolId: "plugin:acme/send",
+      idempotencyKey: expect.stringContaining("external-call-1")
+    });
+    const afterDispatch = await session.readAgentRun("run_external_approval");
+    const started = (
+      afterDispatch["value"] as {
+        events: readonly { readonly type: string; readonly detail?: Record<string, unknown> }[];
+      }
+    ).events.find((event) => event.type === "tool_started");
+    expect(started?.detail).toMatchObject({
+      approvalBindingId: pendingSnapshot.pendingToolApproval.binding.bindingId,
+      approvalBindingKind: "external",
+      idempotencyKey: expect.stringContaining("external-call-1")
+    });
+  });
+
+  test("persists a network approval binding at the durable launch boundary", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ] as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      decideToolApproval(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    let rounds = 0;
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_network_approval" },
+      repository: memoryRepository(),
+      capabilitySnapshot: {
+        workspaceKind: "engineeringWorkspace",
+        searchEnabled: false,
+        fileLifecycleEnabled: false,
+        controlledExecutionEnabled: false,
+        gitReadEnabled: false,
+        networkReadEnabled: true,
+        pluginToolsEnabled: false,
+        mcpToolsEnabled: false,
+        featureFlagRevision: "test-1"
+      },
+      modelDriver: {
+        async *streamRound() {
+          rounds += 1;
+          if (rounds === 1) {
+            yield toolCall("network-call-1", "web_search", { query: "agent runtime" });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          yield toolCall("network-finish-1", "finish", { summary: "done" });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      },
+      networkToolExecutor: {
+        async webSearch() {
+          return {
+            ok: true,
+            value: {
+              kind: "untrusted_remote_data" as const,
+              url: "https://search.example.test/?q=agent",
+              fetchedAt: "2026-07-25T00:00:00.000Z",
+              contentDigest: "a".repeat(64),
+              contentSummary: "empty",
+              truncated: false,
+              sourceLabel: "search"
+            }
+          };
+        },
+        async fetchUrl() {
+          return {
+            ok: true,
+            value: {
+              kind: "untrusted_remote_data" as const,
+              url: "https://example.test/",
+              fetchedAt: "2026-07-25T00:00:00.000Z",
+              contentDigest: "b".repeat(64),
+              contentSummary: "empty",
+              truncated: false,
+              sourceLabel: "url"
+            }
+          };
+        }
+      }
+    });
+
+    await session.startAgentRun({ ...startCommand(), contextMode: "general_file" });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_network_approval")).toMatchObject({
+        value: {
+          snapshot: {
+            status: "awaiting_tool_approval",
+            pendingToolApproval: { binding: { kind: "network" } }
+          }
+        }
+      });
+    });
+    const pending = await session.readAgentRun("run_network_approval");
+    const pendingSnapshot = (
+      pending["value"] as {
+        snapshot: { runRevision: number; pendingToolApproval: { binding: { bindingId: string } } };
+      }
+    ).snapshot;
+    await session.decideToolApproval({
+      projectId: "project-01",
+      runId: "run_network_approval",
+      commandId: "approve-network-1",
+      expectedRunRevision: pendingSnapshot.runRevision,
+      bindingId: pendingSnapshot.pendingToolApproval.binding.bindingId,
+      decision: "approve"
+    });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_network_approval")).toMatchObject({
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+    const read = await session.readAgentRun("run_network_approval");
+    const started = (
+      read["value"] as {
+        events: readonly { readonly type: string; readonly detail?: Record<string, unknown> }[];
+      }
+    ).events.find(
+      (event) => event.type === "tool_started" && event.detail?.["toolCallId"] === "network-call-1"
+    );
+    expect(started?.detail).toMatchObject({
+      approvalBindingId: pendingSnapshot.pendingToolApproval.binding.bindingId,
+      approvalBindingKind: "network",
+      requestDigest: expect.any(String)
+    });
+  });
+
+  test.each([
+    { kind: "network" as const, runId: "run_network_started_persist_failure" },
+    { kind: "external" as const, runId: "run_external_started_persist_failure" }
+  ])(
+    "does not launch a $kind tool when its durable tool_started event cannot persist",
+    async ({ kind, runId }) => {
+      const createSession = (applicationExports as unknown as Record<string, unknown>)[
+        "createAgentRunSession"
+      ] as (options: Record<string, unknown>) => {
+        startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+        decideToolApproval(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+        readAgentRun(runId: string): Promise<Record<string, unknown>>;
+      };
+      let launches = 0;
+      let rejectLaunchEvent = false;
+      const externalToolBase: Omit<AgentToolDescriptor, "descriptorDigest"> = {
+        id: "mcp:trusted/read_status",
+        name: "mcp__trusted__read_status",
+        providerName: "mcp__trusted__read_status",
+        displayName: "Read status",
+        description: "Read remote status.",
+        kind: "external_tool",
+        effect: "external_read",
+        dataEgress: "remote_tool_arguments",
+        destructive: false,
+        retrySemantics: "never_automatic",
+        source: { kind: "mcp", id: "trusted" },
+        inputSchema: { type: "object", additionalProperties: false }
+      };
+      const externalTool = {
+        ...externalToolBase,
+        descriptorDigest: computeAgentToolDescriptorDigest(externalToolBase)
+      };
+      const repository = {
+        ...memoryRepository(),
+        async appendEvent(event: Record<string, unknown>) {
+          if (rejectLaunchEvent && event["type"] === "tool_started") {
+            return {
+              ok: false,
+              error: {
+                code: "AGENT_RUN_STORE_UNAVAILABLE",
+                message: "tool_started persistence failed"
+              }
+            };
+          }
+          return { ok: true, value: event };
+        }
+      };
+      const session = createSession({
+        coordinatorOptions: { createRunId: () => runId },
+        repository,
+        capabilitySnapshot: {
+          workspaceKind: "engineeringWorkspace",
+          searchEnabled: false,
+          fileLifecycleEnabled: false,
+          controlledExecutionEnabled: false,
+          gitReadEnabled: false,
+          networkReadEnabled: kind === "network",
+          pluginToolsEnabled: false,
+          mcpToolsEnabled: kind === "external",
+          featureFlagRevision: "test-1"
+        },
+        ...(kind === "external" ? { externalToolDescriptors: [externalTool] } : {}),
+        modelDriver: {
+          async *streamRound() {
+            yield toolCall(
+              "effectful-call-1",
+              kind === "network" ? "web_search" : "mcp__trusted__read_status",
+              kind === "network" ? { query: "status" } : {}
+            );
+            yield { type: "round_completed", finishReason: "tool_calls" };
+          }
+        },
+        startPreflight: echoStartPreflight(),
+        readToolExecutor: {
+          async execute() {
+            return { ok: true, value: { summary: "unused", data: {} } };
+          }
+        },
+        ...(kind === "network"
+          ? {
+              networkToolExecutor: {
+                async webSearch() {
+                  launches += 1;
+                  return { ok: true, value: networkReadResult() };
+                },
+                async fetchUrl() {
+                  launches += 1;
+                  return { ok: true, value: networkReadResult() };
+                }
+              }
+            }
+          : {
+              externalToolExecutor: {
+                async callTool() {
+                  launches += 1;
+                  return { ok: true, value: { status: "completed", result: {} } };
+                }
+              }
+            })
+      });
+
+      await session.startAgentRun({ ...startCommand(), contextMode: "general_file" });
+      await vi.waitFor(async () => {
+        expect(await session.readAgentRun(runId)).toMatchObject({
+          value: { snapshot: { status: "awaiting_tool_approval" } }
+        });
+      });
+      const pending = await session.readAgentRun(runId);
+      const snapshot = (
+        pending["value"] as {
+          snapshot: {
+            runRevision: number;
+            pendingToolApproval: { binding: { bindingId: string } };
+          };
+        }
+      ).snapshot;
+      rejectLaunchEvent = true;
+
+      expect(
+        await session.decideToolApproval({
+          projectId: "project-01",
+          runId,
+          commandId: `approve-${kind}-persist-failure`,
+          expectedRunRevision: snapshot.runRevision,
+          bindingId: snapshot.pendingToolApproval.binding.bindingId,
+          decision: "approve"
+        })
+      ).toMatchObject({ ok: false, error: { code: "AGENT_RUN_PERSIST_FAILED" } });
+      expect(launches).toBe(0);
+    }
+  );
+
+  test("hydrates an interrupted effectful external launch as outcome_unknown", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ] as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      decideToolApproval(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    const descriptorBase: Omit<AgentToolDescriptor, "descriptorDigest"> = {
+      id: "mcp:trusted/send_message",
+      name: "mcp__trusted__send_message",
+      providerName: "mcp__trusted__send_message",
+      displayName: "Send message",
+      description: "Send a message to the trusted remote MCP server.",
+      kind: "external_tool" as const,
+      effect: "external_action" as const,
+      dataEgress: "remote_tool_arguments" as const,
+      destructive: false,
+      retrySemantics: "never_automatic" as const,
+      source: { kind: "mcp" as const, id: "trusted" },
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["message"],
+        properties: { message: { type: "string", minLength: 1, maxLength: 100 } }
+      }
+    };
+    const descriptor = {
+      ...descriptorBase,
+      descriptorDigest: computeAgentToolDescriptorDigest(descriptorBase)
+    };
+    const repository = durableMemoryRepository();
+    let externalStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      externalStarted = resolve;
+    });
+    const original = createSession({
+      coordinatorOptions: { createRunId: () => "run_external_recovery" },
+      repository,
+      capabilitySnapshot: {
+        workspaceKind: "engineeringWorkspace",
+        searchEnabled: false,
+        fileLifecycleEnabled: false,
+        controlledExecutionEnabled: false,
+        gitReadEnabled: false,
+        networkReadEnabled: false,
+        pluginToolsEnabled: false,
+        mcpToolsEnabled: true,
+        featureFlagRevision: "test-1"
+      },
+      externalToolDescriptors: [descriptor],
+      modelDriver: {
+        async *streamRound() {
+          yield toolCall("recovery-call-1", "mcp__trusted__send_message", { message: "hello" });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      },
+      externalToolExecutor: {
+        async callTool() {
+          externalStarted?.();
+          return new Promise<never>(() => undefined);
+        }
+      }
+    });
+    await original.startAgentRun({ ...startCommand(), contextMode: "general_file" });
+    await vi.waitFor(async () => {
+      expect(await original.readAgentRun("run_external_recovery")).toMatchObject({
+        value: { snapshot: { status: "awaiting_tool_approval" } }
+      });
+    });
+    const pending = await original.readAgentRun("run_external_recovery");
+    const pendingSnapshot = (
+      pending["value"] as {
+        snapshot: { runRevision: number; pendingToolApproval: { binding: { bindingId: string } } };
+      }
+    ).snapshot;
+    void original.decideToolApproval({
+      projectId: "project-01",
+      runId: "run_external_recovery",
+      commandId: "approve-recovery-1",
+      expectedRunRevision: pendingSnapshot.runRevision,
+      bindingId: pendingSnapshot.pendingToolApproval.binding.bindingId,
+      decision: "approve"
+    });
+    await started;
+
+    const recovered = createSession({
+      coordinatorOptions: { createRunId: () => "unused-recovery-id" },
+      repository,
+      capabilitySnapshot: {
+        workspaceKind: "engineeringWorkspace",
+        searchEnabled: false,
+        fileLifecycleEnabled: false,
+        controlledExecutionEnabled: false,
+        gitReadEnabled: false,
+        networkReadEnabled: false,
+        pluginToolsEnabled: false,
+        mcpToolsEnabled: true,
+        featureFlagRevision: "test-1"
+      },
+      externalToolDescriptors: [descriptor],
+      modelDriver: { async *streamRound() {} },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      },
+      externalToolExecutor: {
+        async callTool() {
+          throw new Error("recovered session must not replay an external action");
+        }
+      }
+    });
+    const hydrated = await recovered.readAgentRun("run_external_recovery");
+    expect(hydrated).toMatchObject({
+      ok: true,
+      value: {
+        snapshot: { status: "awaiting_external_outcome_resolution" },
+        events: expect.arrayContaining([
+          expect.objectContaining({
+            type: "external_outcome_unknown",
+            detail: expect.objectContaining({
+              approvalBindingId: pendingSnapshot.pendingToolApproval.binding.bindingId
+            })
+          })
+        ])
+      }
+    });
+  });
+});
+
 async function runGuidanceProbe(overrides: {
   readonly contextMode: "writing" | "general_file";
   readonly initialContextSources: readonly Record<string, unknown>[];
@@ -4577,6 +5236,18 @@ function durableMemoryRepository() {
     async readPreflightError(errorId: string) {
       return { ok: true, value: preflightErrors.get(errorId) };
     }
+  };
+}
+
+function networkReadResult() {
+  return {
+    kind: "untrusted_remote_data" as const,
+    url: "https://example.test/status",
+    fetchedAt: "2026-07-25T00:00:00.000Z",
+    contentDigest: "a".repeat(64),
+    contentSummary: "ok",
+    truncated: false,
+    sourceLabel: "test"
   };
 }
 

@@ -4,7 +4,11 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import { createAgentNetworkToolSession } from "../src/agent-network-tool-session.js";
-import type { AgentNetworkPolicy, ControlledFetch, ControlledFetchResponse } from "../src/agent-network-policy.js";
+import type {
+  AgentNetworkPolicy,
+  ControlledFetch,
+  ControlledFetchResponse
+} from "../src/agent-network-policy.js";
 
 function makePolicy(enabled = true): AgentNetworkPolicy {
   return {
@@ -58,9 +62,7 @@ describe("createAgentNetworkToolSession — webSearch", () => {
   it("returns untrusted_remote_data envelope on success", async () => {
     const mockFetch = makeControlledFetch(
       JSON.stringify({
-        results: [
-          { title: "Result 1", url: "https://example.com/1", snippet: "Snippet 1" }
-        ]
+        results: [{ title: "Result 1", url: "https://example.com/1", snippet: "Snippet 1" }]
       }),
       "application/json"
     );
@@ -79,9 +81,11 @@ describe("createAgentNetworkToolSession — webSearch", () => {
   });
 
   it("handles search API error gracefully", async () => {
-    const mockFetch = vi.fn().mockRejectedValue(
-      Object.assign(new Error("SSRF rejected"), { code: "NETWORK_SSRF_REJECTED" })
-    );
+    const mockFetch = vi
+      .fn()
+      .mockRejectedValue(
+        Object.assign(new Error("SSRF rejected"), { code: "NETWORK_SSRF_REJECTED" })
+      );
     const session = createAgentNetworkToolSession({
       policy: makePolicy(),
       searchProfile: makeSearchProfile(),

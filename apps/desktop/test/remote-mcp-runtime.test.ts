@@ -4,10 +4,7 @@
  *   rejected server methods, schema validation, endpoint drift.
  */
 import { describe, it, expect, vi } from "vitest";
-import {
-  connectRemoteMcp,
-  createRemoteMcpDispatch
-} from "../src/main/remote-mcp-runtime.js";
+import { connectRemoteMcp, createRemoteMcpDispatch } from "../src/main/remote-mcp-runtime.js";
 import type { AgentNetworkPolicy } from "@novel-studio/application";
 import type { ControlledFetch, ControlledFetchResponse } from "@novel-studio/application";
 import { ControlledFetchError } from "@novel-studio/application";
@@ -33,14 +30,31 @@ const TEST_CONFIG: McpServerConfig = {
 
 function makeRpcFetch(responses: unknown[]): ControlledFetch {
   let callCount = 0;
-  return vi.fn().mockImplementation(() => {
+  return vi.fn().mockImplementation((request: { readonly body?: string }) => {
+    const rpcRequest = JSON.parse(request.body ?? "{}") as {
+      readonly id?: string;
+      readonly method?: string;
+    };
+    if (rpcRequest.method === "notifications/initialized") {
+      return Promise.resolve({
+        url: "https://mcp.example.com/rpc",
+        status: 204,
+        contentType: null,
+        body: "",
+        truncated: false
+      } satisfies ControlledFetchResponse);
+    }
     const resp = responses[callCount % responses.length];
     callCount++;
+    const rpcResponse =
+      typeof resp === "object" && resp !== null
+        ? { ...(resp as Record<string, unknown>), id: rpcRequest.id }
+        : resp;
     return Promise.resolve({
       url: "https://mcp.example.com/rpc",
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(resp),
+      body: JSON.stringify(rpcResponse),
       truncated: false
     } satisfies ControlledFetchResponse);
   }) as unknown as ControlledFetch;
@@ -70,6 +84,49 @@ const toolsListResponse = {
   }
 };
 
+interface RpcRequest {
+  readonly id?: string;
+  readonly method?: string;
+}
+
+function mcpResponse(
+  body: unknown,
+  overrides: Partial<ControlledFetchResponse> = {}
+): ControlledFetchResponse {
+  return {
+    url: "https://mcp.example.com/rpc",
+    status: 200,
+    contentType: "application/json",
+    body: typeof body === "string" ? body : JSON.stringify(body),
+    truncated: false,
+    ...overrides
+  };
+}
+
+function makeToolCallFetch(
+  toolCallResponse: (request: RpcRequest) => ControlledFetchResponse
+): ControlledFetch {
+  return vi.fn().mockImplementation((request: { readonly body?: string }) => {
+    const rpcRequest = JSON.parse(request.body ?? "{}") as RpcRequest;
+    if (rpcRequest.method === "notifications/initialized") {
+      return Promise.resolve({
+        url: "https://mcp.example.com/rpc",
+        status: 204,
+        contentType: null,
+        body: "",
+        truncated: false
+      } satisfies ControlledFetchResponse);
+    }
+    if (rpcRequest.method === "initialize") {
+      return Promise.resolve(mcpResponse({ ...initResponse, id: rpcRequest.id }));
+    }
+    if (rpcRequest.method === "tools/list") {
+      return Promise.resolve(mcpResponse({ ...toolsListResponse, id: rpcRequest.id }));
+    }
+    return Promise.resolve(toolCallResponse(rpcRequest));
+  }) as unknown as ControlledFetch;
+}
+
 // ── connect + tools/list ─────────────────────────────────────────────────────
 
 describe("connectRemoteMcp — connect and tools/list", () => {
@@ -89,6 +146,43 @@ describe("connectRemoteMcp — connect and tools/list", () => {
       expect(result.value.tools[0]?.retrySemantics).toBe("never_automatic");
       expect(result.value.tools[0]?.source).toBe("remote_mcp");
     }
+  });
+
+  it("accepts a JSON-RPC response carried by a Streamable HTTP SSE message", async () => {
+    let requestCount = 0;
+    const fetch_: ControlledFetch = vi
+      .fn()
+      .mockImplementation((request: { readonly body?: string }) => {
+        const rpc = JSON.parse(request.body ?? "{}") as {
+          readonly id?: string;
+          readonly method?: string;
+        };
+        if (rpc.method === "notifications/initialized") {
+          return Promise.resolve({
+            url: "https://mcp.example.com/rpc",
+            status: 204,
+            contentType: null,
+            body: "",
+            truncated: false
+          } satisfies ControlledFetchResponse);
+        }
+        requestCount += 1;
+        const response = requestCount === 1 ? initResponse : toolsListResponse;
+        return Promise.resolve({
+          url: "https://mcp.example.com/rpc",
+          status: 200,
+          contentType: "text/event-stream; charset=utf-8",
+          body: `event: message\ndata: ${JSON.stringify({ ...response, id: rpc.id })}\n\n`,
+          truncated: false
+        } satisfies ControlledFetchResponse);
+      }) as unknown as ControlledFetch;
+
+    const result = await connectRemoteMcp({
+      config: TEST_CONFIG,
+      policy: TEST_POLICY,
+      controlledFetch: fetch_
+    });
+    expect(result.ok).toBe(true);
   });
 
   it("returns NETWORK_POLICY_DISABLED when policy is disabled", async () => {
@@ -129,9 +223,8 @@ describe("connectRemoteMcp — connect and tools/list", () => {
       policy: TEST_POLICY,
       controlledFetch: fetch_
     });
-    expect(result.ok).toBe(true);
-    // Tool with bad schema is silently dropped
-    if (result.ok) expect(result.value.tools).toHaveLength(0);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("MCP_TOOL_SOURCE_INVALID");
   });
 
   it("rejects tools with invalid description (control characters)", async () => {
@@ -154,8 +247,8 @@ describe("connectRemoteMcp — connect and tools/list", () => {
       policy: TEST_POLICY,
       controlledFetch: fetch_
     });
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value.tools).toHaveLength(0);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("MCP_TOOL_SOURCE_INVALID");
   });
 
   it("rejects tools with namespaced IDs (colon or slash)", async () => {
@@ -178,8 +271,8 @@ describe("connectRemoteMcp — connect and tools/list", () => {
       policy: TEST_POLICY,
       controlledFetch: fetch_
     });
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value.tools).toHaveLength(0);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("MCP_TOOL_SOURCE_INVALID");
   });
 });
 
@@ -206,24 +299,72 @@ describe("connectRemoteMcp — tools/call", () => {
     expect(result.status).toBe("completed");
   });
 
-  it("returns outcome_unknown on timeout", async () => {
-    const timeoutFetch: ControlledFetch = vi.fn().mockImplementation(() => {
-      // First two calls succeed (init, tools/list), third throws timeout
-      const callCount = (timeoutFetch as { callCount?: number }).callCount ?? 0;
-      (timeoutFetch as { callCount?: number }).callCount = callCount + 1;
-      if (callCount < 2) {
-        const resp = callCount === 0 ? initResponse : toolsListResponse;
-        return Promise.resolve({
-          url: "https://mcp.example.com/rpc",
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify(resp),
-          truncated: false
-        });
+  it("uses POST JSON-RPC and includes idempotency metadata", async () => {
+    const callResponse = { jsonrpc: "2.0", id: 4, result: { content: [] } };
+    const fetch_ = makeRpcFetch([initResponse, toolsListResponse, callResponse]);
+    const conn = await connectRemoteMcp({
+      config: TEST_CONFIG,
+      policy: TEST_POLICY,
+      controlledFetch: fetch_
+    });
+    expect(conn.ok).toBe(true);
+    if (!conn.ok) return;
+
+    await conn.value.callTool("search", { query: "test" }, "run-123", new AbortController().signal);
+    const calls = (fetch_ as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(4);
+    expect(calls.every(([request]) => request.method === "POST")).toBe(true);
+    expect(JSON.parse(calls[1]?.[0].body ?? "{}")).toEqual({
+      jsonrpc: "2.0",
+      method: "notifications/initialized",
+      params: {}
+    });
+    expect(JSON.parse(calls[3]?.[0].body ?? "{}")).toMatchObject({
+      method: "tools/call",
+      params: {
+        name: "search",
+        arguments: { query: "test" },
+        _meta: { "novel-studio/idempotencyKey": "run-123" }
       }
-      const error = Object.assign(new ControlledFetchError("NETWORK_TOTAL_TIMEOUT", "Timeout"), {});
-      return Promise.reject(error);
-    }) as unknown as ControlledFetch;
+    });
+  });
+
+  it("returns outcome_unknown on timeout", async () => {
+    const timeoutFetch: ControlledFetch = vi
+      .fn()
+      .mockImplementation((request: { readonly body?: string }) => {
+        const rpcRequest = JSON.parse(request.body ?? "{}") as {
+          readonly id?: string;
+          readonly method?: string;
+        };
+        if (rpcRequest.method === "notifications/initialized") {
+          return Promise.resolve({
+            url: "https://mcp.example.com/rpc",
+            status: 204,
+            contentType: null,
+            body: "",
+            truncated: false
+          });
+        }
+        // Initialize and tools/list succeed; the later tools/call times out.
+        const callCount = (timeoutFetch as { callCount?: number }).callCount ?? 0;
+        (timeoutFetch as { callCount?: number }).callCount = callCount + 1;
+        if (callCount < 2) {
+          const resp = callCount === 0 ? initResponse : toolsListResponse;
+          return Promise.resolve({
+            url: "https://mcp.example.com/rpc",
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({ ...resp, id: rpcRequest.id }),
+            truncated: false
+          });
+        }
+        const error = Object.assign(
+          new ControlledFetchError("NETWORK_TOTAL_TIMEOUT", "Timeout"),
+          {}
+        );
+        return Promise.reject(error);
+      }) as unknown as ControlledFetch;
 
     const conn = await connectRemoteMcp({
       config: TEST_CONFIG,
@@ -256,8 +397,143 @@ describe("connectRemoteMcp — tools/call", () => {
     expect(conn.ok).toBe(true);
     if (!conn.ok) return;
 
-    const result = await conn.value.callTool("search", { query: "test" }, undefined, abortCtrl.signal);
+    const result = await conn.value.callTool(
+      "search",
+      { query: "test" },
+      undefined,
+      abortCtrl.signal
+    );
     expect(result.status).toBe("outcome_unknown");
+  });
+
+  it.each([
+    [
+      "an HTTP non-2xx response",
+      (request: RpcRequest) =>
+        mcpResponse({ jsonrpc: "2.0", id: request.id, result: {} }, { status: 502 })
+    ],
+    [
+      "a truncated response",
+      (request: RpcRequest) =>
+        mcpResponse({ jsonrpc: "2.0", id: request.id, result: {} }, { truncated: true })
+    ],
+    ["malformed JSON", () => mcpResponse("{not-json")],
+    [
+      "a mismatched JSON-RPC id",
+      () => mcpResponse({ jsonrpc: "2.0", id: "different-request", result: {} })
+    ],
+    [
+      "a mismatched JSON-RPC protocol",
+      (request: RpcRequest) => mcpResponse({ jsonrpc: "1.0", id: request.id, result: {} })
+    ]
+  ])(
+    "returns outcome_unknown after delivery when tools/call receives %s",
+    async (_name, response) => {
+      const fetch_ = makeToolCallFetch(response);
+      const conn = await connectRemoteMcp({
+        config: TEST_CONFIG,
+        policy: TEST_POLICY,
+        controlledFetch: fetch_
+      });
+      expect(conn.ok).toBe(true);
+      if (!conn.ok) return;
+
+      const result = await conn.value.callTool(
+        "search",
+        { query: "test" },
+        undefined,
+        new AbortController().signal
+      );
+      expect(result.status).toBe("outcome_unknown");
+      const callCount = (fetch_ as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
+      const followUp = await conn.value.callTool(
+        "search",
+        { query: "retry" },
+        undefined,
+        new AbortController().signal
+      );
+      expect(followUp.status).toBe("outcome_unknown");
+      expect(fetch_).toHaveBeenCalledTimes(callCount);
+    }
+  );
+
+  it("returns outcome_unknown when a tools/call response changes the MCP session", async () => {
+    const fetch_: ControlledFetch = vi
+      .fn()
+      .mockImplementation((request: { readonly body?: string }) => {
+        const rpcRequest = JSON.parse(request.body ?? "{}") as RpcRequest;
+        const sessionId = rpcRequest.method === "tools/call" ? "changed-session" : "session-one";
+        if (rpcRequest.method === "notifications/initialized") {
+          return Promise.resolve({
+            url: "https://mcp.example.com/rpc",
+            status: 204,
+            contentType: null,
+            body: "",
+            truncated: false,
+            headers: { "mcp-session-id": sessionId }
+          } satisfies ControlledFetchResponse);
+        }
+        const payload =
+          rpcRequest.method === "initialize"
+            ? initResponse
+            : rpcRequest.method === "tools/list"
+              ? toolsListResponse
+              : { jsonrpc: "2.0", result: {} };
+        return Promise.resolve(
+          mcpResponse(
+            { ...payload, id: rpcRequest.id },
+            { headers: { "mcp-session-id": sessionId } }
+          )
+        );
+      }) as unknown as ControlledFetch;
+    const conn = await connectRemoteMcp({
+      config: TEST_CONFIG,
+      policy: TEST_POLICY,
+      controlledFetch: fetch_
+    });
+    expect(conn.ok).toBe(true);
+    if (!conn.ok) return;
+
+    const result = await conn.value.callTool(
+      "search",
+      { query: "test" },
+      undefined,
+      new AbortController().signal
+    );
+    expect(result.status).toBe("outcome_unknown");
+  });
+
+  it("returns outcome_unknown when a delivered tools/call result is not an object", async () => {
+    const fetch_ = makeToolCallFetch((request) =>
+      mcpResponse({ jsonrpc: "2.0", id: request.id, result: "not-an-object" })
+    );
+    const conn = await connectRemoteMcp({
+      config: TEST_CONFIG,
+      policy: TEST_POLICY,
+      controlledFetch: fetch_
+    });
+    expect(conn.ok).toBe(true);
+    if (!conn.ok) return;
+
+    const result = await conn.value.callTool(
+      "search",
+      { query: "test" },
+      undefined,
+      new AbortController().signal
+    );
+    expect(result.status).toBe("outcome_unknown");
+  });
+
+  it("rejects a certificate-pinned server when given an opaque transport", async () => {
+    const fetch_ = makeRpcFetch([initResponse, toolsListResponse]);
+    const result = await connectRemoteMcp({
+      config: { ...TEST_CONFIG, tlsFingerprint: "AA".repeat(32) },
+      policy: TEST_POLICY,
+      controlledFetch: fetch_
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("MCP_TLS_IDENTITY_UNVERIFIED");
+    expect(fetch_).not.toHaveBeenCalled();
   });
 });
 

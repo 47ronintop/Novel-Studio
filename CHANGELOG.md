@@ -99,14 +99,16 @@
 - 执行 M96/M97 后 Scope Review：确认下一步只剩 M98 V1 Ship Audit；M98 只能做 ship 审计和阅读朗读 go/no-go 裁决，不得直接扩成新功能实现。
 - 完成 M98 V1 Ship Audit：新增 `docs/releases/m98-v1-ship-readiness.md`，记录 v1 ship decision: GO、核心闭环证据、验证命令、已知限制、v2/backlog 延期清单和阅读朗读裁决；`release:check` 新增 M98 readiness gate，明确不新增 M99/M100，阅读朗读只进入 v1.1 backlog。
 
-## Stage 5：Agent 工具补全 (2026-07-24)
+## Stage 5：Agent 工具补全合同与脚手架 (2026-07-24)
+
+当前状态由 `docs/releases/stage5-agent-tool-evidence.json` 约束：Phase 0/A/B/D/E.3 为 `Partial`，C.0/C.1-C.4/E.1-E.2/F 为 `Blocked`，E.4 为 `Partial`。以下记录包含合同、条件生产接线和安全修复，不表示完整发布资格。
 
 - **批次 1 (Phase 0.1-0.4)**：新增 `AgentToolCapabilitySnapshot`、`AgentFeatureFlags`、`EffectiveCapabilityState`、Permission Summary v1.1（包含 execute/externalRead/externalAction/dataEgress 能力组）、`AgentTaskSandboxPort`/`AgentSearchToolExecutor`/`AgentNetworkToolExecutor`/`AgentExternalToolExecutor` 执行端口、Run Snapshot v1.1/Event v1.2（新增 `tool_approval_*`、`capability_revoked`、`process_output`、`external_outcome_unknown` 事件类型），以及 22 工具 canonical 目录。
 - **批次 2 (Phase A + B)**：新增受限项目搜索 Repository（no-follow 路径校验、稳定 ref/checksum/digest、`untrusted_project_data` 包络）、`search_project_text`/`find_project_references` 工具；Change Set v1.1 操作联合体（`modify | create_file | move_file | delete_file | create_directory`，DAG preflight 验证环/路径冲突/缺失依赖）；no-follow 文件操作原语（拒绝符号链接/reparse point）；6 个生命周期工具（`propose_chapter_create`、`propose_story_bible_write`、`propose_file_create`、`propose_file_move`、`propose_file_delete`、`propose_directory_create`）经 Change Set 暂存。
-- **批次 3 (Phase D + E.3)**：SSRF 安全 dialer（拒绝 localhost/私网/link-local，DNS-then-pin-IP，重定向逐跳校验，1 MiB 流式上限，30s/60s 超时）、`web_search`/`fetch_url`、`AgentNetworkSettingsSession`、`AgentNetworkSettingsPanel` UI；远程 MCP 客户端（最小 `initialize` + `tools/list` + `tools/call`，严格 schema/description 校验，`mcp:<serverId>/<toolId>` 命名空间 ID，`outcome_unknown` 作为一等不可重试终态）。
+- **批次 3 (Phase D + E.3)**：新增并接线固定 DNS/IP dialer、origin-scoped 凭据、`web_search`/`fetch_url`、网络设置 IPC，以及远程 MCP JSON-RPC descriptor/调度和 `outcome_unknown` 恢复；renderer 设置/来源管理入口与打包 E2E/安全资格仍未完成。
 - **批次 4 (Phase C.0-C.4)**：ADR-0002 Windows AppContainer/Job-Object 任务沙箱；`SandboxQualificationService`（仅当全部4个能力维度 `verified` 时才签发1小时内存 attestation，不允许 `partial`）；冻结的项目任务目录、`AgentTaskSandboxPort`、`TaskExecutionSnapshot`、`ToolApprovalBinding` discriminated union、`awaiting_tool_approval` 运行状态；打包 Git runtime（无 PATH 发现，清空 `GIT_*`/`HOME`/`XDG_CONFIG_HOME`，参数数组执行，`manifest.json` 占位符→fail-closed `AGENT_GIT_ADAPTER_UNAVAILABLE`）；`git_status`/`git_diff` 工具加恶意 Git 仓库矩阵黑盒测试。
 - **批次 5 (Phase E.1 + E.2)**：插件 manifest 新增 `tool` 能力类型和 `tool:invoke` 权限；`PluginSandboxPort` 合同与 `authorizePluginToolCall` 硬拒绝门（任意缺失/不信任/未验证条件均为 deny，无降级路径）；注入启动器（`PluginSandboxHostLauncher`）adapter（不直接 import `node:child_process`）；`McpSettingsFileRepository`（userData 侧，command/argv 从不离开 Main/Repository 边界）；`McpServerConfig` 扩展为 discriminated union（`remote_http | local_stdio`）；`local-mcp-runtime.ts`（注入 `LocalMcpHostLauncher`，同等严格 schema/description 校验，`outcome_unknown` 终态一致性）；`tool-registry.ts` 加 `externalToolDescriptors` 注入口；`agent-run-session.ts` 加 `plugin:` / `mcp:` 外部工具调度分支。
-- **Phase F (跨批次回归 + 文档同步)**：全量回归 1632 tests/186 files 通过，typecheck/lint 干净；文档同步至此行。
+- **Phase F (跨批次回归 + 文档同步)**：记录静态、单元和条件生产接线结果；C.0/Git 真实产物、用户控制、安全资格与打包 E2E 仍阻断发布闭环。
 
 ## Notes
 

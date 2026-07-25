@@ -136,12 +136,12 @@ M7.3 已完成并通过本地门禁。后续扩展 multi-agent、repair、tool c
 
 ## 11. Stage 5 工具补全扩展（2026-07-24）
 
-Stage 5 在保持 M7.3 边界契约不变的前提下，对 Agent Engine 进行了如下扩展：
+Stage 5 的合同与实现位于以下模块，但当前发布状态以 `docs/releases/stage5-agent-tool-evidence.json` 为准。Phase A、D 和远程 MCP 已有条件地进入 Desktop runtime；未取得完整用户控制、打包 E2E 和安全资格的能力仍不得据类型或单元测试推断为已发布。
 
 **工具注册表扩展（`tool-registry.ts`）**
 
 - 新增 22 个静态工具 canonical catalog（`CoreAgentToolName`、`SearchAgentToolName`、`FileLifecycleAgentToolName`、`ControlledExecutionAgentToolName`、`NetworkAgentToolName`）。
-- `ListAgentToolsInput` 加 `capabilitySnapshot?: AgentToolCapabilitySnapshot`（Phase A-E 工具按 flag 门控，关闭时只保留原始 9 工具行为）。
+- `ListAgentToolsInput` 加 `capabilitySnapshot?: AgentToolCapabilitySnapshot`（Phase A-E 工具按 flag 和实际 executor 门控；Desktop production runtime 会生成并冻结该快照，缺安全后端的能力继续隐藏）。
 - `ListAgentToolsInput` 加 `externalToolDescriptors?: readonly AgentToolDescriptor[]`（注入 `plugin:` / `mcp:` 动态描述符，只在 `pluginToolsEnabled` 或 `mcpToolsEnabled` 时生效）。
 
 **能力快照与有效能力状态（`agent-tool-capabilities.ts`、`effective-capability-state.ts`）**
@@ -152,7 +152,7 @@ Stage 5 在保持 M7.3 边界契约不变的前提下，对 Agent Engine 进行�
 **Permission Summary v1.1（`permission-summary.ts`）**
 
 - 新增 `executeCapabilities`、`externalReadCapabilities`、`externalActionCapabilities`、`dataEgressCapabilities`、`featureFlagRevision`、`extendedChecksum`。
-- v1.0 fixture 可读取；旧 fixture 默认拒绝所有新增能力。
+- v1.0 fixture 可读取；旧 fixture 默认拒绝所有新增能力。Desktop runtime 已持久化并读取新版摘要；能力是否可用仍同时取决于冻结快照、有效能力状态和对应安全 executor。
 
 **Run Snapshot/Event 合同（`agent-run-types.ts`）**
 

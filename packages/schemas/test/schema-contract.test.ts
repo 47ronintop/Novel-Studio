@@ -185,9 +185,7 @@ describe("schema contract coverage", () => {
         { permission: "tool:invoke", scopes: ["project"] }
       ],
       contributes: {
-        commands: [
-          { id: "test-tools.open-character-map", title: "Open Character Map" }
-        ],
+        commands: [{ id: "test-tools.open-character-map", title: "Open Character Map" }],
         workflowSteps: [],
         tools: [
           {

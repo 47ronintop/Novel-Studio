@@ -91,6 +91,43 @@ export function AgentRunPanel(props: AgentRunPanelProps) {
         </section>
       )}
 
+      {props.pendingToolApproval === undefined ||
+      props.onDecideToolApproval === undefined ? null : (
+        <section
+          aria-label="工具执行审批"
+          className="ns-agent-tool-approval"
+          data-binding-id={props.pendingToolApproval.bindingId}
+        >
+          <strong>工具需要确认</strong>
+          <p>
+            {toolApprovalKindLabel(props.pendingToolApproval.kind)}：
+            {props.pendingToolApproval.canonicalToolId}
+          </p>
+          <div className="ns-agent-inline-actions">
+            <button
+              aria-label="拒绝工具执行"
+              className="ns-ai-secondary-button"
+              disabled={props.pendingToolApproval.deciding}
+              onClick={() => props.onDecideToolApproval?.("reject")}
+              type="button"
+            >
+              <X aria-hidden="true" size={13} />
+              拒绝
+            </button>
+            <button
+              aria-label="批准工具执行"
+              className="ns-ai-send-button"
+              disabled={props.pendingToolApproval.deciding}
+              onClick={() => props.onDecideToolApproval?.("approve")}
+              type="button"
+            >
+              <Check aria-hidden="true" size={13} />
+              批准
+            </button>
+          </div>
+        </section>
+      )}
+
       {props.status !== "awaiting_context_refresh" ? null : (
         <section className="ns-agent-context-refresh" aria-label="上下文刷新">
           <strong>上下文已变化</strong>
@@ -170,6 +207,8 @@ function RunStatusIndicator({ status }: { readonly status: AgentRunPanelProps["s
   const isCompleted = status === "completed";
   const isWaiting =
     status === "awaiting_write_approval" ||
+    status === "awaiting_tool_approval" ||
+    status === "awaiting_external_outcome_resolution" ||
     status === "awaiting_user_input" ||
     status === "awaiting_context_refresh" ||
     status === "plan_ready" ||
@@ -185,6 +224,19 @@ function RunStatusIndicator({ status }: { readonly status: AgentRunPanelProps["s
     return <CircleCheck aria-hidden="true" className="ns-status-waiting" size={14} />;
   }
   return null;
+}
+
+function toolApprovalKindLabel(
+  kind: NonNullable<AgentRunPanelProps["pendingToolApproval"]>["kind"]
+): string {
+  switch (kind) {
+    case "network":
+      return "网络访问";
+    case "external":
+      return "外部工具";
+    case "task":
+      return "项目任务";
+  }
 }
 
 function PlanRevisionCard({ control }: { readonly control: AgentPlanExecutionControl }) {
@@ -262,6 +314,10 @@ function statusLabel(status: AgentRunPanelProps["status"]): string {
       return "正在准备更改";
     case "awaiting_write_approval":
       return "更改待确认";
+    case "awaiting_tool_approval":
+      return "工具待确认";
+    case "awaiting_external_outcome_resolution":
+      return "外部结果待核验";
     case "applying_changes":
       return "正在应用更改";
     case "stopping_after_transaction":

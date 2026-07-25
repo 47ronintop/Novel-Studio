@@ -136,12 +136,12 @@ describe("M98 V1 ship readiness", () => {
     const packageCheck = await readFile("scripts/package-check.mjs", "utf8");
     const builderConfig = await readFile("apps/desktop/electron-builder.config.cjs", "utf8");
     const runtimeGlob = "packages/*/dist/**";
-    const compiledTestExclusion = "!packages/*/dist/test{,/**}";
+    const compiledTestExclusions = ["!apps/desktop/dist/test{,/**}", "!packages/*/dist/test{,/**}"];
 
     expect(builderConfig).toContain(runtimeGlob);
-    expect(builderConfig).toContain(compiledTestExclusion);
+    for (const exclusion of compiledTestExclusions) expect(builderConfig).toContain(exclusion);
     expect(packageCheck).toContain(runtimeGlob);
-    expect(packageCheck).toContain(compiledTestExclusion);
+    for (const exclusion of compiledTestExclusions) expect(packageCheck).toContain(exclusion);
     expect(packageCheck).toContain("Package files must exclude tests and fixtures.");
   });
 
@@ -156,11 +156,48 @@ describe("M98 V1 ship readiness", () => {
 
     expect(artifactScan).toContain("assertNoCompiledTestOutput");
     expect(artifactScan).toContain("Compiled test output must not be packaged");
+    expect(artifactScan).toContain("apps\\/desktop\\/dist\\/test");
     expect(artifactScan).toContain("Unable to scan artifact directory");
     expect(artifactScan).toContain("Unable to extract app.asar file");
     expect(artifactScan).toContain("Artifact package must contain app.asar");
     expect(artifactScan).toContain("Unsupported artifact entry");
     for (const canary of sensitiveFixtureCanaries) expect(artifactScan).toContain(canary);
+  });
+
+  test("artifact scan rejects compiled desktop test output", async () => {
+    const tempRoot = await mkdtemp(join(process.cwd(), ".tmp-novel-studio-desktop-test-scan-"));
+    const sourceRoot = join(tempRoot, "source");
+    const artifactRoot = join(tempRoot, "win-unpacked");
+    const asarPath = join(artifactRoot, "resources", "app.asar");
+    const schemaRoot = join(sourceRoot, "packages", "schemas", "schema");
+    const desktopTestRoot = join(sourceRoot, "apps", "desktop", "dist", "test");
+    await mkdir(schemaRoot, { recursive: true });
+    await mkdir(desktopTestRoot, { recursive: true });
+    await mkdir(join(artifactRoot, "resources"), { recursive: true });
+    for (const schema of [
+      "project.schema.json",
+      "settings.schema.json",
+      "chapter-frontmatter.schema.json",
+      "plugin-registry.schema.json"
+    ]) {
+      await writeFile(join(schemaRoot, schema), "{}", "utf8");
+    }
+    await writeFile(join(desktopTestRoot, "sensitive-fixture.js"), "sk-nested-secret", "utf8");
+    await createPackageWithOptions(sourceRoot, asarPath, {});
+
+    try {
+      const result = spawnSync(
+        process.execPath,
+        ["scripts/artifact-secret-scan.mjs", relative(process.cwd(), artifactRoot)],
+        { cwd: process.cwd(), encoding: "utf8" }
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Compiled test output must not be packaged");
+      expect(result.stderr).toContain("/apps/desktop/dist/test/sensitive-fixture.js");
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   test("artifact scan fails closed when an artifact directory has no app.asar", async () => {
