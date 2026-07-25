@@ -67,7 +67,7 @@ export interface AttestationLookup {
 export interface AgentTaskSessionOptions {
   readonly projectId: string;
   readonly getAuthorizedTask: (taskId: string) => Promise<AuthorizedTask | undefined>;
-  readonly attestationLookup?: AttestationLookup;
+  readonly attestationLookup: AttestationLookup;
   readonly createSnapshotId?: () => string;
 }
 
@@ -107,30 +107,25 @@ export function createAgentTaskSession(options: AgentTaskSessionOptions): AgentT
         );
       }
 
-      if (options.attestationLookup !== undefined) {
-        const attest = options.attestationLookup.getAttestationById(input.attestationRef);
-        if (attest === undefined) {
-          return err(
-            taskError(
-              "AGENT_TASK_ATTESTATION_INVALID",
-              "Sandbox attestation is missing or expired."
-            )
-          );
-        }
-        const caps = attest.capabilities;
-        if (
-          caps["fileIsolation"] !== "verified" ||
-          caps["networkIsolation"] !== "verified" ||
-          caps["jobObjectKillOnClose"] !== "verified" ||
-          caps["appContainerOrLowBox"] !== "verified"
-        ) {
-          return err(
-            taskError(
-              "AGENT_TASK_ATTESTATION_CAPABILITIES_INCOMPLETE",
-              "Sandbox attestation does not have all required capabilities verified."
-            )
-          );
-        }
+      const attest = options.attestationLookup?.getAttestationById(input.attestationRef);
+      if (attest === undefined) {
+        return err(
+          taskError("AGENT_TASK_ATTESTATION_INVALID", "Sandbox attestation is missing or expired.")
+        );
+      }
+      const caps = attest.capabilities;
+      if (
+        caps["fileIsolation"] !== "verified" ||
+        caps["networkIsolation"] !== "verified" ||
+        caps["jobObjectKillOnClose"] !== "verified" ||
+        caps["appContainerOrLowBox"] !== "verified"
+      ) {
+        return err(
+          taskError(
+            "AGENT_TASK_ATTESTATION_CAPABILITIES_INCOMPLETE",
+            "Sandbox attestation does not have all required capabilities verified."
+          )
+        );
       }
 
       if (typeof input.parameters !== "object" || Array.isArray(input.parameters)) {

@@ -57,6 +57,7 @@ import { RendererWorkspaceShell } from "./renderer-workspace-shell.js";
 import { useProjectWorkflowActions } from "./project-workflow-actions.js";
 import { useAiWritingWorkflowActions } from "./ai-writing-workflow-actions.js";
 import { useAgentUsageSettingsActions } from "./agent-usage-settings-actions.js";
+import { useSettingsPanelActions } from "./settings-panel-actions.js";
 import { useShellPreferenceActions } from "./shell-preference-actions.js";
 import { createWorkspaceNavigation, type WorkspaceNavigation } from "./workspace-navigation.js";
 import { useStudioActions } from "./studio-actions.js";
@@ -98,7 +99,9 @@ export function App() {
   const [commands, setCommands] = useState<readonly ApplicationCommand[]>(rendererCommands);
   const [chapterEditor, setChapterEditor] = useState<ChapterEditorProps | undefined>();
   const [fileEditor, setFileEditor] = useState<PlainFileEditorProps | undefined>();
-  const [engineeringWorkspace, setEngineeringWorkspace] = useState<EngineeringWorkspaceSnapshot | undefined>(() => engineeringWorkspaceBridge?.getProps().workspace);
+  const [engineeringWorkspace, setEngineeringWorkspace] = useState<
+    EngineeringWorkspaceSnapshot | undefined
+  >(() => engineeringWorkspaceBridge?.getProps().workspace);
   const [chapterSelection, setChapterSelection] = useState<ChapterEditorSelection | undefined>();
   const [projectWorkflow, setProjectWorkflow] = useState(() => projectWorkflowBridge?.getProps());
   const [projectSearch, setProjectSearch] = useState(() => projectSearchBridge?.getProps());
@@ -732,6 +735,16 @@ export function App() {
         setSettings(settingsBridge.getProps());
         void pending.then(setSettings);
       }
+      if (section === "network") {
+        const pending = settingsBridge.loadNetworkSettings();
+        setSettings(settingsBridge.getProps());
+        void pending.then(setSettings);
+      }
+      if (section === "mcp") {
+        const pending = settingsBridge.loadMcpServers();
+        setSettings(settingsBridge.getProps());
+        void pending.then(setSettings);
+      }
     },
     [settingsBridge]
   );
@@ -817,6 +830,7 @@ export function App() {
   );
 
   const agentUsageSettingsActions = useAgentUsageSettingsActions(settingsBridge, setSettings);
+  const settingsPanelActions = useSettingsPanelActions(settingsBridge, setSettings);
 
   const {
     handleStudioAssetSelect,
@@ -875,6 +889,20 @@ export function App() {
               : {
                   ...settings.usage,
                   ...agentUsageSettingsActions
+                },
+          network:
+            settings.network === undefined
+              ? undefined
+              : {
+                  ...settings.network,
+                  ...settingsPanelActions.network
+                },
+          toolSources:
+            settings.toolSources === undefined
+              ? undefined
+              : {
+                  ...settings.toolSources,
+                  ...settingsPanelActions.toolSources
                 }
         };
   const onboarding = createOnboardingProps({
@@ -897,109 +925,107 @@ export function App() {
 
   return (
     <>
-    <RendererWorkspaceShell
-      appearancePreferences={appearancePreferences}
-      aiWritingWorkflow={aiWritingWorkflow}
-      agentConversationWorkspace={agentConversationWorkspaceForShell}
-      projectWorkflow={projectWorkflow}
-      projectSearch={projectSearch}
-      settings={interactiveSettings}
-      studio={studio}
-      chapterEditor={interactiveChapterEditor}
-      fileEditor={fileEditor}
-      onboarding={onboarding}
-      storyBible={storyBible}
-      storyBibleEditor={storyBibleEditor}
-      shellState={shellState}
-      commands={commands}
-      commandPaletteOpen={shortcutState.commandPaletteOpen}
-      commandPaletteFeedback={commandPaletteFeedback}
-      commandPaletteQuery={commandPaletteQuery}
-      commandPaletteSelectedCommandId={commandPaletteSelectedCommandId}
-      onAiInstructionChange={handleAiInstructionChange}
-      onGenerateAiSuggestion={handleGenerateAiSuggestion}
-      onApplyAiSuggestion={handleApplyAiSuggestion}
-      onAiModelSelect={handleAiModelSelect}
-      onAiReasoningEffortSelect={handleAiReasoningEffortSelect}
-      onRejectSelectionReview={handleRejectSelectionReview}
-      onUndoSelectionReview={handleUndoSelectionReview}
-      onCancelAiStreaming={handleCancelAiStreaming}
-      onProjectTitleChange={handleProjectTitleChange}
-      onProjectFolderNameChange={handleProjectFolderNameChange}
-      onChooseCreateParentDirectory={handleChooseCreateParentDirectory}
-      onCreateChapter={handleCreateChapter}
-      onRenameChapter={handleRenameChapter}
-      onDuplicateChapter={handleDuplicateChapter}
-      onDeleteChapter={handleDeleteChapter}
-      onCloseChapterTab={handleCloseChapterTab}
-      onPreviewRecoveryDraft={handlePreviewRecoveryDraft}
-      onApplyRecoveryDraft={handleApplyRecoveryDraft}
-      onDiscardRecoveryDraft={handleDiscardRecoveryDraft}
-      onSearchQueryChange={handleSearchQueryChange}
-      onProjectSearch={handleProjectSearch}
-      onRebuildSearchIndex={handleRebuildSearchIndex}
-      onSettingsProfileSelect={handleSettingsProfileSelect}
-      onSettingsSectionSelect={handleSettingsSectionSelect}
-      onSettingsDraftChange={handleSettingsDraftChange}
-      onNewSettingsProfile={handleNewSettingsProfile}
-      onSaveSettingsProfile={handleSaveSettingsProfile}
-      onTestSettingsConnection={handleTestSettingsConnection}
-      onMakeSettingsDefault={handleMakeSettingsDefault}
-      onDiscoverSettingsModelOptions={handleDiscoverSettingsModelOptions}
-      onRefreshPluginRegistry={handleRefreshPluginRegistry}
-      onSetPluginEnabled={handleSetPluginEnabled}
-      onStudioAssetSelect={handleStudioAssetSelect}
-      onStudioContentChange={handleStudioContentChange}
-      onStudioWorkflowNodeSelect={handleStudioWorkflowNodeSelect}
-      onStudioWorkflowEdgeSelect={handleStudioWorkflowEdgeSelect}
-      onStudioWorkflowNodeEdit={handleStudioWorkflowNodeEdit}
-      onStudioWorkflowSemanticEdit={handleStudioWorkflowSemanticEdit}
-      onStudioWorkflowLayoutChange={handleStudioWorkflowLayoutChange}
-      onStudioWorkflowNodeDragCommit={handleStudioWorkflowNodeDragCommit}
-      onStudioSave={handleStudioSave}
-      onStudioRestoreVersion={handleStudioRestoreVersion}
-      onStoryBibleDraftChange={handleStoryBibleDraftChange}
-      onCreativeNavigatorModeSelect={handleCreativeNavigatorModeSelect}
-      engineeringWorkspace={engineeringWorkspace}
-      onEngineeringExpandedPathIdsChange={handleEngineeringExpandedPathIdsChange}
-      onRefreshEngineeringTree={() => void engineeringWorkspaceBridge?.refreshEngineeringTree()}
-      onWorkbenchSelect={workspaceNavigation.selectWorkbench}
-      onOpenEngineeringWorkspace={handleOpenEngineeringWorkspace}
-      onSaveStoryBibleDraft={handleSaveStoryBibleDraft}
-      onCommandExecute={handleCommandExecute}
-      onCommandPaletteActiveCommandChange={handleCommandPaletteActiveCommandChange}
-      onCommandPaletteClose={handleCommandPaletteClose}
-      onCommandPaletteOpen={handleCommandPaletteOpen}
-      onCommandPaletteQueryChange={handleCommandPaletteQueryChange}
-      onBottomPanelTabSelect={handleBottomPanelTabSelect}
-      onSearchResultOpen={handleSearchResultOpen}
-      onActivitySelect={handleActivitySelect}
-      onSettingsClose={handleSettingsClose}
-      navigatorSearchQuery={navigatorSearchQuery}
-      onNavigatorSearchQueryChange={setNavigatorSearchQuery}
-      onNavigatorExpandedSectionIdsChange={handleNavigatorExpandedSectionIdsChange}
-      navigation={workspaceNavigation}
-    />
-    <ProjectCreateDialog
-      open={projectCreateDialogOpen}
-      titleInput={projectWorkflow?.projectTitleInput ?? ""}
-      folderNameInput={projectWorkflow?.projectFolderNameInput ?? ""}
-      {...(projectWorkflow?.selectedParentDisplayName === undefined
-        ? {}
-        : { selectedParentDisplayName: projectWorkflow.selectedParentDisplayName })}
-      {...(projectWorkflow?.creationPreview === undefined
-        ? {}
-        : { creationPreview: projectWorkflow.creationPreview })}
-      busy={projectWorkflow?.status === "creating"}
-      {...(projectWorkflow?.feedback === undefined
-        ? {}
-        : { feedback: projectWorkflow.feedback })}
-      onTitleChange={handleProjectTitleChange}
-      onFolderNameChange={handleProjectFolderNameChange}
-      onChooseParentDirectory={handleChooseCreateParentDirectory}
-      onCancel={() => setProjectCreateDialogOpen(false)}
-      onCreate={handleCreateProject}
-    />
-  </>
+      <RendererWorkspaceShell
+        appearancePreferences={appearancePreferences}
+        aiWritingWorkflow={aiWritingWorkflow}
+        agentConversationWorkspace={agentConversationWorkspaceForShell}
+        projectWorkflow={projectWorkflow}
+        projectSearch={projectSearch}
+        settings={interactiveSettings}
+        studio={studio}
+        chapterEditor={interactiveChapterEditor}
+        fileEditor={fileEditor}
+        onboarding={onboarding}
+        storyBible={storyBible}
+        storyBibleEditor={storyBibleEditor}
+        shellState={shellState}
+        commands={commands}
+        commandPaletteOpen={shortcutState.commandPaletteOpen}
+        commandPaletteFeedback={commandPaletteFeedback}
+        commandPaletteQuery={commandPaletteQuery}
+        commandPaletteSelectedCommandId={commandPaletteSelectedCommandId}
+        onAiInstructionChange={handleAiInstructionChange}
+        onGenerateAiSuggestion={handleGenerateAiSuggestion}
+        onApplyAiSuggestion={handleApplyAiSuggestion}
+        onAiModelSelect={handleAiModelSelect}
+        onAiReasoningEffortSelect={handleAiReasoningEffortSelect}
+        onRejectSelectionReview={handleRejectSelectionReview}
+        onUndoSelectionReview={handleUndoSelectionReview}
+        onCancelAiStreaming={handleCancelAiStreaming}
+        onProjectTitleChange={handleProjectTitleChange}
+        onProjectFolderNameChange={handleProjectFolderNameChange}
+        onChooseCreateParentDirectory={handleChooseCreateParentDirectory}
+        onCreateChapter={handleCreateChapter}
+        onRenameChapter={handleRenameChapter}
+        onDuplicateChapter={handleDuplicateChapter}
+        onDeleteChapter={handleDeleteChapter}
+        onCloseChapterTab={handleCloseChapterTab}
+        onPreviewRecoveryDraft={handlePreviewRecoveryDraft}
+        onApplyRecoveryDraft={handleApplyRecoveryDraft}
+        onDiscardRecoveryDraft={handleDiscardRecoveryDraft}
+        onSearchQueryChange={handleSearchQueryChange}
+        onProjectSearch={handleProjectSearch}
+        onRebuildSearchIndex={handleRebuildSearchIndex}
+        onSettingsProfileSelect={handleSettingsProfileSelect}
+        onSettingsSectionSelect={handleSettingsSectionSelect}
+        onSettingsDraftChange={handleSettingsDraftChange}
+        onNewSettingsProfile={handleNewSettingsProfile}
+        onSaveSettingsProfile={handleSaveSettingsProfile}
+        onTestSettingsConnection={handleTestSettingsConnection}
+        onMakeSettingsDefault={handleMakeSettingsDefault}
+        onDiscoverSettingsModelOptions={handleDiscoverSettingsModelOptions}
+        onRefreshPluginRegistry={handleRefreshPluginRegistry}
+        onSetPluginEnabled={handleSetPluginEnabled}
+        onStudioAssetSelect={handleStudioAssetSelect}
+        onStudioContentChange={handleStudioContentChange}
+        onStudioWorkflowNodeSelect={handleStudioWorkflowNodeSelect}
+        onStudioWorkflowEdgeSelect={handleStudioWorkflowEdgeSelect}
+        onStudioWorkflowNodeEdit={handleStudioWorkflowNodeEdit}
+        onStudioWorkflowSemanticEdit={handleStudioWorkflowSemanticEdit}
+        onStudioWorkflowLayoutChange={handleStudioWorkflowLayoutChange}
+        onStudioWorkflowNodeDragCommit={handleStudioWorkflowNodeDragCommit}
+        onStudioSave={handleStudioSave}
+        onStudioRestoreVersion={handleStudioRestoreVersion}
+        onStoryBibleDraftChange={handleStoryBibleDraftChange}
+        onCreativeNavigatorModeSelect={handleCreativeNavigatorModeSelect}
+        engineeringWorkspace={engineeringWorkspace}
+        onEngineeringExpandedPathIdsChange={handleEngineeringExpandedPathIdsChange}
+        onRefreshEngineeringTree={() => void engineeringWorkspaceBridge?.refreshEngineeringTree()}
+        onWorkbenchSelect={workspaceNavigation.selectWorkbench}
+        onOpenEngineeringWorkspace={handleOpenEngineeringWorkspace}
+        onSaveStoryBibleDraft={handleSaveStoryBibleDraft}
+        onCommandExecute={handleCommandExecute}
+        onCommandPaletteActiveCommandChange={handleCommandPaletteActiveCommandChange}
+        onCommandPaletteClose={handleCommandPaletteClose}
+        onCommandPaletteOpen={handleCommandPaletteOpen}
+        onCommandPaletteQueryChange={handleCommandPaletteQueryChange}
+        onBottomPanelTabSelect={handleBottomPanelTabSelect}
+        onSearchResultOpen={handleSearchResultOpen}
+        onActivitySelect={handleActivitySelect}
+        onSettingsClose={handleSettingsClose}
+        navigatorSearchQuery={navigatorSearchQuery}
+        onNavigatorSearchQueryChange={setNavigatorSearchQuery}
+        onNavigatorExpandedSectionIdsChange={handleNavigatorExpandedSectionIdsChange}
+        navigation={workspaceNavigation}
+      />
+      <ProjectCreateDialog
+        open={projectCreateDialogOpen}
+        titleInput={projectWorkflow?.projectTitleInput ?? ""}
+        folderNameInput={projectWorkflow?.projectFolderNameInput ?? ""}
+        {...(projectWorkflow?.selectedParentDisplayName === undefined
+          ? {}
+          : { selectedParentDisplayName: projectWorkflow.selectedParentDisplayName })}
+        {...(projectWorkflow?.creationPreview === undefined
+          ? {}
+          : { creationPreview: projectWorkflow.creationPreview })}
+        busy={projectWorkflow?.status === "creating"}
+        {...(projectWorkflow?.feedback === undefined ? {} : { feedback: projectWorkflow.feedback })}
+        onTitleChange={handleProjectTitleChange}
+        onFolderNameChange={handleProjectFolderNameChange}
+        onChooseParentDirectory={handleChooseCreateParentDirectory}
+        onCancel={() => setProjectCreateDialogOpen(false)}
+        onCreate={handleCreateProject}
+      />
+    </>
   );
 }

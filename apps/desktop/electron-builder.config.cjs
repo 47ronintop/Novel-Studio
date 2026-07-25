@@ -17,12 +17,26 @@ module.exports = {
   ],
   extraResources: [
     {
-      from: "apps/desktop/resources/git",
+      // Development deliberately ships the unavailable placeholder. Release
+      // packaging must opt in to a directory produced by prepare-git-runtime.
+      from: process.env.NOVEL_STUDIO_GIT_RUNTIME_DIR ?? "apps/desktop/resources/git",
       to: "git"
     },
     {
-      from: "apps/desktop/resources/native/agent-task-sandbox",
+      // CI can stage real, hash-addressed binaries without mutating the
+      // fail-closed source-tree placeholder used by local development.
+      from:
+        process.env.NOVEL_STUDIO_AGENT_SANDBOX_DIR ??
+        "apps/desktop/resources/native/agent-task-sandbox",
       to: "native/agent-task-sandbox"
+    },
+    {
+      // The file lifecycle host has an independent qualification artifact.
+      // Source builds ship only an unavailable placeholder.
+      from:
+        process.env.NOVEL_STUDIO_AGENT_FILE_OPERATIONS_DIR ??
+        "apps/desktop/resources/native/agent-file-operations",
+      to: "native/agent-file-operations"
     }
   ],
   extraMetadata: {

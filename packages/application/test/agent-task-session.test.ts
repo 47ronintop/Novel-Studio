@@ -72,9 +72,14 @@ describe("AgentTaskSession.prepareTaskExecution", () => {
   });
 
   it("rejects unknown taskId", async () => {
+    const attest = makeAttestation("attest_001");
     const session = createAgentTaskSession({
       projectId: "proj_001",
-      getAuthorizedTask: async () => undefined
+      getAuthorizedTask: async () => undefined,
+      attestationLookup: {
+        getAttestation: () => attest,
+        getAttestationById: () => attest
+      }
     });
 
     const result = await session.prepareTaskExecution({
@@ -91,9 +96,14 @@ describe("AgentTaskSession.prepareTaskExecution", () => {
   });
 
   it("rejects if catalog revision mismatches", async () => {
+    const attest = makeAttestation("attest_001");
     const session = createAgentTaskSession({
       projectId: "proj_001",
-      getAuthorizedTask: async () => baseTask
+      getAuthorizedTask: async () => baseTask,
+      attestationLookup: {
+        getAttestation: () => attest,
+        getAttestationById: () => attest
+      }
     });
 
     const result = await session.prepareTaskExecution({

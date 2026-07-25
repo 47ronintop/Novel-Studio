@@ -2,25 +2,22 @@
 name = "agent-task-sandbox-probe"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.79"
 
 [[bin]]
 name = "agent-task-sandbox-probe"
 path = "src/main.rs"
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-uuid = { version = "1.8", features = ["v4"] }
+serde = { version = "=1.0.203", features = ["derive"] }
+serde_json = "=1.0.117"
+uuid = { version = "=1.8.0", features = ["v4"] }
 
 [target.'cfg(windows)'.dependencies.windows]
-version = "0.58"
+version = "=0.58.0"
 features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
-    "Win32_System_IO",
-    "Win32_Storage_FileSystem",
-    "Win32_Networking_WinSock",
-    "Win32_NetworkManagement_IpHelper",
 ]

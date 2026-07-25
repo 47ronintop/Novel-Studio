@@ -5,14 +5,18 @@
 use serde::Serialize;
 use std::{
     fs,
-    io::{self, Write},
-    net::TcpListener,
+    io,
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
+use uuid::Uuid;
 
 #[derive(Debug, Serialize)]
 struct ProbeEvidence {
+    #[serde(rename = "schemaVersion")]
+    schema_version: String,
+    #[serde(rename = "evidenceId")]
+    evidence_id: String,
     /// Matches host bundle manifest value
     #[serde(rename = "hostDigest")]
     host_digest: String,
@@ -25,30 +29,23 @@ struct ProbeEvidence {
     policy_revision: String,
     #[serde(rename = "testVectorRevision")]
     test_vector_revision: String,
-
-    /// Each dimension: "verified" | "unavailable"
-    dimensions: ProbeDimensions,
-
-    /// Nonce for replay-prevention
-    nonce: String,
+    #[serde(rename = "osVersion")]
+    os_version: String,
     #[serde(rename = "generatedAt")]
-    generated_at: u64,
+    generated_at: String,
+    capabilities: ProbeCapabilities,
 }
 
 #[derive(Debug, Serialize)]
-struct ProbeDimensions {
+struct ProbeCapabilities {
     #[serde(rename = "fileIsolation")]
     file_isolation: String,
     #[serde(rename = "networkIsolation")]
     network_isolation: String,
-    #[serde(rename = "processContainment")]
-    process_containment: String,
-    #[serde(rename = "environmentIsolation")]
-    environment_isolation: String,
     #[serde(rename = "jobObjectKillOnClose")]
     job_object_kill_on_close: String,
-    #[serde(rename = "appContainerCapabilities")]
-    app_container_capabilities: String,
+    #[serde(rename = "appContainerOrLowBox")]
+    app_container_or_low_box: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -77,7 +74,34 @@ fn now_unix_secs() -> u64 {
 }
 
 fn unique_nonce() -> String {
-    format!("{:x}", now_unix_secs())
+    Uuid::new_v4().to_string()
+}
+
+fn iso_timestamp() -> String {
+    let seconds = now_unix_secs() as i64;
+    let days = seconds.div_euclid(86_400);
+    let seconds_of_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+// Gregorian conversion for days since 1970-01-01, adapted from the public
+// domain civil calendar algorithm. Keeping it local avoids a runtime time-zone
+// dependency in the qualification binary.
+fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    (year + if month <= 2 { 1 } else { 0 }, month, day)
 }
 
 pub fn run() {
@@ -140,21 +164,21 @@ pub fn run() {
     }
 
     let evidence = ProbeEvidence {
+        schema_version: "1.0".to_string(),
+        evidence_id: format!("native-{}", Uuid::new_v4()),
         host_digest,
         probe_digest,
         protocol_version,
         policy_revision,
         test_vector_revision,
-        dimensions: ProbeDimensions {
+        os_version: "windows".to_string(),
+        generated_at: iso_timestamp(),
+        capabilities: ProbeCapabilities {
             file_isolation: "verified".to_string(),
             network_isolation: "verified".to_string(),
-            process_containment: "verified".to_string(),
-            environment_isolation: "verified".to_string(),
             job_object_kill_on_close: "verified".to_string(),
-            app_container_capabilities: "verified".to_string(),
+            app_container_or_low_box: "verified".to_string(),
         },
-        nonce,
-        generated_at: now_unix_secs(),
     };
 
     println!("{}", serde_json::to_string(&evidence).unwrap_or_default());
@@ -162,7 +186,12 @@ pub fn run() {
 }
 
 fn create_probe_temp_dir(nonce: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("ns_probe_{}", nonce));
+    // The host sets the current directory to the harness-owned projection.
+    // Do not rely on a user TEMP directory, which must not be available inside
+    // the AppContainer.
+    let dir = std::env::current_dir()
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join(format!("ns_probe_{}", nonce));
     let _ = fs::create_dir_all(&dir);
     dir
 }
@@ -199,21 +228,20 @@ fn probe_file_isolation(temp_dir: &PathBuf, nonce: &str) -> Result<(), ProbeErro
     // Attempt to read a path outside workspace — should be denied by AppContainer.
     // The test harness places an external sentinel at a known path; its existence
     // proves the test is sensitive to the isolation boundary.
-    let external_sentinel = std::env::var("PROBE_EXTERNAL_SENTINEL_PATH").ok();
-    if let Some(sentinel) = external_sentinel {
-        let result = fs::read_to_string(&sentinel);
-        match result {
-            Ok(_) => {
-                return Err(ProbeError {
-                    code: "FILE_ISOLATION_BREACH".to_string(),
-                    message: format!("Read external sentinel at '{}' — OS boundary not enforced.", sentinel),
-                    dimension: "fileIsolation".to_string(),
-                });
-            }
-            Err(_) => {
-                // Expected: access denied
-            }
-        }
+    let sentinel = std::env::var("PROBE_EXTERNAL_SENTINEL_PATH").map_err(|_| ProbeError {
+        code: "FILE_SENTINEL_MISSING".to_string(),
+        message: "Qualification requires a harness-created external file sentinel.".to_string(),
+        dimension: "fileIsolation".to_string(),
+    })?;
+    // The harness validates existence before launching the host. Calling
+    // metadata from inside the AppContainer would itself be denied and cannot
+    // distinguish a missing sentinel from successful isolation.
+    if fs::read(&sentinel).is_ok() {
+        return Err(ProbeError {
+            code: "FILE_ISOLATION_BREACH".to_string(),
+            message: "Read the harness external sentinel — OS boundary not enforced.".to_string(),
+            dimension: "fileIsolation".to_string(),
+        });
     }
 
     // AppData / user profile paths should also be denied
@@ -241,19 +269,27 @@ fn probe_file_isolation(temp_dir: &PathBuf, nonce: &str) -> Result<(), ProbeErro
 /// Attempts loopback, DNS resolution, and direct TCP to a test listener.
 fn probe_network_isolation(nonce: &str) -> Result<(), ProbeError> {
     // Check whether a test listener address was provided by the harness
-    let listener_addr = std::env::var("PROBE_NETWORK_LISTENER_ADDR").ok();
+    let listener_addr = std::env::var("PROBE_NETWORK_LISTENER_ADDR").map_err(|_| ProbeError {
+        code: "NETWORK_LISTENER_MISSING".to_string(),
+        message: "Qualification requires a harness-owned network listener.".to_string(),
+        dimension: "networkIsolation".to_string(),
+    })?;
 
     // Attempt loopback TCP connection
     let loopback_result = std::net::TcpStream::connect_timeout(
         &"127.0.0.1:1".parse().unwrap(),
         std::time::Duration::from_millis(200),
     );
-    // ECONNREFUSED is acceptable (port not listening), but ETIMEDOUT on loopback
-    // also suggests isolation. A successful connection is suspicious.
+    // Any successful loopback connection is a breach. The test harness also
+    // supplies a dedicated listener below, so this is not the only signal.
     match loopback_result {
         Ok(_) => {
-            // If harness listener was specified and we connected, that's a breach
-            // (otherwise, a random service on :1 may exist)
+            return Err(ProbeError {
+                code: "NETWORK_LOOPBACK_BREACH".to_string(),
+                message: "Connected to IPv4 loopback — network isolation is not enforced."
+                    .to_string(),
+                dimension: "networkIsolation".to_string(),
+            });
         }
         Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => {
             // Expected in isolated environment — port not listening
@@ -263,27 +299,37 @@ fn probe_network_isolation(nonce: &str) -> Result<(), ProbeError> {
         }
     }
 
+    if std::net::TcpStream::connect_timeout(
+        &"[::1]:1".parse().unwrap(),
+        std::time::Duration::from_millis(200),
+    )
+    .is_ok()
+    {
+        return Err(ProbeError {
+            code: "NETWORK_LOOPBACK_V6_BREACH".to_string(),
+            message: "Connected to IPv6 loopback — network isolation is not enforced."
+                .to_string(),
+            dimension: "networkIsolation".to_string(),
+        });
+    }
+
     // If test harness placed a listener, try to connect; must fail
-    if let Some(addr) = listener_addr {
-        match std::net::TcpStream::connect_timeout(
-            &addr.parse().map_err(|_| ProbeError {
-                code: "NETWORK_LISTENER_PARSE_FAILED".to_string(),
-                message: format!("Cannot parse listener address: {}", addr),
+    match std::net::TcpStream::connect_timeout(
+        &listener_addr.parse().map_err(|_| ProbeError {
+            code: "NETWORK_LISTENER_PARSE_FAILED".to_string(),
+            message: "Cannot parse harness listener address.".to_string(),
+            dimension: "networkIsolation".to_string(),
+        })?,
+        std::time::Duration::from_millis(500),
+    ) {
+        Ok(_) => {
+            return Err(ProbeError {
+                code: "NETWORK_ISOLATION_BREACH".to_string(),
+                message: "Connected to harness network listener — network not isolated.".to_string(),
                 dimension: "networkIsolation".to_string(),
-            })?,
-            std::time::Duration::from_millis(500),
-        ) {
-            Ok(_) => {
-                return Err(ProbeError {
-                    code: "NETWORK_ISOLATION_BREACH".to_string(),
-                    message: format!("Connected to test network listener at {} — network not isolated.", addr),
-                    dimension: "networkIsolation".to_string(),
-                });
-            }
-            Err(_) => {
-                // Expected: connection refused or timed out
-            }
+            });
         }
+        Err(_) => {}
     }
 
     // Attempt DNS resolution — should fail in no-network AppContainer
@@ -291,10 +337,12 @@ fn probe_network_isolation(nonce: &str) -> Result<(), ProbeError> {
     let dns_label = format!("ns-probe-{}.test.invalid", nonce);
     match std::net::ToSocketAddrs::to_socket_addrs(&(dns_label.as_str(), 80u16)) {
         Ok(_) => {
-            // DNS resolution succeeded — network may not be isolated.
-            // Log but don't hard-fail: DNS resolution may succeed even in
-            // no-network containers on Windows for cached entries.
-            // The test-listener check above is the primary network isolation gate.
+            return Err(ProbeError {
+                code: "NETWORK_DNS_BREACH".to_string(),
+                message: "Resolved a unique DNS label — network isolation is not enforced."
+                    .to_string(),
+                dimension: "networkIsolation".to_string(),
+            });
         }
         Err(_) => {} // Expected
     }
@@ -309,8 +357,7 @@ fn probe_process_containment(_nonce: &str) -> Result<(), ProbeError> {
         Win32::{
             System::Threading::{
                 CreateProcessW, PROCESS_INFORMATION, STARTUPINFOW,
-                CREATE_SUSPENDED, CREATE_NO_WINDOW,
-                TerminateProcess, WaitForSingleObject,
+                CREATE_NO_WINDOW, WaitForSingleObject,
             },
             Foundation::{CloseHandle, BOOL},
         },

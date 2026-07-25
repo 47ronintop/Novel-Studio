@@ -50,7 +50,9 @@ export interface SettingsBridge {
   /** Phase D — load current network settings into the panel. */
   loadNetworkSettings(): Promise<ModelSettingsPanelProps>;
   /** Phase D — update network settings and immediately revoke old runtime capabilities. */
-  updateNetworkSettings(partial: Partial<AgentNetworkSettingsData>): Promise<ModelSettingsPanelProps>;
+  updateNetworkSettings(
+    partial: Partial<AgentNetworkSettingsData>
+  ): Promise<ModelSettingsPanelProps>;
   /** Phase D — test a specific provider connection. */
   testNetworkConnection(profileId: string): Promise<ModelSettingsPanelProps>;
   /** Phase D — revoke all network access. */
@@ -298,13 +300,13 @@ export function createSettingsBridge(
 
     async updateNetworkSettings(partial) {
       networkLoading = true;
-      // Immediately revoke old runtime capability before applying new settings
       const result = await api.agentNetwork.updateSettings(partial);
       networkLoading = false;
-      if (result.ok) {
-        networkSettings = result.value;
+      if (!result.ok) {
+        feedback = { kind: "error", message: result.error.message };
+        throw new Error(result.error.message);
       }
-      // Reset test statuses on any settings change — old connections may be invalid
+      networkSettings = result.value;
       networkTestStatuses = {};
       return toProps();
     },
@@ -316,6 +318,7 @@ export function createSettingsBridge(
         ...networkTestStatuses,
         [profileId]: r.ok ? "ok" : "error"
       };
+      if (!r.ok) throw new Error(r.error.message);
       return toProps();
     },
 
@@ -323,9 +326,11 @@ export function createSettingsBridge(
       networkLoading = true;
       const result = await api.agentNetwork.revoke();
       networkLoading = false;
-      if (result.ok) {
-        networkSettings = result.value;
+      if (!result.ok) {
+        feedback = { kind: "error", message: result.error.message };
+        throw new Error(result.error.message);
       }
+      networkSettings = result.value;
       networkTestStatuses = {};
       return toProps();
     },
@@ -346,9 +351,11 @@ export function createSettingsBridge(
       mcpLoading = true;
       const result = await api.agentMcp.addServer(config);
       mcpLoading = false;
-      if (result.ok) {
-        mcpServers = result.value.servers;
+      if (!result.ok) {
+        feedback = { kind: "error", message: result.error.message };
+        throw new Error(result.error.message);
       }
+      mcpServers = result.value.servers;
       return toProps();
     },
 
@@ -356,35 +363,28 @@ export function createSettingsBridge(
       mcpLoading = true;
       const result = await api.agentMcp.removeServer(serverId);
       mcpLoading = false;
-      if (result.ok) {
-        mcpServers = result.value.servers;
-        mcpTestStatuses = omitKey(mcpTestStatuses, serverId);
+      if (!result.ok) {
+        feedback = { kind: "error", message: result.error.message };
+        throw new Error(result.error.message);
       }
+      mcpServers = result.value.servers;
+      mcpTestStatuses = omitKey(mcpTestStatuses, serverId);
       return toProps();
     },
 
     async setMcpServerEnabled(serverId, enabled) {
-      // Enable/disable: revoke old capability state, then reload
       mcpLoading = true;
-      const serverList = [...mcpServers];
-      const idx = serverList.findIndex((s) => s.serverId === serverId);
-      if (idx !== -1) {
-        const existing = serverList[idx];
-        if (existing !== undefined) {
-          serverList[idx] = { ...existing, enabled };
-        }
-        mcpServers = serverList;
-      }
-      // Persist via IPC: add then remove to toggle, or use a dedicated toggle endpoint
-      // For now use remove + add pattern (idempotent)
       const existing = mcpServers.find((s) => s.serverId === serverId);
       if (existing !== undefined) {
         const updated = { ...existing, enabled };
-        await api.agentMcp.removeServer(serverId);
         const result = await api.agentMcp.addServer(updated);
-        if (result.ok) {
-          mcpServers = result.value.servers;
+        if (!result.ok) {
+          mcpLoading = false;
+          feedback = { kind: "error", message: result.error.message };
+          throw new Error(result.error.message);
         }
+        mcpServers = result.value.servers;
+        mcpTestStatuses = omitKey(mcpTestStatuses, serverId);
       }
       mcpLoading = false;
       return toProps();
@@ -397,6 +397,7 @@ export function createSettingsBridge(
         ...mcpTestStatuses,
         [serverId]: r.ok ? "ok" : "error"
       };
+      if (!r.ok) throw new Error(r.error.message);
       return toProps();
     },
 
@@ -404,10 +405,12 @@ export function createSettingsBridge(
       mcpLoading = true;
       const result = await api.agentMcp.revokeServer(serverId);
       mcpLoading = false;
-      if (result.ok) {
-        mcpServers = result.value.servers;
-        mcpTestStatuses = omitKey(mcpTestStatuses, serverId);
+      if (!result.ok) {
+        feedback = { kind: "error", message: result.error.message };
+        throw new Error(result.error.message);
       }
+      mcpServers = result.value.servers;
+      mcpTestStatuses = omitKey(mcpTestStatuses, serverId);
       return toProps();
     }
   };

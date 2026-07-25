@@ -40,6 +40,36 @@ describe("AgentTaskSandbox negative controls", () => {
     expect(parsed).toBeUndefined();
   });
 
+  it("rejects evidence with an expanded capability schema or non-ISO timestamp", async () => {
+    const { parseSandboxQualificationEvidence } =
+      await import("../src/main/agent-sandbox-qualification.js");
+    const base = {
+      schemaVersion: "1.0",
+      evidenceId: "probe-evidence",
+      hostDigest: "a".repeat(64),
+      probeDigest: "b".repeat(64),
+      osVersion: "windows-x64",
+      protocolVersion: "1.0",
+      policyRevision: "policy",
+      testVectorRevision: "vectors",
+      generatedAt: new Date().toISOString(),
+      capabilities: {
+        fileIsolation: "verified",
+        networkIsolation: "verified",
+        jobObjectKillOnClose: "verified",
+        appContainerOrLowBox: "verified"
+      }
+    };
+
+    expect(
+      parseSandboxQualificationEvidence({
+        ...base,
+        capabilities: { ...base.capabilities, callerDefinedCapability: "verified" }
+      })
+    ).toBeUndefined();
+    expect(parseSandboxQualificationEvidence({ ...base, generatedAt: "tomorrow" })).toBeUndefined();
+  });
+
   it("cannot issue an attestation from a caller-provided verification boolean", async () => {
     const { SandboxQualificationService } =
       await import("../src/main/agent-sandbox-qualification.js");

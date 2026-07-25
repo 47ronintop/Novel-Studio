@@ -22,7 +22,8 @@ describe("AgentTaskSandbox process tree cleanup", () => {
         maxProcesses: 4,
         maxScratchBytes: 100 * 1024 * 1024
       },
-      attestationRef: "attest_001"
+      attestationRef: "attest_001",
+      executionSnapshotId: "snap_001"
     });
     expect(result.ok).toBe(false);
     if (!result.ok) {

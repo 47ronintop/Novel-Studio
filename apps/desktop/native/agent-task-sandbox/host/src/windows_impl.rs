@@ -3,46 +3,54 @@
 // process suspended inside the container, assigns it to a Job Object with
 // KILL_ON_JOB_CLOSE before resuming it, then streams output and waits for exit.
 
-use std::collections::HashMap;
-use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashMap,
+    ffi::c_void,
+    ptr,
+    thread,
+};
+use serde::Serialize;
 use windows::{
     core::PCWSTR,
     Win32::{
         Foundation::{
-            CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
-            WIN32_ERROR, BOOL,
+            CloseHandle, SetHandleInformation, BOOL, HANDLE, HANDLE_FLAGS, HANDLE_FLAG_INHERIT,
         },
         Security::{
-            FreeSid, GetTokenInformation, OpenProcessToken, TokenUser,
-            TOKEN_QUERY, TOKEN_USER, PSID,
+            AppLocker::AppContainerDeriveSid,
+            FreeSid, GetTokenInformation, OpenProcessToken,
+            TOKEN_QUERY, PSID, SECURITY_CAPABILITIES,
         },
         System::{
             JobObjects::{
                 AssignProcessToJobObject, CreateJobObjectW,
-                SetInformationJobObject, JOBOBJECT_BASIC_LIMIT_INFORMATION,
-                JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+                SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
                 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
                 JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
                 JOB_OBJECT_LIMIT_JOB_MEMORY,
                 JOB_OBJECT_LIMIT_PROCESS_TIME,
                 JobObjectExtendedLimitInformation,
+                TerminateJobObject,
             },
             Threading::{
-                CreateProcessW, GetCurrentProcess, OpenProcess,
-                ResumeThread, TerminateProcess, WaitForSingleObject,
-                PROCESS_ALL_ACCESS, PROCESS_CREATION_FLAGS,
-                PROCESS_INFORMATION, STARTUPINFOW, CREATE_SUSPENDED,
-                CREATE_NO_WINDOW, INFINITE,
+                CreateProcessW, DeleteProcThreadAttributeList,
+                GetCurrentProcess, InitializeProcThreadAttributeList,
+                ResumeThread, WaitForSingleObject,
+                UpdateProcThreadAttribute, EXTENDED_STARTUPINFO_PRESENT,
+                LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
+                PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, STARTUPINFOEXW,
+                STARTF_USESTDHANDLES, CREATE_SUSPENDED, CREATE_NO_WINDOW,
+                CREATE_UNICODE_ENVIRONMENT,
             },
-            Memory::VirtualAllocEx,
         },
-        UI::Shell::AppContainerDeriveSid,
-        NetworkManagement::IpHelper::GetAdaptersAddresses,
+        Storage::FileSystem::ReadFile,
+        System::Pipes::CreatePipe,
     },
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct HostArgs {
+    mode: HostMode,
     attestation_id: String,
     execution_snapshot_id: String,
     task_id: String,
@@ -54,6 +62,23 @@ struct HostArgs {
     max_processes: u32,
     max_memory_bytes: u64,
     max_cpu_time_ms: u64,
+    probe_context: Option<ProbeContext>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HostMode {
+    Task,
+    Qualification,
+}
+
+#[derive(Debug)]
+struct ProbeContext {
+    host_digest: String,
+    probe_digest: String,
+    policy_revision: String,
+    test_vector_revision: String,
+    external_sentinel_path: String,
+    network_listener_addr: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -76,14 +101,298 @@ struct HostError {
 /// Maximum bytes collected per output stream.
 const MAX_STREAM_BYTES: usize = 1_048_576;
 
+const SE_FILE_OBJECT: u32 = 1;
+const DACL_SECURITY_INFORMATION: u32 = 0x0000_0004;
+const SET_ACCESS: u32 = 2;
+const NO_MULTIPLE_TRUSTEE: u32 = 0;
+const TRUSTEE_IS_SID: u32 = 0;
+const TRUSTEE_IS_UNKNOWN: u32 = 0;
+const SUB_CONTAINERS_AND_OBJECTS_INHERIT: u32 = 0x0000_0003;
+const GENERIC_READ: u32 = 0x8000_0000;
+const GENERIC_WRITE: u32 = 0x4000_0000;
+const GENERIC_EXECUTE: u32 = 0x2000_0000;
+const DELETE: u32 = 0x0001_0000;
+const FILE_DELETE_CHILD: u32 = 0x0000_0040;
+const READ_CONTROL: u32 = 0x0002_0000;
+const WRITE_DAC: u32 = 0x0004_0000;
+const FILE_READ_ATTRIBUTES: u32 = 0x0000_0080;
+const FILE_SHARE_READ: u32 = 0x0000_0001;
+const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+const OPEN_EXISTING: u32 = 3;
+const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
+#[repr(C)]
+struct RawTrusteeW {
+    multiple_trustee: *mut RawTrusteeW,
+    multiple_trustee_operation: u32,
+    trustee_form: u32,
+    trustee_type: u32,
+    name: *mut u16,
+}
+
+#[repr(C)]
+struct RawExplicitAccessW {
+    access_permissions: u32,
+    access_mode: u32,
+    inheritance: u32,
+    trustee: RawTrusteeW,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct RawByHandleFileInformation {
+    file_attributes: u32,
+    creation_time_low: u32,
+    creation_time_high: u32,
+    last_access_time_low: u32,
+    last_access_time_high: u32,
+    last_write_time_low: u32,
+    last_write_time_high: u32,
+    volume_serial_number: u32,
+    file_size_high: u32,
+    file_size_low: u32,
+    number_of_links: u32,
+    file_index_high: u32,
+    file_index_low: u32,
+}
+
+#[link(name = "advapi32")]
+extern "system" {
+    fn GetSecurityInfo(
+        handle: *mut c_void,
+        object_type: u32,
+        security_info: u32,
+        owner: *mut *mut c_void,
+        group: *mut *mut c_void,
+        dacl: *mut *mut c_void,
+        sacl: *mut *mut c_void,
+        security_descriptor: *mut *mut c_void,
+    ) -> u32;
+    fn SetSecurityInfo(
+        handle: *mut c_void,
+        object_type: u32,
+        security_info: u32,
+        owner: *mut c_void,
+        group: *mut c_void,
+        dacl: *mut c_void,
+        sacl: *mut c_void,
+    ) -> u32;
+    fn SetEntriesInAclW(
+        entry_count: u32,
+        entries: *const RawExplicitAccessW,
+        old_acl: *mut c_void,
+        new_acl: *mut *mut c_void,
+    ) -> u32;
+}
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn CreateFileW(
+        file_name: *const u16,
+        desired_access: u32,
+        share_mode: u32,
+        security_attributes: *mut c_void,
+        creation_disposition: u32,
+        flags_and_attributes: u32,
+        template_file: *mut c_void,
+    ) -> *mut c_void;
+    fn GetFileInformationByHandle(
+        handle: *mut c_void,
+        information: *mut RawByHandleFileInformation,
+    ) -> i32;
+    fn LocalFree(memory: *mut c_void) -> *mut c_void;
+}
+
+struct ProjectionAclGuard {
+    handle: *mut c_void,
+    original_dacl: *mut c_void,
+    security_descriptor: *mut c_void,
+    granted_dacl: *mut c_void,
+    restored: bool,
+}
+
+impl ProjectionAclGuard {
+    unsafe fn restore(&mut self) -> Result<(), HostError> {
+        if self.restored {
+            return Ok(());
+        }
+        let result = SetSecurityInfo(
+            self.handle,
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            self.original_dacl,
+            ptr::null_mut(),
+        );
+        if result != 0 {
+            return Err(host_error(
+                "PROJECTION_ACL_RESTORE_FAILED",
+                "Failed to restore the workspace projection ACL.",
+            ));
+        }
+        self.restored = true;
+        Ok(())
+    }
+}
+
+impl Drop for ProjectionAclGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = self.restore();
+            if !self.granted_dacl.is_null() {
+                LocalFree(self.granted_dacl);
+            }
+            if !self.security_descriptor.is_null() {
+                LocalFree(self.security_descriptor);
+            }
+            if !self.handle.is_null() && self.handle as isize != -1 {
+                CloseHandle(HANDLE(self.handle));
+            }
+        }
+    }
+}
+
+/// Grants the per-execution AppContainer SID access to exactly one opened
+/// projection directory. The original DACL is restored before the handle is
+/// released, so an interrupted task cannot leave a reusable SID grant behind.
+unsafe fn grant_projection_access(
+    projection: &str,
+    app_container_sid: PSID,
+) -> Result<ProjectionAclGuard, HostError> {
+    if projection.is_empty() || app_container_sid.is_null() {
+        return Err(host_error(
+            "PROJECTION_ACL_FAILED",
+            "The workspace projection or AppContainer SID is invalid.",
+        ));
+    }
+    let projection_w: Vec<u16> = projection.encode_utf16().chain(std::iter::once(0)).collect();
+    let handle = CreateFileW(
+        projection_w.as_ptr(),
+        READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        ptr::null_mut(),
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+        ptr::null_mut(),
+    );
+    if handle.is_null() || handle as isize == -1 {
+        return Err(host_error(
+            "PROJECTION_ACL_FAILED",
+            "Failed to open the workspace projection without following a reparse point.",
+        ));
+    }
+
+    let mut information = RawByHandleFileInformation::default();
+    if GetFileInformationByHandle(handle, &mut information) == 0 {
+        CloseHandle(HANDLE(handle));
+        return Err(host_error(
+            "PROJECTION_ACL_FAILED",
+            "Failed to inspect the workspace projection handle.",
+        ));
+    }
+    if information.file_attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || information.file_attributes & FILE_ATTRIBUTE_DIRECTORY == 0
+    {
+        CloseHandle(HANDLE(handle));
+        return Err(host_error(
+            "PROJECTION_ACL_FAILED",
+            "The workspace projection must be a regular directory.",
+        ));
+    }
+
+    let mut original_dacl: *mut c_void = ptr::null_mut();
+    let mut security_descriptor: *mut c_void = ptr::null_mut();
+    let security_result = GetSecurityInfo(
+        handle,
+        SE_FILE_OBJECT,
+        DACL_SECURITY_INFORMATION,
+        ptr::null_mut(),
+        ptr::null_mut(),
+        &mut original_dacl,
+        ptr::null_mut(),
+        &mut security_descriptor,
+    );
+    if security_result != 0 {
+        CloseHandle(HANDLE(handle));
+        return Err(host_error(
+            "PROJECTION_ACL_FAILED",
+            "Failed to read the workspace projection DACL.",
+        ));
+    }
+
+    let access = RawExplicitAccessW {
+        access_permissions: GENERIC_READ
+            | GENERIC_WRITE
+            | GENERIC_EXECUTE
+            | DELETE
+            | FILE_DELETE_CHILD,
+        access_mode: SET_ACCESS,
+        inheritance: SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+        trustee: RawTrusteeW {
+            multiple_trustee: ptr::null_mut(),
+            multiple_trustee_operation: NO_MULTIPLE_TRUSTEE,
+            trustee_form: TRUSTEE_IS_SID,
+            trustee_type: TRUSTEE_IS_UNKNOWN,
+            name: app_container_sid as *mut u16,
+        },
+    };
+    let mut granted_dacl: *mut c_void = ptr::null_mut();
+    let acl_result = SetEntriesInAclW(1, &access, original_dacl, &mut granted_dacl);
+    if acl_result != 0 {
+        LocalFree(security_descriptor);
+        CloseHandle(HANDLE(handle));
+        return Err(host_error(
+            "PROJECTION_ACL_FAILED",
+            "Failed to construct the AppContainer projection DACL.",
+        ));
+    }
+    let set_result = SetSecurityInfo(
+        handle,
+        SE_FILE_OBJECT,
+        DACL_SECURITY_INFORMATION,
+        ptr::null_mut(),
+        ptr::null_mut(),
+        granted_dacl,
+        ptr::null_mut(),
+    );
+    if set_result != 0 {
+        LocalFree(granted_dacl);
+        LocalFree(security_descriptor);
+        CloseHandle(HANDLE(handle));
+        return Err(host_error(
+            "PROJECTION_ACL_FAILED",
+            "Failed to apply the AppContainer projection DACL.",
+        ));
+    }
+
+    Ok(ProjectionAclGuard {
+        handle,
+        original_dacl,
+        security_descriptor,
+        granted_dacl,
+        restored: false,
+    })
+}
+
 pub fn run() {
     let args: Vec<String> = std::env::args().collect();
     match parse_args(&args) {
         Ok(host_args) => {
+            let qualification = host_args.mode == HostMode::Qualification;
             match launch_task(host_args) {
                 Ok(output) => {
-                    println!("{}", serde_json::to_string(&output).unwrap_or_default());
-                    std::process::exit(0);
+                    if qualification {
+                        // The qualification service consumes the probe's JSON directly.
+                        print!("{}", output.stdout_summary);
+                        std::process::exit(if output.exit_code == Some(0) { 0 } else { 1 });
+                    } else {
+                        println!("{}", serde_json::to_string(&output).unwrap_or_default());
+                        std::process::exit(0);
+                    }
                 }
                 Err(e) => {
                     eprintln!("{}", serde_json::to_string(&e).unwrap_or_default());
@@ -125,12 +434,35 @@ fn parse_args(args: &[String]) -> Result<HostArgs, String> {
         }
     }
 
+    let mode = match map.get("mode").map(String::as_str).unwrap_or("task") {
+        "task" => HostMode::Task,
+        "qualification" => HostMode::Qualification,
+        value => return Err(format!("unsupported --mode '{value}'")),
+    };
+    let probe_context = if mode == HostMode::Qualification {
+        Some(ProbeContext {
+            host_digest: required_arg(&map, "probe-host-digest")?,
+            probe_digest: required_arg(&map, "probe-digest")?,
+            policy_revision: required_arg(&map, "probe-policy-revision")?,
+            test_vector_revision: required_arg(&map, "probe-test-vector-revision")?,
+            external_sentinel_path: required_arg(&map, "probe-external-sentinel-path")?,
+            network_listener_addr: required_arg(&map, "probe-network-listener-addr")?,
+        })
+    } else {
+        None
+    };
+
     Ok(HostArgs {
-        attestation_id: map.get("attestation-id").cloned().unwrap_or_default(),
-        execution_snapshot_id: map.get("execution-snapshot-id").cloned().unwrap_or_default(),
-        task_id: map.get("task-id").cloned().ok_or("missing --task-id")?,
-        executable: map.get("executable").cloned().unwrap_or_default(),
-        workspace_projection: map.get("workspace-projection").cloned().unwrap_or_default(),
+        mode,
+        attestation_id: required_arg(&map, "attestation-id")?,
+        execution_snapshot_id: required_arg(&map, "execution-snapshot-id")?,
+        task_id: required_arg(&map, "task-id")?,
+        executable: if mode == HostMode::Qualification {
+            required_arg(&map, "qualification-probe")?
+        } else {
+            required_arg(&map, "executable")?
+        },
+        workspace_projection: required_arg(&map, "workspace-projection")?,
         argv: extra_argv,
         max_wall_clock_ms: map.get("max-wall-clock-ms")
             .and_then(|v| v.parse().ok())
@@ -144,20 +476,33 @@ fn parse_args(args: &[String]) -> Result<HostArgs, String> {
         max_cpu_time_ms: map.get("max-cpu-time-ms")
             .and_then(|v| v.parse().ok())
             .unwrap_or(60_000),
+        probe_context,
     })
+}
+
+fn required_arg(map: &HashMap<String, String>, key: &str) -> Result<String, String> {
+    map.get(key)
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or_else(|| format!("missing --{key}"))
 }
 
 fn launch_task(args: HostArgs) -> Result<HostOutput, HostError> {
     let start = std::time::Instant::now();
 
     // Refuse if running elevated (integrity level check)
-    if is_elevated() {
+    if is_elevated()? {
         return Err(host_error("ELEVATED_PROCESS",
             "Host refuses to launch tasks from an elevated process."));
     }
 
-    // Build AppContainer profile name from task_id (deterministic, per-task)
-    let container_name = format!("NovelStudioTask_{}", sanitize_container_name(&args.task_id));
+    // Bind the AppContainer identity to a single immutable execution snapshot.
+    // Reusing a task-level identity would allow permissions or state to bleed
+    // between independent executions.
+    let container_name = sanitize_container_name(&format!(
+        "NovelStudioTask_{}_{}",
+        args.task_id, args.execution_snapshot_id
+    ));
     let container_name_w: Vec<u16> = container_name.encode_utf16().chain(std::iter::once(0)).collect();
 
     // Derive or create AppContainer SID
@@ -165,43 +510,74 @@ fn launch_task(args: HostArgs) -> Result<HostOutput, HostError> {
         derive_or_create_app_container_sid(&container_name_w)?
     };
 
+    let mut projection_acl = match unsafe {
+        grant_projection_access(&args.workspace_projection, app_container_sid)
+    } {
+        Ok(guard) => guard,
+        Err(error) => {
+            unsafe { FreeSid(app_container_sid) };
+            return Err(error);
+        }
+    };
+
     // Create Job Object with kill-on-close and resource limits
-    let job_handle = unsafe {
-        create_job_object_with_limits(&args)?
+    let job_handle = match unsafe { create_job_object_with_limits(&args) } {
+        Ok(handle) => handle,
+        Err(error) => {
+            unsafe { FreeSid(app_container_sid) };
+            return Err(error);
+        }
     };
 
     // Build command line: executable + argv
     let command_line = build_command_line(&args.executable, &args.argv);
-    let command_line_w: Vec<u16> = command_line.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut command_line_w: Vec<u16> = command_line.encode_utf16().chain(std::iter::once(0)).collect();
+    let environment = build_sandbox_environment(args.probe_context.as_ref());
 
-    // Create process suspended inside AppContainer
-    let (proc_info, stdout_read, stderr_read) = unsafe {
+    // Create the process suspended in the AppContainer. The security attribute is
+    // supplied to CreateProcessW itself; merely deriving a SID is not isolation.
+    let (proc_info, stdout_read, stderr_read) = match unsafe {
         create_sandboxed_process(
-            &command_line_w,
-            &args.workspace_projection,
+            &mut command_line_w,
             app_container_sid,
-            job_handle,
-        ).map_err(|e| host_error("PROCESS_CREATE_FAILED", &e))?
+            &args.workspace_projection,
+            &environment,
+        )
+    } {
+        Ok(process) => process,
+        Err(message) => {
+            unsafe {
+                CloseHandle(job_handle);
+                FreeSid(app_container_sid);
+            }
+            return Err(host_error("PROCESS_CREATE_FAILED", &message));
+        }
     };
 
     // Assign to Job Object BEFORE resuming
     unsafe {
-        if !AssignProcessToJobObject(job_handle, proc_info.hProcess).as_bool() {
-            TerminateProcess(proc_info.hProcess, 1);
-            CloseHandle(proc_info.hProcess);
-            CloseHandle(proc_info.hThread);
-            CloseHandle(job_handle);
+        if AssignProcessToJobObject(job_handle, proc_info.hProcess).is_err() {
+            terminate_and_close(proc_info, job_handle, app_container_sid);
             return Err(host_error("JOB_ASSIGN_FAILED",
                 "Failed to assign task process to Job Object before resume."));
         }
         // Now safe to resume — user code cannot run before Job containment
-        ResumeThread(proc_info.hThread);
+        if ResumeThread(proc_info.hThread) == u32::MAX {
+            terminate_and_close(proc_info, job_handle, app_container_sid);
+            return Err(host_error("PROCESS_RESUME_FAILED",
+                "Failed to resume task process after Job assignment."));
+        }
         CloseHandle(proc_info.hThread);
     }
 
-    // Wait for process with wall-clock timeout
+    // Drain both pipes concurrently. Draining only one pipe can deadlock a task
+    // that fills the other stream, which in turn makes the wall-clock limit moot.
+    let stdout_reader = thread::spawn(move || read_pipe_bounded(stdout_read, MAX_STREAM_BYTES));
+    let stderr_reader = thread::spawn(move || read_pipe_bounded(stderr_read, MAX_STREAM_BYTES));
+
+    // Wait for process with wall-clock timeout. On timeout terminate the Job,
+    // rather than only the root PID, so descendants cannot escape teardown.
     let wait_ms = args.max_wall_clock_ms.min(3_600_000) as u32;
-    let (stdout_data, stderr_data) = collect_output(stdout_read, stderr_read, MAX_STREAM_BYTES);
     let exit_code = unsafe {
         wait_for_process(proc_info.hProcess, wait_ms)
     };
@@ -211,8 +587,14 @@ fn launch_task(args: HostArgs) -> Result<HostOutput, HostError> {
 
     // Terminate on timeout
     if exit_code.is_none() {
-        unsafe { TerminateProcess(proc_info.hProcess, 1); }
+        unsafe {
+            TerminateJobObject(job_handle, 1);
+            let _ = WaitForSingleObject(proc_info.hProcess, 5_000);
+        }
     }
+
+    let stdout_result = stdout_reader.join().unwrap_or_else(|_| (Vec::new(), true));
+    let stderr_result = stderr_reader.join().unwrap_or_else(|_| (Vec::new(), true));
 
     unsafe {
         CloseHandle(proc_info.hProcess);
@@ -222,44 +604,47 @@ fn launch_task(args: HostArgs) -> Result<HostOutput, HostError> {
         }
     }
 
-    let truncated = stdout_data.len() >= MAX_STREAM_BYTES || stderr_data.len() >= MAX_STREAM_BYTES;
+    unsafe { projection_acl.restore()? };
+
+    let truncated = stdout_result.1 || stderr_result.1;
 
     Ok(HostOutput {
         task_id: args.task_id,
         exit_code,
-        stdout_summary: String::from_utf8_lossy(&stdout_data[..stdout_data.len().min(4096)]).into_owned(),
-        stderr_summary: String::from_utf8_lossy(&stderr_data[..stderr_data.len().min(4096)]).into_owned(),
+        stdout_summary: String::from_utf8_lossy(&stdout_result.0[..stdout_result.0.len().min(4096)]).into_owned(),
+        stderr_summary: String::from_utf8_lossy(&stderr_result.0[..stderr_result.0.len().min(4096)]).into_owned(),
         truncated,
         duration_ms,
         termination_reason,
     })
 }
 
-/// Returns true if the current process token has elevated privileges.
-fn is_elevated() -> bool {
-    // Simple check: try to open a known system resource that only admins can access.
-    // A more precise check uses GetTokenInformation with TokenElevation.
+/// Returns whether the current process token is elevated. Query failures are
+/// fatal because treating an unknown token as non-elevated would fail open.
+fn is_elevated() -> Result<bool, HostError> {
     unsafe {
         let mut token = HANDLE::default();
-        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_ok() {
-            // Check elevation via TokenElevation (type = 20)
-            let mut elevation_type: u32 = 0;
-            let mut ret_len: u32 = 0;
-            let ok = GetTokenInformation(
-                token,
-                windows::Win32::Security::TokenElevationType,
-                Some(std::ptr::addr_of_mut!(elevation_type) as *mut _),
-                std::mem::size_of::<u32>() as u32,
-                &mut ret_len,
-            );
-            CloseHandle(token);
-            if ok.is_ok() {
-                // TokenElevationTypeFull = 2
-                return elevation_type == 2;
-            }
-        }
+        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token)
+            .map_err(|_| host_error("TOKEN_QUERY_FAILED", "Failed to open the host process token."))?;
+        let mut elevation_type: u32 = 0;
+        let mut ret_len: u32 = 0;
+        let result = GetTokenInformation(
+            token,
+            windows::Win32::Security::TokenElevationType,
+            Some(std::ptr::addr_of_mut!(elevation_type) as *mut _),
+            std::mem::size_of::<u32>() as u32,
+            &mut ret_len,
+        );
+        CloseHandle(token);
+        result.map_err(|_| {
+            host_error(
+                "TOKEN_ELEVATION_QUERY_FAILED",
+                "Failed to determine whether the host process token is elevated.",
+            )
+        })?;
+        // TokenElevationTypeFull = 2.
+        Ok(elevation_type == 2)
     }
-    false
 }
 
 fn sanitize_container_name(s: &str) -> String {
@@ -269,7 +654,7 @@ fn sanitize_container_name(s: &str) -> String {
         .collect()
 }
 
-/// Derive an AppContainer SID. Uses AppContainerDeriveSid on Windows 8+.
+/// Derive a per-run AppContainer SID on Windows 8+.
 unsafe fn derive_or_create_app_container_sid(
     container_name_w: &[u16],
 ) -> Result<PSID, HostError> {
@@ -304,9 +689,8 @@ unsafe fn create_job_object_with_limits(
     // Per-process user-mode CPU time limit (100ns intervals)
     if args.max_cpu_time_ms > 0 {
         ext_limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_TIME;
-        ext_limits.BasicLimitInformation.PerProcessUserTimeLimit = LARGE_INTEGER {
-            QuadPart: (args.max_cpu_time_ms as i64) * 10_000,
-        };
+        ext_limits.BasicLimitInformation.PerProcessUserTimeLimit =
+            (args.max_cpu_time_ms.min(i64::MAX as u64 / 10_000) as i64) * 10_000;
     }
 
     let ok = SetInformationJobObject(
@@ -315,7 +699,7 @@ unsafe fn create_job_object_with_limits(
         std::ptr::addr_of!(ext_limits) as *const _,
         std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
     );
-    if !ok.as_bool() {
+    if ok.is_err() {
         CloseHandle(job);
         return Err(host_error("JOB_LIMITS_FAILED",
             "SetInformationJobObject for extended limits failed."));
@@ -324,10 +708,15 @@ unsafe fn create_job_object_with_limits(
     Ok(job)
 }
 
-// Inline LARGE_INTEGER since windows crate exposes it opaquely in some versions
-#[repr(C)]
-union LARGE_INTEGER {
-    QuadPart: i64,
+unsafe fn terminate_and_close(proc_info: PROCESS_INFORMATION, job: HANDLE, sid: PSID) {
+    let _ = TerminateJobObject(job, 1);
+    let _ = WaitForSingleObject(proc_info.hProcess, 5_000);
+    CloseHandle(proc_info.hProcess);
+    CloseHandle(proc_info.hThread);
+    CloseHandle(job);
+    if !sid.is_null() {
+        FreeSid(sid);
+    }
 }
 
 /// Build a properly quoted command line string from executable + argv.
@@ -341,24 +730,83 @@ fn build_command_line(executable: &str, argv: &[String]) -> String {
 }
 
 fn quote_arg(s: &str) -> String {
-    if s.is_empty() || s.contains(' ') || s.contains('"') || s.contains('\t') {
-        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
-    } else {
+    if !s.is_empty() && !s.chars().any(|c| c == ' ' || c == '"' || c == '\t') {
         s.to_string()
+    } else {
+        // CommandLineToArgvW quoting: only backslashes immediately before a
+        // quote (or the closing quote) are doubled. Doubling every separator
+        // corrupts executable paths such as C:\\Program Files\\tool.exe.
+        let mut quoted = String::from("\"");
+        let mut slash_count = 0usize;
+        for character in s.chars() {
+            match character {
+                '\\' => slash_count += 1,
+                '"' => {
+                    quoted.extend(std::iter::repeat('\\').take(slash_count * 2 + 1));
+                    quoted.push('"');
+                    slash_count = 0;
+                }
+                _ => {
+                    quoted.extend(std::iter::repeat('\\').take(slash_count));
+                    quoted.push(character);
+                    slash_count = 0;
+                }
+            }
+        }
+        quoted.extend(std::iter::repeat('\\').take(slash_count * 2));
+        quoted.push('"');
+        quoted
     }
 }
 
-/// Create process suspended in an AppContainer with pipe-redirected stdio.
+/// The native host does not inherit the desktop's environment. Keep only the
+/// variables Windows needs to create a process, plus the qualification binding
+/// passed over the verified host command line.
+fn build_sandbox_environment(probe: Option<&ProbeContext>) -> Vec<u16> {
+    let mut values = vec!["AGENT_TASK_SANDBOX_PROTOCOL=1.0".to_string()];
+    for name in ["SystemRoot", "WINDIR"] {
+        if let Ok(value) = std::env::var(name) {
+            if !value.is_empty() {
+                values.push(format!("{name}={value}"));
+            }
+        }
+    }
+    if let Some(context) = probe {
+        values.push(format!("PROBE_HOST_DIGEST={}", context.host_digest));
+        values.push(format!("PROBE_PROBE_DIGEST={}", context.probe_digest));
+        values.push("PROBE_PROTOCOL_VERSION=1.0".to_string());
+        values.push(format!("PROBE_POLICY_REVISION={}", context.policy_revision));
+        values.push(format!(
+            "PROBE_TEST_VECTOR_REVISION={}",
+            context.test_vector_revision
+        ));
+        values.push(format!(
+            "PROBE_EXTERNAL_SENTINEL_PATH={}",
+            context.external_sentinel_path
+        ));
+        values.push(format!(
+            "PROBE_NETWORK_LISTENER_ADDR={}",
+            context.network_listener_addr
+        ));
+    }
+    values.sort_unstable();
+    let mut block = values.join("\0").encode_utf16().collect::<Vec<_>>();
+    block.extend([0, 0]);
+    block
+}
+
+/// Create a process suspended in an AppContainer with pipe-redirected stdio.
+///
+/// AppContainer SID assignment is an extended startup attribute. Creating a
+/// normal suspended process and remembering a SID in the host would leave the
+/// child unsandboxed, so this function fails closed if the attribute list cannot
+/// be allocated or populated.
 unsafe fn create_sandboxed_process(
-    command_line_w: &[u16],
-    _workspace_projection: &str,
-    _app_container_sid: PSID,
-    _job_handle: HANDLE,
+    command_line_w: &mut [u16],
+    app_container_sid: PSID,
+    workspace_projection: &str,
+    environment: &[u16],
 ) -> Result<(PROCESS_INFORMATION, HANDLE, HANDLE), String> {
-    use windows::Win32::System::Threading::{
-        STARTUPINFOW, PROCESS_INFORMATION,
-    };
-    use windows::Win32::System::Pipes::CreatePipe;
     use windows::Win32::Foundation::SECURITY_ATTRIBUTES;
 
     let mut sa = SECURITY_ATTRIBUTES {
@@ -380,45 +828,125 @@ unsafe fn create_sandboxed_process(
         CloseHandle(stdout_write);
         return Err("CreatePipe(stderr) failed.".to_string());
     }
+    if SetHandleInformation(stdout_read, HANDLE_FLAG_INHERIT, HANDLE_FLAGS(0)).is_err()
+        || SetHandleInformation(stderr_read, HANDLE_FLAG_INHERIT, HANDLE_FLAGS(0)).is_err()
+    {
+        CloseHandle(stdout_read);
+        CloseHandle(stdout_write);
+        CloseHandle(stderr_read);
+        CloseHandle(stderr_write);
+        return Err("SetHandleInformation(pipe read end) failed.".to_string());
+    }
 
-    let mut si = STARTUPINFOW {
-        cb: std::mem::size_of::<STARTUPINFOW>() as u32,
-        hStdOutput: stdout_write,
-        hStdError: stderr_write,
-        dwFlags: windows::Win32::System::Threading::STARTF_USESTDHANDLES,
-        ..Default::default()
+    let mut attribute_size = 0usize;
+    let _ = InitializeProcThreadAttributeList(None, 2, 0, &mut attribute_size);
+    if attribute_size == 0 {
+        CloseHandle(stdout_read);
+        CloseHandle(stdout_write);
+        CloseHandle(stderr_read);
+        CloseHandle(stderr_write);
+        return Err("InitializeProcThreadAttributeList did not provide a buffer size.".to_string());
+    }
+    let attribute_word_count =
+        (attribute_size + std::mem::size_of::<usize>() - 1) / std::mem::size_of::<usize>();
+    let mut attribute_storage = vec![0usize; attribute_word_count];
+    let attribute_list = attribute_storage.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
+    if InitializeProcThreadAttributeList(attribute_list, 2, 0, &mut attribute_size).is_err() {
+        CloseHandle(stdout_read);
+        CloseHandle(stdout_write);
+        CloseHandle(stderr_read);
+        CloseHandle(stderr_write);
+        return Err("InitializeProcThreadAttributeList failed.".to_string());
+    }
+
+    let mut security_capabilities = SECURITY_CAPABILITIES {
+        AppContainerSid: app_container_sid,
+        Capabilities: std::ptr::null_mut(),
+        CapabilityCount: 0,
+        Reserved: 0,
     };
 
+    if UpdateProcThreadAttribute(
+        attribute_list,
+        0,
+        PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
+        Some(std::ptr::addr_of_mut!(security_capabilities) as *const c_void),
+        std::mem::size_of::<SECURITY_CAPABILITIES>(),
+        None,
+        None,
+    ).is_err() {
+        DeleteProcThreadAttributeList(attribute_list);
+        CloseHandle(stdout_read);
+        CloseHandle(stdout_write);
+        CloseHandle(stderr_read);
+        CloseHandle(stderr_write);
+        return Err("UpdateProcThreadAttribute(SECURITY_CAPABILITIES) failed.".to_string());
+    }
+
+    // Even though stdio needs inheritance, do not leak arbitrary handles the
+    // desktop process may have passed to the native host.
+    let inherited_handles = [stdout_write, stderr_write];
+    if UpdateProcThreadAttribute(
+        attribute_list,
+        0,
+        PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+        Some(inherited_handles.as_ptr() as *const c_void),
+        std::mem::size_of_val(&inherited_handles),
+        None,
+        None,
+    ).is_err() {
+        DeleteProcThreadAttributeList(attribute_list);
+        CloseHandle(stdout_read);
+        CloseHandle(stdout_write);
+        CloseHandle(stderr_read);
+        CloseHandle(stderr_write);
+        return Err("UpdateProcThreadAttribute(HANDLE_LIST) failed.".to_string());
+    }
+
+    let mut si = STARTUPINFOEXW::default();
+    si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+    si.StartupInfo.hStdOutput = stdout_write;
+    si.StartupInfo.hStdError = stderr_write;
+    si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    si.lpAttributeList = attribute_list;
     let mut pi = PROCESS_INFORMATION::default();
+    let flags = CREATE_SUSPENDED
+        | CREATE_NO_WINDOW
+        | CREATE_UNICODE_ENVIRONMENT
+        | EXTENDED_STARTUPINFO_PRESENT;
 
-    // TODO: In production, pass PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES
-    // (via UpdateProcThreadAttribute) to specify the AppContainer SID and
-    // capability SIDs. This requires STARTUPINFOEXW and EXTENDED_STARTUPINFO_PRESENT.
-    // The structure below creates a suspended process; AppContainer wrapping is
-    // applied via UpdateProcThreadAttribute before CreateProcessW.
-    //
-    // For the initial qualified build this must be fully implemented with
-    // PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES populated with the derived SID
-    // and EMPTY capabilities (no internet/private-network).
-    let flags = CREATE_SUSPENDED | CREATE_NO_WINDOW;
-
-    let env: Option<*const core::ffi::c_void> = None;
-    let cwd: PCWSTR = PCWSTR::null();
+    // The host receives an explicit allowlist environment from the desktop
+    // adapter. Never set this to the desktop process environment implicitly.
+    let cwd_w: Vec<u16> = workspace_projection
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    if workspace_projection.is_empty() {
+        DeleteProcThreadAttributeList(attribute_list);
+        CloseHandle(stdout_read);
+        CloseHandle(stdout_write);
+        CloseHandle(stderr_read);
+        CloseHandle(stderr_write);
+        return Err("workspace projection is required.".to_string());
+    }
+    let env = Some(environment.as_ptr() as *const c_void);
+    let cwd = PCWSTR::from_raw(cwd_w.as_ptr());
 
     let result = CreateProcessW(
         None,
-        Some(windows::core::PWSTR::from_raw(command_line_w.as_ptr() as *mut _)),
+        Some(windows::core::PWSTR::from_raw(command_line_w.as_mut_ptr())),
         None,
         None,
         BOOL::from(true), // inherit handles (for pipes)
         flags,
         env,
         cwd,
-        &si,
+        &si.StartupInfo,
         &mut pi,
     );
 
-    // Close write ends in host so EOF is detected correctly
+    DeleteProcThreadAttributeList(attribute_list);
+    // Close write ends in host so readers observe EOF after the task exits.
     CloseHandle(stdout_write);
     CloseHandle(stderr_write);
 
@@ -431,42 +959,25 @@ unsafe fn create_sandboxed_process(
     Ok((pi, stdout_read, stderr_read))
 }
 
-/// Collect output from two pipe handles, bounded by max_bytes each.
-fn collect_output(
-    stdout_read: HANDLE,
-    stderr_read: HANDLE,
-    max_bytes: usize,
-) -> (Vec<u8>, Vec<u8>) {
-    use std::io::Read;
-    use windows::Win32::Storage::FileSystem::ReadFile;
-
-    let read_pipe = |handle: HANDLE| -> Vec<u8> {
-        let mut buf = Vec::new();
-        let mut chunk = [0u8; 4096];
-        loop {
-            let mut bytes_read: u32 = 0;
-            let ok = unsafe {
-                ReadFile(handle, Some(&mut chunk), Some(&mut bytes_read), None)
-            };
-            if ok.is_err() || bytes_read == 0 {
-                break;
-            }
-            buf.extend_from_slice(&chunk[..bytes_read as usize]);
-            if buf.len() >= max_bytes {
-                buf.truncate(max_bytes);
-                break;
-            }
+/// Drain a pipe to EOF while retaining only the bounded prefix. Continuing to
+/// drain after the cap prevents a task from blocking on a full pipe buffer.
+fn read_pipe_bounded(handle: HANDLE, max_bytes: usize) -> (Vec<u8>, bool) {
+    let mut buf = Vec::new();
+    let mut truncated = false;
+    let mut chunk = [0u8; 4096];
+    loop {
+        let mut bytes_read = 0u32;
+        let result = unsafe { ReadFile(handle, Some(&mut chunk), Some(&mut bytes_read), None) };
+        if result.is_err() || bytes_read == 0 {
+            break;
         }
-        unsafe { CloseHandle(handle); }
-        buf
-    };
-
-    // NOTE: For production, read both pipes concurrently to avoid deadlock.
-    // This simplified version reads stdout fully then stderr — acceptable for
-    // bounded output sizes with the 1MiB per-stream limit enforced by the job.
-    let stdout = read_pipe(stdout_read);
-    let stderr = read_pipe(stderr_read);
-    (stdout, stderr)
+        let remaining = max_bytes.saturating_sub(buf.len());
+        let captured = remaining.min(bytes_read as usize);
+        buf.extend_from_slice(&chunk[..captured]);
+        truncated |= captured < bytes_read as usize;
+    }
+    unsafe { CloseHandle(handle); }
+    (buf, truncated)
 }
 
 /// Wait for process exit with timeout. Returns exit code or None on timeout.

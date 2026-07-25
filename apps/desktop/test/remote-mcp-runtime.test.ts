@@ -148,6 +148,21 @@ describe("connectRemoteMcp — connect and tools/list", () => {
     }
   });
 
+  it("rejects a paginated tools/list result instead of exposing a partial directory", async () => {
+    const paginatedToolsListResponse = {
+      ...toolsListResponse,
+      result: { ...toolsListResponse.result, nextCursor: "cursor_2" }
+    };
+    const result = await connectRemoteMcp({
+      config: TEST_CONFIG,
+      policy: TEST_POLICY,
+      controlledFetch: makeRpcFetch([initResponse, paginatedToolsListResponse])
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("MCP_TOOL_SOURCE_PAGINATION_UNSUPPORTED");
+  });
+
   it("accepts a JSON-RPC response carried by a Streamable HTTP SSE message", async () => {
     let requestCount = 0;
     const fetch_: ControlledFetch = vi

@@ -261,6 +261,79 @@ describe("packaged agent runtime verifiers", () => {
       await rm(packageDirectory, { recursive: true, force: true });
     }
   });
+
+  it("rejects an untracked Git runtime file even with a matching reviewed source lock", async () => {
+    const packageDirectory = await mkdtemp(join(tmpdir(), "packaged-git-inventory-verifier-"));
+    const sourceLockPath = join(packageDirectory, "trusted-git-source.lock.json");
+    try {
+      const gitDirectory = join(packageDirectory, "resources", "git");
+      const binary = portableExecutable("git-runtime");
+      const license = Buffer.from("GPL-2.0 license text", "utf8");
+      const source = {
+        schemaVersion: "1.0",
+        status: "pinned",
+        vendor: "Git for Windows",
+        version: "2.50.0.windows.1",
+        sourceUrl:
+          "https://github.com/git-for-windows/git/releases/download/v2.50.0.windows.1/MinGit-2.50.0-64-bit.zip",
+        archiveSha256: "a".repeat(64),
+        executablePath: "git.exe",
+        licensePath: "LICENSE.txt",
+        licenseSha256: sha256(license)
+      };
+      const files = [
+        { path: "LICENSE.txt", size: license.length, digest: sha256(license) },
+        { path: "git.exe", size: binary.length, digest: sha256(binary) }
+      ];
+      const runtimeDigest = sha256(
+        Buffer.from(
+          [...files]
+            .sort((left, right) => left.path.localeCompare(right.path))
+            .map((file) => `${file.path}\0${file.size}\0${file.digest}\n`)
+            .join(""),
+          "utf8"
+        )
+      );
+
+      await mkdir(gitDirectory, { recursive: true });
+      await writeFile(join(gitDirectory, "git.exe"), binary);
+      await writeFile(join(gitDirectory, "LICENSE.txt"), license);
+      await writeFile(join(gitDirectory, "extra.dll"), Buffer.from("unexpected", "utf8"));
+      await writeJson(join(gitDirectory, "manifest.json"), {
+        schemaVersion: "1.0",
+        version: source.version,
+        digest: sha256(binary),
+        path: "git/git.exe",
+        license: "GPL-2.0"
+      });
+      await writeJson(join(gitDirectory, "runtime-inventory.json"), {
+        schemaVersion: "1.0",
+        vendor: source.vendor,
+        version: source.version,
+        sourceUrl: source.sourceUrl,
+        archiveSha256: source.archiveSha256,
+        licensePath: source.licensePath,
+        licenseSha256: source.licenseSha256,
+        executablePath: source.executablePath,
+        executableDigest: sha256(binary),
+        runtimeDigest,
+        files
+      });
+      await writeJson(sourceLockPath, source);
+
+      const result = await runVerifier("scripts/verify-packaged-git-runtime.mjs", [
+        "--release",
+        "--package-dir",
+        packageDirectory,
+        "--trusted-source-lock",
+        sourceLockPath
+      ]);
+      expect(result.exitCode).toBe(1);
+      expect(result.output).toContain("untracked, missing, or unsafe files");
+    } finally {
+      await rm(packageDirectory, { recursive: true, force: true });
+    }
+  });
 });
 
 async function writeJson(path: string, value: unknown): Promise<void> {

@@ -605,6 +605,14 @@ export async function connectRemoteMcp(input: {
   if (!isRecord(toolsListResponse.result)) {
     return err(mcpError("MCP_TOOL_SOURCE_INVALID", "MCP tools/list result must be an object."));
   }
+  if (Object.hasOwn(toolsListResponse.result, "nextCursor")) {
+    return err(
+      mcpError(
+        "MCP_TOOL_SOURCE_PAGINATION_UNSUPPORTED",
+        "MCP tools/list pagination is not supported by this runtime."
+      )
+    );
+  }
   const tools = validateTools(toolsListResponse.result["tools"], config);
   if (!tools.ok) return tools;
 

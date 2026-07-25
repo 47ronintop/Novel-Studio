@@ -1,4 +1,5 @@
-export type SettingsPanelSection = "models" | "appearance" | "plugins" | "usage" | "network" | "mcp";
+export type SettingsPanelSection =
+  "models" | "appearance" | "plugins" | "usage" | "network" | "mcp";
 export type SettingsPanelActiveSection = SettingsPanelSection;
 
 export interface SettingsPanelTabsProps {

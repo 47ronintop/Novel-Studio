@@ -19,7 +19,11 @@ for (const file of [lockfile, manifest, denyConfig]) {
 }
 
 const lockContent = readFileSync(lockfile, "utf8");
-for (const packageName of ["agent-task-sandbox-host", "agent-task-sandbox-probe"]) {
+for (const packageName of [
+  "agent-task-sandbox-host",
+  "agent-task-sandbox-probe",
+  "agent-file-operations-host"
+]) {
   if (!lockContent.includes(`name = "${packageName}"`)) {
     throw new Error(`Cargo.lock does not record ${packageName}.`);
   }

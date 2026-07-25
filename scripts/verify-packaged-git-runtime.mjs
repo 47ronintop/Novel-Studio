@@ -10,13 +10,15 @@ import { Buffer } from "node:buffer";
 import { spawn } from "node:child_process";
 import { clearTimeout, setTimeout } from "node:timers";
 import { existsSync, readFileSync } from "node:fs";
-import { lstat, readFile, realpath } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { lstat, readFile, readdir, realpath } from "node:fs/promises";
+import { isAbsolute, join, posix, relative, resolve, sep } from "node:path";
+import { URL } from "node:url";
 
 const options = parseArguments(process.argv.slice(2));
 const packageDirectory = resolvePackageDirectory(options.packageDirectory);
 const resourcesDirectory = join(packageDirectory, "resources");
 const manifestPath = join(resourcesDirectory, "git", "manifest.json");
+const trustedSourceLockPath = resolve(options.trustedSourceLock);
 let blocked = false;
 let failed = false;
 
@@ -39,9 +41,7 @@ if (!existsSync(manifestPath)) {
     } else {
       await verifyArtifact(binaryPath, manifest.digest, "Git runtime");
       if (options.release) {
-        block(
-          "Trusted Git runtime signature or digest-root verification is not implemented; packaged Git cannot authorize release."
-        );
+        await verifyPinnedRuntime(manifest);
       } else if (!failed) {
         // This executes only as a local development diagnostic, never in a release gate.
         await verifyGitVersion(binaryPath, manifest.version);
@@ -61,12 +61,16 @@ if (failed || (options.release && blocked)) {
 function parseArguments(args) {
   let release = false;
   let packageDirectory;
+  let trustedSourceLock = "apps/desktop/resources/git/runtime-source.lock.json";
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === "--release") {
       release = true;
     } else if (argument === "--package-dir") {
       packageDirectory = args[index + 1];
+      index += 1;
+    } else if (argument === "--trusted-source-lock") {
+      trustedSourceLock = args[index + 1];
       index += 1;
     } else if (!argument.startsWith("-") && packageDirectory === undefined) {
       packageDirectory = argument;
@@ -75,7 +79,8 @@ function parseArguments(args) {
     }
   }
   if (packageDirectory === "") throw new Error("--package-dir requires a value.");
-  return { release, packageDirectory };
+  if (!trustedSourceLock) throw new Error("--trusted-source-lock requires a value.");
+  return { release, packageDirectory, trustedSourceLock };
 }
 
 function resolvePackageDirectory(explicitDirectory) {
@@ -151,6 +156,228 @@ async function verifyGitVersion(binaryPath, expectedVersion) {
   }
 }
 
+/**
+ * A package's manifest is not a trust root: an attacker who can replace the
+ * executable can replace that manifest too. Release verification therefore
+ * compares its complete inventory to the reviewed source lock outside the
+ * unpacked package.
+ */
+async function verifyPinnedRuntime(manifest) {
+  const lock = readTrustedSourceLock(trustedSourceLockPath);
+  if (lock === undefined || lock.status !== "pinned") {
+    block(
+      "Trusted Git runtime signature or digest-root verification is unavailable because the reviewed Git source lock is not pinned."
+    );
+    return;
+  }
+  const inventoryPath = join(resourcesDirectory, "git", "runtime-inventory.json");
+  const inventory = readInventory(inventoryPath);
+  if (inventory === undefined) {
+    fail(`Git runtime inventory is missing or malformed: ${inventoryPath}`);
+    return;
+  }
+  if (
+    inventory.vendor !== lock.vendor ||
+    inventory.version !== lock.version ||
+    inventory.sourceUrl !== lock.sourceUrl ||
+    inventory.archiveSha256 !== lock.archiveSha256 ||
+    inventory.licensePath !== lock.licensePath ||
+    inventory.licenseSha256 !== lock.licenseSha256 ||
+    inventory.executablePath !== lock.executablePath ||
+    manifest.version !== lock.version ||
+    manifest.path !== `git/${lock.executablePath}` ||
+    manifest.digest !== inventory.executableDigest
+  ) {
+    fail("Git runtime manifest or inventory is not bound to the reviewed source lock.");
+    return;
+  }
+  const verifiedFiles = await verifyInventoryFiles(inventory);
+  if (!verifiedFiles) return;
+  if (inventory.runtimeDigest !== inventoryDigest(inventory.files)) {
+    fail("Git runtime inventory digest mismatch.");
+  }
+}
+
+function readTrustedSourceLock(path) {
+  try {
+    const value = JSON.parse(readFileSync(path, "utf8"));
+    if (!isRecord(value) || value.schemaVersion !== "1.0") return undefined;
+    if (
+      value.status === "unavailable" &&
+      hasExactKeys(value, ["schemaVersion", "status", "reason"]) &&
+      isNonEmptyString(value.reason)
+    ) {
+      return value;
+    }
+    if (
+      value.status === "pinned" &&
+      hasExactKeys(value, [
+        "schemaVersion",
+        "status",
+        "vendor",
+        "version",
+        "sourceUrl",
+        "archiveSha256",
+        "executablePath",
+        "licensePath",
+        "licenseSha256"
+      ]) &&
+      value.vendor === "Git for Windows" &&
+      /^[0-9]+\.[0-9]+\.[0-9]+(?:\.windows\.[0-9]+)?$/.test(value.version) &&
+      isTrustedGitForWindowsUrl(value.sourceUrl) &&
+      isSha256(value.archiveSha256) &&
+      isSafeRuntimePath(value.executablePath) &&
+      isSafeRuntimePath(value.licensePath) &&
+      isSha256(value.licenseSha256)
+    ) {
+      return value;
+    }
+  } catch {
+    // A missing lock is deliberately indistinguishable from an untrusted one.
+  }
+  return undefined;
+}
+
+function readInventory(path) {
+  try {
+    const value = JSON.parse(readFileSync(path, "utf8"));
+    const expectedKeys = new Set([
+      "schemaVersion",
+      "vendor",
+      "version",
+      "sourceUrl",
+      "archiveSha256",
+      "licensePath",
+      "licenseSha256",
+      "executablePath",
+      "executableDigest",
+      "runtimeDigest",
+      "files"
+    ]);
+    if (
+      !isRecord(value) ||
+      Object.keys(value).length !== expectedKeys.size ||
+      Object.keys(value).some((key) => !expectedKeys.has(key)) ||
+      value.schemaVersion !== "1.0" ||
+      value.vendor !== "Git for Windows" ||
+      !isNonEmptyString(value.version) ||
+      !isNonEmptyString(value.sourceUrl) ||
+      !isSha256(value.archiveSha256) ||
+      !isSafeRuntimePath(value.licensePath) ||
+      !isSha256(value.licenseSha256) ||
+      !isSafeRuntimePath(value.executablePath) ||
+      !isSha256(value.executableDigest) ||
+      !isSha256(value.runtimeDigest) ||
+      !Array.isArray(value.files) ||
+      value.files.length === 0
+    ) {
+      return undefined;
+    }
+    const seenPaths = new Set();
+    for (const file of value.files) {
+      if (
+        !isRecord(file) ||
+        !hasExactKeys(file, ["path", "size", "digest"]) ||
+        !isSafeRuntimePath(file.path) ||
+        seenPaths.has(file.path) ||
+        !Number.isSafeInteger(file.size) ||
+        file.size < 0 ||
+        !isSha256(file.digest)
+      ) {
+        return undefined;
+      }
+      seenPaths.add(file.path);
+    }
+    return value;
+  } catch {
+    return undefined;
+  }
+}
+
+async function verifyInventoryFiles(inventory) {
+  const gitDirectory = join(resourcesDirectory, "git");
+  const expectedPaths = new Set([
+    "manifest.json",
+    "runtime-inventory.json",
+    ...inventory.files.map((file) => file.path)
+  ]);
+  const actualFiles = await collectRuntimeFiles(gitDirectory);
+  if (actualFiles === undefined) return false;
+  if (
+    actualFiles.length !== expectedPaths.size ||
+    actualFiles.some((path) => !expectedPaths.has(path))
+  ) {
+    fail("Git runtime contains untracked, missing, or unsafe files.");
+    return false;
+  }
+  for (const file of inventory.files) {
+    const path = resolve(gitDirectory, file.path);
+    if (!isContainedPath(gitDirectory, path)) {
+      fail("Git runtime inventory path escapes its runtime directory.");
+      return false;
+    }
+    await verifyArtifactFile(path, file);
+  }
+  const executable = inventory.files.find((file) => file.path === inventory.executablePath);
+  if (executable === undefined || executable.digest !== inventory.executableDigest) {
+    fail("Git runtime executable is not bound to the inventory.");
+    return false;
+  }
+  const license = inventory.files.find((file) => file.path === inventory.licensePath);
+  if (license === undefined || license.digest !== inventory.licenseSha256) {
+    fail("Git runtime license is not bound to the inventory.");
+    return false;
+  }
+  return true;
+}
+
+async function collectRuntimeFiles(directory) {
+  const files = [];
+  const stack = [directory];
+  try {
+    while (stack.length > 0) {
+      const current = stack.pop();
+      const entries = await readdir(current, { withFileTypes: true });
+      for (const entry of entries) {
+        const path = join(current, entry.name);
+        const filePath = relative(directory, path).replaceAll("\\", "/");
+        if (!isSafeRuntimePath(filePath)) return undefined;
+        const details = await lstat(path);
+        if (details.isSymbolicLink() || (!details.isFile() && !details.isDirectory()))
+          return undefined;
+        if (details.isDirectory()) stack.push(path);
+        else files.push(filePath);
+      }
+    }
+    return files.sort((left, right) => left.localeCompare(right));
+  } catch {
+    fail("Git runtime files cannot be enumerated safely.");
+    return undefined;
+  }
+}
+
+async function verifyArtifactFile(path, expected) {
+  const details = await lstat(path);
+  if (!details.isFile() || details.isSymbolicLink() || details.size !== expected.size) {
+    fail(`Git runtime inventory entry is not a matching regular file: ${expected.path}`);
+    return;
+  }
+  const actual = createHash("sha256")
+    .update(await readFile(path))
+    .digest("hex");
+  if (actual !== expected.digest) {
+    fail(`Git runtime inventory digest mismatch: ${expected.path}`);
+  }
+}
+
+function inventoryDigest(files) {
+  const canonical = [...files]
+    .sort((left, right) => left.path.localeCompare(right.path))
+    .map((file) => `${file.path}\0${file.size}\0${file.digest}\n`)
+    .join("");
+  return createHash("sha256").update(canonical, "utf8").digest("hex");
+}
+
 function run(command, args) {
   return new Promise((resolveRun) => {
     const child = spawn(command, args, { shell: false, stdio: ["ignore", "pipe", "ignore"] });
@@ -201,10 +428,43 @@ function fail(message) {
 
 function isSafeResourcePath(value) {
   if (!isNonEmptyString(value) || value.includes("\0") || isAbsolute(value)) return false;
-  if (/^[a-zA-Z]:/.test(value) || value.startsWith("\\\\") || value.startsWith("//")) return false;
+  if (
+    /^[a-zA-Z]:/.test(value) ||
+    value.includes("\\") ||
+    value.startsWith("//") ||
+    posix.normalize(value) !== value
+  ) {
+    return false;
+  }
   return value
-    .split(/[\\/]+/)
+    .split("/")
     .every((part) => part && part !== "." && part !== ".." && !part.includes(":"));
+}
+
+function isSafeRuntimePath(value) {
+  return isSafeResourcePath(value);
+}
+
+function isTrustedGitForWindowsUrl(value) {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      url.hostname === "github.com" &&
+      /^\/git-for-windows\/git\/releases\/download\/v[0-9.]+\.windows\.[0-9]+\/.+\.zip$/.test(
+        url.pathname
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
+function hasExactKeys(value, keys) {
+  return (
+    Object.keys(value).length === keys.length &&
+    Object.keys(value).every((key) => keys.includes(key))
+  );
 }
 
 function isContainedPath(base, candidate) {

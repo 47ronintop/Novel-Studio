@@ -214,10 +214,12 @@ export function listAgentTools(input: ListAgentToolsInput): readonly AgentToolDe
   // Phase E: dynamic external tools (plugin:/mcp: namespaced, injected by runtime)
   const externalValidation = validateExternalToolDescriptors(input.externalToolDescriptors ?? []);
   const externalTools: AgentToolDescriptor[] =
-    input.externalToolDescriptors !== undefined &&
-    (cap?.pluginToolsEnabled === true || cap?.mcpToolsEnabled === true) &&
-    externalValidation.ok
-      ? [...input.externalToolDescriptors]
+    input.externalToolDescriptors !== undefined && externalValidation.ok
+      ? input.externalToolDescriptors.filter((descriptor) => {
+          if (descriptor.source?.kind === "plugin") return cap?.pluginToolsEnabled === true;
+          if (descriptor.source?.kind === "mcp") return cap?.mcpToolsEnabled === true;
+          return false;
+        })
       : [];
 
   return [

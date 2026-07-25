@@ -45,19 +45,26 @@ const emptyForm: ServerFormState = {
 };
 
 export function AgentToolSourcePanel(props: AgentToolSourcePanelProps): React.ReactElement {
-  const { servers, loading = false, onAddServer, onRemoveServer, onSetEnabled, onTestConnection, onRevokeServer } = props;
+  const {
+    servers,
+    loading = false,
+    onAddServer,
+    onRemoveServer,
+    onSetEnabled,
+    onTestConnection,
+    onRevokeServer
+  } = props;
   const [showAddForm, setShowAddForm] = useState(false);
   const [form, setForm] = useState<ServerFormState>(emptyForm);
   const [addError, setAddError] = useState<string | undefined>();
-  const [testStatus, setTestStatus] = useState<Record<string, "idle" | "testing" | "ok" | "error">>({});
+  const [testStatus, setTestStatus] = useState<Record<string, "idle" | "testing" | "ok" | "error">>(
+    {}
+  );
   const [revokeConfirm, setRevokeConfirm] = useState<string | undefined>();
 
-  const handleFormChange = useCallback(
-    (field: keyof ServerFormState, value: string) => {
-      setForm((prev) => ({ ...prev, [field]: value }));
-    },
-    []
-  );
+  const handleFormChange = useCallback((field: keyof ServerFormState, value: string) => {
+    setForm((prev) => ({ ...prev, [field]: value }));
+  }, []);
 
   const handleAddServer = useCallback(async () => {
     setAddError(undefined);
@@ -210,7 +217,9 @@ export function AgentToolSourcePanel(props: AgentToolSourcePanelProps): React.Re
               <button
                 onClick={() => onSetEnabled(config.serverId, !config.enabled)}
                 disabled={loading}
-                aria-label={config.enabled ? `禁用 ${config.displayName}` : `启用 ${config.displayName}`}
+                aria-label={
+                  config.enabled ? `禁用 ${config.displayName}` : `启用 ${config.displayName}`
+                }
                 style={{ fontSize: "12px" }}
                 data-testid={`tool-source-toggle-${config.serverId}`}
               >
@@ -260,7 +269,10 @@ export function AgentToolSourcePanel(props: AgentToolSourcePanelProps): React.Re
                     ? `确认撤销 ${config.displayName} 的访问权限`
                     : `撤销 ${config.displayName} 的访问权限`
                 }
-                style={{ fontSize: "12px", color: revokeConfirm === config.serverId ? "#f44336" : undefined }}
+                style={{
+                  fontSize: "12px",
+                  color: revokeConfirm === config.serverId ? "#f44336" : undefined
+                }}
                 data-testid={`tool-source-revoke-${config.serverId}`}
               >
                 {revokeConfirm === config.serverId ? "确认撤销" : "撤销访问"}
@@ -442,12 +454,8 @@ export function AgentToolSourcePanel(props: AgentToolSourcePanelProps): React.Re
           color: "#666"
         }}
       >
-        <p>
-          工具来源只在运行开始前冻结。运行中修改设置将在下次运行时生效，当前运行不受影响。
-        </p>
-        <p>
-          插件来源需要 Windows AppContainer sandbox 资格（Phase C.0 完成后开放）。
-        </p>
+        <p>工具来源只在运行开始前冻结。运行中修改设置将在下次运行时生效，当前运行不受影响。</p>
+        <p>插件来源需要 Windows AppContainer sandbox 资格（Phase C.0 完成后开放）。</p>
       </div>
     </div>
   );

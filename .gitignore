@@ -6,6 +6,7 @@ coverage/
 playwright-report/
 test-results/
 .tmp-novel-studio-*/
+.tmp-agent-tool/
 *.tsbuildinfo
 .env
 .env.*

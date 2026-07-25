@@ -56,6 +56,8 @@ export interface AgentSandboxAttestation extends SandboxQualificationBinding {
 }
 
 const ATTESTATION_LIFETIME_MS = 60 * 60 * 1000;
+const MAX_EVIDENCE_AGE_MS = 5 * 60 * 1000;
+const MAX_CLOCK_SKEW_MS = 30 * 1000;
 
 /**
  * No direct, adapter-supplied boolean can qualify a sandbox. The default probe
@@ -119,6 +121,17 @@ export class SandboxQualificationService {
     const probeResult = await this.probe.run();
     if (!probeResult.ok) return probeResult;
     const evidence = probeResult.value;
+    if (
+      parseSandboxQualificationEvidence(evidence) === undefined ||
+      !isFreshEvidence(evidence.generatedAt, this.clock())
+    ) {
+      return err(
+        unavailableError(
+          "AGENT_TASK_SANDBOX_UNAVAILABLE",
+          "Sandbox probe evidence is malformed, stale, or from an invalid clock epoch."
+        )
+      );
+    }
     if (!matchesBinding(evidence, this.binding)) {
       return err(
         unavailableError(
@@ -201,6 +214,7 @@ export function parseSandboxQualificationEvidence(
     "capabilities"
   ]);
   if (Object.keys(value).some((key) => !expectedKeys.has(key))) return undefined;
+  if (Object.keys(value).length !== expectedKeys.size) return undefined;
   if (
     value.schemaVersion !== SANDBOX_RUNTIME_MANIFEST_SCHEMA_VERSION ||
     value.protocolVersion !== SANDBOX_PROTOCOL_VERSION ||
@@ -216,6 +230,18 @@ export function parseSandboxQualificationEvidence(
     !isCapabilityStatus(value.capabilities.networkIsolation) ||
     !isCapabilityStatus(value.capabilities.jobObjectKillOnClose) ||
     !isCapabilityStatus(value.capabilities.appContainerOrLowBox)
+  ) {
+    return undefined;
+  }
+  const expectedCapabilityKeys = new Set([
+    "fileIsolation",
+    "networkIsolation",
+    "jobObjectKillOnClose",
+    "appContainerOrLowBox"
+  ]);
+  if (
+    Object.keys(value.capabilities).length !== expectedCapabilityKeys.size ||
+    Object.keys(value.capabilities).some((key) => !expectedCapabilityKeys.has(key))
   ) {
     return undefined;
   }
@@ -283,7 +309,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
+  return (
+    typeof value === "string" && value.trim() === value && value.length > 0 && value.length <= 256
+  );
 }
 
 function isCapabilityStatus(value: unknown): value is SandboxCapabilityStatus {
@@ -291,7 +319,22 @@ function isCapabilityStatus(value: unknown): value is SandboxCapabilityStatus {
 }
 
 function isValidIsoTimestamp(value: unknown): value is string {
-  return typeof value === "string" && Number.isFinite(Date.parse(value));
+  if (
+    typeof value !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)
+  ) {
+    return false;
+  }
+  return Number.isFinite(Date.parse(value));
+}
+
+function isFreshEvidence(generatedAt: string, now: number): boolean {
+  const generatedAtMs = Date.parse(generatedAt);
+  return (
+    Number.isFinite(generatedAtMs) &&
+    generatedAtMs <= now + MAX_CLOCK_SKEW_MS &&
+    generatedAtMs >= now - MAX_EVIDENCE_AGE_MS
+  );
 }
 
 function unavailableError(code: string, message: string): UnifiedError {

@@ -403,6 +403,27 @@ describe("M22 settings bridge", () => {
     expect(updated.plugins?.entries[0]?.enabled).toBe(false);
     expect(updated.plugins?.feedback).toMatchObject({ kind: "info" });
   });
+
+  test("updates MCP enabled state through one Main-owned settings mutation", async () => {
+    const calls: string[] = [];
+    const bridge = createSettingsBridge(createApi(calls));
+    await bridge.addMcpServer({
+      serverId: "mcp_docs",
+      displayName: "Docs",
+      transport: "remote_http",
+      endpointUrl: "https://mcp.example.test",
+      apiKeyRef: "",
+      enabled: true
+    });
+
+    await bridge.setMcpServerEnabled("mcp_docs", false);
+
+    expect(calls.filter((call) => call.startsWith("agentMcp."))).toEqual([
+      "agentMcp.addServer:mcp_docs:true",
+      "agentMcp.addServer:mcp_docs:false"
+    ]);
+    expect(bridge.getProps().toolSources?.servers[0]?.config.enabled).toBe(false);
+  });
 });
 
 function createApi(
@@ -415,6 +436,14 @@ function createApi(
     profiles: [defaultProfile]
   };
   let pluginEnabled = true;
+  let mcpServers: Array<{
+    serverId: string;
+    displayName: string;
+    transport: "remote_http";
+    endpointUrl: string;
+    apiKeyRef: string;
+    enabled: boolean;
+  }> = [];
 
   return {
     getShellState: async () => ({
@@ -673,6 +702,46 @@ function createApi(
       },
       restoreConfigAssetVersion: async () => {
         throw new Error("not used");
+      }
+    },
+    agentNetwork: {
+      getSettings: async () =>
+        ok({
+          enabled: false,
+          providerProfiles: [],
+          allowedHosts: [],
+          dataEgressPolicy: "require_confirmation" as const,
+          policyRevision: "v1.0-test"
+        }),
+      updateSettings: async () => {
+        throw new Error("not used");
+      },
+      testConnection: async () => {
+        throw new Error("not used");
+      },
+      revoke: async () => {
+        throw new Error("not used");
+      }
+    },
+    agentMcp: {
+      listServers: async () => ok(mcpServers),
+      addServer: async (config) => {
+        calls.push(`agentMcp.addServer:${config.serverId}:${config.enabled}`);
+        mcpServers = [...mcpServers.filter((entry) => entry.serverId !== config.serverId), config];
+        return ok({ servers: mcpServers, revision: `v1.0-${mcpServers.length}` });
+      },
+      removeServer: async (serverId) => {
+        calls.push(`agentMcp.removeServer:${serverId}`);
+        mcpServers = mcpServers.filter((entry) => entry.serverId !== serverId);
+        return ok({ servers: mcpServers, revision: `v1.0-${mcpServers.length}` });
+      },
+      testConnection: async () => ok({ latencyMs: 1 }),
+      revokeServer: async (serverId) => {
+        calls.push(`agentMcp.revokeServer:${serverId}`);
+        mcpServers = mcpServers.map((entry) =>
+          entry.serverId === serverId ? { ...entry, enabled: false } : entry
+        );
+        return ok({ servers: mcpServers, revision: `v1.0-${mcpServers.length}` });
       }
     }
   };

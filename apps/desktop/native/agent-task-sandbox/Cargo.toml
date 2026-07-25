@@ -2,5 +2,6 @@
 members = [
     "host",
     "probe",
+    "file-operations",
 ]
 resolver = "2"

@@ -115,9 +115,15 @@
       "completedIn": null,
       "evidence": [
         { "kind": "source", "path": "apps/desktop/native/agent-task-sandbox/host/src/main.rs" },
-        { "kind": "source", "path": "apps/desktop/native/agent-task-sandbox/host/src/windows_impl.rs" },
+        {
+          "kind": "source",
+          "path": "apps/desktop/native/agent-task-sandbox/host/src/windows_impl.rs"
+        },
         { "kind": "source", "path": "apps/desktop/native/agent-task-sandbox/probe/src/main.rs" },
-        { "kind": "source", "path": "apps/desktop/native/agent-task-sandbox/probe/src/windows_probe.rs" }
+        {
+          "kind": "source",
+          "path": "apps/desktop/native/agent-task-sandbox/probe/src/windows_probe.rs"
+        }
       ]
     },
     {

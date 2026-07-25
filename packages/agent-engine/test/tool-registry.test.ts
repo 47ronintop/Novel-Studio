@@ -174,4 +174,57 @@ describe("Agent tool registry", () => {
     }).map((tool) => tool.name);
     expect(names).not.toContain("plugin__acme__summarise");
   });
+
+  test("applies plugin and MCP capability switches independently", () => {
+    const compute = (engineExports as unknown as Record<string, unknown>)[
+      "computeAgentToolDescriptorDigest"
+    ] as (descriptor: Record<string, unknown>) => string;
+    const listTools = (engineExports as unknown as Record<string, unknown>)["listAgentTools"] as (
+      input: Record<string, unknown>
+    ) => readonly { readonly name: string }[];
+    const externalDescriptor = (kind: "plugin" | "mcp", id: string, name: string) => {
+      const descriptor = {
+        id: `${kind}:${id}/search`,
+        name,
+        providerName: name,
+        displayName: `${kind} search`,
+        description: `Search through ${kind}.`,
+        kind: "external_tool",
+        effect: "external_action",
+        dataEgress: "remote_tool_arguments",
+        destructive: false,
+        retrySemantics: "never_automatic",
+        source: { kind, id },
+        inputSchema: { type: "object", additionalProperties: false, properties: {} }
+      };
+      return { ...descriptor, descriptorDigest: compute(descriptor) };
+    };
+    const descriptors = [
+      externalDescriptor("plugin", "acme", "plugin__acme__search"),
+      externalDescriptor("mcp", "docs", "mcp__docs__search")
+    ];
+    const namesFor = (pluginToolsEnabled: boolean, mcpToolsEnabled: boolean) =>
+      listTools({
+        operationMode: "execution",
+        contextMode: "general_file",
+        writePolicy: "write_before_confirmation",
+        capabilitySnapshot: {
+          workspaceKind: "engineeringWorkspace",
+          searchEnabled: false,
+          fileLifecycleEnabled: false,
+          controlledExecutionEnabled: false,
+          gitReadEnabled: false,
+          networkReadEnabled: false,
+          pluginToolsEnabled,
+          mcpToolsEnabled,
+          featureFlagRevision: "flags_01"
+        },
+        externalToolDescriptors: descriptors
+      }).map((tool) => tool.name);
+
+    expect(namesFor(true, false)).toContain("plugin__acme__search");
+    expect(namesFor(true, false)).not.toContain("mcp__docs__search");
+    expect(namesFor(false, true)).not.toContain("plugin__acme__search");
+    expect(namesFor(false, true)).toContain("mcp__docs__search");
+  });
 });
