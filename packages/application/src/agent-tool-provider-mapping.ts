@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import type { CoreAgentToolName } from "@novel-studio/agent-engine";
 
 /** Max length for a single providerName (provider-imposed; conservative across providers). */
-export const PROVIDER_NAME_MAX_LENGTH = 64;
+export const PROVIDER_NAME_MAX_LENGTH = 63;
 
 /** Pattern required for all providerName values. */
 const PROVIDER_NAME_SAFE = /^[A-Za-z0-9_-]+$/;

@@ -415,6 +415,8 @@ export interface AgentRunPendingToolApprovalProps {
   readonly bindingId: string;
   readonly canonicalToolId: string;
   readonly kind: "network" | "external" | "task";
+  readonly argumentsText: string;
+  readonly destination?: string;
   readonly requestedAt: string;
   readonly expiresAt: string;
   readonly deciding: boolean;

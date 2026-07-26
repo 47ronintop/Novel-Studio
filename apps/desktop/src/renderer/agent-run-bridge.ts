@@ -2622,6 +2622,8 @@ function pendingToolApprovalProps(
     bindingId: pending.binding.bindingId,
     canonicalToolId: pending.canonicalToolId,
     kind: pending.binding.kind,
+    argumentsText: pending.argumentsText,
+    ...(pending.binding.kind === "network" ? { destination: pending.binding.destination } : {}),
     requestedAt: pending.requestedAt,
     expiresAt: pending.binding.expiresAt,
     deciding

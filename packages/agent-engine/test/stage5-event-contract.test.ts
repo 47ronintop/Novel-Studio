@@ -70,9 +70,7 @@ describe("Stage 5 run/context contract normalization", () => {
   test("backfills conversationId to null for a v1.0 record missing it", () => {
     const { conversationId: _drop, ...withoutConversation } = v10Snapshot;
     void _drop;
-    const normalized = normalizeAgentRunSnapshot(
-      asJson(withoutConversation)
-    );
+    const normalized = normalizeAgentRunSnapshot(asJson(withoutConversation));
     expect(normalized.conversationId).toBeNull();
   });
 
@@ -91,6 +89,9 @@ describe("Stage 5 run/context contract normalization", () => {
       planExecutionRevision: 2,
       activeErrorId: null,
       recoveryState: "recovery_review",
+      toolFacadeVersion: "v1",
+      toolCatalogSnapshotId: null,
+      toolCatalogRevision: null,
       usageSummary: {
         inputTokens: 100,
         outputTokens: 50,
@@ -147,9 +148,7 @@ describe("Stage 5 run/context contract normalization", () => {
       ],
       excludedSources: []
     };
-    const normalized = normalizeAgentContextSnapshot(
-      asJson(v10Context)
-    );
+    const normalized = normalizeAgentContextSnapshot(asJson(v10Context));
     expect(normalized.schemaVersion).toBe("1.1");
     const source = normalized.sources[0];
     expect(source).toMatchObject({

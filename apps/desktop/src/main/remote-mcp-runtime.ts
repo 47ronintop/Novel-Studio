@@ -33,6 +33,8 @@ import {
 
 const MCP_PROTOCOL_VERSION = "2024-11-05";
 const MAX_TOOL_COUNT = 64;
+const MAX_TOOL_LIST_PAGES = 16;
+const MAX_CURSOR_BYTES = 512;
 const MAX_SESSION_ID_BYTES = 512;
 let nextConnectionSerial = 1;
 
@@ -115,6 +117,7 @@ function sameRemoteConfig(a: McpServerConfig, b: McpServerConfig): boolean {
     a.enabled === b.enabled &&
     endpointIdentity(a.endpointUrl) === endpointIdentity(b.endpointUrl) &&
     a.apiKeyRef === b.apiKeyRef &&
+    a.apiKeyRequired === b.apiKeyRequired &&
     a.tlsFingerprint === b.tlsFingerprint
   );
 }
@@ -327,17 +330,19 @@ function validateTools(
     const schemaCheck = validateStrictToolSchema(inputSchema);
     if (!schemaCheck.ok) return err(mcpError("MCP_TOOL_SOURCE_INVALID", schemaCheck.reason));
 
-    tools.push({
-      canonicalId: `mcp:${config.serverId}/${toolId}`,
-      serverId: config.serverId,
-      toolId,
-      displayName,
-      description,
-      inputSchema: inputSchema as JsonObject,
-      effect: "external_action",
-      retrySemantics: "never_automatic",
-      source: "remote_mcp"
-    });
+    tools.push(
+      Object.freeze({
+        canonicalId: `mcp:${config.serverId}/${toolId}`,
+        serverId: config.serverId,
+        toolId,
+        displayName,
+        description,
+        inputSchema: deepFreezeJson(inputSchema as JsonObject),
+        effect: "external_action",
+        retrySemantics: "never_automatic",
+        source: "remote_mcp"
+      })
+    );
   }
 
   const totalBytes = computeToolDirectoryBytes(
@@ -353,7 +358,13 @@ function validateTools(
       mcpError("MCP_TOOL_SOURCE_INVALID", "MCP tool directory exceeds the configured byte budget.")
     );
   }
-  return ok(tools);
+  return ok(Object.freeze(tools));
+}
+
+function deepFreezeJson<T>(value: T): T {
+  if (value === null || typeof value !== "object") return value;
+  for (const child of Object.values(value as Record<string, unknown>)) deepFreezeJson(child);
+  return Object.freeze(value);
 }
 
 /**
@@ -380,6 +391,14 @@ export async function connectRemoteMcp(input: {
   }
   if (!config.enabled) {
     return err(mcpError("MCP_SERVER_DISABLED", `MCP server '${config.serverId}' is disabled.`));
+  }
+  if (config.apiKeyRef !== `secret://remote-mcp/${config.serverId}/api_key`) {
+    return err(
+      mcpError(
+        "MCP_REMOTE_API_KEY_REF_INVALID",
+        "The MCP credential reference is not bound to this server."
+      )
+    );
   }
   if (!policy.enabled) {
     return err(mcpError("NETWORK_POLICY_DISABLED", "Agent network access is disabled."));
@@ -434,6 +453,14 @@ export async function connectRemoteMcp(input: {
 
   const endpointUrl = endpoint.href;
   const apiKey = input.resolveApiKey?.(config.apiKeyRef);
+  if (config.apiKeyRequired === true && apiKey === undefined) {
+    return err(
+      mcpError(
+        "MCP_API_KEY_UNAVAILABLE",
+        `The credential for MCP server '${config.serverId}' is unavailable.`
+      )
+    );
+  }
   // The Main-owned dialer checks a configured certificate pin in its actual
   // HTTPS handshake on every request. An opaque injected fetcher cannot make
   // that assertion, so pinned servers fail closed rather than relying on a
@@ -591,29 +618,79 @@ export async function connectRemoteMcp(input: {
     );
   }
 
-  let toolsListResponse: JsonRpcResponse;
-  try {
-    toolsListResponse = await sendRequest("tools/list", {}, input.signal);
-  } catch (error) {
-    return err(toMcpConnectionError(error, "MCP_TOOLS_LIST_FAILED", "MCP tools/list failed."));
+  const rawTools: unknown[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+  let pageCount = 0;
+
+  while (true) {
+    pageCount += 1;
+    if (pageCount > MAX_TOOL_LIST_PAGES) {
+      return err(
+        mcpError(
+          "MCP_TOOL_SOURCE_PAGINATION_LIMIT",
+          `MCP tools/list exceeded the ${String(MAX_TOOL_LIST_PAGES)} page limit.`
+        )
+      );
+    }
+
+    let toolsListResponse: JsonRpcResponse;
+    try {
+      toolsListResponse = await sendRequest(
+        "tools/list",
+        cursor === undefined ? {} : { cursor },
+        input.signal
+      );
+    } catch (error) {
+      return err(toMcpConnectionError(error, "MCP_TOOLS_LIST_FAILED", "MCP tools/list failed."));
+    }
+    if (toolsListResponse.error !== undefined) {
+      return err(
+        mcpError("MCP_TOOLS_LIST_ERROR", `MCP tools/list error: ${toolsListResponse.error.message}`)
+      );
+    }
+    if (!isRecord(toolsListResponse.result)) {
+      return err(mcpError("MCP_TOOL_SOURCE_INVALID", "MCP tools/list result must be an object."));
+    }
+
+    const pageTools = toolsListResponse.result["tools"];
+    if (!Array.isArray(pageTools)) {
+      return err(
+        mcpError("MCP_TOOL_SOURCE_INVALID", "MCP tools/list result did not contain a tools array.")
+      );
+    }
+    rawTools.push(...pageTools);
+    if (rawTools.length > MAX_TOOL_COUNT) {
+      return err(
+        mcpError(
+          "MCP_TOO_MANY_TOOLS",
+          `MCP server advertised more than ${String(MAX_TOOL_COUNT)} tools across all pages.`
+        )
+      );
+    }
+
+    const nextCursor = toolsListResponse.result["nextCursor"];
+    if (nextCursor === undefined || nextCursor === null) break;
+    if (
+      typeof nextCursor !== "string" ||
+      nextCursor.length === 0 ||
+      new TextEncoder().encode(nextCursor).byteLength > MAX_CURSOR_BYTES ||
+      hasDisallowedControlCharacters(nextCursor)
+    ) {
+      return err(
+        mcpError("MCP_TOOL_SOURCE_INVALID", "MCP tools/list returned an invalid nextCursor.")
+      );
+    }
+    if (seenCursors.has(nextCursor)) {
+      return err(
+        mcpError("MCP_TOOL_SOURCE_PAGINATION_LOOP", "MCP tools/list repeated a pagination cursor.")
+      );
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
   }
-  if (toolsListResponse.error !== undefined) {
-    return err(
-      mcpError("MCP_TOOLS_LIST_ERROR", `MCP tools/list error: ${toolsListResponse.error.message}`)
-    );
-  }
-  if (!isRecord(toolsListResponse.result)) {
-    return err(mcpError("MCP_TOOL_SOURCE_INVALID", "MCP tools/list result must be an object."));
-  }
-  if (Object.hasOwn(toolsListResponse.result, "nextCursor")) {
-    return err(
-      mcpError(
-        "MCP_TOOL_SOURCE_PAGINATION_UNSUPPORTED",
-        "MCP tools/list pagination is not supported by this runtime."
-      )
-    );
-  }
-  const tools = validateTools(toolsListResponse.result["tools"], config);
+
+  const tools = validateTools(rawTools, config);
   if (!tools.ok) return tools;
 
   return ok({

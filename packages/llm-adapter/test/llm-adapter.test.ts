@@ -265,11 +265,24 @@ describe("LLM Adapter", () => {
         return createMockProvider({ streams: [] }).stream(request);
       }
     };
+    const geminiProvider: LlmProvider = {
+      id: "google-gemini",
+      async complete(request) {
+        calls.push(`gemini:${request.modelProfile.provider}:${request.modelProfile.modelName}`);
+        return {
+          content: { type: "text", value: "gemini response" }
+        };
+      },
+      stream() {
+        return createMockProvider({ streams: [] }).stream(request);
+      }
+    };
     const adapter = createLlmAdapter({
       provider: createProviderRouter({
         providers: {
           "openai-compatible": openAiCompatibleProvider,
-          anthropic: anthropicProvider
+          anthropic: anthropicProvider,
+          "google-gemini": geminiProvider
         },
         aliases: {
           openai: "openai-compatible",
@@ -317,16 +330,26 @@ describe("LLM Adapter", () => {
         modelName: "claude-3-5-sonnet"
       }
     });
+    const gemini = await adapter.complete({
+      ...request,
+      modelProfile: {
+        ...request.modelProfile,
+        provider: "google-gemini",
+        modelName: "gemini-1.5-pro"
+      }
+    });
 
-    expect([deepseek, zhipu, tongyi, anthropic].every((result) => result.ok)).toBe(true);
+    expect([deepseek, zhipu, tongyi, anthropic, gemini].every((result) => result.ok)).toBe(true);
     expect(calls).toEqual([
       "compatible:deepseek:deepseek-chat",
       "compatible:zhipu:glm-4",
       "compatible:tongyi-qianwen:qwen-plus",
-      "anthropic:anthropic:claude-3-5-sonnet"
+      "anthropic:anthropic:claude-3-5-sonnet",
+      "gemini:google-gemini:gemini-1.5-pro"
     ]);
     expect(deepseek).toMatchObject({ ok: true, value: { provider: "deepseek" } });
     expect(anthropic).toMatchObject({ ok: true, value: { provider: "anthropic" } });
+    expect(gemini).toMatchObject({ ok: true, value: { provider: "google-gemini" } });
   });
 
   test("normalizes an in-flight provider timeout", async () => {

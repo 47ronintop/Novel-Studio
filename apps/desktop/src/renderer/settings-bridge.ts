@@ -1,6 +1,7 @@
 import { createPluginSecurityAuditReport, MODEL_PROVIDER_CATALOG } from "@novel-studio/application";
 import type {
   AgentNetworkSettingsData,
+  AgentNetworkProviderProfile,
   AgentUsageQuery,
   McpServerConfig,
   ModelDiscoverySnapshot,
@@ -55,12 +56,18 @@ export interface SettingsBridge {
   ): Promise<ModelSettingsPanelProps>;
   /** Phase D — test a specific provider connection. */
   testNetworkConnection(profileId: string): Promise<ModelSettingsPanelProps>;
+  saveNetworkProvider(
+    profile: Omit<AgentNetworkProviderProfile, "policyRevision">,
+    secret?: string
+  ): Promise<ModelSettingsPanelProps>;
+  removeNetworkProvider(profileId: string): Promise<ModelSettingsPanelProps>;
+  setDefaultNetworkProvider(profileId: string): Promise<ModelSettingsPanelProps>;
   /** Phase D — revoke all network access. */
   revokeNetworkAccess(): Promise<ModelSettingsPanelProps>;
   /** Phase E.4 — load MCP server list. */
   loadMcpServers(): Promise<ModelSettingsPanelProps>;
   /** Phase E.4 — add a new MCP server. */
-  addMcpServer(config: McpServerConfig): Promise<ModelSettingsPanelProps>;
+  addMcpServer(config: McpServerConfig, secret?: string): Promise<ModelSettingsPanelProps>;
   /** Phase E.4 — remove an MCP server. */
   removeMcpServer(serverId: string): Promise<ModelSettingsPanelProps>;
   /** Phase E.4 — enable or disable an MCP server. */
@@ -111,6 +118,7 @@ export function createSettingsBridge(
   let networkSettings: AgentNetworkSettingsData = {
     enabled: false,
     providerProfiles: [],
+    defaultProviderId: "",
     allowedHosts: [],
     dataEgressPolicy: "require_confirmation",
     policyRevision: "v1.0-default"
@@ -322,6 +330,53 @@ export function createSettingsBridge(
       return toProps();
     },
 
+    async saveNetworkProvider(profile, secret) {
+      networkLoading = true;
+      const result = await api.agentNetwork.saveProvider(profile);
+      if (!result.ok) {
+        networkLoading = false;
+        feedback = { kind: "error", message: result.error.message };
+        throw new Error(result.error.message);
+      }
+      networkSettings = result.value;
+      if (secret !== undefined && secret.trim().length > 0) {
+        const savedSecret = await api.settings.saveModelSecret(profile.apiKeyRef, secret.trim());
+        if (!savedSecret.ok) {
+          networkLoading = false;
+          feedback = { kind: "error", message: savedSecret.error.message };
+          throw new Error(savedSecret.error.message);
+        }
+      }
+      networkLoading = false;
+      networkTestStatuses = {};
+      return toProps();
+    },
+
+    async removeNetworkProvider(profileId) {
+      networkLoading = true;
+      const result = await api.agentNetwork.removeProvider(profileId);
+      networkLoading = false;
+      if (!result.ok) {
+        feedback = { kind: "error", message: result.error.message };
+        throw new Error(result.error.message);
+      }
+      networkSettings = result.value;
+      networkTestStatuses = omitKey(networkTestStatuses, profileId);
+      return toProps();
+    },
+
+    async setDefaultNetworkProvider(profileId) {
+      networkLoading = true;
+      const result = await api.agentNetwork.setDefaultProvider(profileId);
+      networkLoading = false;
+      if (!result.ok) {
+        feedback = { kind: "error", message: result.error.message };
+        throw new Error(result.error.message);
+      }
+      networkSettings = result.value;
+      return toProps();
+    },
+
     async revokeNetworkAccess() {
       networkLoading = true;
       const result = await api.agentNetwork.revoke();
@@ -347,8 +402,16 @@ export function createSettingsBridge(
       return toProps();
     },
 
-    async addMcpServer(config) {
+    async addMcpServer(config, secret) {
       mcpLoading = true;
+      if (config.transport === "remote_http" && secret !== undefined && secret.trim().length > 0) {
+        const savedSecret = await api.settings.saveModelSecret(config.apiKeyRef, secret.trim());
+        if (!savedSecret.ok) {
+          mcpLoading = false;
+          feedback = { kind: "error", message: savedSecret.error.message };
+          throw new Error(savedSecret.error.message);
+        }
+      }
       const result = await api.agentMcp.addServer(config);
       mcpLoading = false;
       if (!result.ok) {
@@ -530,6 +593,9 @@ export function createSettingsBridge(
       loading: networkLoading,
       onUpdateSettings: () => Promise.resolve(),
       onTestConnection: () => Promise.resolve({ latencyMs: 0 }),
+      onSaveProvider: () => Promise.resolve(),
+      onRemoveProvider: () => Promise.resolve(),
+      onSetDefaultProvider: () => Promise.resolve(),
       onRevoke: () => Promise.resolve()
     };
 
@@ -566,7 +632,14 @@ export function createSettingsBridge(
       ...(connectionStatus === undefined ? {} : { connectionStatus }),
       providerOptions: MODEL_PROVIDER_CATALOG.map((provider) => ({
         id: provider.id,
-        label: provider.label
+        label: provider.label,
+        defaultModelName: provider.defaultModelName,
+        ...(provider.defaultBaseUrl === undefined
+          ? {}
+          : { defaultBaseUrl: provider.defaultBaseUrl }),
+        agentAdapter: provider.agentAdapter,
+        agentSupport: provider.agentSupport,
+        agentSupportNote: provider.agentSupportNote
       })),
       ...(modelDiscovery === undefined ? {} : { modelDiscovery }),
       plugins: {

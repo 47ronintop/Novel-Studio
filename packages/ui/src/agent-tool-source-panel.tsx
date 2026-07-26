@@ -5,7 +5,7 @@
  * Security invariants:
  * - API keys are displayed as ref status only (never plaintext).
  * - All mutations go through the Main-owned IPC boundary.
- * - Renderer cannot submit capability revision, attestation, or secret values.
+ * - Plaintext keys only travel through the dedicated Main secret-save action and are never returned.
  */
 import React, { useState, useCallback } from "react";
 import type { McpServerConfig } from "@novel-studio/application";
@@ -20,7 +20,7 @@ export interface AgentToolSourceEntry {
 export interface AgentToolSourcePanelProps {
   readonly servers: readonly AgentToolSourceEntry[];
   readonly loading?: boolean;
-  readonly onAddServer: (config: RemoteMcpServerConfig) => Promise<void>;
+  readonly onAddServer: (config: RemoteMcpServerConfig, secret?: string) => Promise<void>;
   readonly onRemoveServer: (serverId: string) => Promise<void>;
   readonly onSetEnabled: (serverId: string, enabled: boolean) => Promise<void>;
   readonly onTestConnection: (serverId: string) => Promise<{ readonly latencyMs: number }>;
@@ -30,14 +30,14 @@ export interface AgentToolSourcePanelProps {
 type ServerFormState = {
   readonly displayName: string;
   readonly endpointUrl: string;
-  readonly apiKeyRef: string;
+  readonly apiKey: string;
   readonly tlsFingerprint: string;
 };
 
 const emptyForm: ServerFormState = {
   displayName: "",
   endpointUrl: "",
-  apiKeyRef: "",
+  apiKey: "",
   tlsFingerprint: ""
 };
 
@@ -85,18 +85,21 @@ export function AgentToolSourcePanel(props: AgentToolSourcePanelProps): React.Re
     }
 
     const serverId = `mcp_${Date.now().toString(36)}`;
+    const secret = form.apiKey.trim();
     const config: RemoteMcpServerConfig = {
       serverId,
       displayName: form.displayName.trim(),
       transport: "remote_http",
       endpointUrl: form.endpointUrl.trim(),
-      apiKeyRef: form.apiKeyRef.trim() || `secret://${serverId}/api_key`,
+      apiKeyRef: `secret://remote-mcp/${serverId}/api_key`,
+      apiKeyRequired: secret.length > 0,
       ...(form.tlsFingerprint.trim() ? { tlsFingerprint: form.tlsFingerprint.trim() } : {}),
       enabled: false
     };
 
     try {
-      await onAddServer(config);
+      if (secret.length === 0) await onAddServer(config);
+      else await onAddServer(config, secret);
       setForm(emptyForm);
       setShowAddForm(false);
     } catch (e) {
@@ -322,19 +325,20 @@ export function AgentToolSourcePanel(props: AgentToolSourcePanelProps): React.Re
           </div>
           <div style={{ marginBottom: "8px" }}>
             <label style={{ display: "block", fontSize: "12px", marginBottom: "4px" }}>
-              API Key 引用（留空则由系统生成）
+              API Key（可选）
             </label>
             <input
-              type="text"
-              value={form.apiKeyRef}
-              onChange={(e) => handleFormChange("apiKeyRef", e.target.value)}
-              placeholder="secret://my-server/api_key（不接受明文密钥）"
-              aria-label="API Key 引用"
+              type="password"
+              value={form.apiKey}
+              onChange={(e) => handleFormChange("apiKey", e.target.value)}
+              placeholder="留空表示无鉴权"
+              aria-label="MCP API Key"
+              autoComplete="off"
               style={{ width: "100%", boxSizing: "border-box" }}
               data-testid="tool-source-add-apikey"
             />
             <p style={{ fontSize: "11px", color: "#888", margin: "4px 0 0" }}>
-              明文 API Key 不会存储在此字段中。请通过密钥管理器保存后使用 secret:// 引用。
+              保存后写入桌面安全存储，MCP 配置文件只保留 secret:// 引用。
             </p>
           </div>
 

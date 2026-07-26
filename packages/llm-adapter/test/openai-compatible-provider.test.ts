@@ -222,7 +222,8 @@ describe("OpenAI-compatible provider", () => {
         yield {
           choices: [
             {
-              delta: {}
+              delta: {},
+              finish_reason: "stop"
             }
           ],
           usage: {
@@ -287,6 +288,10 @@ describe("OpenAI-compatible provider", () => {
           type: "delta",
           value: " answered with rain."
         }
+      },
+      {
+        ok: true,
+        value: { type: "round_completed", finishReason: "stop" }
       },
       {
         ok: true,
@@ -385,6 +390,43 @@ describe("OpenAI-compatible provider", () => {
     ]);
   });
 
+  test("accepts null content and keeps a deterministic ID when a stream omits the call ID", async () => {
+    const provider = createOpenAiCompatibleProvider({
+      transport: async () => readFixture("openai-compatible-chat-success.json"),
+      streamTransport: async function* () {
+        yield {
+          choices: [
+            {
+              delta: {
+                content: null,
+                tool_calls: [
+                  {
+                    index: 0,
+                    function: { name: "finish", arguments: "{}" }
+                  }
+                ]
+              },
+              finish_reason: "tool_calls"
+            }
+          ]
+        };
+      }
+    });
+
+    const events = await collectStream(
+      createLlmAdapter({ provider }).stream({ ...request, mode: "streaming" })
+    );
+    expect(events).toContainEqual({
+      ok: true,
+      value: {
+        type: "tool_call_delta",
+        toolCallId: "tool_call_llmreq_openai_compatible_01_0",
+        name: "finish",
+        argumentsDelta: "{}"
+      }
+    });
+  });
+
   test.each([
     ["stop", "stop"],
     ["tool_calls", "tool_calls"],
@@ -476,6 +518,28 @@ describe("OpenAI-compatible provider", () => {
         })
       }
     ]);
+  });
+
+  test("fails a truncated stream instead of returning a false success", async () => {
+    const provider = createOpenAiCompatibleProvider({
+      transport: async () => readFixture("openai-compatible-chat-success.json"),
+      streamTransport: async function* () {
+        yield { choices: [{ delta: { content: "partial" } }] };
+      }
+    });
+
+    const events = await collectStream(
+      createLlmAdapter({ provider }).stream({ ...request, mode: "streaming" })
+    );
+
+    expect(events).toContainEqual({
+      ok: false,
+      error: expect.objectContaining({ code: "LLM_MALFORMED_RESPONSE" })
+    });
+    expect(events).not.toContainEqual({
+      ok: true,
+      value: expect.objectContaining({ type: "done" })
+    });
   });
 
   test("surfaces provider streaming error messages instead of only the HTTP status", async () => {

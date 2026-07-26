@@ -27,6 +27,7 @@ import {
   type AgentReadToolExecutor,
   type AgentSearchToolExecutor,
   type AgentNetworkToolExecutor,
+  type AgentNetworkPolicy,
   type AgentExternalToolExecutor,
   type AgentFileOperationSessionPort,
   type AgentRunModelDriver,
@@ -160,6 +161,8 @@ export interface DesktopAgentRunSessionOptions {
   readonly searchToolExecutor?: AgentSearchToolExecutor;
   /** Only inject a network executor that has already passed the Main security qualification. */
   readonly networkToolExecutor?: AgentNetworkToolExecutor;
+  /** Main-owned egress policy frozen into this workspace runtime. */
+  readonly dataEgressPolicy?: AgentNetworkPolicy["dataEgressPolicy"];
   /** File lifecycle stays hidden unless the host has an atomic no-follow transaction backend. */
   readonly fileOperationSession?: AgentFileOperationSessionPort;
   readonly lifecycleOperations?: AgentWriteLifecycleOperationPort;
@@ -642,6 +645,9 @@ function createDesktopAgentRuntimeServices(
     ...(options.networkToolExecutor === undefined
       ? {}
       : { networkToolExecutor: options.networkToolExecutor }),
+    ...(options.dataEgressPolicy === undefined
+      ? {}
+      : { dataEgressPolicy: options.dataEgressPolicy }),
     ...(fileOperationSession === undefined ? {} : { fileOperationSession }),
     ...(options.externalToolExecutor === undefined
       ? {}

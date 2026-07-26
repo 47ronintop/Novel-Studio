@@ -275,6 +275,14 @@ function listV2AgentTools(input: ListAgentToolsInput): readonly AgentToolDescrip
           coreTool("manage_path", "file_tool", "propose")
         ]
       : [];
+  // Creative runtimes always compose their trusted text-mutation backend. Engineering runtimes
+  // must explicitly qualify the hardened lifecycle backend before exposing edits.
+  const editTools =
+    cap === undefined ||
+    cap.workspaceKind === "creativeProject" ||
+    cap.fileLifecycleEnabled === true
+      ? [coreTool("edit_text", "file_tool", "propose")]
+      : [];
   const networkTools =
     cap?.networkReadEnabled === true
       ? [
@@ -292,7 +300,7 @@ function listV2AgentTools(input: ListAgentToolsInput): readonly AgentToolDescrip
     coreTool("list_project_entries", "file_tool", "read"),
     coreTool("read_resource", "file_tool", "read"),
     ...searchTools,
-    coreTool("edit_text", "file_tool", "propose"),
+    ...editTools,
     ...lifecycleTools,
     ...networkTools,
     ...remoteExternalTools,
@@ -327,6 +335,8 @@ function coreTool(
 export type ExternalToolDescriptorValidation =
   { readonly ok: true } | { readonly ok: false; readonly error: string };
 
+export const MAX_EXTERNAL_TOOL_DESCRIPTORS = 16;
+
 /**
  * Strictly validate dynamic descriptors at the registry boundary. Invalid entries are denied
  * rather than passed through to a model provider. Runtime code should surface the error before
@@ -335,6 +345,12 @@ export type ExternalToolDescriptorValidation =
 export function validateExternalToolDescriptors(
   descriptors: readonly AgentToolDescriptor[]
 ): ExternalToolDescriptorValidation {
+  if (descriptors.length > MAX_EXTERNAL_TOOL_DESCRIPTORS) {
+    return {
+      ok: false,
+      error: `Dynamic tool directory exceeds the ${String(MAX_EXTERNAL_TOOL_DESCRIPTORS)} tool limit.`
+    };
+  }
   const ids = new Set<string>();
   const providerNames = new Set<string>();
   for (const descriptor of descriptors) {

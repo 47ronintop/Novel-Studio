@@ -125,6 +125,167 @@ describe("M95 real provider runtime", () => {
     expect(verified).toEqual({ ok: true, value: true });
   });
 
+  test.each([
+    {
+      provider: "anthropic",
+      modelName: "claude-3-5-sonnet",
+      baseUrl: "https://api.anthropic.com",
+      expectedUrl: "https://api.anthropic.com/v1/messages",
+      authHeader: "x-api-key",
+      payload: {
+        content: [{ type: "text", text: "pong" }],
+        usage: { input_tokens: 1, output_tokens: 1 }
+      }
+    },
+    {
+      provider: "google-gemini",
+      modelName: "gemini-1.5-pro",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      expectedUrl:
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent",
+      authHeader: "x-goog-api-key",
+      payload: {
+        candidates: [{ content: { role: "model", parts: [{ text: "pong" }] } }],
+        usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 }
+      }
+    }
+  ] as const)(
+    "routes $provider connection checks through its native protocol",
+    async ({ provider, modelName, baseUrl, expectedUrl, authHeader, payload }) => {
+      const userDataRoot = await mkdtemp(join(tmpdir(), `novel-studio-${provider}-runtime-`));
+      tempRoots.push(userDataRoot);
+      const calls: FetchCall[] = [];
+      const secretRef = `secret://model_${provider}/api_key`;
+      const secretStore = createEncryptedFileModelSecretStore({
+        userDataRoot,
+        cipher: testCipher
+      });
+      await secretStore.saveSecret(secretRef, "native-provider-secret");
+      const runtime = createDesktopModelRuntime({
+        userDataRoot,
+        secretStore,
+        fetch: createJsonFetch(calls, payload)
+      });
+      const profile = {
+        id: `model_${provider}`,
+        provider,
+        displayName: provider,
+        baseUrl,
+        apiKeyRef: secretRef,
+        modelName,
+        temperature: 0,
+        maxTokens: 64,
+        topP: 1,
+        timeoutMs: 60_000
+      };
+
+      const tested = await runtime.modelConnectionTester.testConnection(profile);
+
+      expect(tested).toMatchObject({
+        ok: true,
+        value: { ok: true, provider, modelName }
+      });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.url).toBe(expectedUrl);
+      expect(calls[0]?.headers[authHeader]).toBe("native-provider-secret");
+      expect(calls[0]?.url).not.toContain("/chat/completions");
+    }
+  );
+
+  test.each([
+    {
+      provider: "anthropic",
+      modelName: "claude-3-5-sonnet",
+      baseUrl: "https://api.anthropic.com",
+      expectedUrl: "https://api.anthropic.com/v1/messages",
+      authHeader: "x-api-key",
+      chunks: [
+        { type: "message_start", message: { usage: { input_tokens: 2 } } },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "native anthropic" }
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { output_tokens: 2 }
+        },
+        { type: "message_stop" }
+      ],
+      expectedText: "native anthropic"
+    },
+    {
+      provider: "google-gemini",
+      modelName: "gemini-1.5-pro",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      expectedUrl:
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:streamGenerateContent?alt=sse",
+      authHeader: "x-goog-api-key",
+      chunks: [
+        {
+          candidates: [
+            {
+              content: { role: "model", parts: [{ text: "native gemini" }] },
+              finishReason: "STOP"
+            }
+          ],
+          usageMetadata: { promptTokenCount: 2, candidatesTokenCount: 2, totalTokenCount: 4 }
+        }
+      ],
+      expectedText: "native gemini"
+    }
+  ] as const)(
+    "streams $provider SSE through the native Desktop route",
+    async ({ provider, modelName, baseUrl, expectedUrl, authHeader, chunks, expectedText }) => {
+      const userDataRoot = await mkdtemp(join(tmpdir(), `novel-studio-${provider}-stream-`));
+      tempRoots.push(userDataRoot);
+      const calls: FetchCall[] = [];
+      const secretRef = `secret://model_${provider}/api_key`;
+      const secretStore = createEncryptedFileModelSecretStore({
+        userDataRoot,
+        cipher: testCipher
+      });
+      await secretStore.saveSecret(secretRef, "native-provider-secret");
+      await secretStore.markVerified(secretRef, { provider, baseUrl, modelName });
+      const runtime = createDesktopModelRuntime({
+        userDataRoot,
+        secretStore,
+        fetch: createFiniteStreamingFetch(calls, chunks)
+      });
+      const profile = {
+        id: `model_${provider}`,
+        provider,
+        displayName: provider,
+        baseUrl,
+        apiKeyRef: secretRef,
+        modelName,
+        temperature: 0,
+        maxTokens: 64,
+        topP: 1,
+        timeoutMs: 60_000
+      };
+      const chapterEditorSession = await createLoadedChapterEditorSession();
+      const runtimeProvider = runtime.createAiProvider({ chapterEditorSession });
+      const events = await collectProviderStream(
+        runtimeProvider.stream({
+          schemaVersion: "1.0",
+          requestId: `stream_${provider}`,
+          traceId: `stream_${provider}`,
+          mode: "streaming",
+          modelProfile: profile,
+          messages: [{ role: "user", content: "ping" }],
+          parameters: { maxTokens: 8 }
+        })
+      );
+
+      expect(events).toContainEqual({ type: "delta", value: expectedText });
+      expect(events).toContainEqual({ type: "round_completed", finishReason: "stop" });
+      expect(calls[0]?.url).toBe(expectedUrl);
+      expect(calls[0]?.headers[authHeader]).toBe("native-provider-secret");
+    }
+  );
+
   test("reports non-JSON provider responses as actionable Base URL errors", async () => {
     const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-runtime-html-"));
     tempRoots.push(userDataRoot);
@@ -642,6 +803,29 @@ function createStreamingFetch(calls: FetchCall[], delimiter = "\n\n"): typeof fe
         status: 200,
         headers: { "content-type": "text/event-stream" }
       }
+    );
+  }) as typeof fetch;
+}
+
+function createFiniteStreamingFetch(calls: FetchCall[], chunks: readonly unknown[]): typeof fetch {
+  return (async (url, init) => {
+    calls.push({
+      url: String(url),
+      method: init?.method,
+      headers: normalizeHeaders(init?.headers),
+      body: JSON.parse(String(init?.body ?? "{}")) as unknown
+    });
+    const encoder = new TextEncoder();
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const chunk of chunks) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+          }
+          controller.close();
+        }
+      }),
+      { status: 200, headers: { "content-type": "text/event-stream" } }
     );
   }) as typeof fetch;
 }

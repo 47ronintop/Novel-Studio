@@ -10,7 +10,12 @@ import type { SettingsBridge } from "./settings-bridge.js";
 
 type NetworkActions = Pick<
   AgentNetworkSettingsPanelProps,
-  "onUpdateSettings" | "onTestConnection" | "onRevoke"
+  | "onUpdateSettings"
+  | "onTestConnection"
+  | "onSaveProvider"
+  | "onRemoveProvider"
+  | "onSetDefaultProvider"
+  | "onRevoke"
 >;
 type ToolSourceActions = Pick<
   AgentToolSourcePanelProps,
@@ -22,7 +27,7 @@ export function useSettingsPanelActions(
   setSettings: (settings: ModelSettingsPanelProps) => void
 ): { readonly network: NetworkActions; readonly toolSources: ToolSourceActions } {
   const run = useCallback(
-    async <T,>(action: (bridge: SettingsBridge) => Promise<T>): Promise<T> => {
+    async <T>(action: (bridge: SettingsBridge) => Promise<T>): Promise<T> => {
       if (settingsBridge === undefined) throw new Error("Settings are unavailable.");
       const pending = action(settingsBridge);
       setSettings(settingsBridge.getProps());
@@ -44,13 +49,22 @@ export function useSettingsPanelActions(
         await run((bridge) => bridge.testNetworkConnection(profileId));
         return { latencyMs: 0 };
       },
+      async onSaveProvider(profile, secret) {
+        await run((bridge) => bridge.saveNetworkProvider(profile, secret));
+      },
+      async onRemoveProvider(profileId) {
+        await run((bridge) => bridge.removeNetworkProvider(profileId));
+      },
+      async onSetDefaultProvider(profileId) {
+        await run((bridge) => bridge.setDefaultNetworkProvider(profileId));
+      },
       async onRevoke() {
         await run((bridge) => bridge.revokeNetworkAccess());
       }
     },
     toolSources: {
-      async onAddServer(config: McpServerConfig) {
-        await run((bridge) => bridge.addMcpServer(config));
+      async onAddServer(config: McpServerConfig, secret?: string) {
+        await run((bridge) => bridge.addMcpServer(config, secret));
       },
       async onRemoveServer(serverId: string) {
         await run((bridge) => bridge.removeMcpServer(serverId));

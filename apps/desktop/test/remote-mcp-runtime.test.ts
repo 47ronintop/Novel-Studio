@@ -24,7 +24,7 @@ const TEST_CONFIG: McpServerConfig = {
   displayName: "Test MCP",
   transport: "remote_http",
   endpointUrl: "https://mcp.example.com/rpc",
-  apiKeyRef: "secret://test-key",
+  apiKeyRef: "secret://remote-mcp/test-mcp/api_key",
   enabled: true
 };
 
@@ -145,22 +145,125 @@ describe("connectRemoteMcp — connect and tools/list", () => {
       expect(result.value.tools[0]?.effect).toBe("external_action");
       expect(result.value.tools[0]?.retrySemantics).toBe("never_automatic");
       expect(result.value.tools[0]?.source).toBe("remote_mcp");
+      expect(Object.isFrozen(result.value.tools)).toBe(true);
+      expect(Object.isFrozen(result.value.tools[0])).toBe(true);
+      expect(Object.isFrozen(result.value.tools[0]?.inputSchema)).toBe(true);
     }
   });
 
-  it("rejects a paginated tools/list result instead of exposing a partial directory", async () => {
-    const paginatedToolsListResponse = {
+  it("connects without authentication when the optional credential is unavailable", async () => {
+    const fetch_ = makeRpcFetch([initResponse, toolsListResponse]);
+    const resolveApiKey = vi.fn(() => undefined);
+    const result = await connectRemoteMcp({
+      config: { ...TEST_CONFIG, apiKeyRequired: false },
+      policy: TEST_POLICY,
+      controlledFetch: fetch_,
+      resolveApiKey
+    });
+
+    expect(result.ok).toBe(true);
+    expect(resolveApiKey).toHaveBeenCalledWith(TEST_CONFIG.apiKeyRef);
+    expect(fetch_).toHaveBeenCalled();
+  });
+
+  it("fails before connecting when a required credential is unavailable", async () => {
+    const fetch_ = makeRpcFetch([initResponse, toolsListResponse]);
+    const result = await connectRemoteMcp({
+      config: { ...TEST_CONFIG, apiKeyRequired: true },
+      policy: TEST_POLICY,
+      controlledFetch: fetch_,
+      resolveApiKey: () => undefined
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "MCP_API_KEY_UNAVAILABLE" }
+    });
+    expect(fetch_).not.toHaveBeenCalled();
+  });
+
+  it("rejects a credential reference that is not bound to the server ID", async () => {
+    const fetch_ = makeRpcFetch([initResponse, toolsListResponse]);
+    const result = await connectRemoteMcp({
+      config: { ...TEST_CONFIG, apiKeyRef: "secret://model-profile/victim/api_key" },
+      policy: TEST_POLICY,
+      controlledFetch: fetch_,
+      resolveApiKey: () => "must-not-be-read"
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "MCP_REMOTE_API_KEY_REF_INVALID" }
+    });
+    expect(fetch_).not.toHaveBeenCalled();
+  });
+
+  it("follows tools/list pagination and freezes the complete directory", async () => {
+    const requests: Array<{ readonly method?: string; readonly params?: unknown }> = [];
+    const fetch_: ControlledFetch = vi
+      .fn()
+      .mockImplementation((request: { readonly body?: string }) => {
+        const rpc = JSON.parse(request.body ?? "{}") as {
+          readonly id?: string;
+          readonly method?: string;
+          readonly params?: { readonly cursor?: string };
+        };
+        requests.push(rpc);
+        if (rpc.method === "notifications/initialized") {
+          return Promise.resolve(mcpResponse("", { status: 204, contentType: null, body: "" }));
+        }
+        if (rpc.method === "initialize") {
+          return Promise.resolve(mcpResponse({ ...initResponse, id: rpc.id }));
+        }
+        const result =
+          rpc.params?.cursor === "cursor_2"
+            ? {
+                tools: [
+                  {
+                    name: "open",
+                    description: "Open a result",
+                    inputSchema: {
+                      type: "object",
+                      required: ["id"],
+                      properties: { id: { type: "string" } }
+                    }
+                  }
+                ]
+              }
+            : { ...toolsListResponse.result, nextCursor: "cursor_2" };
+        return Promise.resolve(mcpResponse({ jsonrpc: "2.0", id: rpc.id, result }));
+      }) as unknown as ControlledFetch;
+    const result = await connectRemoteMcp({
+      config: TEST_CONFIG,
+      policy: TEST_POLICY,
+      controlledFetch: fetch_
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.tools.map((tool) => tool.toolId)).toEqual(["search", "open"]);
+    expect(
+      requests.filter((request) => request.method === "tools/list").map((request) => request.params)
+    ).toEqual([{}, { cursor: "cursor_2" }]);
+  });
+
+  it("rejects a repeated tools/list cursor", async () => {
+    const loopingToolsListResponse = {
       ...toolsListResponse,
-      result: { ...toolsListResponse.result, nextCursor: "cursor_2" }
+      result: { tools: [], nextCursor: "cursor_loop" }
     };
     const result = await connectRemoteMcp({
       config: TEST_CONFIG,
       policy: TEST_POLICY,
-      controlledFetch: makeRpcFetch([initResponse, paginatedToolsListResponse])
+      controlledFetch: makeRpcFetch([
+        initResponse,
+        loopingToolsListResponse,
+        loopingToolsListResponse
+      ])
     });
 
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("MCP_TOOL_SOURCE_PAGINATION_UNSUPPORTED");
+    if (!result.ok) expect(result.error.code).toBe("MCP_TOOL_SOURCE_PAGINATION_LOOP");
   });
 
   it("accepts a JSON-RPC response carried by a Streamable HTTP SSE message", async () => {
@@ -537,6 +640,60 @@ describe("connectRemoteMcp — tools/call", () => {
       new AbortController().signal
     );
     expect(result.status).toBe("outcome_unknown");
+  });
+
+  it("fails before delivery when the frozen settings revision changes", async () => {
+    let revision = "mcp-revision-1";
+    const fetch_ = makeRpcFetch([initResponse, toolsListResponse]);
+    const conn = await connectRemoteMcp({
+      config: TEST_CONFIG,
+      policy: TEST_POLICY,
+      controlledFetch: fetch_,
+      configRevision: revision,
+      readCurrentConfig: () =>
+        Promise.resolve({
+          ok: true as const,
+          value: { revision, config: TEST_CONFIG }
+        })
+    });
+    expect(conn.ok).toBe(true);
+    if (!conn.ok) return;
+    const callsBeforeDrift = (fetch_ as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    revision = "mcp-revision-2";
+    const result = await conn.value.callTool(
+      "search",
+      { query: "test" },
+      undefined,
+      new AbortController().signal
+    );
+
+    expect(result.status).toBe("error");
+    if (result.status === "error") expect(result.error.code).toBe("MCP_CONFIG_CHANGED");
+    expect(fetch_).toHaveBeenCalledTimes(callsBeforeDrift);
+  });
+
+  it("tears down synchronously and prevents later transport calls", async () => {
+    const fetch_ = makeRpcFetch([initResponse, toolsListResponse]);
+    const conn = await connectRemoteMcp({
+      config: TEST_CONFIG,
+      policy: TEST_POLICY,
+      controlledFetch: fetch_
+    });
+    expect(conn.ok).toBe(true);
+    if (!conn.ok) return;
+    const callsBeforeClose = (fetch_ as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    conn.value.close();
+    const result = await conn.value.callTool(
+      "search",
+      { query: "test" },
+      undefined,
+      new AbortController().signal
+    );
+
+    expect(result.status).toBe("outcome_unknown");
+    expect(fetch_).toHaveBeenCalledTimes(callsBeforeClose);
   });
 
   it("rejects a certificate-pinned server when given an opaque transport", async () => {

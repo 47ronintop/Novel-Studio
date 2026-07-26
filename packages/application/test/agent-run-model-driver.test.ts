@@ -101,7 +101,8 @@ describe("AgentRunModelDriver", () => {
               type: "tool_call_delta",
               toolCallId: "call-1",
               name: "read_chapter",
-              argumentsDelta: '{"chapter'
+              argumentsDelta: '{"chapter',
+              providerMetadata: { thoughtSignature: "signature-one" }
             }
           };
           yield {
@@ -146,6 +147,7 @@ describe("AgentRunModelDriver", () => {
       tools: [
         {
           name: "read_chapter",
+          description: "Read one chapter.",
           inputSchema: {
             type: "object",
             additionalProperties: false,
@@ -165,7 +167,8 @@ describe("AgentRunModelDriver", () => {
         type: "tool_call_delta",
         toolCallId: "call-1",
         name: "read_chapter",
-        argumentsDelta: '{"chapter'
+        argumentsDelta: '{"chapter',
+        providerMetadata: { thoughtSignature: "signature-one" }
       },
       { type: "tool_call_delta", toolCallId: "call-1", argumentsDelta: 'Id":"chapter-03"}' },
       { type: "round_completed", finishReason: "tool_calls" }
@@ -175,6 +178,7 @@ describe("AgentRunModelDriver", () => {
         type: "function",
         function: {
           name: "read_chapter",
+          description: "Read one chapter.",
           parameters: {
             type: "object",
             additionalProperties: false,

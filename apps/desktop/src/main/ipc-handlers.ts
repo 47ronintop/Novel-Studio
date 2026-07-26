@@ -63,6 +63,7 @@ import type {
   UserPreferencesSaveInput
 } from "@novel-studio/application";
 import type {
+  AgentNetworkProviderProfile,
   AgentNetworkSettingsData,
   AgentNetworkSettingsSession
 } from "@novel-studio/application";
@@ -239,22 +240,10 @@ export function createApplicationIpcHandlers(
     const result = await request;
     if (result.ok) {
       try {
-        const refreshed = await options.onAgentSettingsChanged?.();
-        if (refreshed !== undefined && !refreshed.ok) return err(refreshed.error);
-      } catch (error) {
-        return err(
-          createUnifiedError({
-            code: "AGENT_RUNTIME_SETTINGS_REFRESH_FAILED",
-            category: "AgentError",
-            message:
-              error instanceof Error
-                ? error.message
-                : "The Agent runtime could not apply the updated settings.",
-            recoverability: "user-action",
-            suggestedAction: "Retry the settings update after the active Agent run has stopped.",
-            traceId: "ipc-handlers"
-          })
-        );
+        await options.onAgentSettingsChanged?.();
+      } catch {
+        // The durable mutation is authoritative. Main revokes old capabilities before refresh, so
+        // a refresh failure must not make the renderer retry an already-persisted operation.
       }
     }
     return result;
@@ -954,7 +943,10 @@ export function createApplicationIpcHandlers(
         return options.modelSecretStore.saveSecret("", "");
       }
 
-      return options.modelSecretStore.saveSecret(secretRef, secret);
+      const saved = options.modelSecretStore.saveSecret(secretRef, secret);
+      return secretRef.startsWith("secret://agent-network/")
+        ? notifyAgentSettingsChanged(saved)
+        : saved;
     },
     "application:settings:test-model-profile": (profileId: unknown) => {
       if (typeof profileId !== "string") {
@@ -1037,6 +1029,24 @@ export function createApplicationIpcHandlers(
       notifyAgentSettingsChanged(
         options.agentNetworkSettingsSession?.updateNetworkSettings(
           isRecord(input) ? (input as Partial<AgentNetworkSettingsData>) : {}
+        ) ?? Promise.resolve(ok(DEFAULT_NETWORK_SETTINGS))
+      ),
+    "application:agent-network:save-provider": (input: unknown) =>
+      notifyAgentSettingsChanged(
+        options.agentNetworkSettingsSession?.saveProviderProfile(
+          (isRecord(input) ? input : {}) as Omit<AgentNetworkProviderProfile, "policyRevision">
+        ) ?? Promise.resolve(ok(DEFAULT_NETWORK_SETTINGS))
+      ),
+    "application:agent-network:remove-provider": (providerId: unknown) =>
+      notifyAgentSettingsChanged(
+        options.agentNetworkSettingsSession?.removeProviderProfile(
+          typeof providerId === "string" ? providerId : ""
+        ) ?? Promise.resolve(ok(DEFAULT_NETWORK_SETTINGS))
+      ),
+    "application:agent-network:set-default-provider": (providerId: unknown) =>
+      notifyAgentSettingsChanged(
+        options.agentNetworkSettingsSession?.setDefaultProvider(
+          typeof providerId === "string" ? providerId : ""
         ) ?? Promise.resolve(ok(DEFAULT_NETWORK_SETTINGS))
       ),
     "application:agent-network:test-connection": (profileId: unknown) =>

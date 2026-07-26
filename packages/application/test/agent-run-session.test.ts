@@ -361,6 +361,15 @@ describe("AgentRunSession", () => {
           expect(input.messages).toContainEqual(
             expect.objectContaining({ role: "user", content: "保留现有揭示时机。" })
           );
+          expect(input.messages).toContainEqual(
+            expect.objectContaining({
+              role: "assistant",
+              toolCalls: [expect.objectContaining({ id: "call_question" })]
+            })
+          );
+          expect(input.messages).toContainEqual(
+            expect.objectContaining({ role: "tool", toolCallId: "call_question" })
+          );
           yield toolCall("call_finish", "finish", { summary: "只读核对完成。" });
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
@@ -426,8 +435,10 @@ describe("AgentRunSession", () => {
       "tool_completed",
       "tool_started",
       "tool_completed",
+      "assistant_text_completed",
       "user_input_requested",
       "user_input_resolved",
+      "assistant_text_completed",
       "run_completed"
     ]);
     for (const published of persistenceOrder.filter((entry) => entry.startsWith("publish:"))) {
@@ -882,6 +893,7 @@ describe("AgentRunSession", () => {
           },
           events: [
             expect.objectContaining({ type: "run_started" }),
+            expect.objectContaining({ type: "assistant_text_completed" }),
             expect.objectContaining({ type: "tool_started" }),
             expect.objectContaining({ type: "tool_completed" }),
             expect.objectContaining({ type: "context_stale" }),
@@ -1143,6 +1155,7 @@ describe("AgentRunSession", () => {
           snapshot: { status: "limit_reached" },
           events: [
             expect.objectContaining({ type: "run_started" }),
+            expect.objectContaining({ type: "assistant_text_completed" }),
             expect.objectContaining({ type: "tool_started" }),
             expect.objectContaining({ type: "tool_completed" }),
             expect.objectContaining({ type: "run_limit_reached" })
@@ -4725,18 +4738,27 @@ describe("AgentRunSession effectful tool approvals", () => {
     });
   });
 
-  test("persists a network approval binding at the durable launch boundary", async () => {
+  test("auto-approves a structured web_search through the durable approval boundary", async () => {
     const createSession = (applicationExports as unknown as Record<string, unknown>)[
       "createAgentRunSession"
     ] as (options: Record<string, unknown>) => {
       startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
-      decideToolApproval(command: Record<string, unknown>): Promise<Record<string, unknown>>;
       readAgentRun(runId: string): Promise<Record<string, unknown>>;
     };
+    const persistedEventTypes: string[] = [];
+    const repository = {
+      ...memoryRepository(),
+      async appendEvent(event: Record<string, unknown>) {
+        persistedEventTypes.push(String(event["type"]));
+        return { ok: true, value: event };
+      }
+    };
     let rounds = 0;
+    let searches = 0;
     const session = createSession({
-      coordinatorOptions: { createRunId: () => "run_network_approval" },
-      repository: memoryRepository(),
+      coordinatorOptions: { createRunId: () => "run_auto_search_approval" },
+      repository,
+      dataEgressPolicy: "auto_approve_search_queries",
       capabilitySnapshot: {
         workspaceKind: "engineeringWorkspace",
         searchEnabled: false,
@@ -4752,7 +4774,107 @@ describe("AgentRunSession effectful tool approvals", () => {
         async *streamRound() {
           rounds += 1;
           if (rounds === 1) {
-            yield toolCall("network-call-1", "web_search", { query: "agent runtime" });
+            yield toolCall("auto-search-call-1", "web_search", { query: "agent runtime" });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          yield toolCall("auto-search-finish-1", "finish", { summary: "done" });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      },
+      networkToolExecutor: {
+        async webSearch() {
+          searches += 1;
+          expect(persistedEventTypes.at(-1)).toBe("tool_started");
+          return { ok: true, value: networkReadResult() };
+        },
+        async fetchUrl() {
+          throw new Error("fetch_url should not run");
+        }
+      }
+    });
+
+    await session.startAgentRun({ ...startCommand(), contextMode: "general_file" });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_auto_search_approval")).toMatchObject({
+        value: { snapshot: { status: "completed", pendingToolApproval: null } }
+      });
+    });
+    expect(searches).toBe(1);
+    const read = await session.readAgentRun("run_auto_search_approval");
+    const events = (
+      read["value"] as {
+        events: readonly { readonly type: string; readonly detail?: Record<string, unknown> }[];
+      }
+    ).events;
+    const requested = events.find((event) => event.type === "tool_approval_requested");
+    const resolved = events.find((event) => event.type === "tool_approval_resolved");
+    const started = events.find(
+      (event) =>
+        event.type === "tool_started" && event.detail?.["toolCallId"] === "auto-search-call-1"
+    );
+    expect(requested?.detail).toMatchObject({
+      canonicalToolId: "web_search",
+      binding: { kind: "network", requestDigest: expect.any(String) }
+    });
+    expect(resolved?.detail).toMatchObject({
+      canonicalToolId: "web_search",
+      bindingId: (requested?.detail?.["binding"] as Record<string, unknown>)["bindingId"],
+      decision: "approve"
+    });
+    expect(started?.detail).toMatchObject({
+      approvalBindingId: (requested?.detail?.["binding"] as Record<string, unknown>)["bindingId"],
+      approvalBindingKind: "network",
+      requestDigest: expect.any(String)
+    });
+    const requestedIndex = events.findIndex((event) => event.type === "tool_approval_requested");
+    const resolvedIndex = events.findIndex((event) => event.type === "tool_approval_resolved");
+    const startedIndex = events.findIndex(
+      (event) =>
+        event.type === "tool_started" && event.detail?.["toolCallId"] === "auto-search-call-1"
+    );
+    expect(requestedIndex).toBeGreaterThanOrEqual(0);
+    expect(resolvedIndex).toBeGreaterThan(requestedIndex);
+    expect(startedIndex).toBeGreaterThan(resolvedIndex);
+  });
+
+  test("keeps fetch_url behind manual approval when search queries are auto-approved", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ] as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      decideToolApproval(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    let rounds = 0;
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_network_approval" },
+      repository: memoryRepository(),
+      dataEgressPolicy: "auto_approve_search_queries",
+      capabilitySnapshot: {
+        workspaceKind: "engineeringWorkspace",
+        searchEnabled: false,
+        fileLifecycleEnabled: false,
+        controlledExecutionEnabled: false,
+        gitReadEnabled: false,
+        networkReadEnabled: true,
+        pluginToolsEnabled: false,
+        mcpToolsEnabled: false,
+        featureFlagRevision: "test-1"
+      },
+      modelDriver: {
+        async *streamRound() {
+          rounds += 1;
+          if (rounds === 1) {
+            yield toolCall("network-call-1", "fetch_url", {
+              url: "https://example.test/article"
+            });
             yield { type: "round_completed", finishReason: "tool_calls" };
             return;
           }
@@ -4905,7 +5027,12 @@ describe("AgentRunSession effectful tool approvals", () => {
           mcpToolsEnabled: kind === "external",
           featureFlagRevision: "test-1"
         },
-        ...(kind === "external" ? { externalToolDescriptors: [externalTool] } : {}),
+        ...(kind === "external"
+          ? {
+              dataEgressPolicy: "auto_approve_search_queries",
+              externalToolDescriptors: [externalTool]
+            }
+          : {}),
         modelDriver: {
           async *streamRound() {
             yield toolCall(

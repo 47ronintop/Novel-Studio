@@ -53,6 +53,37 @@ describe("createDesktopNetworkToolExecutor", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("fails closed when the default provider secret cannot be resolved", async () => {
+    const settings = {
+      ...DEFAULT_NETWORK_SETTINGS,
+      enabled: true,
+      allowedHosts: ["search.example.com"],
+      policyRevision: "v1.0-test",
+      defaultProviderId: "search",
+      providerProfiles: [
+        {
+          providerId: "search",
+          name: "Search",
+          apiKeyRef: "secret://agent-network/search/api_key",
+          endpoint: "https://search.example.com/search",
+          policyRevision: "v1.0-test"
+        }
+      ]
+    };
+    const result = await createDesktopNetworkToolExecutor({
+      resolveSecret: () => undefined,
+      settingsPort: {
+        readNetworkSettings: vi.fn(() => Promise.resolve(ok(settings))),
+        writeNetworkSettings: vi.fn((next) => Promise.resolve(ok(next)))
+      }
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "NETWORK_PROVIDER_SECRET_UNAVAILABLE" }
+    });
+  });
+
   it("forwards storage errors", async () => {
     const port: AgentNetworkSettingsPort = {
       readNetworkSettings: vi.fn(() =>
@@ -85,11 +116,19 @@ describe("createDesktopNetworkToolExecutor", () => {
       enabled: true,
       allowedHosts: ["api.example.com", "search.example.com"],
       policyRevision: "v1.0-test",
+      defaultProviderId: "search",
       providerProfiles: [
+        {
+          providerId: "backup",
+          name: "Backup",
+          apiKeyRef: "secret://agent-network/backup/api_key",
+          endpoint: "https://api.example.com/search",
+          policyRevision: "v1.0-test"
+        },
         {
           providerId: "search",
           name: "Search",
-          apiKeyRef: "secret://search",
+          apiKeyRef: "secret://agent-network/search/api_key",
           endpoint: "https://search.example.com/search",
           policyRevision: "v1.0-test"
         }
@@ -110,8 +149,13 @@ describe("createDesktopNetworkToolExecutor", () => {
         })()
       };
     };
+    const resolveSecret = vi.fn(async (secretRef: string) =>
+      secretRef === "secret://agent-network/search/api_key"
+        ? "provider-key-canary"
+        : "backup-key-canary"
+    );
     const result = await createDesktopNetworkToolExecutor({
-      resolveSecret: () => "provider-key-canary",
+      resolveSecret,
       settingsPort: port,
       dialerOptions: {
         resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
@@ -135,6 +179,8 @@ describe("createDesktopNetworkToolExecutor", () => {
     expect(headers[0]?.["authorization"]).toBe("Bearer provider-key-canary");
     expect(headers[1]?.["authorization"]).toBeUndefined();
     expect(JSON.stringify(headers[1])).not.toContain("provider-key-canary");
+    expect(resolveSecret).toHaveBeenCalledOnce();
+    expect(resolveSecret).toHaveBeenCalledWith("secret://agent-network/search/api_key");
   });
 });
 
@@ -158,11 +204,12 @@ describe("createDesktopNetworkSettingsSession", () => {
       enabled: true,
       allowedHosts: ["search.example.com"],
       policyRevision: "v1.0-test",
+      defaultProviderId: "search",
       providerProfiles: [
         {
           providerId: "search",
           name: "Search",
-          apiKeyRef: "secret://search",
+          apiKeyRef: "secret://agent-network/search/api_key",
           endpoint: "https://search.example.com/health",
           policyRevision: "v1.0-test"
         }
@@ -180,7 +227,7 @@ describe("createDesktopNetworkSettingsSession", () => {
       })()
     }));
     const session = createDesktopNetworkSettingsSession({
-      resolveSecret: () => undefined,
+      resolveSecret: () => "connection-test-key",
       settingsPort: port,
       dialerOptions: {
         resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
@@ -196,8 +243,40 @@ describe("createDesktopNetworkSettingsSession", () => {
       expect.objectContaining({
         url: expect.objectContaining({ hostname: "search.example.com" }),
         address: { address: "93.184.216.34", family: 4 },
-        method: "GET"
+        method: "GET",
+        headers: expect.objectContaining({ authorization: "Bearer connection-test-key" })
       })
     );
+  });
+
+  it("rejects a connection test when its Main-owned secret is unavailable", async () => {
+    const settings = {
+      ...DEFAULT_NETWORK_SETTINGS,
+      enabled: true,
+      allowedHosts: ["search.example.com"],
+      policyRevision: "v1.0-test",
+      defaultProviderId: "search",
+      providerProfiles: [
+        {
+          providerId: "search",
+          name: "Search",
+          apiKeyRef: "secret://agent-network/search/api_key",
+          endpoint: "https://search.example.com/health",
+          policyRevision: "v1.0-test"
+        }
+      ]
+    };
+    const session = createDesktopNetworkSettingsSession({
+      resolveSecret: () => undefined,
+      settingsPort: {
+        readNetworkSettings: vi.fn(() => Promise.resolve(ok(settings))),
+        writeNetworkSettings: vi.fn((next) => Promise.resolve(ok(next)))
+      }
+    });
+
+    expect(await session.testConnection("search")).toMatchObject({
+      ok: false,
+      error: { code: "NETWORK_PROVIDER_SECRET_UNAVAILABLE" }
+    });
   });
 });

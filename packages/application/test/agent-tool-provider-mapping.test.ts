@@ -33,7 +33,7 @@ describe("checkProviderNameCollisions", () => {
 
   test("rejects name exceeding max length", () => {
     const result = checkProviderNameCollisions([
-      { canonicalId: "tool", providerName: "a".repeat(65) }
+      { canonicalId: "tool", providerName: "a".repeat(64) }
     ]);
     expect(result.ok).toBe(false);
   });
@@ -44,9 +44,9 @@ describe("mangleToolId", () => {
     expect(mangleToolId("plugin:acme/summarise")).toBe("plugin__acme__summarise");
   });
 
-  test("truncates to 64 chars", () => {
+  test("truncates to the cross-provider limit", () => {
     const id = "plugin:" + "x".repeat(100);
-    expect(mangleToolId(id).length).toBeLessThanOrEqual(64);
+    expect(mangleToolId(id).length).toBeLessThanOrEqual(63);
   });
 
   test("leaves ASCII-safe IDs unchanged", () => {

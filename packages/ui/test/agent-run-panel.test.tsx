@@ -126,6 +126,7 @@ describe("AgentRunPanel", () => {
         bindingId: "tool_approval_01",
         canonicalToolId: "mcp:trusted/send_message",
         kind: "external",
+        argumentsText: '{"message":"hello","apiKey":"do-not-render"}',
         requestedAt: "2026-07-25T00:00:00.000Z",
         expiresAt: "2026-07-25T00:05:00.000Z",
         deciding: false
@@ -137,9 +138,48 @@ describe("AgentRunPanel", () => {
     expect(approval?.dataset["bindingId"]).toBe("tool_approval_01");
     expect(approval?.textContent).toContain("外部工具");
     expect(approval?.textContent).toContain("mcp:trusted/send_message");
+    expect(approval?.querySelector('[aria-label="工具参数"]')?.textContent).toContain(
+      '"message": "hello"'
+    );
+    expect(approval?.textContent).toContain("[redacted]");
+    expect(approval?.textContent).not.toContain("do-not-render");
     act(() => approval?.querySelector<HTMLButtonElement>('[aria-label="批准工具执行"]')?.click());
     act(() => approval?.querySelector<HTMLButtonElement>('[aria-label="拒绝工具执行"]')?.click());
     expect(onDecideToolApproval.mock.calls).toEqual([["approve"], ["reject"]]);
+
+    disposePanelHost(host);
+  });
+
+  test("shows a bounded, redacted network target and arguments before approval", () => {
+    const destination = `https://user:password@api.example.test/v1?access_token=do-not-render`;
+    const argumentsText = JSON.stringify({
+      query: "x".repeat(2_000),
+      nested: { token: "do-not-render" }
+    });
+    const host = renderPanelHost({
+      status: "awaiting_tool_approval",
+      pendingToolApproval: {
+        bindingId: "tool_approval_network_01",
+        canonicalToolId: "network:fetch",
+        kind: "network",
+        argumentsText,
+        destination,
+        requestedAt: "2026-07-25T00:00:00.000Z",
+        expiresAt: "2026-07-25T00:05:00.000Z",
+        deciding: false
+      },
+      onDecideToolApproval: vi.fn()
+    });
+    const approval = host.querySelector<HTMLElement>('[aria-label="工具执行审批"]');
+    const parameters = approval?.querySelector<HTMLElement>('[aria-label="工具参数"]');
+
+    expect(approval?.textContent).toContain(
+      "https://api.example.test/v1?access_token=%5Bredacted%5D"
+    );
+    expect(approval?.textContent).not.toContain("password");
+    expect(approval?.textContent).not.toContain("do-not-render");
+    expect(parameters?.textContent).toContain("[内容已截断]");
+    expect(parameters?.textContent?.length).toBeLessThanOrEqual(1_600);
 
     disposePanelHost(host);
   });

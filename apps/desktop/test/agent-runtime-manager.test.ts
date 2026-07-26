@@ -139,6 +139,46 @@ describe("DesktopAgentRuntimeManager", () => {
     expect(manager.currentWorkspace()?.workspaceId).toBe("ws_a");
   });
 
+  test("refuses a workspace switch when a run starts while the candidate is preparing", async () => {
+    const rootA = await createRoot("active-during-prepare-a");
+    const rootB = await createRoot("active-during-prepare-b");
+    const runtimes = new Map<string, ReturnType<typeof fakeRuntime>>();
+    let releaseCandidate: (() => void) | undefined;
+    const candidatePrepared = new Promise<void>((resolve) => {
+      releaseCandidate = resolve;
+    });
+    const manager = createDesktopAgentRuntimeManager({
+      createRuntime(binding) {
+        const runtime = fakeRuntime(binding.workspaceId, binding.contentRoot, binding.stateRoot, {
+          ...(binding.workspaceId === "ws_prepare_b"
+            ? { prepare: async () => candidatePrepared.then(() => ok(undefined)) }
+            : {})
+        });
+        runtimes.set(binding.workspaceId, runtime);
+        return runtime as unknown as DesktopAgentRuntime;
+      }
+    });
+    await manager.bindWorkspace(engineeringBinding("ws_prepare_a", rootA));
+
+    const preparing = manager.prepareWorkspace(engineeringBinding("ws_prepare_b", rootB));
+    await vi.waitFor(() => expect(runtimes.get("ws_prepare_b")?.prepareCalls).toBe(1));
+    runtimes.get("ws_prepare_a")?.addSnapshot({
+      runId: "run_started_during_prepare",
+      projectId: "ws_prepare_a",
+      runRevision: 1,
+      status: "executing_model"
+    });
+    releaseCandidate?.();
+
+    await expect(preparing).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED" }
+    });
+    expect(manager.currentWorkspace()?.workspaceId).toBe("ws_prepare_a");
+    expect(runtimes.get("ws_prepare_a")).toMatchObject({ disposeCalls: 0 });
+    expect(runtimes.get("ws_prepare_b")).toMatchObject({ disposeCalls: 1, subscribeCalls: 0 });
+  });
+
   test("keeps the old runtime when candidate preparation fails", async () => {
     const rootA = await createRoot("prepared-a");
     const rootB = await createRoot("prepared-b");
@@ -269,6 +309,48 @@ describe("DesktopAgentRuntimeManager", () => {
     expect(runtimes[0]).toMatchObject({ stopCalls: 1, disposeCalls: 1 });
   });
 
+  test("queues one settings refresh until a write transaction becomes terminal", async () => {
+    const root = await createRoot("settings-refresh-transaction");
+    const runtimes: ReturnType<typeof fakeRuntime>[] = [];
+    const manager = createDesktopAgentRuntimeManager({
+      createRuntime(binding) {
+        const runtime = fakeRuntime(binding.workspaceId, binding.contentRoot, binding.stateRoot, {
+          ...(runtimes.length === 0
+            ? {
+                snapshots: [
+                  {
+                    runId: "run_applying_changes",
+                    projectId: binding.workspaceId,
+                    runRevision: 4,
+                    status: "applying_changes"
+                  }
+                ],
+                deferStop: true
+              }
+            : {})
+        });
+        runtimes.push(runtime);
+        return runtime as unknown as DesktopAgentRuntime;
+      }
+    });
+    await manager.bindWorkspace(engineeringBinding("ws_settings_transaction", root));
+
+    expect(await manager.refreshCurrentWorkspace()).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUNTIME_SETTINGS_REFRESH_DEFERRED" }
+    });
+    expect(runtimes).toHaveLength(1);
+    expect(runtimes[0]).toMatchObject({ stopCalls: 1, revokeCalls: 1, disposeCalls: 0 });
+
+    runtimes[0]?.setRunStatus("run_applying_changes", "cancelled");
+    runtimes[0]?.emit({ type: "run_cancelled", runId: "run_applying_changes" });
+    runtimes[0]?.emit({ type: "run_cancelled", runId: "run_applying_changes" });
+
+    await vi.waitFor(() => expect(runtimes).toHaveLength(2));
+    expect(runtimes[0]).toMatchObject({ stopCalls: 1, disposeCalls: 1 });
+    expect(runtimes[1]).toMatchObject({ prepareCalls: 1, disposeCalls: 0 });
+  });
+
   test("revokes settings capabilities when refresh cannot confirm active runs", async () => {
     const root = await createRoot("settings-refresh-list-failure");
     const listError = createUnifiedError({
@@ -355,6 +437,7 @@ function fakeRuntime(
     readonly listResult?: Result<readonly Record<string, unknown>[], UnifiedError>;
     readonly prepareResult?: ReturnType<typeof ok<void>> | ReturnType<typeof err>;
     readonly prepare?: () => Promise<ReturnType<typeof ok<void>> | ReturnType<typeof err>>;
+    readonly deferStop?: boolean;
   } = {}
 ) {
   const listeners = new Set<(event: Record<string, unknown>) => void>();
@@ -381,9 +464,12 @@ function fakeRuntime(
         runtime.stopCalls += 1;
         const index = snapshots.findIndex((snapshot) => snapshot["runId"] === command.runId);
         if (index >= 0) {
-          snapshots[index] = { ...snapshots[index], status: "cancelled" };
+          snapshots[index] = {
+            ...snapshots[index],
+            status: options.deferStop ? "stopping_after_transaction" : "cancelled"
+          };
         }
-        return ok({});
+        return ok(snapshots[index] ?? {});
       },
       subscribe(listener: (event: Record<string, unknown>) => void) {
         runtime.subscribeCalls += 1;
@@ -404,6 +490,13 @@ function fakeRuntime(
     },
     revokeSettingsCapabilities() {
       runtime.revokeCalls += 1;
+    },
+    addSnapshot(snapshot: Record<string, unknown>) {
+      snapshots.push(snapshot);
+    },
+    setRunStatus(runId: string, status: string) {
+      const index = snapshots.findIndex((snapshot) => snapshot["runId"] === runId);
+      if (index >= 0) snapshots[index] = { ...snapshots[index], status };
     },
     emit(event: Record<string, unknown>) {
       for (const listener of listeners) listener(event);

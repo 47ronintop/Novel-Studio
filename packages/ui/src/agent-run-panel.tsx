@@ -103,6 +103,26 @@ export function AgentRunPanel(props: AgentRunPanelProps) {
             {toolApprovalKindLabel(props.pendingToolApproval.kind)}：
             {props.pendingToolApproval.canonicalToolId}
           </p>
+          {props.pendingToolApproval.destination === undefined ? null : (
+            <p>
+              目标：
+              <span>{formatToolApprovalDestination(props.pendingToolApproval.destination)}</span>
+            </p>
+          )}
+          <details>
+            <summary>参数</summary>
+            <pre
+              aria-label="工具参数"
+              style={{
+                maxHeight: "12rem",
+                overflow: "auto",
+                overflowWrap: "anywhere",
+                whiteSpace: "pre-wrap"
+              }}
+            >
+              {formatToolApprovalArguments(props.pendingToolApproval.argumentsText)}
+            </pre>
+          </details>
           <div className="ns-agent-inline-actions">
             <button
               aria-label="拒绝工具执行"
@@ -237,6 +257,52 @@ function toolApprovalKindLabel(
     case "task":
       return "项目任务";
   }
+}
+
+const TOOL_APPROVAL_PREVIEW_LIMIT = 1_500;
+const SENSITIVE_ARGUMENT_KEY =
+  /(?:api[-_]?key|authorization|cookie|credential|password|secret|token)/i;
+
+function formatToolApprovalArguments(argumentsText: string): string {
+  try {
+    const parsed: unknown = JSON.parse(argumentsText);
+    return truncateToolApprovalPreview(
+      JSON.stringify(redactToolApprovalArguments(parsed), null, 2)
+    );
+  } catch {
+    return "参数无法安全预览。";
+  }
+}
+
+function redactToolApprovalArguments(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactToolApprovalArguments);
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, child]) => [
+      key,
+      SENSITIVE_ARGUMENT_KEY.test(key) ? "[redacted]" : redactToolApprovalArguments(child)
+    ])
+  );
+}
+
+function formatToolApprovalDestination(destination: string): string {
+  try {
+    const target = new URL(destination);
+    target.username = "";
+    target.password = "";
+    for (const key of [...target.searchParams.keys()]) {
+      if (SENSITIVE_ARGUMENT_KEY.test(key)) target.searchParams.set(key, "[redacted]");
+    }
+    return truncateToolApprovalPreview(target.toString());
+  } catch {
+    return truncateToolApprovalPreview(destination);
+  }
+}
+
+function truncateToolApprovalPreview(value: string): string {
+  return value.length <= TOOL_APPROVAL_PREVIEW_LIMIT
+    ? value
+    : `${value.slice(0, TOOL_APPROVAL_PREVIEW_LIMIT)}\n[内容已截断]`;
 }
 
 function PlanRevisionCard({ control }: { readonly control: AgentPlanExecutionControl }) {

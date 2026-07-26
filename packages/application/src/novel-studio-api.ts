@@ -102,6 +102,7 @@ import type {
   UserPreferencesSnapshot
 } from "./user-preferences-session.js";
 import type { AgentNetworkSettingsData } from "./agent-network-settings-session.js";
+import type { AgentNetworkProviderProfile } from "./agent-network-policy.js";
 import type { McpServerConfig, McpSettingsData } from "./mcp-settings-session.js";
 import type { AgentRunReadResult, AnswerAgentUserInputCommand } from "./agent-run-session.js";
 import type {
@@ -346,6 +347,11 @@ export interface NovelStudioApi {
     updateSettings(
       partial: Partial<AgentNetworkSettingsData>
     ): Promise<Result<AgentNetworkSettingsData, UnifiedError>>;
+    saveProvider(
+      profile: Omit<AgentNetworkProviderProfile, "policyRevision">
+    ): Promise<Result<AgentNetworkSettingsData, UnifiedError>>;
+    removeProvider(providerId: string): Promise<Result<AgentNetworkSettingsData, UnifiedError>>;
+    setDefaultProvider(providerId: string): Promise<Result<AgentNetworkSettingsData, UnifiedError>>;
     testConnection(
       profileId: string
     ): Promise<Result<{ readonly latencyMs: number }, UnifiedError>>;

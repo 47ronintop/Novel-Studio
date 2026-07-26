@@ -96,6 +96,13 @@ export function createDesktopAgentRuntimeManager(
   const pendingPreparations = new Set<PreparedDesktopAgentWorkspace>();
   let settingsRefreshGeneration = 0;
   let settingsRefreshTail: Promise<void> = Promise.resolve();
+  let deferredSettingsRefresh:
+    | {
+        readonly generation: number;
+        readonly sourceRuntime: DesktopAgentRuntime;
+        retryScheduled: boolean;
+      }
+    | undefined;
 
   async function hasActiveRun(): Promise<Result<boolean, UnifiedError>> {
     if (runtime === undefined) return ok(false);
@@ -120,6 +127,7 @@ export function createDesktopAgentRuntimeManager(
       if (active.length === 0) return ok(undefined);
 
       let shouldRetry = false;
+      let mustWaitForTerminal = false;
       for (const snapshot of active) {
         if (generation !== settingsRefreshGeneration) return ok(undefined);
         const stopped = await currentRuntime.agentRunSession.stopAgentRun({
@@ -128,7 +136,10 @@ export function createDesktopAgentRuntimeManager(
           commandId: `settings-refresh-${String(generation)}-${snapshot.runId}-${String(snapshot.runRevision)}`,
           expectedRunRevision: snapshot.runRevision
         });
-        if (stopped.ok) continue;
+        if (stopped.ok) {
+          if (!isTerminal(stopped.value.status)) mustWaitForTerminal = true;
+          continue;
+        }
         if (stopped.error.code === "AGENT_RUN_REVISION_CONFLICT") {
           shouldRetry = true;
           continue;
@@ -136,10 +147,11 @@ export function createDesktopAgentRuntimeManager(
         if (stopped.error.code === "AGENT_RUN_ALREADY_TERMINAL") continue;
         return err(stopped.error);
       }
-      if (!shouldRetry) {
-        const remaining = await hasActiveRun();
-        if (!remaining.ok) return remaining;
-        if (!remaining.value) return ok(undefined);
+      const remaining = await hasActiveRun();
+      if (!remaining.ok) return remaining;
+      if (!remaining.value) return ok(undefined);
+      if (mustWaitForTerminal || !shouldRetry) {
+        return err(runtimeError("AGENT_RUNTIME_SETTINGS_REFRESH_DEFERRED"));
       }
     }
     return err(runtimeError("AGENT_RUNTIME_SETTINGS_REFRESH_DEFERRED"));
@@ -161,6 +173,81 @@ export function createDesktopAgentRuntimeManager(
     }
     manager.commitPreparedWorkspace(prepared.value);
     return ok(undefined);
+  }
+
+  function scheduleDeferredSettingsRefresh(sourceRuntime: DesktopAgentRuntime): void {
+    const deferred = deferredSettingsRefresh;
+    if (
+      deferred === undefined ||
+      deferred.sourceRuntime !== sourceRuntime ||
+      deferred.generation !== settingsRefreshGeneration ||
+      deferred.retryScheduled ||
+      runtime !== sourceRuntime
+    ) {
+      return;
+    }
+    deferred.retryScheduled = true;
+    const previous = settingsRefreshTail;
+    const retry = (async () => {
+      await previous;
+      if (
+        deferredSettingsRefresh !== deferred ||
+        deferred.generation !== settingsRefreshGeneration ||
+        runtime !== sourceRuntime
+      ) {
+        return;
+      }
+      const refreshed = await refreshWorkspaceAtGeneration(deferred.generation);
+      if (deferredSettingsRefresh !== deferred) return;
+      if (refreshed.ok) {
+        deferredSettingsRefresh = undefined;
+        return;
+      }
+      revokeCurrentSettingsCapabilities();
+      if (refreshed.error.code !== "AGENT_RUNTIME_SETTINGS_REFRESH_DEFERRED") {
+        deferredSettingsRefresh = undefined;
+        return;
+      }
+      deferred.retryScheduled = false;
+      confirmDeferredSettingsRefresh(deferred);
+    })();
+    settingsRefreshTail = retry.then(
+      () => undefined,
+      () => undefined
+    );
+  }
+
+  function confirmDeferredSettingsRefresh(
+    deferred: NonNullable<typeof deferredSettingsRefresh>
+  ): void {
+    void (async () => {
+      const listed = await deferred.sourceRuntime.agentRunSession.listAgentRuns(
+        deferred.sourceRuntime.workspaceId
+      );
+      if (
+        deferredSettingsRefresh !== deferred ||
+        deferred.generation !== settingsRefreshGeneration ||
+        runtime !== deferred.sourceRuntime ||
+        !listed.ok
+      ) {
+        return;
+      }
+      if (listed.value.every((snapshot) => isTerminal(snapshot.status))) {
+        scheduleDeferredSettingsRefresh(deferred.sourceRuntime);
+      }
+    })();
+  }
+
+  function deferSettingsRefresh(generation: number): void {
+    const sourceRuntime = runtime;
+    if (sourceRuntime === undefined || generation !== settingsRefreshGeneration) return;
+    const deferred = {
+      generation,
+      sourceRuntime,
+      retryScheduled: false
+    };
+    deferredSettingsRefresh = deferred;
+    confirmDeferredSettingsRefresh(deferred);
   }
 
   function revokeCurrentSettingsCapabilities(): void {
@@ -206,6 +293,7 @@ export function createDesktopAgentRuntimeManager(
       const active = await hasActiveRun();
       if (!active.ok) return active;
       if (active.value) return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
+      const sourceRuntime = runtime;
 
       let candidate: DesktopAgentRuntime;
       try {
@@ -226,10 +314,21 @@ export function createDesktopAgentRuntimeManager(
         return prepareResult;
       }
 
+      const activeBeforeCommit = await hasActiveRun();
+      if (!activeBeforeCommit.ok) {
+        candidate.dispose?.();
+        return activeBeforeCommit;
+      }
+      if (runtime !== sourceRuntime || activeBeforeCommit.value) {
+        candidate.dispose?.();
+        return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
+      }
+
       let unsubscribeCandidate: () => void;
       try {
         unsubscribeCandidate = candidate.agentRunSession.subscribe((event) => {
           if (runtime !== candidate) return;
+          if (isTerminalRunEvent(event.type)) scheduleDeferredSettingsRefresh(candidate);
           for (const listener of listeners) listener(event);
         });
       } catch {
@@ -278,12 +377,18 @@ export function createDesktopAgentRuntimeManager(
           },
     async refreshCurrentWorkspace() {
       const generation = ++settingsRefreshGeneration;
+      deferredSettingsRefresh = undefined;
       const previous = settingsRefreshTail;
       const result = (async () => {
         await previous;
         if (generation !== settingsRefreshGeneration) return ok(undefined);
         const refreshed = await refreshWorkspaceAtGeneration(generation);
-        if (!refreshed.ok) revokeCurrentSettingsCapabilities();
+        if (!refreshed.ok) {
+          revokeCurrentSettingsCapabilities();
+          if (refreshed.error.code === "AGENT_RUNTIME_SETTINGS_REFRESH_DEFERRED") {
+            deferSettingsRefresh(generation);
+          }
+        }
         return refreshed;
       })();
       settingsRefreshTail = result.then(
@@ -299,6 +404,8 @@ export function createDesktopAgentRuntimeManager(
       return () => listeners.delete(listener);
     },
     dispose() {
+      settingsRefreshGeneration += 1;
+      deferredSettingsRefresh = undefined;
       unsubscribeRuntime?.();
       unsubscribeRuntime = undefined;
       runtime?.dispose?.();
@@ -333,6 +440,15 @@ function isTerminal(status: AgentRunSnapshot["status"]): boolean {
     status === "cancelled" ||
     status === "failed" ||
     status === "limit_reached"
+  );
+}
+
+function isTerminalRunEvent(type: AgentRunEvent["type"]): boolean {
+  return (
+    type === "run_completed" ||
+    type === "run_cancelled" ||
+    type === "run_failed" ||
+    type === "run_limit_reached"
   );
 }
 

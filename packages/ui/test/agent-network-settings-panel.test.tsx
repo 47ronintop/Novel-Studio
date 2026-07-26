@@ -8,6 +8,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { AgentNetworkSettingsPanel } from "../src/agent-network-settings-panel.js";
 import type { AgentNetworkSettingsData } from "@novel-studio/application";
+import type { AgentNetworkProviderProfile } from "@novel-studio/application";
 
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -18,7 +19,8 @@ const defaultSettings: AgentNetworkSettingsData = {
   allowedHosts: [],
   dataEgressPolicy: "require_confirmation",
   policyRevision: "v1.0-default",
-  providerProfiles: []
+  providerProfiles: [],
+  defaultProviderId: ""
 };
 
 let container: HTMLDivElement;
@@ -38,6 +40,12 @@ function renderPanel(
   overrideCallbacks?: {
     onUpdateSettings?: (partial: Partial<AgentNetworkSettingsData>) => Promise<void>;
     onTestConnection?: (profileId: string) => Promise<{ readonly latencyMs: number }>;
+    onSaveProvider?: (
+      profile: Omit<AgentNetworkProviderProfile, "policyRevision">,
+      secret?: string
+    ) => Promise<void>;
+    onRemoveProvider?: (profileId: string) => Promise<void>;
+    onSetDefaultProvider?: (profileId: string) => Promise<void>;
     onRevoke?: () => Promise<void>;
   }
 ) {
@@ -50,6 +58,11 @@ function renderPanel(
   const onTestConnection =
     overrideCallbacks?.onTestConnection ?? vi.fn().mockResolvedValue({ latencyMs: 50 });
   const onRevoke = overrideCallbacks?.onRevoke ?? vi.fn().mockResolvedValue(undefined);
+  const onSaveProvider = overrideCallbacks?.onSaveProvider ?? vi.fn().mockResolvedValue(undefined);
+  const onRemoveProvider =
+    overrideCallbacks?.onRemoveProvider ?? vi.fn().mockResolvedValue(undefined);
+  const onSetDefaultProvider =
+    overrideCallbacks?.onSetDefaultProvider ?? vi.fn().mockResolvedValue(undefined);
 
   act(() => {
     root.render(
@@ -57,12 +70,23 @@ function renderPanel(
         settings={{ ...defaultSettings, ...settings }}
         onUpdateSettings={onUpdateSettings}
         onTestConnection={onTestConnection}
+        onSaveProvider={onSaveProvider}
+        onRemoveProvider={onRemoveProvider}
+        onSetDefaultProvider={onSetDefaultProvider}
         onRevoke={onRevoke}
       />
     );
   });
 
-  return { container, onUpdateSettings, onTestConnection, onRevoke };
+  return {
+    container,
+    onUpdateSettings,
+    onTestConnection,
+    onSaveProvider,
+    onRemoveProvider,
+    onSetDefaultProvider,
+    onRevoke
+  };
 }
 
 describe("AgentNetworkSettingsPanel", () => {
@@ -184,5 +208,82 @@ describe("AgentNetworkSettingsPanel", () => {
     });
     const select = container.querySelector("[aria-label='数据外发策略']") as HTMLSelectElement;
     expect(select?.value).toBe("auto_approve_search_queries");
+  });
+
+  it("submits a new provider with a deterministic secret ref", async () => {
+    const onSaveProvider = vi.fn().mockResolvedValue(undefined);
+    const rendered = renderPanel(
+      { enabled: true, allowedHosts: ["search.example.com"] },
+      { onSaveProvider }
+    );
+    const setValue = (label: string, value: string) => {
+      const input = rendered.container.querySelector(`[aria-label='${label}']`) as HTMLInputElement;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    await act(async () => {
+      setValue("网络 Provider ID", "primary");
+      setValue("网络 Provider 名称", "Primary Search");
+      setValue("网络 Provider 端点", "https://search.example.com/query");
+      setValue("网络 Provider API Key", "network-secret");
+    });
+
+    const save = Array.from(rendered.container.querySelectorAll("button")).find(
+      (button) => button.textContent === "新增 Provider"
+    );
+    await act(async () => {
+      (save as HTMLButtonElement).click();
+    });
+
+    expect(onSaveProvider).toHaveBeenCalledWith(
+      {
+        providerId: "primary",
+        name: "Primary Search",
+        endpoint: "https://search.example.com/query",
+        apiKeyRef: "secret://agent-network/primary/api_key"
+      },
+      "network-secret"
+    );
+  });
+
+  it("can select and remove a configured provider", async () => {
+    const onSetDefaultProvider = vi.fn().mockResolvedValue(undefined);
+    const onRemoveProvider = vi.fn().mockResolvedValue(undefined);
+    const rendered = renderPanel(
+      {
+        enabled: true,
+        defaultProviderId: "primary",
+        providerProfiles: [
+          {
+            providerId: "primary",
+            name: "Primary",
+            endpoint: "https://search.example.com/query",
+            apiKeyRef: "secret://network/primary",
+            policyRevision: "v1"
+          },
+          {
+            providerId: "backup",
+            name: "Backup",
+            endpoint: "https://backup.example.com/query",
+            apiKeyRef: "secret://network/backup",
+            policyRevision: "v1"
+          }
+        ]
+      },
+      { onSetDefaultProvider, onRemoveProvider }
+    );
+
+    await act(async () => {
+      (
+        rendered.container.querySelector(
+          "[aria-label='设为默认 Provider Backup']"
+        ) as HTMLButtonElement
+      ).click();
+      (
+        rendered.container.querySelector("[aria-label='删除 Provider Backup']") as HTMLButtonElement
+      ).click();
+    });
+    expect(onSetDefaultProvider).toHaveBeenCalledWith("backup");
+    expect(onRemoveProvider).toHaveBeenCalledWith("backup");
   });
 });

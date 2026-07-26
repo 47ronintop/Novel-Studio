@@ -3,6 +3,7 @@ export { createAgentRunCoordinator } from "./agent-run-coordinator.js";
 export {
   computeAgentToolDescriptorDigest,
   listAgentTools,
+  MAX_EXTERNAL_TOOL_DESCRIPTORS,
   validateAgentToolArguments,
   validateExternalToolDescriptors
 } from "./tool-registry.js";

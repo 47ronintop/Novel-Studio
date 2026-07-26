@@ -63,6 +63,11 @@ export interface ModelSettingsDraft {
 export interface ModelProviderOption {
   readonly id: string;
   readonly label: string;
+  readonly defaultModelName?: string;
+  readonly defaultBaseUrl?: string;
+  readonly agentAdapter?: "openai-compatible" | "anthropic-native" | "gemini-native";
+  readonly agentSupport?: "native" | "conditional-compatible";
+  readonly agentSupportNote?: string;
 }
 
 export interface ModelConnectionStatus {
@@ -358,13 +363,17 @@ function ModelProfileSettingsSection({
   const canRunProfileAction = activeProfileId.trim().length > 0;
   const activeConnectionStatus =
     connectionStatus?.profileId === activeProfileId ? connectionStatus : undefined;
+  const selectedProviderOption = providerOptions?.find(
+    (provider) => provider.id === draft.provider
+  );
+  const endpointNote = modelProviderEndpointNote(selectedProviderOption);
 
   return (
     <section className="model-settings-section" aria-label="模型配置">
       <div className="model-settings-section-header">
         <div>
           <h2>模型配置</h2>
-          <p>配置 OpenAI Compatible、OpenAI 或 Ollama profile。保存前仍由 Application 层校验。</p>
+          <p>配置模型 Provider profile。保存前仍由 Application 层校验。</p>
         </div>
         {feedback === undefined ? null : (
           <p className="ns-project-feedback" data-kind={feedback.kind} role="status">
@@ -435,7 +444,20 @@ function ModelProfileSettingsSection({
               <select
                 aria-label="模型 Provider"
                 className="model-settings-select"
-                onChange={(event) => onDraftChange?.({ provider: event.currentTarget.value })}
+                onChange={(event) => {
+                  const provider = providerOptions?.find(
+                    (option) => option.id === event.currentTarget.value
+                  );
+                  onDraftChange?.({
+                    provider: event.currentTarget.value,
+                    ...(provider?.defaultBaseUrl === undefined
+                      ? {}
+                      : { baseUrl: provider.defaultBaseUrl }),
+                    ...(provider?.defaultModelName === undefined
+                      ? {}
+                      : { modelName: provider.defaultModelName })
+                  });
+                }}
                 value={draft.provider}
               >
                 {(providerOptions ?? []).map((provider) => (
@@ -444,6 +466,11 @@ function ModelProfileSettingsSection({
                   </option>
                 ))}
               </select>
+              {selectedProviderOption?.agentSupportNote === undefined ? null : (
+                <small className="model-discovery-fallback" data-testid="agent-provider-support">
+                  {selectedProviderOption.agentSupportNote}
+                </small>
+              )}
             </ModelField>
             <ModelField
               actions={
@@ -518,7 +545,7 @@ function ModelProfileSettingsSection({
                 </>
               }
               label="API 请求地址"
-              note="请填写兼容 OpenAI 格式的服务端点地址，例如 https://api.example.com/v1。"
+              note={endpointNote}
             >
               <input
                 aria-label="模型 Base URL"
@@ -658,6 +685,16 @@ function ModelProfileSettingsSection({
       </div>
     </section>
   );
+}
+
+function modelProviderEndpointNote(provider: ModelProviderOption | undefined): string {
+  if (provider?.agentAdapter === "anthropic-native") {
+    return "请填写 Anthropic Messages API 根地址，例如 https://api.anthropic.com。";
+  }
+  if (provider?.agentAdapter === "gemini-native") {
+    return "请填写 Gemini generateContent API 根地址，例如 https://generativelanguage.googleapis.com/v1beta。";
+  }
+  return "请填写兼容 OpenAI 格式的服务端点地址，例如 https://api.example.com/v1。";
 }
 
 function ModelConnectionInlineStatus({

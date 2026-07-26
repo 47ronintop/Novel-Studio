@@ -424,6 +424,76 @@ describe("M22 settings bridge", () => {
     ]);
     expect(bridge.getProps().toolSources?.servers[0]?.config.enabled).toBe(false);
   });
+
+  test("saves a remote MCP key before persisting its secret reference", async () => {
+    const calls: string[] = [];
+    const savedSecrets = new Map<string, string>();
+    const bridge = createSettingsBridge(createApi(calls, savedSecrets));
+
+    await bridge.addMcpServer(
+      {
+        serverId: "mcp_secure",
+        displayName: "Secure MCP",
+        transport: "remote_http",
+        endpointUrl: "https://mcp.example.test",
+        apiKeyRef: "secret://remote-mcp/mcp_secure/api_key",
+        enabled: false
+      },
+      "mcp-plain-key"
+    );
+
+    expect(savedSecrets.get("secret://remote-mcp/mcp_secure/api_key")).toBe("mcp-plain-key");
+    expect(calls).toContain("settings.saveModelSecret:secret://remote-mcp/mcp_secure/api_key");
+    expect(JSON.stringify(bridge.getProps().toolSources)).not.toContain("mcp-plain-key");
+  });
+
+  test("saves a network provider before its replacement key and preserves the old key on rejection", async () => {
+    const calls: string[] = [];
+    const savedSecrets = new Map([
+      ["secret://agent-network/search/api_key", "old-network-key"]
+    ]);
+    const api = createApi(calls, savedSecrets);
+    api.agentNetwork.saveProvider = async (profile) => {
+      calls.push(`agentNetwork.saveProvider:${profile.providerId}`);
+      return ok({
+        enabled: false,
+        providerProfiles: [{ ...profile, policyRevision: "v1.0-test" }],
+        defaultProviderId: profile.providerId,
+        allowedHosts: [],
+        dataEgressPolicy: "require_confirmation",
+        policyRevision: "v1.0-test"
+      });
+    };
+    const bridge = createSettingsBridge(api);
+    const profile = {
+      providerId: "search",
+      name: "Search",
+      endpoint: "https://search.example.test",
+      apiKeyRef: "secret://agent-network/search/api_key"
+    };
+
+    await bridge.saveNetworkProvider(profile, "new-network-key");
+
+    expect(calls).toEqual([
+      "agentNetwork.saveProvider:search",
+      "settings.saveModelSecret:secret://agent-network/search/api_key"
+    ]);
+    expect(savedSecrets.get(profile.apiKeyRef)).toBe("new-network-key");
+
+    calls.length = 0;
+    savedSecrets.set(profile.apiKeyRef, "old-network-key");
+    api.agentNetwork.saveProvider = async (rejectedProfile) => {
+      calls.push(`agentNetwork.saveProvider:${rejectedProfile.providerId}`);
+      return { ok: false, error: { message: "Provider endpoint is not allowed." } as never };
+    };
+
+    await expect(bridge.saveNetworkProvider(profile, "rejected-network-key")).rejects.toThrow(
+      "Provider endpoint is not allowed."
+    );
+
+    expect(calls).toEqual(["agentNetwork.saveProvider:search"]);
+    expect(savedSecrets.get(profile.apiKeyRef)).toBe("old-network-key");
+  });
 });
 
 function createApi(
@@ -709,11 +779,21 @@ function createApi(
         ok({
           enabled: false,
           providerProfiles: [],
+          defaultProviderId: "",
           allowedHosts: [],
           dataEgressPolicy: "require_confirmation" as const,
           policyRevision: "v1.0-test"
         }),
       updateSettings: async () => {
+        throw new Error("not used");
+      },
+      saveProvider: async () => {
+        throw new Error("not used");
+      },
+      removeProvider: async () => {
+        throw new Error("not used");
+      },
+      setDefaultProvider: async () => {
         throw new Error("not used");
       },
       testConnection: async () => {

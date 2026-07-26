@@ -28,7 +28,7 @@ const sampleServer: McpServerConfig = {
   displayName: "Test MCP Server",
   transport: "remote_http",
   endpointUrl: "https://mcp.example.com/rpc",
-  apiKeyRef: "secret://mcp-key",
+  apiKeyRef: "secret://remote-mcp/mcp-test-1/api_key",
   enabled: true
 };
 
@@ -51,6 +51,51 @@ describe("createMcpSettingsSession", () => {
       expect(result.value).toHaveLength(1);
       expect(result.value[0]?.serverId).toBe("mcp-test-1");
     }
+  });
+
+  it("rejects plaintext remote credential references", async () => {
+    const session = createMcpSettingsSession({ port: makePort() });
+
+    const result = await session.addServer({ ...sampleServer, apiKeyRef: "plain-api-key" });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("MCP_REMOTE_API_KEY_REF_INVALID");
+  });
+
+  it("stores whether a remote credential is required", async () => {
+    const session = createMcpSettingsSession({ port: makePort() });
+
+    const result = await session.addServer({ ...sampleServer, apiKeyRequired: false });
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: { servers: [expect.objectContaining({ apiKeyRequired: false })] }
+    });
+  });
+
+  it("rejects a remote server that references another secret namespace", async () => {
+    const session = createMcpSettingsSession({ port: makePort() });
+
+    const result = await session.addServer({
+      ...sampleServer,
+      apiKeyRef: "secret://model-profile/victim/api_key"
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "MCP_REMOTE_API_KEY_REF_INVALID" }
+    });
+  });
+
+  it("returns a validation error for malformed renderer input instead of throwing", async () => {
+    const session = createMcpSettingsSession({ port: makePort() });
+
+    await expect(
+      session.addServer({
+        serverId: "mcp-test-1",
+        transport: "remote_http"
+      } as unknown as McpServerConfig)
+    ).resolves.toMatchObject({ ok: false, error: { code: "MCP_SERVER_CONFIG_INVALID" } });
   });
 
   it("addServer updates existing server by ID", async () => {

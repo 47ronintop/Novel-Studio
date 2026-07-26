@@ -91,6 +91,7 @@ import {
   formatAiWritingStyleRulesForPrompt
 } from "./ai-writing-style-rules.js";
 import type { ModelReasoningStrengthControl } from "./model-discovery-session.js";
+import type { AgentNetworkPolicy } from "./agent-network-policy.js";
 import type { AgentPermissionSession } from "./agent-permission-session.js";
 import type { AgentPricingRegistry } from "./agent-pricing-registry.js";
 import type { AgentNetworkToolExecutor, AgentSearchToolExecutor } from "./agent-tool-ports.js";
@@ -120,7 +121,8 @@ import {
   createToolCallAssembler,
   dispatchAssembledToolCalls,
   parseToolCallArguments,
-  type AssembledToolCall
+  type AssembledToolCall,
+  type ToolCallDispatchFailure
 } from "./agent-tool-call-pipeline.js";
 
 export type AgentModelMessageRole = "system" | "user" | "assistant" | "tool";
@@ -133,6 +135,7 @@ export interface AgentModelMessage {
     readonly id: string;
     readonly name: string;
     readonly arguments: string;
+    readonly providerMetadata?: JsonObject;
   }[];
 }
 
@@ -161,6 +164,7 @@ export type AgentModelStreamEvent =
       readonly toolCallId: string;
       readonly name?: string;
       readonly argumentsDelta?: string;
+      readonly providerMetadata?: JsonObject;
     }
   | { readonly type: "round_completed"; readonly finishReason: LlmRoundFinishReason };
 
@@ -168,7 +172,7 @@ export interface AgentModelRoundInput {
   readonly runId: string;
   readonly snapshot: AgentRunSnapshot;
   readonly messages: readonly AgentModelMessage[];
-  readonly tools: readonly Pick<AgentToolDescriptor, "name" | "inputSchema">[];
+  readonly tools: readonly Pick<AgentToolDescriptor, "name" | "description" | "inputSchema">[];
   readonly signal: AbortSignal;
   /**
    * The mode-specific, system-authored guidance for this round (Task 1.7). It is computed per run
@@ -595,6 +599,11 @@ export interface CreateAgentRunSessionOptions {
   readonly conversationLifecycle?: AgentConversationLifecyclePort;
   /** Phase D: network read executor. When absent, network tools return UNAVAILABLE. */
   readonly networkToolExecutor?: AgentNetworkToolExecutor;
+  /**
+   * Main-owned network egress policy. Only a schema-valid built-in web_search may be approved
+   * automatically; URL fetches and external tools always retain their durable user approval gate.
+   */
+  readonly dataEgressPolicy?: AgentNetworkPolicy["dataEgressPolicy"];
   /** Phase A: search executor. When absent, search tools return UNAVAILABLE. */
   readonly searchToolExecutor?: AgentSearchToolExecutor;
   /** Phase B: file lifecycle operation session. When absent, lifecycle tools return UNAVAILABLE. */
@@ -1420,12 +1429,85 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         ? restoredChangeSet
         : { ...restoredChangeSet, status: restoredChangeSetStatus };
     const messages: AgentModelMessage[] = [{ role: "user", content: snapshot.userRequest }];
+    const restoredAssistantToolCallIds = new Set<string>();
     for (const event of events) {
+      if (event.type === "assistant_text_completed") {
+        const text = typeof event.detail?.["text"] === "string" ? event.detail["text"] : "";
+        const rawCalls = event.detail?.["toolCalls"];
+        const toolCalls = Array.isArray(rawCalls)
+          ? rawCalls.flatMap((value) => {
+              if (!isJsonObject(value)) return [];
+              const id = value["id"];
+              const name = value["name"];
+              const argumentsText = value["arguments"];
+              if (
+                typeof id !== "string" ||
+                typeof name !== "string" ||
+                typeof argumentsText !== "string"
+              ) {
+                return [];
+              }
+              restoredAssistantToolCallIds.add(id);
+              const providerMetadata = value["providerMetadata"];
+              return [
+                {
+                  id,
+                  name,
+                  arguments: argumentsText,
+                  ...(isJsonObject(providerMetadata) ? { providerMetadata } : {})
+                }
+              ];
+            })
+          : [];
+        if (text.length > 0 || toolCalls.length > 0) {
+          messages.push({
+            role: "assistant",
+            content: text,
+            ...(toolCalls.length === 0 ? {} : { toolCalls })
+          });
+        }
+      }
       if (event.type === "tool_completed" && typeof event.detail?.["summary"] === "string") {
-        messages.push({
-          role: "system",
-          content: `Restored completed read summary: ${event.detail["summary"]}`
-        });
+        const toolCallId = event.detail["toolCallId"];
+        messages.push(
+          typeof toolCallId === "string" && restoredAssistantToolCallIds.has(toolCallId)
+            ? {
+                role: "tool",
+                toolCallId,
+                content: JSON.stringify({ ok: true, summary: event.detail["summary"] })
+              }
+            : {
+                role: "system",
+                content: `Restored completed read summary: ${event.detail["summary"]}`
+              }
+        );
+      }
+      if (event.type === "tool_failed") {
+        const toolCallId = event.detail?.["toolCallId"];
+        if (typeof toolCallId === "string" && restoredAssistantToolCallIds.has(toolCallId)) {
+          messages.push({
+            role: "tool",
+            toolCallId,
+            content: JSON.stringify({
+              ok: false,
+              error: { code: event.detail?.["code"] ?? "AGENT_TOOL_FAILED" }
+            })
+          });
+        }
+      }
+      if (event.type === "user_input_requested") {
+        const toolCallId = event.detail?.["toolCallId"];
+        if (typeof toolCallId === "string" && restoredAssistantToolCallIds.has(toolCallId)) {
+          messages.push({
+            role: "tool",
+            toolCallId,
+            content: JSON.stringify({
+              ok: true,
+              status: "awaiting_user_input",
+              questionId: event.detail?.["questionId"]
+            })
+          });
+        }
       }
       if (event.type === "user_input_resolved" && typeof event.detail?.["answer"] === "string") {
         messages.push({ role: "user", content: event.detail["answer"] });
@@ -1988,12 +2070,26 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         if (!partial.ok) return;
         snapshot = partial.value;
       }
-      if (assistantText.length > 0) {
+      if (assistantText.length > 0 || toolCallRound.calls.length > 0) {
         await recordEvent(runId, {
           runId,
           status: snapshot.operationMode === "planning" ? "planning_model" : "executing_model",
           type: "assistant_text_completed",
-          detail: { text: assistantText }
+          detail: {
+            text: assistantText,
+            ...(toolCallRound.calls.length === 0
+              ? {}
+              : {
+                  toolCalls: toolCallRound.calls.map((call) => ({
+                    id: call.toolCallId,
+                    name: call.name,
+                    arguments: call.argumentsText,
+                    ...(call.providerMetadata === undefined
+                      ? {}
+                      : { providerMetadata: call.providerMetadata })
+                  }))
+                })
+          }
         });
         snapshot = coordinator.readSnapshot(runId) ?? snapshot;
       }
@@ -2004,13 +2100,28 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           toolCalls: toolCallRound.calls.map((call) => ({
             id: call.toolCallId,
             name: call.name,
-            arguments: call.argumentsText
+            arguments: call.argumentsText,
+            ...(call.providerMetadata === undefined
+              ? {}
+              : { providerMetadata: call.providerMetadata })
           }))
         });
       } else if (assistantText.length > 0) {
         runtime.messages.push({ role: "assistant", content: assistantText });
       }
       if (toolCallRound.calls.length === 0) {
+        if (finishReason !== "stop") {
+          await recordEvent(runId, {
+            runId,
+            status: "failed",
+            type: "run_failed",
+            detail: {
+              code: modelRoundTerminalFailureCode(finishReason),
+              message: `The model round ended without a final answer (finish_reason=${String(finishReason ?? "missing")}).`
+            }
+          });
+          return;
+        }
         await recordEvent(runId, {
           runId,
           status: "completed",
@@ -2029,6 +2140,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
             ? "terminal"
             : "continue";
         },
+        skip: (call, failure) => recordSkippedToolCall(runtime, runId, call, failure),
         dispatch: (call) => handleToolCall(runId, runtime, call),
         mayContinue: (outcome) => outcome === "continue" || outcome === "staged",
         isActive: () => isCurrent(runId, generation)
@@ -2234,6 +2346,18 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     );
   }
 
+  function policyAutoApprovesStructuredSearch(descriptor: AgentToolDescriptor): boolean {
+    return (
+      options.dataEgressPolicy === "auto_approve_search_queries" &&
+      canonicalToolId(descriptor) === "web_search" &&
+      descriptor.name === "web_search" &&
+      descriptor.kind === "network_tool" &&
+      descriptor.effect === "external_read" &&
+      descriptor.dataEgress === "provider_query" &&
+      descriptor.source?.kind === "core"
+    );
+  }
+
   function sha256(value: string): string {
     return createHash("sha256").update(value, "utf8").digest("hex");
   }
@@ -2391,6 +2515,41 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     if (!recorded.ok) return err(recorded.error);
     input.runtime.pendingToolApproval = pending.value;
     return pending;
+  }
+
+  async function resolvePolicyToolApproval(input: {
+    readonly runId: string;
+    readonly runtime: RunRuntime;
+    readonly pending: PendingToolApproval;
+  }): Promise<AgentRunCommandResult> {
+    const snapshot = coordinator.readSnapshot(input.runId);
+    if (snapshot === undefined) {
+      return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
+    }
+    const verified = validatePendingToolApproval({
+      snapshot,
+      runtime: input.runtime,
+      pending: input.pending
+    });
+    if (!verified.ok) {
+      return { ok: false, error: verified.error, latestSnapshot: snapshot };
+    }
+
+    delete input.runtime.pendingToolApproval;
+    return recordEvent(input.runId, {
+      runId: input.runId,
+      status: snapshot.operationMode === "planning" ? "planning_model" : "executing_model",
+      type: "tool_approval_resolved",
+      snapshotPatch: { pendingToolApproval: null },
+      detail: {
+        toolCallId: input.pending.binding.toolCallId,
+        canonicalToolId: input.pending.canonicalToolId,
+        bindingId: input.pending.binding.bindingId,
+        decision: "approve",
+        approvalSource: "main_data_egress_policy",
+        effectiveCapabilityRevision: input.pending.binding.effectiveCapabilityRevision
+      }
+    });
   }
 
   function validatePendingToolApproval(input: {
@@ -2616,7 +2775,14 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           ? "terminal"
           : "continue";
       }
-      return "paused";
+      if (!policyAutoApprovesStructuredSearch(descriptor)) return "paused";
+      const approved = await resolvePolicyToolApproval({
+        runId,
+        runtime,
+        pending: requested.value
+      });
+      if (!approved.ok) return { kind: "failure", result: approved };
+      return handleToolCall(runId, runtime, call, requested.value);
     }
     if (
       approvedReplay &&
@@ -3498,6 +3664,15 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           : "continue";
       }
       runtime.pendingUserInput = question.value;
+      runtime.messages.push({
+        role: "tool",
+        toolCallId: call.toolCallId,
+        content: JSON.stringify({
+          ok: true,
+          status: "awaiting_user_input",
+          questionId: question.value.questionId
+        })
+      });
       delete runtime.lastFailedToolCall;
       await persistRetryCheckpoint(runId);
       await recordEvent(runId, {
@@ -3505,12 +3680,21 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         status: "awaiting_user_input",
         type: "user_input_requested",
         snapshotPatch: { pendingUserInputId: question.value.questionId },
-        detail: asJsonObject(question.value)
+        detail: {
+          ...asJsonObject(question.value),
+          toolCallId: call.toolCallId,
+          toolName: descriptor.name
+        }
       });
       return "paused";
     }
 
     if (descriptor.name === "finish") {
+      runtime.messages.push({
+        role: "tool",
+        toolCallId: call.toolCallId,
+        content: JSON.stringify({ ok: true, status: "completed" })
+      });
       delete runtime.lastFailedToolCall;
       await persistRetryCheckpoint(runId);
       await recordEvent(runId, {
@@ -3530,6 +3714,16 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           : "continue";
       }
       runtime.planArtifact = plan.value;
+      runtime.messages.push({
+        role: "tool",
+        toolCallId: call.toolCallId,
+        content: JSON.stringify({
+          ok: true,
+          status: "plan_ready",
+          planId: plan.value.planId,
+          revision: plan.value.revision
+        })
+      });
       delete runtime.lastFailedToolCall;
       await persistRetryCheckpoint(runId);
       if (options.repository.writePlanArtifact !== undefined) {
@@ -3540,7 +3734,11 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         runId,
         status: "plan_ready",
         type: "plan_ready",
-        detail: asJsonObject(plan.value)
+        detail: {
+          ...asJsonObject(plan.value),
+          toolCallId: call.toolCallId,
+          toolName: descriptor.name
+        }
       });
       return "paused";
     }
@@ -3605,6 +3803,33 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       }
     });
     return true;
+  }
+
+  async function recordSkippedToolCall(
+    runtime: RunRuntime,
+    runId: string,
+    call: AssembledToolCall,
+    failure: ToolCallDispatchFailure
+  ): Promise<void> {
+    const snapshot = coordinator.readSnapshot(runId);
+    if (snapshot === undefined) return;
+    const skipped = await recordEvent(runId, {
+      runId,
+      status: snapshot.status,
+      type: "tool_failed",
+      detail: {
+        toolCallId: call.toolCallId,
+        toolName: call.name,
+        code: failure.code,
+        message: failure.message
+      }
+    });
+    if (!skipped.ok) throw skipped.error;
+    runtime.messages.push({
+      role: "tool",
+      toolCallId: call.toolCallId,
+      content: JSON.stringify({ ok: false, error: { code: failure.code } })
+    });
   }
 
   function isCurrent(runId: string, generation: number): boolean {
@@ -3687,6 +3912,39 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         ...failedCall,
         toolCallId: `${failedCall.toolCallId}_retry_${requested.value.runRevision}`
       };
+      const retryDeclared = await recordEvent(command.runId, {
+        runId: command.runId,
+        status,
+        type: "assistant_text_completed",
+        detail: {
+          text: "",
+          toolCalls: [
+            {
+              id: retryCall.toolCallId,
+              name: retryCall.name,
+              arguments: retryCall.argumentsText,
+              ...(retryCall.providerMetadata === undefined
+                ? {}
+                : { providerMetadata: retryCall.providerMetadata })
+            }
+          ]
+        }
+      });
+      if (!retryDeclared.ok) return retryDeclared;
+      runtime.messages.push({
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: retryCall.toolCallId,
+            name: retryCall.name,
+            arguments: retryCall.argumentsText,
+            ...(retryCall.providerMetadata === undefined
+              ? {}
+              : { providerMetadata: retryCall.providerMetadata })
+          }
+        ]
+      });
       let outcome: Awaited<ReturnType<typeof handleToolCall>>;
       try {
         outcome = await handleToolCall(command.runId, runtime, retryCall);
@@ -5310,7 +5568,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
 
         if (command.decision === "reject_all") {
           runtime.messages.push({
-            role: "tool",
+            role: "user",
             content: JSON.stringify({ ok: true, decision: "rejected_by_user" })
           });
           delete runtime.changeSet;
@@ -5674,6 +5932,15 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     }
   };
   return session;
+}
+
+function modelRoundTerminalFailureCode(finishReason: LlmRoundFinishReason | undefined): string {
+  if (finishReason === "length") return "AGENT_MODEL_OUTPUT_TRUNCATED";
+  if (finishReason === "content_filter") return "AGENT_MODEL_CONTENT_FILTERED";
+  if (finishReason === "aborted") return "AGENT_MODEL_ROUND_ABORTED";
+  if (finishReason === "error") return "AGENT_MODEL_ROUND_FAILED";
+  if (finishReason === "tool_calls") return "AGENT_MODEL_TOOL_CALLS_MISSING";
+  return "AGENT_MODEL_ROUND_INCOMPLETE";
 }
 
 function parseRetryCheckpoint(value: JsonObject | undefined): AssembledToolCall | undefined {

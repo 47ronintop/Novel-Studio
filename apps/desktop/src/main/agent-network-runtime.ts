@@ -5,7 +5,11 @@
  */
 import { createAgentNetworkToolSession } from "@novel-studio/application";
 import { createAgentNetworkSettingsSession } from "@novel-studio/application";
-import { DEFAULT_NETWORK_POLICY, type AgentNetworkPolicy } from "@novel-studio/application";
+import {
+  ControlledFetchError,
+  DEFAULT_NETWORK_POLICY,
+  type AgentNetworkPolicy
+} from "@novel-studio/application";
 import type { AgentNetworkToolExecutor } from "@novel-studio/application";
 import type {
   AgentNetworkSettingsSession,
@@ -20,7 +24,7 @@ import {
 
 export interface DesktopNetworkRuntimeOptions {
   /** Resolves a secret:// ref to the plaintext value from Electron safeStorage. */
-  readonly resolveSecret: (secretRef: string) => string | undefined;
+  readonly resolveSecret: (secretRef: string) => string | undefined | Promise<string | undefined>;
   /** Resolve/store network settings. */
   readonly settingsPort: AgentNetworkSettingsPort;
   /** Injectable deterministic Main dialer dependencies for tests. */
@@ -58,8 +62,9 @@ export async function createDesktopNetworkToolExecutor(
   };
   const genericFetch = createMainControlledFetch(policy, options.dialerOptions);
 
-  // Resolve first available provider profile
-  const activeProfile = settings.providerProfiles[0];
+  const activeProfile = settings.providerProfiles.find(
+    (profile) => profile.providerId === settings.defaultProviderId
+  );
   if (activeProfile !== undefined) {
     let providerEndpoint: URL;
     try {
@@ -88,18 +93,23 @@ export async function createDesktopNetworkToolExecutor(
         )
       );
     }
-    const apiKey = options.resolveSecret(activeProfile.apiKeyRef);
-    const providerFetch =
-      apiKey === undefined
-        ? genericFetch
-        : createOriginScopedControlledFetch(
-            policy,
-            {
-              origin: providerEndpoint.origin,
-              authorization: `Bearer ${apiKey}`
-            },
-            options.dialerOptions
-          );
+    const apiKey = await options.resolveSecret(activeProfile.apiKeyRef);
+    if (apiKey === undefined) {
+      return err(
+        networkRuntimeError(
+          "NETWORK_PROVIDER_SECRET_UNAVAILABLE",
+          "The default search provider credential is unavailable."
+        )
+      );
+    }
+    const providerFetch = createOriginScopedControlledFetch(
+      policy,
+      {
+        origin: providerEndpoint.origin,
+        authorization: `Bearer ${apiKey}`
+      },
+      options.dialerOptions
+    );
     return ok(
       createAgentNetworkToolSession({
         policy,
@@ -123,15 +133,20 @@ export function createDesktopNetworkSettingsSession(
 ): AgentNetworkSettingsSession {
   return createAgentNetworkSettingsSession({
     port: options.settingsPort,
-    createControlledFetch: (policy, profile) => {
-      const apiKey = options.resolveSecret(profile.apiKeyRef);
+    createControlledFetch: async (policy, profile) => {
+      const apiKey = await options.resolveSecret(profile.apiKeyRef);
       let endpoint: URL;
       try {
         endpoint = new URL(profile.endpoint);
       } catch {
         return createMainControlledFetch(policy, options.dialerOptions);
       }
-      if (apiKey === undefined) return createMainControlledFetch(policy, options.dialerOptions);
+      if (apiKey === undefined) {
+        throw new ControlledFetchError(
+          "NETWORK_PROVIDER_SECRET_UNAVAILABLE",
+          "The network provider credential is unavailable."
+        );
+      }
       return createOriginScopedControlledFetch(
         policy,
         { origin: endpoint.origin, authorization: `Bearer ${apiKey}` },

@@ -14,15 +14,26 @@ import type {
 import {
   createLlmAgentRunModelDriver,
   createModelDiscoveryFallback,
-  createModelDiscoverySnapshot
+  createModelDiscoverySnapshot,
+  MODEL_PROVIDER_CATALOG,
+  isModelProvider
 } from "@novel-studio/application";
 import {
+  AnthropicHttpError,
+  createAnthropicProvider,
+  createGeminiProvider,
   createOpenAiCompatibleProvider,
   createLlmAdapter,
   createProviderRouter,
+  GeminiHttpError,
   LlmProviderFailure,
   OpenAiCompatibleHttpError,
+  type AnthropicTransport,
+  type AnthropicTransportRequest,
+  type GeminiTransport,
+  type GeminiTransportRequest,
   type LlmProvider,
+  type LlmProviderId,
   type LlmRequest,
   type LlmModelProfile,
   type LlmParameters,
@@ -211,6 +222,33 @@ export function createDesktopModelRuntime(
     postOpenAiCompatibleJson(fetchImpl, request);
   const streamTransport = (request: OpenAiCompatibleTransportRequest) =>
     streamOpenAiCompatibleJson(fetchImpl, request);
+  const anthropicTransport: AnthropicTransport = (request) => postAnthropicJson(fetchImpl, request);
+  const anthropicStreamTransport = (request: AnthropicTransportRequest) =>
+    streamAnthropicJson(fetchImpl, request);
+  const geminiTransport: GeminiTransport = (request) => postGeminiJson(fetchImpl, request);
+  const geminiStreamTransport = (request: GeminiTransportRequest) =>
+    streamGeminiJson(fetchImpl, request);
+
+  const providerForSecret = (secret: string): LlmProvider =>
+    createProviderRouter({
+      providers: {
+        "openai-compatible": createOpenAiCompatibleProvider({
+          transport,
+          streamTransport,
+          resolveApiKey: async () => secret
+        }),
+        anthropic: createAnthropicProvider({
+          transport: anthropicTransport,
+          streamTransport: anthropicStreamTransport,
+          resolveApiKey: async () => secret
+        }),
+        "google-gemini": createGeminiProvider({
+          transport: geminiTransport,
+          streamTransport: geminiStreamTransport,
+          resolveApiKey: async () => secret
+        })
+      }
+    });
 
   const runtime: DesktopModelRuntime = {
     modelConnectionTester: {
@@ -223,21 +261,12 @@ export function createDesktopModelRuntime(
           return ok(failedConnection(profile, "No API key is stored for this model profile."));
         }
 
+        if (!isModelProvider(profile.provider)) {
+          return ok(failedConnection(profile, "The selected provider has no runtime adapter."));
+        }
+
         try {
-          await postOpenAiCompatibleJson(fetchImpl, {
-            url: `${requiredBaseUrl(profile).replace(/\/+$/, "")}/chat/completions`,
-            headers: {
-              authorization: `Bearer ${secret.value}`
-            },
-            body: {
-              model: profile.modelName,
-              messages: [{ role: "user", content: "ping" }],
-              max_tokens: 1,
-              temperature: 0,
-              stream: false
-            },
-            timeoutMs: profile.timeoutMs
-          });
+          await providerForSecret(secret.value).complete(connectionProbeRequest(profile));
           const marked = await secretStore.markVerified(profile.apiKeyRef, profile);
           if (!marked.ok) {
             return marked;
@@ -270,17 +299,11 @@ export function createDesktopModelRuntime(
         }
 
         try {
-          const payload = await getOpenAiCompatibleJson(fetchImpl, {
-            url: `${requiredBaseUrl(profile).replace(/\/+$/, "")}/models`,
-            headers: {
-              authorization: `Bearer ${secret.value}`
-            },
-            timeoutMs: profile.timeoutMs
-          });
+          const models = await discoverProviderModels(fetchImpl, profile, secret.value);
           return ok(
             createModelDiscoverySnapshot({
               profile,
-              models: normalizeOpenAiCompatibleModels(payload)
+              models
             })
           );
         } catch (error) {
@@ -325,16 +348,7 @@ export function createDesktopModelRuntime(
             });
           }
 
-          const verifiedProvider = createProviderRouter({
-            providers: {
-              "openai-compatible": createOpenAiCompatibleProvider({
-                transport,
-                resolveApiKey: async () => secret.value
-              })
-            }
-          });
-
-          return verifiedProvider.complete(request);
+          return providerForSecret(secret.value).complete(withRuntimeBaseUrl(request));
         },
         async *stream(request) {
           const secretRef = request.modelProfile.apiKeyRef;
@@ -370,17 +384,7 @@ export function createDesktopModelRuntime(
             });
           }
 
-          const verifiedProvider = createProviderRouter({
-            providers: {
-              "openai-compatible": createOpenAiCompatibleProvider({
-                transport,
-                streamTransport,
-                resolveApiKey: async () => secret.value
-              })
-            }
-          });
-
-          yield* verifiedProvider.stream(request);
+          yield* providerForSecret(secret.value).stream(withRuntimeBaseUrl(request));
         }
       };
     },
@@ -397,6 +401,132 @@ export function createDesktopModelRuntime(
   };
 
   return runtime;
+}
+
+function connectionProbeRequest(profile: ModelProfile): LlmRequest {
+  return {
+    schemaVersion: "1.0",
+    requestId: `connection_${profile.id}`,
+    traceId: `connection_${profile.id}`,
+    mode: "non-streaming",
+    modelProfile: {
+      id: profile.id,
+      provider: profile.provider as LlmProviderId,
+      displayName: profile.displayName,
+      modelName: profile.modelName,
+      baseUrl: requiredBaseUrl(profile),
+      apiKeyRef: profile.apiKeyRef,
+      timeoutMs: profile.timeoutMs
+    },
+    messages: [{ role: "user", content: "ping" }],
+    parameters: { temperature: 0, maxTokens: 1 }
+  };
+}
+
+function withRuntimeBaseUrl(request: LlmRequest): LlmRequest {
+  if (request.modelProfile.baseUrl?.trim()) return request;
+  const baseUrl = MODEL_PROVIDER_CATALOG.find(
+    (entry) => entry.id === request.modelProfile.provider
+  )?.defaultBaseUrl;
+  return baseUrl === undefined
+    ? request
+    : { ...request, modelProfile: { ...request.modelProfile, baseUrl } };
+}
+
+async function discoverProviderModels(
+  fetchImpl: typeof fetch,
+  profile: ModelProfile,
+  secret: string
+): Promise<readonly ModelDiscoveryModelInput[]> {
+  const baseUrl = requiredBaseUrl(profile).replace(/\/+$/, "");
+  if (profile.provider === "anthropic") {
+    const payload = await getOpenAiCompatibleJson(fetchImpl, {
+      url: baseUrl.endsWith("/v1") ? `${baseUrl}/models` : `${baseUrl}/v1/models`,
+      headers: { "x-api-key": secret, "anthropic-version": "2023-06-01" },
+      timeoutMs: profile.timeoutMs
+    });
+    return normalizeAnthropicModels(payload);
+  }
+  if (profile.provider === "google-gemini") {
+    const payload = await getOpenAiCompatibleJson(fetchImpl, {
+      url: `${baseUrl}/models`,
+      headers: { "x-goog-api-key": secret },
+      timeoutMs: profile.timeoutMs
+    });
+    return normalizeGeminiModels(payload);
+  }
+  const payload = await getOpenAiCompatibleJson(fetchImpl, {
+    url: `${baseUrl}/models`,
+    headers: { authorization: `Bearer ${secret}` },
+    timeoutMs: profile.timeoutMs
+  });
+  return normalizeOpenAiCompatibleModels(payload);
+}
+
+async function postAnthropicJson(
+  fetchImpl: typeof fetch,
+  request: AnthropicTransportRequest
+): Promise<unknown> {
+  try {
+    return await postOpenAiCompatibleJson(fetchImpl, request);
+  } catch (error) {
+    throw asAnthropicError(error);
+  }
+}
+
+async function* streamAnthropicJson(
+  fetchImpl: typeof fetch,
+  request: AnthropicTransportRequest
+): AsyncIterable<unknown> {
+  try {
+    yield* streamOpenAiCompatibleJson(fetchImpl, request);
+  } catch (error) {
+    throw asAnthropicError(error);
+  }
+}
+
+function asAnthropicError(error: unknown): unknown {
+  return error instanceof OpenAiCompatibleHttpError
+    ? new AnthropicHttpError({
+        status: error.status,
+        message: error.message,
+        ...(error.body === undefined ? {} : { body: error.body }),
+        ...(error.headers === undefined ? {} : { headers: error.headers })
+      })
+    : error;
+}
+
+async function postGeminiJson(
+  fetchImpl: typeof fetch,
+  request: GeminiTransportRequest
+): Promise<unknown> {
+  try {
+    return await postOpenAiCompatibleJson(fetchImpl, request);
+  } catch (error) {
+    throw asGeminiError(error);
+  }
+}
+
+async function* streamGeminiJson(
+  fetchImpl: typeof fetch,
+  request: GeminiTransportRequest
+): AsyncIterable<unknown> {
+  try {
+    yield* streamOpenAiCompatibleJson(fetchImpl, request);
+  } catch (error) {
+    throw asGeminiError(error);
+  }
+}
+
+function asGeminiError(error: unknown): unknown {
+  return error instanceof OpenAiCompatibleHttpError
+    ? new GeminiHttpError({
+        status: error.status,
+        message: error.message,
+        ...(error.body === undefined ? {} : { body: error.body }),
+        ...(error.headers === undefined ? {} : { headers: error.headers })
+      })
+    : error;
 }
 
 async function* streamOpenAiCompatibleJson(
@@ -596,6 +726,10 @@ async function postOpenAiCompatibleJson(
   request: OpenAiCompatibleTransportRequest
 ): Promise<unknown> {
   const controller = new AbortController();
+  const signal =
+    request.abortSignal === undefined
+      ? controller.signal
+      : AbortSignal.any([request.abortSignal, controller.signal]);
   const timeout =
     request.timeoutMs === undefined
       ? undefined
@@ -608,7 +742,7 @@ async function postOpenAiCompatibleJson(
         ...stringHeaders(request.headers)
       },
       body: JSON.stringify(request.body),
-      signal: controller.signal
+      signal
     });
     const text = await response.text();
     const payload = parseProviderJsonPayload(response, text);
@@ -620,6 +754,14 @@ async function postOpenAiCompatibleJson(
       });
     }
     return payload;
+  } catch (error) {
+    if (isAbortError(error) && controller.signal.aborted && request.abortSignal?.aborted !== true) {
+      throw new OpenAiCompatibleHttpError({
+        status: 408,
+        message: "Provider request timed out."
+      });
+    }
+    throw error;
   } finally {
     if (timeout !== undefined) {
       clearTimeout(timeout);
@@ -713,6 +855,65 @@ function normalizeOpenAiCompatibleModels(payload: unknown): readonly {
       };
     })
     .filter((entry): entry is ModelDiscoveryModelInput => entry !== undefined);
+}
+
+function normalizeAnthropicModels(payload: unknown): readonly ModelDiscoveryModelInput[] {
+  if (!isJsonRecord(payload) || !Array.isArray(payload["data"])) {
+    throw new OpenAiCompatibleHttpError({
+      status: 502,
+      message: "Anthropic returned a malformed model list.",
+      body: payload
+    });
+  }
+  return payload["data"].filter(isJsonRecord).flatMap((entry): ModelDiscoveryModelInput[] => {
+    const id = stringValue(entry["id"]);
+    if (id === undefined) return [];
+    const displayName = stringValue(entry["display_name"]) ?? id;
+    return [
+      {
+        id,
+        displayName,
+        streaming: true,
+        toolCalling: true,
+        structuredArguments: true
+      }
+    ];
+  });
+}
+
+function normalizeGeminiModels(payload: unknown): readonly ModelDiscoveryModelInput[] {
+  if (!isJsonRecord(payload) || !Array.isArray(payload["models"])) {
+    throw new OpenAiCompatibleHttpError({
+      status: 502,
+      message: "Gemini returned a malformed model list.",
+      body: payload
+    });
+  }
+  return payload["models"].filter(isJsonRecord).flatMap((entry): ModelDiscoveryModelInput[] => {
+    const resourceName = stringValue(entry["name"]);
+    if (resourceName === undefined) return [];
+    const id = resourceName.startsWith("models/")
+      ? resourceName.slice("models/".length)
+      : resourceName;
+    if (id.length === 0) return [];
+    const methods = Array.isArray(entry["supportedGenerationMethods"])
+      ? entry["supportedGenerationMethods"].filter(
+          (method): method is string => typeof method === "string"
+        )
+      : [];
+    const supportsGeneration = methods.length === 0 || methods.includes("generateContent");
+    const contextWindow = optionalNumber(entry["inputTokenLimit"]);
+    return [
+      {
+        id,
+        displayName: stringValue(entry["displayName"]) ?? id,
+        ...(contextWindow === undefined ? {} : { contextWindow }),
+        streaming: supportsGeneration,
+        toolCalling: supportsGeneration,
+        structuredArguments: supportsGeneration
+      }
+    ];
+  });
 }
 
 function capabilityBooleanFromModelMetadata(
@@ -845,13 +1046,18 @@ async function readProfileSecret(
 }
 
 function requiredBaseUrl(profile: ModelProfile): string {
-  if (profile.baseUrl === undefined || profile.baseUrl.trim().length === 0) {
+  const configured = profile.baseUrl?.trim();
+  if (configured !== undefined && configured.length > 0) return configured;
+  const defaultBaseUrl = MODEL_PROVIDER_CATALOG.find(
+    (entry) => entry.id === profile.provider
+  )?.defaultBaseUrl;
+  if (defaultBaseUrl === undefined) {
     throw new OpenAiCompatibleHttpError({
       status: 400,
-      message: "OpenAI-compatible model profiles require a Base URL."
+      message: "The selected model provider requires a Base URL."
     });
   }
-  return profile.baseUrl;
+  return defaultBaseUrl;
 }
 
 function failedConnection(profile: ModelProfile, detail: string) {

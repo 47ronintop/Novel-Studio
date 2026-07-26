@@ -27,11 +27,12 @@ describe("desktop Agent tool settings store", () => {
     expect(
       await port.writeNetworkSettings({
         enabled: true,
+        defaultProviderId: "search",
         providerProfiles: [
           {
             providerId: "search",
             name: "Search",
-            apiKeyRef: "secret://agent-search",
+            apiKeyRef: "secret://agent-network/search/api_key",
             endpoint: "https://search.example.test/api",
             policyRevision: "network-test-1"
           }
@@ -48,7 +49,9 @@ describe("desktop Agent tool settings store", () => {
       ok: true,
       value: {
         enabled: true,
-        providerProfiles: [expect.objectContaining({ apiKeyRef: "secret://agent-search" })]
+        providerProfiles: [
+          expect.objectContaining({ apiKeyRef: "secret://agent-network/search/api_key" })
+        ]
       }
     });
   });
@@ -66,7 +69,7 @@ describe("desktop Agent tool settings store", () => {
             displayName: "Docs",
             transport: "remote_http",
             endpointUrl: "https://mcp.example.test/",
-            apiKeyRef: "secret://mcp-docs",
+            apiKeyRef: "secret://remote-mcp/docs/api_key",
             enabled: true
           }
         ]
@@ -77,7 +80,7 @@ describe("desktop Agent tool settings store", () => {
       ok: true,
       value: {
         revision: "mcp-test-1",
-        servers: [expect.objectContaining({ apiKeyRef: "secret://mcp-docs" })]
+        servers: [expect.objectContaining({ apiKeyRef: "secret://remote-mcp/docs/api_key" })]
       }
     });
   });

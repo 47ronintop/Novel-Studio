@@ -16,12 +16,14 @@ export interface AssembledToolCall {
   readonly toolCallId: string;
   readonly name: string;
   readonly argumentsText: string;
+  readonly providerMetadata?: JsonObject;
 }
 
 export interface ToolCallDelta {
   readonly toolCallId: string;
   readonly name?: string;
   readonly argumentsDelta?: string;
+  readonly providerMetadata?: JsonObject;
 }
 
 export interface AssembledToolCallRound {
@@ -37,7 +39,15 @@ export interface ToolCallAssembler {
 
 /** Collects provider deltas in first-seen call order and owns the round terminal state. */
 export function createToolCallAssembler(): ToolCallAssembler {
-  const calls = new Map<string, { toolCallId: string; name: string; argumentsText: string }>();
+  const calls = new Map<
+    string,
+    {
+      toolCallId: string;
+      name: string;
+      argumentsText: string;
+      providerMetadata?: JsonObject;
+    }
+  >();
   let finishReason: LlmRoundFinishReason | undefined;
 
   return {
@@ -50,6 +60,12 @@ export function createToolCallAssembler(): ToolCallAssembler {
       };
       if (delta.name !== undefined) existing.name += delta.name;
       if (delta.argumentsDelta !== undefined) existing.argumentsText += delta.argumentsDelta;
+      if (delta.providerMetadata !== undefined) {
+        existing.providerMetadata = {
+          ...(existing.providerMetadata ?? {}),
+          ...delta.providerMetadata
+        };
+      }
       calls.set(delta.toolCallId, existing);
     },
     complete(nextFinishReason) {
@@ -87,6 +103,7 @@ export async function dispatchAssembledToolCalls<TOutcome>(input: {
   readonly round: AssembledToolCallRound;
   readonly effectFor: (call: AssembledToolCall) => string | undefined;
   readonly reject: (call: AssembledToolCall, failure: ToolCallDispatchFailure) => Promise<TOutcome>;
+  readonly skip: (call: AssembledToolCall, failure: ToolCallDispatchFailure) => Promise<void>;
   readonly dispatch: (call: AssembledToolCall) => Promise<TOutcome>;
   readonly mayContinue: (outcome: TOutcome) => boolean;
   readonly isActive: () => boolean;
@@ -101,16 +118,23 @@ export async function dispatchAssembledToolCalls<TOutcome>(input: {
       kind: "rejected",
       calls: input.round.calls,
       invoke: (call) => input.reject(call, failure),
+      skip: input.skip,
       mayContinue: input.mayContinue,
       isActive: input.isActive
     });
   }
 
   const proposalCalls = input.round.calls.filter((call) => input.effectFor(call) === "propose");
+  const deferredCalls =
+    proposalCalls.length === 0
+      ? []
+      : input.round.calls.filter((call) => input.effectFor(call) !== "propose");
   return runCalls({
     kind: "dispatched",
     calls: proposalCalls.length > 0 ? proposalCalls : input.round.calls,
+    deferredCalls,
     invoke: input.dispatch,
+    skip: input.skip,
     mayContinue: input.mayContinue,
     isActive: input.isActive
   });
@@ -140,18 +164,40 @@ export function parseToolCallArguments(value: string): Result<JsonObject, Unifie
 async function runCalls<TOutcome>(input: {
   readonly kind: "rejected" | "dispatched";
   readonly calls: readonly AssembledToolCall[];
+  readonly deferredCalls?: readonly AssembledToolCall[];
   readonly invoke: (call: AssembledToolCall) => Promise<TOutcome>;
+  readonly skip: (call: AssembledToolCall, failure: ToolCallDispatchFailure) => Promise<void>;
   readonly mayContinue: (outcome: TOutcome) => boolean;
   readonly isActive: () => boolean;
 }): Promise<ToolCallDispatchResult<TOutcome>> {
   const outcomes: TOutcome[] = [];
-  for (const call of input.calls) {
+  for (const [index, call] of input.calls.entries()) {
     if (!input.isActive()) return { kind: "interrupted", outcomes };
     const outcome = await input.invoke(call);
     outcomes.push(outcome);
-    if (!input.mayContinue(outcome)) break;
+    if (!input.mayContinue(outcome)) {
+      if (input.isActive()) {
+        await skipCalls(input.calls.slice(index + 1), input.skip);
+        await skipCalls(input.deferredCalls ?? [], input.skip);
+      }
+      return { kind: input.kind, outcomes };
+    }
   }
+  await skipCalls(input.deferredCalls ?? [], input.skip);
   return { kind: input.kind, outcomes };
+}
+
+async function skipCalls(
+  calls: readonly AssembledToolCall[],
+  skip: (call: AssembledToolCall, failure: ToolCallDispatchFailure) => Promise<void>
+): Promise<void> {
+  const failure: ToolCallDispatchFailure = {
+    code: "AGENT_TOOL_CALL_SKIPPED_IN_EFFECTFUL_BATCH",
+    message:
+      "The tool call was not executed because another call in the same batch requires a serialized approval boundary.",
+    finishReason: "tool_calls"
+  };
+  for (const call of calls) await skip(call, failure);
 }
 
 function incompleteRoundFailure(

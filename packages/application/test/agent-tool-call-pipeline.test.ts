@@ -14,7 +14,8 @@ describe("Agent tool-call pipeline", () => {
     assembler.append({
       toolCallId: "call-one",
       name: "read_",
-      argumentsDelta: '{"path":"one'
+      argumentsDelta: '{"path":"one',
+      providerMetadata: { thoughtSignature: "signature-one" }
     });
     assembler.append({
       toolCallId: "call-two",
@@ -34,7 +35,8 @@ describe("Agent tool-call pipeline", () => {
         {
           toolCallId: "call-one",
           name: "read_project_text",
-          argumentsText: '{"path":"one.md"}'
+          argumentsText: '{"path":"one.md"}',
+          providerMetadata: { thoughtSignature: "signature-one" }
         },
         {
           toolCallId: "call-two",
@@ -58,11 +60,13 @@ describe("Agent tool-call pipeline", () => {
     async (finishReason, expectedCode) => {
       const dispatch = vi.fn(async () => "continue" as const);
       const reject = vi.fn(async () => "continue" as const);
+      const skip = vi.fn(async () => undefined);
 
       const result = await dispatchAssembledToolCalls({
         round: round(finishReason),
         effectFor: () => "read",
         reject,
+        skip,
         dispatch,
         mayContinue: (outcome) => outcome === "continue",
         isActive: () => true
@@ -105,6 +109,9 @@ describe("Agent tool-call pipeline", () => {
       },
       effectFor: () => "read",
       reject: async () => "continue" as const,
+      skip: async (current) => {
+        handled.push(`skipped:${current.toolCallId}`);
+      },
       dispatch: async (current) => {
         handled.push(current.toolCallId);
         return current.toolCallId === "call-two" ? ("paused" as const) : ("continue" as const);
@@ -114,7 +121,35 @@ describe("Agent tool-call pipeline", () => {
     });
 
     expect(result).toEqual({ kind: "dispatched", outcomes: ["continue", "paused"] });
-    expect(handled).toEqual(["call-one", "call-two"]);
+    expect(handled).toEqual(["call-one", "call-two", "skipped:call-three"]);
+  });
+
+  test("dispatches proposals first and records skipped results for the rest of a mixed batch", async () => {
+    const dispatched: string[] = [];
+    const skipped: string[] = [];
+    const proposal = { ...call("call-proposal"), name: "edit_text" };
+
+    const result = await dispatchAssembledToolCalls({
+      round: {
+        finishReason: "tool_calls",
+        calls: [call("call-read"), proposal, { ...call("call-finish"), name: "finish" }]
+      },
+      effectFor: (current) => (current.name === "edit_text" ? "propose" : "read"),
+      reject: async () => "continue" as const,
+      skip: async (current) => {
+        skipped.push(current.toolCallId);
+      },
+      dispatch: async (current) => {
+        dispatched.push(current.toolCallId);
+        return "staged" as const;
+      },
+      mayContinue: (outcome) => outcome === "continue" || outcome === "staged",
+      isActive: () => true
+    });
+
+    expect(result).toEqual({ kind: "dispatched", outcomes: ["staged"] });
+    expect(dispatched).toEqual(["call-proposal"]);
+    expect(skipped).toEqual(["call-read", "call-finish"]);
   });
 
   test("does not launch another call after cancellation", async () => {
@@ -128,6 +163,7 @@ describe("Agent tool-call pipeline", () => {
       },
       effectFor: () => "read",
       reject: async () => "continue" as const,
+      skip: async () => undefined,
       dispatch: async (current) => {
         handled.push(current.toolCallId);
         active = false;

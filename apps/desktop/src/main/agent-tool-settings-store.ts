@@ -105,7 +105,12 @@ function parseNetworkSettings(value: unknown): AgentNetworkSettingsData {
   ) {
     return DEFAULT_NETWORK_SETTINGS;
   }
-  return value as unknown as AgentNetworkSettingsData;
+  const defaultProviderId =
+    typeof value["defaultProviderId"] === "string"
+      ? value["defaultProviderId"]
+      : ((providerProfiles[0] as { readonly providerId?: unknown } | undefined)?.providerId ?? "");
+  if (typeof defaultProviderId !== "string") return DEFAULT_NETWORK_SETTINGS;
+  return { ...(value as unknown as AgentNetworkSettingsData), defaultProviderId };
 }
 
 function isNetworkProviderProfile(value: unknown): boolean {
@@ -114,6 +119,8 @@ function isNetworkProviderProfile(value: unknown): boolean {
     typeof value["providerId"] === "string" &&
     typeof value["name"] === "string" &&
     typeof value["apiKeyRef"] === "string" &&
+    value["apiKeyRef"].startsWith("secret://") &&
+    value["apiKeyRef"].length > "secret://".length &&
     typeof value["endpoint"] === "string" &&
     typeof value["policyRevision"] === "string"
   );

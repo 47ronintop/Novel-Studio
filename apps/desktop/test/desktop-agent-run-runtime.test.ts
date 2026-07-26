@@ -1140,6 +1140,8 @@ describe("desktop Agent Run runtime", () => {
               range: { unit: "character", start: 0, end: 8 },
               replacement: "Revised"
             });
+          } else {
+            yield runtimeToolCall("finish-text", "finish", { summary: "Text updated." });
           }
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
@@ -1507,6 +1509,65 @@ describe("desktop Agent Run runtime", () => {
       });
     });
     expect(observedToolLists[0]).toContain("search_project");
+  });
+
+  test("forwards Main's search-query auto-approval policy into the run session", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-agent-web-search-"));
+    roots.push(projectRoot);
+    let round = 0;
+    let searches = 0;
+    const session = createDesktopRuntime({
+      workspaceKind: "engineeringWorkspace",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      createRunId: () => "run-desktop-web-search",
+      dataEgressPolicy: "auto_approve_search_queries",
+      featureFlags: createAgentFeatureFlags({
+        phaseD_networkReadEnabled: true,
+        revision: "desktop-web-search-test"
+      }),
+      networkToolExecutor: {
+        async webSearch() {
+          searches += 1;
+          return {
+            ok: true,
+            value: {
+              kind: "untrusted_remote_data",
+              url: "https://search.example.test/?q=context",
+              fetchedAt: "2026-07-26T00:00:00.000Z",
+              contentDigest: "a".repeat(64),
+              contentSummary: "search result",
+              truncated: false,
+              sourceLabel: "search"
+            }
+          };
+        },
+        async fetchUrl() {
+          throw new Error("fetch_url should not run");
+        }
+      },
+      modelDriver: {
+        async *streamRound() {
+          round += 1;
+          if (round === 1) {
+            yield runtimeToolCall("desktop-web-search", "web_search", { query: "context" });
+          } else {
+            yield runtimeToolCall("desktop-web-search-finish", "finish", { summary: "Done." });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+
+    await session.startAgentRun(executionCommand("general_file"));
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run-desktop-web-search")).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+    expect(searches).toBe(1);
   });
 
   test("keeps search tools hidden in the production runtime without the Main feature gate", async () => {

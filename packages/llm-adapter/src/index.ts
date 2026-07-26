@@ -3,6 +3,22 @@ export { LlmProviderFailure } from "./errors.js";
 export { createMockProvider } from "./mock-provider.js";
 export { createProviderRouter, type ProviderRouterOptions } from "./provider-router.js";
 export {
+  createAnthropicProvider,
+  AnthropicHttpError,
+  type AnthropicProviderOptions,
+  type AnthropicStreamTransport,
+  type AnthropicTransport,
+  type AnthropicTransportRequest
+} from "./anthropic-provider.js";
+export {
+  createGeminiProvider,
+  GeminiHttpError,
+  type GeminiProviderOptions,
+  type GeminiStreamTransport,
+  type GeminiTransport,
+  type GeminiTransportRequest
+} from "./gemini-provider.js";
+export {
   createOpenAiCompatibleProvider,
   OpenAiCompatibleHttpError,
   type OpenAiCompatibleProviderOptions,

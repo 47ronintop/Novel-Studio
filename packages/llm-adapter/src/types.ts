@@ -26,6 +26,8 @@ export interface LlmMessage {
     readonly id: string;
     readonly name: string;
     readonly arguments: string;
+    /** Provider-owned continuation state that must be replayed with this tool call. */
+    readonly providerMetadata?: JsonObject;
   }[];
 }
 
@@ -35,6 +37,8 @@ export interface LlmToolDefinition {
     readonly name: string;
     readonly description?: string;
     readonly parameters?: JsonObject;
+    /** Request provider-side strict argument validation when the protocol supports it. */
+    readonly strict?: boolean;
   };
 }
 
@@ -177,6 +181,8 @@ export interface LlmStreamToolCallDeltaEvent {
   readonly toolCallId: string;
   readonly name?: string;
   readonly argumentsDelta?: string;
+  /** Provider-owned continuation state; callers must preserve it without interpreting it. */
+  readonly providerMetadata?: JsonObject;
 }
 
 /**

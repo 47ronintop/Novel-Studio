@@ -553,6 +553,35 @@ describe("M8 Settings and Studio UI", () => {
     host.remove();
   });
 
+  test("shows the selected native Agent adapter and protocol-specific endpoint guidance", () => {
+    const props = createModelSettingsPanelProps();
+    const html = renderToStaticMarkup(
+      <ModelSettingsPanel
+        {...props}
+        draft={{
+          ...props.draft,
+          provider: "anthropic",
+          baseUrl: "https://api.anthropic.com",
+          modelName: "claude-3-5-sonnet"
+        }}
+        providerOptions={[
+          {
+            id: "anthropic",
+            label: "Anthropic",
+            agentAdapter: "anthropic-native",
+            agentSupport: "native",
+            agentSupportNote: "Agent 使用 Anthropic Messages 原生协议。"
+          }
+        ]}
+      />
+    );
+
+    expect(html).toContain('data-testid="agent-provider-support"');
+    expect(html).toContain("Agent 使用 Anthropic Messages 原生协议");
+    expect(html).toContain("请填写 Anthropic Messages API 根地址");
+    expect(html).not.toContain("请填写兼容 OpenAI 格式的服务端点地址");
+  });
+
   test("keeps provider visible and moves low-frequency model fields into advanced settings", () => {
     const html = renderToStaticMarkup(
       <ModelSettingsPanel {...createModelSettingsPanelProps()} activeSection="models" />

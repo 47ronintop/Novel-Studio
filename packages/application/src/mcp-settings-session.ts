@@ -17,6 +17,12 @@ export type McpServerConfig =
       readonly endpointUrl: string;
       /** Reference into safeStorage — never the plaintext secret. */
       readonly apiKeyRef: string;
+      /**
+       * When true, a missing secret prevents the runtime from connecting.
+       * Omitted for backward compatibility with configurations saved before
+       * API keys could be explicitly marked optional.
+       */
+      readonly apiKeyRequired?: boolean;
       /** Optional TLS certificate fingerprint for connection identity pinning. */
       readonly tlsFingerprint?: string;
       readonly enabled: boolean;
@@ -118,6 +124,9 @@ function hasDisallowedControlCharacters(value: string): boolean {
 }
 
 function validateServerConfig(config: McpServerConfig): Result<void, UnifiedError> {
+  if (!hasMcpServerConfigShape(config)) {
+    return err(mcpError("MCP_SERVER_CONFIG_INVALID", "MCP server configuration is malformed."));
+  }
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(config.serverId)) {
     return err(
       mcpError("MCP_SERVER_ID_INVALID", "MCP serverId must be 1-128 safe identifier characters.")
@@ -151,8 +160,17 @@ function validateServerConfig(config: McpServerConfig): Result<void, UnifiedErro
       )
     );
   }
-  if (hasDisallowedControlCharacters(config.apiKeyRef) || config.apiKeyRef.length > 512) {
-    return err(mcpError("MCP_REMOTE_API_KEY_REF_INVALID", "Remote MCP apiKeyRef is invalid."));
+  if (
+    config.apiKeyRef !== `secret://remote-mcp/${config.serverId}/api_key` ||
+    hasDisallowedControlCharacters(config.apiKeyRef) ||
+    config.apiKeyRef.length > 512
+  ) {
+    return err(
+      mcpError(
+        "MCP_REMOTE_API_KEY_REF_INVALID",
+        "Remote MCP apiKeyRef must be bound to its server ID."
+      )
+    );
   }
   if (
     config.tlsFingerprint !== undefined &&
@@ -165,6 +183,29 @@ function validateServerConfig(config: McpServerConfig): Result<void, UnifiedErro
     );
   }
   return ok(undefined);
+}
+
+function hasMcpServerConfigShape(value: unknown): value is McpServerConfig {
+  if (
+    !isRecord(value) ||
+    typeof value["serverId"] !== "string" ||
+    typeof value["displayName"] !== "string" ||
+    typeof value["enabled"] !== "boolean"
+  ) {
+    return false;
+  }
+  if (value["transport"] === "local_stdio") return true;
+  return (
+    value["transport"] === "remote_http" &&
+    typeof value["endpointUrl"] === "string" &&
+    typeof value["apiKeyRef"] === "string" &&
+    (value["apiKeyRequired"] === undefined || typeof value["apiKeyRequired"] === "boolean") &&
+    (value["tlsFingerprint"] === undefined || typeof value["tlsFingerprint"] === "string")
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function createMcpSettingsSession(input: {

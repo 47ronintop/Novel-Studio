@@ -189,6 +189,18 @@ describe("Agent tool registry", () => {
       "request_user_input"
     ]);
     expect(fullExecution).toHaveLength(8);
+
+    const unqualifiedEngineeringTools = listTools({
+      facadeVersion: "v2",
+      operationMode: "execution",
+      contextMode: "general_file",
+      writePolicy: "write_before_confirmation",
+      capabilitySnapshot: {
+        ...capabilities(false, false),
+        workspaceKind: "engineeringWorkspace"
+      }
+    }).map((tool) => tool.name);
+    expect(unqualifiedEngineeringTools).not.toContain("edit_text");
   });
 
   test("keeps v2 network and remote MCP additions while excluding cancelled capabilities", () => {
@@ -443,6 +455,43 @@ describe("Agent tool registry", () => {
       externalToolDescriptors: [{ ...attested, descriptorDigest: "0".repeat(64) }]
     }).map((tool) => tool.name);
     expect(names).not.toContain("plugin__acme__summarise");
+  });
+
+  test("rejects a dynamic tool directory above the provider-safe global limit", () => {
+    const compute = (engineExports as unknown as Record<string, unknown>)[
+      "computeAgentToolDescriptorDigest"
+    ] as (descriptor: Record<string, unknown>) => string;
+    const validate = (engineExports as unknown as Record<string, unknown>)[
+      "validateExternalToolDescriptors"
+    ] as (descriptors: readonly Record<string, unknown>[]) => {
+      readonly ok: boolean;
+      readonly error?: string;
+    };
+    const maximum = (engineExports as unknown as Record<string, unknown>)[
+      "MAX_EXTERNAL_TOOL_DESCRIPTORS"
+    ] as number;
+    const descriptors = Array.from({ length: maximum + 1 }, (_, index) => {
+      const descriptor = {
+        id: `mcp:server/tool_${String(index)}`,
+        name: `mcp__server__tool_${String(index)}`,
+        providerName: `mcp__server__tool_${String(index)}`,
+        displayName: `Tool ${String(index)}`,
+        description: "Remote MCP tool.",
+        kind: "external_tool",
+        effect: "external_action",
+        dataEgress: "remote_tool_arguments",
+        destructive: false,
+        retrySemantics: "never_automatic",
+        source: { kind: "mcp", id: "server" },
+        inputSchema: { type: "object", additionalProperties: false, properties: {} }
+      };
+      return { ...descriptor, descriptorDigest: compute(descriptor) };
+    });
+
+    expect(validate(descriptors)).toMatchObject({
+      ok: false,
+      error: expect.stringContaining(`${String(maximum)} tool limit`)
+    });
   });
 
   test("applies plugin and MCP capability switches independently", () => {

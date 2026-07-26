@@ -35,6 +35,7 @@ export function createLlmAgentRunModelDriver(
         type: "function",
         function: {
           name: tool.name,
+          ...(tool.description === undefined ? {} : { description: tool.description }),
           parameters: tool.inputSchema
         }
       }));
@@ -68,7 +69,10 @@ export function createLlmAgentRunModelDriver(
             ...(result.value.name === undefined ? {} : { name: result.value.name }),
             ...(result.value.argumentsDelta === undefined
               ? {}
-              : { argumentsDelta: result.value.argumentsDelta })
+              : { argumentsDelta: result.value.argumentsDelta }),
+            ...(result.value.providerMetadata === undefined
+              ? {}
+              : { providerMetadata: result.value.providerMetadata })
           };
         } else if (result.value.type === "usage") {
           yield { type: "usage", usage: result.value.usage };

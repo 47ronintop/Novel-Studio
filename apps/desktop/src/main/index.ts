@@ -35,6 +35,7 @@ import {
   resolveCatalogAgentModelCapabilities
 } from "@novel-studio/application";
 import type {
+  AgentNetworkPolicy,
   AgentNetworkSettingsPort,
   AgentNetworkSettingsSession,
   AgentNetworkToolExecutor,
@@ -47,6 +48,7 @@ import type {
 import type { LlmModelProfile, LlmProviderId } from "@novel-studio/llm-adapter";
 import {
   computeAgentToolDescriptorDigest,
+  MAX_EXTERNAL_TOOL_DESCRIPTORS,
   validateExternalToolDescriptors
 } from "@novel-studio/agent-engine";
 import type { AgentToolDescriptor } from "@novel-studio/agent-engine";
@@ -87,9 +89,10 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
   const agentNetworkSettingsPort = createDesktopAgentNetworkSettingsPort({ userDataRoot });
   const agentNetworkSettingsSession = createDesktopNetworkSettingsSession({
     settingsPort: agentNetworkSettingsPort,
-    // This path intentionally uses the Main pinned-IP dialer even when a test profile has no
-    // credential cached yet. Runtime construction resolves and binds provider credentials separately.
-    resolveSecret: () => undefined
+    resolveSecret: async (secretRef) => {
+      const secret = await modelSecretStore.readSecret(secretRef);
+      return secret.ok ? secret.value : undefined;
+    }
   });
   const agentMcpSettingsPort = createDesktopMcpSettingsPort({ userDataRoot });
   const agentMcpSettingsSession = createMcpSettingsSession({
@@ -146,6 +149,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         ...(networkRuntime.executor === undefined
           ? {}
           : { networkToolExecutor: networkRuntime.executor }),
+        dataEgressPolicy: networkRuntime.dataEgressPolicy,
         ...(mcpRuntime.executor === undefined
           ? {}
           : {
@@ -372,10 +376,14 @@ async function resolveDesktopNetworkRuntime(input: {
 }): Promise<{
   readonly executor?: AgentNetworkToolExecutor;
   readonly policyRevision: string;
+  readonly dataEgressPolicy: AgentNetworkPolicy["dataEgressPolicy"];
 }> {
   const settings = await input.settingsSession.getNetworkSettings();
   if (!settings.ok || !settings.value.enabled || settings.value.allowedHosts.length === 0) {
-    return { policyRevision: settings.ok ? settings.value.policyRevision : "unavailable" };
+    return {
+      policyRevision: settings.ok ? settings.value.policyRevision : "unavailable",
+      dataEgressPolicy: settings.ok ? settings.value.dataEgressPolicy : "require_confirmation"
+    };
   }
 
   const secrets = new Map<string, string>();
@@ -393,7 +401,8 @@ async function resolveDesktopNetworkRuntime(input: {
   });
   return {
     ...(created.ok ? { executor: created.value } : {}),
-    policyRevision: settings.value.policyRevision
+    policyRevision: settings.value.policyRevision,
+    dataEgressPolicy: settings.value.dataEgressPolicy
   };
 }
 
@@ -436,9 +445,12 @@ async function resolveDesktopMcpRuntime(input: {
   );
   if (connections.length === 0) return { settingsRevision };
 
-  const descriptors = createRemoteMcpAgentDescriptors(
-    connections.flatMap((connection) => connection.value.tools)
-  );
+  const advertisedTools = connections.flatMap((connection) => connection.value.tools);
+  if (advertisedTools.length > MAX_EXTERNAL_TOOL_DESCRIPTORS) {
+    for (const connection of connections) connection.value.close();
+    return { settingsRevision };
+  }
+  const descriptors = createRemoteMcpAgentDescriptors(advertisedTools);
   const valid = validateExternalToolDescriptors(descriptors);
   if (!valid.ok) {
     for (const connection of connections) connection.value.close();

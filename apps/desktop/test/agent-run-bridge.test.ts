@@ -167,7 +167,8 @@ describe("Agent Run renderer bridge", () => {
     expect(loaded.pendingToolApproval).toMatchObject({
       bindingId: "tool_approval_bridge_01",
       canonicalToolId: "mcp:trusted/send_message",
-      kind: "external"
+      kind: "external",
+      argumentsText: '{"message":"hello"}'
     });
     await bridge.decideToolApproval("approve");
 
@@ -181,6 +182,48 @@ describe("Agent Run renderer bridge", () => {
       })
     ]);
     expect(bridge.getProps()?.pendingToolApproval).toBeUndefined();
+  });
+
+  test("projects network approval destination alongside its persisted arguments", async () => {
+    const pendingSnapshot = {
+      ...snapshot,
+      status: "awaiting_tool_approval" as const,
+      pendingToolApproval: {
+        canonicalToolId: "network:fetch",
+        providerToolName: "network_fetch",
+        argumentsText: '{"method":"GET"}',
+        requestedAt: "2026-07-25T00:00:00.000Z",
+        binding: {
+          kind: "network" as const,
+          bindingId: "tool_approval_network_01",
+          runId: "run-bridge",
+          runRevision: 1,
+          toolCallId: "tool-call-network-01",
+          destination: "https://api.example.test/v1/chapters",
+          requestDigest: "a".repeat(64),
+          egressClass: "public",
+          effectiveCapabilityRevision: 1,
+          expiresAt: "2026-07-25T00:05:00.000Z"
+        }
+      }
+    } as AgentRunSnapshot;
+    const api = {
+      agentRuns: {
+        onEvent: () => () => undefined,
+        list: async () => ok([pendingSnapshot]),
+        read: async () => ok({ snapshot: pendingSnapshot, events: [] })
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({ projectId: "project-01", settings });
+
+    const loaded = await bridge.load("project-01");
+
+    expect(loaded.pendingToolApproval).toMatchObject({
+      kind: "network",
+      destination: "https://api.example.test/v1/chapters",
+      argumentsText: '{"method":"GET"}'
+    });
   });
 
   test("coalesces duplicate explicit retries and sends only the persisted target", async () => {

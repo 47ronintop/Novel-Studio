@@ -11,6 +11,7 @@ import {
 } from "@novel-studio/repository";
 import { err, ok, type UnifiedError } from "@novel-studio/shared";
 import { createDesktopAgentRuntime } from "../src/main/agent-run-runtime.js";
+import { createAgentFeatureFlags } from "../src/main/agent-feature-flags.js";
 
 const roots: string[] = [];
 
@@ -40,12 +41,16 @@ describe("engineering Agent runtime", () => {
       projectLockOwnerId: lockOwnerId,
       createRunId: () => "run-engineering-write",
       lifecycleOperations: createTestingReplaceLifecyclePort(contentRoot),
+      featureFlags: createAgentFeatureFlags({
+        phaseB_fileLifecycleEnabled: true,
+        revision: "engineering-edit-text-test"
+      }),
       modelDriver: {
         async *streamRound() {
           round += 1;
           if (round === 1) {
-            yield toolCall("proposal-engineering", "propose_file_write", {
-              path: "src/index.ts",
+            yield toolCall("proposal-engineering", "edit_text", {
+              ref: "file:src/index.ts",
               baseHash: sha256("before\n"),
               range: { unit: "character", start: 0, end: 7 },
               replacement: "after\n"

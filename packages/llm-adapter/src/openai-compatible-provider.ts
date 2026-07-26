@@ -70,7 +70,7 @@ export function createOpenAiCompatibleProvider(
           ...(result.warning === undefined ? {} : { warnings: [result.warning] })
         };
       } catch (error) {
-        throw normalizeOpenAiCompatibleError(error);
+        throw normalizeOpenAiCompatibleError(error, request.abortSignal);
       }
     },
     stream(request) {
@@ -91,29 +91,45 @@ async function* streamChatCompletion(
   try {
     const transportRequest = await createTransportRequest(request, options, true);
     let emittedEvent = false;
+    let sawRoundCompleted = false;
     const toolCallIdsByIndex = new Map<number, string>();
+    const syntheticToolCallPrefix = `tool_call_${safeIdentifier(request.requestId)}`;
     try {
       for await (const chunk of streamTransport(transportRequest)) {
-        for (const event of parseStreamChunk(chunk, toolCallIdsByIndex)) {
+        for (const event of parseStreamChunk(chunk, toolCallIdsByIndex, syntheticToolCallPrefix)) {
           emittedEvent = true;
+          if (event.type === "round_completed") {
+            if (sawRoundCompleted) throw duplicateRoundCompletion();
+            sawRoundCompleted = true;
+          }
           yield event;
         }
       }
+      throwIfStreamIncomplete(request, sawRoundCompleted);
       return;
     } catch (error) {
       if (!emittedEvent && shouldRetryWithoutReasoningEffort(error, transportRequest)) {
         yield reasoningEffortIgnoredWarning();
         for await (const chunk of streamTransport(omitReasoningEffort(transportRequest))) {
-          for (const event of parseStreamChunk(chunk, toolCallIdsByIndex)) {
+          for (const event of parseStreamChunk(
+            chunk,
+            toolCallIdsByIndex,
+            syntheticToolCallPrefix
+          )) {
+            if (event.type === "round_completed") {
+              if (sawRoundCompleted) throw duplicateRoundCompletion();
+              sawRoundCompleted = true;
+            }
             yield event;
           }
         }
+        throwIfStreamIncomplete(request, sawRoundCompleted);
         return;
       }
       throw error;
     }
   } catch (error) {
-    throw normalizeOpenAiCompatibleError(error);
+    throw normalizeOpenAiCompatibleError(error, request.abortSignal);
   }
 }
 
@@ -306,14 +322,21 @@ function parseChatCompletion(payload: unknown): LlmProviderCompletion {
   }
 
   const message = firstChoice.message;
-  if (!isRecord(message) || typeof message.content !== "string") {
+  if (!isRecord(message)) {
+    throw malformedResponse(root);
+  }
+  const content = message.content;
+  if (
+    typeof content !== "string" &&
+    !(content === null && Array.isArray(message.tool_calls) && message.tool_calls.length > 0)
+  ) {
     throw malformedResponse(root);
   }
 
   return {
     content: {
       type: "text",
-      value: message.content
+      value: typeof content === "string" ? content : ""
     },
     usage: parseUsage(root.usage)
   };
@@ -321,7 +344,8 @@ function parseChatCompletion(payload: unknown): LlmProviderCompletion {
 
 function parseStreamChunk(
   payload: unknown,
-  toolCallIdsByIndex: Map<number, string> = new Map()
+  toolCallIdsByIndex: Map<number, string> = new Map(),
+  syntheticToolCallPrefix = "tool_call_stream"
 ): readonly LlmProviderStreamEvent[] {
   const root = requireRecord(payload);
   const choices = root.choices;
@@ -341,7 +365,7 @@ function parseStreamChunk(
     }
 
     const content = delta.content;
-    if (content !== undefined) {
+    if (content !== undefined && content !== null) {
       if (typeof content !== "string") {
         throw malformedResponse(root);
       }
@@ -360,8 +384,11 @@ function parseStreamChunk(
         if (!isRecord(toolCall)) throw malformedResponse(root);
         const index = typeof toolCall.index === "number" ? toolCall.index : 0;
         const providedToolCallId = typeof toolCall.id === "string" ? toolCall.id : undefined;
-        if (providedToolCallId !== undefined) toolCallIdsByIndex.set(index, providedToolCallId);
-        const toolCallId = providedToolCallId ?? toolCallIdsByIndex.get(index);
+        let toolCallId = toolCallIdsByIndex.get(index);
+        if (toolCallId === undefined) {
+          toolCallId = providedToolCallId ?? `${syntheticToolCallPrefix}_${String(index)}`;
+          toolCallIdsByIndex.set(index, toolCallId);
+        }
         const functionValue = toolCall.function;
         if (!isRecord(functionValue)) throw malformedResponse(root);
         const name = functionValue.name;
@@ -371,7 +398,7 @@ function parseStreamChunk(
         }
         events.push({
           type: "tool_call_delta",
-          toolCallId: toolCallId ?? `tool_call_index_${String(index)}`,
+          toolCallId,
           ...(typeof name === "string" ? { name } : {}),
           ...(typeof argumentsDelta === "string" ? { argumentsDelta } : {})
         });
@@ -411,6 +438,11 @@ function parseStreamChunk(
   }
 
   return events;
+}
+
+function safeIdentifier(value: string): string {
+  const normalized = value.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 48);
+  return normalized.length > 0 ? normalized : "request";
 }
 
 function parseUsage(value: unknown): LlmUsage {
@@ -453,9 +485,20 @@ function unknownUsage(): LlmUsage {
   };
 }
 
-function normalizeOpenAiCompatibleError(error: unknown): LlmProviderFailure {
+function normalizeOpenAiCompatibleError(
+  error: unknown,
+  abortSignal?: AbortSignal
+): LlmProviderFailure {
   if (error instanceof LlmProviderFailure) {
     return error;
+  }
+
+  if (abortSignal?.aborted === true || (error instanceof Error && error.name === "AbortError")) {
+    return new LlmProviderFailure({
+      code: "LLM_ABORTED",
+      message: "The OpenAI-compatible request was cancelled.",
+      retryable: false
+    });
   }
 
   if (error instanceof OpenAiCompatibleHttpError) {
@@ -474,9 +517,14 @@ function normalizeOpenAiCompatibleError(error: unknown): LlmProviderFailure {
     }
 
     return new LlmProviderFailure({
-      code: error.status === 429 ? "LLM_RATE_LIMITED" : "LLM_PROVIDER_ERROR",
+      code:
+        error.status === 408
+          ? "LLM_TIMEOUT"
+          : error.status === 429
+            ? "LLM_RATE_LIMITED"
+            : "LLM_PROVIDER_ERROR",
       message: providerMessage ?? error.message,
-      retryable: error.status === 429 || error.status >= 500,
+      retryable: error.status === 408 || error.status === 429 || error.status >= 500,
       redactedDetail: detail
     });
   }
@@ -485,6 +533,33 @@ function normalizeOpenAiCompatibleError(error: unknown): LlmProviderFailure {
     code: "LLM_PROVIDER_ERROR",
     message: "OpenAI-compatible transport failed.",
     retryable: false
+  });
+}
+
+function throwIfStreamIncomplete(request: LlmRequest, sawRoundCompleted: boolean): void {
+  if (request.abortSignal?.aborted === true) {
+    throw new LlmProviderFailure({
+      code: "LLM_ABORTED",
+      message: "The OpenAI-compatible request was cancelled.",
+      retryable: false
+    });
+  }
+  if (!sawRoundCompleted) {
+    throw new LlmProviderFailure({
+      code: "LLM_MALFORMED_RESPONSE",
+      message: "The OpenAI-compatible endpoint ended the stream before declaring a round result.",
+      retryable: false,
+      redactedDetail: { streamTermination: "missing" }
+    });
+  }
+}
+
+function duplicateRoundCompletion(): LlmProviderFailure {
+  return new LlmProviderFailure({
+    code: "LLM_MALFORMED_RESPONSE",
+    message: "The OpenAI-compatible endpoint declared more than one round result.",
+    retryable: false,
+    redactedDetail: { streamTermination: "duplicate" }
   });
 }
 

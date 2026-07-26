@@ -536,6 +536,23 @@ const api: NovelStudioApi = {
       invokeTyped<
         Result<import("@novel-studio/application").AgentNetworkSettingsData, UnifiedError>
       >("application:agent-network:update-settings", partial),
+    saveProvider: (
+      profile: Omit<
+        import("@novel-studio/application").AgentNetworkProviderProfile,
+        "policyRevision"
+      >
+    ) =>
+      invokeTyped<
+        Result<import("@novel-studio/application").AgentNetworkSettingsData, UnifiedError>
+      >("application:agent-network:save-provider", profile),
+    removeProvider: (providerId: string) =>
+      invokeTyped<
+        Result<import("@novel-studio/application").AgentNetworkSettingsData, UnifiedError>
+      >("application:agent-network:remove-provider", providerId),
+    setDefaultProvider: (providerId: string) =>
+      invokeTyped<
+        Result<import("@novel-studio/application").AgentNetworkSettingsData, UnifiedError>
+      >("application:agent-network:set-default-provider", providerId),
     testConnection: (profileId: string) =>
       invokeTyped<Result<{ readonly latencyMs: number }, UnifiedError>>(
         "application:agent-network:test-connection",
