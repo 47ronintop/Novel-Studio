@@ -28,9 +28,6 @@ import {
   type AgentNetworkToolExecutor,
   type AgentExternalToolExecutor,
   type AgentFileOperationSessionPort,
-  type AgentGitToolSessionPort,
-  type AgentTaskSandboxPortRef,
-  type AgentTaskApprovalResolver,
   type AgentRunModelDriver,
   type AgentRunSession,
   type AgentRunStartFacts,
@@ -168,15 +165,11 @@ export interface DesktopAgentRunSessionOptions {
   readonly lifecycleOperations?: AgentWriteLifecycleOperationPort;
   /** Standard-trust existing-text replacement for app-managed creative projects only. */
   readonly trustedCreativeMutations?: AgentWriteTrustedCreativeMutationPort;
-  /** External capabilities are hidden unless the Main-owned sandbox transport is injected. */
+  /** Remote MCP capabilities are hidden unless the Main-owned transport is injected. */
   readonly externalToolExecutor?: AgentExternalToolExecutor;
   readonly externalToolDescriptors?: readonly AgentToolDescriptor[];
   /** Closes Main-owned external transports when this workspace runtime is replaced. */
   readonly disposeExternalTools?: () => void;
-  readonly gitToolSession?: AgentGitToolSessionPort;
-  readonly taskSandboxPort?: AgentTaskSandboxPortRef;
-  readonly taskApprovalResolver?: AgentTaskApprovalResolver;
-  readonly sandboxAttestationId?: string;
 }
 
 export interface PreparedAgentRunStart {
@@ -235,15 +228,11 @@ function requestedCapabilitySnapshot(
     workspaceKind: options.workspaceKind,
     searchEnabled: flags.phaseA_searchEnabled,
     fileLifecycleEnabled: flags.phaseB_fileLifecycleEnabled,
-    controlledExecutionEnabled:
-      flags.phaseC_controlledExecutionEnabled && options.sandboxAttestationId !== undefined,
-    ...(options.sandboxAttestationId === undefined
-      ? {}
-      : { sandboxAttestationId: options.sandboxAttestationId }),
-    gitReadEnabled: flags.phaseC_gitReadEnabled,
+    controlledExecutionEnabled: false,
+    gitReadEnabled: false,
     networkReadEnabled: flags.phaseD_networkReadEnabled,
-    pluginToolsEnabled: flags.phaseE_pluginToolsEnabled,
-    mcpToolsEnabled: flags.phaseE_localMcpEnabled || flags.phaseE_remoteMcpEnabled,
+    pluginToolsEnabled: false,
+    mcpToolsEnabled: flags.phaseE_remoteMcpEnabled,
     featureFlagRevision: flags.revision
   });
 }
@@ -257,23 +246,9 @@ function buildRuntimeCapabilitySnapshot(input: {
   readonly hasVersionGroupExecutor: boolean;
   readonly externalToolExecutor?: AgentExternalToolExecutor;
   readonly externalToolDescriptors?: readonly AgentToolDescriptor[];
-  readonly gitToolSession?: AgentGitToolSessionPort;
-  readonly taskSandboxPort?: AgentTaskSandboxPortRef;
-  readonly taskApprovalResolver?: AgentTaskApprovalResolver;
-  readonly sandboxAttestationId?: string;
 }): AgentToolCapabilitySnapshot {
   const descriptors = input.externalToolDescriptors ?? [];
-  const hasPluginDescriptor = descriptors.some((descriptor) =>
-    descriptor.id?.startsWith("plugin:")
-  );
   const hasMcpDescriptor = descriptors.some((descriptor) => descriptor.id?.startsWith("mcp:"));
-  const controlledExecutionEnabled =
-    input.requested.controlledExecutionEnabled &&
-    input.taskSandboxPort !== undefined &&
-    input.taskApprovalResolver !== undefined &&
-    input.sandboxAttestationId !== undefined &&
-    input.requested.sandboxAttestationId === input.sandboxAttestationId;
-
   return freezeAgentToolCapabilitySnapshot({
     workspaceKind: input.requested.workspaceKind,
     searchEnabled: input.requested.searchEnabled && input.searchToolExecutor !== undefined,
@@ -282,15 +257,11 @@ function buildRuntimeCapabilitySnapshot(input: {
       input.fileOperationSession !== undefined &&
       input.lifecycleOperations !== undefined &&
       input.hasVersionGroupExecutor,
-    controlledExecutionEnabled,
-    ...(controlledExecutionEnabled ? { sandboxAttestationId: input.sandboxAttestationId } : {}),
-    gitReadEnabled: input.requested.gitReadEnabled && input.gitToolSession !== undefined,
+    controlledExecutionEnabled: false,
+    gitReadEnabled: false,
     networkReadEnabled:
       input.requested.networkReadEnabled && input.networkToolExecutor !== undefined,
-    pluginToolsEnabled:
-      input.requested.pluginToolsEnabled &&
-      input.externalToolExecutor !== undefined &&
-      hasPluginDescriptor,
+    pluginToolsEnabled: false,
     mcpToolsEnabled:
       input.requested.mcpToolsEnabled &&
       input.externalToolExecutor !== undefined &&
@@ -470,18 +441,7 @@ function createDesktopAgentRuntimeServices(
       : { externalToolExecutor: options.externalToolExecutor }),
     ...(options.externalToolDescriptors === undefined
       ? {}
-      : { externalToolDescriptors: options.externalToolDescriptors }),
-    ...(options.gitToolSession === undefined ? {} : { gitToolSession: options.gitToolSession }),
-    ...(options.taskSandboxPort === undefined ? {} : { taskSandboxPort: options.taskSandboxPort }),
-    ...(options.taskApprovalResolver === undefined
-      ? {}
-      : { taskApprovalResolver: options.taskApprovalResolver }),
-    ...((options.sandboxAttestationId ?? requestedCapabilities.sandboxAttestationId) === undefined
-      ? {}
-      : {
-          sandboxAttestationId:
-            options.sandboxAttestationId ?? requestedCapabilities.sandboxAttestationId
-        })
+      : { externalToolDescriptors: options.externalToolDescriptors })
   });
 
   const scriptedDriver = createDesktopScriptedAgentDriver(options.activeChapterId);
@@ -675,12 +635,6 @@ function createDesktopAgentRuntimeServices(
     ...(options.externalToolDescriptors === undefined
       ? {}
       : { externalToolDescriptors: options.externalToolDescriptors }),
-    ...(options.gitToolSession === undefined ? {} : { gitToolSession: options.gitToolSession }),
-    ...(options.taskSandboxPort === undefined ? {} : { taskSandboxPort: options.taskSandboxPort }),
-    ...(options.taskApprovalResolver === undefined
-      ? {}
-      : { taskApprovalResolver: options.taskApprovalResolver }),
-    ...(options.taskSandboxPort === undefined ? {} : { projectRoot: options.contentRoot }),
     ...(usageRepository === undefined
       ? {}
       : {

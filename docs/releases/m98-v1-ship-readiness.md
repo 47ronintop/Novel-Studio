@@ -107,17 +107,17 @@ M98 final gate: conditional hold until manual live provider verification passes.
 
 Stage 5 的唯一机器可读状态源是 `docs/releases/stage5-agent-tool-evidence.json`。以下表格必须与该清单同步；存在代码、类型或单元测试不等于可在生产运行时或发布版中使用。
 
-| Phase                                                 | 状态    | 当前发布判断                                                                              |
-| ----------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------- |
-| Phase 0.1-0.4 foundation                              | Partial | capability snapshot、Permission Summary 与 provider mapping 已接入；缺打包 E2E/安全资格。 |
-| Phase A project search and references                 | Partial | 安全搜索 executor 已进入生产 runtime；缺用户控制、打包 E2E/安全资格。                     |
-| Phase B file lifecycle                                | Partial | 事务/恢复链已完成；缺合格 native handle/no-follow 后端，生产保持隐藏。                    |
-| Phase D network read                                  | Partial | pinned-IP dialer 与 origin 凭据边界已接线；设置 UI 未挂载且缺打包 E2E/安全资格。          |
-| Phase E.3 remote MCP                                  | Partial | JSON-RPC transport 和条件生产调度已接线；缺来源管理 UI 与打包 E2E/安全资格。              |
-| Phase C.0 sandbox qualification                       | Blocked | 原生 host/probe 是 stub；没有打包 Windows AppContainer 资格证据。                         |
-| Phase C.1-C.4 tasks and Git                           | Blocked | 依赖 C.0；统一审批已交付，Git 打包运行时仍 unavailable、未取得资格。                      |
-| Phase E.1 plugin tools and E.2 local stdio MCP        | Blocked | 依赖 C.0，启动器必须保持 fail-closed。                                                    |
-| Phase E.4 tool source management and unified approval | Partial | 统一审批 IPC/审批卡已交付；插件/MCP 来源管理 UI 尚未交付。                                |
-| Phase F release closure                               | Blocked | 尚无 Phase 具备完整生产与安全发布证据。                                                   |
+| Phase                                                 | 状态        | 当前发布判断                                                                              |
+| ----------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------- |
+| Phase 0.1-0.4 foundation                              | Partial     | capability snapshot、Permission Summary 与 provider mapping 已接入；缺打包 E2E/安全资格。 |
+| Phase A project search and references                 | Partial     | 安全搜索 executor 已进入生产 runtime；缺用户控制、打包 E2E/安全资格。                     |
+| Phase B file lifecycle                                | Partial     | 事务/恢复/撤销与可信创作文本替换已接线；创建/移动/删除仍未开放。                          |
+| Phase D network read                                  | Partial     | pinned-IP dialer 与 origin 凭据边界已接线；设置 UI 未挂载且缺打包 E2E/安全资格。          |
+| Phase E.3 remote MCP                                  | Partial     | JSON-RPC transport 和条件生产调度已接线；缺来源管理 UI 与打包 E2E/安全资格。              |
+| Phase C.0 sandbox qualification                       | Unavailable | 当前产品范围已取消，原生 host/probe 与资格链路已移除。                                    |
+| Phase C.1-C.4 tasks and Git                           | Unavailable | 工程任务、Agent Git 与内置 Git runtime 已取消。                                           |
+| Phase E.1 plugin tools and E.2 local stdio MCP        | Unavailable | 插件进程与本地 stdio MCP 已取消；不以裸进程替代。                                         |
+| Phase E.4 tool source management and unified approval | Partial     | 远程 MCP 来源管理与统一审批已交付；仍缺打包 E2E 证据。                                    |
+| Phase F release closure                               | Blocked     | 尚无 Phase 具备完整生产与安全发布证据。                                                   |
 
 `Blocked`/`Partial` 不影响既有 v1 核心写作旅程，但它们禁止将对应工具作为已发布能力宣传或默认开放。

@@ -1,7 +1,18 @@
 import { describe, expect, test } from "vitest";
 
-import { listAgentTools, type AgentToolDescriptor, type ListAgentToolsInput } from "@novel-studio/agent-engine";
-import { ok, err, createUnifiedError, type JsonObject, type Result, type UnifiedError } from "@novel-studio/shared";
+import {
+  listAgentTools,
+  type AgentToolDescriptor,
+  type ListAgentToolsInput
+} from "@novel-studio/agent-engine";
+import {
+  ok,
+  err,
+  createUnifiedError,
+  type JsonObject,
+  type Result,
+  type UnifiedError
+} from "@novel-studio/shared";
 
 import {
   createAgentPermissionSession,
@@ -44,8 +55,7 @@ function memoryRepository(): AgentPermissionSessionRepository & {
       return ok(
         written.find(
           (summary) =>
-            summary["runId"] === runId &&
-            summary["permissionSummaryId"] === permissionSummaryId
+            summary["runId"] === runId && summary["permissionSummaryId"] === permissionSummaryId
         )
       );
     }
@@ -183,9 +193,13 @@ describe("createAgentPermissionSession.verifyForStart", () => {
       repository: memoryRepository(),
       rootFingerprint: fakeRootFingerprint(() => "f".repeat(64))
     });
-    const prepared = await session.prepareForDraft(baseInput({ writePolicy: "write_before_confirmation" }));
+    const prepared = await session.prepareForDraft(
+      baseInput({ writePolicy: "write_before_confirmation" })
+    );
     expect(prepared.ok).toBe(true);
-    const verified = await session.verifyForStart(baseInput({ writePolicy: "user_preapproved_run" }));
+    const verified = await session.verifyForStart(
+      baseInput({ writePolicy: "user_preapproved_run" })
+    );
     expect(verified.ok).toBe(false);
     if (verified.ok) return;
     expect(verified.error.redactedDetail?.["driftedFields"]).toContain("writePolicy");

@@ -62,14 +62,17 @@ async function checkPackageScripts() {
   ) {
     failures.push("release:gate must run the strict packaged runtime gate.");
   }
-  if (packageJson.scripts?.["agent-sandbox:audit"] !== "node scripts/agent-sandbox-audit.mjs") {
-    failures.push("agent-sandbox:audit must run the locked native sandbox audit wrapper.");
-  }
-  if (packageJson.scripts?.["agent-sandbox:build"] !== "node scripts/build-agent-sandbox.mjs") {
-    failures.push("agent-sandbox:build must stage a locked Windows x64 native bundle.");
-  }
-  if (packageJson.scripts?.["agent-sandbox:qualify"] !== "node scripts/qualify-agent-sandbox.mjs") {
-    failures.push("agent-sandbox:qualify must run host/probe qualification vectors.");
+  for (const canceledScript of [
+    "agent-sandbox:audit",
+    "agent-sandbox:build",
+    "agent-sandbox:qualify",
+    "agent-file-operations:build",
+    "agent-file-operations:qualify",
+    "git-runtime:prepare"
+  ]) {
+    if (packageJson.scripts?.[canceledScript] !== undefined) {
+      failures.push(`Canceled local executable workflow must stay removed: ${canceledScript}.`);
+    }
   }
 }
 
@@ -182,54 +185,8 @@ async function checkElectronBuilderConfig() {
   if (!Array.isArray(config.files) || !config.files.includes("packages/schemas/schema/**")) {
     failures.push("Electron package files must include JSON Schema runtime contracts.");
   }
-  const expectedExtraResources = [
-    {
-      from: process.env.NOVEL_STUDIO_GIT_RUNTIME_DIR ?? "apps/desktop/resources/git",
-      to: "git"
-    },
-    {
-      from:
-        process.env.NOVEL_STUDIO_AGENT_SANDBOX_DIR ??
-        "apps/desktop/resources/native/agent-task-sandbox",
-      to: "native/agent-task-sandbox"
-    },
-    {
-      from:
-        process.env.NOVEL_STUDIO_AGENT_FILE_OPERATIONS_DIR ??
-        "apps/desktop/resources/native/agent-file-operations",
-      to: "native/agent-file-operations"
-    }
-  ];
-  if (
-    !Array.isArray(config.extraResources) ||
-    config.extraResources.length !== expectedExtraResources.length ||
-    expectedExtraResources.some(
-      (expected, index) =>
-        config.extraResources[index]?.from !== expected.from ||
-        config.extraResources[index]?.to !== expected.to
-    )
-  ) {
-    failures.push(
-      "Electron package must ship fixed Git and sandbox resources through extraResources."
-    );
-  }
-  for (const requiredResource of [
-    "apps/desktop/resources/git/manifest.json",
-    "apps/desktop/resources/git/runtime-source.lock.json",
-    "apps/desktop/resources/native/agent-task-sandbox/manifest.json",
-    "apps/desktop/resources/native/agent-file-operations/manifest.json",
-    "scripts/verify-packaged-git-runtime.mjs",
-    "scripts/prepare-git-runtime.mjs",
-    "scripts/verify-packaged-agent-sandbox.mjs",
-    "scripts/agent-sandbox-audit.mjs",
-    "scripts/build-agent-sandbox.mjs",
-    "scripts/build-agent-file-operations.mjs",
-    "scripts/qualify-agent-sandbox.mjs",
-    "scripts/qualify-agent-file-operations.mjs"
-  ]) {
-    if (!(await fileExists(join(root, requiredResource)))) {
-      failures.push(`Agent runtime packaging prerequisite is missing: ${requiredResource}`);
-    }
+  if (config.extraResources !== undefined && config.extraResources.length !== 0) {
+    failures.push("Electron package must not ship canceled local executable runtimes.");
   }
   const allowedPackageFiles = new Set([
     "apps/desktop/dist/**",

@@ -131,11 +131,10 @@ M18 必须覆盖：
 **`PluginSandboxPort` 合同（`packages/application/src/plugin-sandbox-port.ts`）**
 
 - `authorizePluginToolCall`：纯函数、无 I/O 的硬拒绝门，任意缺失/不信任/未验证条件均 deny，无降级路径（按计划原则9）。
-- `PluginSandboxPort.callTool`：端口接口，只有通过授权后才可调用。
-- 生产 adapter（`apps/desktop/src/main/plugin-sandbox-runtime.ts`）通过注入的 `PluginSandboxHostLauncher` 与原生 host 通信，不直接 import `node:child_process`（该文件专属权仍属 `agent-task-sandbox.ts`）。
+- `PluginSandboxPort.callTool`：保留为传输无关的合同，供持久化兼容和纯策略测试使用。
 
 **真实沙箱执行当前状态**
 
-- 原生 host stub（`apps/desktop/native/agent-task-sandbox/host/src/main.rs`）仍输出 unavailable 并 exit 1 — fail-closed 是正确行为，等待真实 Windows AppContainer 二进制打包。
-- 所有插件工具调用路径均以 `PLUGIN_SANDBOX_UNAVAILABLE` 错误告终，直到打包并签名真实 host binary 后方可通过。
-- 因 C.0 尚未资格认证，E.1 当前状态为 `Blocked`，而非可发布插件工具；权威状态和证据见 `docs/releases/stage5-agent-tool-evidence.json`。
+- 当前 Desktop 不提供插件进程 adapter，也不启动第三方插件源码。
+- 原生 host、构建和资格链路已按当前 Agent-tool 优先级计划移除，不以裸进程替代。
+- E.1 当前状态为 `Unavailable`；插件注册表、权限模型和纯策略合同继续保留。

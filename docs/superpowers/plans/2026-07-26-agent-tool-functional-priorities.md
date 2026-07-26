@@ -209,6 +209,8 @@ Pi 的 deferred tools/tool reference 只在部分 Anthropic、OpenAI Responses �
 
 **完成条件：** 新 checkout 只安装项目现有 Node 依赖即可开发和验证当前 Agent 功能；仓库、CI 与打包流程不再引用 Rust/MSVC/SDK 或等待原生资格。
 
+**清理状态（2026-07-26）：Complete。** Rust/AppContainer/file-operations host、内置 Git runtime、对应 Desktop adapter、构建/资格脚本、CI 安装步骤和 Electron 资源打包项均已移除。创作项目继续使用 `standard_trusted_creative`，远程网络/MCP 与通用事务/策略端口保留。
+
 ## 12. 明确延期：智能上下文
 
 以下内容继续延期：
@@ -244,4 +246,4 @@ Pi 的 deferred tools/tool reference 只在部分 Anthropic、OpenAI Responses �
 
 ## 15. 下一步
 
-立即执行批次 1：先补齐不完整/截断工具调用的 fail-closed 终态，再抽出通用 tool-call assembler/dispatcher。随后执行批次 2，恢复无需编译工具链的创作写入。批次 2 纵向闭环通过后，按第 11 节移除已取消的 Rust、原生构建、CI 和打包链路，再进入批次 3；全过程不安装 Rust、MSVC 或其他原生依赖。
+批次 1、批次 2 与第 11 节原生链路清理均已完成。下一步执行批次 3：收敛模型可见工具门面；不进入智能上下文、发布或本地进程能力。

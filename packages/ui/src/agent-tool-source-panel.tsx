@@ -1,10 +1,8 @@
 /**
  * Phase E.4 — Tool source management panel.
- * Allows users to view, add, edit, test, enable/disable, and remove
- * MCP server configurations and plugin sources.
+ * Allows users to view, add, test, enable/disable, and remove remote MCP servers.
  *
  * Security invariants:
- * - Raw command/argv/cwd for local stdio servers never appear here.
  * - API keys are displayed as ref status only (never plaintext).
  * - All mutations go through the Main-owned IPC boundary.
  * - Renderer cannot submit capability revision, attestation, or secret values.
@@ -12,16 +10,17 @@
 import React, { useState, useCallback } from "react";
 import type { McpServerConfig } from "@novel-studio/application";
 
+type RemoteMcpServerConfig = Extract<McpServerConfig, { readonly transport: "remote_http" }>;
+
 export interface AgentToolSourceEntry {
-  readonly config: McpServerConfig;
+  readonly config: RemoteMcpServerConfig;
   readonly connectionStatus?: "idle" | "testing" | "ok" | "error";
-  readonly sandboxStatus?: "verified" | "unavailable" | "unknown";
 }
 
 export interface AgentToolSourcePanelProps {
   readonly servers: readonly AgentToolSourceEntry[];
   readonly loading?: boolean;
-  readonly onAddServer: (config: McpServerConfig) => Promise<void>;
+  readonly onAddServer: (config: RemoteMcpServerConfig) => Promise<void>;
   readonly onRemoveServer: (serverId: string) => Promise<void>;
   readonly onSetEnabled: (serverId: string, enabled: boolean) => Promise<void>;
   readonly onTestConnection: (serverId: string) => Promise<{ readonly latencyMs: number }>;
@@ -30,7 +29,6 @@ export interface AgentToolSourcePanelProps {
 
 type ServerFormState = {
   readonly displayName: string;
-  readonly transport: "remote_http" | "local_stdio";
   readonly endpointUrl: string;
   readonly apiKeyRef: string;
   readonly tlsFingerprint: string;
@@ -38,7 +36,6 @@ type ServerFormState = {
 
 const emptyForm: ServerFormState = {
   displayName: "",
-  transport: "remote_http",
   endpointUrl: "",
   apiKeyRef: "",
   tlsFingerprint: ""
@@ -72,42 +69,31 @@ export function AgentToolSourcePanel(props: AgentToolSourcePanelProps): React.Re
       setAddError("显示名称不能为空。");
       return;
     }
-    if (form.transport === "remote_http" && !form.endpointUrl.trim()) {
+    if (!form.endpointUrl.trim()) {
       setAddError("远程 HTTP 服务器需要端点 URL。");
       return;
     }
-    // Validate endpoint URL is HTTPS
-    if (form.transport === "remote_http") {
-      try {
-        const url = new URL(form.endpointUrl.trim());
-        if (url.protocol !== "https:") {
-          setAddError("远程 MCP 服务器端点必须使用 HTTPS。");
-          return;
-        }
-      } catch {
-        setAddError("端点 URL 格式无效。");
+    try {
+      const url = new URL(form.endpointUrl.trim());
+      if (url.protocol !== "https:") {
+        setAddError("远程 MCP 服务器端点必须使用 HTTPS。");
         return;
       }
+    } catch {
+      setAddError("端点 URL 格式无效。");
+      return;
     }
 
     const serverId = `mcp_${Date.now().toString(36)}`;
-    const config: McpServerConfig =
-      form.transport === "remote_http"
-        ? {
-            serverId,
-            displayName: form.displayName.trim(),
-            transport: "remote_http",
-            endpointUrl: form.endpointUrl.trim(),
-            apiKeyRef: form.apiKeyRef.trim() || `secret://${serverId}/api_key`,
-            ...(form.tlsFingerprint.trim() ? { tlsFingerprint: form.tlsFingerprint.trim() } : {}),
-            enabled: false // Disabled by default; user must explicitly enable
-          }
-        : {
-            serverId,
-            displayName: form.displayName.trim(),
-            transport: "local_stdio",
-            enabled: false
-          };
+    const config: RemoteMcpServerConfig = {
+      serverId,
+      displayName: form.displayName.trim(),
+      transport: "remote_http",
+      endpointUrl: form.endpointUrl.trim(),
+      apiKeyRef: form.apiKeyRef.trim() || `secret://${serverId}/api_key`,
+      ...(form.tlsFingerprint.trim() ? { tlsFingerprint: form.tlsFingerprint.trim() } : {}),
+      enabled: false
+    };
 
     try {
       await onAddServer(config);
@@ -161,7 +147,7 @@ export function AgentToolSourcePanel(props: AgentToolSourcePanelProps): React.Re
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginBottom: "16px" }}>
-        {servers.map(({ config, sandboxStatus }) => (
+        {servers.map(({ config }) => (
           <div
             key={config.serverId}
             data-testid={`tool-source-entry-${config.serverId}`}
@@ -184,7 +170,7 @@ export function AgentToolSourcePanel(props: AgentToolSourcePanelProps): React.Re
                   padding: "2px 6px"
                 }}
               >
-                {config.transport === "remote_http" ? "远程 HTTP" : "本地 stdio"}
+                远程 HTTP
               </span>
               <span
                 data-testid={`tool-source-enabled-${config.serverId}`}
@@ -197,20 +183,9 @@ export function AgentToolSourcePanel(props: AgentToolSourcePanelProps): React.Re
               </span>
             </div>
 
-            {config.transport === "remote_http" && (
-              <div style={{ fontSize: "12px", color: "#888", marginTop: "4px" }}>
-                端点: {config.endpointUrl}
-              </div>
-            )}
-
-            {sandboxStatus === "unavailable" && (
-              <div
-                data-testid={`tool-source-sandbox-unavailable-${config.serverId}`}
-                style={{ fontSize: "11px", color: "#f44336", marginTop: "4px" }}
-              >
-                ⚠ sandbox 资格未满足 — 工具不可用
-              </div>
-            )}
+            <div style={{ fontSize: "12px", color: "#888", marginTop: "4px" }}>
+              端点: {config.endpointUrl}
+            </div>
 
             <div style={{ display: "flex", gap: "8px", marginTop: "8px", flexWrap: "wrap" }}>
               {/* Enable/disable */}
@@ -226,18 +201,15 @@ export function AgentToolSourcePanel(props: AgentToolSourcePanelProps): React.Re
                 {config.enabled ? "禁用" : "启用"}
               </button>
 
-              {/* Test connection (remote only) */}
-              {config.transport === "remote_http" && (
-                <button
-                  onClick={() => handleTestConnection(config.serverId)}
-                  disabled={loading || testStatus[config.serverId] === "testing"}
-                  aria-label={`测试连接 ${config.displayName}`}
-                  style={{ fontSize: "12px" }}
-                  data-testid={`tool-source-test-${config.serverId}`}
-                >
-                  {testStatus[config.serverId] === "testing" ? "测试中..." : "测试连接"}
-                </button>
-              )}
+              <button
+                onClick={() => handleTestConnection(config.serverId)}
+                disabled={loading || testStatus[config.serverId] === "testing"}
+                aria-label={`测试连接 ${config.displayName}`}
+                style={{ fontSize: "12px" }}
+                data-testid={`tool-source-test-${config.serverId}`}
+              >
+                {testStatus[config.serverId] === "testing" ? "测试中..." : "测试连接"}
+              </button>
               {testStatus[config.serverId] === "ok" && (
                 <span style={{ color: "#4caf50", fontSize: "11px", alignSelf: "center" }}>
                   连接成功
@@ -322,83 +294,49 @@ export function AgentToolSourcePanel(props: AgentToolSourcePanelProps): React.Re
 
           <div style={{ marginBottom: "8px" }}>
             <label style={{ display: "block", fontSize: "12px", marginBottom: "4px" }}>
-              传输类型
+              端点 URL <span style={{ color: "#f44336" }}>*</span>
             </label>
-            <select
-              value={form.transport}
-              onChange={(e) =>
-                handleFormChange("transport", e.target.value as "remote_http" | "local_stdio")
-              }
-              aria-label="传输类型"
+            <input
+              type="url"
+              value={form.endpointUrl}
+              onChange={(e) => handleFormChange("endpointUrl", e.target.value)}
+              placeholder="https://mcp.example.com/api"
+              aria-label="端点 URL"
               style={{ width: "100%", boxSizing: "border-box" }}
-              data-testid="tool-source-add-transport"
-            >
-              <option value="remote_http">远程 HTTP (HTTPS)</option>
-              <option value="local_stdio">本地 stdio (需要 sandbox 资格)</option>
-            </select>
+              data-testid="tool-source-add-endpoint"
+            />
           </div>
-
-          {form.transport === "remote_http" && (
-            <>
-              <div style={{ marginBottom: "8px" }}>
-                <label style={{ display: "block", fontSize: "12px", marginBottom: "4px" }}>
-                  端点 URL <span style={{ color: "#f44336" }}>*</span>
-                </label>
-                <input
-                  type="url"
-                  value={form.endpointUrl}
-                  onChange={(e) => handleFormChange("endpointUrl", e.target.value)}
-                  placeholder="https://mcp.example.com/api"
-                  aria-label="端点 URL"
-                  style={{ width: "100%", boxSizing: "border-box" }}
-                  data-testid="tool-source-add-endpoint"
-                />
-              </div>
-              <div style={{ marginBottom: "8px" }}>
-                <label style={{ display: "block", fontSize: "12px", marginBottom: "4px" }}>
-                  TLS 证书指纹（可选）
-                </label>
-                <input
-                  type="text"
-                  value={form.tlsFingerprint}
-                  onChange={(e) => handleFormChange("tlsFingerprint", e.target.value)}
-                  placeholder="sha256:..."
-                  aria-label="TLS 证书指纹"
-                  style={{ width: "100%", boxSizing: "border-box" }}
-                  data-testid="tool-source-add-tls"
-                />
-              </div>
-              <div style={{ marginBottom: "8px" }}>
-                <label style={{ display: "block", fontSize: "12px", marginBottom: "4px" }}>
-                  API Key 引用（留空则由系统生成）
-                </label>
-                <input
-                  type="text"
-                  value={form.apiKeyRef}
-                  onChange={(e) => handleFormChange("apiKeyRef", e.target.value)}
-                  placeholder="secret://my-server/api_key（不接受明文密钥）"
-                  aria-label="API Key 引用"
-                  style={{ width: "100%", boxSizing: "border-box" }}
-                  data-testid="tool-source-add-apikey"
-                />
-                <p style={{ fontSize: "11px", color: "#888", margin: "4px 0 0" }}>
-                  明文 API Key 不会存储在此字段中。请通过密钥管理器保存后使用 secret:// 引用。
-                </p>
-              </div>
-            </>
-          )}
-
-          {form.transport === "local_stdio" && (
-            <div style={{ marginBottom: "8px" }}>
-              <p style={{ fontSize: "12px", color: "#f5a623" }}>
-                ⚠ 本地 stdio MCP 需要 Windows AppContainer sandbox 资格（Phase C.0）。
-                当前环境未满足条件，添加后将保持 unavailable 状态，直至资格通过。
-              </p>
-              <p style={{ fontSize: "11px", color: "#888" }}>
-                命令行和工作目录由 Main 进程管理，不通过此界面配置。
-              </p>
-            </div>
-          )}
+          <div style={{ marginBottom: "8px" }}>
+            <label style={{ display: "block", fontSize: "12px", marginBottom: "4px" }}>
+              TLS 证书指纹（可选）
+            </label>
+            <input
+              type="text"
+              value={form.tlsFingerprint}
+              onChange={(e) => handleFormChange("tlsFingerprint", e.target.value)}
+              placeholder="sha256:..."
+              aria-label="TLS 证书指纹"
+              style={{ width: "100%", boxSizing: "border-box" }}
+              data-testid="tool-source-add-tls"
+            />
+          </div>
+          <div style={{ marginBottom: "8px" }}>
+            <label style={{ display: "block", fontSize: "12px", marginBottom: "4px" }}>
+              API Key 引用（留空则由系统生成）
+            </label>
+            <input
+              type="text"
+              value={form.apiKeyRef}
+              onChange={(e) => handleFormChange("apiKeyRef", e.target.value)}
+              placeholder="secret://my-server/api_key（不接受明文密钥）"
+              aria-label="API Key 引用"
+              style={{ width: "100%", boxSizing: "border-box" }}
+              data-testid="tool-source-add-apikey"
+            />
+            <p style={{ fontSize: "11px", color: "#888", margin: "4px 0 0" }}>
+              明文 API Key 不会存储在此字段中。请通过密钥管理器保存后使用 secret:// 引用。
+            </p>
+          </div>
 
           {addError && (
             <p
@@ -455,7 +393,6 @@ export function AgentToolSourcePanel(props: AgentToolSourcePanelProps): React.Re
         }}
       >
         <p>工具来源只在运行开始前冻结。运行中修改设置将在下次运行时生效，当前运行不受影响。</p>
-        <p>插件来源需要 Windows AppContainer sandbox 资格（Phase C.0 完成后开放）。</p>
       </div>
     </div>
   );

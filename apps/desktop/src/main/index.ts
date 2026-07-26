@@ -16,7 +16,6 @@ import {
   createDesktopNetworkToolExecutor
 } from "./agent-network-runtime.js";
 import { createAgentFeatureFlags } from "./agent-feature-flags.js";
-import { WindowsNativeFileOperations } from "./native-file-operations.js";
 import {
   createDesktopAgentNetworkSettingsPort,
   createDesktopMcpSettingsPort
@@ -29,7 +28,6 @@ import { createDesktopModelRuntime, createEncryptedFileModelSecretStore } from "
 import { createSecureWebPreferences } from "./security.js";
 import {
   createAgentPricingRegistry,
-  createAgentFileOperationSession,
   createAgentExternalToolSession,
   createMcpSettingsSession,
   mangleToolId,
@@ -113,25 +111,11 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     createAiProvider: modelRuntime.createAiProvider
   });
   activeDesktopApplication = bootstrapped.application;
-  // This is expected to be unavailable in source and development builds. The
-  // runtime only receives a lifecycle port after the packaged native binary and
-  // manifest digest have both qualified.
-  const nativeFileOperations = await WindowsNativeFileOperations.fromPackagedResources({
-    resourcesBase: process.resourcesPath
-  });
   const failAgentWriteAt = readPositiveInteger(
     process.env["NOVEL_STUDIO_TEST_AGENT_WRITE_FAIL_AT"]
   );
   const agentRuntimeManager = createDesktopAgentRuntimeManager({
     createRuntime: async (binding) => {
-      const boundLifecycle = nativeFileOperations.ok
-        ? await nativeFileOperations.value.withProjectRoot(binding.contentRoot)
-        : undefined;
-      const lifecycleOperations = boundLifecycle?.ok ? boundLifecycle.value : undefined;
-      const fileOperationSession =
-        lifecycleOperations === undefined
-          ? undefined
-          : createAgentFileOperationSession({ traceId: "desktop-agent-file-operation-session" });
       const networkRuntime = await resolveDesktopNetworkRuntime({
         settingsSession: agentNetworkSettingsSession,
         settingsPort: agentNetworkSettingsPort,
@@ -144,10 +128,10 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
       });
       const featureFlags = createAgentFeatureFlags({
         phaseA_searchEnabled: true,
-        phaseB_fileLifecycleEnabled: lifecycleOperations !== undefined,
+        phaseB_fileLifecycleEnabled: false,
         phaseD_networkReadEnabled: networkRuntime.executor !== undefined,
         phaseE_remoteMcpEnabled: mcpRuntime.executor !== undefined,
-        revision: `desktop-main:${networkRuntime.policyRevision}:${mcpRuntime.settingsRevision}:file-lifecycle-${lifecycleOperations === undefined ? "unavailable" : "qualified"}`
+        revision: `desktop-main:${networkRuntime.policyRevision}:${mcpRuntime.settingsRevision}:write-standard-trusted-creative`
       });
       return createDesktopAgentRuntime({
         workspaceKind: binding.kind,
@@ -159,8 +143,6 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
           : { activeChapterId: binding.activeChapterId }),
         userDataRoot,
         featureFlags,
-        ...(fileOperationSession === undefined ? {} : { fileOperationSession }),
-        ...(lifecycleOperations === undefined ? {} : { lifecycleOperations }),
         ...(networkRuntime.executor === undefined
           ? {}
           : { networkToolExecutor: networkRuntime.executor }),

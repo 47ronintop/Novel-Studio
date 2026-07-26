@@ -121,18 +121,18 @@ Novel Studio v1 是一个 local-first、project-based 的 AI 小说创作 IDE。
 
 当前完成度由 `docs/releases/stage5-agent-tool-evidence.json` 作为唯一机器可读状态源。`Partial` 表示合同或局部实现存在，但还没有生产闭环；`Blocked` 表示已知安全、资格或依赖缺口阻止发布。任何 Phase 只有同时具备生产接线、安全资格、用户控制和 E2E 证据时才能标为 `Complete`。
 
-| Phase                                                 | 状态    | 当前证据与发布判断                                                                                          |
-| ----------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------- |
-| Phase 0.1-0.4 foundation                              | Partial | capability snapshot、Permission Summary 和 provider mapping 已接入生产 runtime；缺打包 E2E 与安全资格证据。 |
-| Phase A project search and references                 | Partial | 受预算/no-follow 约束的搜索 executor 已接入生产 runtime；缺用户控制、打包 E2E 与安全资格证据。              |
-| Phase B file lifecycle                                | Partial | Change Set、事务、恢复和逆序撤销链已完成；缺合格 native handle/no-follow 后端，生产保持隐藏。               |
-| Phase D network read                                  | Partial | pinned-IP dialer、origin 凭据边界和条件生产接线已完成；设置面板未挂载且缺打包 E2E/安全资格。                |
-| Phase E.3 remote MCP                                  | Partial | JSON-RPC transport、descriptor 和条件生产调度已接线；缺来源管理 UI 与打包 E2E/安全资格。                    |
-| Phase C.0 sandbox qualification                       | Blocked | 原生 host/probe 仍为 stub，没有真实 Windows AppContainer 打包资格证据。                                     |
-| Phase C.1-C.4 tasks and Git                           | Blocked | 依赖 C.0；统一审批已交付，但只读 Git 打包产物仍 unavailable、未取得资格。                                   |
-| Phase E.1 plugin tools and E.2 local stdio MCP        | Blocked | 依赖 C.0，启动器必须继续 fail-closed。                                                                      |
-| Phase E.4 tool source management and unified approval | Partial | descriptor、统一审批 IPC 和运行中审批卡已交付；插件/MCP 来源管理 UI 尚未交付。                              |
-| Phase F release closure                               | Blocked | 没有能力 Phase 同时满足生产接线、安全资格、用户控制和 E2E 证据。                                            |
+| Phase                                                 | 状态        | 当前证据与发布判断                                                                                          |
+| ----------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------- |
+| Phase 0.1-0.4 foundation                              | Partial     | capability snapshot、Permission Summary 和 provider mapping 已接入生产 runtime；缺打包 E2E 与安全资格证据。 |
+| Phase A project search and references                 | Partial     | 受预算/no-follow 约束的搜索 executor 已接入生产 runtime；缺用户控制、打包 E2E 与安全资格证据。              |
+| Phase B file lifecycle                                | Partial     | Change Set、事务、恢复、撤销及可信创作文本替换已接线；创建/移动/删除仍未开放。                              |
+| Phase D network read                                  | Partial     | pinned-IP dialer、origin 凭据边界和条件生产接线已完成；设置面板未挂载且缺打包 E2E/安全资格。                |
+| Phase E.3 remote MCP                                  | Partial     | JSON-RPC transport、descriptor 和条件生产调度已接线；缺来源管理 UI 与打包 E2E/安全资格。                    |
+| Phase C.0 sandbox qualification                       | Unavailable | 当前产品范围已取消，原生 host/probe 与资格链路已移除。                                                      |
+| Phase C.1-C.4 tasks and Git                           | Unavailable | 工程任务、Agent Git 与内置 Git runtime 已取消。                                                             |
+| Phase E.1 plugin tools and E.2 local stdio MCP        | Unavailable | 插件进程与本地 stdio MCP 已取消；不以裸进程替代。                                                           |
+| Phase E.4 tool source management and unified approval | Partial     | 远程 MCP 来源管理与统一审批已交付；仍缺打包 E2E 证据。                                                      |
+| Phase F release closure                               | Blocked     | 没有能力 Phase 同时满足生产接线、安全资格、用户控制和 E2E 证据。                                            |
 
 - settings schema 将首批可配置 provider 收敛为 `openai-compatible`、`openai`、`ollama`，并继续拒绝明文 `apiKey`。
 - Application 层新增 profile 保存校验：不支持 provider 或非 `secret://` 密钥引用会在写入前失败，错误信息保持脱敏。

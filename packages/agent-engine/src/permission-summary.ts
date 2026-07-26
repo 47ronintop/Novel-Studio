@@ -14,9 +14,7 @@ import {
 } from "./tool-registry.js";
 
 export type AgentWriteMutationTrust =
-  | "unavailable"
-  | "standard_trusted_creative"
-  | "hardened_native";
+  "unavailable" | "standard_trusted_creative" | "hardened_native";
 
 /**
  * The capabilities Stage 5 never grants to an Agent run. They are a fixed, registry-independent

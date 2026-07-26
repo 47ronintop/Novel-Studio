@@ -2,7 +2,7 @@
   "schemaVersion": "1.0",
   "assessedAt": "2026-07-25",
   "overallStatus": "Blocked",
-  "notes": "C.0 Rust source complete but cannot build/qualify without Windows AppContainer CI runner. Git runtime requires bundled binary. B native backend requires Rust build. D network panel mounted in renderer; E.4 source management UI delivered.",
+  "notes": "Local executable scope (C.0, C.1-C.4, and E.1-E.2) was canceled by the active Agent-tool priorities plan. Existing-text creative writes use standard_trusted_creative; D network and E.3 remote MCP remain active but incomplete.",
   "phases": [
     {
       "id": "phase-0",
@@ -52,7 +52,7 @@
       "userControlsComplete": false,
       "endToEndEvidence": false,
       "blockedBy": [
-        "NoFollowNativeFileOperationPort interface and path validation complete. Real Windows handle-based implementation (napi-rs or Rust IPC) requires Windows build environment not available in current CI. File lifecycle tools remain hidden until native backend qualifies."
+        "Existing-text creative replacements are wired through standard_trusted_creative. Create, move, delete, and directory lifecycle operations remain outside the current trusted backend and are not exposed."
       ],
       "evidence": [
         { "kind": "unit", "path": "packages/agent-engine/test/change-set.test.ts" },
@@ -103,60 +103,59 @@
     {
       "id": "phase-c0",
       "label": "Phase C.0 sandbox qualification",
-      "status": "Blocked",
+      "status": "Unavailable",
       "releaseEligible": false,
       "productionRuntimeWired": false,
       "securityQualified": false,
       "userControlsComplete": false,
       "endToEndEvidence": false,
       "blockedBy": [
-        "Real Windows AppContainer Rust source implemented (host/src/windows_impl.rs + probe/src/windows_probe.rs with AppContainer SID derivation, Job Object KILL_ON_JOB_CLOSE, CREATE_SUSPENDED sequencing, and full qualification probe). Build and qualification require Windows x64 CI runner with Windows SDK — not available in current environment. Cargo.toml updated with windows crate dependencies. Cannot produce packaged artifacts or run qualification tests without that environment."
+        "Canceled from the current product scope by the active Agent-tool priorities plan; the native host, probe, build, and qualification chain were removed."
       ],
       "completedIn": null,
       "evidence": [
-        { "kind": "source", "path": "apps/desktop/native/agent-task-sandbox/host/src/main.rs" },
         {
-          "kind": "source",
-          "path": "apps/desktop/native/agent-task-sandbox/host/src/windows_impl.rs"
-        },
-        { "kind": "source", "path": "apps/desktop/native/agent-task-sandbox/probe/src/main.rs" },
-        {
-          "kind": "source",
-          "path": "apps/desktop/native/agent-task-sandbox/probe/src/windows_probe.rs"
+          "kind": "decision",
+          "path": "docs/superpowers/plans/2026-07-26-agent-tool-functional-priorities.md"
         }
       ]
     },
     {
       "id": "phase-c1-c4",
       "label": "Phase C.1-C.4 tasks and Git",
-      "status": "Blocked",
+      "status": "Unavailable",
       "releaseEligible": false,
       "productionRuntimeWired": false,
       "securityQualified": false,
       "userControlsComplete": false,
       "endToEndEvidence": false,
       "blockedBy": [
-        "C.0 is blocked: requires Windows CI to build and qualify AppContainer host/probe.",
-        "The packaged read-only Git runtime remains unavailable: apps/desktop/resources/git/manifest.json digest is placeholder. Bundling a real Git binary requires downloading and verifying a Windows x64 Git release — not possible without Windows environment."
+        "Project tasks, Agent Git, and the bundled Git runtime were canceled from the current product scope."
       ],
       "evidence": [
-        { "kind": "unit", "path": "packages/application/test/agent-run-session.test.ts" },
-        { "kind": "unit", "path": "apps/desktop/test/git-read-adapter.test.ts" }
+        {
+          "kind": "decision",
+          "path": "docs/superpowers/plans/2026-07-26-agent-tool-functional-priorities.md"
+        }
       ]
     },
     {
       "id": "phase-e1-e2",
       "label": "Phase E.1 plugin tools and E.2 local stdio MCP",
-      "status": "Blocked",
+      "status": "Unavailable",
       "releaseEligible": false,
       "productionRuntimeWired": false,
       "securityQualified": false,
       "userControlsComplete": false,
       "endToEndEvidence": false,
-      "blockedBy": ["C.0 is blocked, so plugin and local MCP launchers must remain unavailable."],
+      "blockedBy": [
+        "Plugin process execution and local stdio MCP were canceled from the current product scope."
+      ],
       "evidence": [
-        { "kind": "unit", "path": "packages/application/test/plugin-sandbox-port.test.ts" },
-        { "kind": "unit", "path": "apps/desktop/test/local-mcp-runtime.test.ts" }
+        {
+          "kind": "decision",
+          "path": "docs/superpowers/plans/2026-07-26-agent-tool-functional-priorities.md"
+        }
       ]
     },
     {
@@ -169,7 +168,7 @@
       "userControlsComplete": true,
       "endToEndEvidence": false,
       "blockedBy": [
-        "Plugin source management UI delivered (AgentToolSourcePanel). Sandbox-dependent plugin/local-MCP sources remain unavailable. Packaged E2E not yet recorded."
+        "Remote MCP source management and unified approval are present, but packaged E2E evidence is not recorded."
       ],
       "completedIn": "2026-07-25",
       "evidence": [
@@ -190,9 +189,8 @@
       "endToEndEvidence": false,
       "blockedBy": [
         "No implementation phase has the production and security evidence required for release closure.",
-        "C.0 requires Windows CI runner for AppContainer qualification.",
-        "Git runtime requires bundled binary.",
-        "B native backend requires Windows build environment."
+        "Canceled local executable capabilities are not release candidates.",
+        "The remaining active capabilities still require their own release evidence."
       ],
       "evidence": [{ "kind": "gate", "path": "scripts/release-check.mjs" }]
     }

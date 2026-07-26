@@ -1,8 +1,13 @@
 # ADR-0002: Agent Task Sandbox — Threat Model and Trust Boundaries
 
 **Date:** 2026-07-23  
-**Status:** Candidate  
-**Context:** Phase C — Controlled Execution for Novel Studio Agent
+**Status:** Superseded
+**Context:** Historical Phase C controlled-execution proposal
+
+This proposal was removed from the current product scope by
+`docs/superpowers/plans/2026-07-26-agent-tool-functional-priorities.md`. The implementation and
+packaging chain no longer exist; the remaining text records the rejected threat model and must not
+be treated as current runtime documentation.
 
 ## Problem Statement
 

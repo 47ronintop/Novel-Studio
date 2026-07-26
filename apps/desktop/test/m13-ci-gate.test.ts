@@ -48,6 +48,11 @@ describe("M13 real E2E and CI gate", () => {
     expect(workflow).toContain("npm run package:dir:built");
     expect(workflow).toContain("npm audit");
     expect(workflow).toContain("--omit=dev --audit-level=high");
+    expect(workflow).not.toMatch(
+      /rust-toolchain|cargo(?:-deny)?|agent-sandbox|agent-file-operations/u
+    );
+    expect(workflow).not.toContain("NOVEL_STUDIO_AGENT_SANDBOX_DIR");
+    expect(workflow).not.toContain("NOVEL_STUDIO_AGENT_FILE_OPERATIONS_DIR");
     expect(workflow).not.toContain("--release --package-dir");
     expect(packageJson.scripts["format:changed"]).toBe("node scripts/format-changed.mjs");
     expect(packageJson.scripts["format:full-debt"]).toBe("prettier --check .");

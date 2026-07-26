@@ -533,16 +533,18 @@ export function createSettingsBridge(
       onRevoke: () => Promise.resolve()
     };
 
-    const toolSourceEntries: AgentToolSourceEntry[] = mcpServers.map((config) => {
-      const testStatus = mcpTestStatuses[config.serverId];
-      const entry: AgentToolSourceEntry = {
-        config,
-        ...(testStatus !== undefined ? { connectionStatus: testStatus } : {}),
-        sandboxStatus:
-          config.transport === "local_stdio" ? ("unavailable" as const) : ("unknown" as const)
-      };
-      return entry;
-    });
+    const toolSourceEntries: AgentToolSourceEntry[] = mcpServers
+      .filter(
+        (config): config is Extract<McpServerConfig, { readonly transport: "remote_http" }> =>
+          config.transport === "remote_http"
+      )
+      .map((config) => {
+        const testStatus = mcpTestStatuses[config.serverId];
+        return {
+          config,
+          ...(testStatus !== undefined ? { connectionStatus: testStatus } : {})
+        };
+      });
 
     const toolSourcesProps: AgentToolSourcePanelProps = {
       servers: toolSourceEntries,

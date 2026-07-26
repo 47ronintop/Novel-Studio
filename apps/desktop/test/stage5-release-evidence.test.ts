@@ -17,13 +17,13 @@ interface Stage5Evidence {
 }
 
 describe("Stage 5 release evidence", () => {
-  test("keeps unqualified agent-tool phases out of the release-ready state", async () => {
+  test("keeps incomplete and canceled agent-tool phases out of the release-ready state", async () => {
     const manifest = JSON.parse(
       await readFile("docs/releases/stage5-agent-tool-evidence.json", "utf8")
     ) as Stage5Evidence;
 
     expect(manifest.overallStatus).toBe("Blocked");
-    expect(manifest.phases.find((phase) => phase.id === "phase-c0")?.status).toBe("Blocked");
+    expect(manifest.phases.find((phase) => phase.id === "phase-c0")?.status).toBe("Unavailable");
 
     for (const phase of manifest.phases) {
       if (phase.status !== "Complete") {
@@ -47,7 +47,7 @@ describe("Stage 5 release evidence", () => {
     expect(releaseCheck).toContain("checkStage5Evidence");
     expect(releaseCheck).toContain("docs/releases/stage5-agent-tool-evidence.json");
     expect(releaseCheck).toContain("cannot be Complete without production and security evidence");
-    expect(releaseCheck).toContain("Phase C.0 must be Blocked until qualified");
+    expect(releaseCheck).toContain('if (kind === "decision")');
     expect(releaseCheck).toContain("Strict release gate cannot pass while Stage 5 overall status");
     expect(releaseCheck).toContain("overall Blocked or Complete status");
     expect(releaseCheck).toContain("isSafeEvidencePath");

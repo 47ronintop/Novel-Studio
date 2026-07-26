@@ -23,12 +23,6 @@ jobs:
           node-version: "20.20.0"
           cache: npm
 
-      - name: Setup locked Rust toolchain
-        uses: dtolnay/rust-toolchain@1.79.0
-
-      - name: Install locked cargo-deny
-        run: cargo install --locked cargo-deny --version 0.15.4
-
       - name: Install dependencies
         run: npm ci
 
@@ -62,23 +56,5 @@ jobs:
       - name: Dependency audit
         run: npm audit --omit=dev --audit-level=high
 
-      - name: Native sandbox supply-chain audit
-        run: npm run agent-sandbox:audit
-
-      - name: Build locked Windows x64 sandbox host and probe
-        run: npm run agent-sandbox:build
-
-      - name: Build locked Windows x64 no-follow file operation host
-        run: npm run agent-file-operations:build
-
-      - name: Run sandbox host/probe qualification vectors
-        run: npm run agent-sandbox:qualify
-
-      - name: Run no-follow file operation qualification vectors
-        run: npm run agent-file-operations:qualify
-
-      - name: Package sandbox build inputs
-        env:
-          NOVEL_STUDIO_AGENT_SANDBOX_DIR: release/agent-task-sandbox
-          NOVEL_STUDIO_AGENT_FILE_OPERATIONS_DIR: release/agent-file-operations
+      - name: Package Node build inputs
         run: npm run package:dir:built

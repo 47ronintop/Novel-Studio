@@ -1,9 +1,7 @@
 /**
- * Task E.1 — PluginSandboxPort: the boundary Application uses to invoke a plugin-declared
- * tool inside the real OS sandbox (see apps/desktop/src/main/plugin-sandbox-runtime.ts for the
- * production implementation, which depends on Phase C.0's native host through an injected
- * launcher port). This file only defines the port contract and a pure, I/O-free authorization
- * function; it performs no process launching itself.
+ * PluginSandboxPort is the transport-agnostic boundary for persisted contracts and policy tests.
+ * The current Desktop product does not provide a process-launching implementation. This file only
+ * defines the port contract and a pure, I/O-free authorization function.
  *
  * authorizePluginToolCall mirrors packages/plugin-engine's authorizePluginAction, but is
  * stricter and tool-specific: it is the last policy gate before a call ever reaches the real

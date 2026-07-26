@@ -17,6 +17,17 @@ describe("M10 beta packaging", () => {
     expect(config).not.toMatch(/electronLanguages[^;]*\*/);
   });
 
+  test("does not bundle canceled local executable runtimes", () => {
+    const config = readFileSync(
+      join(process.cwd(), "apps", "desktop", "electron-builder.config.cjs"),
+      "utf8"
+    );
+
+    expect(config).not.toMatch(/resources[\\/]native|resources[\\/]git/u);
+    expect(config).not.toContain("NOVEL_STUDIO_AGENT_");
+    expect(config).not.toContain("NOVEL_STUDIO_GIT_RUNTIME_DIR");
+  });
+
   test("declares renderer bundling and installer-grade packaging scripts", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
       readonly scripts: Record<string, string>;

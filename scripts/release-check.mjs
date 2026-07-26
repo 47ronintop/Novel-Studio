@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { createRequire } from "node:module";
 import { lstat, readFile, realpath, stat } from "node:fs/promises";
@@ -19,7 +18,7 @@ await checkPublicInstallGate();
 await checkV1ShipReadiness();
 const stage5OverallStatus = await checkStage5Evidence();
 if (strictReleaseGate) {
-  await checkQualifiedPackagedAgentRuntimes(options.packageDirectory);
+  await verifyPackagedLayout(options.packageDirectory);
 }
 
 if (failures.length > 0) {
@@ -56,28 +55,6 @@ async function checkPackageScripts() {
   expectScript(scripts, "release:notes", "node scripts/release-notes.mjs");
   expectScript(scripts, "release:check", "node scripts/release-check.mjs");
   expectScript(scripts, "release:gate", "node scripts/release-check.mjs --strict --package-dir");
-}
-
-async function checkQualifiedPackagedAgentRuntimes(explicitPackageDirectory) {
-  const packageDirectory = await verifyPackagedLayout(explicitPackageDirectory);
-  if (packageDirectory === undefined) {
-    return;
-  }
-
-  for (const verifier of [
-    "scripts/verify-packaged-agent-sandbox.mjs",
-    "scripts/verify-packaged-git-runtime.mjs"
-  ]) {
-    const result = await run(process.execPath, [
-      verifier,
-      "--release",
-      "--package-dir",
-      packageDirectory
-    ]);
-    if (result.exitCode !== 0) {
-      failures.push(`Strict release gate rejected packaged runtime via ${verifier}.`);
-    }
-  }
 }
 
 function parseArguments(argumentsList) {
@@ -210,14 +187,6 @@ async function isPortableExecutable(path) {
   } catch {
     return false;
   }
-}
-
-function run(command, args) {
-  return new Promise((resolveRun, reject) => {
-    const child = spawn(command, args, { cwd: root, shell: false, stdio: "inherit" });
-    child.once("error", reject);
-    child.once("close", (exitCode) => resolveRun({ exitCode }));
-  });
 }
 
 async function checkElectronBuilderConfig() {
@@ -375,6 +344,7 @@ async function checkStage5Evidence() {
     "unit",
     "source",
     "gate",
+    "decision",
     "production-e2e",
     "security-qualification"
   ]);
@@ -463,11 +433,6 @@ async function checkStage5Evidence() {
         `Strict release gate requires Phase ${phase.id} to be Complete and release eligible.`
       );
     }
-    if (phase.id === "phase-c0" && phase.status !== "Blocked" && phase.status !== "Complete") {
-      failures.push(
-        "Stage 5 Phase C.0 must be Blocked until qualified, then Complete with normal evidence."
-      );
-    }
     for (const item of evidence) {
       if (!isSafeEvidencePath(item.path) || !hasEvidenceKindSemantics(item.kind, item.path)) {
         failures.push(`Stage 5 evidence entry has an unsafe kind or path for ${phase.id}.`);
@@ -543,6 +508,8 @@ function hasEvidenceKindSemantics(kind, path) {
   if (kind === "source") return /\/src\//.test(normalizedPath);
   if (kind === "gate")
     return normalizedPath.startsWith("scripts/") && normalizedPath.endsWith(".mjs");
+  if (kind === "decision")
+    return normalizedPath.startsWith("docs/superpowers/plans/") && normalizedPath.endsWith(".md");
   if (kind === "production-e2e") return /\.e2e\.[cm]?[jt]sx?$/.test(normalizedPath);
   if (kind === "security-qualification")
     return /(?:qualification|attestation|security)/i.test(normalizedPath);
