@@ -55,6 +55,7 @@ import type {
   AgentToolCapabilitySnapshot,
   AgentToolDescriptor,
   AgentToolName,
+  AgentWriteMutationTrust,
   ChangeSet,
   StartAgentRunCommand,
   VersionGroup
@@ -442,6 +443,14 @@ function createDesktopAgentRuntimeServices(
             ? {}
             : { failAgentWriteAt: options.failAgentWriteAt })
         });
+  const writeMutationTrust: AgentWriteMutationTrust =
+    versionGroupServices === undefined
+      ? "unavailable"
+      : options.lifecycleOperations !== undefined
+        ? "hardened_native"
+        : trustedCreativeMutations !== undefined
+          ? "standard_trusted_creative"
+          : "unavailable";
 
   const capabilitySnapshot = buildRuntimeCapabilitySnapshot({
     requested: requestedCapabilities,
@@ -616,6 +625,7 @@ function createDesktopAgentRuntimeServices(
         }
       }
     },
+    writeMutationTrust,
     ...(options.now === undefined ? {} : { now: options.now })
   });
   const planExecutionSession = createAgentPlanExecutionSession({ repository });

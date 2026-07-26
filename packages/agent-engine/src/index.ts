@@ -65,6 +65,7 @@ export {
   computeProviderMappingRevision
 } from "./permission-summary.js";
 export type {
+  AgentWriteMutationTrust,
   AgentToolLister,
   GeneratePermissionSummaryInput,
   PermissionSummary,

@@ -7,6 +7,7 @@ import {
   type AgentToolCapabilitySnapshot,
   type AgentToolDescriptor,
   type AgentToolLister,
+  type AgentWriteMutationTrust,
   type AgentWritePolicy,
   type PermissionSummary,
   type PermissionSummaryFieldDrift
@@ -116,6 +117,8 @@ export interface CreateAgentPermissionSessionOptions {
   readonly rootFingerprint: AgentPermissionRootFingerprintPort;
   readonly now?: () => string;
   readonly createId?: () => string;
+  /** Main-owned classification of the write backend available to this runtime. */
+  readonly writeMutationTrust?: AgentWriteMutationTrust;
   /** Injectable Tool Registry lister; defaults to the real registry. Tests use it to prove drift. */
   readonly listTools?: AgentToolLister;
 }
@@ -145,6 +148,7 @@ export function createAgentPermissionSession(
         writePolicy: input.writePolicy,
         rootFingerprint: fingerprint.value,
         generatedAt: now(),
+        writeMutationTrust: options.writeMutationTrust ?? "unavailable",
         ...(input.capabilitySnapshot === undefined
           ? {}
           : { capabilitySnapshot: input.capabilitySnapshot }),
@@ -261,6 +265,10 @@ function isPermissionSummary(value: JsonObject, input: ReadPermissionSummaryForR
       typeof value["featureFlagRevision"] !== "string" ||
       typeof value["descriptorRevision"] !== "string" ||
       typeof value["providerMappingRevision"] !== "string" ||
+      (value["writeMutationTrust"] !== undefined &&
+        value["writeMutationTrust"] !== "unavailable" &&
+        value["writeMutationTrust"] !== "standard_trusted_creative" &&
+        value["writeMutationTrust"] !== "hardened_native") ||
       typeof value["extendedChecksum"] !== "string"
     ) {
       return false;

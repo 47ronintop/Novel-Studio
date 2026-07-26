@@ -6,6 +6,8 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   AgentUsageFileRepository,
   ProjectLockFileRepository,
+  RecoveryRepository,
+  type AgentTransactionJournal,
   type AgentOperationPathSnapshot,
   type AgentWriteLifecycleOperationPort
 } from "@novel-studio/repository";
@@ -25,6 +27,131 @@ afterEach(async () => {
 });
 
 describe("desktop Agent Run runtime", () => {
+  test.each([
+    {
+      label: "creative trusted fallback",
+      workspaceKind: "creativeProject" as const,
+      withProjectLock: true,
+      withNativeLifecycle: false,
+      expected: "standard_trusted_creative"
+    },
+    {
+      label: "creative runtime without a transaction executor",
+      workspaceKind: "creativeProject" as const,
+      withProjectLock: false,
+      withNativeLifecycle: false,
+      expected: "unavailable"
+    },
+    {
+      label: "engineering runtime without native lifecycle",
+      workspaceKind: "engineeringWorkspace" as const,
+      withProjectLock: true,
+      withNativeLifecycle: false,
+      expected: "unavailable"
+    },
+    {
+      label: "qualified lifecycle contract",
+      workspaceKind: "creativeProject" as const,
+      withProjectLock: true,
+      withNativeLifecycle: true,
+      expected: "hardened_native"
+    }
+  ])("records the write backend trust for $label", async (testCase) => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-write-trust-"));
+    roots.push(projectRoot);
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      workspaceKind: testCase.workspaceKind,
+      projectId: "project-write-trust",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      ...(testCase.withProjectLock ? { projectLockOwnerId: "write-trust-owner" } : {}),
+      ...(testCase.withNativeLifecycle
+        ? { lifecycleOperations: createTestingReplaceLifecyclePort(projectRoot) }
+        : {})
+    });
+
+    const summary = await runtime.agentPermissionSession.prepareForDraft({
+      projectId: "project-write-trust",
+      runDraftId: `draft-${testCase.expected}`,
+      runDraftRevision: 1,
+      operationMode: "execution",
+      contextMode: testCase.workspaceKind === "creativeProject" ? "writing" : "general_file",
+      writePolicy: "write_before_confirmation"
+    });
+
+    expect(summary).toMatchObject({
+      ok: true,
+      value: { writeMutationTrust: testCase.expected }
+    });
+  });
+
+  test("recovers a trusted creative rename completed before the journal update", async () => {
+    const contentRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-recovery-content-"));
+    const stateRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-recovery-state-"));
+    roots.push(contentRoot, stateRoot);
+    const relativePath = "notes.txt";
+    const before = "Before crash.\n";
+    const candidate = "Candidate already renamed.\n";
+    await writeFile(join(contentRoot, relativePath), candidate, "utf8");
+    const lockOwnerId = "desktop-trusted-recovery";
+    const lock = new ProjectLockFileRepository({ projectRoot: stateRoot, ownerId: lockOwnerId });
+    expect(await lock.acquireProjectLock()).toMatchObject({ ok: true });
+    const changeSetChecksum = "c".repeat(64);
+    const recovery = new RecoveryRepository({ projectRoot: stateRoot });
+    const journal: AgentTransactionJournal = {
+      schemaVersion: "1.0",
+      transactionId: "tx_desktop_trusted_recovery",
+      versionGroupId: "vg_desktop_trusted_recovery",
+      kind: "apply",
+      runId: "run-desktop-trusted-recovery",
+      runSequence: 1,
+      checkpointId: "checkpoint-desktop-trusted-recovery",
+      changeSetId: "changes-desktop-trusted-recovery",
+      changeSetRevision: 1,
+      changeSetChecksum,
+      writePolicy: "write_before_confirmation",
+      approvalSource: "human_confirmation",
+      approvalToken: sha256(`changes-desktop-trusted-recovery:1:${changeSetChecksum}`),
+      createdAt: "2026-07-26T00:00:00.000Z",
+      updatedAt: "2026-07-26T00:00:01.000Z",
+      transactionStatus: "applying",
+      entries: [
+        {
+          writeId: "write-desktop-trusted-recovery",
+          relativePath,
+          assetType: "text",
+          beforeChecksum: sha256(before),
+          candidateChecksum: sha256(candidate),
+          beforeContent: before,
+          candidateContent: candidate,
+          beforeVersionId: "version-before-desktop-trusted-recovery",
+          status: "pending"
+        }
+      ]
+    };
+    expect(await recovery.writeAgentTransactionJournal(journal)).toMatchObject({ ok: true });
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-desktop-trusted-recovery",
+      contentRoot,
+      stateRoot,
+      projectLockOwnerId: lockOwnerId
+    });
+
+    expect(await runtime.prepare()).toMatchObject({ ok: true });
+
+    expect(await readFile(join(contentRoot, relativePath), "utf8")).toBe(before);
+    expect(await recovery.readAgentTransactionJournal("tx_desktop_trusted_recovery")).toMatchObject(
+      {
+        ok: true,
+        value: {
+          transactionStatus: "rolled_back",
+          entries: [expect.objectContaining({ status: "rolled_back" })]
+        }
+      }
+    );
+  });
+
   test("exposes the usage session and enforces retention under the user-data root at startup", async () => {
     const projectRoot = await mkdtemp(
       join(tmpdir(), "novel-studio-desktop-usage-session-project-")

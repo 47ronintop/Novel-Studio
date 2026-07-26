@@ -13,6 +13,11 @@ import {
   type ListAgentToolsInput
 } from "./tool-registry.js";
 
+export type AgentWriteMutationTrust =
+  | "unavailable"
+  | "standard_trusted_creative"
+  | "hardened_native";
+
 /**
  * The capabilities Stage 5 never grants to an Agent run. They are a fixed, registry-independent
  * denial list surfaced verbatim in the permission summary so the UI cannot dress a Stage 5 run up as
@@ -81,6 +86,8 @@ export interface PermissionSummaryV11 extends Omit<PermissionSummaryV10, "schema
   readonly descriptorRevision: string;
   /** Digest of the frozen canonical-id <-> provider-name mapping for this run. */
   readonly providerMappingRevision: string;
+  /** Main-owned write backend classification. Missing only on legacy v1.1 records. */
+  readonly writeMutationTrust?: AgentWriteMutationTrust;
   /** SHA-256 of the extended fields (all authorization facts in this v1.1 record). */
   readonly extendedChecksum: string;
 }
@@ -109,6 +116,8 @@ export interface GeneratePermissionSummaryInput {
    * supply one, it is deterministically derived from the descriptors for this summary.
    */
   readonly providerMappingRevision?: string;
+  /** Main-owned write backend classification; unrecognized or absent values fail closed. */
+  readonly writeMutationTrust?: AgentWriteMutationTrust;
   /** Injectable Tool Registry lister; defaults to the real registry. Tests use it to prove drift. */
   readonly listTools?: AgentToolLister;
 }
@@ -175,6 +184,7 @@ export function generatePermissionSummary(
   const descriptorRevision = computeDescriptorRevision(tools);
   const providerMappingRevision =
     input.providerMappingRevision ?? computeProviderMappingRevision(tools);
+  const writeMutationTrust = normalizeWriteMutationTrust(input.writeMutationTrust);
   const extendedChecksum = checksumText(
     stableSerialize({
       checksum,
@@ -186,7 +196,8 @@ export function generatePermissionSummary(
       dataEgressCapabilities,
       featureFlagRevision: capabilitySnapshot.featureFlagRevision,
       descriptorRevision,
-      providerMappingRevision
+      providerMappingRevision,
+      writeMutationTrust
     })
   );
 
@@ -214,6 +225,7 @@ export function generatePermissionSummary(
     featureFlagRevision: capabilitySnapshot.featureFlagRevision,
     descriptorRevision,
     providerMappingRevision,
+    writeMutationTrust,
     extendedChecksum
   };
 }
@@ -248,6 +260,7 @@ const COMPARABLE_PERMISSION_SUMMARY_V11_FIELDS = [
   "featureFlagRevision",
   "descriptorRevision",
   "providerMappingRevision",
+  "writeMutationTrust",
   "extendedChecksum"
 ] as const satisfies readonly (keyof PermissionSummaryV11)[];
 
@@ -420,6 +433,7 @@ export interface ResolvedPermissionSummaryCapabilities {
   readonly featureFlagRevision: string;
   readonly descriptorRevision: string;
   readonly providerMappingRevision: string;
+  readonly writeMutationTrust: AgentWriteMutationTrust;
 }
 
 export function resolvePermissionSummaryCapabilities(
@@ -435,7 +449,8 @@ export function resolvePermissionSummaryCapabilities(
       dataEgressCapabilities: summary.dataEgressCapabilities,
       featureFlagRevision: summary.featureFlagRevision,
       descriptorRevision: summary.descriptorRevision,
-      providerMappingRevision: summary.providerMappingRevision
+      providerMappingRevision: summary.providerMappingRevision,
+      writeMutationTrust: summary.writeMutationTrust ?? "unavailable"
     };
   }
   return {
@@ -447,7 +462,8 @@ export function resolvePermissionSummaryCapabilities(
     dataEgressCapabilities: [],
     featureFlagRevision: "legacy-v1.0-deny",
     descriptorRevision: "legacy-v1.0-deny",
-    providerMappingRevision: "legacy-v1.0-deny"
+    providerMappingRevision: "legacy-v1.0-deny",
+    writeMutationTrust: "unavailable"
   };
 }
 
@@ -467,7 +483,8 @@ export function hasValidPermissionSummaryChecksums(summary: PermissionSummary): 
       dataEgressCapabilities: summary.dataEgressCapabilities,
       featureFlagRevision: summary.featureFlagRevision,
       descriptorRevision: summary.descriptorRevision,
-      providerMappingRevision: summary.providerMappingRevision
+      providerMappingRevision: summary.providerMappingRevision,
+      writeMutationTrust: summary.writeMutationTrust
     })
   );
   return summary.extendedChecksum === expectedExtended;
@@ -509,4 +526,10 @@ function coreChecksumFields(
 
 function defaultWorkspaceKind(contextMode: AgentContextMode): AgentWorkspaceKind {
   return contextMode === "writing" ? "creativeProject" : "engineeringWorkspace";
+}
+
+function normalizeWriteMutationTrust(value: unknown): AgentWriteMutationTrust {
+  return value === "standard_trusted_creative" || value === "hardened_native"
+    ? value
+    : "unavailable";
 }

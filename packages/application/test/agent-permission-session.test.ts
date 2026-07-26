@@ -58,7 +58,8 @@ describe("createAgentPermissionSession.prepareForDraft", () => {
       repository: memoryRepository(),
       rootFingerprint: fakeRootFingerprint(() => "f".repeat(64)),
       now: () => "2026-07-16T00:00:00.000Z",
-      createId: () => "permission_summary_fixed"
+      createId: () => "permission_summary_fixed",
+      writeMutationTrust: "standard_trusted_creative"
     });
     const result = await session.prepareForDraft(baseInput());
     expect(result.ok).toBe(true);
@@ -66,6 +67,10 @@ describe("createAgentPermissionSession.prepareForDraft", () => {
     expect(result.value.rootFingerprint).toBe("f".repeat(64));
     expect(result.value.permissionSummaryId).toBe("permission_summary_fixed");
     expect(result.value.runId).toBeUndefined();
+    expect(result.value).toMatchObject({
+      schemaVersion: "1.1",
+      writeMutationTrust: "standard_trusted_creative"
+    });
   });
 
   test("propagates a root-fingerprint resolution failure", async () => {

@@ -160,7 +160,25 @@ describe("AgentComposer", () => {
     expect(summary?.textContent).toContain("网络");
     expect(summary?.textContent).toContain("propose_chapter_write");
     expect(summary?.textContent).toContain("写作上下文");
+    expect(summary?.textContent).toContain("standard trusted creative");
+    expect(summary?.textContent).toContain("不抵御同权限本地进程的路径竞争");
     expect(summary?.textContent).not.toContain("通用文件");
+  });
+
+  test("labels a qualified native write backend without the standard-trust warning", () => {
+    const control = permissionControl();
+    if (control.summary?.schemaVersion !== "1.1") throw new Error("Expected a v1.1 summary.");
+    const { host } = renderComposer({
+      permission: permissionControl({
+        summary: { ...control.summary, writeMutationTrust: "hardened_native" }
+      })
+    });
+
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="添加引用与执行审批"]')?.click());
+    const summary = document.querySelector<HTMLDetailsElement>('[aria-label="本次权限摘要"]');
+
+    expect(summary?.textContent).toContain("hardened native");
+    expect(summary?.textContent).not.toContain("不抵御同权限本地进程的路径竞争");
   });
 
   test("treats choosing preapproval as the current-run acknowledgement", () => {
@@ -505,7 +523,7 @@ function permissionControl(
     approvalSource: "not_approved",
     onOpen: () => undefined,
     summary: {
-      schemaVersion: "1.0",
+      schemaVersion: "1.1",
       permissionSummaryId: "permission-summary-01",
       projectId: "project-01",
       runDraftId: "draft-01",
@@ -525,7 +543,18 @@ function permissionControl(
         "create_directory"
       ],
       checksum: "c".repeat(64),
-      generatedAt: "2026-07-17T00:00:00.000Z"
+      generatedAt: "2026-07-17T00:00:00.000Z",
+      workspaceKind: "creativeProject",
+      operationMode: "execution",
+      executeCapabilities: [],
+      externalReadCapabilities: [],
+      externalActionCapabilities: [],
+      dataEgressCapabilities: [],
+      featureFlagRevision: "test-flags",
+      descriptorRevision: "d".repeat(64),
+      providerMappingRevision: "p".repeat(64),
+      writeMutationTrust: "standard_trusted_creative",
+      extendedChecksum: "e".repeat(64)
     },
     ...overrides
   };

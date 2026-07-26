@@ -105,6 +105,12 @@ function PermissionSummaryDetails({
               {summary.proposalCapabilities.length > 0 ? "允许生成，仍需走审批管线" : "不适用"}
             </dd>
           </div>
+          {summary.schemaVersion === "1.1" ? (
+            <div>
+              <dt>写入后端</dt>
+              <dd>{writeMutationTrustLabel(summary.writeMutationTrust)}</dd>
+            </div>
+          ) : null}
           <div>
             <dt>审批状态</dt>
             <dd>{approvalLabel(control?.approvalSource ?? "not_approved")}</dd>
@@ -160,5 +166,20 @@ function approvalLabel(source: AgentComposerPermissionControl["approvalSource"])
       return "本次运行预授权";
     default:
       return "尚未批准";
+  }
+}
+
+function writeMutationTrustLabel(
+  trust: "unavailable" | "standard_trusted_creative" | "hardened_native" | undefined
+): string {
+  switch (trust) {
+    case "standard_trusted_creative":
+      return "标准可信创作（standard trusted creative）· 不抵御同权限本地进程的路径竞争";
+    case "hardened_native":
+      return "强化原生（hardened native）";
+    case "unavailable":
+      return "不可用";
+    default:
+      return "旧记录未声明";
   }
 }

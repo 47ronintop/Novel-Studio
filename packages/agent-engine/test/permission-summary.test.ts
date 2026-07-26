@@ -213,6 +213,7 @@ describe("PermissionSummary schema", () => {
     expect(summary.projectId).toBe("project_01");
     expect(summary.runDraftId).toBe("run_draft_01");
     expect(summary.runId).toBeUndefined();
+    expect(summary.writeMutationTrust).toBe("unavailable");
   });
 
   test("binds an optional runId when provided", () => {
@@ -238,7 +239,8 @@ describe("PermissionSummary v1.1 migration and integrity", () => {
           featureFlagRevision: "flags_27"
         },
         contextMode: "general_file",
-        providerMappingRevision: "a".repeat(64)
+        providerMappingRevision: "a".repeat(64),
+        writeMutationTrust: "hardened_native"
       })
     );
     expect(summary.workspaceKind).toBe("engineeringWorkspace");
@@ -246,6 +248,7 @@ describe("PermissionSummary v1.1 migration and integrity", () => {
     expect(summary.externalReadCapabilities).toEqual(["fetch_url", "web_search"]);
     expect(summary.dataEgressCapabilities).toEqual(["provider_query"]);
     expect(summary.providerMappingRevision).toBe("a".repeat(64));
+    expect(summary.writeMutationTrust).toBe("hardened_native");
     expect(summary.descriptorRevision).toMatch(/^[a-f0-9]{64}$/);
     expect(hasValidPermissionSummaryChecksums(summary)).toBe(true);
 
@@ -266,7 +269,22 @@ describe("PermissionSummary v1.1 migration and integrity", () => {
     expect(legacy.externalReadCapabilities).toEqual([]);
     expect(legacy.externalActionCapabilities).toEqual([]);
     expect(legacy.dataEgressCapabilities).toEqual([]);
+    expect(legacy.writeMutationTrust).toBe("unavailable");
     expect(hasValidPermissionSummaryChecksums(v10)).toBe(true);
+  });
+
+  test("binds write backend trust into integrity and drift checks", () => {
+    const stored = generatePermissionSummary(
+      baseInput({ writeMutationTrust: "standard_trusted_creative" })
+    );
+    const regenerated = generatePermissionSummary(
+      baseInput({ writeMutationTrust: "hardened_native" })
+    );
+
+    expect(stored.extendedChecksum).not.toBe(regenerated.extendedChecksum);
+    expect(findPermissionSummaryDrift(stored, regenerated).map((entry) => entry.field)).toEqual(
+      expect.arrayContaining(["writeMutationTrust", "extendedChecksum"])
+    );
   });
 
   test("reports descriptor and provider mapping revision drift", () => {
