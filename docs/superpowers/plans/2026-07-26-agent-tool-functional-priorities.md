@@ -1,8 +1,8 @@
 # Novel Studio Agent Tool 功能完成优先级
 
 - **日期：** 2026-07-26
-- **状态：** Active（Pi packages 对照、取消原生工具链范围后修订）
-- **实现基线：** `171ea3e`
+- **状态：** Complete（批次 1-5 已完成；上下文工程转入独立 C1-C5 计划）
+- **实现基线：** `7626853`（Provider、网络与远程 MCP 前置合同已合入）
 - **参考实现：** `earendil-works/pi@5bc1c2c0a6f07e00e8c240304182f213ab8d311f`
 - **目标合同：** `docs/superpowers/plans/2026-07-23-agent-tool-completion.md`
 - **设计依据：** `docs/superpowers/specs/2026-07-23-agent-tool-completion-design.md`
@@ -11,7 +11,7 @@
 
 本计划只安排当前最需要完成的 Agent 用户功能，不进入发布收尾。
 
-- 智能上下文继续延期。只修复会阻断运行、越界、泄漏或损坏显式引用的问题。
+- 本计划不实施智能上下文；批次 1-5 完成后由双工作台上下文计划从 C1 开始。向量/语义检索、自动注入、跨模型降级和记忆自动写入继续延期。
 - 暂不执行 Phase F、发布、签名、安装包推广或部署。
 - 当前产品范围正式取消 Rust 原生文件宿主、AppContainer 任务沙箱、内置 Git runtime、插件进程和本地 stdio MCP，不安装 Rust、MSVC、Windows SDK、容器或相关本地工具。
 - 基础创作写入不得依赖用户或普通开发环境现场编译原生程序。
@@ -129,6 +129,8 @@ Pi 的 deferred tools/tool reference 只在部分 Anthropic、OpenAI Responses �
 
 **额外下载：** 无。
 
+**实施状态（2026-07-26）：Complete。** 工具调用装配、严格校验、终态 fail-closed、审批边界、匹配 tool result 与恢复路径已合入；最终跨 Provider 配对修正在 `7626853` 收口。
+
 ## 7. 批次 2：恢复基础创作写入
 
 **目标：** 用户不安装编译工具，也能完成“Agent 提案 -> 审阅 -> 应用 -> 撤销”。
@@ -147,6 +149,8 @@ Pi 的 deferred tools/tool reference 只在部分 Anthropic、OpenAI Responses �
 
 **额外下载：** 无。
 
+**实施状态（2026-07-26）：Complete。** `standard_trusted_creative` 写入、Change Set、审批、版本组、事务恢复与撤销闭环已合入；信任边界在 `ebe8070` 明示。
+
 ## 8. 批次 3：接入 v2 工具门面和文件生命周期
 
 1. 实现 `read_resource`、`search_project`、`edit_text`、`create_resource`、`manage_path` descriptor 和 handler。
@@ -160,6 +164,8 @@ Pi 的 deferred tools/tool reference 只在部分 Anthropic、OpenAI Responses �
 
 **额外下载：** 无。
 
+**实施状态（2026-07-26）：Complete。** v2 工具门面与文件生命周期在 `c523748` 合入；工程工作台只在存在合格 lifecycle backend 时暴露 `edit_text`。
+
 ## 9. 批次 4：校正多 Provider 工具调用
 
 1. 建立真实 Agent Provider 支持矩阵；没有运行适配器的 Provider 不得仅因出现在设置目录中就宣称支持 Agent。
@@ -172,6 +178,8 @@ Pi 的 deferred tools/tool reference 只在部分 Anthropic、OpenAI Responses �
 **完成条件：** 设置界面显示的 Agent 支持状态与真实 adapter 一致，不再把所有 Provider 当作 `/chat/completions` 兼容端点。
 
 **额外下载：** 无本地可执行程序；只需要相应 Provider 凭据和网络。
+
+**实施状态（2026-07-26）：Complete（`7626853`）。** 设置目录现有 11 个 Provider 均映射到真实 Agent adapter：Anthropic 与 Gemini 使用原生协议，其余 9 个使用明确的 OpenAI-compatible 合同；后者仍要求实际端点支持流式输出和工具调用。已覆盖原生 payload/stream、tool-call ID、thinking metadata、usage、abort/timeout、终态和跨轮 tool result 合同；真实公网 canary 仍取决于用户凭据与网络。
 
 ## 10. 批次 5：网络读取与远程 MCP
 
@@ -189,6 +197,8 @@ Pi 的 deferred tools/tool reference 只在部分 Anthropic、OpenAI Responses �
 3. 验证 `outcome_unknown`、schema 漂移、断线、超时和 teardown。
 
 **额外下载：** 无本地可执行程序；需要远程服务配置、凭据和网络。
+
+**实施状态（2026-07-26）：Complete（`7626853`）。** Network Provider CRUD、默认选择、连接测试、endpoint/host 校验、Main secret 绑定与搜索审批闭环已完成；远程 MCP 已覆盖分页与目录上限、严格 schema、可选鉴权、revision 冻结、`outcome_unknown`、teardown 和运行时延迟刷新。最终门禁：`typecheck`、`lint`、`build`、`git diff --check` 通过，全量 `189` 个测试文件、`1870/1870` 项测试通过。
 
 ## 11. 已取消范围与原生代码清理
 
@@ -211,17 +221,11 @@ Pi 的 deferred tools/tool reference 只在部分 Anthropic、OpenAI Responses �
 
 **清理状态（2026-07-26）：Complete。** Rust/AppContainer/file-operations host、内置 Git runtime、对应 Desktop adapter、构建/资格脚本、CI 安装步骤和 Electron 资源打包项均已移除。创作项目继续使用 `standard_trusted_creative`，远程网络/MCP 与通用事务/策略端口保留。
 
-## 12. 明确延期：智能上下文
+## 12. 已转入独立计划：上下文工程
 
-以下内容继续延期：
+Context Profile、项目约定、工作区定向块、预算诚实化和按 profile 压缩不在本计划内实现，统一由 `docs/superpowers/plans/2026-07-26-context-engineering-two-workbenches.md` 从 C1 开始执行。当前提交只关闭其 Provider、工具目录、网络/MCP 与审批前置合同，不把任何上下文能力标成已实现。
 
-- 竞品上下文选择、压缩和恢复机制调研。
-- 按模型动态分配上下文预算和安全余量。
-- Story Bible、人物、世界观、记忆、时间线和编辑器选择器。
-- 自动检索、排序、向量检索和来源选择 trace。
-- 模型辅助摘要、跨模型压缩和降级策略。
-
-延期期间只处理运行阻断、上下文越界/泄漏、预算为负、旧内容错误复活和显式引用损坏。
+仍明确延期：向量/语义检索、自动注入、跨模型降级、记忆自动写入，以及不经用户确认的来源选择。
 
 ## 13. 下载与安装政策
 
@@ -246,4 +250,4 @@ Pi 的 deferred tools/tool reference 只在部分 Anthropic、OpenAI Responses �
 
 ## 15. 下一步
 
-批次 1、批次 2 与第 11 节原生链路清理均已完成。下一步执行批次 3：收敛模型可见工具门面；不进入智能上下文、发布或本地进程能力。
+批次 1-5 与第 11 节原生链路清理均已完成，代码基线为 `7626853`。下一步按双工作台上下文实施计划进入 C1（Context Profile 骨架与指导 v2）；发布、本地进程能力以及明确延期项仍不进入当前范围。

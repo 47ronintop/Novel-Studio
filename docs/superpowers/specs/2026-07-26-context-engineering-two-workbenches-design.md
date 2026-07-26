@@ -1,10 +1,10 @@
 # Novel Studio 双工作台上下文工程设计
 
 **日期：** 2026-07-26
-**状态：** Candidate，作为上位计划批次 4/5 完成后的上下文方案；批次 4/5 当前尚未完成
-**实现基线：** `c523748`（当前 HEAD；批次 3 v2 tool facade/lifecycle 已合入）
+**状态：** Ready（上位计划批次 1-5 已完成；下一步 C1，上下文能力尚未实现）
+**实现基线：** `7626853`（Provider、v2 工具目录、网络/MCP 与审批前置合同已冻结）
 **实施计划：** `docs/superpowers/plans/2026-07-26-context-engineering-two-workbenches.md`
-**范围：** Agent 运行的系统提示装配、初始上下文、项目约定文件、工作区定向块、上下文预算、压缩模板；不改变工具安全边界与审批链路。批次 4/5 前只允许落地运行阻断、上下文泄漏、预算为负、旧内容错误复活和显式引用损坏修复。
+**范围：** Agent 运行的系统提示装配、初始上下文、项目约定文件、工作区定向块、上下文预算、压缩模板；不改变工具安全边界与审批链路。本文定义目标合同，不表示 C1-C5 已实现。
 
 ---
 
@@ -122,22 +122,26 @@ Profile 由服务器解析：`workspaceKind` 取自冻结的 capability snapshot
 - 定向块是**数据**不是权威：仍包 `untrusted_project_data` 封套（内容源自项目元数据）；压缩时归类为可驱逐、可重读（模型可用 list/search 工具重新获取）。
 - 预算：定向块计入 usedTokens，目标 ≤ 1500 token/块；超预算时定向块先于一切被裁（它是最便宜的可重建层）。
 
+`packages/application` 定义只读 `WorkspaceOutlineReader` 端口，Main 按 profile 注入实现；端口接收服务器解析的 workspace identity、profile 与硬限制，不接受 renderer 提供的根路径或正文。返回值除结构化条目和已装配文本外，还必须包含不可变 dependency manifest：`readerVersion`、profile、canonical root identity、限制参数、截断状态，以及工程目录条目集合 revision/checksum，或写作章节索引与 Story Bible 索引 revision/checksum。artifact 保存 manifest checksum，不能只保存最终文本 checksum。
+
+定向块只在 run start 或用户确认的 context refresh 时重建。stale reader 用 dependency manifest 与当前 metadata revision 比较；任何依赖新增、删除、重命名或 revision 变化都触发现有 `context_stale -> awaiting_context_refresh`，不得在运行中静默替换冻结 artifact。确认 refresh 后生成新 artifact/source revision；依赖缺失时生成可审计的空/降级块。compaction 驱逐正文时只保留 manifest/pointer 和重读提示，不能让旧正文在 hydrate 时复活。
+
 ### 4.4 初始上下文最小集
 
-| profile          | app-authored system prompt | 数据消息（含约定/定向块）                               |
-| ---------------- | -------------------------- | ------------------------------------------------------- |
-| writing          | 层 1/2/3                   | 会话摘要封套（现状）→ 用户请求 → 约定/定向块 → 当前章节 |
-| creative_general | 层 1/2                     | 会话摘要 → 用户请求 → 约定/定向块 → 当前文件            |
-| engineering      | 层 1/2                     | 会话摘要 → 用户请求 → 约定/定向块（无正文预载）         |
+| profile          | app-authored system prompt | 数据消息（含约定/定向块）                                |
+| ---------------- | -------------------------- | -------------------------------------------------------- |
+| writing          | 层 1/2/3                   | 用户请求 → 会话摘要（如有）→ 约定 → 定向块 → 当前章节    |
+| creative_general | 层 1/2                     | 用户请求 → 会话摘要（如有）→ 约定 → 定向块 → 当前文件    |
+| engineering      | 层 1/2                     | 用户请求 → 会话摘要（如有）→ 约定 → 定向块（无正文预载） |
 
-其余一切靠工具拉取。这与现有 `initialContextSources` 管线兼容：定向块由 main 侧在 start preflight 时追加为一个 source，渲染层 `contextDraftRefs` 不变。
+其余一切靠工具拉取。必须保持 Stage 5 的固定消息顺序：app-authored system prompt 之后，`user_request` 是第一条非 system 事实消息；可选 `conversation_summary` 只能位于用户请求之后，不能为方便装配而前移。随后依次注入约定、定向块和显式引用；start、refresh、exclude、compact 与 hydrate 都从持久化 artifact 按同一顺序 materialize。这与现有 `initialContextSources` 管线兼容：定向块由 main 侧在 start preflight 时追加为一个 source，渲染层 `contextDraftRefs` 不变。
 
 ### 4.5 预算诚实化
 
 现有公式不变：`safeInputBudget = contextWindow − outputReserve − toolReserve − systemReserve`（`packages/agent-engine/src/context-budget.ts`）。修正操作数：
 
 - `systemReserve` = 对 app-authored system prompt、固定 conversation/control wrapper 以及约定 user/data envelope 的完整装配估算，替换现在只算指导文字的 `estimateAgentSystemReserveTokens(contextMode)`（`agent-run-session.ts:941-947`）。签名升级为接收 profile + 约定 artifact。
-- `toolReserve` = 对该 run 冻结的 provider-specific 工具目录（包括批次 4 的多 Provider schema/count 能力和批次 5 的网络/MCP descriptors）及最大工具结果摘要的确定性估算，替换写死的 0（`agent-run-runtime.ts:805,890`）。批次 4/5 完成前只定义共享 resolver 接口，不冻结最终数字。
+- `toolReserve` = 对该 run 冻结的 provider-specific 工具目录（包括批次 4 的多 Provider schema/count 能力和批次 5 的网络/MCP descriptors）及最大工具结果摘要的确定性估算，替换写死的 0（`agent-run-runtime.ts:805,890`）。以 `7626853` 的 Provider 与动态 descriptor 合同作为 C4 计算基线。
 - `previewContextBudget`（desktop `agent-run-runtime.ts:844-901`）与 run 启动、compaction 重算三处必须用同一套解析函数，禁止各自复算。
 - 预算必须覆盖 conversation envelope、JSON 包装、system/data message、工具 schema、结果摘要、summary/pointer artifact，并使用 Provider 可验证的 tokenizer；未知 context window 必须 fail closed。
 
@@ -154,15 +158,17 @@ Profile 由服务器解析：`workspaceKind` 取自冻结的 capability snapshot
 
 ## 5. 数据合同变化
 
-| 合同                            | 变化                                                                                                                                                                | 兼容性                                                                       |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `AgentContextSourceKind`        | + `project_conventions`、`workspace_outline`                                                                                                                        | 加法；旧快照 normalize 路径不受影响（`context-snapshot.ts:114-132`）         |
-| layer 映射                      | `project_conventions` → `explicit_ref`；`workspace_outline` → `tool_result`                                                                                         | 复用现有 `defaultLayerForSource`（`context-snapshot.ts:134-145`）加两个 case |
-| `AGENT_SYSTEM_GUIDANCE_VERSION` | `1.0` → `2.0`，refId 携带 profileId                                                                                                                                 | 旧 run 只重放持久化 artifact，不用当前模板重写旧输入                         |
-| `AgentRunSnapshot`              | 增加 `contextProfileId`、`profileVersion`、`guidanceTemplateChecksum`、`conventionsArtifactId`（均绑定 start 时冻结值）                                             | v1.1 内加法；旧 run 缺省时只能按旧合同恢复                                   |
-| `ContextSnapshot` / artifact    | source 增加 `sourceRevision`、`readerIdentity`、`originalChecksum`、`materializedChecksum`、`tokenCount`、`truncationRange`；正文或摘要通过不可变 artifact 引用保留 | 旧 snapshot normalize 只读兼容；新 run 必须写完整 provenance                 |
-| 约定文件路径                    | 固定：工程 `AGENTS.md`、创作 `conventions/writing.md`；只经受守卫的 project instruction reader 读取，须 workspace trust/显式启用                                    | 不提升为 system authority；无新文件系统权限面                                |
-| 预算输入                        | `resolveBudgetInputs` 增加约定文本与工具目录输入                                                                                                                    | desktop 内部seam，`AgentContextBudgetInputsPort` 加法扩展                    |
+| 合同                             | 变化                                                                                                                             | 兼容性                                                               |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `AgentContextSnapshot` / source  | 新 `1.2` 增加 `project_conventions`、`workspace_outline`、dependency manifest 与 materialization provenance                      | reader 显式 normalize `1.0/1.1 -> 1.2`；新 run 只写 `1.2`            |
+| layer 映射                       | `project_conventions` → `explicit_ref`；`workspace_outline` → `tool_result`                                                      | 在 `1.2` source validator/default layer 中显式处理                   |
+| `AGENT_SYSTEM_GUIDANCE_VERSION`  | `1.0` → `2.0`，refId 固定为 `system_guidance:{profileId}@{version}`                                                              | 旧 run 只重放持久化 artifact，不用当前模板重写旧输入                 |
+| `AgentRunSnapshot`               | 新 `1.2` 增加 `contextProfileId`、`profileVersion`、`guidanceTemplateChecksum`、`conventionsArtifactId`（均绑定 start 时冻结值） | reader 显式 normalize `1.0/1.1 -> 1.2`；新 run 只写 `1.2`            |
+| Context materialization artifact | 新独立 `1.0` artifact 保存 source/artifact ID、reader/dependency identity、原文与注入 checksum、tokenCount、truncationRange      | 正文或摘要只经不可变 artifact 引用；hydrate 不从当前文件重写历史输入 |
+| 约定文件路径                     | 固定：工程 `AGENTS.md`、创作 `conventions/writing.md`；只经受守卫的 project instruction reader 读取，须 workspace trust/显式启用 | 不提升为 system authority；无新文件系统权限面                        |
+| 预算输入                         | `resolveBudgetInputs` 增加约定文本与工具目录输入                                                                                 | desktop 内部seam，`AgentContextBudgetInputsPort` 加法扩展            |
+
+兼容规则是硬约束：任何新增持久化字段、枚举值或结构都必须声明新 schema 版本、validator、normalizer 和 repository 可读版本；禁止把上述字段静默塞进现有 `AgentRunSnapshot 1.1` 或 `AgentContextSnapshot 1.1`。旧文件只读规范化，不批量改写；未知版本 fail closed。
 
 ## 6. 安全与信任边界（不变量）
 
@@ -174,10 +180,10 @@ Profile 由服务器解析：`workspaceKind` 取自冻结的 capability snapshot
 
 ## 7. 与既有计划的关系
 
-- 上位计划批次 3 已在当前 HEAD `c523748` 合入；批次 4（多 Provider）和批次 5（网络读取/远程 MCP）尚未完成。本设计不替代它们，也不把上下文功能标成当前已实现。
-- 批次 4/5 完成前，只允许落地 §12 明确允许的运行阻断、上下文越界/泄漏、预算为负、旧内容错误复活和显式引用损坏修复；完整 profile、约定文件、定向块、动态预算和模型摘要排在批次 5 后。
-- 批次 4 决定 Provider/tokenizer/tool-schema 合同，批次 5 决定动态网络/MCP descriptors、结果预算和数据外发审批；C4 必须排在两者之后。
-- 完整实施前必须更新 Stage 5A 差异基线；不能继续声称其所有合同已原样落地。继续延期：向量/语义检索、自动注入、记忆自动写入和跨模型降级。
+- 上位计划批次 1-5 已在 `7626853` 前完成；Anthropic/Gemini 原生 adapter、OpenAI-compatible 合同、v2 工具目录、网络/MCP descriptors 与数据外发审批现在是本设计的冻结前置基线。
+- 本次只把设计状态推进到 Ready，不把 Context Profile、约定文件、定向块、动态预算或模型摘要标成已实现；下一实现批次是 C1。
+- C4 直接消费 `7626853` 的 Provider/tool-schema/network/MCP 合同，不再保留“批次 4/5 未定”的占位数字。
+- 实施时必须以当前 Stage 5A 代码重新建立差异基线，并遵守 §5 的显式 schema 升级。继续延期：向量/语义检索、自动注入、记忆自动写入和跨模型降级。
 
 ## 8. 测试与验收要点
 
@@ -188,5 +194,5 @@ Profile 由服务器解析：`workspaceKind` 取自冻结的 capability snapshot
 5. **预算**：toolReserve 随 Provider、v2、网络/MCP 目录变化；systemReserve 覆盖实际 wrapper；preview/start/round/compaction 同值，未知能力 fail closed。
 6. **压缩**：conventions 受保护、outline 被驱逐且留指针；摘要正文/provenance/tokenCount 写入 artifact；两套模板断言关键字段；真实 prompt 随结果 Snapshot 更新。
 7. **E2E**：真实 Electron 下，工程工作台新 run 首轮消息含目录骨架，创作写作 run 首轮消息含章节清单 + Story Bible 索引；`查看来源` 面板出现新 source kinds。
-8. 真实 Electron 下断言 start、refresh、exclude、compact、reload 后 Provider 收到的完整消息；批次 4/5 完成后再跑多 Provider、网络/MCP、数据外发审批 E2E。
+8. 真实 Electron 下断言 start、refresh、exclude、compact、reload 后 Provider 收到的完整消息；C4 以 `7626853` 为基线覆盖多 Provider、网络/MCP 与数据外发审批 E2E。
 9. 全量 `--no-file-parallelism` 套件、typecheck、lint、既有 agent-context-runtime E2E 全绿。

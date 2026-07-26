@@ -1,10 +1,10 @@
 # Novel Studio 双工作台上下文工程实施计划
 
 - **日期：** 2026-07-26
-- **状态：** Candidate（批次 4/5 完成后实施；当前仅允许 C0 阻断修复）
-- **实现基线：** `c523748`（当前 HEAD；批次 3 v2 tool facade/lifecycle 已合入）
+- **状态：** Ready（前置批次 1-5 已完成；下一步 C1，C1-C5 尚未实现）
+- **实现基线：** `7626853`（Provider、v2 工具目录、网络/MCP 与审批合同已冻结）
 - **设计依据：** `docs/superpowers/specs/2026-07-26-context-engineering-two-workbenches-design.md`
-- **上位计划：** `docs/superpowers/plans/2026-07-26-agent-tool-functional-priorities.md`（批次 4 多 Provider、批次 5 网络读取/远程 MCP 尚未完成；本计划不得提前解除 §12 的完整延期）
+- **上位计划：** `docs/superpowers/plans/2026-07-26-agent-tool-functional-priorities.md`（批次 1-5 Complete；代码提交 `7626853`）
 
 ## 1. 当前决定
 
@@ -12,14 +12,17 @@
 - 规划两类用户可写项目约定文件：工程 `AGENTS.md`、创作 `conventions/writing.md`，以 workspace trust 约束的 user/data message 注入；不得进入同一个 trusted system role。
 - 引入服务器构建的定向块（章节清单 + Story Bible 索引 / 有界目录骨架），作为初始上下文数据消息。
 - `toolReserve`/`systemReserve` 诚实化。
-- 批次 4/5 完成前继续延期：profile 全量落地、项目约定、定向块、动态预算、模型摘要；当前只修运行阻断、泄漏、负预算、旧内容复活和显式引用损坏。向量/语义检索、自动注入、跨模型降级、记忆自动写入继续延期。
+- Provider、工具目录、网络/MCP 与审批前置已在 `7626853` 关闭；本文件现在允许从 C1 开始，但不把任何 C1-C5 能力标成已实现。向量/语义检索、自动注入、跨模型降级、记忆自动写入继续延期。
+- 前置最终门禁：`typecheck`、`lint`、`build`、`git diff --check` 通过，全量 `189` 个测试文件、`1870/1870` 项测试通过；真实外部 Provider/MCP canary 仍需要凭据与网络。
 - 不新增模型可见工具、不改审批/Change Set/事务链路；所有项目文件仍走 data envelope，约定文件也不获得 system authority（见设计 §4.2/§6）。
 
 ## 2. 批次划分
 
-依赖顺序：C0 → 上位计划批次 4 → 上位计划批次 5 → C1 →（C2 ∥ C3）→ C4 → C5。C0 可在延期期间实施；C1-C5 以批次 4/5 的 Provider、工具目录、网络/MCP 和审批合同为前置。C4 必须排在批次 5 后，避免反复重算工具 schema、结果预算和外发策略。
+执行顺序：C1 →（C2 ∥ C3）→ C4 → C5。上位计划批次 4/5 已完成；C4 直接使用 `7626853` 的 Provider、冻结工具目录、网络/MCP descriptor 和审批合同，避免反复重算工具 schema、结果预算和外发策略。
 
-### 批次 C0：运行时上下文闭环与延期期间修复
+### 批次 C0：运行时上下文闭环与延期期间修复（吸收到 C1-C4，不再单独排期）
+
+**状态：** 已吸收到后续批次，不能据此声称上下文闭环已实现。C0 用于批次 4/5 完成前界定允许的阻断修复；新序列不再创建独立 C0 提交，其 prompt materialization/恢复不变量归 C1，stale/显式引用不变量归 C2-C3，预算不变量归 C4。任一批次发现泄漏、负预算、旧内容复活或显式引用损坏，仍按阻断级回归立即修复。
 
 **目标：** 只修复上位计划 §12 允许的运行阻断，不引入 Context Profile 或新的自动检索能力。
 
@@ -36,11 +39,13 @@
 
 1. 由 `packages/application` 拥有策略并新增 `agent-context-profile.ts`：`AgentContextProfileId`、`resolveAgentContextProfile(workspaceKind, contextMode)`、冻结 runtime facts 结构和 profile 元数据（身份指导、检索指导、压缩模板文本、约定文件相对路径、定向块参数）。`packages/agent-engine` 只承载无 IO 的共享值对象/校验，不决定上下文选择策略。
 2. `buildAgentSystemGuidance` 重构为 `buildAgentSystemPrompt(profile, { conventionsArtifact? })`：system role 只装配 app-authored 层；约定 artifact 作为 user/data message 接入，`AGENT_SYSTEM_GUIDANCE_VERSION` → `2.0`；风格包仅 writing。保留旧函数导出别名直到调用点全部迁移。
-3. system_guidance 审计源 refId 升级为 `system_guidance:{profileId}`；新 run 的 profile/template/artifact 版本在 start 时冻结，hydrate 只恢复持久化 artifact，不能用当前 builder 重写旧 run 输入。
-4. `estimateAgentSystemReserveTokens` 升级为按完整装配文本估算（签名接收 profile；约定文本参数 C2 接通）。
-5. 测试：三 profile 装配快照、冻结 runtime facts、风格包仅 writing、版本号与 refId、artifact 恢复、工程 × writing 预检拒绝回归保持绿。
+3. system_guidance 审计源 refId 升级为 `system_guidance:{profileId}@{version}`；新 run 的 profile/template/artifact 版本在 start 时冻结，hydrate 只恢复持久化 artifact，不能用当前 builder 重写旧 run 输入。
+4. prompt materializer 保持 Stage 5 固定消息顺序：app-authored system prompt 后，用户请求是第一条非 system 事实消息；conversation summary 只能在其后，随后才是约定、定向块和显式引用。start/refresh/exclude/compact/hydrate 必须同序，禁止把 summary 前移。
+5. 新增显式持久化版本：`AgentRunSnapshot 1.2` 与 `AgentContextSnapshot 1.2`，补 validator、`1.0/1.1 -> 1.2` normalizer 和 repository 可读版本；禁止静默扩展现有 `1.1`。
+6. `estimateAgentSystemReserveTokens` 升级为按完整装配文本估算（签名接收 profile；约定文本参数 C2 接通）。
+7. 测试：三 profile 装配快照、固定消息顺序、冻结 runtime facts、风格包仅 writing、版本号与 refId、schema normalize、artifact 恢复、工程 × writing 预检拒绝回归保持绿。
 
-**完成条件：** 每轮 systemPrompt 由 profile 驱动；`agent-run-session.ts` 不再按裸 contextMode 拼指导；全量套件绿。
+**完成条件：** 每轮 systemPrompt 由 profile 驱动；start/refresh/exclude/compact/hydrate 从冻结 artifact 生成同序 model input；`agent-run-session.ts` 不再按裸 contextMode 拼指导；全量套件绿。
 
 ### 批次 C2：项目约定文件（受信任的用户/数据层）
 
@@ -59,12 +64,14 @@
 
 **目标：** 三 profile 的初始上下文最小集成型。
 
-1. main 侧新增受 canonical-root/no-symlink 守卫保护的 metadata/index port：
+1. `packages/application` 定义 `WorkspaceOutlineReader` 只读端口，Main 注入受 canonical-root/no-symlink 守卫保护的 metadata/index 实现；输入只接受服务器解析的 workspace identity、profile 和硬限制，不接受 renderer 根路径或正文：
    - 工程/创作通用：递归深 ≤ 2、条目 ≤ 200，并同时限制扫描 entry/byte/time；
    - 写作：章节清单（id/标题/字数）+ Story Bible 资产索引（assetId/名称/类型，无正文），不得为索引读取整章正文。
-2. start preflight 把定向块追加为 initialContextSources 之一：sourceKind `workspace_outline`，走现有 `untrusted_project_data` 数据消息管线；目标 ≤ 1500 token，超预算先裁定向块。
-3. 压缩分类：`agent-compaction-composer.ts` 把 `workspace_outline` 归可驱逐 `rereadable_body`（指针注明可用 list/search 重读）；`project_conventions` 归受保护事实。
-4. 测试：封顶与截断标注、blockedRoots 过滤、无 Story Bible 降级、空目录、压缩驱逐与指针、E2E（工程新 run 首轮含目录骨架；写作新 run 含章节清单 + 设定索引）。
+2. reader 返回结构化条目、装配文本与 dependency manifest；manifest 至少记录 `readerVersion`、profile、canonical root identity、限制/截断状态，以及工程目录条目集合 revision/checksum，或章节索引与 Story Bible 索引 revision/checksum。artifact 同时保存 manifest checksum 与 materialized checksum。
+3. start preflight 把定向块追加为 initialContextSources 之一：sourceKind `workspace_outline`，走现有 `untrusted_project_data` 数据消息管线；目标 ≤ 1500 token，超预算先裁定向块。
+4. 只在 start 或用户确认的 context refresh 重建。stale reader 比较 dependency manifest；新增、删除、重命名或 revision 变化触发 `context_stale -> awaiting_context_refresh`，不得静默替换。refresh 写新 artifact/source revision；依赖缺失产生可审计降级块。
+5. 压缩分类：`agent-compaction-composer.ts` 把 `workspace_outline` 归可驱逐 `rereadable_body`，只保留 dependency manifest/pointer 与 list/search 重读提示；`project_conventions` 归受保护事实。hydrate 不得从旧正文复活已驱逐内容。
+6. 测试：封顶与截断标注、blockedRoots 过滤、manifest 变化/stale/refresh/reload、无 Story Bible 降级、空目录、压缩驱逐与指针、E2E（工程新 run 首轮含目录骨架；写作新 run 含章节清单 + 设定索引）。
 
 **完成条件：** 工程 Agent 不再从零摸目录；写作 Agent 开局知道有哪些章节与设定可查；压缩正确分类两种新源。
 
@@ -95,7 +102,7 @@
 | 定向块超预算挤占正文                         | 1500 token 封顶 + 最先被裁 + 可驱逐可重读                                                                      |
 | guidance/profile/约定版本升级破坏旧 run 恢复 | 保存 profileVersion、template checksum、conventions artifact、原文/注入 checksum；旧 run 只重放不可变 artifact |
 | systemReserve 增大导致小窗口模型预算不足     | 现有 `AGENT_CONTEXT_BUDGET_INSUFFICIENT` fail-closed 路径已覆盖；约定层超限先截断                              |
-| 批次 4/5 改变工具/Provider/网络合同          | C4 明确排在批次 5 后；先锁定共享 resolver 接口，禁止提前写死最终 reserve                                       |
+| Provider/网络合同后续演进                    | C4 以 `7626853` 的冻结 tool catalog revision 与动态 descriptor checksum 为输入；变化只影响新 run               |
 
 ## 4. 执行与验证原则
 
@@ -104,8 +111,9 @@
 3. application 测试依赖 agent-engine 编译产物：改 agent-engine 后先 `npx tsc -b packages/agent-engine` 再跑 application 测试。
 4. 所有新文本（指导、模板、头部声明）随 profile 版本冻结，改文字必须升版本。
 5. 不得以任何形式把项目文件内容提升为系统权威；约定文件只能作为受信任的 user/data context，必须有 workspace trust、显式启用和可审计 artifact。
-6. 批次 4/5 完成前，不把 C1-C5 标记为已开始或已实现；任何提前提交仅限 C0 阻断修复。
+6. 文档 Ready 不等于代码已实现；只有对应代码、schema migration 和验收提交完成后，才能逐批把 C1-C5 标成 Complete。
+7. 任何新增持久化字段、枚举或结构必须升 schema 版本并提供 validator/normalizer；不得静默扩展 `AgentRunSnapshot 1.1` 或 `AgentContextSnapshot 1.1`。
 
 ## 5. 下一步
 
-C0 可立即开始。建议提交序：C0 → 上位计划批次 4 → 上位计划批次 5 → C1 → C2 + C3 → C4 → C5。批次 4/5 完成后先更新本计划与设计的实现基线，再进入 C1。
+从 C1（Context Profile 骨架与指导 v2）开始实现；完成其 schema 1.2、固定消息顺序、冻结/恢复与系统预算骨架后，再并行进入 C2 + C3，随后 C4、C5。本轮只完成前置与文档对齐，不包含 C1 代码。
