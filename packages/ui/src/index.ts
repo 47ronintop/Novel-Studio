@@ -85,9 +85,12 @@ export { RecoveryReview } from "./recovery-review.js";
 export { ChangeSetReview, RollbackReview } from "./change-set-review.js";
 export type {
   ChangeSetFileSelection,
+  ChangeSetOperationSelection,
   ChangeSetReviewFile,
   ChangeSetReviewHunk,
   ChangeSetReviewModel,
+  ChangeSetReviewOperation,
+  ChangeSetReviewOperationKind,
   ChangeSetReviewProps,
   ChangeSetReviewValidation,
   ChangeSetSelection,

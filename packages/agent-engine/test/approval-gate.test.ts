@@ -61,18 +61,16 @@ describe("Change Set approval gate", () => {
 
   test("does not let a public gate caller mint an automatic approval source", async () => {
     const changeSet = await validChangeSet();
-    const result = decideChangeSetApproval(
-      {
-        changeSet,
-        writePolicy: "user_preapproved_run",
-        approvalSource: "user_preapproved_run",
-        decision: "apply_selected",
-        changeSetId: changeSet.changeSetId,
-        revision: changeSet.revision,
-        checksum: changeSet.checksum,
-        resolvedAt: "2026-07-13T02:00:00.000Z"
-      } as never
-    );
+    const result = decideChangeSetApproval({
+      changeSet,
+      writePolicy: "user_preapproved_run",
+      approvalSource: "user_preapproved_run",
+      decision: "apply_selected",
+      changeSetId: changeSet.changeSetId,
+      revision: changeSet.revision,
+      checksum: changeSet.checksum,
+      resolvedAt: "2026-07-13T02:00:00.000Z"
+    } as never);
 
     expect(result).toMatchObject({
       ok: true,
@@ -123,6 +121,30 @@ describe("Change Set approval gate", () => {
     expect(decide(empty, "reject_all")).toMatchObject({
       ok: true,
       value: { decision: "reject_all", approvalSource: "human_confirmation" }
+    });
+  });
+
+  test("approves an operation-only Change Set when a lifecycle operation is selected", async () => {
+    const base = await validChangeSet();
+    const operationOnly: ChangeSet = {
+      ...base,
+      schemaVersion: "1.1",
+      files: [],
+      operationsSchemaVersion: "1.1",
+      operations: [
+        {
+          kind: "create_directory",
+          operationId: "op-create-assets",
+          relativePath: "assets",
+          toolCallIdempotencyKey: "tool-create-assets",
+          selected: true
+        }
+      ]
+    };
+
+    expect(decide(operationOnly, "apply_selected")).toMatchObject({
+      ok: true,
+      value: { decision: "apply_selected", approvalSource: "human_confirmation" }
     });
   });
 });

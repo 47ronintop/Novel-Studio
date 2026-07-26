@@ -11,6 +11,7 @@ export type {
   AgentToolDataEgress,
   AgentToolDescriptor,
   AgentToolEffect,
+  AgentToolFacadeVersion,
   AgentToolKind,
   AgentToolName,
   AgentToolRetrySemantics,
@@ -22,8 +23,20 @@ export type {
   NamespacedExternalToolId,
   NetworkAgentToolName,
   SearchAgentToolName,
-  StaticAgentToolName
+  StaticAgentToolName,
+  V2AgentToolName
 } from "./tool-registry.js";
+export {
+  agentRunToolCatalogSnapshotId,
+  computeAgentRunToolCatalogRevision,
+  createAgentRunToolCatalogSnapshot,
+  validateAgentRunToolCatalogSnapshot
+} from "./agent-run-tool-catalog.js";
+export type {
+  AgentRunToolCatalogSnapshot,
+  AgentRunToolCatalogValidation,
+  CreateAgentRunToolCatalogSnapshotInput
+} from "./agent-run-tool-catalog.js";
 export {
   createDefaultCapabilitySnapshot,
   freezeAgentToolCapabilitySnapshot

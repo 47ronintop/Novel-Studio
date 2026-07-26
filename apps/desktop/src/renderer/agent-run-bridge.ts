@@ -9,6 +9,7 @@ import type {
   AgentRunRetryTarget,
   AgentRunSnapshot,
   ChangeSet,
+  ChangeSetOperation,
   ContextBudgetSnapshot,
   ContextDraft,
   ContextDraftRef,
@@ -509,7 +510,8 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       revision: changeSet.revision,
       checksum: changeSet.checksum,
       decision: "update_selection",
-      files: selection.files
+      files: selection.files,
+      ...(selection.operations === undefined ? {} : { operations: selection.operations })
     };
     const request = (async () => {
       try {
@@ -2455,8 +2457,84 @@ function toChangeSetReviewModel(changeSet: ChangeSet): ChangeSetReviewModel {
         additions: diffUnitCount(hunk.replacement),
         deletions: diffUnitCount(hunk.baseContent)
       }))
-    }))
+    })),
+    ...(changeSet.operations === undefined
+      ? {}
+      : { operations: changeSet.operations.map(toChangeSetReviewOperation) })
   };
+}
+
+function toChangeSetReviewOperation(operation: ChangeSetOperation) {
+  switch (operation.kind) {
+    case "modify":
+      return {
+        operationId: operation.operationId,
+        kind: operation.kind,
+        selected: operation.selected !== false,
+        dependsOn: operation.dependsOn ?? [],
+        resourceKind: resourceKindForPath(operation.relativePath, false),
+        relativePath: operation.relativePath,
+        impact: `修改${resourceLabelForPath(operation.relativePath, false)} ${operation.relativePath}`
+      } as const;
+    case "create_file":
+      return {
+        operationId: operation.operationId,
+        kind: operation.kind,
+        selected: operation.selected !== false,
+        dependsOn: operation.dependsOn ?? [],
+        resourceKind: resourceKindForPath(operation.relativePath, false),
+        relativePath: operation.relativePath,
+        impact: `创建${resourceLabelForPath(operation.relativePath, false)} ${operation.relativePath}`
+      } as const;
+    case "move_file":
+      return {
+        operationId: operation.operationId,
+        kind: operation.kind,
+        selected: operation.selected !== false,
+        dependsOn: operation.dependsOn ?? [],
+        resourceKind: resourceKindForPath(operation.targetPath, false),
+        sourcePath: operation.sourcePath,
+        targetPath: operation.targetPath,
+        impact: `移动${resourceLabelForPath(operation.targetPath, false)}：${operation.sourcePath} → ${operation.targetPath}`
+      } as const;
+    case "delete_file":
+      return {
+        operationId: operation.operationId,
+        kind: operation.kind,
+        selected: operation.selected !== false,
+        dependsOn: operation.dependsOn ?? [],
+        resourceKind: resourceKindForPath(operation.relativePath, false),
+        relativePath: operation.relativePath,
+        impact: `删除${resourceLabelForPath(operation.relativePath, false)} ${operation.relativePath}`
+      } as const;
+    case "create_directory":
+      return {
+        operationId: operation.operationId,
+        kind: operation.kind,
+        selected: operation.selected !== false,
+        dependsOn: operation.dependsOn ?? [],
+        resourceKind: resourceKindForPath(operation.relativePath, true),
+        relativePath: operation.relativePath,
+        impact: `创建项目目录 ${operation.relativePath}`
+      } as const;
+  }
+}
+
+function resourceKindForPath(
+  relativePath: string,
+  directory: boolean
+): "chapter" | "story_bible" | "project_file" | "project_directory" {
+  if (directory) return "project_directory";
+  if (relativePath.startsWith("story-bible/")) return "story_bible";
+  return /^chapters\/[^/]+\.md$/u.test(relativePath) ? "chapter" : "project_file";
+}
+
+function resourceLabelForPath(relativePath: string, directory: boolean): string {
+  const kind = resourceKindForPath(relativePath, directory);
+  if (kind === "chapter") return "章节";
+  if (kind === "story_bible") return "故事圣经";
+  if (kind === "project_directory") return "项目目录";
+  return "项目文件";
 }
 
 function rangeLabel(unit: string, start: number, end: number): string {

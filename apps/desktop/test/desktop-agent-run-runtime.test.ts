@@ -404,8 +404,8 @@ describe("desktop Agent Run runtime", () => {
         async *streamRound() {
           round += 1;
           if (round === 1) {
-            yield runtimeToolCall("proposal-saved-editor", "propose_chapter_write", {
-              chapterId,
+            yield runtimeToolCall("proposal-saved-editor", "edit_text", {
+              ref: `chapter:${chapterId}`,
               baseHash: sha256(body),
               range: { unit: "character", start: 0, end: 8 },
               replacement: "Revised"
@@ -583,7 +583,9 @@ describe("desktop Agent Run runtime", () => {
         }) {
           round += 1;
           if (round === 1) {
-            yield runtimeToolCall("read-before-proposal", "read_chapter", { chapterId });
+            yield runtimeToolCall("read-before-proposal", "read_resource", {
+              ref: `chapter:${chapterId}`
+            });
           } else if (round === 2) {
             const toolMessage = input.messages.findLast((message) => message.role === "tool");
             if (toolMessage === undefined) throw new Error("Expected read_chapter tool output.");
@@ -592,8 +594,8 @@ describe("desktop Agent Run runtime", () => {
             };
             expect(envelope.data.content).toBe(body);
             expect(envelope.data.checksum).toBe(sha256(body));
-            yield runtimeToolCall("proposal-from-read", "propose_chapter_write", {
-              chapterId,
+            yield runtimeToolCall("proposal-from-read", "edit_text", {
+              ref: `chapter:${chapterId}`,
               baseHash: envelope.data.checksum,
               range: { unit: "character", start: 0, end: 8 },
               replacement: "Revised"
@@ -654,7 +656,9 @@ describe("desktop Agent Run runtime", () => {
               path: "chapters"
             });
           } else if (toolResultCount === 1) {
-            yield runtimeToolCall("plan-read-chapter", "read_chapter", { chapterId });
+            yield runtimeToolCall("plan-read-chapter", "read_resource", {
+              ref: `chapter:${chapterId}`
+            });
           } else {
             yield runtimeToolCall("plan-finish", "finish_plan", {
               planId: "plan-desktop-read-only",
@@ -718,7 +722,7 @@ describe("desktop Agent Run runtime", () => {
               }),
               expect.objectContaining({
                 type: "tool_completed",
-                detail: expect.objectContaining({ toolName: "read_chapter" })
+                detail: expect.objectContaining({ toolName: "read_resource" })
               }),
               expect.objectContaining({ type: "plan_ready" })
             ])
@@ -799,8 +803,8 @@ describe("desktop Agent Run runtime", () => {
         async *streamRound() {
           round += 1;
           if (round === 1) {
-            yield runtimeToolCall("proposal-01", "propose_chapter_write", {
-              chapterId,
+            yield runtimeToolCall("proposal-01", "edit_text", {
+              ref: `chapter:${chapterId}`,
               baseHash: sha256(body),
               range: { unit: "character", start: 0, end: 8 },
               replacement: "Revised"
@@ -901,8 +905,8 @@ describe("desktop Agent Run runtime", () => {
         async *streamRound() {
           round += 1;
           if (round === 1) {
-            yield runtimeToolCall("proposal-conflict", "propose_chapter_write", {
-              chapterId,
+            yield runtimeToolCall("proposal-conflict", "edit_text", {
+              ref: `chapter:${chapterId}`,
               baseHash: sha256(body),
               range: { unit: "character", start: 0, end: 8 },
               replacement: "Revised"
@@ -1002,8 +1006,8 @@ describe("desktop Agent Run runtime", () => {
         async *streamRound() {
           round += 1;
           if (round === 1) {
-            yield runtimeToolCall("proposal-dirty-undo", "propose_chapter_write", {
-              chapterId,
+            yield runtimeToolCall("proposal-dirty-undo", "edit_text", {
+              ref: `chapter:${chapterId}`,
               baseHash: sha256(body),
               range: { unit: "character", start: 0, end: 8 },
               replacement: "Revised"
@@ -1130,8 +1134,8 @@ describe("desktop Agent Run runtime", () => {
         async *streamRound() {
           round += 1;
           if (round === 1) {
-            yield runtimeToolCall("proposal-text", "propose_file_write", {
-              path: "notes.txt",
+            yield runtimeToolCall("proposal-text", "edit_text", {
+              ref: "file:notes.txt",
               baseHash: sha256(notes),
               range: { unit: "character", start: 0, end: 8 },
               replacement: "Revised"
@@ -1209,6 +1213,191 @@ describe("desktop Agent Run runtime", () => {
     expect(await readFile(notesPath, "utf8")).toBe(notes);
   });
 
+  test("applies and undoes v2 lifecycle proposals through the trusted creative fallback", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-v2-lifecycle-"));
+    roots.push(projectRoot);
+    const sourcePath = join(projectRoot, "draft.md");
+    const obsoletePath = join(projectRoot, "obsolete.txt");
+    const movedPath = join(projectRoot, "moved.md");
+    const createdPath = join(projectRoot, "created.txt");
+    const storyBiblePath = join(projectRoot, "characters", "hero.json");
+    const source = "Move this draft.\n";
+    const obsolete = "Remove this file.\n";
+    const created = "Created by the agent.\n";
+    const chapterBody = "雨夜里，故事开始了。";
+    const storyBible = JSON.stringify({ id: "hero", type: "character", name: "Lin" });
+    await mkdir(join(projectRoot, "chapters"), { recursive: true });
+    await mkdir(join(projectRoot, "characters"), { recursive: true });
+    await writeFile(sourcePath, source, "utf8");
+    await writeFile(obsoletePath, obsolete, "utf8");
+    const lockOwnerId = "desktop-agent-v2-lifecycle-test";
+    const lock = new ProjectLockFileRepository({ projectRoot, ownerId: lockOwnerId });
+    expect((await lock.acquireProjectLock()).ok).toBe(true);
+    let round = 0;
+    const session = createDesktopRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      activeChapterId: "chapter-unused",
+      projectLockOwnerId: lockOwnerId,
+      createRunId: () => "run-desktop-v2-lifecycle",
+      featureFlags: createAgentFeatureFlags({
+        phaseB_fileLifecycleEnabled: true,
+        revision: "desktop-v2-lifecycle-test"
+      }),
+      modelDriver: {
+        async *streamRound() {
+          round += 1;
+          if (round === 1) {
+            yield runtimeToolCall("create-v2-chapter", "create_resource", {
+              kind: "chapter",
+              title: "第一章",
+              content: chapterBody
+            });
+            yield runtimeToolCall("create-v2-story-bible", "create_resource", {
+              kind: "story_bible",
+              assetType: "character",
+              content: storyBible
+            });
+            yield runtimeToolCall("create-v2-file", "create_resource", {
+              kind: "file",
+              path: "created.txt",
+              content: created
+            });
+            yield runtimeToolCall("create-v2-directory", "manage_path", {
+              operation: "create_directory",
+              path: "assets"
+            });
+            yield runtimeToolCall("move-v2-file", "manage_path", {
+              operation: "move_file",
+              sourceRef: "file:draft.md",
+              targetPath: "moved.md",
+              baseHash: sha256(source)
+            });
+            yield runtimeToolCall("delete-v2-file", "manage_path", {
+              operation: "delete_file",
+              ref: "file:obsolete.txt",
+              baseHash: sha256(obsolete)
+            });
+          } else {
+            yield runtimeToolCall("finish-v2-lifecycle", "finish", { summary: "Applied." });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    }) as unknown as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      decideChangeSet(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      undoRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+
+    await session.startAgentRun(executionCommand("general_file"));
+    let awaitingRevision = 0;
+    let changeSet: Record<string, unknown> | undefined;
+    let chapterRelativePath = "";
+    await vi.waitFor(async () => {
+      const read = await session.readAgentRun("run-desktop-v2-lifecycle");
+      expect(read).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: { status: "awaiting_write_approval" },
+          changeSet: {
+            operations: expect.arrayContaining([
+              expect.objectContaining({
+                kind: "create_file",
+                relativePath: expect.stringMatching(/^chapters\/ch_[A-Za-z0-9_-]+\.md$/u)
+              }),
+              expect.objectContaining({
+                kind: "create_file",
+                relativePath: "characters/hero.json"
+              }),
+              expect.objectContaining({ kind: "create_file", relativePath: "created.txt" }),
+              expect.objectContaining({ kind: "create_directory", relativePath: "assets" }),
+              expect.objectContaining({
+                kind: "move_file",
+                sourcePath: "draft.md",
+                targetPath: "moved.md"
+              }),
+              expect.objectContaining({ kind: "delete_file", relativePath: "obsolete.txt" })
+            ])
+          }
+        }
+      });
+      const value = read as {
+        value: { snapshot: { runRevision: number }; changeSet: Record<string, unknown> };
+      };
+      awaitingRevision = value.value.snapshot.runRevision;
+      changeSet = value.value.changeSet;
+      const operations = value.value.changeSet["operations"] as readonly Record<string, unknown>[];
+      chapterRelativePath = String(
+        operations.find((operation) =>
+          String(operation["relativePath"]).startsWith("chapters/ch_")
+        )?.["relativePath"] ?? ""
+      );
+    });
+    expect(chapterRelativePath).toMatch(/^chapters\/ch_[A-Za-z0-9_-]+\.md$/u);
+    expect(await readFile(sourcePath, "utf8")).toBe(source);
+    expect(await readFile(obsoletePath, "utf8")).toBe(obsolete);
+    expect(await readdir(projectRoot)).not.toContain("created.txt");
+    expect(await readdir(projectRoot)).not.toContain("assets");
+    await expect(readFile(join(projectRoot, chapterRelativePath), "utf8")).rejects.toMatchObject({
+      code: "ENOENT"
+    });
+    await expect(readFile(storyBiblePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    if (changeSet === undefined) throw new Error("Expected a staged lifecycle Change Set.");
+
+    const applied = await session.decideChangeSet({
+      runId: "run-desktop-v2-lifecycle",
+      projectId: "project-01",
+      commandId: "apply-desktop-v2-lifecycle",
+      expectedRunRevision: awaitingRevision,
+      changeSetId: changeSet["changeSetId"],
+      revision: changeSet["revision"],
+      checksum: changeSet["checksum"],
+      decision: "apply_selected"
+    });
+    expect(applied).toMatchObject({ ok: true, value: { status: "executing_model" } });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run-desktop-v2-lifecycle")).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+    expect(await readFile(createdPath, "utf8")).toBe(created);
+    expect(await readFile(join(projectRoot, chapterRelativePath), "utf8")).toContain(
+      'title: "第一章"'
+    );
+    expect(await readFile(join(projectRoot, chapterRelativePath), "utf8")).toContain(chapterBody);
+    expect(await readFile(storyBiblePath, "utf8")).toBe(storyBible);
+    expect(await readFile(movedPath, "utf8")).toBe(source);
+    await expect(readFile(sourcePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(obsoletePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readdir(projectRoot)).toContain("assets");
+
+    const completed = (await session.readAgentRun("run-desktop-v2-lifecycle")) as {
+      value: { snapshot: { runRevision: number } };
+    };
+    expect(
+      await session.undoRun({
+        projectId: "project-01",
+        runId: "run-desktop-v2-lifecycle",
+        commandId: "undo-desktop-v2-lifecycle",
+        expectedRunRevision: completed.value.snapshot.runRevision
+      })
+    ).toMatchObject({ ok: true, value: { status: "completed" } });
+    expect(await readFile(sourcePath, "utf8")).toBe(source);
+    expect(await readFile(obsoletePath, "utf8")).toBe(obsolete);
+    await expect(readFile(createdPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(projectRoot, chapterRelativePath), "utf8")).rejects.toMatchObject({
+      code: "ENOENT"
+    });
+    await expect(readFile(storyBiblePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(movedPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readdir(projectRoot)).not.toContain("assets");
+  });
+
   test("rejects a syntax-valid settings candidate that fails the existing settings schema", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-agent-schema-"));
     roots.push(projectRoot);
@@ -1228,8 +1417,8 @@ describe("desktop Agent Run runtime", () => {
         async *streamRound() {
           round += 1;
           if (round === 1) {
-            yield runtimeToolCall("proposal-settings", "propose_file_write", {
-              path: "settings.json",
+            yield runtimeToolCall("proposal-settings", "edit_text", {
+              ref: "file:settings.json",
               baseHash: sha256(settings),
               range: { unit: "character", start: 0, end: settings.length },
               replacement: invalidCandidate
@@ -1287,7 +1476,8 @@ describe("desktop Agent Run runtime", () => {
           observedToolLists.push(input.tools.map((tool) => tool.name));
           round += 1;
           if (round === 1) {
-            yield runtimeToolCall("search-needle", "search_project_text", {
+            yield runtimeToolCall("search-needle", "search_project", {
+              mode: "text",
               query: "needle",
               maxResults: 10
             });
@@ -1316,9 +1506,7 @@ describe("desktop Agent Run runtime", () => {
         value: { snapshot: { status: "completed" } }
       });
     });
-    expect(observedToolLists[0]).toEqual(
-      expect.arrayContaining(["search_project_text", "find_project_references"])
-    );
+    expect(observedToolLists[0]).toContain("search_project");
   });
 
   test("keeps search tools hidden in the production runtime without the Main feature gate", async () => {
@@ -1357,8 +1545,7 @@ describe("desktop Agent Run runtime", () => {
         value: { snapshot: { status: "completed" } }
       });
     });
-    expect(observedToolLists[0]).not.toContain("search_project_text");
-    expect(observedToolLists[0]).not.toContain("find_project_references");
+    expect(observedToolLists[0]).not.toContain("search_project");
   });
 });
 

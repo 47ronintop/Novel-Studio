@@ -6,6 +6,22 @@ export interface ChangeSetReviewModel {
   readonly checksum: string;
   readonly status: string;
   readonly files: readonly ChangeSetReviewFile[];
+  readonly operations?: readonly ChangeSetReviewOperation[];
+}
+
+export type ChangeSetReviewOperationKind =
+  "modify" | "create_file" | "move_file" | "delete_file" | "create_directory";
+
+export interface ChangeSetReviewOperation {
+  readonly operationId: string;
+  readonly kind: ChangeSetReviewOperationKind;
+  readonly selected: boolean;
+  readonly dependsOn: readonly string[];
+  readonly resourceKind: "chapter" | "story_bible" | "project_file" | "project_directory";
+  readonly relativePath?: string;
+  readonly sourcePath?: string;
+  readonly targetPath?: string;
+  readonly impact: string;
 }
 
 export interface ChangeSetReviewFile {
@@ -37,6 +53,12 @@ export interface ChangeSetReviewHunk {
 
 export interface ChangeSetSelection {
   readonly files: readonly ChangeSetFileSelection[];
+  readonly operations?: readonly ChangeSetOperationSelection[];
+}
+
+export interface ChangeSetOperationSelection {
+  readonly operationId: string;
+  readonly selected: boolean;
 }
 
 export interface ChangeSetFileSelection {
@@ -65,12 +87,7 @@ export interface ChangeSetReviewProps {
 
 export type RollbackReviewDecision = "keep_current" | "restore_baseline";
 export type RollbackReviewFileStatus =
-  | "ready"
-  | "conflict"
-  | "stale"
-  | "failed"
-  | "completed"
-  | "kept";
+  "ready" | "conflict" | "stale" | "failed" | "completed" | "kept";
 
 export interface RollbackReviewModel {
   readonly schemaVersion: "1.0";
@@ -153,6 +170,9 @@ export function ChangeSetReview({ review }: { readonly review: ChangeSetReviewPr
       </header>
       <div className="ns-change-set-summary-stats">
         <span>{review.changeSet.files.length} 个文件</span>
+        {(review.changeSet.operations?.length ?? 0) === 0 ? null : (
+          <span>{review.changeSet.operations?.length} 项路径操作</span>
+        )}
         <span className="ns-diff-addition">+{totals.additions}</span>
         <span className="ns-diff-deletion">-{totals.deletions}</span>
       </div>
@@ -166,6 +186,16 @@ export function ChangeSetReview({ review }: { readonly review: ChangeSetReviewPr
           </li>
         ))}
       </ul>
+      {(review.changeSet.operations?.length ?? 0) === 0 ? null : (
+        <ul className="ns-change-set-summary-operations" aria-label="路径操作摘要">
+          {review.changeSet.operations?.map((operation) => (
+            <li key={operation.operationId}>
+              <span>{operationKindLabel(operation.kind)}</span>
+              <span>{operation.impact}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       {hasConflict ? (
         <p className="ns-change-set-alert" role="status">
           <AlertTriangle aria-hidden="true" size={14} />
@@ -362,6 +392,30 @@ export function selectedChangeSetFiles(changeSet: ChangeSetReviewModel): ChangeS
   }));
 }
 
+export function selectedChangeSetOperations(
+  changeSet: ChangeSetReviewModel
+): ChangeSetOperationSelection[] | undefined {
+  return changeSet.operations?.map((operation) => ({
+    operationId: operation.operationId,
+    selected: operation.selected
+  }));
+}
+
+export function operationKindLabel(kind: ChangeSetReviewOperationKind): string {
+  switch (kind) {
+    case "modify":
+      return "修改文件";
+    case "create_file":
+      return "创建文件";
+    case "move_file":
+      return "移动文件";
+    case "delete_file":
+      return "删除文件";
+    case "create_directory":
+      return "创建目录";
+  }
+}
+
 export function canApplyChangeSet(review: ChangeSetReviewProps): boolean {
   if (
     review.applying ||
@@ -374,11 +428,11 @@ export function canApplyChangeSet(review: ChangeSetReviewProps): boolean {
     return false;
   }
   const selectedFiles = review.changeSet.files.filter((file) => file.selected);
+  const hasSelectedOperation =
+    review.changeSet.operations?.some((operation) => operation.selected) ?? false;
   return (
-    selectedFiles.length > 0 &&
-    selectedFiles.every(
-      (file) => file.validation.valid && file.hunks.some((hunk) => hunk.selected)
-    )
+    (selectedFiles.length > 0 || hasSelectedOperation) &&
+    selectedFiles.every((file) => file.validation.valid && file.hunks.some((hunk) => hunk.selected))
   );
 }
 

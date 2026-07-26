@@ -4,15 +4,20 @@ import {
   canApplyChangeSet,
   changeSetTotals,
   isFinalChangeSetStatus,
+  operationKindLabel,
   selectedChangeSetFiles,
+  selectedChangeSetOperations,
   type ChangeSetReviewFile,
   type ChangeSetReviewHunk,
+  type ChangeSetReviewModel,
+  type ChangeSetReviewOperation,
   type ChangeSetReviewProps
 } from "./change-set-review.js";
 
 export function DiffReview({ review }: { readonly review: ChangeSetReviewProps }) {
   const totals = changeSetTotals(review.changeSet);
   const locked = isFinalChangeSetStatus(review.changeSet.status);
+  const operations = review.changeSet.operations ?? [];
 
   return (
     <section className="ns-diff-review" aria-label="变更集差异审阅">
@@ -30,12 +35,19 @@ export function DiffReview({ review }: { readonly review: ChangeSetReviewProps }
             {review.changeSet.status === "applied" ? "已写入" : "尚未写入"}
           </span>
           <strong>{review.changeSet.files.length} 个文件</strong>
+          {operations.length === 0 ? null : <span>{operations.length} 项路径操作</span>}
           <span className="ns-diff-addition">+{totals.additions}</span>
           <span className="ns-diff-deletion">-{totals.deletions}</span>
         </div>
         <div className="ns-diff-review-actions">
-          <button aria-label="返回对话" className="ns-icon-text-button" onClick={review.onReturn} type="button">
-            <ArrowLeft aria-hidden="true" size={14} />返回对话
+          <button
+            aria-label="返回对话"
+            className="ns-icon-text-button"
+            onClick={review.onReturn}
+            type="button"
+          >
+            <ArrowLeft aria-hidden="true" size={14} />
+            返回对话
           </button>
           {review.changeSet.status === "applied" ? (
             <button
@@ -45,15 +57,30 @@ export function DiffReview({ review }: { readonly review: ChangeSetReviewProps }
               onClick={review.onUndoRun}
               type="button"
             >
-              <X aria-hidden="true" size={14} />撤销本次运行
+              <X aria-hidden="true" size={14} />
+              撤销本次运行
             </button>
           ) : (
             <>
-              <button aria-label="拒绝全部" className="ns-icon-text-button" disabled={review.applying || review.selectionPending || locked} onClick={review.onReject} type="button">
-                <X aria-hidden="true" size={14} />拒绝全部
+              <button
+                aria-label="拒绝全部"
+                className="ns-icon-text-button"
+                disabled={review.applying || review.selectionPending || locked}
+                onClick={review.onReject}
+                type="button"
+              >
+                <X aria-hidden="true" size={14} />
+                拒绝全部
               </button>
-              <button aria-label="应用所选" className="ns-ai-secondary-button" disabled={!canApplyChangeSet(review)} onClick={review.onApply} type="button">
-                <Check aria-hidden="true" size={14} />应用所选
+              <button
+                aria-label="应用所选"
+                className="ns-ai-secondary-button"
+                disabled={!canApplyChangeSet(review)}
+                onClick={review.onApply}
+                type="button"
+              >
+                <Check aria-hidden="true" size={14} />
+                应用所选
               </button>
             </>
           )}
@@ -65,11 +92,39 @@ export function DiffReview({ review }: { readonly review: ChangeSetReviewProps }
       </div>
       <div className="ns-diff-review-layout">
         <aside className="ns-diff-review-files" aria-label="变更文件">
+          {operations.length === 0 ? null : (
+            <section className="ns-diff-review-operation-list" aria-label="路径操作选择">
+              <h2>路径操作</h2>
+              {operations.map((operation) => (
+                <OperationSelection
+                  key={operation.operationId}
+                  operation={operation}
+                  review={review}
+                />
+              ))}
+            </section>
+          )}
+          {operations.length === 0 ? null : (
+            <h2 className="ns-diff-review-list-heading">内容变更</h2>
+          )}
           {review.changeSet.files.map((file) => (
             <FileSelection key={file.relativePath} file={file} review={review} />
           ))}
         </aside>
         <div className="ns-diff-review-content">
+          {operations.length === 0 ? null : (
+            <section className="ns-diff-operations" aria-label="文件与目录操作">
+              <header>
+                <strong>文件与目录操作</strong>
+                <span>{operations.length} 项</span>
+              </header>
+              <div className="ns-diff-operation-details">
+                {operations.map((operation) => (
+                  <OperationDetail key={operation.operationId} operation={operation} />
+                ))}
+              </div>
+            </section>
+          )}
           {review.changeSet.files.map((file) => (
             <FileDiff key={file.relativePath} file={file} review={review} />
           ))}
@@ -79,7 +134,132 @@ export function DiffReview({ review }: { readonly review: ChangeSetReviewProps }
   );
 }
 
-function FileSelection({ file, review }: { readonly file: ChangeSetReviewFile; readonly review: ChangeSetReviewProps }) {
+function OperationSelection({
+  operation,
+  review
+}: {
+  readonly operation: ChangeSetReviewOperation;
+  readonly review: ChangeSetReviewProps;
+}) {
+  return (
+    <label className="ns-diff-review-operation-row" data-selected={operation.selected}>
+      <input
+        aria-label={`包含路径操作：${operation.impact}`}
+        checked={operation.selected}
+        disabled={
+          review.applying ||
+          review.selectionPending ||
+          isFinalChangeSetStatus(review.changeSet.status)
+        }
+        key={`${review.changeSet.revision}:${operation.operationId}`}
+        onChange={(event) => {
+          review.onSelectionChange({
+            files: selectedChangeSetFiles(review.changeSet),
+            operations: toggleOperationSelection(
+              review.changeSet,
+              operation.operationId,
+              event.currentTarget.checked
+            )
+          });
+        }}
+        type="checkbox"
+      />
+      <span>{operationKindLabel(operation.kind)}</span>
+      <small>{operation.impact}</small>
+    </label>
+  );
+}
+
+function OperationDetail({ operation }: { readonly operation: ChangeSetReviewOperation }) {
+  return (
+    <article className="ns-diff-operation" data-selected={operation.selected}>
+      <header>
+        <strong>{operationKindLabel(operation.kind)}</strong>
+        <code>{operation.kind}</code>
+      </header>
+      <dl>
+        <div>
+          <dt>资源</dt>
+          <dd>{resourceKindLabel(operation.resourceKind)}</dd>
+        </div>
+        {operation.sourcePath === undefined ? null : (
+          <div>
+            <dt>源</dt>
+            <dd>{operation.sourcePath}</dd>
+          </div>
+        )}
+        <div>
+          <dt>{operation.sourcePath === undefined ? "路径" : "目标"}</dt>
+          <dd>{operation.targetPath ?? operation.relativePath}</dd>
+        </div>
+        <div>
+          <dt>依赖</dt>
+          <dd>{operation.dependsOn.length === 0 ? "无" : operation.dependsOn.join("、")}</dd>
+        </div>
+        <div>
+          <dt>影响</dt>
+          <dd>{operation.impact}</dd>
+        </div>
+      </dl>
+    </article>
+  );
+}
+
+function resourceKindLabel(kind: ChangeSetReviewOperation["resourceKind"]): string {
+  if (kind === "chapter") return "章节";
+  if (kind === "story_bible") return "故事圣经";
+  if (kind === "project_directory") return "项目目录";
+  return "项目文件";
+}
+
+function toggleOperationSelection(
+  changeSet: ChangeSetReviewModel,
+  operationId: string,
+  selected: boolean
+) {
+  const operations = changeSet.operations ?? [];
+  const selectedIds = new Set(
+    operations.filter((operation) => operation.selected).map((operation) => operation.operationId)
+  );
+  const byId = new Map(operations.map((operation) => [operation.operationId, operation]));
+
+  if (selected) {
+    const selectWithDependencies = (id: string) => {
+      if (selectedIds.has(id)) return;
+      selectedIds.add(id);
+      for (const dependency of byId.get(id)?.dependsOn ?? []) selectWithDependencies(dependency);
+    };
+    selectWithDependencies(operationId);
+  } else {
+    selectedIds.delete(operationId);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const operation of operations) {
+        if (
+          selectedIds.has(operation.operationId) &&
+          operation.dependsOn.some((dependency) => !selectedIds.has(dependency))
+        ) {
+          selectedIds.delete(operation.operationId);
+          changed = true;
+        }
+      }
+    }
+  }
+
+  return (selectedChangeSetOperations(changeSet) ?? []).map((selection) => ({
+    ...selection,
+    selected: selectedIds.has(selection.operationId)
+  }));
+}
+
+function FileSelection({
+  file,
+  review
+}: {
+  readonly file: ChangeSetReviewFile;
+  readonly review: ChangeSetReviewProps;
+}) {
   const additions = file.hunks.reduce((total, hunk) => total + hunk.additions, 0);
   const deletions = file.hunks.reduce((total, hunk) => total + hunk.deletions, 0);
   const conflicted = review.baseHashConflictPaths.includes(file.relativePath);
@@ -90,34 +270,59 @@ function FileSelection({ file, review }: { readonly file: ChangeSetReviewFile; r
       <input
         aria-label={`包含文件：${file.relativePath}`}
         checked={file.selected}
-        disabled={review.applying || review.selectionPending || isFinalChangeSetStatus(review.changeSet.status)}
+        disabled={
+          review.applying ||
+          review.selectionPending ||
+          isFinalChangeSetStatus(review.changeSet.status)
+        }
         key={`${review.changeSet.revision}:${file.relativePath}`}
         onChange={(event) => {
           const selected = event.currentTarget.checked;
           const files = selectedChangeSetFiles(review.changeSet).map((selection) =>
             selection.relativePath === file.relativePath
-              ? { ...selection, selected, selectedHunkIds: selected ? file.hunks.map((hunk) => hunk.hunkId) : [] }
+              ? {
+                  ...selection,
+                  selected,
+                  selectedHunkIds: selected ? file.hunks.map((hunk) => hunk.hunkId) : []
+                }
               : selection
           );
-          review.onSelectionChange({ files });
+          const operations = selectedChangeSetOperations(review.changeSet);
+          review.onSelectionChange({
+            files,
+            ...(operations === undefined ? {} : { operations })
+          });
         }}
         type="checkbox"
       />
       <FileText aria-hidden="true" size={14} />
       <span>{file.relativePath}</span>
-      <small>+{additions} -{deletions}</small>
+      <small>
+        +{additions} -{deletions}
+      </small>
       {conflicted ? <em>Base hash 冲突</em> : dirty ? <em>未保存目标</em> : null}
     </label>
   );
 }
 
-function FileDiff({ file, review }: { readonly file: ChangeSetReviewFile; readonly review: ChangeSetReviewProps }) {
+function FileDiff({
+  file,
+  review
+}: {
+  readonly file: ChangeSetReviewFile;
+  readonly review: ChangeSetReviewProps;
+}) {
   return (
     <section className="ns-diff-file" aria-label={`文件差异：${file.relativePath}`}>
-      <header><strong>{file.relativePath}</strong><span>{file.validation.valid ? "校验通过" : "校验失败"}</span></header>
+      <header>
+        <strong>{file.relativePath}</strong>
+        <span>{file.validation.valid ? "校验通过" : "校验失败"}</span>
+      </header>
       {file.validation.issues.length === 0 ? null : (
         <ul className="ns-diff-validation" aria-label={`校验问题：${file.relativePath}`}>
-          {file.validation.issues.map((issue) => <li key={issue}>{issue}</li>)}
+          {file.validation.issues.map((issue) => (
+            <li key={issue}>{issue}</li>
+          ))}
         </ul>
       )}
       {file.hunks.map((hunk) => (
@@ -126,22 +331,38 @@ function FileDiff({ file, review }: { readonly file: ChangeSetReviewFile; readon
             <input
               aria-label={`包含变更块：${hunk.label}`}
               checked={hunk.selected}
-              disabled={review.applying || review.selectionPending || !file.selected || isFinalChangeSetStatus(review.changeSet.status)}
+              disabled={
+                review.applying ||
+                review.selectionPending ||
+                !file.selected ||
+                isFinalChangeSetStatus(review.changeSet.status)
+              }
               key={`${review.changeSet.revision}:${hunk.hunkId}`}
               onChange={(event) => {
                 const selectedHunkIds = file.hunks
-                  .filter((candidate) => candidate.hunkId === hunk.hunkId ? event.currentTarget.checked : candidate.selected)
+                  .filter((candidate) =>
+                    candidate.hunkId === hunk.hunkId
+                      ? event.currentTarget.checked
+                      : candidate.selected
+                  )
                   .map((candidate) => candidate.hunkId);
                 const files = selectedChangeSetFiles(review.changeSet).map((selection) =>
                   selection.relativePath === file.relativePath
                     ? { ...selection, selected: selectedHunkIds.length > 0, selectedHunkIds }
                     : selection
                 );
-                review.onSelectionChange({ files });
+                const operations = selectedChangeSetOperations(review.changeSet);
+                review.onSelectionChange({
+                  files,
+                  ...(operations === undefined ? {} : { operations })
+                });
               }}
               type="checkbox"
             />
-            <span>{hunk.label}</span><small>+{hunk.additions} -{hunk.deletions}</small>
+            <span>{hunk.label}</span>
+            <small>
+              +{hunk.additions} -{hunk.deletions}
+            </small>
           </label>
           <HunkDiff assetType={file.assetType} hunk={hunk} />
         </article>
@@ -485,8 +706,9 @@ function tokenizeWords(text: string): string[] {
     }
   ).Segmenter;
   if (Segmenter !== undefined) {
-    return Array.from(new Segmenter(undefined, { granularity: "word" }).segment(text), (part) =>
-      part.segment
+    return Array.from(
+      new Segmenter(undefined, { granularity: "word" }).segment(text),
+      (part) => part.segment
     );
   }
   return text.match(/[\p{Script=Han}]|[\p{L}\p{N}_]+|\s+|[^\s\p{L}\p{N}_]/gu) ?? [];

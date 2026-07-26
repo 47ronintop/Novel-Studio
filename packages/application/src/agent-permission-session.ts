@@ -119,6 +119,9 @@ export interface CreateAgentPermissionSessionOptions {
   readonly createId?: () => string;
   /** Main-owned classification of the write backend available to this runtime. */
   readonly writeMutationTrust?: AgentWriteMutationTrust;
+  /** Main-owned defaults used by renderer permission previews that omit runtime capabilities. */
+  readonly defaultCapabilitySnapshot?: AgentToolCapabilitySnapshot;
+  readonly defaultExternalToolDescriptors?: readonly AgentToolDescriptor[];
   /** Injectable Tool Registry lister; defaults to the real registry. Tests use it to prove drift. */
   readonly listTools?: AgentToolLister;
 }
@@ -149,12 +152,17 @@ export function createAgentPermissionSession(
         rootFingerprint: fingerprint.value,
         generatedAt: now(),
         writeMutationTrust: options.writeMutationTrust ?? "unavailable",
-        ...(input.capabilitySnapshot === undefined
+        ...((input.capabilitySnapshot ?? options.defaultCapabilitySnapshot) === undefined
           ? {}
-          : { capabilitySnapshot: input.capabilitySnapshot }),
-        ...(input.externalToolDescriptors === undefined
+          : {
+              capabilitySnapshot: input.capabilitySnapshot ?? options.defaultCapabilitySnapshot
+            }),
+        ...((input.externalToolDescriptors ?? options.defaultExternalToolDescriptors) === undefined
           ? {}
-          : { externalToolDescriptors: input.externalToolDescriptors }),
+          : {
+              externalToolDescriptors:
+                input.externalToolDescriptors ?? options.defaultExternalToolDescriptors
+            }),
         ...(input.providerMappingRevision === undefined
           ? {}
           : { providerMappingRevision: input.providerMappingRevision }),

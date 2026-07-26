@@ -12,6 +12,56 @@ afterEach(async () => {
 });
 
 describe("AgentRunFileRepository", () => {
+  test("persists immutable tool catalogs and rejects invalid or conflicting catalog identities", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-tool-catalog-store-"));
+    roots.push(projectRoot);
+    const Repository = repositoryExports.AgentRunFileRepository as unknown as new (options: {
+      projectRoot: string;
+    }) => {
+      writeToolCatalog(runId: string, catalog: Record<string, unknown>): Promise<unknown>;
+      readToolCatalog(runId: string, catalogId: string): Promise<unknown>;
+    };
+    const repository = new Repository({ projectRoot });
+    const catalog = {
+      schemaVersion: "1.0",
+      toolCatalogSnapshotId: "tool_catalog_run_01",
+      runId: "run_01",
+      facadeVersion: "v2",
+      descriptors: [],
+      descriptorRevision: "a".repeat(64),
+      providerMappingRevision: "b".repeat(64),
+      catalogRevision: "c".repeat(64),
+      createdAt: "2026-07-26T00:00:00.000Z"
+    };
+
+    expect(await repository.writeToolCatalog("run_01", catalog)).toMatchObject({ ok: true });
+    expect(await repository.writeToolCatalog("run_01", catalog)).toMatchObject({ ok: true });
+    expect(await repository.readToolCatalog("run_01", "tool_catalog_run_01")).toEqual({
+      ok: true,
+      value: catalog
+    });
+    expect(
+      await repository.writeToolCatalog("run_01", {
+        ...catalog,
+        createdAt: "2026-07-27T00:00:00.000Z"
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_TOOL_CATALOG_CONFLICT" } });
+    expect(await repository.writeToolCatalog("../run", catalog)).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_TOOL_CATALOG_INVALID" }
+    });
+    expect(
+      await repository.writeToolCatalog("run_01", {
+        ...catalog,
+        toolCatalogSnapshotId: "../catalog"
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_TOOL_CATALOG_INVALID" } });
+    expect(await repository.readToolCatalog("run_01", "../catalog")).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_TOOL_CATALOG_INVALID" }
+    });
+  });
+
   test("persists snapshots, ordered events, and command receipts under project history", async () => {
     const Repository = (repositoryExports as unknown as Record<string, unknown>)[
       "AgentRunFileRepository"
@@ -532,10 +582,7 @@ describe("AgentRunFileRepository — compaction persistence + commit marker", ()
       )
     ).toContain('"errorId": "err_run_01"');
     expect(
-      await readFile(
-        join(projectRoot, "history", "agent-diagnostics", "err_draft_01.json"),
-        "utf8"
-      )
+      await readFile(join(projectRoot, "history", "agent-diagnostics", "err_draft_01.json"), "utf8")
     ).toContain('"runDraftId": "draft_01"');
 
     expect(await repository["writeRunError"]?.("run_01", runError)).toMatchObject({ ok: true });
@@ -575,8 +622,7 @@ describe("AgentRunFileRepository — compaction persistence + commit marker", ()
         repository["writeRunError"]?.("run_race", first),
         repository["writeRunError"]?.("run_race", second)
       ])) as Array<
-        | { ok: true; value: Record<string, unknown> }
-        | { ok: false; error: Record<string, unknown> }
+        { ok: true; value: Record<string, unknown> } | { ok: false; error: Record<string, unknown> }
       >;
       const succeeded = results.filter(
         (result): result is { ok: true; value: Record<string, unknown> } => result.ok
@@ -628,9 +674,10 @@ describe("AgentRunFileRepository — compaction persistence + commit marker", ()
 
     const root = join(projectRoot, "history", "agent-diagnostics");
     const files = (await readdir(root)).filter((entry) => entry.endsWith(".json"));
-    const totalBytes = (
-      await Promise.all(files.map((file) => readFile(join(root, file))))
-    ).reduce((total, value) => total + value.byteLength, 0);
+    const totalBytes = (await Promise.all(files.map((file) => readFile(join(root, file))))).reduce(
+      (total, value) => total + value.byteLength,
+      0
+    );
     expect(files.length).toBeLessThanOrEqual(2);
     expect(totalBytes).toBeLessThanOrEqual(maxBytes);
     expect(files).toContain("err_draft_04.json");

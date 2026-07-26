@@ -47,6 +47,12 @@ export type ControlledExecutionAgentToolName = "run_project_task" | "git_status"
  */
 export type NetworkAgentToolName = "web_search" | "fetch_url";
 
+/** Compact model-facing facade used by new Agent runs. */
+export type V2AgentToolName =
+  "read_resource" | "search_project" | "edit_text" | "create_resource" | "manage_path";
+
+export type AgentToolFacadeVersion = "v1" | "v2";
+
 /**
  * Namespaced dynamic tool IDs for plugins and MCP servers.
  * @since v1.1
@@ -62,7 +68,8 @@ export type StaticAgentToolName =
   | SearchAgentToolName
   | FileLifecycleAgentToolName
   | ControlledExecutionAgentToolName
-  | NetworkAgentToolName;
+  | NetworkAgentToolName
+  | V2AgentToolName;
 
 /** Backward-compatible alias — keeps existing callers that reference AgentToolName working. */
 export type AgentToolName = CoreAgentToolName;
@@ -126,6 +133,8 @@ export interface ListAgentToolsInput {
   readonly operationMode: AgentOperationMode;
   readonly contextMode: AgentContextMode;
   readonly writePolicy: AgentWritePolicy;
+  /** Defaults to v1 so persisted runs and existing callers retain their frozen tool contract. */
+  readonly facadeVersion?: AgentToolFacadeVersion;
   /**
    * Task 0.1: Optional capability snapshot. When absent the registry falls back to v1.0
    * behaviour — exactly the original 9 tools, preserving all pre-Phase-0 test contracts.
@@ -141,6 +150,10 @@ export interface ListAgentToolsInput {
 }
 
 export function listAgentTools(input: ListAgentToolsInput): readonly AgentToolDescriptor[] {
+  return input.facadeVersion === "v2" ? listV2AgentTools(input) : listV1AgentTools(input);
+}
+
+function listV1AgentTools(input: ListAgentToolsInput): readonly AgentToolDescriptor[] {
   const readTools: AgentToolDescriptor[] =
     input.contextMode === "writing"
       ? [
@@ -240,6 +253,54 @@ export function listAgentTools(input: ListAgentToolsInput): readonly AgentToolDe
   ];
 }
 
+function listV2AgentTools(input: ListAgentToolsInput): readonly AgentToolDescriptor[] {
+  const cap = input.capabilitySnapshot;
+  const searchTools =
+    cap?.searchEnabled === true ? [coreTool("search_project", "search_tool", "read")] : [];
+
+  if (input.operationMode === "planning") {
+    return [
+      coreTool("list_project_entries", "file_tool", "read"),
+      coreTool("read_resource", "file_tool", "read"),
+      ...searchTools,
+      coreTool("finish_plan", "protocol_action", "control"),
+      coreTool("request_user_input", "protocol_action", "control")
+    ];
+  }
+
+  const lifecycleTools =
+    cap?.fileLifecycleEnabled === true
+      ? [
+          coreTool("create_resource", "file_tool", "propose"),
+          coreTool("manage_path", "file_tool", "propose")
+        ]
+      : [];
+  const networkTools =
+    cap?.networkReadEnabled === true
+      ? [
+          coreTool("web_search", "network_tool", "external_read"),
+          coreTool("fetch_url", "network_tool", "external_read")
+        ]
+      : [];
+  const externalValidation = validateExternalToolDescriptors(input.externalToolDescriptors ?? []);
+  const remoteExternalTools =
+    input.externalToolDescriptors !== undefined && externalValidation.ok && cap?.mcpToolsEnabled
+      ? input.externalToolDescriptors.filter((descriptor) => descriptor.source?.kind === "mcp")
+      : [];
+
+  return [
+    coreTool("list_project_entries", "file_tool", "read"),
+    coreTool("read_resource", "file_tool", "read"),
+    ...searchTools,
+    coreTool("edit_text", "file_tool", "propose"),
+    ...lifecycleTools,
+    ...networkTools,
+    ...remoteExternalTools,
+    coreTool("finish", "protocol_action", "control"),
+    coreTool("request_user_input", "protocol_action", "control")
+  ];
+}
+
 /** Build a fully-populated descriptor for a static core tool. */
 function coreTool(
   name: StaticAgentToolName,
@@ -258,7 +319,7 @@ function coreTool(
     destructive: isDestructive(name),
     retrySemantics: retrySemanticsFor(effect),
     source: { kind: "core", id: name },
-    inputSchema: inputSchemaFor(name as AgentToolName)
+    inputSchema: inputSchemaFor(name)
   };
   return { ...descriptor, descriptorDigest: computeAgentToolDescriptorDigest(descriptor) };
 }
@@ -381,7 +442,8 @@ function isDestructive(name: StaticAgentToolName): boolean {
     name === "propose_file_delete" ||
     name === "propose_file_move" ||
     name === "propose_directory_create" ||
-    name === "run_project_task"
+    name === "run_project_task" ||
+    name === "manage_path"
   );
 }
 
@@ -408,7 +470,12 @@ function displayNameFor(name: StaticAgentToolName): string {
     git_status: "Git 状态",
     git_diff: "Git Diff",
     web_search: "网络搜索",
-    fetch_url: "获取 URL"
+    fetch_url: "获取 URL",
+    read_resource: "读取资源",
+    search_project: "搜索项目",
+    edit_text: "修改文本",
+    create_resource: "创建资源",
+    manage_path: "管理路径"
   };
   return labels[name] ?? name;
 }
@@ -436,7 +503,12 @@ function descriptionFor(name: StaticAgentToolName): string {
     git_status: "以结构化格式返回 Git 仓库状态（只读）。",
     git_diff: "返回指定路径的 Git diff（只读）。",
     web_search: "通过配置的搜索提供商执行网络搜索。",
-    fetch_url: "获取 HTTP(S) URL 的有界文本内容。"
+    fetch_url: "获取 HTTP(S) URL 的有界文本内容。",
+    read_resource: "按稳定引用读取章节、Story Bible 或项目文本。",
+    search_project: "在项目内搜索文本或查找稳定引用的使用位置。",
+    edit_text: "基于内容哈希和有界范围提案修改已有文本。",
+    create_resource: "提案创建章节、Story Bible 资产或普通文本文件。",
+    manage_path: "提案移动、删除文件或创建目录。"
   };
   return descs[name] ?? "";
 }
@@ -455,6 +527,11 @@ export function validateAgentToolArguments(input: {
 }
 
 function inputSchemaFor(name: AgentToolName | StaticAgentToolName): JsonObject {
+  if (name === "read_resource") return strictStableRefObject("ref");
+  if (name === "search_project") return v2SearchSchema();
+  if (name === "edit_text") return v2EditSchema();
+  if (name === "create_resource") return v2CreateSchema();
+  if (name === "manage_path") return v2ManagePathSchema();
   if (name === "propose_chapter_write") {
     return proposalSchema("chapterId");
   }
@@ -688,7 +765,210 @@ function strictStringObject(key: string): JsonObject {
   };
 }
 
+const STABLE_RESOURCE_REF_PATTERN = "^(chapter|story_bible|file):[^\\s]+$";
+const STABLE_FILE_REF_PATTERN = "^file:[^\\s]+$";
+
+function strictStableRefObject(key: string): JsonObject {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [key],
+    properties: {
+      [key]: {
+        type: "string",
+        minLength: 6,
+        maxLength: 1036,
+        pattern: STABLE_RESOURCE_REF_PATTERN
+      }
+    }
+  };
+}
+
+function v2SearchSchema(): JsonObject {
+  return {
+    oneOf: [
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["mode", "query"],
+        properties: {
+          mode: { const: "text" },
+          query: { type: "string", minLength: 1, maxLength: 500 },
+          includeGlobs: {
+            type: "array",
+            items: { type: "string", minLength: 1, maxLength: 256 },
+            maxItems: 20
+          },
+          excludeGlobs: {
+            type: "array",
+            items: { type: "string", minLength: 1, maxLength: 256 },
+            maxItems: 20
+          },
+          maxResults: { type: "integer", minimum: 1, maximum: 200 }
+        }
+      },
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["mode", "ref"],
+        properties: {
+          mode: { const: "references" },
+          ref: {
+            type: "string",
+            minLength: 6,
+            maxLength: 1036,
+            pattern: STABLE_RESOURCE_REF_PATTERN
+          },
+          maxResults: { type: "integer", minimum: 1, maximum: 200 }
+        }
+      }
+    ]
+  };
+}
+
+function v2EditSchema(): JsonObject {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["ref", "baseHash", "range", "replacement"],
+    properties: {
+      ref: {
+        type: "string",
+        minLength: 6,
+        maxLength: 1036,
+        pattern: STABLE_RESOURCE_REF_PATTERN
+      },
+      baseHash: { type: "string", pattern: "^[a-f0-9]{64}$" },
+      range: textRangeSchema(),
+      replacement: { type: "string", maxLength: 1_000_000 }
+    }
+  };
+}
+
+function v2CreateSchema(): JsonObject {
+  const dependsOn = {
+    type: "array",
+    items: { type: "string", minLength: 1, maxLength: 256 },
+    maxItems: 50
+  };
+  return {
+    oneOf: [
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["kind", "title"],
+        properties: {
+          kind: { const: "chapter" },
+          title: { type: "string", minLength: 1, maxLength: 512 },
+          content: { type: "string", maxLength: 1_000_000 },
+          dependsOn
+        }
+      },
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["kind", "assetType", "content"],
+        properties: {
+          kind: { const: "story_bible" },
+          assetType: { type: "string", minLength: 1, maxLength: 128 },
+          content: { type: "string", minLength: 1, maxLength: 1_048_576 },
+          dependsOn
+        }
+      },
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["kind", "path", "content"],
+        properties: {
+          kind: { const: "file" },
+          path: { type: "string", minLength: 1, maxLength: 1024 },
+          content: { type: "string", maxLength: 10_485_760 },
+          dependsOn
+        }
+      }
+    ]
+  };
+}
+
+function v2ManagePathSchema(): JsonObject {
+  const dependsOn = {
+    type: "array",
+    items: { type: "string", minLength: 1, maxLength: 256 },
+    maxItems: 50
+  };
+  return {
+    oneOf: [
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["operation", "sourceRef", "targetPath", "baseHash"],
+        properties: {
+          operation: { const: "move_file" },
+          sourceRef: {
+            type: "string",
+            minLength: 6,
+            maxLength: 1029,
+            pattern: STABLE_FILE_REF_PATTERN
+          },
+          targetPath: { type: "string", minLength: 1, maxLength: 1024 },
+          baseHash: { type: "string", pattern: "^[a-f0-9]{64}$" },
+          dependsOn
+        }
+      },
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["operation", "ref", "baseHash"],
+        properties: {
+          operation: { const: "delete_file" },
+          ref: {
+            type: "string",
+            minLength: 6,
+            maxLength: 1029,
+            pattern: STABLE_FILE_REF_PATTERN
+          },
+          baseHash: { type: "string", pattern: "^[a-f0-9]{64}$" },
+          dependsOn
+        }
+      },
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["operation", "path"],
+        properties: {
+          operation: { const: "create_directory" },
+          path: { type: "string", minLength: 1, maxLength: 1024 },
+          dependsOn
+        }
+      }
+    ]
+  };
+}
+
+function textRangeSchema(): JsonObject {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["unit", "start", "end"],
+    properties: {
+      unit: { type: "string", enum: ["character", "line", "paragraph"] },
+      start: { type: "integer", minimum: 0 },
+      end: { type: "integer", minimum: 0 }
+    }
+  };
+}
+
 function validateSchemaValue(schema: JsonObject, value: unknown): boolean {
+  if (Object.prototype.hasOwnProperty.call(schema, "const") && !Object.is(value, schema["const"])) {
+    return false;
+  }
+  const oneOf = schema["oneOf"];
+  if (
+    Array.isArray(oneOf) &&
+    oneOf.filter((branch) => isObject(branch) && validateSchemaValue(branch, value)).length !== 1
+  ) {
+    return false;
+  }
   const type = schema["type"];
   if (type === "object") {
     if (!isObject(value)) return false;
@@ -720,12 +1000,14 @@ function validateSchemaValue(schema: JsonObject, value: unknown): boolean {
   if (type === "integer") {
     return (
       Number.isInteger(value) &&
-      (typeof schema["minimum"] !== "number" || Number(value) >= schema["minimum"])
+      (typeof schema["minimum"] !== "number" || Number(value) >= schema["minimum"]) &&
+      (typeof schema["maximum"] !== "number" || Number(value) <= schema["maximum"])
     );
   }
   if (type === "boolean") return typeof value === "boolean";
   if (type === "array") {
     if (!Array.isArray(value)) return false;
+    if (typeof schema["maxItems"] === "number" && value.length > schema["maxItems"]) return false;
     const itemSchema = schema["items"];
     return !isObject(itemSchema) || value.every((item) => validateSchemaValue(itemSchema, item));
   }

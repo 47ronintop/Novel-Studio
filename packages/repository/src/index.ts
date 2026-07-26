@@ -5,6 +5,7 @@ export type {
   AgentWriteLifecycleMutation,
   AgentWriteLifecycleOperationPort,
   AgentWriteReplaceInput,
+  AgentWriteTrustedCreativeLifecycleMutation,
   AgentWriteTrustedCreativeMutationPort,
   AgentWriteTrustedCreativeReplaceMutation,
   AgentWriteTransactionOptions

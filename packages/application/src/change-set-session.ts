@@ -51,6 +51,10 @@ export interface ChangeSetSessionPort {
     readonly projectId: string;
     readonly relativePath: string;
   }): Promise<Result<ChangeSetProposalTarget, UnifiedError>>;
+  readStoryBibleTarget?(input: {
+    readonly projectId: string;
+    readonly assetId: string;
+  }): Promise<Result<ChangeSetProposalTarget, UnifiedError>>;
   validateCandidate(
     input: ChangeSetCandidateValidationPortInput
   ): Promise<Result<ChangeSetExternalValidation, UnifiedError>>;
@@ -88,6 +92,10 @@ export interface ProposeFileWriteInput extends ChangeSetProposalBinding {
   readonly path: string;
 }
 
+export interface ProposeStoryBibleWriteInput extends ChangeSetProposalBinding {
+  readonly assetId: string;
+}
+
 export interface SelectChangeSetSessionRevisionInput {
   readonly runId: string;
   readonly projectId: string;
@@ -110,6 +118,9 @@ export interface ProposeOperationInput {
 export interface ChangeSetSession {
   proposeChapterWrite(input: ProposeChapterWriteInput): Promise<Result<ChangeSet, UnifiedError>>;
   proposeFileWrite(input: ProposeFileWriteInput): Promise<Result<ChangeSet, UnifiedError>>;
+  proposeStoryBibleWrite(
+    input: ProposeStoryBibleWriteInput
+  ): Promise<Result<ChangeSet, UnifiedError>>;
   /** Task B.3 — stages a lifecycle operation (create/move/delete/mkdir) into the active Change Set. */
   proposeOperation(input: ProposeOperationInput): Promise<Result<ChangeSet, UnifiedError>>;
   selectRevision(
@@ -318,6 +329,36 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
           "CHANGE_SET_TARGET_INVALID",
           "The file target did not match the requested project-relative path.",
           "Refresh the file target and retry."
+        );
+      }
+      return propose(input, target.value);
+    },
+
+    async proposeStoryBibleWrite(input) {
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(input.assetId)) {
+        return failure(
+          "CHANGE_SET_TARGET_INVALID",
+          "A Story Bible proposal requires a stable asset ID.",
+          "Select an existing Story Bible asset and retry the proposal."
+        );
+      }
+      if (options.port.readStoryBibleTarget === undefined) {
+        return failure(
+          "CHANGE_SET_TARGET_UNAVAILABLE",
+          "Story Bible Change Set staging is unavailable for this project.",
+          "Open a creative project and retry the proposal."
+        );
+      }
+      const target = await options.port.readStoryBibleTarget({
+        projectId: input.projectId,
+        assetId: input.assetId
+      });
+      if (!target.ok) return target;
+      if (target.value.assetType !== "text" || target.value.assetId !== input.assetId) {
+        return failure(
+          "CHANGE_SET_TARGET_INVALID",
+          "The Story Bible target did not match the requested asset ID.",
+          "Refresh the Story Bible asset and retry."
         );
       }
       return propose(input, target.value);

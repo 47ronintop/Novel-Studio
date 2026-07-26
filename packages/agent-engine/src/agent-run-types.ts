@@ -1,6 +1,7 @@
 import type { JsonObject, UnifiedError } from "@novel-studio/shared";
 import type { ChangeSetFileSelection, ChangeSetOperationSelection } from "./change-set.js";
 import type { AgentContextSourceInput } from "./context-snapshot.js";
+import type { AgentToolFacadeVersion } from "./tool-registry.js";
 
 export type AgentOperationMode = "planning" | "execution";
 export type AgentContextMode = "writing" | "general_file";
@@ -118,6 +119,11 @@ export interface AgentRunSnapshotV11 extends Omit<AgentRunSnapshotV10, "schemaVe
   readonly activeErrorId: string | null;
   readonly recoveryState: AgentRunRecoveryState;
   readonly usageSummary: AgentRunUsageSummary;
+  /** Missing on historical snapshots; normalization treats absence as the frozen v1 facade. */
+  readonly toolFacadeVersion?: AgentToolFacadeVersion;
+  /** Immutable descriptor catalog persisted before the first model round for new runs. */
+  readonly toolCatalogSnapshotId?: string | null;
+  readonly toolCatalogRevision?: string | null;
   /**
    * Durable resumption record for an effectful tool that is waiting for a user decision. The
    * original arguments are retained only so an approved call can be verified and executed without
@@ -303,6 +309,9 @@ export interface AgentRunSnapshotPatch {
   readonly recoveryState?: AgentRunRecoveryState;
   readonly usageSummary?: AgentRunUsageSummary;
   readonly pendingToolApproval?: PendingToolApproval | null;
+  readonly toolFacadeVersion?: AgentToolFacadeVersion;
+  readonly toolCatalogSnapshotId?: string | null;
+  readonly toolCatalogRevision?: string | null;
 }
 
 export interface RecordAgentRunEventInput {
@@ -371,6 +380,10 @@ export interface ResolvedAgentRunStartInput {
   readonly planExecutionRevision?: number;
   readonly sourcePlanId?: string;
   readonly sourcePlanRevision?: number;
+  /** Main-owned model tool contract. Public IPC never supplies this value. */
+  readonly toolFacadeVersion?: AgentToolFacadeVersion;
+  /** Revision of the immutable catalog that Application will persist before driving the run. */
+  readonly toolCatalogRevision?: string;
 }
 
 export interface StopAgentRunCommand {
@@ -509,8 +522,19 @@ export interface AgentRunCoordinator {
 export function normalizeAgentRunSnapshot(value: JsonObject): AgentRunSnapshotV11 {
   const conversationId =
     typeof value["conversationId"] === "string" ? value["conversationId"] : null;
+  const toolFacadeVersion = value["toolFacadeVersion"] === "v2" ? "v2" : "v1";
+  const toolCatalogSnapshotId =
+    typeof value["toolCatalogSnapshotId"] === "string" ? value["toolCatalogSnapshotId"] : null;
+  const toolCatalogRevision =
+    typeof value["toolCatalogRevision"] === "string" ? value["toolCatalogRevision"] : null;
   if (value["schemaVersion"] === "1.1") {
-    return { ...value, conversationId } as unknown as AgentRunSnapshotV11;
+    return {
+      ...value,
+      conversationId,
+      toolFacadeVersion,
+      toolCatalogSnapshotId,
+      toolCatalogRevision
+    } as unknown as AgentRunSnapshotV11;
   }
   const capability = value["providerCapabilitySnapshot"];
   const modelProfileId =
@@ -531,7 +555,10 @@ export function normalizeAgentRunSnapshot(value: JsonObject): AgentRunSnapshotV1
     activeErrorId: null,
     recoveryState: "none",
     usageSummary: EMPTY_AGENT_RUN_USAGE_SUMMARY,
-    pendingToolApproval: null
+    pendingToolApproval: null,
+    toolFacadeVersion,
+    toolCatalogSnapshotId,
+    toolCatalogRevision
   } as unknown as AgentRunSnapshotV11;
 }
 

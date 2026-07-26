@@ -161,16 +161,24 @@ describe("AgentFileOperationSession", () => {
   });
 
   test("proposeChapterCreate returns a create_file operation with chapter path", () => {
-    const session = createAgentFileOperationSession();
+    const session = createAgentFileOperationSession({
+      createChapterId: () => "ch_test_create",
+      now: () => "2026-07-26T00:00:00.000Z"
+    });
     const result = session.proposeChapterCreate({
       toolCallId: "call-chapter",
-      title: "My New Chapter"
+      title: "第一章",
+      content: "雨夜里，故事开始了。"
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.operation.kind).toBe("create_file");
     if (result.value.operation.kind !== "create_file") return;
-    expect(result.value.operation.relativePath).toMatch(/^chapters\//);
+    expect(result.value.operation.relativePath).toBe("chapters/ch_test_create.md");
+    expect(result.value.operation.content).toContain("id: ch_test_create");
+    expect(result.value.operation.content).toContain('title: "第一章"');
+    expect(result.value.operation.content).toContain('createdAt: "2026-07-26T00:00:00.000Z"');
+    expect(result.value.operation.content).toContain("雨夜里，故事开始了。");
   });
 
   test("proposeChapterCreate rejects empty title", () => {
@@ -184,11 +192,13 @@ describe("AgentFileOperationSession", () => {
     const result = session.proposeStoryBibleWrite({
       toolCallId: "call-sb",
       assetType: "character",
-      content: JSON.stringify({ id: "char-01", name: "Alice" })
+      content: JSON.stringify({ id: "char-01", type: "character", name: "Alice" })
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.operation.kind).toBe("create_file");
+    if (result.value.operation.kind !== "create_file") return;
+    expect(result.value.operation.relativePath).toBe("characters/char-01.json");
   });
 
   test("proposeStoryBibleWrite rejects invalid JSON", () => {
@@ -207,6 +217,16 @@ describe("AgentFileOperationSession", () => {
       toolCallId: "call-sb-unk",
       assetType: "unknown_type",
       content: "{}"
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  test("proposeStoryBibleWrite rejects content whose type does not match the request", () => {
+    const session = createAgentFileOperationSession();
+    const result = session.proposeStoryBibleWrite({
+      toolCallId: "call-sb-mismatch",
+      assetType: "character",
+      content: JSON.stringify({ id: "char-01", type: "outline" })
     });
     expect(result.ok).toBe(false);
   });

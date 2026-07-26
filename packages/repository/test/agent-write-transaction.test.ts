@@ -20,7 +20,8 @@ import { err, ok } from "@novel-studio/shared";
 import {
   AgentWriteTransaction,
   type AgentWriteLifecycleMutation,
-  type AgentWriteLifecycleOperationPort
+  type AgentWriteLifecycleOperationPort,
+  type AgentWriteTrustedCreativeMutationPort
 } from "../src/agent-write-transaction.js";
 import { writeTextAtomically } from "../src/atomic-write.js";
 import { HistoryRepository } from "../src/history-repository.js";
@@ -34,6 +35,7 @@ import type {
   AgentWriteTransactionInput
 } from "../src/ports.js";
 import { RecoveryRepository } from "../src/recovery-repository.js";
+import { createTrustedCreativeFileOperationsPort } from "../src/trusted-creative-file-operations.js";
 
 const tempRoots: string[] = [];
 
@@ -1947,6 +1949,155 @@ describe("AgentWriteTransaction lifecycle operations", () => {
     });
   });
 
+  test("uses the standard trusted creative lifecycle port for apply and undo", async () => {
+    const projectRoot = await createProject({
+      "notes/source.md": "source",
+      "notes/delete.md": "delete me"
+    });
+    const transaction = createTransaction(projectRoot, {
+      disableNativeFileMutations: true,
+      trustedCreativeMutations: createTrustedCreativeFileOperationsPort({
+        workspaceKind: "creativeProject",
+        projectRoot
+      })
+    });
+
+    const applied = await transaction.apply(
+      createInput([], {
+        operations: [
+          {
+            kind: "create_directory",
+            operationId: "mkdir_drafts",
+            toolCallIdempotencyKey: "trusted_mkdir",
+            relativePath: "drafts"
+          },
+          {
+            kind: "create_file",
+            operationId: "create_new",
+            toolCallIdempotencyKey: "trusted_create",
+            dependsOn: ["mkdir_drafts"],
+            relativePath: "drafts/new.md",
+            content: "new"
+          },
+          {
+            kind: "move_file",
+            operationId: "move_source",
+            toolCallIdempotencyKey: "trusted_move",
+            dependsOn: ["mkdir_drafts"],
+            sourcePath: "notes/source.md",
+            targetPath: "drafts/moved.md",
+            sourceChecksum: checksum("source")
+          },
+          {
+            kind: "delete_file",
+            operationId: "delete_old",
+            toolCallIdempotencyKey: "trusted_delete",
+            relativePath: "notes/delete.md",
+            baseChecksum: checksum("delete me")
+          }
+        ]
+      })
+    );
+
+    expect(applied.ok).toBe(true);
+    if (!applied.ok) throw new Error(applied.error.message);
+    expect(await readFile(join(projectRoot, "drafts/new.md"), "utf8")).toBe("new");
+    expect(await readFile(join(projectRoot, "drafts/moved.md"), "utf8")).toBe("source");
+    await expect(readFile(join(projectRoot, "notes/delete.md"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT"
+    });
+
+    const undone = await transaction.undoVersionGroup({
+      versionGroupId: applied.value.versionGroupId
+    });
+
+    expect(undone.ok).toBe(true);
+    expect(await readFile(join(projectRoot, "notes/source.md"), "utf8")).toBe("source");
+    expect(await readFile(join(projectRoot, "notes/delete.md"), "utf8")).toBe("delete me");
+    await expect(lstat(join(projectRoot, "drafts"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test("keeps replacement-only trusted ports lifecycle-unavailable", async () => {
+    const projectRoot = await createProject({});
+    const replacementOnly: AgentWriteTrustedCreativeMutationPort = {
+      trustLevel: "standard_trusted_creative",
+      replace: async () => ok(undefined)
+    };
+    const transaction = createTransaction(projectRoot, {
+      disableNativeFileMutations: true,
+      trustedCreativeMutations: replacementOnly
+    });
+
+    const result = await transaction.apply(
+      createInput([], {
+        operations: [
+          {
+            kind: "create_file",
+            operationId: "create_file",
+            toolCallIdempotencyKey: "replace_only_create",
+            relativePath: "new.md",
+            content: "new"
+          }
+        ]
+      })
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_WRITE_NATIVE_FILE_OPERATIONS_REQUIRED" }
+    });
+    await expect(lstat(join(projectRoot, "new.md"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test("compensates trusted creative lifecycle mutations after a later failure", async () => {
+    const projectRoot = await createProject({});
+    const backing = createTrustedCreativeFileOperationsPort({
+      workspaceKind: "creativeProject",
+      projectRoot
+    });
+    const trustedCreativeMutations: AgentWriteTrustedCreativeMutationPort = {
+      trustLevel: "standard_trusted_creative",
+      replace: (input) => backing.replace(input),
+      async mutate(input) {
+        if (input.kind === "create_file") return err(transactionTestError("INJECTED_FAILURE"));
+        if (backing.mutate === undefined) throw new Error("Expected lifecycle support.");
+        return backing.mutate(input);
+      }
+    };
+    const transaction = createTransaction(projectRoot, {
+      disableNativeFileMutations: true,
+      trustedCreativeMutations
+    });
+
+    const result = await transaction.apply(
+      createInput([], {
+        operations: [
+          {
+            kind: "create_directory",
+            operationId: "mkdir_drafts",
+            toolCallIdempotencyKey: "trusted_compensate_mkdir",
+            relativePath: "drafts"
+          },
+          {
+            kind: "create_file",
+            operationId: "fail_create",
+            toolCallIdempotencyKey: "trusted_compensate_create",
+            dependsOn: ["mkdir_drafts"],
+            relativePath: "drafts/new.md",
+            content: "new"
+          }
+        ]
+      })
+    );
+
+    expect(result.ok && result.value.transactionStatus).toBe("rolled_back");
+    expect(result.ok && result.value.operations?.map((operation) => operation.status)).toEqual([
+      "rolled_back",
+      "pending"
+    ]);
+    await expect(lstat(join(projectRoot, "drafts"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   test("fails closed without a native lifecycle executor before snapshots or journal writes", async () => {
     const projectRoot = await createProject({});
     const operations: string[] = [];
@@ -2212,6 +2363,7 @@ interface TransactionTestOptions {
   readonly mutateBeforeFinalVerify?: (input: { relativePath: string }) => Promise<void>;
   readonly projectLock?: AgentWriteProjectLockPort;
   readonly lifecycleOperations?: AgentWriteLifecycleOperationPort;
+  readonly trustedCreativeMutations?: AgentWriteTrustedCreativeMutationPort;
   readonly disableNativeFileMutations?: boolean;
 }
 
@@ -2251,6 +2403,9 @@ function createTransaction(
     createVersionGroupId: () => `vg_${++nextId}`,
     createWriteId: () => `write_${++nextId}`,
     ...(lifecycleOperations === undefined ? {} : { lifecycleOperations }),
+    ...(options.trustedCreativeMutations === undefined
+      ? {}
+      : { trustedCreativeMutations: options.trustedCreativeMutations }),
     allowUnsafeReplaceFileForTesting: true,
     replaceFile: async (input) => {
       operations.push(`replace:${input.phase}:${input.relativePath}`);

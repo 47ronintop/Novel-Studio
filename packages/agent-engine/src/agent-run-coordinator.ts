@@ -1,6 +1,7 @@
 import { createUnifiedError } from "@novel-studio/shared";
 
 import { EMPTY_AGENT_RUN_USAGE_SUMMARY } from "./agent-run-types.js";
+import { agentRunToolCatalogSnapshotId } from "./agent-run-tool-catalog.js";
 import type {
   AgentRunCommandResult,
   AgentRunCoordinator,
@@ -123,6 +124,10 @@ export function createAgentRunCoordinator(
         activeErrorId: null,
         recoveryState: "none",
         usageSummary: EMPTY_AGENT_RUN_USAGE_SUMMARY,
+        toolFacadeVersion: command.toolFacadeVersion ?? "v1",
+        toolCatalogSnapshotId:
+          command.toolCatalogRevision === undefined ? null : agentRunToolCatalogSnapshotId(runId),
+        toolCatalogRevision: command.toolCatalogRevision ?? null,
         pendingToolApproval: null
       };
       runs.set(runId, snapshot);

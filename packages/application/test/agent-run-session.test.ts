@@ -2,6 +2,9 @@ import { describe, expect, test, vi } from "vitest";
 import { createHash } from "node:crypto";
 import {
   computeAgentToolDescriptorDigest,
+  createEffectiveCapabilityState,
+  revokeCapability,
+  type AgentToolCapabilitySnapshot,
   type AgentToolDescriptor
 } from "@novel-studio/agent-engine";
 
@@ -5111,6 +5114,622 @@ describe("AgentRunSession effectful tool approvals", () => {
   });
 });
 
+describe("AgentRunSession v2 tool facade", () => {
+  const createSession = (applicationExports as unknown as Record<string, unknown>)[
+    "createAgentRunSession"
+  ] as (options: Record<string, unknown>) => {
+    startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+    decidePlan(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+    readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    resumeAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+  };
+
+  const readExecutor = {
+    async execute() {
+      return { ok: true, value: { summary: "ok", data: {} } };
+    }
+  };
+
+  test("persists one v2 catalog and sends only the merged tool facade to a new run", async () => {
+    const repository = durableMemoryRepository();
+    let providerToolNames: string[] = [];
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_v2_catalog" },
+      repository,
+      newRunToolFacadeVersion: "v2",
+      capabilitySnapshot: creativeV2Capabilities(),
+      modelDriver: {
+        async *streamRound(input: { readonly tools: readonly { readonly name: string }[] }) {
+          providerToolNames = input.tools.map((tool) => tool.name);
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+
+    const started = await session.startAgentRun(startCommand());
+    expect(started).toMatchObject({
+      ok: true,
+      value: {
+        runId: "run_v2_catalog",
+        toolFacadeVersion: "v2",
+        toolCatalogSnapshotId: "tool_catalog_run_v2_catalog",
+        toolCatalogRevision: expect.stringMatching(/^[a-f0-9]{64}$/u)
+      }
+    });
+    await vi.waitFor(() => {
+      expect(providerToolNames).toEqual([
+        "list_project_entries",
+        "read_resource",
+        "search_project",
+        "edit_text",
+        "create_resource",
+        "manage_path",
+        "finish",
+        "request_user_input"
+      ]);
+    });
+    expect(providerToolNames).not.toContain("read_chapter");
+    expect(providerToolNames).not.toContain("propose_file_move");
+
+    const catalog = await repository.readToolCatalog(
+      "run_v2_catalog",
+      "tool_catalog_run_v2_catalog"
+    );
+    expect(catalog).toMatchObject({
+      ok: true,
+      value: {
+        facadeVersion: "v2",
+        descriptors: providerToolNames.map((name) => expect.objectContaining({ name }))
+      }
+    });
+  });
+
+  test("removes revoked v2 search and lifecycle tools from the active run catalog", async () => {
+    const repository = durableMemoryRepository();
+    const capabilitySnapshot = creativeV2Capabilities();
+    const initialState = createEffectiveCapabilityState(capabilitySnapshot);
+    const effectiveCapabilityState = revokeCapability(
+      revokeCapability(initialState, "search", "feature_flag_disabled", "2026-07-26T00:00:00.000Z"),
+      "file_lifecycle",
+      "feature_flag_disabled",
+      "2026-07-26T00:00:01.000Z"
+    );
+    let providerToolNames: string[] = [];
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_v2_revoked" },
+      repository,
+      newRunToolFacadeVersion: "v2",
+      capabilitySnapshot,
+      effectiveCapabilityState,
+      modelDriver: {
+        async *streamRound(input: { readonly tools: readonly { readonly name: string }[] }) {
+          providerToolNames = input.tools.map((tool) => tool.name);
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+
+    await session.startAgentRun(startCommand());
+    await vi.waitFor(() => expect(providerToolNames.length).toBeGreaterThan(0));
+    expect(providerToolNames).toContain("edit_text");
+    expect(providerToolNames).not.toContain("search_project");
+    expect(providerToolNames).not.toContain("create_resource");
+    expect(providerToolNames).not.toContain("manage_path");
+  });
+
+  test("persists a v2 execution catalog when an approved v2 plan starts its linked run", async () => {
+    const repository = durableMemoryRepository();
+    let runSequence = 0;
+    let executionToolNames: string[] = [];
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => `run_v2_plan_${++runSequence}` },
+      repository,
+      newRunToolFacadeVersion: "v2",
+      capabilitySnapshot: creativeV2Capabilities(),
+      modelDriver: {
+        async *streamRound(input: {
+          readonly snapshot: { readonly sourcePlanId?: string | null };
+          readonly tools: readonly { readonly name: string }[];
+        }) {
+          if (input.snapshot.sourcePlanId === "plan_v2_handoff") {
+            executionToolNames = input.tools.map((tool) => tool.name);
+            yield { type: "round_completed", finishReason: "stop" };
+            return;
+          }
+          yield toolCall("finish_v2_plan", "finish_plan", {
+            planId: "plan_v2_handoff",
+            goal: "Prepare the v2 handoff",
+            successCriteria: ["Execution starts"],
+            nonGoals: [],
+            facts: [],
+            assumptions: [],
+            openQuestions: [],
+            targetRefs: [],
+            steps: [{ stepId: "step_v2_handoff", title: "Execute", verification: "Finish" }],
+            risks: [],
+            verification: [],
+            sourceRefs: []
+          });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+
+    const planningStarted = await session.startAgentRun({
+      ...startCommand(),
+      operationMode: "planning"
+    });
+    expect(planningStarted).toMatchObject({
+      ok: true,
+      value: {
+        runId: "run_v2_plan_1",
+        toolFacadeVersion: "v2",
+        toolCatalogSnapshotId: "tool_catalog_run_v2_plan_1"
+      }
+    });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_v2_plan_1")).toMatchObject({
+        value: { snapshot: { status: "plan_ready" } }
+      });
+    });
+    const planning = (await session.readAgentRun("run_v2_plan_1")) as {
+      readonly value: { readonly snapshot: { readonly runRevision: number } };
+    };
+
+    const executionStarted = await session.decidePlan({
+      projectId: "project-01",
+      runId: "run_v2_plan_1",
+      commandId: "approve-v2-plan",
+      expectedRunRevision: planning.value.snapshot.runRevision,
+      planId: "plan_v2_handoff",
+      planRevision: 1,
+      decision: "approve"
+    });
+    expect(executionStarted).toMatchObject({
+      ok: true,
+      value: {
+        runId: "run_v2_plan_2",
+        toolFacadeVersion: "v2",
+        toolCatalogSnapshotId: "tool_catalog_run_v2_plan_2",
+        toolCatalogRevision: expect.stringMatching(/^[a-f0-9]{64}$/u)
+      }
+    });
+
+    const executionCatalog = await repository.readToolCatalog(
+      "run_v2_plan_2",
+      "tool_catalog_run_v2_plan_2"
+    );
+    expect(executionCatalog).toMatchObject({
+      ok: true,
+      value: {
+        facadeVersion: "v2",
+        descriptors: expect.arrayContaining([
+          expect.objectContaining({ name: "edit_text" }),
+          expect.objectContaining({ name: "create_resource" }),
+          expect.objectContaining({ name: "manage_path" })
+        ])
+      }
+    });
+    await vi.waitFor(() => expect(executionToolNames).not.toEqual([]));
+    expect(executionToolNames).toContain("edit_text");
+    expect(executionToolNames).toContain("manage_path");
+    expect(executionToolNames).not.toContain("propose_chapter_write");
+    expect(executionToolNames).not.toContain("read_chapter");
+  });
+
+  test("restores a historical v1 run without exposing v2 aliases", async () => {
+    const repository = durableMemoryRepository();
+    let originalNames: string[] = [];
+    const original = createSession({
+      coordinatorOptions: { createRunId: () => "run_legacy_v1" },
+      repository,
+      modelDriver: {
+        async *streamRound(input: { readonly tools: readonly { readonly name: string }[] }) {
+          originalNames = input.tools.map((tool) => tool.name);
+          yield* blockedModelRound();
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+    const started = await original.startAgentRun(startCommand());
+    expect(started).toMatchObject({
+      ok: true,
+      value: { toolFacadeVersion: "v1", toolCatalogSnapshotId: null }
+    });
+    await vi.waitFor(() => expect(originalNames.length).toBeGreaterThan(0));
+
+    let restoredNames: string[] = [];
+    const restored = createSession({
+      coordinatorOptions: { createRunId: () => "unused_v2_run" },
+      repository,
+      newRunToolFacadeVersion: "v2",
+      capabilitySnapshot: creativeV2Capabilities(),
+      modelDriver: {
+        async *streamRound(input: { readonly tools: readonly { readonly name: string }[] }) {
+          restoredNames = input.tools.map((tool) => tool.name);
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+    const hydrated = await restored.readAgentRun("run_legacy_v1");
+    expect(hydrated).toMatchObject({ ok: true });
+    const hydratedSnapshot = (
+      hydrated["value"] as { readonly snapshot: { readonly runRevision: number } }
+    ).snapshot;
+    expect(
+      await restored.resumeAgentRun({
+        projectId: "project-01",
+        runId: "run_legacy_v1",
+        commandId: "resume-legacy-v1",
+        expectedRunRevision: hydratedSnapshot.runRevision
+      })
+    ).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(restoredNames.length).toBeGreaterThan(0));
+    expect(restoredNames).toContain("read_chapter");
+    expect(restoredNames).not.toContain("read_resource");
+    expect(restoredNames).not.toContain("edit_text");
+  });
+
+  test("fails closed when a persisted v2 run has no tool catalog", async () => {
+    const repository = durableMemoryRepository();
+    let roundStarted = false;
+    const original = createSession({
+      coordinatorOptions: { createRunId: () => "run_v2_missing_catalog" },
+      repository,
+      newRunToolFacadeVersion: "v2",
+      modelDriver: {
+        async *streamRound() {
+          roundStarted = true;
+          yield* blockedModelRound();
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+    await original.startAgentRun(startCommand());
+    await vi.waitFor(() => expect(roundStarted).toBe(true));
+
+    const restored = createSession({
+      coordinatorOptions: { createRunId: () => "unused_missing_catalog" },
+      repository: {
+        ...repository,
+        async readToolCatalog() {
+          return { ok: true, value: undefined };
+        }
+      },
+      newRunToolFacadeVersion: "v2",
+      modelDriver: { async *streamRound() {} },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+    expect(await restored.readAgentRun("run_v2_missing_catalog")).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_TOOL_CATALOG_MISSING" }
+    });
+  });
+
+  test("fails closed when a persisted v2 catalog descriptor is tampered", async () => {
+    const repository = durableMemoryRepository();
+    let roundStarted = false;
+    const original = createSession({
+      coordinatorOptions: { createRunId: () => "run_v2_tampered_catalog" },
+      repository,
+      newRunToolFacadeVersion: "v2",
+      modelDriver: {
+        async *streamRound() {
+          roundStarted = true;
+          yield* blockedModelRound();
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+    await original.startAgentRun(startCommand());
+    await vi.waitFor(() => expect(roundStarted).toBe(true));
+
+    const restored = createSession({
+      coordinatorOptions: { createRunId: () => "unused_tampered_catalog" },
+      repository: {
+        ...repository,
+        async readToolCatalog(runId: string, snapshotId: string) {
+          const read = await repository.readToolCatalog(runId, snapshotId);
+          if (!read.ok || read.value === undefined) return read;
+          const descriptors = read.value["descriptors"] as Record<string, unknown>[];
+          return {
+            ok: true,
+            value: {
+              ...read.value,
+              descriptors: [
+                { ...descriptors[0], description: "tampered descriptor" },
+                ...descriptors.slice(1)
+              ]
+            }
+          };
+        }
+      },
+      newRunToolFacadeVersion: "v2",
+      modelDriver: { async *streamRound() {} },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+    expect(await restored.readAgentRun("run_v2_tampered_catalog")).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_TOOL_CATALOG_INVALID" }
+    });
+  });
+
+  test("maps v2 read and search calls onto the existing domain executors", async () => {
+    const readCalls: Record<string, unknown>[] = [];
+    const searchCalls: Record<string, unknown>[] = [];
+    let rounds = 0;
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_v2_read_search" },
+      repository: durableMemoryRepository(),
+      newRunToolFacadeVersion: "v2",
+      capabilitySnapshot: creativeV2Capabilities(),
+      modelDriver: {
+        async *streamRound() {
+          rounds += 1;
+          if (rounds === 1) {
+            yield toolCall("v2-read", "read_resource", { ref: "story_bible:hero" });
+            yield toolCall("v2-search", "search_project", {
+              mode: "text",
+              query: "moon",
+              includeGlobs: ["chapters/**"],
+              maxResults: 5
+            });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute(input: Record<string, unknown>) {
+          readCalls.push(input);
+          return { ok: true, value: { summary: "read", data: {} } };
+        }
+      },
+      searchToolExecutor: {
+        async searchText(input: Record<string, unknown>) {
+          searchCalls.push(input);
+          return {
+            ok: true,
+            value: {
+              kind: "untrusted_project_data",
+              items: [],
+              totalHits: 0,
+              truncated: false,
+              indexVersion: "test-v1"
+            }
+          };
+        },
+        async findReferences() {
+          throw new Error("unexpected reference search");
+        }
+      }
+    });
+
+    await session.startAgentRun(startCommand());
+    await vi.waitFor(() => {
+      expect(readCalls).toHaveLength(1);
+      expect(searchCalls).toHaveLength(1);
+    });
+    expect(readCalls[0]).toMatchObject({
+      name: "read_story_bible",
+      arguments: { assetId: "hero" }
+    });
+    expect(searchCalls[0]).toMatchObject({
+      query: "moon",
+      includeGlobs: ["chapters/**"],
+      maxResults: 5
+    });
+  });
+
+  test("maps v2 Story Bible edits onto the existing Change Set proposal path", async () => {
+    const proposals: Record<string, unknown>[] = [];
+    const runId = "run_v2_story_edit";
+    const changeSet = diagnosticChangeSet(runId);
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => runId },
+      repository: durableMemoryRepository(),
+      newRunToolFacadeVersion: "v2",
+      capabilitySnapshot: creativeV2Capabilities(),
+      modelDriver: {
+        async *streamRound() {
+          yield toolCall("v2-story-edit", "edit_text", {
+            ref: "story_bible:hero",
+            baseHash: "a".repeat(64),
+            range: { unit: "character", start: 0, end: 2 },
+            replacement: "{}"
+          });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      changeSetSession: {
+        async proposeStoryBibleWrite(input: Record<string, unknown>) {
+          proposals.push(input);
+          return { ok: true, value: changeSet };
+        },
+        async proposeFileWrite() {
+          throw new Error("unexpected file proposal");
+        },
+        async proposeChapterWrite() {
+          throw new Error("unexpected chapter proposal");
+        },
+        async proposeOperation() {
+          throw new Error("unexpected lifecycle proposal");
+        }
+      }
+    });
+
+    await session.startAgentRun(startCommand());
+    await vi.waitFor(() => expect(proposals).toHaveLength(1));
+    expect(proposals[0]).toMatchObject({
+      assetId: "hero",
+      baseHash: "a".repeat(64),
+      range: { unit: "character", start: 0, end: 2 },
+      replacement: "{}"
+    });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun(runId)).toMatchObject({
+        value: { snapshot: { status: "awaiting_write_approval" } }
+      });
+    });
+  });
+
+  test("maps v2 file creation onto AgentFileOperationSession and Change Set v1.1", async () => {
+    const fileProposals: Record<string, unknown>[] = [];
+    const stagedOperations: Record<string, unknown>[] = [];
+    const runId = "run_v2_create_file";
+    const changeSet = diagnosticChangeSet(runId);
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => runId },
+      repository: durableMemoryRepository(),
+      newRunToolFacadeVersion: "v2",
+      capabilitySnapshot: creativeV2Capabilities(),
+      modelDriver: {
+        async *streamRound() {
+          yield toolCall("v2-create-file", "create_resource", {
+            kind: "file",
+            path: "notes/new.md",
+            content: "new",
+            dependsOn: ["op-parent"]
+          });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      fileOperationSession: {
+        proposeFileCreate(input: Record<string, unknown>) {
+          fileProposals.push(input);
+          const operation = {
+            kind: "create_file",
+            operationId: "op-create",
+            relativePath: input["relativePath"],
+            content: input["content"],
+            dependsOn: input["dependsOn"],
+            toolCallIdempotencyKey: input["toolCallId"]
+          };
+          return { ok: true, value: { operation, operationId: "op-create" } };
+        }
+      },
+      changeSetSession: {
+        async proposeOperation(input: Record<string, unknown>) {
+          stagedOperations.push(input);
+          return { ok: true, value: changeSet };
+        }
+      }
+    });
+
+    await session.startAgentRun({ ...startCommand(), contextMode: "general_file" });
+    await vi.waitFor(() => expect(stagedOperations).toHaveLength(1));
+    expect(fileProposals[0]).toMatchObject({
+      toolCallId: "v2-create-file",
+      relativePath: "notes/new.md",
+      content: "new",
+      dependsOn: ["op-parent"]
+    });
+    expect(stagedOperations[0]).toMatchObject({
+      operation: {
+        kind: "create_file",
+        relativePath: "notes/new.md",
+        dependsOn: ["op-parent"]
+      }
+    });
+  });
+
+  test("maps v2 move operations and keeps them awaiting human review when preapproved", async () => {
+    const moveProposals: Record<string, unknown>[] = [];
+    const runId = "run_v2_move_file";
+    let lifecycleOperation: Record<string, unknown> | undefined;
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => runId },
+      repository: durableMemoryRepository(),
+      newRunToolFacadeVersion: "v2",
+      capabilitySnapshot: creativeV2Capabilities(),
+      modelDriver: {
+        async *streamRound() {
+          yield toolCall("v2-move-file", "manage_path", {
+            operation: "move_file",
+            sourceRef: "file:notes/old.md",
+            targetPath: "notes/new.md",
+            baseHash: "b".repeat(64),
+            dependsOn: ["op-directory"]
+          });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      fileOperationSession: {
+        proposeFileMove(input: Record<string, unknown>) {
+          moveProposals.push(input);
+          const operation = {
+            kind: "move_file",
+            operationId: "op-move",
+            sourcePath: input["sourcePath"],
+            targetPath: input["targetPath"],
+            sourceChecksum: input["sourceChecksum"],
+            dependsOn: input["dependsOn"],
+            toolCallIdempotencyKey: input["toolCallId"]
+          };
+          return { ok: true, value: { operation, operationId: "op-move" } };
+        }
+      },
+      changeSetSession: {
+        async proposeOperation(input: Record<string, unknown>) {
+          lifecycleOperation = input["operation"] as Record<string, unknown>;
+          return {
+            ok: true,
+            value: {
+              ...diagnosticChangeSet(runId),
+              schemaVersion: "1.1",
+              writePolicy: "write_before_confirmation",
+              files: [],
+              operationsSchemaVersion: "1.1",
+              operations: [lifecycleOperation]
+            }
+          };
+        }
+      }
+    });
+
+    await session.startAgentRun({
+      ...startCommand(),
+      contextMode: "general_file",
+      writePolicy: "user_preapproved_run",
+      writePolicyAcknowledged: true
+    });
+    await vi.waitFor(() => expect(moveProposals).toHaveLength(1));
+    expect(moveProposals[0]).toMatchObject({
+      sourcePath: "notes/old.md",
+      targetPath: "notes/new.md",
+      sourceChecksum: "b".repeat(64),
+      dependsOn: ["op-directory"]
+    });
+    expect(lifecycleOperation).toMatchObject({ kind: "move_file" });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun(runId)).toMatchObject({
+        value: { snapshot: { status: "awaiting_write_approval" } }
+      });
+    });
+  });
+});
+
 async function runGuidanceProbe(overrides: {
   readonly contextMode: "writing" | "general_file";
   readonly initialContextSources: readonly Record<string, unknown>[];
@@ -5346,6 +5965,7 @@ function durableMemoryRepository() {
   const commandReceipts = new Map<string, Record<string, unknown>>();
   const runErrors = new Map<string, Record<string, unknown>>();
   const preflightErrors = new Map<string, Record<string, unknown>>();
+  const toolCatalogs = new Map<string, Record<string, unknown>>();
   return {
     async writeSnapshot(snapshot: Record<string, unknown>) {
       snapshots.set(String(snapshot["runId"]), structuredClone(snapshot));
@@ -5368,6 +5988,19 @@ function durableMemoryRepository() {
     },
     async readEvents(runId: string) {
       return { ok: true, value: events.get(runId) ?? [] };
+    },
+    async writeToolCatalog(runId: string, catalog: Record<string, unknown>) {
+      toolCatalogs.set(
+        `${runId}:${String(catalog["toolCatalogSnapshotId"])}`,
+        structuredClone(catalog)
+      );
+      return { ok: true, value: catalog };
+    },
+    async readToolCatalog(runId: string, toolCatalogSnapshotId: string) {
+      return {
+        ok: true,
+        value: toolCatalogs.get(`${runId}:${toolCatalogSnapshotId}`)
+      };
     },
     async writeRetryCheckpoint(runId: string, checkpoint: Record<string, unknown>) {
       retryCheckpoints.set(runId, structuredClone(checkpoint));
@@ -5396,6 +6029,20 @@ function durableMemoryRepository() {
     async readPreflightError(errorId: string) {
       return { ok: true, value: preflightErrors.get(errorId) };
     }
+  };
+}
+
+function creativeV2Capabilities(): AgentToolCapabilitySnapshot {
+  return {
+    workspaceKind: "creativeProject",
+    searchEnabled: true,
+    fileLifecycleEnabled: true,
+    controlledExecutionEnabled: false,
+    gitReadEnabled: false,
+    networkReadEnabled: false,
+    pluginToolsEnabled: false,
+    mcpToolsEnabled: false,
+    featureFlagRevision: "v2-test"
   };
 }
 

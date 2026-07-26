@@ -4,16 +4,27 @@
  * This backend is intentionally distinct from the native lifecycle port. Node
  * path APIs cannot close a hostile same-user reparse-point race, so this port is
  * only composed for app-managed creative projects and never claims hardened
- * native isolation. It supports replacement of existing text assets only.
+ * native isolation or resistance to hostile same-user reparse races.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, open, readFile, realpath, rename, rm } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  rmdir,
+  unlink
+} from "node:fs/promises";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
 import type {
   AgentWriteTrustedCreativeMutationPort,
+  AgentWriteTrustedCreativeLifecycleMutation,
   AgentWriteTrustedCreativeReplaceMutation
 } from "./agent-write-transaction.js";
 import { isSafeProjectRelativePath } from "./no-follow-file-operations.js";
@@ -63,6 +74,9 @@ export interface TrustedCreativeFileSystem {
   open(path: string, flags: "wx"): Promise<TrustedCreativeFileHandle>;
   rename(oldPath: string, newPath: string): Promise<void>;
   rm(path: string): Promise<void>;
+  mkdir?(path: string): Promise<void>;
+  rmdir?(path: string): Promise<void>;
+  unlink?(path: string): Promise<void>;
 }
 
 interface BoundCreativeRoot {
@@ -90,15 +104,18 @@ const defaultFileSystem: TrustedCreativeFileSystem = {
     };
   },
   rename: (oldPath, newPath) => rename(oldPath, newPath),
+  mkdir: (path) => mkdir(path),
+  rmdir: (path) => rmdir(path),
+  unlink: (path) => unlink(path),
   rm: async (path) => {
     await rm(path, { force: true });
   }
 };
 
 /**
- * Create a replacement port whose authority is permanently bound to one
+ * Create a standard-trust mutation port whose authority is permanently bound to one
  * creative-project root. Root validation is cached as a Result and root identity
- * is rechecked before every mutation and immediately before rename.
+ * is rechecked before every mutation and during postcondition verification.
  */
 export function createTrustedCreativeFileOperationsPort(
   options: TrustedCreativeFileOperationsOptions
@@ -208,6 +225,28 @@ export function createTrustedCreativeFileOperationsPort(
         "after",
         fileSystem
       );
+    },
+    async mutate(
+      input: AgentWriteTrustedCreativeLifecycleMutation
+    ): Promise<Result<void, UnifiedError>> {
+      const validation = validateLifecycleMutation(input);
+      if (!validation.ok) return validation;
+      const binding = await boundRoot;
+      if (!binding.ok) return binding;
+
+      const before = await verifySnapshots(binding.value, input.before, "before", fileSystem);
+      if (!before.ok) return before;
+      const immediateBefore = await verifySnapshots(
+        binding.value,
+        input.before,
+        "before",
+        fileSystem
+      );
+      if (!immediateBefore.ok) return immediateBefore;
+
+      const mutated = await executeLifecycleMutation(binding.value, input, fileSystem);
+      if (!mutated.ok) return mutated;
+      return verifySnapshots(binding.value, input.after, "after", fileSystem);
     }
   });
 }
@@ -261,6 +300,369 @@ function validateReplaceMutation(
     );
   }
   return ok({ before, after });
+}
+
+function validateLifecycleMutation(
+  input: AgentWriteTrustedCreativeLifecycleMutation
+): Result<void, UnifiedError> {
+  const pathsAllowed =
+    input.kind === "move_file"
+      ? isAllowedCreativeTextPath(input.sourcePath) && isAllowedCreativeTextPath(input.targetPath)
+      : input.kind === "create_directory" || input.kind === "remove_directory"
+        ? isAllowedCreativeDirectoryPath(input.relativePath)
+        : isAllowedCreativeTextPath(input.relativePath);
+  if (!pathsAllowed) {
+    const relativePath = input.kind === "move_file" ? input.sourcePath : input.relativePath;
+    return err(
+      trustedCreativeError(
+        "TRUSTED_CREATIVE_PATH_REJECTED",
+        "Only safe creative-project lifecycle paths are allowed.",
+        relativePath,
+        "ValidationError"
+      )
+    );
+  }
+
+  switch (input.kind) {
+    case "create_file": {
+      const before = singleSnapshot(input.before, input.relativePath, "missing");
+      const after = singleSnapshot(input.after, input.relativePath, "file");
+      if (
+        before === undefined ||
+        after?.kind !== "file" ||
+        !validFileSnapshot(after) ||
+        input.content.includes("\0") ||
+        after.content !== input.content
+      ) {
+        return invalidLifecycleSnapshot(input.relativePath);
+      }
+      return ok(undefined);
+    }
+    case "delete_file": {
+      const before = singleSnapshot(input.before, input.relativePath, "file");
+      const after = singleSnapshot(input.after, input.relativePath, "missing");
+      return before?.kind === "file" && validFileSnapshot(before) && after !== undefined
+        ? ok(undefined)
+        : invalidLifecycleSnapshot(input.relativePath);
+    }
+    case "move_file": {
+      if (
+        input.sourcePath === input.targetPath ||
+        input.before.length !== 2 ||
+        input.after.length !== 2
+      ) {
+        return invalidLifecycleSnapshot(input.sourcePath);
+      }
+      const sourceBefore = snapshotFor(input.before, input.sourcePath, "file");
+      const targetBefore = snapshotFor(input.before, input.targetPath, "missing");
+      const sourceAfter = snapshotFor(input.after, input.sourcePath, "missing");
+      const targetAfter = snapshotFor(input.after, input.targetPath, "file");
+      if (
+        sourceBefore?.kind !== "file" ||
+        !validFileSnapshot(sourceBefore) ||
+        targetBefore === undefined ||
+        sourceAfter === undefined ||
+        targetAfter?.kind !== "file" ||
+        !validFileSnapshot(targetAfter) ||
+        sourceBefore.content !== targetAfter.content ||
+        sourceBefore.checksum !== targetAfter.checksum
+      ) {
+        return invalidLifecycleSnapshot(input.sourcePath);
+      }
+      return ok(undefined);
+    }
+    case "create_directory":
+    case "remove_directory": {
+      const beforeKind = input.kind === "create_directory" ? "missing" : "directory";
+      const afterKind = input.kind === "create_directory" ? "directory" : "missing";
+      return singleSnapshot(input.before, input.relativePath, beforeKind) !== undefined &&
+        singleSnapshot(input.after, input.relativePath, afterKind) !== undefined
+        ? ok(undefined)
+        : invalidLifecycleSnapshot(input.relativePath);
+    }
+  }
+}
+
+function singleSnapshot<K extends AgentOperationPathSnapshot["kind"]>(
+  snapshots: readonly AgentOperationPathSnapshot[],
+  relativePath: string,
+  kind: K
+): Extract<AgentOperationPathSnapshot, { readonly kind: K }> | undefined {
+  if (snapshots.length !== 1) return undefined;
+  return snapshotFor(snapshots, relativePath, kind);
+}
+
+function snapshotFor<K extends AgentOperationPathSnapshot["kind"]>(
+  snapshots: readonly AgentOperationPathSnapshot[],
+  relativePath: string,
+  kind: K
+): Extract<AgentOperationPathSnapshot, { readonly kind: K }> | undefined {
+  const matches = snapshots.filter(
+    (snapshot) => snapshot.relativePath === relativePath && snapshot.kind === kind
+  );
+  return matches.length === 1
+    ? (matches[0] as Extract<AgentOperationPathSnapshot, { readonly kind: K }>)
+    : undefined;
+}
+
+function validFileSnapshot(
+  snapshot: Extract<AgentOperationPathSnapshot, { readonly kind: "file" }>
+): boolean {
+  return (
+    !snapshot.content.includes("\0") &&
+    checksumPattern.test(snapshot.checksum) &&
+    snapshot.checksum === checksum(snapshot.content)
+  );
+}
+
+function invalidLifecycleSnapshot(relativePath: string): Result<void, UnifiedError> {
+  return err(
+    trustedCreativeError(
+      "TRUSTED_CREATIVE_SNAPSHOT_INVALID",
+      "Lifecycle mutation snapshots do not describe the requested creative-project change.",
+      relativePath,
+      "ValidationError"
+    )
+  );
+}
+
+async function executeLifecycleMutation(
+  root: BoundCreativeRoot,
+  input: AgentWriteTrustedCreativeLifecycleMutation,
+  fileSystem: TrustedCreativeFileSystem
+): Promise<Result<void, UnifiedError>> {
+  switch (input.kind) {
+    case "create_file":
+      return createTrustedFile(root, input.relativePath, input.content, fileSystem);
+    case "move_file":
+      return runLifecycleIo(
+        input.sourcePath,
+        "TRUSTED_CREATIVE_MOVE_FILE_FAILED",
+        "The creative text asset could not be moved.",
+        () =>
+          fileSystem.rename(
+            trustedPath(root, input.sourcePath),
+            trustedPath(root, input.targetPath)
+          )
+      );
+    case "delete_file":
+      return runOptionalLifecycleIo(
+        input.relativePath,
+        fileSystem.unlink,
+        "TRUSTED_CREATIVE_DELETE_FILE_FAILED",
+        "The creative text asset could not be deleted.",
+        (operation) => operation(trustedPath(root, input.relativePath))
+      );
+    case "create_directory":
+      return runOptionalLifecycleIo(
+        input.relativePath,
+        fileSystem.mkdir,
+        "TRUSTED_CREATIVE_CREATE_DIRECTORY_FAILED",
+        "The creative directory could not be created.",
+        (operation) => operation(trustedPath(root, input.relativePath))
+      );
+    case "remove_directory":
+      return runOptionalLifecycleIo(
+        input.relativePath,
+        fileSystem.rmdir,
+        "TRUSTED_CREATIVE_REMOVE_DIRECTORY_FAILED",
+        "The empty creative directory could not be removed.",
+        (operation) => operation(trustedPath(root, input.relativePath))
+      );
+  }
+}
+
+async function createTrustedFile(
+  root: BoundCreativeRoot,
+  relativePath: string,
+  content: string,
+  fileSystem: TrustedCreativeFileSystem
+): Promise<Result<void, UnifiedError>> {
+  const targetPath = trustedPath(root, relativePath);
+  let handle: TrustedCreativeFileHandle | undefined;
+  let created = false;
+  try {
+    handle = await fileSystem.open(targetPath, "wx");
+    created = true;
+    await handle.writeFile(content, "utf8");
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    return ok(undefined);
+  } catch {
+    await closeQuietly(handle);
+    if (created) await removeQuietly(fileSystem, targetPath);
+    return err(
+      trustedCreativeError(
+        "TRUSTED_CREATIVE_CREATE_FILE_FAILED",
+        "The creative text asset could not be created and flushed.",
+        relativePath,
+        "StorageError"
+      )
+    );
+  }
+}
+
+async function runOptionalLifecycleIo(
+  relativePath: string,
+  operation: ((path: string) => Promise<void>) | undefined,
+  code: string,
+  message: string,
+  invoke: (operation: (path: string) => Promise<void>) => Promise<void>
+): Promise<Result<void, UnifiedError>> {
+  if (operation === undefined) {
+    return err(
+      trustedCreativeError(
+        "TRUSTED_CREATIVE_LIFECYCLE_UNAVAILABLE",
+        "This trusted creative filesystem does not implement lifecycle mutations.",
+        relativePath,
+        "StorageError"
+      )
+    );
+  }
+  return runLifecycleIo(relativePath, code, message, () => invoke(operation));
+}
+
+async function runLifecycleIo(
+  relativePath: string,
+  code: string,
+  message: string,
+  operation: () => Promise<void>
+): Promise<Result<void, UnifiedError>> {
+  try {
+    await operation();
+    return ok(undefined);
+  } catch {
+    return err(trustedCreativeError(code, message, relativePath, "StorageError"));
+  }
+}
+
+function trustedPath(root: BoundCreativeRoot, relativePath: string): string {
+  return join(root.projectRoot, ...relativePath.split("/"));
+}
+
+async function verifySnapshots(
+  root: BoundCreativeRoot,
+  snapshots: readonly AgentOperationPathSnapshot[],
+  phase: "before" | "after",
+  fileSystem: TrustedCreativeFileSystem
+): Promise<Result<void, UnifiedError>> {
+  for (const snapshot of snapshots) {
+    const verified = await verifySnapshot(root, snapshot, phase, fileSystem);
+    if (!verified.ok) return verified;
+  }
+  return ok(undefined);
+}
+
+async function verifySnapshot(
+  root: BoundCreativeRoot,
+  expected: AgentOperationPathSnapshot,
+  phase: "before" | "after",
+  fileSystem: TrustedCreativeFileSystem
+): Promise<Result<void, UnifiedError>> {
+  const rootCheck = await verifyRootIdentity(root, fileSystem);
+  if (!rootCheck.ok) return rootCheck;
+  const targetPath = trustedPath(root, expected.relativePath);
+  const lexicalRelative = relative(root.projectRoot, resolve(targetPath));
+  if (!isContainedRelativePath(lexicalRelative)) {
+    return err(pathRejectedError(expected.relativePath));
+  }
+
+  let current = root.projectRoot;
+  const segments = expected.relativePath.split("/");
+  for (const [index, segment] of segments.entries()) {
+    current = join(current, segment);
+    const finalSegment = index === segments.length - 1;
+    let stats: TrustedCreativePathStats;
+    try {
+      stats = await fileSystem.lstat(current);
+    } catch (error) {
+      if (finalSegment && expected.kind === "missing" && isMissingError(error)) {
+        return ok(undefined);
+      }
+      if (finalSegment && isMissingError(error)) {
+        return err(snapshotConflictError(expected.relativePath, phase));
+      }
+      return err(pathRejectedError(expected.relativePath));
+    }
+
+    let canonical: string;
+    try {
+      canonical = await fileSystem.realpath(current);
+    } catch {
+      return err(pathRejectedError(expected.relativePath));
+    }
+    if (
+      stats.isSymbolicLink() ||
+      !isContainedRelativePath(relative(root.canonicalRoot, canonical))
+    ) {
+      return err(pathRejectedError(expected.relativePath));
+    }
+    if (!finalSegment && !stats.isDirectory()) {
+      return err(pathRejectedError(expected.relativePath));
+    }
+    if (finalSegment) {
+      if (expected.kind === "missing") {
+        return err(snapshotConflictError(expected.relativePath, phase));
+      }
+      if (
+        (expected.kind === "file" && !stats.isFile()) ||
+        (expected.kind === "directory" && !stats.isDirectory())
+      ) {
+        return err(snapshotConflictError(expected.relativePath, phase));
+      }
+    }
+  }
+
+  if (expected.kind === "file") {
+    try {
+      const content = await fileSystem.readFile(targetPath, "utf8");
+      if (
+        content.includes("\0") ||
+        content !== expected.content ||
+        checksum(content) !== expected.checksum
+      ) {
+        return err(snapshotConflictError(expected.relativePath, phase));
+      }
+    } catch {
+      return err(snapshotConflictError(expected.relativePath, phase));
+    }
+  }
+  return ok(undefined);
+}
+
+async function verifyRootIdentity(
+  root: BoundCreativeRoot,
+  fileSystem: TrustedCreativeFileSystem
+): Promise<Result<void, UnifiedError>> {
+  try {
+    const stats = await fileSystem.lstat(root.projectRoot);
+    const canonical = await fileSystem.realpath(root.projectRoot);
+    return !stats.isSymbolicLink() &&
+      stats.isDirectory() &&
+      String(stats.dev) === root.device &&
+      String(stats.ino) === root.inode &&
+      samePath(canonical, root.canonicalRoot)
+      ? ok(undefined)
+      : err(rootRejectedError());
+  } catch {
+    return err(rootRejectedError());
+  }
+}
+
+function snapshotConflictError(relativePath: string, phase: "before" | "after"): UnifiedError {
+  return trustedCreativeError(
+    phase === "before" ? "TRUSTED_CREATIVE_BASE_CONFLICT" : "TRUSTED_CREATIVE_POSTCONDITION_FAILED",
+    phase === "before"
+      ? "The path changed after the approved Change Set was created."
+      : "The lifecycle mutation does not match the approved result.",
+    relativePath,
+    phase === "before" ? "ValidationError" : "StorageError"
+  );
+}
+
+function isMissingError(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
 }
 
 async function bindCreativeRoot(
@@ -401,13 +803,18 @@ async function verifyTemporaryFile(
 }
 
 function isAllowedCreativeTextPath(relativePath: string): boolean {
+  if (!isAllowedCreativePath(relativePath)) return false;
+  return allowedTextExtensions.has(extname(relativePath).toLowerCase());
+}
+
+function isAllowedCreativeDirectoryPath(relativePath: string): boolean {
+  return isAllowedCreativePath(relativePath);
+}
+
+function isAllowedCreativePath(relativePath: string): boolean {
   if (!isSafeProjectRelativePath(relativePath)) return false;
   const firstSegment = relativePath.split("/", 1)[0]?.toLowerCase();
-  return (
-    firstSegment !== undefined &&
-    !blockedRoots.has(firstSegment) &&
-    allowedTextExtensions.has(extname(relativePath).toLowerCase())
-  );
+  return firstSegment !== undefined && !blockedRoots.has(firstSegment);
 }
 
 function isContainedRelativePath(path: string): boolean {

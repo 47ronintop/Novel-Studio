@@ -1176,6 +1176,138 @@ describe("Agent Run renderer bridge", () => {
     expect(JSON.stringify(decisions)).not.toContain("candidateContent");
   });
 
+  test("maps v1.1 lifecycle operations and sends operation selections through Change Set IPC", async () => {
+    const pending: ChangeSet = {
+      ...changeSet(4, "change-set-checksum-r4", true),
+      schemaVersion: "1.1",
+      operationsSchemaVersion: "1.1",
+      operations: [
+        {
+          operationId: "mkdir-drafts",
+          kind: "create_directory",
+          relativePath: "notes/drafts",
+          toolCallIdempotencyKey: "tool-mkdir",
+          selected: true
+        },
+        {
+          operationId: "move-outline",
+          kind: "move_file",
+          sourcePath: "notes/outline.md",
+          targetPath: "notes/drafts/outline.md",
+          sourceChecksum: "outline-checksum",
+          toolCallIdempotencyKey: "tool-move",
+          dependsOn: ["mkdir-drafts"],
+          selected: true
+        },
+        {
+          operationId: "delete-old",
+          kind: "delete_file",
+          relativePath: "chapters/ch_01.md",
+          baseChecksum: "chapter-checksum",
+          toolCallIdempotencyKey: "tool-delete",
+          selected: false
+        },
+        {
+          operationId: "modify-character",
+          kind: "modify",
+          relativePath: "story-bible/character/alice.json",
+          toolCallIdempotencyKey: "tool-modify-character",
+          selected: true
+        }
+      ]
+    };
+    const decisions: Array<Record<string, unknown>> = [];
+    const writeSnapshot = {
+      ...snapshot,
+      operationMode: "execution" as const,
+      status: "awaiting_write_approval" as const,
+      runRevision: 12
+    };
+    const api = {
+      agentRuns: {
+        onEvent: () => () => undefined,
+        list: async () => ok([writeSnapshot]),
+        read: async () => ok({ snapshot: writeSnapshot, events: [], changeSet: pending }),
+        decideChangeSet: async (command: Record<string, unknown>) => {
+          decisions.push(structuredClone(command));
+          return ok({ ...writeSnapshot, runRevision: 13 });
+        }
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api) as AgentRunBridgeWithWrites;
+    bridge.syncContext({ projectId: "project-01", settings });
+
+    const props = await bridge.load("project-01");
+
+    expect(props.changeSetReview?.changeSet.operations).toEqual([
+      {
+        operationId: "mkdir-drafts",
+        kind: "create_directory",
+        selected: true,
+        dependsOn: [],
+        resourceKind: "project_directory",
+        relativePath: "notes/drafts",
+        impact: "创建项目目录 notes/drafts"
+      },
+      {
+        operationId: "move-outline",
+        kind: "move_file",
+        selected: true,
+        dependsOn: ["mkdir-drafts"],
+        resourceKind: "project_file",
+        sourcePath: "notes/outline.md",
+        targetPath: "notes/drafts/outline.md",
+        impact: "移动项目文件：notes/outline.md → notes/drafts/outline.md"
+      },
+      {
+        operationId: "delete-old",
+        kind: "delete_file",
+        selected: false,
+        dependsOn: [],
+        resourceKind: "chapter",
+        relativePath: "chapters/ch_01.md",
+        impact: "删除章节 chapters/ch_01.md"
+      },
+      {
+        operationId: "modify-character",
+        kind: "modify",
+        selected: true,
+        dependsOn: [],
+        resourceKind: "story_bible",
+        relativePath: "story-bible/character/alice.json",
+        impact: "修改故事圣经 story-bible/character/alice.json"
+      }
+    ]);
+
+    await bridge.updateChangeSetSelection?.({
+      files: [
+        {
+          relativePath: "chapters/ch_03.md",
+          selected: true,
+          selectedHunkIds: ["hunk-ch03-p5"]
+        }
+      ],
+      operations: [
+        { operationId: "mkdir-drafts", selected: true },
+        { operationId: "move-outline", selected: false },
+        { operationId: "delete-old", selected: false },
+        { operationId: "modify-character", selected: true }
+      ]
+    });
+
+    expect(decisions[0]).toMatchObject({
+      decision: "update_selection",
+      files: [{ relativePath: "chapters/ch_03.md", selected: true }],
+      operations: [
+        { operationId: "mkdir-drafts", selected: true },
+        { operationId: "move-outline", selected: false },
+        { operationId: "delete-old", selected: false },
+        { operationId: "modify-character", selected: true }
+      ]
+    });
+    expect(JSON.stringify(decisions[0])).not.toContain("sourceChecksum");
+  });
+
   test("hydrates persisted hash-conflict events after a failed apply command", async () => {
     const awaitingSnapshot = {
       ...snapshot,
@@ -2549,6 +2681,10 @@ interface AgentRunBridgeWithWrites {
       readonly relativePath: string;
       readonly selected: boolean;
       readonly selectedHunkIds?: readonly string[];
+    }[];
+    readonly operations?: readonly {
+      readonly operationId: string;
+      readonly selected: boolean;
     }[];
   }) => Promise<NonNullable<ReturnType<typeof createAgentRunBridge>["getProps"]>>;
   readonly applyChangeSet?: () => Promise<

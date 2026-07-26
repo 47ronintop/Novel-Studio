@@ -32,6 +32,44 @@ export class AgentRunFileRepository {
       : this.writeJson(this.runPath(runId, "run.json"), snapshot);
   }
 
+  public writeToolCatalog(
+    runId: string,
+    catalog: JsonObject
+  ): Promise<Result<JsonObject, UnifiedError>> {
+    const snapshotId = readSafeString(catalog, "toolCatalogSnapshotId");
+    if (
+      !isSafeId(runId) ||
+      snapshotId === undefined ||
+      catalog["runId"] !== runId ||
+      catalog["schemaVersion"] !== "1.0"
+    ) {
+      return Promise.resolve(this.invalidRecord("AGENT_TOOL_CATALOG_INVALID"));
+    }
+    return this.writeImmutableJson(
+      this.runPath(runId, join("tool-catalogs", `${snapshotId}.json`)),
+      catalog,
+      "AGENT_TOOL_CATALOG_CONFLICT"
+    );
+  }
+
+  public async readToolCatalog(
+    runId: string,
+    toolCatalogSnapshotId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    if (!isSafeId(runId) || !isSafeId(toolCatalogSnapshotId)) {
+      return this.invalidRecord("AGENT_TOOL_CATALOG_INVALID");
+    }
+    const read = await this.readJson(
+      this.runPath(runId, join("tool-catalogs", `${toolCatalogSnapshotId}.json`))
+    );
+    if (!read.ok || read.value === undefined) return read;
+    return read.value["runId"] === runId &&
+      read.value["toolCatalogSnapshotId"] === toolCatalogSnapshotId &&
+      read.value["schemaVersion"] === "1.0"
+      ? read
+      : this.invalidRecord("AGENT_TOOL_CATALOG_INVALID");
+  }
+
   public async writeRunError(
     runId: string,
     record: JsonObject
@@ -70,9 +108,7 @@ export class AgentRunFileRepository {
       : this.invalidRecord("AGENT_RUN_ERROR_RECORD_INVALID");
   }
 
-  public async writePreflightError(
-    record: JsonObject
-  ): Promise<Result<JsonObject, UnifiedError>> {
+  public async writePreflightError(record: JsonObject): Promise<Result<JsonObject, UnifiedError>> {
     const errorId = readSafeString(record, "errorId");
     const runDraftId = readSafeString(record, "runDraftId");
     if (
@@ -783,9 +819,10 @@ export class AgentRunFileRepository {
         let createdAt = "";
         try {
           const parsed = JSON.parse(content.toString("utf8")) as unknown;
-          createdAt = isJsonObject(parsed) && typeof parsed["createdAt"] === "string"
-            ? parsed["createdAt"]
-            : "";
+          createdAt =
+            isJsonObject(parsed) && typeof parsed["createdAt"] === "string"
+              ? parsed["createdAt"]
+              : "";
         } catch {
           // Invalid records sort oldest and are removed before valid diagnostics.
         }

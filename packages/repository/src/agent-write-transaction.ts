@@ -45,9 +45,9 @@ export interface AgentWriteReplaceInput {
  * traversal below the project root, must not follow symlinks or Windows reparse
  * points, and must atomically enforce the supplied before/after snapshots.
  *
- * Node's pathname APIs cannot provide this guarantee, so this port is required
- * for text replacement and create/move/delete/mkdir operations. It deliberately
- * has no Node fallback.
+ * Node's pathname APIs cannot provide this guarantee. A separately typed
+ * standard-trusted creative port may be selected for app-managed projects, but
+ * it deliberately carries weaker trust semantics than this contract.
  */
 export interface AgentWriteLifecycleOperationPort {
   mutate(input: AgentWriteLifecycleMutation): Promise<Result<void, UnifiedError>>;
@@ -95,16 +95,23 @@ export type AgentWriteTrustedCreativeReplaceMutation = Extract<
   { readonly kind: "replace_file" }
 >;
 
+export type AgentWriteTrustedCreativeLifecycleMutation = Exclude<
+  AgentWriteLifecycleMutation,
+  AgentWriteTrustedCreativeReplaceMutation
+>;
+
 /**
  * Standard-trust replacement boundary for app-managed creative projects.
  *
  * Unlike AgentWriteLifecycleOperationPort, this contract does not claim atomic
- * descriptor/handle traversal. It can only replace an existing approved text
- * asset and is never used for create/move/delete/directory operations.
+ * descriptor/handle traversal or resistance to hostile same-user reparse races.
+ * Lifecycle support is optional so existing replacement-only implementations
+ * remain source compatible and fail closed when lifecycle operations are used.
  */
 export interface AgentWriteTrustedCreativeMutationPort {
   readonly trustLevel: "standard_trusted_creative";
   replace(input: AgentWriteTrustedCreativeReplaceMutation): Promise<Result<void, UnifiedError>>;
+  mutate?(input: AgentWriteTrustedCreativeLifecycleMutation): Promise<Result<void, UnifiedError>>;
 }
 
 export interface AgentWriteTransactionOptions {
@@ -883,7 +890,7 @@ export class AgentWriteTransaction {
     if (!operationPreflight.ok) return operationPreflight;
     if (
       (preflight.value.length > 0 && !this.hasReplaceMutationPort()) ||
-      (operationPreflight.value.length > 0 && this.options.lifecycleOperations === undefined)
+      (operationPreflight.value.length > 0 && !this.hasLifecycleMutationPort())
     ) {
       return err(this.error("AGENT_WRITE_NATIVE_FILE_OPERATIONS_REQUIRED", "validation"));
     }
@@ -1207,8 +1214,7 @@ export class AgentWriteTransaction {
     }
     if (
       (steps.some((step) => step.kind === "write") && !this.hasReplaceMutationPort()) ||
-      (steps.some((step) => step.kind === "operation") &&
-        this.options.lifecycleOperations === undefined)
+      (steps.some((step) => step.kind === "operation") && !this.hasLifecycleMutationPort())
     ) {
       return err(this.error("AGENT_WRITE_NATIVE_FILE_OPERATIONS_REQUIRED", "validation"));
     }
@@ -1807,7 +1813,8 @@ export class AgentWriteTransaction {
     prepared: PreparedOperation
   ): Promise<Result<void, UnifiedError>> {
     const lifecycle = this.options.lifecycleOperations;
-    if (lifecycle === undefined) {
+    const trustedCreative = this.options.trustedCreativeMutations;
+    if (lifecycle === undefined && trustedCreative?.mutate === undefined) {
       return err(this.error("AGENT_WRITE_NATIVE_FILE_OPERATIONS_REQUIRED", "validation"));
     }
     const locked = await this.options.projectLock.verifyProjectLockOwnership();
@@ -1816,7 +1823,12 @@ export class AgentWriteTransaction {
     if (mutation === undefined) {
       return err(this.error("AGENT_WRITE_OPERATION_INVALID", "validation"));
     }
-    return lifecycle.mutate(mutation);
+    return lifecycle === undefined
+      ? requireDefined(
+          trustedCreative?.mutate,
+          "Trusted creative lifecycle mutation port is missing."
+        ).call(trustedCreative, mutation)
+      : lifecycle.mutate(mutation);
   }
 
   private async restoreJournalOperation(
@@ -1826,12 +1838,18 @@ export class AgentWriteTransaction {
     if (inverse === undefined)
       return err(this.error("AGENT_WRITE_ROLLBACK_CONFLICT", "validation"));
     const lifecycle = this.options.lifecycleOperations;
-    if (lifecycle === undefined) {
+    const trustedCreative = this.options.trustedCreativeMutations;
+    if (lifecycle === undefined && trustedCreative?.mutate === undefined) {
       return err(this.error("AGENT_WRITE_NATIVE_FILE_OPERATIONS_REQUIRED", "validation"));
     }
     const locked = await this.options.projectLock.verifyProjectLockOwnership();
     if (!locked.ok) return locked;
-    return lifecycle.mutate(inverse);
+    return lifecycle === undefined
+      ? requireDefined(
+          trustedCreative?.mutate,
+          "Trusted creative lifecycle mutation port is missing."
+        ).call(trustedCreative, inverse)
+      : lifecycle.mutate(inverse);
   }
 
   private async reconcileJournalOperation(
@@ -1954,6 +1972,13 @@ export class AgentWriteTransaction {
     return (
       this.options.lifecycleOperations !== undefined ||
       this.options.trustedCreativeMutations !== undefined
+    );
+  }
+
+  private hasLifecycleMutationPort(): boolean {
+    return (
+      this.options.lifecycleOperations !== undefined ||
+      this.options.trustedCreativeMutations?.mutate !== undefined
     );
   }
 
@@ -2271,7 +2296,9 @@ function operationHistorySnapshot(
     : undefined;
 }
 
-function lifecycleMutation(prepared: PreparedOperation): AgentWriteLifecycleMutation | undefined {
+function lifecycleMutation(
+  prepared: PreparedOperation
+): AgentWriteTrustedCreativeLifecycleMutation | undefined {
   const operation = prepared.operation;
   switch (operation.kind) {
     case "create_file":
@@ -2312,7 +2339,7 @@ function lifecycleMutation(prepared: PreparedOperation): AgentWriteLifecycleMuta
 
 function inverseLifecycleMutation(
   entry: AgentTransactionJournalOperationEntry
-): AgentWriteLifecycleMutation | undefined {
+): AgentWriteTrustedCreativeLifecycleMutation | undefined {
   const operation = entry.operation;
   switch (operation.kind) {
     case "create_file":

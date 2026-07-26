@@ -128,10 +128,10 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
       });
       const featureFlags = createAgentFeatureFlags({
         phaseA_searchEnabled: true,
-        phaseB_fileLifecycleEnabled: false,
+        phaseB_fileLifecycleEnabled: true,
         phaseD_networkReadEnabled: networkRuntime.executor !== undefined,
         phaseE_remoteMcpEnabled: mcpRuntime.executor !== undefined,
-        revision: `desktop-main:${networkRuntime.policyRevision}:${mcpRuntime.settingsRevision}:write-standard-trusted-creative`
+        revision: `desktop-main:${networkRuntime.policyRevision}:${mcpRuntime.settingsRevision}:write-standard-trusted-creative-v2`
       });
       return createDesktopAgentRuntime({
         workspaceKind: binding.kind,

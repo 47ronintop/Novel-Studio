@@ -12,6 +12,7 @@ import type {
   AiWritingWorkflowProps
 } from "../src/workspace-shell-types.js";
 import { WorkspaceShell } from "../src/workspace-shell.js";
+import type { ChangeSetReviewOperation } from "../src/change-set-review.js";
 
 Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
 
@@ -48,9 +49,7 @@ describe("Diff Review", () => {
   test("requests an immutable revision using ids and selection state only", () => {
     const selections: unknown[] = [];
     const host = renderReview({ onSelectionChange: (selection) => selections.push(selection) });
-    const hunk = host.querySelector<HTMLInputElement>(
-      'input[aria-label="包含变更块：第 5 段"]'
-    );
+    const hunk = host.querySelector<HTMLInputElement>('input[aria-label="包含变更块：第 5 段"]');
 
     expect(hunk).not.toBeNull();
     act(() => hunk?.click());
@@ -80,9 +79,7 @@ describe("Diff Review", () => {
 
     expect(diff).not.toBeNull();
     expect(diff?.querySelectorAll('[data-diff-block="paragraph"]')).toHaveLength(2);
-    expect(
-      diff?.querySelector('del[data-diff-highlight="word"]')?.textContent
-    ).toBe("waits");
+    expect(diff?.querySelector('del[data-diff-highlight="word"]')?.textContent).toBe("waits");
     expect(
       Array.from(diff?.querySelectorAll('ins[data-diff-highlight="word"]') ?? []).map(
         (element) => element.textContent
@@ -102,21 +99,15 @@ describe("Diff Review", () => {
     const diff = host.querySelector<HTMLElement>('[data-diff-view="lines"]');
 
     expect(diff).not.toBeNull();
-    expect(
-      diff?.querySelector('[data-diff-line][data-kind="deletion"]')?.textContent
-    ).toContain("status = draft");
-    expect(
-      diff?.querySelector('[data-diff-line][data-kind="addition"]')?.textContent
-    ).toContain("status = ready");
-    expect(
-      diff?.querySelector('del[data-diff-highlight="inline"]')?.textContent
-    ).toBe("draft");
-    expect(
-      diff?.querySelector('ins[data-diff-highlight="inline"]')?.textContent
-    ).toBe("ready");
-    expect(
-      diff?.querySelectorAll('[data-diff-line][data-kind="context"]')
-    ).toHaveLength(1);
+    expect(diff?.querySelector('[data-diff-line][data-kind="deletion"]')?.textContent).toContain(
+      "status = draft"
+    );
+    expect(diff?.querySelector('[data-diff-line][data-kind="addition"]')?.textContent).toContain(
+      "status = ready"
+    );
+    expect(diff?.querySelector('del[data-diff-highlight="inline"]')?.textContent).toBe("draft");
+    expect(diff?.querySelector('ins[data-diff-highlight="inline"]')?.textContent).toBe("ready");
+    expect(diff?.querySelectorAll('[data-diff-line][data-kind="context"]')).toHaveLength(1);
 
     cleanup(host);
   });
@@ -129,22 +120,34 @@ describe("Diff Review", () => {
 
     expect(diff?.getAttribute("data-diff-fallback")).toBe("bounded");
     expect(diff?.querySelector('del[data-diff-highlight="word"]')?.textContent).toContain("base-0");
-    expect(diff?.querySelector('ins[data-diff-highlight="word"]')?.textContent).toContain("candidate-0");
+    expect(diff?.querySelector('ins[data-diff-highlight="word"]')?.textContent).toContain(
+      "candidate-0"
+    );
 
     cleanup(host);
   });
 
   test("uses a bounded fallback for oversized ordinary text diffs while preserving lines", () => {
     const baseText = Array.from({ length: 512 }, (_, index) => `base line ${index}`).join("\n");
-    const candidateText = Array.from({ length: 512 }, (_, index) => `candidate line ${index}`).join("\n");
+    const candidateText = Array.from({ length: 512 }, (_, index) => `candidate line ${index}`).join(
+      "\n"
+    );
     const host = renderReview({ assetType: "text", baseText, candidateText });
     const diff = host.querySelector<HTMLElement>('[data-diff-view="lines"]');
 
     expect(diff?.getAttribute("data-diff-fallback")).toBe("bounded");
-    expect(diff?.querySelector('[data-diff-line][data-kind="deletion"]')?.textContent).toContain("base line 0");
-    expect(diff?.querySelector('[data-diff-line][data-kind="addition"]')?.textContent).toContain("candidate line 0");
-    expect(diff?.querySelector('del[data-diff-highlight="inline"]')?.textContent).toContain("base line 0");
-    expect(diff?.querySelector('ins[data-diff-highlight="inline"]')?.textContent).toContain("candidate line 0");
+    expect(diff?.querySelector('[data-diff-line][data-kind="deletion"]')?.textContent).toContain(
+      "base line 0"
+    );
+    expect(diff?.querySelector('[data-diff-line][data-kind="addition"]')?.textContent).toContain(
+      "candidate line 0"
+    );
+    expect(diff?.querySelector('del[data-diff-highlight="inline"]')?.textContent).toContain(
+      "base line 0"
+    );
+    expect(diff?.querySelector('ins[data-diff-highlight="inline"]')?.textContent).toContain(
+      "candidate line 0"
+    );
 
     cleanup(host);
   });
@@ -152,7 +155,9 @@ describe("Diff Review", () => {
   test("requests file selection through ids without embedding file text", () => {
     const selections: unknown[] = [];
     const host = renderReview({ onSelectionChange: (selection) => selections.push(selection) });
-    const file = host.querySelector<HTMLInputElement>('input[aria-label="包含文件：chapters/ch_03.md"]');
+    const file = host.querySelector<HTMLInputElement>(
+      'input[aria-label="包含文件：chapters/ch_03.md"]'
+    );
 
     expect(file?.checked).toBe(true);
     act(() => file?.click());
@@ -169,6 +174,67 @@ describe("Diff Review", () => {
       }
     ]);
     expect(JSON.stringify(selections)).not.toContain("她停在门外");
+
+    cleanup(host);
+  });
+
+  test("renders v1.1 operation details with domain paths dependencies and impact", () => {
+    const host = renderReview({ operations: lifecycleOperations });
+    const operations = host.querySelector<HTMLElement>('[aria-label="文件与目录操作"]');
+
+    expect(operations).not.toBeNull();
+    expect(operations?.textContent).toContain("create_directory");
+    expect(operations?.textContent).toContain("move_file");
+    expect(operations?.textContent).toContain("项目目录");
+    expect(operations?.textContent).toContain("notes/drafts");
+    expect(operations?.textContent).toContain("notes/outline.md");
+    expect(operations?.textContent).toContain("notes/drafts/outline.md");
+    expect(operations?.textContent).toContain("mkdir-drafts");
+    expect(operations?.textContent).toContain(
+      "移动项目文件：notes/outline.md → notes/drafts/outline.md"
+    );
+
+    cleanup(host);
+  });
+
+  test("sends operation ids through the existing selection callback and preserves dependency closure", () => {
+    const selections: unknown[] = [];
+    const operations = lifecycleOperations.map((operation) => ({ ...operation, selected: false }));
+    const host = renderReview({
+      operations,
+      onSelectionChange: (selection) => selections.push(selection)
+    });
+    const move = host.querySelector<HTMLInputElement>(
+      'input[aria-label="包含路径操作：移动项目文件：notes/outline.md → notes/drafts/outline.md"]'
+    );
+
+    act(() => move?.click());
+    expect(selections).toEqual([
+      {
+        files: [
+          {
+            relativePath: "chapters/ch_03.md",
+            selected: true,
+            selectedHunkIds: ["hunk-ch03-p5"]
+          }
+        ],
+        operations: [
+          { operationId: "mkdir-drafts", selected: true },
+          { operationId: "move-outline", selected: true }
+        ]
+      }
+    ]);
+    expect(JSON.stringify(selections)).not.toContain("sourceChecksum");
+
+    cleanup(host);
+  });
+
+  test("allows an operations-only Change Set to be applied", () => {
+    const host = renderReview({ selectFile: false, operations: lifecycleOperations });
+
+    expect(host.querySelector<HTMLButtonElement>('button[aria-label="应用所选"]')?.disabled).toBe(
+      false
+    );
 
     cleanup(host);
   });
@@ -194,9 +260,9 @@ describe("Diff Review", () => {
   ])("disables apply for %s", (_label, overrides) => {
     const host = renderReview(overrides);
 
-    expect(
-      host.querySelector<HTMLButtonElement>('button[aria-label="应用所选"]')?.disabled
-    ).toBe(true);
+    expect(host.querySelector<HTMLButtonElement>('button[aria-label="应用所选"]')?.disabled).toBe(
+      true
+    );
 
     cleanup(host);
   });
@@ -218,6 +284,7 @@ interface RenderOverrides {
   readonly canUndoRun?: boolean;
   readonly onUndoRun?: () => void;
   readonly changeSetStatus?: string;
+  readonly operations?: readonly ChangeSetReviewOperation[];
 }
 
 function renderReview(overrides: RenderOverrides = {}): HTMLElement {
@@ -258,6 +325,7 @@ function renderReview(overrides: RenderOverrides = {}): HTMLElement {
           revision: 4,
           checksum: "cs-checksum-r4",
           status: overrides.changeSetStatus ?? "pending",
+          ...(overrides.operations === undefined ? {} : { operations: overrides.operations }),
           files: [
             {
               relativePath: overrides.relativePath ?? "chapters/ch_03.md",
@@ -274,8 +342,7 @@ function renderReview(overrides: RenderOverrides = {}): HTMLElement {
                   hunkId: "hunk-ch03-p5",
                   label: "第 5 段",
                   baseText: overrides.baseText ?? "她停在门外。",
-                  candidateText:
-                    overrides.candidateText ?? "她在门外停住，听见里面压低的争执。",
+                  candidateText: overrides.candidateText ?? "她在门外停住，听见里面压低的争执。",
                   baseRange: { start: 5, end: 5 },
                   candidateRange: { start: 5, end: 5 },
                   selected,
@@ -327,6 +394,28 @@ function renderReview(overrides: RenderOverrides = {}): HTMLElement {
   Reflect.set(host, "__root", root);
   return host;
 }
+
+const lifecycleOperations: readonly ChangeSetReviewOperation[] = [
+  {
+    operationId: "mkdir-drafts",
+    kind: "create_directory",
+    selected: true,
+    dependsOn: [],
+    resourceKind: "project_directory",
+    relativePath: "notes/drafts",
+    impact: "创建项目目录 notes/drafts"
+  },
+  {
+    operationId: "move-outline",
+    kind: "move_file",
+    selected: true,
+    dependsOn: ["mkdir-drafts"],
+    resourceKind: "project_file",
+    sourcePath: "notes/outline.md",
+    targetPath: "notes/drafts/outline.md",
+    impact: "移动项目文件：notes/outline.md → notes/drafts/outline.md"
+  }
+];
 
 function reviewWorkspace(workflow: AiWritingWorkflowProps): AgentConversationWorkspaceShellProps {
   const agentRun = workflow.agentRun;

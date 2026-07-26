@@ -42,11 +42,14 @@ export function decideChangeSetApproval(
   }
   if (input.decision === "apply_selected") {
     const selectedFiles = input.changeSet.files.filter((file) => file.selected);
-    if (selectedFiles.length === 0) {
+    const selectedOperations = (input.changeSet.operations ?? []).filter(
+      (operation) => operation.selected !== false
+    );
+    if (selectedFiles.length === 0 && selectedOperations.length === 0) {
       return failure(
         "CHANGE_SET_EMPTY_SELECTION",
-        "No Change Set hunks are selected.",
-        "Select at least one valid hunk or reject the Change Set."
+        "No Change Set files or operations are selected.",
+        "Select at least one valid file, operation, or reject the Change Set."
       );
     }
     if (selectedFiles.some((file) => !file.validation.valid)) {

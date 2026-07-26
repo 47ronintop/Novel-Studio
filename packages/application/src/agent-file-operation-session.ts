@@ -150,6 +150,8 @@ function preflightOperations(
 
 export interface FileOperationSessionOptions {
   readonly createOperationId?: () => string;
+  readonly createChapterId?: () => string;
+  readonly now?: () => string;
   readonly traceId?: string;
 }
 
@@ -223,6 +225,9 @@ export function createAgentFileOperationSession(
 ): AgentFileOperationSession {
   const createOperationId =
     options.createOperationId ?? (() => `op_${randomUUID().replaceAll("-", "")}`);
+  const createChapterId =
+    options.createChapterId ?? (() => `ch_${randomUUID().replaceAll("-", "")}`);
+  const now = options.now ?? (() => new Date().toISOString());
   const traceId = options.traceId ?? "agent-file-operation-session";
 
   const proposals = new Map<string, FileOperationProposal>();
@@ -340,16 +345,22 @@ export function createAgentFileOperationSession(
         return err(operationError("FILE_OP_TITLE_INVALID", "Chapter title must be 1–512 chars."));
       const existing = proposals.get(input.toolCallId);
       if (existing !== undefined) return ok(existing);
-      const safeName = input.title
-        .toLowerCase()
-        .replace(/[^a-z0-9\s-]/g, "")
-        .replace(/\s+/g, "-")
-        .slice(0, 64);
+      const chapterId = createChapterId();
+      const createdAt = now();
+      if (!/^ch_[A-Za-z0-9_-]+$/u.test(chapterId) || !Number.isFinite(Date.parse(createdAt))) {
+        return err(
+          operationError(
+            "FILE_OP_CHAPTER_ID_INVALID",
+            "The generated chapter identity or timestamp is invalid."
+          )
+        );
+      }
+      const body = input.content ?? "";
       const operation: ChangeSetCreateFileOperation = {
         kind: "create_file",
         operationId: createOperationId(),
-        relativePath: `chapters/${safeName}.md`,
-        content: input.content ?? `---\ntitle: "${input.title}"\n---\n\n`,
+        relativePath: `chapters/${chapterId}.md`,
+        content: formatCreatedChapter(chapterId, input.title, body, createdAt),
         toolCallIdempotencyKey: input.toolCallId,
         ...(input.dependsOn === undefined ? {} : { dependsOn: Object.freeze([...input.dependsOn]) })
       };
@@ -374,19 +385,41 @@ export function createAgentFileOperationSession(
         return err(
           operationError("FILE_OP_CONTENT_INVALID", "Content must be non-empty and ≤1 MB.")
         );
+      let parsed: Record<string, unknown>;
       try {
-        JSON.parse(input.content);
+        const candidate = JSON.parse(input.content) as unknown;
+        if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
+          throw new Error("Story Bible asset must be an object.");
+        }
+        parsed = candidate as Record<string, unknown>;
       } catch {
         return err(
           operationError("FILE_OP_CONTENT_INVALID", "Story Bible content must be valid JSON.")
         );
+      }
+      const assetId = parsed["id"];
+      if (
+        typeof assetId !== "string" ||
+        !/^[A-Za-z0-9_-]{1,128}$/u.test(assetId) ||
+        parsed["type"] !== input.assetType
+      ) {
+        return err(
+          operationError(
+            "FILE_OP_CONTENT_INVALID",
+            "Story Bible content must contain a stable ID and the requested asset type."
+          )
+        );
+      }
+      const relativePath = storyBibleAssetRelativePath(input.assetType, assetId);
+      if (relativePath === undefined || !isValidRelativePath(relativePath)) {
+        return err(operationError("FILE_OP_PATH_INVALID", "Story Bible asset path is invalid."));
       }
       const existing = proposals.get(input.toolCallId);
       if (existing !== undefined) return ok(existing);
       const operation: ChangeSetCreateFileOperation = {
         kind: "create_file",
         operationId: createOperationId(),
-        relativePath: `story-bible/${input.assetType.replace(".", "/")}.json`,
+        relativePath,
         content: input.content,
         toolCallIdempotencyKey: input.toolCallId,
         ...(input.dependsOn === undefined ? {} : { dependsOn: Object.freeze([...input.dependsOn]) })
@@ -404,4 +437,37 @@ export function createAgentFileOperationSession(
       return err(operationError("FILE_OP_DAG_INVALID", result.error));
     }
   };
+}
+
+function storyBibleAssetRelativePath(assetType: string, assetId: string): string | undefined {
+  if (assetType === "character") return `characters/${assetId}.json`;
+  if (assetType.startsWith("world.")) return `world/${assetId}.json`;
+  if (assetType === "outline") return "outline/outline.json";
+  if (assetType === "timeline.events") return "timeline/events.json";
+  return undefined;
+}
+
+function formatCreatedChapter(
+  chapterId: string,
+  title: string,
+  body: string,
+  createdAt: string
+): string {
+  const wordCount = body.trim().length === 0 ? 0 : body.trim().split(/\s+/u).length;
+  return [
+    "---",
+    'schemaVersion: "1.0"',
+    `id: ${chapterId}`,
+    "type: chapter",
+    `title: ${JSON.stringify(title)}`,
+    "order: 1",
+    "status: draft",
+    `wordCount: ${wordCount}`,
+    `createdAt: ${JSON.stringify(createdAt)}`,
+    `updatedAt: ${JSON.stringify(createdAt)}`,
+    "---",
+    "",
+    body.replace(/\s*$/u, ""),
+    ""
+  ].join("\n");
 }

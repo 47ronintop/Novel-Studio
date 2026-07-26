@@ -16,7 +16,10 @@ import { basename, join } from "node:path";
 
 import { afterEach, describe, expect, test } from "vitest";
 
-import type { AgentWriteTrustedCreativeReplaceMutation } from "../src/agent-write-transaction.js";
+import type {
+  AgentWriteTrustedCreativeLifecycleMutation,
+  AgentWriteTrustedCreativeReplaceMutation
+} from "../src/agent-write-transaction.js";
 import {
   createTrustedCreativeFileOperationsPort,
   type TrustedCreativeFileOperationsOptions,
@@ -205,6 +208,72 @@ describe("trusted creative file operations", () => {
     });
     expect(await readFile(targetPath, "utf8")).toBe(tampered);
   });
+
+  test("creates, moves, deletes, and removes creative paths with verified snapshots", async () => {
+    const projectRoot = await temporaryRoot("lifecycle");
+    const port = createPort(projectRoot);
+    if (port.mutate === undefined) throw new Error("Expected lifecycle support.");
+
+    expect(
+      await port.mutate(directoryMutation("create_directory", "drafts", "missing", "directory"))
+    ).toEqual({ ok: true, value: undefined });
+    expect(await port.mutate(createFileMutation("drafts/new.md", "New draft.\n"))).toEqual({
+      ok: true,
+      value: undefined
+    });
+    expect(
+      await port.mutate(moveFileMutation("drafts/new.md", "drafts/moved.md", "New draft.\n"))
+    ).toEqual({ ok: true, value: undefined });
+    expect(await readFile(join(projectRoot, "drafts/moved.md"), "utf8")).toBe("New draft.\n");
+
+    expect(await port.mutate(deleteFileMutation("drafts/moved.md", "New draft.\n"))).toEqual({
+      ok: true,
+      value: undefined
+    });
+    expect(
+      await port.mutate(directoryMutation("remove_directory", "drafts", "directory", "missing"))
+    ).toEqual({ ok: true, value: undefined });
+    await expect(lstat(join(projectRoot, "drafts"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test.each([
+    "../outside.md",
+    "/outside.md",
+    ".git/config.md",
+    "CON.md",
+    "notes/a.md:stream",
+    "notes\\outside.md",
+    "C:/outside.md"
+  ])("rejects unsafe lifecycle path %s", async (relativePath) => {
+    const projectRoot = await temporaryRoot("unsafe-lifecycle");
+    const port = createPort(projectRoot);
+    if (port.mutate === undefined) throw new Error("Expected lifecycle support.");
+
+    const result = await port.mutate(createFileMutation(relativePath, "blocked"));
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "TRUSTED_CREATIVE_PATH_REJECTED" }
+    });
+  });
+
+  test("rejects a lifecycle mutation through a symlink or junction parent", async () => {
+    const projectRoot = await temporaryRoot("lifecycle-linked-project");
+    const outsideRoot = await temporaryRoot("lifecycle-linked-outside");
+    await directorySymlink(outsideRoot, join(projectRoot, "drafts"));
+    const port = createPort(projectRoot);
+    if (port.mutate === undefined) throw new Error("Expected lifecycle support.");
+
+    const result = await port.mutate(createFileMutation("drafts/new.md", "blocked"));
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "TRUSTED_CREATIVE_REPARSE_REJECTED" }
+    });
+    await expect(readFile(join(outsideRoot, "new.md"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT"
+    });
+  });
 });
 
 async function temporaryRoot(label: string): Promise<string> {
@@ -235,6 +304,63 @@ function replaceMutation(
     before: [fileSnapshot(relativePath, before)],
     after: [fileSnapshot(relativePath, after)]
   };
+}
+
+function createFileMutation(
+  relativePath: string,
+  content: string
+): AgentWriteTrustedCreativeLifecycleMutation {
+  return {
+    kind: "create_file",
+    relativePath,
+    content,
+    before: [missingSnapshot(relativePath)],
+    after: [fileSnapshot(relativePath, content)]
+  };
+}
+
+function moveFileMutation(
+  sourcePath: string,
+  targetPath: string,
+  content: string
+): AgentWriteTrustedCreativeLifecycleMutation {
+  return {
+    kind: "move_file",
+    sourcePath,
+    targetPath,
+    before: [fileSnapshot(sourcePath, content), missingSnapshot(targetPath)],
+    after: [missingSnapshot(sourcePath), fileSnapshot(targetPath, content)]
+  };
+}
+
+function deleteFileMutation(
+  relativePath: string,
+  content: string
+): AgentWriteTrustedCreativeLifecycleMutation {
+  return {
+    kind: "delete_file",
+    relativePath,
+    before: [fileSnapshot(relativePath, content)],
+    after: [missingSnapshot(relativePath)]
+  };
+}
+
+function directoryMutation(
+  kind: "create_directory" | "remove_directory",
+  relativePath: string,
+  before: "missing" | "directory",
+  after: "missing" | "directory"
+): AgentWriteTrustedCreativeLifecycleMutation {
+  return {
+    kind,
+    relativePath,
+    before: [{ kind: before, relativePath }],
+    after: [{ kind: after, relativePath }]
+  };
+}
+
+function missingSnapshot(relativePath: string) {
+  return { kind: "missing" as const, relativePath };
 }
 
 function fileSnapshot(relativePath: string, content: string) {

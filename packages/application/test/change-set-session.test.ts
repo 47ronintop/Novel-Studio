@@ -72,6 +72,51 @@ describe("Change Set application session", () => {
     expect(persisted.map((item) => item.revision)).toEqual([1, 2]);
   });
 
+  test("resolves a Story Bible asset ID before staging its JSON edit", async () => {
+    const content = '{"id":"hero","type":"character","summary":"old"}\n';
+    const persisted: ChangeSet[] = [];
+    const session = createChangeSetSession({
+      port: {
+        ...targetPort({ chapter: () => "unused", file: () => "unused", persisted }),
+        async readStoryBibleTarget({ assetId }) {
+          return {
+            ok: true as const,
+            value: {
+              relativePath: `characters/${assetId}.json`,
+              assetType: "text" as const,
+              assetId,
+              content,
+              checksum: sha256(content),
+              dirty: false,
+              supported: true
+            }
+          };
+        }
+      },
+      createChangeSetId: () => "change-set-story-bible",
+      createHunkId: () => "story-hunk",
+      now: () => "2026-07-13T03:00:00.000Z"
+    });
+
+    const proposed = await session.proposeStoryBibleWrite({
+      ...proposalBinding(),
+      assetId: "hero",
+      range: { unit: "character", start: content.indexOf("old"), end: content.indexOf("old") + 3 },
+      baseHash: sha256(content),
+      replacement: "new"
+    });
+
+    expect(expectOk(proposed)).toMatchObject({
+      files: [
+        {
+          relativePath: "characters/hero.json",
+          assetId: "hero",
+          candidateContent: '{"id":"hero","type":"character","summary":"new"}\n'
+        }
+      ]
+    });
+  });
+
   test("does not let the public proposal API grant preapproved-run writes", async () => {
     const session = createChangeSetSession({
       port: targetPort({ chapter: () => "unused", file: () => "alpha", persisted: [] }),

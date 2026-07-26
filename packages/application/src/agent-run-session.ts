@@ -1,5 +1,7 @@
 import {
   createAgentRunCoordinator,
+  createAgentRunToolCatalogSnapshot,
+  computeAgentRunToolCatalogRevision,
   createAgentContextSnapshot,
   createDefaultCapabilitySnapshot,
   createEffectiveCapabilityState,
@@ -15,6 +17,7 @@ import {
   normalizeAgentContextSnapshot,
   normalizeAgentRunEvent,
   normalizeAgentRunSnapshot,
+  validateAgentRunToolCatalogSnapshot,
   validateExternalToolDescriptors,
   validateAgentToolArguments,
   type ChangeSet,
@@ -36,6 +39,8 @@ import {
   type AgentContextSnapshot,
   type AgentContextSourceInput,
   type AgentToolDescriptor,
+  type AgentToolFacadeVersion,
+  type AgentRunToolCatalogSnapshot,
   type AgentToolCapabilitySnapshot,
   type EffectiveCapabilityState,
   type AgentWritePolicy,
@@ -378,6 +383,11 @@ export interface RecordAgentPlanDeviationCommand {
 
 export interface AgentRunPersistencePort {
   writeSnapshot(snapshot: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
+  writeToolCatalog?(runId: string, catalog: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
+  readToolCatalog?(
+    runId: string,
+    toolCatalogSnapshotId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>>;
   appendEvent(event: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
   writeCommandReceipt(
     runId: string,
@@ -553,6 +563,8 @@ export interface CreateAgentRunSessionOptions {
   readonly modelDriver: AgentRunModelDriver;
   readonly readToolExecutor: AgentReadToolExecutor;
   readonly startPreflight: AgentRunStartPreflightPort;
+  /** Product runtimes set v2; the v1 default keeps lower-level legacy embedders compatible. */
+  readonly newRunToolFacadeVersion?: AgentToolFacadeVersion;
   /**
    * Main-authored tool capabilities frozen for the lifetime of this session. Omitting this preserves
    * the legacy core-tool set; new capabilities remain fail-closed.
@@ -689,7 +701,11 @@ const readToolNames = new Set<string>([
 
 const networkToolNames = new Set<string>(["web_search", "fetch_url"]);
 
-const searchToolNames = new Set<string>(["search_project_text", "find_project_references"]);
+const searchToolNames = new Set<string>([
+  "search_project_text",
+  "find_project_references",
+  "search_project"
+]);
 
 const fileLifecycleToolNames = new Set<string>([
   "propose_chapter_create",
@@ -697,7 +713,9 @@ const fileLifecycleToolNames = new Set<string>([
   "propose_file_create",
   "propose_file_move",
   "propose_file_delete",
-  "propose_directory_create"
+  "propose_directory_create",
+  "create_resource",
+  "manage_path"
 ]);
 
 function isExternalToolName(name: string): boolean {
@@ -824,14 +842,17 @@ function collectPotentialToolDescriptors(
     { operationMode: "execution", contextMode: "general_file" }
   ];
   const descriptors = new Map<string, AgentToolDescriptor>();
-  for (const variant of variants) {
-    for (const descriptor of listAgentTools({
-      ...variant,
-      writePolicy: "write_before_confirmation",
-      capabilitySnapshot,
-      ...(externalToolDescriptors === undefined ? {} : { externalToolDescriptors })
-    })) {
-      descriptors.set(canonicalToolId(descriptor), descriptor);
+  for (const facadeVersion of ["v1", "v2"] as const) {
+    for (const variant of variants) {
+      for (const descriptor of listAgentTools({
+        ...variant,
+        facadeVersion,
+        writePolicy: "write_before_confirmation",
+        capabilitySnapshot,
+        ...(externalToolDescriptors === undefined ? {} : { externalToolDescriptors })
+      })) {
+        descriptors.set(canonicalToolId(descriptor), descriptor);
+      }
     }
   }
   return [...descriptors.values()];
@@ -955,6 +976,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
   const diagnostics = options.diagnostics ?? diagnosticsForRepository(options.repository);
   const listeners = new Set<(event: AgentRunEvent) => void>();
   const runtimes = new Map<string, RunRuntime>();
+  const toolCatalogs = new Map<string, AgentRunToolCatalogSnapshot>();
+  const providerMappingsByRun = new Map<string, FrozenProviderNameMapping>();
   const commandReceipts = new Map<string, AgentRunCommandResult>();
   const inFlightCommands = new Map<string, Promise<AgentRunCommandResult>>();
   const inFlightHydrations = new Map<string, Promise<AgentRunCommandResult>>();
@@ -967,6 +990,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     });
   const createPlanExecutionId =
     options.createPlanExecutionId ?? ((commandId: string) => `plan_execution_${commandId}`);
+  const newRunToolFacadeVersion = options.newRunToolFacadeVersion ?? "v1";
   const frozenCapabilitySnapshot = freezeCapabilitySnapshot(
     options.capabilitySnapshot ?? createDefaultCapabilitySnapshot()
   );
@@ -986,7 +1010,6 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     frozenCapabilitySnapshot,
     frozenExternalToolDescriptors
   );
-  let frozenProviderNameMapping: FrozenProviderNameMapping;
   let toolRuntimeConfigurationError = frozenExternalTools.error;
   try {
     if (toolRuntimeConfigurationError !== undefined) {
@@ -1000,14 +1023,10 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     );
     if (options.providerNameMapping !== undefined) {
       verifyFrozenProviderNameMapping(options.providerNameMapping, computed);
-      frozenProviderNameMapping = options.providerNameMapping;
-    } else {
-      frozenProviderNameMapping = computed;
     }
   } catch (error) {
     toolRuntimeConfigurationError =
       error instanceof Error ? error.message : "The frozen Agent tool provider mapping is invalid.";
-    frozenProviderNameMapping = freezeProviderNameMapping([]);
   }
   const toolApprovalNow = options.toolApprovalNow ?? (() => new Date().toISOString());
   const toolApprovalTtlMs =
@@ -1025,29 +1044,65 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
   function toolsFor(snapshot: AgentRunSnapshot): readonly AgentToolDescriptor[] {
     if (toolRuntimeConfigurationError !== undefined) return [];
     const state = effectiveCapabilityState();
-    return listAgentTools({
-      operationMode: snapshot.operationMode,
-      contextMode: snapshot.contextMode,
-      writePolicy: snapshot.writePolicy,
-      capabilitySnapshot: frozenCapabilitySnapshot,
-      ...(frozenExternalToolDescriptors === undefined
-        ? {}
-        : { externalToolDescriptors: frozenExternalToolDescriptors })
-    }).filter((descriptor) => isToolDescriptorEffective(descriptor, state));
+    const catalog = toolCatalogs.get(snapshot.runId);
+    const descriptors =
+      catalog?.descriptors ??
+      (snapshot.toolCatalogSnapshotId === null || snapshot.toolCatalogSnapshotId === undefined
+        ? listAgentTools({
+            facadeVersion: "v1",
+            operationMode: snapshot.operationMode,
+            contextMode: snapshot.contextMode,
+            writePolicy: snapshot.writePolicy,
+            capabilitySnapshot: frozenCapabilitySnapshot,
+            ...(frozenExternalToolDescriptors === undefined
+              ? {}
+              : { externalToolDescriptors: frozenExternalToolDescriptors })
+          })
+        : []);
+    return descriptors.filter((descriptor) => isToolDescriptorEffective(descriptor, state));
+  }
+
+  function providerMappingFor(snapshot: AgentRunSnapshot): FrozenProviderNameMapping {
+    const existing = providerMappingsByRun.get(snapshot.runId);
+    if (existing !== undefined) return existing;
+    const catalog = toolCatalogs.get(snapshot.runId);
+    const descriptors =
+      catalog?.descriptors ??
+      listAgentTools({
+        facadeVersion: "v1",
+        operationMode: snapshot.operationMode,
+        contextMode: snapshot.contextMode,
+        writePolicy: snapshot.writePolicy,
+        capabilitySnapshot: frozenCapabilitySnapshot,
+        ...(frozenExternalToolDescriptors === undefined
+          ? {}
+          : { externalToolDescriptors: frozenExternalToolDescriptors })
+      });
+    const mapping = freezeProviderNameMapping(
+      descriptors.map((descriptor) => ({
+        id: canonicalToolId(descriptor),
+        providerName: providerNameForDescriptorInput(descriptor)
+      }))
+    );
+    providerMappingsByRun.set(snapshot.runId, mapping);
+    return mapping;
   }
 
   function resolveToolDescriptor(
     snapshot: AgentRunSnapshot,
     providerToolName: string
   ): AgentToolDescriptor | undefined {
-    const canonicalId =
-      frozenProviderNameMapping.canonicalIdFor(providerToolName) ?? providerToolName;
+    const canonicalId = providerMappingFor(snapshot).canonicalIdFor(providerToolName);
+    if (canonicalId === undefined) return undefined;
     return toolsFor(snapshot).find((descriptor) => canonicalToolId(descriptor) === canonicalId);
   }
 
-  function providerToolNameFor(descriptor: AgentToolDescriptor): string | undefined {
+  function providerToolNameFor(
+    snapshot: AgentRunSnapshot,
+    descriptor: AgentToolDescriptor
+  ): string | undefined {
     const canonicalId = canonicalToolId(descriptor);
-    return frozenProviderNameMapping.providerNameFor(canonicalId);
+    return providerMappingFor(snapshot).providerNameFor(canonicalId);
   }
 
   function authorizeProposalIfPreapproved(input: { readonly writePolicy?: string }): boolean {
@@ -1227,6 +1282,60 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     return request;
   }
 
+  async function hydrateToolCatalog(
+    snapshot: AgentRunSnapshot
+  ): Promise<Result<AgentRunToolCatalogSnapshot | undefined, UnifiedError>> {
+    const snapshotId = snapshot.toolCatalogSnapshotId;
+    if (snapshotId === undefined || snapshotId === null) {
+      return snapshot.toolFacadeVersion === "v2"
+        ? err(
+            applicationError(
+              "AGENT_TOOL_CATALOG_MISSING",
+              "This v2 Agent run has no persisted tool catalog and cannot be resumed safely."
+            )
+          )
+        : ok(undefined);
+    }
+    if (options.repository.readToolCatalog === undefined) {
+      return err(
+        applicationError(
+          "AGENT_TOOL_CATALOG_UNAVAILABLE",
+          "The Agent tool catalog repository is unavailable."
+        )
+      );
+    }
+    const read = await options.repository.readToolCatalog(snapshot.runId, snapshotId);
+    if (!read.ok) return read;
+    if (read.value === undefined) {
+      return err(
+        applicationError(
+          "AGENT_TOOL_CATALOG_MISSING",
+          "The frozen Agent tool catalog could not be found."
+        )
+      );
+    }
+    const validated = validateAgentRunToolCatalogSnapshot(read.value);
+    if (
+      !validated.ok ||
+      validated.value.runId !== snapshot.runId ||
+      validated.value.toolCatalogSnapshotId !== snapshotId ||
+      validated.value.catalogRevision !== snapshot.toolCatalogRevision ||
+      validated.value.facadeVersion !== snapshot.toolFacadeVersion
+    ) {
+      return err(
+        applicationError(
+          "AGENT_TOOL_CATALOG_INVALID",
+          validated.ok
+            ? "The frozen Agent tool catalog does not match the run snapshot."
+            : validated.error
+        )
+      );
+    }
+    toolCatalogs.set(snapshot.runId, validated.value);
+    providerMappingsByRun.delete(snapshot.runId);
+    return ok(validated.value);
+  }
+
   async function hydrateRunOnce(runId: string): Promise<AgentRunCommandResult> {
     const existing = coordinator.readSnapshot(runId);
     if (existing !== undefined) return { ok: true, value: existing };
@@ -1242,6 +1351,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
     }
     const persistedSnapshot = normalizeAgentRunSnapshot(snapshotResult.value);
+    const catalog = await hydrateToolCatalog(persistedSnapshot);
+    if (!catalog.ok) return { ok: false, error: catalog.error };
     const events = eventsResult.value.map(normalizeAgentRunEvent);
     const restored = coordinator.restoreRun(persistedSnapshot, events);
     if (!restored.ok) return restored;
@@ -1782,20 +1893,21 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     let assistantText = "";
     let pendingUsage: LlmUsage | undefined;
     try {
-      const availableTools = toolsFor(snapshot);
+      const roundSnapshot = snapshot;
+      const availableTools = toolsFor(roundSnapshot);
       for await (const modelEvent of options.modelDriver.streamRound({
         runId,
-        snapshot,
+        snapshot: roundSnapshot,
         messages: [...runtime.messages],
         tools: availableTools.flatMap((tool) => {
-          const providerName = providerToolNameFor(tool);
+          const providerName = providerToolNameFor(roundSnapshot, tool);
           return providerName === undefined
             ? []
             : [{ name: providerName, inputSchema: tool.inputSchema }];
         }),
         // Mode-specific guidance is trusted system authority computed from the run's context mode; it
         // rides the systemPrompt seam, never the untrusted-data envelope.
-        systemPrompt: buildAgentSystemGuidance(snapshot.contextMode),
+        systemPrompt: buildAgentSystemGuidance(roundSnapshot.contextMode),
         signal: runtime.controller.signal
       })) {
         if (!isCurrent(runId, generation) || runtime.controller.signal.aborted) return;
@@ -2522,7 +2634,23 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         : "continue";
     }
 
-    if (readToolNames.has(descriptor.name)) {
+    const invocation = adaptToolInvocation(descriptor.name, parsedArguments.value);
+    if (!invocation.ok) {
+      return (await toolFailure(
+        runtime,
+        runId,
+        call,
+        invocation.error.code,
+        invocation.error.message,
+        invocation.error
+      ))
+        ? "terminal"
+        : "continue";
+    }
+    const dispatchName = invocation.value.name;
+    const dispatchArguments = invocation.value.arguments;
+
+    if (readToolNames.has(dispatchName)) {
       await recordEvent(runId, {
         runId,
         status: "executing_read_tool",
@@ -2532,8 +2660,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       const result = await options.readToolExecutor.execute({
         runId,
         projectId: snapshot.projectId,
-        name: descriptor.name,
-        arguments: parsedArguments.value,
+        name: dispatchName,
+        arguments: dispatchArguments,
         signal: runtime.controller.signal
       });
       if (!isCurrent(runId, runtime.generation)) return "terminal";
@@ -2609,7 +2737,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     }
 
     // ── Phase A: search tools ────────────────────────────────────────────────
-    if (searchToolNames.has(descriptor.name)) {
+    if (searchToolNames.has(dispatchName)) {
       if (options.searchToolExecutor === undefined) {
         return (await toolFailure(
           runtime,
@@ -2628,8 +2756,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         detail: { toolCallId: call.toolCallId, toolName: descriptor.name }
       });
       let searchResult;
-      if (descriptor.name === "search_project_text") {
-        const query = readString(parsedArguments.value, "query");
+      if (dispatchName === "search_project_text") {
+        const query = readString(dispatchArguments, "query");
         if (query === undefined) {
           return (await toolFailure(
             runtime,
@@ -2641,9 +2769,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
             ? "terminal"
             : "continue";
         }
-        const includeGlobs = readStringArray(parsedArguments.value, "includeGlobs");
-        const excludeGlobs = readStringArray(parsedArguments.value, "excludeGlobs");
-        const maxResults = parsedArguments.value["maxResults"];
+        const includeGlobs = readStringArray(dispatchArguments, "includeGlobs");
+        const excludeGlobs = readStringArray(dispatchArguments, "excludeGlobs");
+        const maxResults = dispatchArguments["maxResults"];
         searchResult = await options.searchToolExecutor.searchText({
           runId,
           projectId: snapshot.projectId,
@@ -2654,7 +2782,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           signal: runtime.controller.signal
         });
       } else {
-        const stableRef = readString(parsedArguments.value, "stableRef");
+        const stableRef = readString(dispatchArguments, "stableRef");
         if (stableRef === undefined) {
           return (await toolFailure(
             runtime,
@@ -2711,7 +2839,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     }
 
     // ── Phase B: file lifecycle tools ────────────────────────────────────────
-    if (fileLifecycleToolNames.has(descriptor.name)) {
+    if (fileLifecycleToolNames.has(dispatchName)) {
       if (options.fileOperationSession === undefined || options.changeSetSession === undefined) {
         return (await toolFailure(
           runtime,
@@ -2723,12 +2851,12 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           ? "terminal"
           : "continue";
       }
-      const dependsOn = readStringArray(parsedArguments.value, "dependsOn");
+      const dependsOn = readStringArray(dispatchArguments, "dependsOn");
       const proposalResult = buildFileOperationProposal(
         options.fileOperationSession,
-        descriptor.name,
+        dispatchName,
         call.toolCallId,
-        parsedArguments.value,
+        dispatchArguments,
         dependsOn
       );
       if (!proposalResult.ok) {
@@ -3210,25 +3338,27 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           ? "terminal"
           : "continue";
       }
-      const range = parseChangeSetRange(parsedArguments.value["range"]);
+      const range = parseChangeSetRange(dispatchArguments["range"]);
       const baseHash =
-        readString(parsedArguments.value, "baseHash") ??
-        readString(parsedArguments.value, "baseChecksum");
-      const replacement = readString(parsedArguments.value, "replacement");
+        readString(dispatchArguments, "baseHash") ?? readString(dispatchArguments, "baseChecksum");
+      const replacement = readString(dispatchArguments, "replacement");
       const targetPath =
-        descriptor.name === "propose_file_write"
-          ? readString(parsedArguments.value, "path")
-          : undefined;
+        dispatchName === "propose_file_write" ? readString(dispatchArguments, "path") : undefined;
       const chapterId =
-        descriptor.name === "propose_chapter_write"
-          ? readString(parsedArguments.value, "chapterId")
+        dispatchName === "propose_chapter_write"
+          ? readString(dispatchArguments, "chapterId")
+          : undefined;
+      const storyBibleAssetId =
+        dispatchName === "propose_story_bible_edit"
+          ? readString(dispatchArguments, "assetId")
           : undefined;
       if (
         range === undefined ||
         baseHash === undefined ||
         replacement === undefined ||
-        (descriptor.name === "propose_file_write" && targetPath === undefined) ||
-        (descriptor.name === "propose_chapter_write" && chapterId === undefined)
+        (dispatchName === "propose_file_write" && targetPath === undefined) ||
+        (dispatchName === "propose_chapter_write" && chapterId === undefined) ||
+        (dispatchName === "propose_story_bible_edit" && storyBibleAssetId === undefined)
       ) {
         return (await toolFailure(
           runtime,
@@ -3240,7 +3370,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           ? "terminal"
           : "continue";
       }
-      if (hasDirtyProposalTarget(runtime.contextSources, targetPath, chapterId)) {
+      if (
+        hasDirtyProposalTarget(runtime.contextSources, targetPath, chapterId, storyBibleAssetId)
+      ) {
         return (await toolFailure(
           runtime,
           runId,
@@ -3289,11 +3421,19 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         replacement
       };
       let proposed: Awaited<ReturnType<ChangeSetSession["proposeFileWrite"]>>;
-      if (descriptor.name === "propose_chapter_write") {
+      if (dispatchName === "propose_chapter_write") {
         const proposalInput = { ...binding, chapterId: chapterId ?? "" };
         const authorized = authorizeProposalIfPreapproved(proposalInput);
         try {
           proposed = await options.changeSetSession.proposeChapterWrite(proposalInput);
+        } finally {
+          if (authorized) revokeAgentRunProposalAuthorization(proposalInput);
+        }
+      } else if (dispatchName === "propose_story_bible_edit") {
+        const proposalInput = { ...binding, assetId: storyBibleAssetId ?? "" };
+        const authorized = authorizeProposalIfPreapproved(proposalInput);
+        try {
+          proposed = await options.changeSetSession.proposeStoryBibleWrite(proposalInput);
         } finally {
           if (authorized) revokeAgentRunProposalAuthorization(proposalInput);
         }
@@ -3629,6 +3769,15 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           )
         );
       }
+      if (newRunToolFacadeVersion === "v2" && options.repository.writeToolCatalog === undefined) {
+        return recordPreflightFailure(
+          command,
+          applicationError(
+            "AGENT_TOOL_CATALOG_UNAVAILABLE",
+            "The Agent tool catalog repository is unavailable and a v2 run cannot start."
+          )
+        );
+      }
       // Server-authoritative preflight: reload the run draft + Context Draft, resolve the model
       // profile and its capabilities, read editor content, and resolve context sources. A stale or
       // missing draft, an unknown profile, an unsupported reasoning strength, or a model that cannot
@@ -3643,6 +3792,26 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         return recordPreflightFailure(command, resolvedStart.error, preflight.value.model);
       }
       const startInput = resolvedStart.value;
+      const newRunDescriptors = listAgentTools({
+        facadeVersion: newRunToolFacadeVersion,
+        operationMode: startInput.operationMode,
+        contextMode: startInput.contextMode,
+        writePolicy: startInput.writePolicy ?? "write_before_confirmation",
+        capabilitySnapshot: frozenCapabilitySnapshot,
+        ...(frozenExternalToolDescriptors === undefined
+          ? {}
+          : { externalToolDescriptors: frozenExternalToolDescriptors })
+      });
+      const newRunProviderMapping = freezeProviderNameMapping(
+        newRunDescriptors.map((descriptor) => ({
+          id: canonicalToolId(descriptor),
+          providerName: providerNameForDescriptorInput(descriptor)
+        }))
+      );
+      const newRunCatalogRevision = computeAgentRunToolCatalogRevision(
+        newRunToolFacadeVersion,
+        newRunDescriptors
+      );
       // Regenerate the Permission Summary from the current Tool Registry and canonical root, and
       // compare it against whatever the composer last previewed for this draft (Task 2.1). Drift —
       // a Tool Registry change, a root-fingerprint change, or a resolved write-policy change since
@@ -3660,7 +3829,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           ...(frozenExternalToolDescriptors === undefined
             ? {}
             : { externalToolDescriptors: frozenExternalToolDescriptors }),
-          providerMappingRevision: frozenProviderNameMapping.revision
+          providerMappingRevision: newRunProviderMapping.revision
         });
         if (!verified.ok) {
           return recordPreflightFailure(command, verified.error, preflight.value.model);
@@ -3703,11 +3872,16 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         await cancelConversationStart();
         return restoredActive;
       }
+      const catalogStartInput = {
+        ...startInput,
+        toolFacadeVersion: newRunToolFacadeVersion,
+        ...(newRunToolFacadeVersion === "v2" ? { toolCatalogRevision: newRunCatalogRevision } : {})
+      };
       const result = coordinator.startRun(
         verifiedPermissionSummary === undefined
-          ? startInput
+          ? catalogStartInput
           : {
-              ...startInput,
+              ...catalogStartInput,
               permissionSummaryId: verifiedPermissionSummary.permissionSummaryId,
               permissionSummaryChecksum: verifiedPermissionSummary.checksum
             }
@@ -3716,6 +3890,37 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         commandReceipts.set(receiptKey, result);
         await cancelConversationStart();
         return result;
+      }
+      if (newRunToolFacadeVersion === "v2") {
+        const catalog = createAgentRunToolCatalogSnapshot({
+          runId: result.value.runId,
+          facadeVersion: newRunToolFacadeVersion,
+          descriptors: newRunDescriptors,
+          createdAt: result.value.startedAt
+        });
+        const written = await options.repository.writeToolCatalog?.(
+          result.value.runId,
+          catalog as unknown as JsonObject
+        );
+        if (written?.ok !== true) {
+          const error =
+            written?.error ??
+            applicationError(
+              "AGENT_TOOL_CATALOG_UNAVAILABLE",
+              "The Agent tool catalog could not be persisted."
+            );
+          const failed = coordinator.recordRunEvent({
+            runId: result.value.runId,
+            status: "failed",
+            type: "run_failed",
+            detail: { code: error.code, message: error.message }
+          });
+          if (failed.ok) await persistLatest(result.value.runId);
+          await cancelConversationStart();
+          return { ok: false, error };
+        }
+        toolCatalogs.set(result.value.runId, catalog);
+        providerMappingsByRun.set(result.value.runId, newRunProviderMapping);
       }
       const initialContextSources = [...(startInput.initialContextSources ?? [])];
       const runtime: RunRuntime = {
@@ -4272,6 +4477,38 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           "Automatic writes require an explicit acknowledgement for this execution run."
         );
       }
+      if (
+        command.decision === "approve" &&
+        newRunToolFacadeVersion === "v2" &&
+        options.repository.writeToolCatalog === undefined
+      ) {
+        return failure(
+          "AGENT_TOOL_CATALOG_UNAVAILABLE",
+          "The Agent tool catalog repository is unavailable and execution cannot start."
+        );
+      }
+      const executionContextMode = command.executionContextMode ?? snapshot.contextMode;
+      const executionWritePolicy = command.executionWritePolicy ?? "write_before_confirmation";
+      const executionDescriptors = listAgentTools({
+        facadeVersion: newRunToolFacadeVersion,
+        operationMode: "execution",
+        contextMode: executionContextMode,
+        writePolicy: executionWritePolicy,
+        capabilitySnapshot: frozenCapabilitySnapshot,
+        ...(frozenExternalToolDescriptors === undefined
+          ? {}
+          : { externalToolDescriptors: frozenExternalToolDescriptors })
+      });
+      const executionProviderMapping = freezeProviderNameMapping(
+        executionDescriptors.map((descriptor) => ({
+          id: canonicalToolId(descriptor),
+          providerName: providerNameForDescriptorInput(descriptor)
+        }))
+      );
+      const executionCatalogRevision = computeAgentRunToolCatalogRevision(
+        newRunToolFacadeVersion,
+        executionDescriptors
+      );
       let executionConversationContext: readonly AgentModelMessage[] = [];
       let executionConversationReserved = false;
       const cancelExecutionStart = async (): Promise<void> => {
@@ -4345,13 +4582,13 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           projectId: command.projectId,
           runDraftId: sourcePermission.value.runDraftId,
           operationMode: "execution",
-          contextMode: command.executionContextMode ?? snapshot.contextMode,
-          writePolicy: command.executionWritePolicy ?? "write_before_confirmation",
+          contextMode: executionContextMode,
+          writePolicy: executionWritePolicy,
           capabilitySnapshot: frozenCapabilitySnapshot,
           ...(frozenExternalToolDescriptors === undefined
             ? {}
             : { externalToolDescriptors: frozenExternalToolDescriptors }),
-          providerMappingRevision: frozenProviderNameMapping.revision
+          providerMappingRevision: executionProviderMapping.revision
         });
         if (!preparedPermission.ok) {
           await cancelExecutionStart();
@@ -4409,8 +4646,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         commandId: `${command.commandId}_execution`,
         expectedRunRevision: 0,
         operationMode: "execution",
-        contextMode: command.executionContextMode ?? snapshot.contextMode,
-        writePolicy: command.executionWritePolicy ?? "write_before_confirmation",
+        contextMode: executionContextMode,
+        writePolicy: executionWritePolicy,
         ...(command.executionWritePolicyAcknowledged === true
           ? { writePolicyAcknowledged: true }
           : {}),
@@ -4424,6 +4661,10 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         sourcePlanRevision: plan.revision,
         planExecutionId,
         planExecutionRevision: 1,
+        toolFacadeVersion: newRunToolFacadeVersion,
+        ...(newRunToolFacadeVersion === "v2"
+          ? { toolCatalogRevision: executionCatalogRevision }
+          : {}),
         ...(executionPermissionSummary === undefined
           ? {}
           : {
@@ -4436,6 +4677,37 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       if (!executionStarted.ok) {
         await cancelExecutionStart();
         return executionStarted;
+      }
+      if (newRunToolFacadeVersion === "v2") {
+        const executionCatalog = createAgentRunToolCatalogSnapshot({
+          runId: executionStarted.value.runId,
+          facadeVersion: newRunToolFacadeVersion,
+          descriptors: executionDescriptors,
+          createdAt: executionStarted.value.startedAt
+        });
+        const written = await options.repository.writeToolCatalog?.(
+          executionStarted.value.runId,
+          executionCatalog as unknown as JsonObject
+        );
+        if (written?.ok !== true) {
+          const error =
+            written?.error ??
+            applicationError(
+              "AGENT_TOOL_CATALOG_UNAVAILABLE",
+              "The execution run tool catalog could not be persisted."
+            );
+          coordinator.recordRunEvent({
+            runId: executionStarted.value.runId,
+            status: "failed",
+            type: "run_failed",
+            detail: { code: error.code, message: error.message }
+          });
+          await persistLatest(executionStarted.value.runId);
+          await cancelExecutionStart();
+          return { ok: false, error };
+        }
+        toolCatalogs.set(executionStarted.value.runId, executionCatalog);
+        providerMappingsByRun.set(executionStarted.value.runId, executionProviderMapping);
       }
       const planExecution = createPlanExecutionRecord({
         planExecutionId,
@@ -5442,14 +5714,18 @@ function parseChangeSetRange(value: unknown): ChangeSetRange | undefined {
 function hasDirtyProposalTarget(
   sources: readonly AgentContextSourceInput[],
   relativePath: string | undefined,
-  chapterId: string | undefined
+  chapterId: string | undefined,
+  storyBibleAssetId: string | undefined
 ): boolean {
   return sources.some(
     (source) =>
       source.dirty &&
       ((relativePath !== undefined && source.relativePath === relativePath) ||
         (chapterId !== undefined &&
-          (source.assetId === chapterId || source.refId === `chapter:${chapterId}`)))
+          (source.assetId === chapterId || source.refId === `chapter:${chapterId}`)) ||
+        (storyBibleAssetId !== undefined &&
+          (source.assetId === storyBibleAssetId ||
+            source.refId === `story_bible:${storyBibleAssetId}`)))
   );
 }
 
@@ -5620,6 +5896,169 @@ function readStringArray(value: JsonObject, key: string): string[] {
 
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function adaptToolInvocation(
+  toolName: string,
+  argumentsValue: JsonObject
+): Result<{ readonly name: string; readonly arguments: JsonObject }, UnifiedError> {
+  if (toolName === "read_resource") {
+    const ref = readString(argumentsValue, "ref");
+    const resource = ref === undefined ? undefined : parseResourceRef(ref);
+    if (resource === undefined) return err(invalidV2ResourceRef(toolName));
+    if (resource.kind === "chapter") {
+      return ok({ name: "read_chapter", arguments: { chapterId: resource.value } });
+    }
+    if (resource.kind === "story_bible") {
+      return ok({ name: "read_story_bible", arguments: { assetId: resource.value } });
+    }
+    return ok({ name: "read_project_text", arguments: { path: resource.value } });
+  }
+  if (toolName === "search_project") {
+    const mode = readString(argumentsValue, "mode");
+    if (mode === "text") {
+      const legacyArguments = { ...argumentsValue };
+      delete legacyArguments.mode;
+      return ok({ name: "search_project_text", arguments: legacyArguments });
+    }
+    if (mode === "references") {
+      const ref = readString(argumentsValue, "ref");
+      return ref === undefined
+        ? err(invalidV2ResourceRef(toolName))
+        : ok({ name: "find_project_references", arguments: { stableRef: ref } });
+    }
+    return err(
+      applicationError(
+        "AGENT_TOOL_ARGUMENTS_INVALID",
+        "search_project requires mode text or references."
+      )
+    );
+  }
+  if (toolName === "edit_text") {
+    const ref = readString(argumentsValue, "ref");
+    const resource = ref === undefined ? undefined : parseResourceRef(ref);
+    if (resource === undefined) {
+      return err(
+        applicationError(
+          "AGENT_TOOL_ARGUMENTS_INVALID",
+          "edit_text requires a chapter:, story_bible:, or file: resource reference."
+        )
+      );
+    }
+    const proposal = { ...argumentsValue };
+    delete proposal.ref;
+    if (resource.kind === "chapter") {
+      return ok({
+        name: "propose_chapter_write",
+        arguments: { ...proposal, chapterId: resource.value }
+      });
+    }
+    return resource.kind === "story_bible"
+      ? ok({
+          name: "propose_story_bible_edit",
+          arguments: { ...proposal, assetId: resource.value }
+        })
+      : ok({ name: "propose_file_write", arguments: { ...proposal, path: resource.value } });
+  }
+  if (toolName === "create_resource") {
+    const kind = readString(argumentsValue, "kind");
+    const resourceArguments = { ...argumentsValue };
+    delete resourceArguments.kind;
+    if (kind === "chapter") {
+      return ok({ name: "propose_chapter_create", arguments: resourceArguments });
+    }
+    if (kind === "story_bible") {
+      return ok({ name: "propose_story_bible_write", arguments: resourceArguments });
+    }
+    if (kind === "file") {
+      const path = readString(argumentsValue, "path");
+      if (path === undefined) return err(invalidV2ResourceRef(toolName));
+      const fileArguments = { ...resourceArguments };
+      delete fileArguments.path;
+      return ok({
+        name: "propose_file_create",
+        arguments: { ...fileArguments, relativePath: path }
+      });
+    }
+    return err(
+      applicationError(
+        "AGENT_TOOL_ARGUMENTS_INVALID",
+        "create_resource requires kind chapter, story_bible, or file."
+      )
+    );
+  }
+  if (toolName === "manage_path") {
+    const operation = readString(argumentsValue, "operation");
+    const dependsOn = readStringArray(argumentsValue, "dependsOn");
+    const dependencyPatch = dependsOn.length === 0 ? {} : { dependsOn };
+    if (operation === "move_file") {
+      const sourceRef = readString(argumentsValue, "sourceRef");
+      const source = sourceRef === undefined ? undefined : parseResourceRef(sourceRef);
+      const targetPath = readString(argumentsValue, "targetPath");
+      const baseHash = readString(argumentsValue, "baseHash");
+      return source?.kind === "file" && targetPath !== undefined && baseHash !== undefined
+        ? ok({
+            name: "propose_file_move",
+            arguments: {
+              sourcePath: source.value,
+              targetPath,
+              sourceChecksum: baseHash,
+              ...dependencyPatch
+            }
+          })
+        : err(invalidV2ResourceRef(toolName));
+    }
+    if (operation === "delete_file") {
+      const ref = readString(argumentsValue, "ref");
+      const resource = ref === undefined ? undefined : parseResourceRef(ref);
+      const baseHash = readString(argumentsValue, "baseHash");
+      return resource?.kind === "file" && baseHash !== undefined
+        ? ok({
+            name: "propose_file_delete",
+            arguments: {
+              relativePath: resource.value,
+              baseChecksum: baseHash,
+              ...dependencyPatch
+            }
+          })
+        : err(invalidV2ResourceRef(toolName));
+    }
+    if (operation === "create_directory") {
+      const path = readString(argumentsValue, "path");
+      return path === undefined
+        ? err(invalidV2ResourceRef(toolName))
+        : ok({
+            name: "propose_directory_create",
+            arguments: { relativePath: path, ...dependencyPatch }
+          });
+    }
+    return err(
+      applicationError(
+        "AGENT_TOOL_ARGUMENTS_INVALID",
+        "manage_path requires move_file, delete_file, or create_directory."
+      )
+    );
+  }
+  return ok({ name: toolName, arguments: argumentsValue });
+}
+
+function parseResourceRef(
+  ref: string
+): { readonly kind: "chapter" | "story_bible" | "file"; readonly value: string } | undefined {
+  const separator = ref.indexOf(":");
+  if (separator <= 0 || separator === ref.length - 1) return undefined;
+  const kind = ref.slice(0, separator);
+  const value = ref.slice(separator + 1);
+  return kind === "chapter" || kind === "story_bible" || kind === "file"
+    ? { kind, value }
+    : undefined;
+}
+
+function invalidV2ResourceRef(toolName: string): UnifiedError {
+  return applicationError(
+    "AGENT_TOOL_ARGUMENTS_INVALID",
+    `${toolName} requires a valid stable resource reference and matching operation arguments.`
+  );
 }
 
 /** Task B.3 — routes a file lifecycle tool call to the matching AgentFileOperationSessionPort method. */

@@ -1,6 +1,7 @@
 import {
   createAgentConversationSession,
   createAgentContextSession,
+  createAgentFileOperationSession,
   createAgentPricingRegistry,
   createAgentPermissionSession,
   createAgentPlanExecutionSession,
@@ -51,7 +52,6 @@ import type {
   AgentUsageRecord,
   AgentToolCapabilitySnapshot,
   AgentToolDescriptor,
-  AgentToolName,
   AgentWriteMutationTrust,
   ChangeSet,
   StartAgentRunCommand,
@@ -243,6 +243,7 @@ function buildRuntimeCapabilitySnapshot(input: {
   readonly networkToolExecutor?: AgentNetworkToolExecutor;
   readonly fileOperationSession?: AgentFileOperationSessionPort;
   readonly lifecycleOperations?: AgentWriteLifecycleOperationPort;
+  readonly trustedCreativeMutations?: AgentWriteTrustedCreativeMutationPort;
   readonly hasVersionGroupExecutor: boolean;
   readonly externalToolExecutor?: AgentExternalToolExecutor;
   readonly externalToolDescriptors?: readonly AgentToolDescriptor[];
@@ -255,7 +256,8 @@ function buildRuntimeCapabilitySnapshot(input: {
     fileLifecycleEnabled:
       input.requested.fileLifecycleEnabled &&
       input.fileOperationSession !== undefined &&
-      input.lifecycleOperations !== undefined &&
+      (input.lifecycleOperations !== undefined ||
+        input.trustedCreativeMutations?.mutate !== undefined) &&
       input.hasVersionGroupExecutor,
     controlledExecutionEnabled: false,
     gitReadEnabled: false,
@@ -275,19 +277,22 @@ function buildRuntimeProviderNameMapping(
   externalToolDescriptors: readonly AgentToolDescriptor[] | undefined
 ) {
   const descriptors = new Map<string, AgentToolDescriptor>();
-  for (const variant of [
-    { operationMode: "planning" as const, contextMode: "writing" as const },
-    { operationMode: "planning" as const, contextMode: "general_file" as const },
-    { operationMode: "execution" as const, contextMode: "writing" as const },
-    { operationMode: "execution" as const, contextMode: "general_file" as const }
-  ]) {
-    for (const descriptor of listAgentTools({
-      ...variant,
-      writePolicy: "write_before_confirmation",
-      capabilitySnapshot,
-      ...(externalToolDescriptors === undefined ? {} : { externalToolDescriptors })
-    })) {
-      descriptors.set(String(descriptor.id ?? descriptor.name), descriptor);
+  for (const facadeVersion of ["v1", "v2"] as const) {
+    for (const variant of [
+      { operationMode: "planning" as const, contextMode: "writing" as const },
+      { operationMode: "planning" as const, contextMode: "general_file" as const },
+      { operationMode: "execution" as const, contextMode: "writing" as const },
+      { operationMode: "execution" as const, contextMode: "general_file" as const }
+    ]) {
+      for (const descriptor of listAgentTools({
+        ...variant,
+        facadeVersion,
+        writePolicy: "write_before_confirmation",
+        capabilitySnapshot,
+        ...(externalToolDescriptors === undefined ? {} : { externalToolDescriptors })
+      })) {
+        descriptors.set(String(descriptor.id ?? descriptor.name), descriptor);
+      }
     }
   }
   return freezeProviderNameMapping(
@@ -317,6 +322,11 @@ function createDesktopAgentRuntimeServices(
           projectRoot: options.contentRoot
         }))
       : undefined;
+  const fileOperationSession =
+    options.fileOperationSession ??
+    (options.lifecycleOperations !== undefined || trustedCreativeMutations?.mutate !== undefined
+      ? createAgentFileOperationSession({ traceId: "desktop-agent-file-operations" })
+      : undefined);
   const projectReads = new AgentProjectReadRepository({
     projectRoot: options.contentRoot,
     traceId: "desktop-agent-project-read"
@@ -377,6 +387,7 @@ function createDesktopAgentRuntimeServices(
     projectId: options.projectId,
     projectReads,
     ...(chapterRepository === undefined ? {} : { chapterRepository }),
+    ...(storyBible === undefined ? {} : { storyBible }),
     repository,
     ...(options.readEditorState === undefined ? {} : { readEditorState: options.readEditorState })
   });
@@ -429,12 +440,11 @@ function createDesktopAgentRuntimeServices(
     ...(options.networkToolExecutor === undefined
       ? {}
       : { networkToolExecutor: options.networkToolExecutor }),
-    ...(options.fileOperationSession === undefined
-      ? {}
-      : { fileOperationSession: options.fileOperationSession }),
+    ...(fileOperationSession === undefined ? {} : { fileOperationSession }),
     ...(options.lifecycleOperations === undefined
       ? {}
       : { lifecycleOperations: options.lifecycleOperations }),
+    ...(trustedCreativeMutations === undefined ? {} : { trustedCreativeMutations }),
     hasVersionGroupExecutor: versionGroupServices !== undefined,
     ...(options.externalToolExecutor === undefined
       ? {}
@@ -586,6 +596,11 @@ function createDesktopAgentRuntimeServices(
       }
     },
     writeMutationTrust,
+    defaultCapabilitySnapshot: capabilitySnapshot,
+    ...(options.externalToolDescriptors === undefined
+      ? {}
+      : { defaultExternalToolDescriptors: options.externalToolDescriptors }),
+    listTools: (input) => listAgentTools({ ...input, facadeVersion: "v2" }),
     ...(options.now === undefined ? {} : { now: options.now })
   });
   const planExecutionSession = createAgentPlanExecutionSession({ repository });
@@ -615,6 +630,7 @@ function createDesktopAgentRuntimeServices(
     modelDriver,
     readToolExecutor,
     startPreflight,
+    newRunToolFacadeVersion: "v2",
     capabilitySnapshot,
     effectiveCapabilityState,
     getEffectiveCapabilityState: () => effectiveCapabilityState,
@@ -626,9 +642,7 @@ function createDesktopAgentRuntimeServices(
     ...(options.networkToolExecutor === undefined
       ? {}
       : { networkToolExecutor: options.networkToolExecutor }),
-    ...(options.fileOperationSession === undefined
-      ? {}
-      : { fileOperationSession: options.fileOperationSession }),
+    ...(fileOperationSession === undefined ? {} : { fileOperationSession }),
     ...(options.externalToolExecutor === undefined
       ? {}
       : { externalToolExecutor: options.externalToolExecutor }),
@@ -936,6 +950,7 @@ function createDesktopChangeSetSession(input: {
   readonly projectId: string;
   readonly projectReads: AgentProjectReadRepository;
   readonly chapterRepository?: ChapterFileRepository;
+  readonly storyBible?: StoryBibleFileRepository;
   readonly repository: AgentRunFileRepository;
   readonly readEditorState?: DesktopAgentRunSessionOptions["readEditorState"];
 }) {
@@ -968,6 +983,27 @@ function createDesktopChangeSetSession(input: {
         return ok({
           relativePath: read.value.relativePath,
           assetType: "text" as const,
+          content: read.value.content,
+          checksum: read.value.checksum,
+          dirty: editor?.dirty ?? false,
+          supported: true
+        });
+      },
+      async readStoryBibleTarget({ projectId, assetId }) {
+        if (projectId !== input.projectId) return err(runtimeError("CHANGE_SET_PROJECT_MISMATCH"));
+        if (input.storyBible === undefined) {
+          return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
+        }
+        const asset = await findStoryBibleAsset(input.storyBible, assetId);
+        if (!asset.ok) return asset;
+        const relativePath = storyBibleAssetRelativePath(asset.value);
+        const read = await input.projectReads.readText(relativePath);
+        if (!read.ok) return read;
+        const editor = await input.readEditorState?.(relativePath);
+        return ok({
+          relativePath,
+          assetType: "text" as const,
+          assetId,
           content: read.value.content,
           checksum: read.value.checksum,
           dirty: editor?.dirty ?? false,
@@ -1862,15 +1898,22 @@ function createDesktopReadToolExecutor(
         if (assetId === undefined) return invalidToolArguments(input.name);
         const asset = await findStoryBibleAsset(storyBible, assetId);
         if (!asset.ok) return asset;
-        const content = JSON.stringify(asset.value);
+        const relativePath = storyBibleAssetRelativePath(asset.value);
+        const read = await projectReads.readText(relativePath);
+        if (!read.ok) return read;
         return ok({
           summary: `已读取 Story Bible 资产 ${assetId}`,
-          data: { asset: asset.value },
+          data: {
+            asset: asset.value,
+            content: read.value.content,
+            checksum: read.value.checksum
+          },
           source: {
-            refId: `story-bible:${assetId}`,
+            refId: `story_bible:${assetId}`,
             sourceKind: "story_bible_asset",
             assetId,
-            content,
+            relativePath,
+            content: read.value.content,
             dirty: false
           }
         });
@@ -1897,7 +1940,12 @@ function createDesktopScriptedAgentDriver(
         input.snapshot.contextMode === "writing" &&
         activeChapterId !== undefined
       ) {
-        yield toolCall("desktop_read_chapter", "read_chapter", { chapterId: activeChapterId });
+        const usesV2 = input.tools.some((tool) => tool.name === "read_resource");
+        yield usesV2
+          ? toolCall("desktop_read_chapter", "read_resource", {
+              ref: `chapter:${activeChapterId}`
+            })
+          : toolCall("desktop_read_chapter", "read_chapter", { chapterId: activeChapterId });
         yield { type: "round_completed", finishReason: "tool_calls" };
         return;
       }
@@ -1934,7 +1982,7 @@ function createDesktopScriptedAgentDriver(
   };
 }
 
-function toolCall(toolCallId: string, name: AgentToolName, argumentsValue: JsonObject) {
+function toolCall(toolCallId: string, name: string, argumentsValue: JsonObject) {
   return {
     type: "tool_call_delta" as const,
     toolCallId,
@@ -1966,6 +2014,16 @@ async function findStoryBibleAsset(repository: StoryBibleFileRepository, assetId
         })
       )
     : ok(asset);
+}
+
+function storyBibleAssetRelativePath(asset: {
+  readonly id: string;
+  readonly type: string;
+}): string {
+  if (asset.type === "character") return `characters/${asset.id}.json`;
+  if (asset.type.startsWith("world.")) return `world/${asset.id}.json`;
+  if (asset.type === "outline") return "outline/outline.json";
+  return "timeline/events.json";
 }
 
 function invalidToolArguments(name: string) {
