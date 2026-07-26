@@ -179,9 +179,18 @@ export interface LlmStreamToolCallDeltaEvent {
   readonly argumentsDelta?: string;
 }
 
+/**
+ * All provider-declared finish reasons surfaced through the stream pipeline.
+ * Values beyond `tool_calls` and `stop` indicate truncated or interrupted rounds
+ * and MUST NOT trigger tool-call execution — the agent loop enforces fail-closed
+ * dispatch based on this value.
+ */
+export type LlmRoundFinishReason =
+  "tool_calls" | "stop" | "length" | "content_filter" | "aborted" | "error" | "unknown";
+
 export interface LlmStreamRoundCompletedEvent {
   readonly type: "round_completed";
-  readonly finishReason: "tool_calls" | "stop";
+  readonly finishReason: LlmRoundFinishReason;
 }
 
 export type LlmStreamEvent =

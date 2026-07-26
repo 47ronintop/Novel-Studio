@@ -30,6 +30,7 @@ export type {
   LlmReasoningEffort,
   LlmRequest,
   LlmResponse,
+  LlmRoundFinishReason,
   LlmStreamDeltaEvent,
   LlmStreamDoneEvent,
   LlmStreamRoundCompletedEvent,

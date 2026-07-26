@@ -552,7 +552,7 @@ describe("desktop Agent Run runtime", () => {
           }
           yield {
             type: "round_completed" as const,
-            finishReason: toolResultCount < 2 ? "tool_calls" : "stop"
+            finishReason: "tool_calls" as const
           };
         }
       }
@@ -830,7 +830,7 @@ describe("desktop Agent Run runtime", () => {
     expect(await readFile(chapterPath, "utf8")).toContain("Externally changed chapter body.");
   });
 
-  test("opens rollback review before restoring a chapter with a dirty active editor", async () => {
+  test("uses the trusted creative fallback for apply and dirty-editor undo", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-agent-dirty-undo-"));
     roots.push(projectRoot);
     await mkdir(join(projectRoot, "chapters"), { recursive: true });
@@ -856,7 +856,6 @@ describe("desktop Agent Run runtime", () => {
       activeChapterId: chapterId,
       projectLockOwnerId: lockOwnerId,
       createRunId: () => "run-desktop-dirty-undo",
-      lifecycleOperations: createTestingReplaceLifecyclePort(projectRoot),
       readEditorState: async (path: string) => {
         editorReads.push(editorDirty);
         return path === relativePath
@@ -982,12 +981,15 @@ describe("desktop Agent Run runtime", () => {
     expect(editorDirty).toBe(false);
   });
 
-  test("does not claim external schema validation for an ordinary text proposal", async () => {
+  test("applies and undoes an ordinary text proposal through the trusted creative fallback", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-agent-text-"));
     roots.push(projectRoot);
     const notesPath = join(projectRoot, "notes.txt");
     const notes = "Original notes.\n";
     await writeFile(notesPath, notes, "utf8");
+    const lockOwnerId = "desktop-agent-trusted-text-test";
+    const lock = new ProjectLockFileRepository({ projectRoot, ownerId: lockOwnerId });
+    expect((await lock.acquireProjectLock()).ok).toBe(true);
     let round = 0;
     const session = createDesktopRuntime({
       workspaceKind: "creativeProject",
@@ -995,6 +997,7 @@ describe("desktop Agent Run runtime", () => {
       contentRoot: projectRoot,
       stateRoot: projectRoot,
       activeChapterId: "chapter-unused",
+      projectLockOwnerId: lockOwnerId,
       createRunId: () => "run-desktop-text-validation",
       modelDriver: {
         async *streamRound() {
@@ -1010,10 +1013,17 @@ describe("desktop Agent Run runtime", () => {
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       }
-    });
+    }) as unknown as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      decideChangeSet(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      undoRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
 
     await session.startAgentRun(executionCommand("general_file"));
 
+    let changeSet: Record<string, unknown> | undefined;
+    let awaitingRevision = 0;
     await vi.waitFor(async () => {
       const read = await session.readAgentRun("run-desktop-text-validation");
       expect(read).toMatchObject({
@@ -1032,7 +1042,43 @@ describe("desktop Agent Run runtime", () => {
           }
         }
       });
+      const value = read as {
+        value: { snapshot: { runRevision: number }; changeSet: Record<string, unknown> };
+      };
+      awaitingRevision = value.value.snapshot.runRevision;
+      changeSet = value.value.changeSet;
     });
+    expect(await readFile(notesPath, "utf8")).toBe(notes);
+    if (changeSet === undefined) throw new Error("Expected a staged text Change Set.");
+
+    await session.decideChangeSet({
+      runId: "run-desktop-text-validation",
+      projectId: "project-01",
+      commandId: "apply-desktop-trusted-text",
+      expectedRunRevision: awaitingRevision,
+      changeSetId: changeSet["changeSetId"],
+      revision: changeSet["revision"],
+      checksum: changeSet["checksum"],
+      decision: "apply_selected"
+    });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run-desktop-text-validation")).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+    expect(await readFile(notesPath, "utf8")).toBe("Revised notes.\n");
+
+    const completed = (await session.readAgentRun("run-desktop-text-validation")) as {
+      value: { snapshot: { runRevision: number } };
+    };
+    const undone = await session.undoRun({
+      projectId: "project-01",
+      runId: "run-desktop-text-validation",
+      commandId: "undo-desktop-trusted-text",
+      expectedRunRevision: completed.value.snapshot.runRevision
+    });
+    expect(undone).toMatchObject({ ok: true, value: { status: "completed" } });
     expect(await readFile(notesPath, "utf8")).toBe(notes);
   });
 

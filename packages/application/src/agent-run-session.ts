@@ -63,8 +63,7 @@ import {
   type ToolApprovalBinding
 } from "@novel-studio/agent-engine";
 import { createHash } from "node:crypto";
-import { Buffer } from "node:buffer";
-import type { LlmUsage } from "@novel-studio/llm-adapter";
+import type { LlmRoundFinishReason, LlmUsage } from "@novel-studio/llm-adapter";
 import {
   createUnifiedError,
   err,
@@ -112,6 +111,12 @@ import {
   revokeAgentRunApprovalAuthorization,
   revokeAgentRunProposalAuthorization
 } from "./agent-write-authorization.js";
+import {
+  createToolCallAssembler,
+  dispatchAssembledToolCalls,
+  parseToolCallArguments,
+  type AssembledToolCall
+} from "./agent-tool-call-pipeline.js";
 
 export type AgentModelMessageRole = "system" | "user" | "assistant" | "tool";
 
@@ -152,7 +157,7 @@ export type AgentModelStreamEvent =
       readonly name?: string;
       readonly argumentsDelta?: string;
     }
-  | { readonly type: "round_completed"; readonly finishReason: "tool_calls" | "stop" };
+  | { readonly type: "round_completed"; readonly finishReason: LlmRoundFinishReason };
 
 export interface AgentModelRoundInput {
   readonly runId: string;
@@ -668,12 +673,6 @@ interface RunRuntime {
   systemGuidanceSource?: AgentContextSourceInput;
 }
 
-interface AssembledToolCall {
-  readonly toolCallId: string;
-  name: string;
-  argumentsText: string;
-}
-
 type ToolCallOutcome =
   | "continue"
   | "paused"
@@ -700,8 +699,6 @@ const fileLifecycleToolNames = new Set<string>([
   "propose_file_delete",
   "propose_directory_create"
 ]);
-
-const MAX_TOOL_ARGUMENT_UTF8_BYTES = 1_048_576;
 
 function isExternalToolName(name: string): boolean {
   return name.startsWith("plugin:") || name.startsWith("mcp:");
@@ -1781,10 +1778,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       }
     }
 
-    const toolCalls = new Map<string, AssembledToolCall>();
+    const toolCallAssembler = createToolCallAssembler();
     let assistantText = "";
     let pendingUsage: LlmUsage | undefined;
-    let finishReason: "tool_calls" | "stop" | undefined;
     try {
       const availableTools = toolsFor(snapshot);
       for await (const modelEvent of options.modelDriver.streamRound({
@@ -1829,23 +1825,16 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           continue;
         }
         if (modelEvent.type === "tool_call_delta") {
-          const existing = toolCalls.get(modelEvent.toolCallId) ?? {
-            toolCallId: modelEvent.toolCallId,
-            name: "",
-            argumentsText: ""
-          };
-          if (modelEvent.name !== undefined) existing.name += modelEvent.name;
-          if (modelEvent.argumentsDelta !== undefined) {
-            existing.argumentsText += modelEvent.argumentsDelta;
-          }
-          toolCalls.set(modelEvent.toolCallId, existing);
+          toolCallAssembler.append(modelEvent);
           continue;
         }
         if (modelEvent.type === "round_completed") {
-          finishReason = modelEvent.finishReason;
+          toolCallAssembler.complete(modelEvent.finishReason);
         }
       }
       if (!isCurrent(runId, generation)) return;
+      const toolCallRound = toolCallAssembler.snapshot();
+      const { finishReason } = toolCallRound;
       if (finishReason !== undefined && options.usageSink !== undefined) {
         const finalUsage = pendingUsage ?? missingRoundUsage();
         const finalSequence = snapshot.lastSequence + 1;
@@ -1896,11 +1885,11 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         });
         snapshot = coordinator.readSnapshot(runId) ?? snapshot;
       }
-      if (toolCalls.size > 0) {
+      if (toolCallRound.calls.length > 0) {
         runtime.messages.push({
           role: "assistant",
           content: assistantText,
-          toolCalls: [...toolCalls.values()].map((call) => ({
+          toolCalls: toolCallRound.calls.map((call) => ({
             id: call.toolCallId,
             name: call.name,
             arguments: call.argumentsText
@@ -1909,7 +1898,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       } else if (assistantText.length > 0) {
         runtime.messages.push({ role: "assistant", content: assistantText });
       }
-      if (toolCalls.size === 0) {
+      if (toolCallRound.calls.length === 0) {
         await recordEvent(runId, {
           runId,
           status: "completed",
@@ -1920,21 +1909,31 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       }
       const dispatchSnapshot = coordinator.readSnapshot(runId);
       if (dispatchSnapshot === undefined) return;
-      const assembledCalls = [...toolCalls.values()];
-      const proposalCalls = assembledCalls.filter(
-        (call) => resolveToolDescriptor(dispatchSnapshot, call.name)?.effect === "propose"
-      );
-      const callsToHandle = proposalCalls.length > 0 ? proposalCalls : assembledCalls;
-      let stagedProposal = false;
-      for (const call of callsToHandle) {
-        if (!isCurrent(runId, generation)) return;
-        const outcome = await handleToolCall(runId, runtime, call);
-        if (outcome === "staged") {
-          stagedProposal = true;
-          continue;
-        }
-        if (outcome !== "continue") return;
+      const dispatchResult = await dispatchAssembledToolCalls<ToolCallOutcome>({
+        round: toolCallRound,
+        effectFor: (call) => resolveToolDescriptor(dispatchSnapshot, call.name)?.effect,
+        reject: async (call, failure) => {
+          return (await toolFailure(runtime, runId, call, failure.code, failure.message))
+            ? "terminal"
+            : "continue";
+        },
+        dispatch: (call) => handleToolCall(runId, runtime, call),
+        mayContinue: (outcome) => outcome === "continue" || outcome === "staged",
+        isActive: () => isCurrent(runId, generation)
+      });
+      if (dispatchResult.kind === "interrupted") return;
+      if (dispatchResult.kind === "rejected") {
+        const lastOutcome = dispatchResult.outcomes.at(-1);
+        if (lastOutcome !== undefined && lastOutcome !== "continue") return;
+        if (isCurrent(runId, generation)) scheduleNextRound(runId, runtime);
+        return;
       }
+      if (
+        dispatchResult.outcomes.some((outcome) => outcome !== "continue" && outcome !== "staged")
+      ) {
+        return;
+      }
+      const stagedProposal = dispatchResult.outcomes.some((outcome) => outcome === "staged");
       if (stagedProposal && runtime.changeSet !== undefined) {
         const changeSet = runtime.changeSet;
         const ready = await recordEvent(runId, {
@@ -2034,7 +2033,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     readonly roundId: string;
     readonly finalSequence: number;
     readonly usage: LlmUsage;
-    readonly finishReason: "tool_calls" | "stop";
+    readonly finishReason: LlmRoundFinishReason;
   }): Promise<Result<AgentUsageRecord, UnifiedError>> {
     if (options.usageSink === undefined) {
       return err(
@@ -2326,7 +2325,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         )
       );
     }
-    const parsed = parseArguments(input.pending.argumentsText);
+    const parsed = parseToolCallArguments(input.pending.argumentsText);
     if (!parsed.ok) return parsed;
     const validated = validateAgentToolArguments({
       descriptor,
@@ -2455,7 +2454,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         : "continue";
     }
 
-    const parsedArguments = parseArguments(call.argumentsText);
+    const parsedArguments = parseToolCallArguments(call.argumentsText);
     if (!parsedArguments.ok) {
       return (await toolFailure(
         runtime,
@@ -2547,11 +2546,6 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           result.error.message,
           result.error
         );
-        runtime.messages.push({
-          role: "tool",
-          toolCallId: call.toolCallId,
-          content: JSON.stringify({ ok: false, error: { code: result.error.code } })
-        });
         return limitReached ? "terminal" : "continue";
       }
       runtime.consecutiveToolFailures = 0;
@@ -2689,11 +2683,6 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           searchResult.error.message,
           searchResult.error
         );
-        runtime.messages.push({
-          role: "tool",
-          toolCallId: call.toolCallId,
-          content: JSON.stringify({ ok: false, error: { code: searchResult.error.code } })
-        });
         return limitReached ? "terminal" : "continue";
       }
       runtime.consecutiveToolFailures = 0;
@@ -2894,11 +2883,6 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           networkResult.error.message,
           networkResult.error
         );
-        runtime.messages.push({
-          role: "tool",
-          toolCallId: call.toolCallId,
-          content: JSON.stringify({ ok: false, error: { code: networkResult.error.code } })
-        });
         return limitReached ? "terminal" : "continue";
       }
       runtime.consecutiveToolFailures = 0;
@@ -2965,11 +2949,6 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           externalResult.error.message,
           externalResult.error
         );
-        runtime.messages.push({
-          role: "tool",
-          toolCallId: call.toolCallId,
-          content: JSON.stringify({ ok: false, error: { code: externalResult.error.code } })
-        });
         return limitReached ? "terminal" : "continue";
       }
       runtime.consecutiveToolFailures = 0;
@@ -3446,6 +3425,11 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       detail: { toolCallId: call.toolCallId, toolName: call.name, code, message }
     });
     if (!failed.ok) return true;
+    runtime.messages.push({
+      role: "tool",
+      toolCallId: call.toolCallId,
+      content: JSON.stringify({ ok: false, error: { code } })
+    });
     runtime.lastFailedToolCall = { ...call };
     await persistRetryCheckpoint(runId, call);
     const diagnosticError = normalizeDiagnosticError(sourceError, {
@@ -5486,27 +5470,6 @@ function mergeCurrentContextSources(
     }
     return { ...source, content: candidate.content, dirty: candidate.dirty };
   });
-}
-
-function parseArguments(value: string): Result<JsonObject, UnifiedError> {
-  if (Buffer.byteLength(value, "utf8") > MAX_TOOL_ARGUMENT_UTF8_BYTES) {
-    return err(
-      applicationError(
-        "AGENT_TOOL_ARGUMENTS_TOO_LARGE",
-        "Tool arguments exceed the 1 MiB UTF-8 limit."
-      )
-    );
-  }
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return isJsonObject(parsed)
-      ? ok(parsed)
-      : err(applicationError("AGENT_TOOL_ARGUMENTS_INVALID", "Tool arguments must be an object."));
-  } catch {
-    return err(
-      applicationError("AGENT_TOOL_ARGUMENTS_INVALID", "Tool arguments are incomplete JSON.")
-    );
-  }
 }
 
 function parseUserInputRequest(value: JsonObject): Result<AgentUserInputRequest, UnifiedError> {

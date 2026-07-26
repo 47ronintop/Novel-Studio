@@ -79,7 +79,9 @@ import {
 import {
   AgentConversationFileRepository,
   AgentWriteTransaction,
+  createTrustedCreativeFileOperationsPort,
   type AgentWriteLifecycleOperationPort,
+  type AgentWriteTrustedCreativeMutationPort,
   AgentProjectReadRepository,
   AgentProjectSearchRepository,
   AgentRunFileRepository,
@@ -163,6 +165,8 @@ export interface DesktopAgentRunSessionOptions {
   /** File lifecycle stays hidden unless the host has an atomic no-follow transaction backend. */
   readonly fileOperationSession?: AgentFileOperationSessionPort;
   readonly lifecycleOperations?: AgentWriteLifecycleOperationPort;
+  /** Standard-trust existing-text replacement for app-managed creative projects only. */
+  readonly trustedCreativeMutations?: AgentWriteTrustedCreativeMutationPort;
   /** External capabilities are hidden unless the Main-owned sandbox transport is injected. */
   readonly externalToolExecutor?: AgentExternalToolExecutor;
   readonly externalToolDescriptors?: readonly AgentToolDescriptor[];
@@ -333,6 +337,14 @@ function createDesktopAgentRuntimeServices(
   enforceConversationBinding: boolean
 ): DesktopAgentRuntimeServices {
   const requestedCapabilities = requestedCapabilitySnapshot(options);
+  const trustedCreativeMutations =
+    options.workspaceKind === "creativeProject" && options.lifecycleOperations === undefined
+      ? (options.trustedCreativeMutations ??
+        createTrustedCreativeFileOperationsPort({
+          workspaceKind: "creativeProject",
+          projectRoot: options.contentRoot
+        }))
+      : undefined;
   const projectReads = new AgentProjectReadRepository({
     projectRoot: options.contentRoot,
     traceId: "desktop-agent-project-read"
@@ -407,6 +419,7 @@ function createDesktopAgentRuntimeServices(
           ...(options.lifecycleOperations === undefined
             ? {}
             : { lifecycleOperations: options.lifecycleOperations }),
+          ...(trustedCreativeMutations === undefined ? {} : { trustedCreativeMutations }),
           projectReads,
           ...(chapterRepository === undefined ? {} : { chapterRepository }),
           ...(options.readEditorState === undefined
@@ -1078,6 +1091,7 @@ function createDesktopVersionGroupServices(input: {
   readonly projectId: string;
   readonly projectLockOwnerId: string;
   readonly lifecycleOperations?: AgentWriteLifecycleOperationPort;
+  readonly trustedCreativeMutations?: AgentWriteTrustedCreativeMutationPort;
   readonly projectReads: AgentProjectReadRepository;
   readonly chapterRepository?: ChapterFileRepository;
   readonly readEditorState?: DesktopAgentRunSessionOptions["readEditorState"];
@@ -1115,6 +1129,17 @@ function createDesktopVersionGroupServices(input: {
               ? input.lifecycleOperations
               : createFailureInjectingLifecycleOperations(
                   input.lifecycleOperations,
+                  input.failAgentWriteAt
+                )
+        }),
+    ...(input.trustedCreativeMutations === undefined
+      ? {}
+      : {
+          trustedCreativeMutations:
+            input.failAgentWriteAt === undefined
+              ? input.trustedCreativeMutations
+              : createFailureInjectingTrustedCreativeMutations(
+                  input.trustedCreativeMutations,
                   input.failAgentWriteAt
                 )
         }),
@@ -1459,6 +1484,30 @@ function createFailureInjectingLifecycleOperations(
         }
       }
       return lifecycle.mutate(input);
+    }
+  };
+}
+
+function createFailureInjectingTrustedCreativeMutations(
+  mutations: AgentWriteTrustedCreativeMutationPort,
+  failAt: number
+): AgentWriteTrustedCreativeMutationPort {
+  let applyCount = 0;
+  return {
+    trustLevel: "standard_trusted_creative",
+    async replace(input) {
+      if (input.phase === "apply") {
+        applyCount += 1;
+        if (applyCount === failAt) {
+          return err(
+            runtimeError("AGENT_WRITE_INJECTED_FAILURE", {
+              relativePath: input.relativePath,
+              failAt
+            })
+          );
+        }
+      }
+      return mutations.replace(input);
     }
   };
 }

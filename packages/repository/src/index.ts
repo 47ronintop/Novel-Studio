@@ -5,6 +5,8 @@ export type {
   AgentWriteLifecycleMutation,
   AgentWriteLifecycleOperationPort,
   AgentWriteReplaceInput,
+  AgentWriteTrustedCreativeMutationPort,
+  AgentWriteTrustedCreativeReplaceMutation,
   AgentWriteTransactionOptions
 } from "./agent-write-transaction.js";
 export { CacheRepository } from "./cache-repository.js";
@@ -187,3 +189,10 @@ export type {
   LocalMcpServerSummary,
   McpSettingsFileRepositoryOptions
 } from "./mcp-settings-repository.js";
+export { createTrustedCreativeFileOperationsPort } from "./trusted-creative-file-operations.js";
+export type {
+  TrustedCreativeFileHandle,
+  TrustedCreativeFileOperationsOptions,
+  TrustedCreativeFileSystem,
+  TrustedCreativePathStats
+} from "./trusted-creative-file-operations.js";

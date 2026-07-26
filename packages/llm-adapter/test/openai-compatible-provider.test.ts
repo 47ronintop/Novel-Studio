@@ -385,6 +385,56 @@ describe("OpenAI-compatible provider", () => {
     ]);
   });
 
+  test.each([
+    ["stop", "stop"],
+    ["tool_calls", "tool_calls"],
+    ["length", "length"],
+    ["content_filter", "content_filter"],
+    ["aborted", "aborted"],
+    ["error", "error"],
+    ["provider_specific_reason", "unknown"]
+  ] as const)(
+    "normalizes the provider finish reason %s",
+    async (finishReason, expectedFinishReason) => {
+      const provider = createOpenAiCompatibleProvider({
+        transport: async () => readFixture("openai-compatible-chat-success.json"),
+        streamTransport: async function* () {
+          yield { choices: [{ delta: {}, finish_reason: finishReason }] };
+        }
+      });
+      const adapter = createLlmAdapter({ provider });
+
+      const events = await collectStream(adapter.stream({ ...request, mode: "streaming" }));
+
+      expect(events).toContainEqual({
+        ok: true,
+        value: { type: "round_completed", finishReason: expectedFinishReason }
+      });
+    }
+  );
+
+  test("uses a later string finish reason when an earlier choice is unfinished", async () => {
+    const provider = createOpenAiCompatibleProvider({
+      transport: async () => readFixture("openai-compatible-chat-success.json"),
+      streamTransport: async function* () {
+        yield {
+          choices: [
+            { delta: {}, finish_reason: null },
+            { delta: {}, finish_reason: "length" }
+          ]
+        };
+      }
+    });
+    const adapter = createLlmAdapter({ provider });
+
+    const events = await collectStream(adapter.stream({ ...request, mode: "streaming" }));
+
+    expect(events).toContainEqual({
+      ok: true,
+      value: { type: "round_completed", finishReason: "length" }
+    });
+  });
+
   test("normalizes malformed OpenAI-compatible streaming chunks", async () => {
     const provider = createOpenAiCompatibleProvider({
       transport: async () => readFixture("openai-compatible-chat-success.json"),

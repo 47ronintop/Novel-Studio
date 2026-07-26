@@ -90,6 +90,23 @@ export type AgentWriteLifecycleMutation =
       readonly after: readonly AgentOperationPathSnapshot[];
     };
 
+export type AgentWriteTrustedCreativeReplaceMutation = Extract<
+  AgentWriteLifecycleMutation,
+  { readonly kind: "replace_file" }
+>;
+
+/**
+ * Standard-trust replacement boundary for app-managed creative projects.
+ *
+ * Unlike AgentWriteLifecycleOperationPort, this contract does not claim atomic
+ * descriptor/handle traversal. It can only replace an existing approved text
+ * asset and is never used for create/move/delete/directory operations.
+ */
+export interface AgentWriteTrustedCreativeMutationPort {
+  readonly trustLevel: "standard_trusted_creative";
+  replace(input: AgentWriteTrustedCreativeReplaceMutation): Promise<Result<void, UnifiedError>>;
+}
+
 export interface AgentWriteTransactionOptions {
   readonly projectRoot: string;
   readonly projectLock: AgentWriteProjectLockPort;
@@ -101,11 +118,12 @@ export interface AgentWriteTransactionOptions {
   readonly createWriteId?: () => string;
   /**
    * Test-only verifier/fault hook. It never performs the mutation itself;
-   * production writes must always flow through lifecycleOperations.
+   * production writes must always flow through a configured mutation port.
    */
   readonly replaceFile?: (input: AgentWriteReplaceInput) => Promise<Result<void, UnifiedError>>;
   readonly allowUnsafeReplaceFileForTesting?: boolean;
   readonly lifecycleOperations?: AgentWriteLifecycleOperationPort;
+  readonly trustedCreativeMutations?: AgentWriteTrustedCreativeMutationPort;
   readonly traceId?: string;
 }
 
@@ -864,8 +882,8 @@ export class AgentWriteTransaction {
     const operationPreflight = await this.preflightOperations(input.operations ?? []);
     if (!operationPreflight.ok) return operationPreflight;
     if (
-      (preflight.value.length > 0 || operationPreflight.value.length > 0) &&
-      this.options.lifecycleOperations === undefined
+      (preflight.value.length > 0 && !this.hasReplaceMutationPort()) ||
+      (operationPreflight.value.length > 0 && this.options.lifecycleOperations === undefined)
     ) {
       return err(this.error("AGENT_WRITE_NATIVE_FILE_OPERATIONS_REQUIRED", "validation"));
     }
@@ -1187,7 +1205,11 @@ export class AgentWriteTransaction {
       }
       return preflight;
     }
-    if (this.options.lifecycleOperations === undefined) {
+    if (
+      (steps.some((step) => step.kind === "write") && !this.hasReplaceMutationPort()) ||
+      (steps.some((step) => step.kind === "operation") &&
+        this.options.lifecycleOperations === undefined)
+    ) {
       return err(this.error("AGENT_WRITE_NATIVE_FILE_OPERATIONS_REQUIRED", "validation"));
     }
 
@@ -1882,7 +1904,8 @@ export class AgentWriteTransaction {
     content = file.candidateContent
   ): Promise<Result<void, UnifiedError>> {
     const lifecycle = this.options.lifecycleOperations;
-    if (lifecycle === undefined) {
+    const trustedCreative = this.options.trustedCreativeMutations;
+    if (lifecycle === undefined && trustedCreative === undefined) {
       return err(this.error("AGENT_WRITE_NATIVE_FILE_OPERATIONS_REQUIRED", "validation"));
     }
 
@@ -1912,14 +1935,26 @@ export class AgentWriteTransaction {
 
     const locked = await this.options.projectLock.verifyProjectLockOwnership();
     if (!locked.ok) return locked;
-    return lifecycle.mutate({
+    const mutation: AgentWriteTrustedCreativeReplaceMutation = {
       kind: "replace_file",
       phase,
       relativePath: file.relativePath,
       content,
       before: [fileSnapshot(file.relativePath, expectedContent)],
       after: [fileSnapshot(file.relativePath, content)]
-    });
+    };
+    return lifecycle === undefined
+      ? requireDefined(trustedCreative, "Trusted creative mutation port is missing.").replace(
+          mutation
+        )
+      : lifecycle.mutate(mutation);
+  }
+
+  private hasReplaceMutationPort(): boolean {
+    return (
+      this.options.lifecycleOperations !== undefined ||
+      this.options.trustedCreativeMutations !== undefined
+    );
   }
 
   private async restoreJournalEntry(

@@ -379,10 +379,27 @@ function parseStreamChunk(
     }
   }
 
-  const finishReason = choices
+  const rawFinishReason = choices
     .map((choice) => (isRecord(choice) ? choice.finish_reason : undefined))
-    .find((value) => value !== undefined);
-  if (finishReason === "tool_calls" || finishReason === "stop") {
+    .find((value): value is string => typeof value === "string");
+  // Emit round_completed for any non-null string finish_reason. Values beyond
+  // "tool_calls" and "stop" indicate truncated/filtered rounds; the agent loop
+  // enforces fail-closed dispatch and must NOT execute tool calls for those states.
+  if (rawFinishReason !== undefined) {
+    const finishReason =
+      rawFinishReason === "tool_calls"
+        ? "tool_calls"
+        : rawFinishReason === "stop"
+          ? "stop"
+          : rawFinishReason === "length"
+            ? "length"
+            : rawFinishReason === "content_filter"
+              ? "content_filter"
+              : rawFinishReason === "aborted"
+                ? "aborted"
+                : rawFinishReason === "error"
+                  ? "error"
+                  : "unknown";
     events.push({ type: "round_completed", finishReason });
   }
 

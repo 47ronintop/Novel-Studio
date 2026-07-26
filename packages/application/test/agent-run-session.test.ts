@@ -1520,6 +1520,166 @@ describe("AgentRunSession", () => {
     expect(executed).toEqual(["notes/one.md"]);
   });
 
+  test.each([
+    "stop",
+    "length",
+    "content_filter",
+    "aborted",
+    "error",
+    "unknown",
+    undefined
+  ] as const)(
+    "does not execute assembled tool calls when the round ends with %s",
+    async (finishReason) => {
+      const createSession = (applicationExports as unknown as Record<string, unknown>)[
+        "createAgentRunSession"
+      ] as (options: Record<string, unknown>) => {
+        startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+        readAgentRun(runId: string): Promise<Record<string, unknown>>;
+      };
+      const runId = `run_incomplete_${finishReason ?? "missing"}`;
+      let rounds = 0;
+      const execute = vi.fn(async () => ({ ok: true, value: { summary: "read", data: {} } }));
+      const session = createSession({
+        coordinatorOptions: { createRunId: () => runId },
+        repository: memoryRepository(),
+        modelDriver: {
+          async *streamRound() {
+            rounds += 1;
+            if (rounds === 1) {
+              yield toolCall("incomplete-call", "read_project_text", { path: "notes.md" });
+              if (finishReason !== undefined) {
+                yield { type: "round_completed", finishReason };
+              }
+              return;
+            }
+            yield { type: "round_completed", finishReason: "stop" };
+          }
+        },
+        startPreflight: echoStartPreflight(),
+        readToolExecutor: { execute }
+      });
+
+      await session.startAgentRun({
+        ...startCommand(),
+        limits: { maxModelRounds: 2, maxToolCalls: 2, maxConsecutiveToolFailures: 2 }
+      });
+      await vi.waitFor(async () => {
+        expect(await session.readAgentRun(runId)).toMatchObject({
+          value: {
+            snapshot: { status: "completed" },
+            events: expect.arrayContaining([
+              expect.objectContaining({
+                type: "tool_failed",
+                detail: expect.objectContaining({ toolCallId: "incomplete-call" })
+              })
+            ])
+          }
+        });
+      });
+      expect(execute).not.toHaveBeenCalled();
+    }
+  );
+
+  test("rejects truncated tool JSON before invoking the read executor", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ] as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    let rounds = 0;
+    const execute = vi.fn(async () => ({ ok: true, value: { summary: "read", data: {} } }));
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_truncated_tool_json" },
+      repository: memoryRepository(),
+      modelDriver: {
+        async *streamRound() {
+          rounds += 1;
+          if (rounds === 1) {
+            yield {
+              type: "tool_call_delta",
+              toolCallId: "truncated-json",
+              name: "read_project_text",
+              argumentsDelta: '{"path":'
+            };
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: { execute }
+    });
+
+    await session.startAgentRun({
+      ...startCommand(),
+      limits: { maxModelRounds: 2, maxToolCalls: 2, maxConsecutiveToolFailures: 2 }
+    });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_truncated_tool_json")).toMatchObject({
+        value: {
+          snapshot: { status: "completed" },
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_failed",
+              detail: expect.objectContaining({ code: "AGENT_TOOL_ARGUMENTS_INVALID" })
+            })
+          ])
+        }
+      });
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  test("executes a repeated tool-call ID only once", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ] as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    let rounds = 0;
+    const execute = vi.fn(async () => ({ ok: true, value: { summary: "read", data: {} } }));
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_duplicate_tool_id" },
+      repository: memoryRepository(),
+      modelDriver: {
+        async *streamRound() {
+          rounds += 1;
+          if (rounds <= 2) {
+            yield toolCall("repeated-call", "read_project_text", { path: "notes.md" });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: { execute }
+    });
+
+    await session.startAgentRun({
+      ...startCommand(),
+      limits: { maxModelRounds: 3, maxToolCalls: 3, maxConsecutiveToolFailures: 2 }
+    });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_duplicate_tool_id")).toMatchObject({
+        value: {
+          snapshot: { status: "completed" },
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_failed",
+              detail: expect.objectContaining({ code: "AGENT_TOOL_CALL_DUPLICATE" })
+            })
+          ])
+        }
+      });
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   test("stops retrying read tools after the consecutive failure limit", async () => {
     const createSession = (applicationExports as unknown as Record<string, unknown>)[
       "createAgentRunSession"
