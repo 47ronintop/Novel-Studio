@@ -31,12 +31,18 @@ export type {
   AgentUsageRepositoryRunSummary,
   ClearAgentUsageRepositoryCommand
 } from "./agent-usage-repository.js";
-export { AgentConversationFileRepository } from "./agent-conversation-repository.js";
+export {
+  AgentConversationFileRepository,
+  normalizeConversationRecord
+} from "./agent-conversation-repository.js";
 export type {
   AgentConversationFileRepositoryOptions,
   AgentConversationListDiagnostic,
   AgentConversationListPage,
   AgentConversationRecord,
+  AgentConversationRecordV10,
+  AgentConversationRecordV11,
+  AgentConversationRecordWrite,
   AgentConversationRecordStatus,
   AgentConversationSummaryRevision,
   UpdateAgentConversationRecordInput
@@ -49,6 +55,26 @@ export type {
 } from "./agent-project-read-repository.js";
 export { EngineeringWorkspaceFileRepository } from "./engineering-workspace-repository.js";
 export type { EngineeringWorkspaceFileRepositoryOptions } from "./engineering-workspace-repository.js";
+export {
+  CREATIVE_PROJECT_FILE_LIFECYCLE_VERSION,
+  CREATIVE_PROJECT_FILE_POLICY_VERSION,
+  CREATIVE_PROJECT_FILE_TREE_SNAPSHOT_VERSION,
+  DEFAULT_CREATIVE_PROJECT_FILE_POLICY,
+  CreativeProjectFileRepository,
+  normalizeCreativeProjectFilePath,
+  normalizeCreativeProjectFilePolicy
+} from "./creative-project-file-repository.js";
+export type {
+  CreativeProjectFileDocument,
+  CreativeProjectFileLifecycleCommand,
+  CreativeProjectFileLifecycleReceipt,
+  CreativeProjectFilePolicy,
+  CreativeProjectFileReceiptStore,
+  CreativeProjectFileRepositoryOptions,
+  CreativeProjectFileSaveResult,
+  CreativeProjectFileTreeNode,
+  CreativeProjectFileTreeSnapshot
+} from "./creative-project-file-repository.js";
 export type {
   AssetType,
   AgentTransactionJournal,

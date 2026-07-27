@@ -23,7 +23,7 @@ describe("UserPreferencesSession", () => {
 
     expect(loaded).toEqual(
       ok({
-        schemaVersion: "1.0",
+        schemaVersion: "1.2",
         onboarding: { dismissed: false },
         editor: {
           fontFamily: "serif",
@@ -41,6 +41,7 @@ describe("UserPreferencesSession", () => {
     expect(createDefaultUserPreferences().shell).toMatchObject({
       workbenchMode: "creative",
       creativeNavigatorMode: "writing",
+      creativeFileExpandedPathIds: [],
       engineeringExpandedPathIds: [],
       inspectorCollapsed: false
     });
@@ -60,8 +61,11 @@ describe("UserPreferencesSession", () => {
 
     const saveResult = await session.save({
       shell: {
+        creativeNavigatorMode: "files",
+        creativeFileExpandedPathIds: ["notes", "notes"],
         engineeringExpandedPathIds: [],
-        navigatorExpandedSectionIds: []
+        navigatorExpandedSectionIds: [],
+        standaloneSelectedConversationId: "standalone-conversation-01"
       }
     });
     const loaded = await session.load();
@@ -70,8 +74,11 @@ describe("UserPreferencesSession", () => {
       ok: true,
       value: {
         shell: {
+          creativeNavigatorMode: "files",
+          creativeFileExpandedPathIds: ["notes"],
           engineeringExpandedPathIds: [],
-          navigatorExpandedSectionIds: []
+          navigatorExpandedSectionIds: [],
+          standaloneSelectedConversationId: "standalone-conversation-01"
         }
       }
     });
@@ -79,8 +86,11 @@ describe("UserPreferencesSession", () => {
       ok: true,
       value: {
         shell: {
+          creativeNavigatorMode: "files",
+          creativeFileExpandedPathIds: ["notes"],
           engineeringExpandedPathIds: [],
-          navigatorExpandedSectionIds: []
+          navigatorExpandedSectionIds: [],
+          standaloneSelectedConversationId: "standalone-conversation-01"
         }
       }
     });
@@ -415,7 +425,8 @@ describe("UserPreferencesSession", () => {
         workbenchMode: "unknown",
         creativeNavigatorMode: "unknown",
         engineeringExpandedPathIds: ["src", "src", 42],
-        navigatorExpandedSectionIds: ["chapters", "chapters", 42]
+        navigatorExpandedSectionIds: ["chapters", "chapters", 42],
+        standaloneSelectedConversationId: 42
       }
     } as unknown as UserPreferencesSnapshot;
     const session = createUserPreferencesSession({
@@ -438,5 +449,38 @@ describe("UserPreferencesSession", () => {
         }
       }
     });
+    if (loaded.ok) {
+      expect(loaded.value.shell).not.toHaveProperty("standaloneSelectedConversationId");
+    }
+  });
+
+  test("normalizes legacy shells without standalone selection state", async () => {
+    const defaults = createDefaultUserPreferences();
+    const {
+      creativeFileExpandedPathIds: _legacyCreativeFileExpansion,
+      standaloneSelectedConversationId: _legacyStandaloneSelection,
+      ...legacyShell
+    } = defaults.shell;
+    const session = createUserPreferencesSession({
+      preferencesPort: {
+        readUserPreferences: async () =>
+          ok({ ...defaults, schemaVersion: "1.0", shell: legacyShell } as UserPreferencesSnapshot),
+        writeUserPreferences: async (preferences) => ok(preferences)
+      }
+    });
+
+    const loaded = await session.load();
+    expect(loaded).toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "1.2",
+        shell: { creativeNavigatorMode: "writing", creativeFileExpandedPathIds: [] }
+      }
+    });
+    if (loaded.ok) {
+      expect(loaded.value.shell).not.toHaveProperty("standaloneSelectedConversationId");
+    }
+    void _legacyCreativeFileExpansion;
+    void _legacyStandaloneSelection;
   });
 });

@@ -88,7 +88,12 @@ function isUserPreferencesSnapshot(value: unknown): value is UserPreferencesSnap
     return false;
   }
   const record = value as Record<string, unknown>;
-  return record["schemaVersion"] === "1.0" && typeof record["onboarding"] === "object";
+  return (
+    (record["schemaVersion"] === "1.0" ||
+      record["schemaVersion"] === "1.1" ||
+      record["schemaVersion"] === "1.2") &&
+    typeof record["onboarding"] === "object"
+  );
 }
 
 function isMissingFileError(error: unknown): boolean {

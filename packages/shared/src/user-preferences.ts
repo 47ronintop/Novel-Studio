@@ -30,7 +30,9 @@ export interface UserAppearancePreferences {
 export interface UserShellPreferences {
   readonly workbenchMode: WorkbenchMode;
   readonly creativeNavigatorMode: CreativeNavigatorMode;
+  readonly creativeFileExpandedPathIds: readonly string[];
   readonly engineeringExpandedPathIds: readonly string[];
+  readonly standaloneSelectedConversationId?: string;
   readonly navigatorCollapsed: boolean;
   readonly navigatorExpandedSectionIds?: readonly string[];
   readonly inspectorCollapsed: boolean;
@@ -43,6 +45,7 @@ export interface UserShellPreferences {
 export const DEFAULT_USER_SHELL_PREFERENCES: UserShellPreferences = {
   workbenchMode: "creative",
   creativeNavigatorMode: "writing",
+  creativeFileExpandedPathIds: [],
   engineeringExpandedPathIds: [],
   navigatorCollapsed: false,
   navigatorExpandedSectionIds: [],
@@ -59,7 +62,7 @@ export const DEFAULT_USER_SHELL_PREFERENCES: UserShellPreferences = {
 };
 
 export interface UserPreferencesSnapshot {
-  readonly schemaVersion: "1.0";
+  readonly schemaVersion: "1.0" | "1.1" | "1.2";
   readonly onboarding: UserOnboardingPreferences;
   readonly editor: UserEditorPreferences;
   readonly appearance: UserAppearancePreferences;

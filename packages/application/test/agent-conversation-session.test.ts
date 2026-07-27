@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 
+import type { AgentContextScope } from "@novel-studio/agent-engine";
 import { err, ok, type JsonObject, type Result, type UnifiedError } from "@novel-studio/shared";
 import {
   LEGACY_AGENT_CONVERSATION_ID,
@@ -663,6 +664,88 @@ describe("AgentConversationSession", () => {
     ).toMatchObject({ ok: false, error: { code: "AGENT_CONVERSATION_ID_RESERVED" } });
     expect(browserExports.LEGACY_AGENT_CONVERSATION_ID).toBe(LEGACY_AGENT_CONVERSATION_ID);
   });
+
+  test("keeps standalone conversations scope-bound without a project identity", async () => {
+    const port = new MemoryConversationPort();
+    port.records.set("conv_workspace", conversationRecord("conv_workspace"));
+    const scope = standaloneScope();
+    const session = createAgentConversationSession({
+      scope,
+      repository: port,
+      runReader: port,
+      createConversationId: () => "conv_standalone",
+      now: () => "2026-07-14T00:00:00.000Z"
+    });
+
+    const created = await session.createConversation({ scope, commandId: "cmd_create" });
+    expect(created).toMatchObject({
+      ok: true,
+      value: { schemaVersion: "1.1", conversationId: "conv_standalone", scope }
+    });
+    expect(created.ok && "projectId" in created.value).toBe(false);
+    expect(port.records.get("conv_standalone")).toMatchObject({
+      schemaVersion: "1.1",
+      scope
+    });
+    expect(port.records.get("conv_standalone")).not.toHaveProperty("projectId");
+
+    expect(await session.listConversations({ scope })).toMatchObject({
+      ok: true,
+      value: { items: [{ conversationId: "conv_standalone", scope }] }
+    });
+    expect(
+      await session.readConversation({
+        scope: {
+          kind: "workspace",
+          workspaceKind: "creativeProject",
+          workspaceId: "project_01"
+        },
+        conversationId: "conv_standalone"
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_CONVERSATION_SCOPE_MISMATCH" } });
+
+    expect(await session.searchConversations({ scope, query: "新会话" })).toMatchObject({
+      ok: true,
+      value: { items: [{ conversationId: "conv_standalone" }] }
+    });
+
+    expect(
+      await session.archiveConversation({
+        scope,
+        conversationId: "conv_standalone",
+        commandId: "cmd_archive",
+        expectedConversationRevision: 1
+      })
+    ).toMatchObject({ ok: true, value: { status: "archived", revision: 2, scope } });
+    expect(
+      await session.restoreConversation({
+        scope,
+        conversationId: "conv_standalone",
+        commandId: "cmd_restore",
+        expectedConversationRevision: 2
+      })
+    ).toMatchObject({ ok: true, value: { status: "active", revision: 3, scope } });
+    expect(
+      await session.archiveConversation({
+        scope,
+        conversationId: "conv_standalone",
+        commandId: "cmd_archive_again",
+        expectedConversationRevision: 3
+      })
+    ).toMatchObject({ ok: true, value: { status: "archived", revision: 4, scope } });
+    expect(
+      await session.deleteConversation({
+        scope,
+        conversationId: "conv_standalone",
+        commandId: "cmd_delete",
+        expectedConversationRevision: 4
+      })
+    ).toEqual({ ok: true, value: { conversationId: "conv_standalone", revision: 5 } });
+    expect(await session.listConversations({ scope, includeArchived: true })).toEqual({
+      ok: true,
+      value: { items: [], diagnostics: [] }
+    });
+  });
 });
 
 function createSession(port: MemoryConversationPort) {
@@ -685,7 +768,8 @@ class MemoryConversationPort implements AgentConversationPersistencePort {
   public readonly events = new Map<string, JsonObject[]>();
   public readonly summaries: JsonObject[] = [];
   public readonly searchInputs: {
-    readonly projectId: string;
+    readonly scope?: { readonly kind: string; readonly workspaceId?: string };
+    readonly projectId?: string;
     readonly query: string;
     readonly includeArchived?: boolean;
     readonly cursor?: string;
@@ -719,20 +803,29 @@ class MemoryConversationPort implements AgentConversationPersistencePort {
   }
 
   public listConversations(input: {
-    readonly projectId: string;
+    readonly scope?: { readonly kind: string; readonly workspaceId?: string };
+    readonly projectId?: string;
     readonly status?: "active" | "archived";
     readonly cursor?: string;
     readonly limit?: number;
   }): Promise<Result<AgentConversationPersistenceListPage, UnifiedError>> {
     this.listInputs.push(input as JsonObject);
+    const requestedProjectId =
+      input.scope?.kind === "workspace" ? input.scope.workspaceId : input.projectId;
     const limit = Math.min(input.limit ?? 30, 100);
     const items = [...this.records.values()]
-      .filter(
-        (record) =>
-          record["projectId"] === input.projectId &&
+      .filter((record) => {
+        const scope = record["scope"];
+        const workspaceId =
+          typeof scope === "object" && scope !== null && !Array.isArray(scope)
+            ? (scope as JsonObject)["workspaceId"]
+            : record["projectId"];
+        return (
+          workspaceId === requestedProjectId &&
           record["status"] !== "deleted" &&
           (input.status === undefined || record["status"] === input.status)
-      )
+        );
+      })
       .sort((left, right) => String(right["updatedAt"]).localeCompare(String(left["updatedAt"])))
       .slice(0, limit);
     return Promise.resolve(ok({ items, diagnostics: this.listDiagnostics }));
@@ -806,7 +899,8 @@ class MemoryConversationPort implements AgentConversationPersistencePort {
   }
 
   public searchConversations(input: {
-    readonly projectId: string;
+    readonly scope?: { readonly kind: string; readonly workspaceId?: string };
+    readonly projectId?: string;
     readonly query: string;
     readonly includeArchived?: boolean;
     readonly cursor?: string;
@@ -858,6 +952,22 @@ class MemoryConversationPort implements AgentConversationPersistencePort {
     return Promise.resolve(ok(this.runs.filter((run) => run["projectId"] === projectId)));
   }
 
+  public listRunSnapshotsForScope(
+    scope: AgentContextScope
+  ): Promise<Result<JsonObject[], UnifiedError>> {
+    return Promise.resolve(
+      ok(
+        this.runs.filter((run) => {
+          const runScope = run["scope"];
+          if (typeof runScope === "object" && runScope !== null && !Array.isArray(runScope)) {
+            return JSON.stringify(runScope) === JSON.stringify(scope);
+          }
+          return scope.kind === "workspace" && run["projectId"] === scope.workspaceId;
+        })
+      )
+    );
+  }
+
   public readRunEvents(runId: string): Promise<Result<JsonObject[], UnifiedError>> {
     return Promise.resolve(ok(this.events.get(runId) ?? []));
   }
@@ -865,6 +975,14 @@ class MemoryConversationPort implements AgentConversationPersistencePort {
   public hasPendingReview(): Promise<Result<boolean, UnifiedError>> {
     return Promise.resolve(ok(this.pendingReview));
   }
+
+  public hasPendingReviewForScope(): Promise<Result<boolean, UnifiedError>> {
+    return Promise.resolve(ok(this.pendingReview));
+  }
+}
+
+function standaloneScope(): Extract<AgentContextScope, { readonly kind: "standalone" }> {
+  return { kind: "standalone", scopeId: "standalone" };
 }
 
 function statusCommand(commandId: string, expectedConversationRevision: number) {

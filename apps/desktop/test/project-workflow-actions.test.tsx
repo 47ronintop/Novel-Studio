@@ -76,6 +76,66 @@ describe("useProjectWorkflowActions", () => {
     expect(storyBibleEditorStates).toEqual([]);
   });
 
+  test("does not start project transitions when the dirty-file guard is canceled", async () => {
+    const currentWorkflow = {
+      ...createWorkflow(),
+      projectId: "project-a",
+      status: "ready" as const
+    };
+    const getProps = vi.fn(() => currentWorkflow);
+    const openProject = vi.fn(async () => currentWorkflow);
+    const createProject = vi.fn(async () => currentWorkflow);
+    const createExampleProject = vi.fn(async () => currentWorkflow);
+    const beforeWorkspaceTransition = vi.fn(async () => false);
+    const workflowStates: Array<ProjectWorkflowProps | undefined> = [];
+    const bridge = {
+      getProps,
+      openProject,
+      createProject,
+      createExampleProject
+    } as unknown as ProjectWorkflowBridge;
+    let actions: ReturnType<typeof useProjectWorkflowActions> | undefined;
+
+    function Harness() {
+      actions = useProjectWorkflowActions({
+        api: undefined,
+        chapterBridge: undefined,
+        projectWorkflowBridge: bridge,
+        settingsBridge: undefined,
+        storyBibleBridge: undefined,
+        studioBridge: undefined,
+        beforeWorkspaceTransition,
+        setChapterEditor: () => undefined,
+        setProjectWorkflow: (next) => workflowStates.push(resolveState(next)),
+        setSettings: () => undefined,
+        setShellState: () => undefined,
+        setStoryBible: () => undefined,
+        setStoryBibleEditor: () => undefined,
+        setStudio: () => undefined
+      });
+      return null;
+    }
+
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<Harness />));
+
+    await act(async () => {
+      actions?.handleOpenProject();
+      actions?.handleCreateProject();
+      actions?.handleCreateExampleProject();
+      await Promise.resolve();
+    });
+
+    expect(beforeWorkspaceTransition).toHaveBeenCalledTimes(3);
+    expect(getProps).not.toHaveBeenCalled();
+    expect(openProject).not.toHaveBeenCalled();
+    expect(createProject).not.toHaveBeenCalled();
+    expect(createExampleProject).not.toHaveBeenCalled();
+    expect(workflowStates).toEqual([]);
+  });
+
   test("clears project-bound story projections only after successful activation", async () => {
     const storyBibleStates: Array<StoryBibleSummaryProps | undefined> = [];
     const storyBibleEditorStates: Array<StoryBibleEditorProps | undefined> = [];

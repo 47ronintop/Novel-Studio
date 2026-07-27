@@ -11,7 +11,7 @@ import {
 function baseDraft(overrides: Partial<CreateAgentRunDraftInput> = {}): AgentRunDraft {
   return createAgentRunDraft({
     runDraftId: "run_draft_01",
-    projectId: "project_01",
+    scope: { kind: "workspace", workspaceKind: "creativeProject", workspaceId: "project_01" },
     conversationId: "conv_01",
     userRequest: "",
     operationMode: "planning",
@@ -31,7 +31,7 @@ function baseDraft(overrides: Partial<CreateAgentRunDraftInput> = {}): AgentRunD
 describe("Agent Run Draft value object", () => {
   test("creates revision 1 with a checksum and is frozen", () => {
     const draft = baseDraft();
-    expect(draft.schemaVersion).toBe("1.0");
+    expect(draft.schemaVersion).toBe("1.1");
     expect(draft.revision).toBe(1);
     expect(draft.checksum).toMatch(/^[0-9a-f]{64}$/);
     expect(Object.isFrozen(draft)).toBe(true);
@@ -170,5 +170,32 @@ describe("Agent Run Draft value object", () => {
     expect(changed.checksum).not.toBe(draft.checksum);
     const sameContent = baseDraft({ operationMode: "execution" });
     expect(sameContent.checksum).toBe(draft.checksum);
+  });
+
+  test("normalizes a legacy engineering draft without retaining projectId", async () => {
+    const { normalizeAgentRunDraft } = await import("../src/agent-run-draft.js");
+    const current = baseDraft();
+    const legacy = {
+      ...current,
+      schemaVersion: "1.0",
+      projectId: "workspace_01"
+    } as unknown as Record<string, unknown>;
+    delete legacy["scope"];
+
+    const normalized = normalizeAgentRunDraft(legacy, "engineeringWorkspace");
+    expect(normalized.scope).toEqual({
+      kind: "workspace",
+      workspaceKind: "engineeringWorkspace",
+      workspaceId: "workspace_01"
+    });
+    expect(normalized).not.toHaveProperty("projectId");
+
+    const revised = applyAgentRunDraftMutation(
+      normalized,
+      { kind: "set_request", request: "updated" },
+      "t2"
+    );
+    expect(revised.ok).toBe(true);
+    if (revised.ok) expect(revised.value).not.toHaveProperty("projectId");
   });
 });

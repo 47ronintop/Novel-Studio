@@ -5,7 +5,7 @@ import type {
   AgentRunErrorRecord,
   AgentRunEvent,
   AgentRunRetryTarget,
-  AgentRunStatusV12,
+  AgentRunStatusV13,
   AgentWritePolicy,
   ApplicationCommand,
   ApplicationCommandId,
@@ -32,6 +32,7 @@ import type { EditorPreferences } from "./editor-toolbar.js";
 import type { ModelSettingsPanelProps } from "./model-settings-panel.js";
 import type { PlanArtifactReviewProps } from "./plan-artifact-review.js";
 import type { EngineeringWorkspaceNavigatorProps } from "./engineering-workspace-navigator.js";
+import type { ProjectFileTreeNode } from "./project-file-tree.js";
 
 export interface WorkspaceShellProps {
   readonly appearancePreferences?: UserAppearancePreferences | undefined;
@@ -82,6 +83,13 @@ export interface CreativeWorkspaceNavigatorProps {
   readonly activeChapterId?: string;
   readonly dirtyChapterIds: readonly string[];
   readonly storyBible: StoryBibleEditorProps;
+  /**
+   * The creative-project-file surface is deliberately scoped to the creative
+   * navigator. It exposes only project-relative identities and lifecycle
+   * callbacks; root paths and engineering workspace capabilities never cross
+   * this UI boundary.
+   */
+  readonly projectFiles?: CreativeProjectFilesNavigatorProps | undefined;
   readonly onModeSelect: (mode: CreativeNavigatorMode) => void;
   readonly onSearchQueryChange: (query: string) => void;
   readonly onCreateChapter: () => void;
@@ -92,6 +100,22 @@ export interface CreativeWorkspaceNavigatorProps {
   readonly onStoryKindOpen: (kind: StoryBibleEditorKind) => void;
   readonly onStoryEntryOpen: (entryId: string) => void;
   readonly onStoryEntryCreate: (kind: StoryBibleEditorKind) => void;
+}
+
+export interface CreativeProjectFilesNavigatorProps {
+  readonly nodes: readonly ProjectFileTreeNode[];
+  readonly expandedPathIds: readonly string[];
+  readonly activeFilePath?: string | undefined;
+  readonly loading?: boolean | undefined;
+  readonly truncated?: boolean | undefined;
+  readonly errorMessage?: string | undefined;
+  readonly onExpandedPathIdsChange: (pathIds: readonly string[]) => void;
+  readonly onFileOpen: (path: string) => void;
+  readonly onRefresh: () => void;
+  readonly onCreateTextFile: (path: string) => void;
+  readonly onCreateDirectory: (path: string) => void;
+  readonly onRenamePath: (sourcePath: string, targetPath: string) => void;
+  readonly onDeletePath: (path: string) => void;
 }
 
 export type RecoveryReviewProps =
@@ -389,7 +413,7 @@ export interface AgentRunPanelProps {
   readonly runId?: string;
   /** The request currently being started; shown immediately before a persisted run exists. */
   readonly userRequest?: string;
-  readonly status: AgentRunStatusV12 | "idle";
+  readonly status: AgentRunStatusV13 | "idle";
   readonly assistantText: string;
   readonly events: readonly AgentRunEvent[];
   readonly pendingUserInput?: AgentRunPendingUserInputProps;

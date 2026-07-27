@@ -12,6 +12,7 @@ import type {
   ChapterEditorProps,
   CommandPaletteFeedback,
   ConfigStudioPanelProps,
+  CreativeProjectFilesNavigatorProps,
   CreativeWorkspaceNavigatorProps,
   ModelSettingsPanelProps,
   ProjectSearchProps,
@@ -36,6 +37,8 @@ export interface RendererWorkspaceShellProps {
   readonly studio: ConfigStudioPanelProps | undefined;
   readonly chapterEditor: ChapterEditorProps | undefined;
   readonly fileEditor: PlainFileEditorProps | undefined;
+  readonly fileEditorScope: "creativeProjectFile" | "engineeringWorkspaceFile" | undefined;
+  readonly creativeProjectFiles: CreativeProjectFilesNavigatorProps | undefined;
   readonly engineeringWorkspace: EngineeringWorkspaceSnapshot | undefined;
   readonly onboarding: WorkspaceShellProps["onboarding"];
   readonly storyBible: StoryBibleSummaryProps | undefined;
@@ -189,6 +192,9 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
             : { activeChapterId: projectWorkflow.activeChapterId }),
           dirtyChapterIds: projectWorkflow.dirtyChapterIds ?? [],
           storyBible: storyBibleEditor,
+          ...(props.creativeProjectFiles === undefined
+            ? {}
+            : { projectFiles: props.creativeProjectFiles }),
           onModeSelect: props.onCreativeNavigatorModeSelect,
           onSearchQueryChange: props.onNavigatorSearchQueryChange,
           onCreateChapter: props.onCreateChapter,
@@ -210,7 +216,8 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
           displayName: props.engineeringWorkspace.displayName,
           tree: props.engineeringWorkspace.tree,
           expandedPathIds: props.shellState.engineeringExpandedPathIds,
-          ...(props.fileEditor?.path === undefined
+          ...(props.fileEditor?.path === undefined ||
+          props.fileEditorScope !== "engineeringWorkspaceFile"
             ? {}
             : { activeFilePath: props.fileEditor.path }),
           onExpandedPathIdsChange: props.onEngineeringExpandedPathIdsChange,

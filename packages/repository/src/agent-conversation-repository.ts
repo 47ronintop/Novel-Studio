@@ -3,6 +3,12 @@ import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 import { err, ok, type JsonObject, type Result, type UnifiedError } from "@novel-studio/shared";
+import {
+  agentContextScopeKey,
+  normalizeAgentContextScope,
+  type AgentContextScope,
+  type AgentWorkspaceKind
+} from "@novel-studio/agent-engine";
 
 import {
   createProjectPathGuard,
@@ -30,7 +36,7 @@ const MAX_SEARCH_USER_REQUESTS = 100;
 
 export type AgentConversationRecordStatus = "active" | "archived" | "deleted";
 
-export interface AgentConversationRecord extends JsonObject {
+export interface AgentConversationRecordV10 extends JsonObject {
   readonly schemaVersion: "1.0";
   readonly conversationId: string;
   readonly projectId: string;
@@ -42,6 +48,27 @@ export interface AgentConversationRecord extends JsonObject {
   readonly createdByCommandId?: string;
   readonly lastMutationCommandId?: string;
 }
+
+export interface AgentConversationRecordV11 extends JsonObject {
+  readonly schemaVersion: "1.1";
+  readonly scope: AgentContextScope;
+  readonly conversationId: string;
+  readonly revision: number;
+  readonly title: string;
+  readonly status: AgentConversationRecordStatus;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly createdByCommandId?: string;
+  readonly lastMutationCommandId?: string;
+  /**
+   * Workspace-only compatibility accessor. New records serialize `scope`, not `projectId`.
+   * It is absent for standalone records.
+   */
+  readonly projectId?: string;
+}
+
+export type AgentConversationRecord = AgentConversationRecordV11;
+export type AgentConversationRecordWrite = Omit<AgentConversationRecordV11, "projectId">;
 
 export interface AgentConversationSummaryRevision extends JsonObject {
   readonly schemaVersion: "1.0";
@@ -69,7 +96,9 @@ export interface AgentConversationListPage {
 export interface AgentConversationSearchDocument extends JsonObject {
   readonly schemaVersion: "1.0";
   readonly conversationId: string;
-  readonly projectId: string;
+  readonly scope?: AgentContextScope;
+  /** Legacy workspace-only identity. */
+  readonly projectId?: string;
   readonly title: string;
   readonly status: AgentConversationRecordStatus;
   readonly updatedAt: string;
@@ -90,12 +119,22 @@ export interface AgentConversationSearchPage {
 
 export interface AgentConversationFileRepositoryOptions {
   readonly projectRoot: string;
+  /** Binds this repository instance to one state-root scope when supplied. */
+  readonly scope?: AgentContextScope;
   readonly traceId?: string;
+}
+
+export interface AgentConversationScopeIdentity {
+  readonly scope?: AgentContextScope;
+  /** Legacy workspace-only identity. */
+  readonly projectId?: string;
 }
 
 export interface UpdateAgentConversationRecordInput {
   readonly conversationId: string;
-  readonly projectId: string;
+  readonly scope?: AgentContextScope;
+  /** Legacy workspace-only identity. */
+  readonly projectId?: string;
   readonly expectedRevision: number;
   readonly title?: string;
   readonly status?: AgentConversationRecordStatus;
@@ -104,14 +143,14 @@ export interface UpdateAgentConversationRecordInput {
 }
 
 interface ConversationCursor {
-  readonly projectId: string;
+  readonly scope: AgentContextScope;
   readonly status: "active" | "archived" | null;
   readonly updatedAt: string;
   readonly conversationId: string;
 }
 
 interface ConversationSearchCursor {
-  readonly projectId: string;
+  readonly scope: AgentContextScope;
   readonly query: string;
   readonly includeArchived: boolean;
   readonly updatedAt: string;
@@ -122,69 +161,107 @@ export class AgentConversationFileRepository {
   private readonly traceId: string;
   private readonly pathGuard: ProjectPathGuard;
   private readonly writeTails = new Map<string, Promise<void>>();
+  private readonly configuredScope: AgentContextScope | undefined;
+  private readonly hasInvalidConfiguredScope: boolean;
 
   public constructor(private readonly options: AgentConversationFileRepositoryOptions) {
     this.traceId = options.traceId ?? "agent-conversation-file-repository";
     this.pathGuard = createProjectPathGuard(options.projectRoot);
+    try {
+      this.configuredScope =
+        options.scope === undefined ? undefined : normalizeAgentContextScope(options.scope);
+      this.hasInvalidConfiguredScope = false;
+    } catch {
+      this.configuredScope = undefined;
+      this.hasInvalidConfiguredScope = true;
+    }
   }
 
   public createConversation(
-    record: AgentConversationRecord
+    record: AgentConversationRecordWrite | AgentConversationRecordV10
   ): Promise<Result<AgentConversationRecord, UnifiedError>> {
     if (record.conversationId === LEGACY_CONVERSATION_ID) {
       return Promise.resolve(this.invalid("AGENT_CONVERSATION_ID_RESERVED"));
     }
-    if (
-      !isConversationRecord(record) ||
-      record.status === "deleted" ||
-      jsonByteLength(record) > MAX_RECORD_BYTES
-    ) {
+    let normalized: AgentConversationRecord;
+    try {
+      normalized = normalizeConversationRecord(record, this.legacyWorkspaceKind());
+    } catch {
       return Promise.resolve(this.invalid("AGENT_CONVERSATION_RECORD_INVALID"));
     }
-    return this.withConversationWrite(record.conversationId, async () => {
-      const existing = await this.readConversation(record.conversationId);
+    if (!this.matchesConfiguredScope(normalized.scope)) {
+      return Promise.resolve(this.invalid("AGENT_CONVERSATION_SCOPE_MISMATCH"));
+    }
+    if (normalized.status === "deleted" || jsonByteLength(normalized) > MAX_RECORD_BYTES) {
+      return Promise.resolve(this.invalid("AGENT_CONVERSATION_RECORD_INVALID"));
+    }
+    return this.withConversationWrite(normalized.conversationId, async () => {
+      const existing = await this.readConversationRecord(normalized.conversationId);
       if (!existing.ok) return existing;
       if (existing.value !== undefined) {
-        return sameJson(existing.value, record)
+        if (!sameScope(existing.value.scope, normalized.scope)) {
+          return this.invalid("AGENT_CONVERSATION_SCOPE_MISMATCH");
+        }
+        return sameJson(existing.value, normalized)
           ? ok(existing.value)
           : this.invalid("AGENT_CONVERSATION_CREATE_CONFLICT");
       }
-      const written = await this.writeJson(this.conversationPath(record.conversationId), record);
-      return written.ok ? ok(record) : written;
+      const written = await this.writeJson(
+        this.conversationPath(normalized.conversationId),
+        normalized
+      );
+      return written.ok ? ok(normalized) : written;
     });
   }
 
   public async readConversation(
-    conversationId: string
+    conversationId: string,
+    scope?: AgentContextScope
   ): Promise<Result<AgentConversationRecord | undefined, UnifiedError>> {
     if (!isSafeId(conversationId)) return this.invalid("AGENT_CONVERSATION_ID_INVALID");
     if (conversationId === LEGACY_CONVERSATION_ID) {
       return this.invalid("AGENT_CONVERSATION_ID_RESERVED");
     }
-    const read = await this.readJson(
-      this.conversationPath(conversationId),
-      "AGENT_CONVERSATION_READ_FAILED",
-      MAX_RECORD_BYTES
-    );
-    if (!read.ok) return err(read.error);
-    if (read.value === undefined) return ok(undefined);
-    return isConversationRecord(read.value) && read.value.conversationId === conversationId
-      ? ok(read.value)
-      : this.invalid("AGENT_CONVERSATION_RECORD_INVALID");
+    let requestedScope: AgentContextScope | undefined;
+    try {
+      requestedScope =
+        scope === undefined ? this.configuredScope : normalizeAgentContextScope(scope);
+    } catch {
+      return this.invalid("AGENT_CONVERSATION_SCOPE_INVALID");
+    }
+    if (this.hasInvalidConfiguredScope) return this.invalid("AGENT_CONVERSATION_SCOPE_INVALID");
+    if (
+      requestedScope !== undefined &&
+      this.configuredScope !== undefined &&
+      !sameScope(requestedScope, this.configuredScope)
+    ) {
+      return this.invalid("AGENT_CONVERSATION_SCOPE_MISMATCH");
+    }
+    const record = await this.readConversationRecord(conversationId);
+    if (!record.ok || record.value === undefined) return record;
+    if (
+      (requestedScope !== undefined && !sameScope(record.value.scope, requestedScope)) ||
+      !this.matchesConfiguredScope(record.value.scope)
+    ) {
+      return ok(undefined);
+    }
+    return record;
   }
 
   public async listConversations(input: {
-    readonly projectId: string;
+    readonly scope?: AgentContextScope;
+    readonly projectId?: string;
     readonly status?: "active" | "archived";
     readonly cursor?: string;
     readonly limit?: number;
   }): Promise<Result<AgentConversationListPage, UnifiedError>> {
-    if (!isSafeId(input.projectId)) return this.invalid("AGENT_CONVERSATION_PROJECT_INVALID");
+    const scope = this.resolveScope(input, "AGENT_CONVERSATION_PROJECT_INVALID");
+    if (!scope.ok) return scope;
     const cursor = decodeCursor(input.cursor);
     if (
       input.cursor !== undefined &&
       (cursor === undefined ||
-        cursor.projectId !== input.projectId ||
+        !sameScope(cursor.scope, scope.value) ||
         cursor.status !== (input.status ?? null))
     ) {
       return this.invalid("AGENT_CONVERSATION_CURSOR_INVALID");
@@ -199,16 +276,12 @@ export class AgentConversationFileRepository {
       const diagnostics: AgentConversationListDiagnostic[] = [];
       for (const entry of entries) {
         if (!entry.isDirectory() || !isSafeId(entry.name)) continue;
-        const conversation = await this.readConversation(entry.name);
+        const conversation = await this.readConversation(entry.name, scope.value);
         if (!conversation.ok) {
           diagnostics.push({ conversationId: entry.name, code: conversation.error.code });
           continue;
         }
-        if (
-          conversation.value === undefined ||
-          conversation.value.projectId !== input.projectId ||
-          conversation.value.status === "deleted"
-        ) {
+        if (conversation.value === undefined || conversation.value.status === "deleted") {
           continue;
         }
         if (input.status !== undefined && conversation.value.status !== input.status) continue;
@@ -227,7 +300,7 @@ export class AgentConversationFileRepository {
         ...(afterCursor.length > items.length && last !== undefined
           ? {
               nextCursor: encodeCursor({
-                projectId: input.projectId,
+                scope: scope.value,
                 status: input.status ?? null,
                 updatedAt: last.updatedAt,
                 conversationId: last.conversationId
@@ -243,7 +316,8 @@ export class AgentConversationFileRepository {
   }
 
   public async searchConversations(input: {
-    readonly projectId: string;
+    readonly scope?: AgentContextScope;
+    readonly projectId?: string;
     readonly query: string;
     readonly includeArchived?: boolean;
     readonly cursor?: string;
@@ -252,8 +326,9 @@ export class AgentConversationFileRepository {
   }): Promise<Result<AgentConversationSearchPage, UnifiedError>> {
     const normalizedQuery = input.query.trim().toLocaleLowerCase();
     const includeArchived = input.includeArchived === true;
+    const scope = this.resolveScope(input, "AGENT_CONVERSATION_QUERY_INVALID");
+    if (!scope.ok) return scope;
     if (
-      !isSafeId(input.projectId) ||
       Buffer.byteLength(normalizedQuery, "utf8") > MAX_SEARCH_QUERY_BYTES ||
       input.documents.length > MAX_SEARCH_DOCUMENTS
     ) {
@@ -263,7 +338,7 @@ export class AgentConversationFileRepository {
     if (
       input.cursor !== undefined &&
       (cursor === undefined ||
-        cursor.projectId !== input.projectId ||
+        !sameScope(cursor.scope, scope.value) ||
         cursor.query !== normalizedQuery ||
         cursor.includeArchived !== includeArchived)
     ) {
@@ -274,7 +349,7 @@ export class AgentConversationFileRepository {
     const diagnostics: AgentConversationListDiagnostic[] = [];
     const documents: AgentConversationSearchDocument[] = [];
     for (const candidate of input.documents) {
-      if (!isSearchDocument(candidate) || candidate.projectId !== input.projectId) {
+      if (!isSearchDocument(candidate) || !sameScope(searchDocumentScope(candidate), scope.value)) {
         diagnostics.push({
           code: "AGENT_CONVERSATION_SEARCH_DOCUMENT_INVALID",
           ...(typeof candidate?.["conversationId"] === "string" &&
@@ -289,7 +364,8 @@ export class AgentConversationFileRepository {
     documents.sort(compareSearchDocuments);
     const index: JsonObject = {
       schemaVersion: "1.0",
-      projectId: input.projectId,
+      scope: scope.value,
+      ...(scope.value.kind === "workspace" ? { projectId: scope.value.workspaceId } : {}),
       documents
     };
     if (jsonByteLength(index) > MAX_SEARCH_INDEX_BYTES) {
@@ -300,7 +376,7 @@ export class AgentConversationFileRepository {
       "AGENT_CONVERSATION_SEARCH_INDEX_READ_FAILED",
       MAX_SEARCH_INDEX_BYTES
     );
-    if (cached.ok && cached.value !== undefined && !isSearchIndex(cached.value, input.projectId)) {
+    if (cached.ok && cached.value !== undefined && !isSearchIndex(cached.value, scope.value)) {
       diagnostics.push({ code: "AGENT_CONVERSATION_SEARCH_INDEX_REBUILT" });
     } else if (!cached.ok) {
       diagnostics.push({ code: "AGENT_CONVERSATION_SEARCH_INDEX_REBUILT" });
@@ -335,7 +411,7 @@ export class AgentConversationFileRepository {
       ...(afterCursor.length > page.length && last !== undefined
         ? {
             nextCursor: encodeSearchCursor({
-              projectId: input.projectId,
+              scope: scope.value,
               query: normalizedQuery,
               includeArchived,
               updatedAt: last.updatedAt,
@@ -351,7 +427,6 @@ export class AgentConversationFileRepository {
   ): Promise<Result<AgentConversationRecord, UnifiedError>> {
     if (
       !isSafeId(input.conversationId) ||
-      !isSafeId(input.projectId) ||
       input.conversationId === LEGACY_CONVERSATION_ID ||
       !Number.isSafeInteger(input.expectedRevision) ||
       input.expectedRevision < 1 ||
@@ -359,10 +434,12 @@ export class AgentConversationFileRepository {
     ) {
       return Promise.resolve(this.invalid("AGENT_CONVERSATION_ID_INVALID"));
     }
+    const scope = this.resolveScope(input, "AGENT_CONVERSATION_ID_INVALID");
+    if (!scope.ok) return Promise.resolve(scope);
     return this.withConversationWrite(input.conversationId, async () => {
-      const current = await this.readConversation(input.conversationId);
+      const current = await this.readConversation(input.conversationId, scope.value);
       if (!current.ok) return current;
-      if (current.value === undefined || current.value.projectId !== input.projectId) {
+      if (current.value === undefined) {
         return this.invalid("AGENT_CONVERSATION_NOT_FOUND");
       }
       if (current.value.revision !== input.expectedRevision) {
@@ -376,7 +453,7 @@ export class AgentConversationFileRepository {
       if (input.status === "deleted" && current.value.status !== "archived") {
         return this.invalid("AGENT_CONVERSATION_DELETE_REQUIRES_ARCHIVE");
       }
-      const next: AgentConversationRecord = {
+      const next = attachConversationProjectId({
         ...current.value,
         revision: current.value.revision + 1,
         updatedAt: laterTimestamp(current.value.updatedAt, input.updatedAt),
@@ -385,7 +462,7 @@ export class AgentConversationFileRepository {
         ...(input.mutationCommandId === undefined
           ? {}
           : { lastMutationCommandId: input.mutationCommandId })
-      };
+      } as Omit<AgentConversationRecord, "projectId">);
       if (!isConversationRecord(next) || jsonByteLength(next) > MAX_RECORD_BYTES) {
         return this.invalid("AGENT_CONVERSATION_RECORD_INVALID");
       }
@@ -397,7 +474,8 @@ export class AgentConversationFileRepository {
   public writeCommandReceipt(
     conversationId: string,
     commandId: string,
-    receipt: JsonObject
+    receipt: JsonObject,
+    scope?: AgentContextScope
   ): Promise<Result<JsonObject, UnifiedError>> {
     if (
       !isSafeId(conversationId) ||
@@ -408,10 +486,10 @@ export class AgentConversationFileRepository {
       return Promise.resolve(this.invalid("AGENT_CONVERSATION_RECEIPT_INVALID"));
     }
     return this.withConversationWrite(conversationId, async () => {
-      const conversation = await this.readConversation(conversationId);
+      const conversation = await this.readConversation(conversationId, scope);
       if (!conversation.ok) return conversation;
       if (conversation.value === undefined) return this.invalid("AGENT_CONVERSATION_NOT_FOUND");
-      const existing = await this.readCommandReceipt(conversationId, commandId);
+      const existing = await this.readCommandReceipt(conversationId, commandId, scope);
       if (!existing.ok) return existing;
       if (existing.value !== undefined) {
         return sameJson(existing.value, receipt)
@@ -423,9 +501,10 @@ export class AgentConversationFileRepository {
     });
   }
 
-  public readCommandReceipt(
+  public async readCommandReceipt(
     conversationId: string,
-    commandId: string
+    commandId: string,
+    scope?: AgentContextScope
   ): Promise<Result<JsonObject | undefined, UnifiedError>> {
     if (
       !isSafeId(conversationId) ||
@@ -434,6 +513,9 @@ export class AgentConversationFileRepository {
     ) {
       return Promise.resolve(this.invalid("AGENT_CONVERSATION_RECEIPT_INVALID"));
     }
+    const conversation = await this.readConversation(conversationId, scope);
+    if (!conversation.ok) return conversation;
+    if (conversation.value === undefined) return ok(undefined);
     return this.readJson(
       this.receiptPath(conversationId, commandId),
       "AGENT_CONVERSATION_RECEIPT_READ_FAILED",
@@ -610,6 +692,64 @@ export class AgentConversationFileRepository {
       : this.invalid("AGENT_CONVERSATION_SUMMARY_INVALID");
   }
 
+  private async readConversationRecord(
+    conversationId: string
+  ): Promise<Result<AgentConversationRecord | undefined, UnifiedError>> {
+    const read = await this.readJson(
+      this.conversationPath(conversationId),
+      "AGENT_CONVERSATION_READ_FAILED",
+      MAX_RECORD_BYTES
+    );
+    if (!read.ok) return err(read.error);
+    if (read.value === undefined) return ok(undefined);
+    try {
+      const normalized = normalizeConversationRecord(read.value, this.legacyWorkspaceKind());
+      return normalized.conversationId === conversationId
+        ? ok(normalized)
+        : this.invalid("AGENT_CONVERSATION_RECORD_INVALID");
+    } catch {
+      return this.invalid("AGENT_CONVERSATION_RECORD_INVALID");
+    }
+  }
+
+  private resolveScope(
+    identity: AgentConversationScopeIdentity,
+    legacyErrorCode: string
+  ): Result<AgentContextScope, UnifiedError> {
+    if (this.hasInvalidConfiguredScope) return this.invalid("AGENT_CONVERSATION_SCOPE_INVALID");
+    if (
+      identity.scope === undefined &&
+      identity.projectId === undefined &&
+      this.configuredScope !== undefined
+    ) {
+      return ok(this.configuredScope);
+    }
+    let scope: AgentContextScope;
+    try {
+      scope = resolveConversationScope(identity);
+    } catch {
+      return this.invalid(
+        identity.scope === undefined ? legacyErrorCode : "AGENT_CONVERSATION_SCOPE_INVALID"
+      );
+    }
+    return this.matchesConfiguredScope(scope)
+      ? ok(scope)
+      : this.invalid("AGENT_CONVERSATION_SCOPE_MISMATCH");
+  }
+
+  private legacyWorkspaceKind(): AgentWorkspaceKind | undefined {
+    return this.configuredScope?.kind === "workspace"
+      ? this.configuredScope.workspaceKind
+      : undefined;
+  }
+
+  private matchesConfiguredScope(scope: AgentContextScope): boolean {
+    return (
+      !this.hasInvalidConfiguredScope &&
+      (this.configuredScope === undefined || sameScope(scope, this.configuredScope))
+    );
+  }
+
   private conversationsRoot(): string {
     return join(this.options.projectRoot, "history", "conversations");
   }
@@ -720,11 +860,10 @@ export class AgentConversationFileRepository {
 function isConversationRecord(value: unknown): value is AgentConversationRecord {
   if (!isJsonObject(value)) return false;
   return (
-    value["schemaVersion"] === "1.0" &&
+    value["schemaVersion"] === "1.1" &&
     typeof value["conversationId"] === "string" &&
     isSafeId(value["conversationId"]) &&
-    typeof value["projectId"] === "string" &&
-    isSafeId(value["projectId"]) &&
+    isConversationScope(value["scope"]) &&
     Number.isSafeInteger(value["revision"]) &&
     Number(value["revision"]) >= 1 &&
     typeof value["title"] === "string" &&
@@ -740,6 +879,94 @@ function isConversationRecord(value: unknown): value is AgentConversationRecord 
     optionalSafeId(value["createdByCommandId"]) &&
     optionalSafeId(value["lastMutationCommandId"])
   );
+}
+
+export function normalizeConversationRecord(
+  value: JsonObject,
+  legacyWorkspaceKind?: AgentWorkspaceKind
+): AgentConversationRecord {
+  if (value["schemaVersion"] === "1.1") {
+    const scope = normalizeAgentContextScope(value["scope"], undefined, legacyWorkspaceKind);
+    assertLegacyProjectIdMatchesScope(scope, value["projectId"]);
+    const normalized = attachConversationProjectId({
+      ...withoutProjectId(value),
+      scope
+    } as unknown as Omit<AgentConversationRecord, "projectId">);
+    if (!isConversationRecord(normalized)) throw new Error("AGENT_CONVERSATION_RECORD_INVALID");
+    return normalized;
+  }
+  if (value["schemaVersion"] !== "1.0") {
+    throw new Error("AGENT_CONVERSATION_VERSION_UNSUPPORTED");
+  }
+  const normalized = attachConversationProjectId({
+    ...withoutProjectId(value),
+    schemaVersion: "1.1",
+    scope: normalizeAgentContextScope(undefined, value["projectId"], legacyWorkspaceKind)
+  } as unknown as Omit<AgentConversationRecord, "projectId">);
+  if (!isConversationRecord(normalized)) throw new Error("AGENT_CONVERSATION_RECORD_INVALID");
+  return normalized;
+}
+
+export function attachConversationProjectId<T extends JsonObject>(
+  value: T
+): T & { readonly scope: AgentContextScope; readonly projectId?: string } {
+  const scope = normalizeAgentContextScope(value["scope"]);
+  if (scope.kind === "workspace" && !("projectId" in value)) {
+    Object.defineProperty(value, "projectId", {
+      configurable: false,
+      enumerable: false,
+      value: scope.workspaceId,
+      writable: false
+    });
+  }
+  return value as T & { readonly scope: AgentContextScope; readonly projectId?: string };
+}
+
+function resolveConversationScope(identity: AgentConversationScopeIdentity): AgentContextScope {
+  if (identity.scope === undefined) {
+    return normalizeAgentContextScope(undefined, identity.projectId);
+  }
+  const scope = normalizeAgentContextScope(identity.scope);
+  assertLegacyProjectIdMatchesScope(scope, identity.projectId);
+  return scope;
+}
+
+function scopeIdentityFromJson(value: JsonObject): AgentConversationScopeIdentity {
+  return {
+    ...(value["scope"] === undefined ? {} : { scope: value["scope"] as AgentContextScope }),
+    ...(value["projectId"] === undefined ? {} : { projectId: value["projectId"] as string })
+  };
+}
+
+function assertLegacyProjectIdMatchesScope(scope: AgentContextScope, projectId: unknown): void {
+  if (projectId === undefined) return;
+  if (
+    scope.kind !== "workspace" ||
+    typeof projectId !== "string" ||
+    !isSafeId(projectId) ||
+    scope.workspaceId !== projectId
+  ) {
+    throw new Error("AGENT_CONVERSATION_SCOPE_INVALID");
+  }
+}
+
+function sameScope(left: AgentContextScope, right: AgentContextScope): boolean {
+  return agentContextScopeKey(left) === agentContextScopeKey(right);
+}
+
+function isConversationScope(value: unknown): boolean {
+  try {
+    normalizeAgentContextScope(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function withoutProjectId(value: JsonObject): JsonObject {
+  const { projectId: _projectId, ...rest } = value;
+  void _projectId;
+  return rest;
 }
 
 function isDraftRevisionNumber(value: unknown): value is number {
@@ -797,14 +1024,18 @@ function decodeCursor(cursor: string | undefined): ConversationCursor | undefine
     const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as unknown;
     if (!isJsonObject(parsed)) return undefined;
     const status = parsed["status"];
-    return typeof parsed["projectId"] === "string" &&
-      isSafeId(parsed["projectId"]) &&
-      (status === null || status === "active" || status === "archived") &&
+    let scope: AgentContextScope;
+    try {
+      scope = normalizeAgentContextScope(parsed["scope"], parsed["projectId"]);
+    } catch {
+      return undefined;
+    }
+    return (status === null || status === "active" || status === "archived") &&
       typeof parsed["updatedAt"] === "string" &&
       typeof parsed["conversationId"] === "string" &&
       isSafeId(parsed["conversationId"])
       ? {
-          projectId: parsed["projectId"],
+          scope,
           status,
           updatedAt: parsed["updatedAt"],
           conversationId: parsed["conversationId"]
@@ -824,15 +1055,19 @@ function decodeSearchCursor(cursor: string | undefined): ConversationSearchCurso
   try {
     const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as unknown;
     if (!isJsonObject(parsed)) return undefined;
-    return typeof parsed["projectId"] === "string" &&
-      isSafeId(parsed["projectId"]) &&
-      typeof parsed["query"] === "string" &&
+    let scope: AgentContextScope;
+    try {
+      scope = normalizeAgentContextScope(parsed["scope"], parsed["projectId"]);
+    } catch {
+      return undefined;
+    }
+    return typeof parsed["query"] === "string" &&
       typeof parsed["includeArchived"] === "boolean" &&
       typeof parsed["updatedAt"] === "string" &&
       typeof parsed["conversationId"] === "string" &&
       isSafeId(parsed["conversationId"])
       ? {
-          projectId: parsed["projectId"],
+          scope,
           query: parsed["query"],
           includeArchived: parsed["includeArchived"],
           updatedAt: parsed["updatedAt"],
@@ -846,12 +1081,17 @@ function decodeSearchCursor(cursor: string | undefined): ConversationSearchCurso
 
 function isSearchDocument(value: unknown): value is AgentConversationSearchDocument {
   if (!isJsonObject(value)) return false;
+  let scope: AgentContextScope;
+  try {
+    scope = resolveConversationScope(scopeIdentityFromJson(value));
+  } catch {
+    return false;
+  }
   return (
     value["schemaVersion"] === "1.0" &&
     typeof value["conversationId"] === "string" &&
     isSafeId(value["conversationId"]) &&
-    typeof value["projectId"] === "string" &&
-    isSafeId(value["projectId"]) &&
+    scope !== undefined &&
     typeof value["title"] === "string" &&
     Buffer.byteLength(value["title"], "utf8") <= MAX_TITLE_BYTES &&
     (value["status"] === "active" ||
@@ -870,10 +1110,20 @@ function isSearchDocument(value: unknown): value is AgentConversationSearchDocum
   );
 }
 
-function isSearchIndex(value: JsonObject, projectId: string): boolean {
+function searchDocumentScope(value: AgentConversationSearchDocument): AgentContextScope {
+  return resolveConversationScope(value);
+}
+
+function isSearchIndex(value: JsonObject, scope: AgentContextScope): boolean {
+  let indexScope: AgentContextScope;
+  try {
+    indexScope = resolveConversationScope(scopeIdentityFromJson(value));
+  } catch {
+    return false;
+  }
   return (
     value["schemaVersion"] === "1.0" &&
-    value["projectId"] === projectId &&
+    sameScope(indexScope, scope) &&
     Array.isArray(value["documents"]) &&
     value["documents"].length <= MAX_SEARCH_DOCUMENTS &&
     value["documents"].every(isSearchDocument)

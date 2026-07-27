@@ -1,4 +1,5 @@
 import type { LlmCost } from "@novel-studio/llm-adapter";
+import type { AgentContextScope } from "@novel-studio/agent-engine";
 
 export interface AgentUsageDateRange {
   readonly fromLocalDate: string;
@@ -39,10 +40,11 @@ export interface AgentUsageDailyBucket {
 }
 
 export interface AgentUsageRunSummary {
+  readonly scope: AgentContextScope;
   readonly usageId: string;
   readonly runId: string;
   readonly conversationId: string;
-  readonly projectId: string;
+  readonly projectId?: string;
   readonly provider: string;
   readonly model: string;
   readonly totalTokens: number;

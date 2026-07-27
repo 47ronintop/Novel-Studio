@@ -128,6 +128,8 @@ describe("AgentRunFileRepository", () => {
     )({ projectRoot });
     expect(typeof repository["writeContextSnapshot"]).toBe("function");
     expect(typeof repository["readContextSnapshot"]).toBe("function");
+    expect(typeof repository["writePromptMaterialization"]).toBe("function");
+    expect(typeof repository["readPromptMaterialization"]).toBe("function");
     expect(typeof repository["writePlanArtifact"]).toBe("function");
     expect(typeof repository["readPlanArtifact"]).toBe("function");
     expect(typeof repository["listSnapshots"]).toBe("function");
@@ -137,6 +139,8 @@ describe("AgentRunFileRepository", () => {
     if (
       typeof repository["writeContextSnapshot"] !== "function" ||
       typeof repository["readContextSnapshot"] !== "function" ||
+      typeof repository["writePromptMaterialization"] !== "function" ||
+      typeof repository["readPromptMaterialization"] !== "function" ||
       typeof repository["writePlanArtifact"] !== "function" ||
       typeof repository["readPlanArtifact"] !== "function" ||
       typeof repository["listSnapshots"] !== "function" ||
@@ -171,8 +175,16 @@ describe("AgentRunFileRepository", () => {
       status: "ready",
       goal: "Resolve continuity"
     };
+    const promptMaterialization = {
+      schemaVersion: "1.0",
+      artifactId: "prompt_context_02",
+      runId: "run_02",
+      contextSnapshotId: "context_02",
+      checksum: "a".repeat(64)
+    };
     await repository["writeSnapshot"]?.(snapshot);
     await repository["writeContextSnapshot"]?.(contextSnapshot);
+    await repository["writePromptMaterialization"]?.("run_02", promptMaterialization);
     await repository["writePlanArtifact"]?.(plan);
     expect(await repository["readPlanArtifact"]?.("plan_02", 1)).toEqual({
       ok: true,
@@ -207,6 +219,10 @@ describe("AgentRunFileRepository", () => {
     expect(await repository["readContextSnapshot"]?.("run_02", "context_02")).toEqual({
       ok: true,
       value: contextSnapshot
+    });
+    expect(await repository["readPromptMaterialization"]?.("run_02", "prompt_context_02")).toEqual({
+      ok: true,
+      value: promptMaterialization
     });
     expect(
       JSON.parse(

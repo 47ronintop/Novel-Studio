@@ -1,4 +1,4 @@
-import { realpath } from "node:fs/promises";
+import { mkdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
@@ -26,11 +26,7 @@ import type {
   ProjectSettings,
   ProjectSettingsPort
 } from "@novel-studio/application";
-import {
-  createLlmAdapter,
-  type LlmProvider,
-  type LlmRequest
-} from "@novel-studio/llm-adapter";
+import { createLlmAdapter, type LlmProvider, type LlmRequest } from "@novel-studio/llm-adapter";
 import {
   ChapterFileRepository,
   AgentUsageFileRepository,
@@ -58,9 +54,23 @@ const DEFAULT_CHAPTER_BODY = "这是第一章的正文。你可以直接开始�
 
 export interface ProjectDesktopApplicationOptions {
   readonly projectRoot: string;
+  /** Application-owned model settings root; production uses this while no project is open. */
+  readonly applicationSettingsRoot?: string;
+  /** Start with an empty workspace instead of treating projectRoot as the active project. */
+  readonly startUnbound?: boolean;
   readonly chapterId: string;
   readonly projectTitle: string;
   readonly userDataRoot?: string;
+  readonly now?: () => string;
+  readonly createVersionId?: () => string;
+  readonly modelConnectionTester?: ModelConnectionTester;
+  readonly modelDiscoveryPort?: ModelDiscoveryPort;
+  readonly createAiProvider?: (input: DesktopAiProviderFactoryInput) => LlmProvider;
+  readonly projectLockOwnerId?: string;
+}
+
+export interface UnboundDesktopApplicationOptions {
+  readonly userDataRoot: string;
   readonly now?: () => string;
   readonly createVersionId?: () => string;
   readonly modelConnectionTester?: ModelConnectionTester;
@@ -132,7 +142,9 @@ export function createProjectDesktopApplication(
   options: ProjectDesktopApplicationOptions
 ): DesktopApplication {
   const lockOwnerId = options.projectLockOwnerId ?? createProjectLockOwnerId();
-  let activeProjectRoot: string | undefined = options.projectRoot;
+  let activeProjectRoot: string | undefined = options.startUnbound
+    ? undefined
+    : options.projectRoot;
   const chapterRepository = new ChapterFileRepository({
     projectRoot: options.projectRoot,
     traceId: "trace_desktop_chapter_repository"
@@ -329,7 +341,7 @@ export function createProjectDesktopApplication(
 
   function createSettingsRepository(): ProjectSettingsRepository {
     return new ProjectSettingsRepository({
-      projectRoot: requireActiveProjectRoot(),
+      projectRoot: options.applicationSettingsRoot ?? requireActiveProjectRoot(),
       traceId: "trace_desktop_settings_repository"
     });
   }
@@ -382,6 +394,74 @@ export function createProjectDesktopApplication(
     }
     return activeProjectRoot;
   }
+}
+
+export async function createUnboundDesktopApplication(
+  options: UnboundDesktopApplicationOptions
+): Promise<DesktopApplication> {
+  const applicationStateRoot = join(options.userDataRoot, "application");
+  await mkdir(applicationStateRoot, { recursive: true });
+  const settingsRepository = new ProjectSettingsRepository({
+    projectRoot: applicationStateRoot,
+    traceId: "trace_desktop_application_settings_repository"
+  });
+  const currentSettings = await settingsRepository.readSettings();
+  if (!currentSettings.ok && currentSettings.error.code === "SETTINGS_FILE_MISSING") {
+    await settingsRepository.writeSettings(createDefaultApplicationSettings());
+  }
+  return createProjectDesktopApplication({
+    projectRoot: applicationStateRoot,
+    applicationSettingsRoot: applicationStateRoot,
+    startUnbound: true,
+    userDataRoot: options.userDataRoot,
+    chapterId: DEFAULT_FIXTURE_CHAPTER_ID,
+    projectTitle: "未打开项目",
+    ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.createVersionId === undefined ? {} : { createVersionId: options.createVersionId }),
+    ...(options.modelConnectionTester === undefined
+      ? {}
+      : { modelConnectionTester: options.modelConnectionTester }),
+    ...(options.modelDiscoveryPort === undefined
+      ? {}
+      : { modelDiscoveryPort: options.modelDiscoveryPort }),
+    ...(options.createAiProvider === undefined
+      ? {}
+      : { createAiProvider: options.createAiProvider }),
+    ...(options.projectLockOwnerId === undefined
+      ? {}
+      : { projectLockOwnerId: options.projectLockOwnerId })
+  });
+}
+
+function createDefaultApplicationSettings(): ProjectSettings {
+  return {
+    schemaVersion: "1.0",
+    autosave: { enabled: true, intervalMs: 30_000, createHistorySnapshot: false },
+    history: {
+      snapshotPolicy: "manual-and-interval",
+      intervalMinutes: 10,
+      maxSnapshotsPerChapter: 20
+    },
+    models: {
+      defaultProfileId: "model_default",
+      profiles: [
+        {
+          id: "model_default",
+          provider: "openai-compatible",
+          displayName: "Default Model",
+          baseUrl: "https://api.example.com/v1",
+          apiKeyRef: "secret://model_default/api_key",
+          modelName: "example-model",
+          temperature: 0.7,
+          maxTokens: 4096,
+          topP: 1,
+          timeoutMs: 60_000,
+          frequencyPenalty: 0,
+          presencePenalty: 0
+        }
+      ]
+    }
+  };
 }
 
 function createDesktopMockAiProvider(chapterEditorSession: ChapterEditorSession): LlmProvider {

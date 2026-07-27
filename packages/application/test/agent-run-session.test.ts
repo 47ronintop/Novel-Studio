@@ -121,11 +121,15 @@ describe("AgentRunSession", () => {
     const finalSequence = usageEvents.at(-1)?.["sequence"];
     expect(written).toEqual([
       expect.objectContaining({
-        schemaVersion: "1.0",
+        schemaVersion: "1.1",
+        scope: {
+          kind: "workspace",
+          workspaceKind: "creativeProject",
+          workspaceId: "project-01"
+        },
         usageId: `run_usage_round:model_round_run_usage_round_1:${String(finalSequence)}`,
         runId: "run_usage_round",
         conversationId: "conv-01",
-        projectId: "project-01",
         roundId: "model_round_run_usage_round_1",
         finalSequence,
         provider: "demo",
@@ -427,6 +431,7 @@ describe("AgentRunSession", () => {
     expect(toolCalls).toEqual(["list_project_entries", "read_chapter", "read_story_bible"]);
     expect(publishedTypes).toEqual([
       "run_started",
+      "context_refreshed",
       "assistant_text_delta",
       "assistant_text_completed",
       "tool_started",
@@ -713,9 +718,10 @@ describe("AgentRunSession", () => {
     };
 
     let delegatedTo: string | undefined;
+    const compactRepository = durableMemoryRepository();
     const withCompactor = create({
       coordinatorOptions: { createRunId: () => "run_compact" },
-      repository: memoryRepository(),
+      repository: compactRepository,
       modelDriver: { streamRound: blockedModelRound },
       startPreflight: echoStartPreflight(),
       readToolExecutor: {
@@ -726,7 +732,88 @@ describe("AgentRunSession", () => {
       contextCompactor: {
         async compactContext(command: { runId: string }) {
           delegatedTo = command.runId;
-          return { ok: true, value: { compactionId: "compaction_1", runSnapshot: {} } };
+          const storedRun = await compactRepository.readSnapshot(command.runId);
+          const run = storedRun.value as Record<string, unknown>;
+          const sourceSnapshotId = String(run["contextSnapshotId"]);
+          const storedContext = await compactRepository.readContextSnapshot(
+            command.runId,
+            sourceSnapshotId
+          );
+          const context = storedContext.value as Record<string, unknown>;
+          const sourceArtifactId = String(
+            ((context["sources"] as Record<string, unknown>[])[0] ?? {})["artifactId"]
+          );
+          const storedArtifact = await compactRepository.readPromptMaterialization(
+            command.runId,
+            sourceArtifactId
+          );
+          const rematerialize = applicationExports.rematerializeAgentPromptArtifact;
+          const resultSnapshotId = `${sourceSnapshotId}_c1`;
+          const promptArtifact = rematerialize(
+            storedArtifact.value as unknown as Parameters<typeof rematerialize>[0],
+            {
+              contextSnapshotId: resultSnapshotId,
+              contextSources: (
+                storedArtifact.value as unknown as Parameters<typeof rematerialize>[0]
+              ).contextSources
+            }
+          );
+          await compactRepository.writePromptMaterialization(
+            command.runId,
+            promptArtifact as unknown as Record<string, unknown>
+          );
+          const resultContext = {
+            ...context,
+            contextSnapshotId: resultSnapshotId,
+            compactionRevision: Number(context["compactionRevision"]) + 1,
+            materialization: {
+              ...(context["materialization"] as Record<string, unknown>),
+              stablePrefixChecksum: promptArtifact.stablePrefixChecksum
+            },
+            sources: (context["sources"] as Record<string, unknown>[]).map((source) =>
+              source["artifactId"] === sourceArtifactId
+                ? { ...source, artifactId: promptArtifact.artifactId }
+                : source
+            )
+          };
+          await compactRepository.writeContextSnapshot(resultContext);
+          const budgetSnapshotId = "budget_compacted";
+          return {
+            ok: true,
+            value: {
+              compactionId: "compaction_1",
+              revision: {
+                schemaVersion: "1.0",
+                compactionId: "compaction_1",
+                runId: command.runId,
+                sourceSnapshotId,
+                resultSnapshotId,
+                budgetSnapshotId,
+                inputManifestId: "manifest_compaction_1",
+                inputManifestChecksum: "a".repeat(64),
+                revision: 1,
+                throughSequence: Number(run["lastSequence"]),
+                trigger: "manual",
+                strategy: "deterministic",
+                protectedFactIds: [],
+                evictedSourceIds: [],
+                inputTokens: 0,
+                outputTokens: 0,
+                usageRecordId: null,
+                precision: "unknown",
+                summaryChecksum: "b".repeat(64),
+                status: "completed",
+                createdAt: "2026-07-27T00:00:00.000Z"
+              },
+              runSnapshot: {
+                ...run,
+                activeCompactionId: "compaction_1",
+                contextSnapshotId: resultSnapshotId,
+                contextBudgetSnapshotId: budgetSnapshotId,
+                cachePrefixChecksum: promptArtifact.stablePrefixChecksum
+              }
+            }
+          };
         }
       }
     });
@@ -772,6 +859,263 @@ describe("AgentRunSession", () => {
       ok: false,
       error: { code: "AGENT_CONTEXT_COMPACTION_UNAVAILABLE" }
     });
+  });
+
+  test("compaction rematerializes the next provider input and restores the compacted artifact", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+    const create = createSession as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      compactContext(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      answerUserInput(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+
+    const repository = durableMemoryRepository();
+    const runId = "run_compact_rematerialized";
+    const contextSnapshotId = "context_compact_rematerialized";
+    const evictedRefId = "file:notes/obsolete.md";
+    const evictedBody = "COMPACTION_EVICTED_BODY_MUST_NOT_REACH_PROVIDER";
+    const retainedConvention = "COMPACTION_RETAINED_CONVENTION";
+    let initialSystemPrompt = "";
+    let initialCachePrefixChecksum = "";
+
+    const firstSession = create({
+      coordinatorOptions: { createRunId: () => runId },
+      createContextSnapshotId: () => contextSnapshotId,
+      repository,
+      modelDriver: {
+        async *streamRound(input: {
+          readonly systemPrompt?: string;
+          readonly snapshot: { readonly cachePrefixChecksum: string };
+        }) {
+          initialSystemPrompt = input.systemPrompt ?? "";
+          initialCachePrefixChecksum = input.snapshot.cachePrefixChecksum;
+          yield toolCall("compact_question", "request_user_input", {
+            questionId: "continue_after_compaction",
+            prompt: "继续处理压缩后的上下文吗？",
+            reason: "验证下一轮输入。",
+            options: [
+              { id: "continue", label: "继续" },
+              { id: "stop", label: "停止" }
+            ]
+          });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      },
+      contextCompactor: {
+        async compactContext(command: { runId: string }) {
+          const storedRun = await repository.readSnapshot(command.runId);
+          const run = storedRun.value as Record<string, unknown>;
+          const sourceSnapshotId = String(run["contextSnapshotId"]);
+          const storedContext = await repository.readContextSnapshot(
+            command.runId,
+            sourceSnapshotId
+          );
+          const context = storedContext.value as Record<string, unknown>;
+          const sourceArtifactId = String(
+            ((context["sources"] as Record<string, unknown>[])[0] ?? {})["artifactId"]
+          );
+          const storedArtifact = await repository.readPromptMaterialization(
+            command.runId,
+            sourceArtifactId
+          );
+          const rematerialize = applicationExports.rematerializeAgentPromptArtifact;
+          const resultSnapshotId = `${sourceSnapshotId}_c1`;
+          const priorArtifact = storedArtifact.value as unknown as Parameters<
+            typeof rematerialize
+          >[0];
+          const promptArtifact = rematerialize(priorArtifact, {
+            contextSnapshotId: resultSnapshotId,
+            contextSources: priorArtifact.contextSources.filter(
+              (source) => source.refId !== evictedRefId
+            )
+          });
+          expect(promptArtifact.stablePrefixChecksum).toBe(initialCachePrefixChecksum);
+          await repository.writePromptMaterialization(
+            command.runId,
+            promptArtifact as unknown as Record<string, unknown>
+          );
+          const resultContext = {
+            ...context,
+            contextSnapshotId: resultSnapshotId,
+            compactionRevision: Number(context["compactionRevision"]) + 1,
+            materialization: {
+              ...(context["materialization"] as Record<string, unknown>),
+              stablePrefixChecksum: promptArtifact.stablePrefixChecksum
+            },
+            sources: (context["sources"] as Record<string, unknown>[]).map((source) => {
+              if (source["refId"] === evictedRefId) {
+                return { ...source, state: "excluded", artifactId: null };
+              }
+              return source["artifactId"] === sourceArtifactId
+                ? { ...source, artifactId: promptArtifact.artifactId }
+                : source;
+            }),
+            excludedSources: [
+              ...((context["excludedSources"] as readonly string[] | undefined) ?? []),
+              evictedRefId
+            ]
+          };
+          await repository.writeContextSnapshot(resultContext);
+          const budgetSnapshotId = "budget_compacted_rematerialized";
+          return {
+            ok: true,
+            value: {
+              compactionId: "compaction_rematerialized",
+              revision: {
+                schemaVersion: "1.0",
+                compactionId: "compaction_rematerialized",
+                runId: command.runId,
+                sourceSnapshotId,
+                resultSnapshotId,
+                budgetSnapshotId,
+                inputManifestId: "manifest_compaction_rematerialized",
+                inputManifestChecksum: "a".repeat(64),
+                revision: 1,
+                throughSequence: Number(run["lastSequence"]),
+                trigger: "manual",
+                strategy: "deterministic",
+                protectedFactIds: [],
+                evictedSourceIds: [evictedRefId],
+                inputTokens: 0,
+                outputTokens: 0,
+                usageRecordId: null,
+                precision: "unknown",
+                summaryChecksum: "b".repeat(64),
+                status: "completed",
+                createdAt: "2026-07-27T00:00:00.000Z"
+              },
+              runSnapshot: {
+                ...run,
+                activeCompactionId: "compaction_rematerialized",
+                contextSnapshotId: resultSnapshotId,
+                contextBudgetSnapshotId: budgetSnapshotId,
+                cachePrefixChecksum: promptArtifact.stablePrefixChecksum
+              }
+            }
+          };
+        }
+      }
+    });
+
+    await firstSession.startAgentRun({
+      ...startCommand(),
+      initialContextSources: [
+        {
+          refId: "conventions:writing",
+          sourceKind: "project_conventions",
+          relativePath: "conventions/writing.md",
+          content: retainedConvention,
+          dirty: false
+        },
+        {
+          refId: evictedRefId,
+          sourceKind: "disk_file",
+          relativePath: "notes/obsolete.md",
+          content: evictedBody,
+          dirty: false
+        }
+      ]
+    });
+    await vi.waitFor(async () => {
+      expect(await firstSession.readAgentRun(runId)).toMatchObject({
+        value: { snapshot: { status: "awaiting_user_input" } }
+      });
+    });
+    expect(initialSystemPrompt).not.toBe("");
+    expect(initialCachePrefixChecksum).toMatch(/^[a-f0-9]{64}$/u);
+
+    const beforeCompaction = (await firstSession.readAgentRun(runId)) as {
+      value: { snapshot: { runRevision: number } };
+    };
+    const compacted = await firstSession.compactContext({
+      projectId: "project-01",
+      runId,
+      commandId: "compact-rematerialized",
+      expectedRunRevision: beforeCompaction.value.snapshot.runRevision,
+      contextBudgetSnapshotId: "budget_before_compaction",
+      trigger: "manual"
+    });
+    expect(compacted).toMatchObject({
+      ok: true,
+      value: {
+        contextSnapshotId: `${contextSnapshotId}_c1`,
+        cachePrefixChecksum: initialCachePrefixChecksum
+      }
+    });
+
+    const compactedContext = await repository.readContextSnapshot(runId, `${contextSnapshotId}_c1`);
+    expect(compactedContext.value).toMatchObject({
+      materialization: { stablePrefixChecksum: initialCachePrefixChecksum },
+      excludedSources: [evictedRefId],
+      sources: expect.arrayContaining([
+        expect.objectContaining({ refId: evictedRefId, state: "excluded", artifactId: null })
+      ])
+    });
+
+    let resumedSystemPrompt = "";
+    let resumedMessages: readonly Record<string, unknown>[] = [];
+    const reloadedSession = create({
+      repository,
+      modelDriver: {
+        async *streamRound(input: {
+          readonly systemPrompt?: string;
+          readonly messages: readonly Record<string, unknown>[];
+        }) {
+          resumedSystemPrompt = input.systemPrompt ?? "";
+          resumedMessages = input.messages;
+          yield { type: "assistant_text_delta", delta: "已继续。" };
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      }
+    });
+    const restored = await reloadedSession.readAgentRun(runId);
+    expect(restored).toMatchObject({
+      ok: true,
+      value: {
+        snapshot: {
+          status: "awaiting_user_input",
+          contextSnapshotId: `${contextSnapshotId}_c1`,
+          cachePrefixChecksum: initialCachePrefixChecksum
+        },
+        pendingUserInput: { questionId: "continue_after_compaction" }
+      }
+    });
+    const restoredRevision = (restored as { value: { snapshot: { runRevision: number } } }).value
+      .snapshot.runRevision;
+    await reloadedSession.answerUserInput({
+      projectId: "project-01",
+      runId,
+      commandId: "answer-after-compaction",
+      expectedRunRevision: restoredRevision,
+      questionId: "continue_after_compaction",
+      answer: "继续。"
+    });
+    await vi.waitFor(async () => {
+      expect(await reloadedSession.readAgentRun(runId)).toMatchObject({
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+
+    expect(resumedSystemPrompt).toBe(initialSystemPrompt);
+    expect(JSON.stringify(resumedMessages)).toContain(retainedConvention);
+    expect(JSON.stringify(resumedMessages)).not.toContain(evictedBody);
   });
 
   test("returns the persisted stop receipt after application reload", async () => {
@@ -893,6 +1237,7 @@ describe("AgentRunSession", () => {
           },
           events: [
             expect.objectContaining({ type: "run_started" }),
+            expect.objectContaining({ type: "context_refreshed" }),
             expect.objectContaining({ type: "assistant_text_completed" }),
             expect.objectContaining({ type: "tool_started" }),
             expect.objectContaining({ type: "tool_completed" }),
@@ -1155,6 +1500,7 @@ describe("AgentRunSession", () => {
           snapshot: { status: "limit_reached" },
           events: [
             expect.objectContaining({ type: "run_started" }),
+            expect.objectContaining({ type: "context_refreshed" }),
             expect.objectContaining({ type: "assistant_text_completed" }),
             expect.objectContaining({ type: "tool_started" }),
             expect.objectContaining({ type: "tool_completed" }),
@@ -1321,11 +1667,13 @@ describe("AgentRunSession", () => {
       answerUserInput(command: Record<string, unknown>): Promise<Record<string, unknown>>;
       readAgentRun(runId: string): Promise<Record<string, unknown>>;
     };
+    let initialSystemPrompt = "";
     const firstSession = create({
       coordinatorOptions: { createRunId: () => "run_durable_pause" },
       repository,
       modelDriver: {
-        async *streamRound() {
+        async *streamRound(input: { readonly systemPrompt?: string }) {
+          initialSystemPrompt = input.systemPrompt ?? "";
           yield toolCall("durable_question", "request_user_input", {
             questionId: "question_durable",
             prompt: "保留揭示时机？",
@@ -1345,7 +1693,18 @@ describe("AgentRunSession", () => {
         }
       }
     });
-    await firstSession.startAgentRun(startCommand());
+    await firstSession.startAgentRun({
+      ...startCommand(),
+      initialContextSources: [
+        {
+          refId: "file:notes/current.md",
+          sourceKind: "disk_file",
+          relativePath: "notes/current.md",
+          content: "frozen current body",
+          dirty: false
+        }
+      ]
+    });
     await vi.waitFor(async () => {
       expect(await firstSession.readAgentRun("run_durable_pause")).toMatchObject({
         value: { snapshot: { status: "awaiting_user_input" } }
@@ -1353,11 +1712,13 @@ describe("AgentRunSession", () => {
     });
 
     let resumedMessages: readonly Record<string, unknown>[] = [];
+    let resumedSystemPrompt = "";
     const restoredSession = create({
       repository,
       modelDriver: {
         async *streamRound(input: { readonly messages: readonly Record<string, unknown>[] }) {
           resumedMessages = input.messages;
+          resumedSystemPrompt = (input as { readonly systemPrompt?: string }).systemPrompt ?? "";
           yield toolCall("durable_finish", "finish", { summary: "resumed" });
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
@@ -1399,6 +1760,8 @@ describe("AgentRunSession", () => {
     expect(resumedMessages).toContainEqual(
       expect.objectContaining({ role: "user", content: "保留揭示时机。" })
     );
+    expect(JSON.stringify(resumedMessages)).toContain("frozen current body");
+    expect(resumedSystemPrompt).toBe(initialSystemPrompt);
     const duplicateSession = create({
       repository,
       modelDriver: { streamRound: () => unexpectedModelRound("Duplicate answer must not resume.") },
@@ -3579,7 +3942,7 @@ describe("AgentRunSession", () => {
           }
           sawExclusion = input.messages.some(
             (message) =>
-              message["role"] === "system" &&
+              message["role"] === "user" &&
               typeof message["content"] === "string" &&
               message["content"].includes('"kind":"context_excluded"')
           );
@@ -4037,14 +4400,14 @@ describe("AgentRunSession", () => {
       });
     });
     expect(observedMessages[0]).toMatchObject({
-      role: "system",
-      content: expect.stringContaining("Untrusted conversation context")
-    });
-    expect(String(observedMessages[0]?.["content"])).toContain("Earlier request");
-    expect(observedMessages.at(-1)).toMatchObject({
       role: "user",
       content: "核对第 3 章的人物动机。"
     });
+    expect(observedMessages.at(-1)).toMatchObject({
+      role: "user",
+      content: expect.stringContaining("Untrusted conversation context")
+    });
+    expect(String(observedMessages.at(-1)?.["content"])).toContain("Earlier request");
     expect(order).toContain("note-terminal");
   });
 
@@ -5257,6 +5620,99 @@ describe("AgentRunSession v2 tool facade", () => {
     }
   };
 
+  test("persists frozen prompt and context before publishing the initial active snapshot", async () => {
+    const durable = durableMemoryRepository();
+    const order: string[] = [];
+    const repository = {
+      ...durable,
+      async writePromptMaterialization(runId: string, artifact: Record<string, unknown>) {
+        const result = await durable.writePromptMaterialization(runId, artifact);
+        order.push("prompt");
+        return result;
+      },
+      async writeContextSnapshot(snapshot: Record<string, unknown>) {
+        const result = await durable.writeContextSnapshot(snapshot);
+        order.push("context");
+        return result;
+      },
+      async appendEvent(event: Record<string, unknown>) {
+        const result = await durable.appendEvent(event);
+        order.push(`event:${String(event["type"])}`);
+        return result;
+      },
+      async writeSnapshot(snapshot: Record<string, unknown>) {
+        const result = await durable.writeSnapshot(snapshot);
+        order.push("snapshot");
+        return result;
+      }
+    };
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_v2_initial_order" },
+      repository,
+      newRunToolFacadeVersion: "v2",
+      capabilitySnapshot: creativeV2Capabilities(),
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+
+    expect(await session.startAgentRun(startCommand())).toMatchObject({ ok: true });
+    expect(order.slice(0, 5)).toEqual([
+      "prompt",
+      "context",
+      "event:run_started",
+      "event:context_refreshed",
+      "snapshot"
+    ]);
+  });
+
+  test("releases an unpersisted v2 run when prompt materialization fails", async () => {
+    const durable = durableMemoryRepository();
+    let failPrompt = true;
+    let runSequence = 0;
+    const repository = {
+      ...durable,
+      async writePromptMaterialization(runId: string, artifact: Record<string, unknown>) {
+        if (failPrompt) {
+          failPrompt = false;
+          return {
+            ok: false as const,
+            error: {
+              code: "TEST_PROMPT_WRITE_FAILED",
+              category: "StorageError",
+              message: "prompt write failed",
+              recoverability: "retryable",
+              suggestedAction: "Retry.",
+              traceId: "test"
+            }
+          };
+        }
+        return durable.writePromptMaterialization(runId, artifact);
+      }
+    };
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => `run_v2_prompt_failure_${++runSequence}` },
+      repository,
+      newRunToolFacadeVersion: "v2",
+      capabilitySnapshot: creativeV2Capabilities(),
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+
+    expect(await session.startAgentRun(startCommand())).toMatchObject({
+      ok: false,
+      error: { code: "TEST_PROMPT_WRITE_FAILED" }
+    });
+    expect(await durable.readSnapshot("run_v2_prompt_failure_1")).toEqual({
+      ok: true,
+      value: undefined
+    });
+    expect(
+      await session.startAgentRun({ ...startCommand(), commandId: "start-after-failure" })
+    ).toMatchObject({ ok: true, value: { runId: "run_v2_prompt_failure_2" } });
+  });
+
   test("persists one v2 catalog and sends only the merged tool facade to a new run", async () => {
     const repository = durableMemoryRepository();
     let providerToolNames: string[] = [];
@@ -5541,6 +5997,39 @@ describe("AgentRunSession v2 tool facade", () => {
     expect(await restored.readAgentRun("run_v2_missing_catalog")).toMatchObject({
       ok: false,
       error: { code: "AGENT_TOOL_CATALOG_MISSING" }
+    });
+  });
+
+  test("fails closed when a persisted v2 run has no frozen prompt artifact", async () => {
+    const repository = durableMemoryRepository();
+    const original = createSession({
+      coordinatorOptions: { createRunId: () => "run_v2_missing_prompt" },
+      repository,
+      newRunToolFacadeVersion: "v2",
+      capabilitySnapshot: creativeV2Capabilities(),
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+    expect(await original.startAgentRun(startCommand())).toMatchObject({ ok: true });
+
+    const restored = createSession({
+      coordinatorOptions: { createRunId: () => "unused_missing_prompt" },
+      repository: {
+        ...repository,
+        async readPromptMaterialization() {
+          return { ok: true as const, value: undefined };
+        }
+      },
+      newRunToolFacadeVersion: "v2",
+      capabilitySnapshot: creativeV2Capabilities(),
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+    expect(await restored.readAgentRun("run_v2_missing_prompt")).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_PROMPT_MATERIALIZATION_MISSING" }
     });
   });
 
@@ -6093,6 +6582,8 @@ function durableMemoryRepository() {
   const runErrors = new Map<string, Record<string, unknown>>();
   const preflightErrors = new Map<string, Record<string, unknown>>();
   const toolCatalogs = new Map<string, Record<string, unknown>>();
+  const contextSnapshots = new Map<string, Record<string, unknown>>();
+  const promptMaterializations = new Map<string, Record<string, unknown>>();
   return {
     async writeSnapshot(snapshot: Record<string, unknown>) {
       snapshots.set(String(snapshot["runId"]), structuredClone(snapshot));
@@ -6129,6 +6620,26 @@ function durableMemoryRepository() {
         value: toolCatalogs.get(`${runId}:${toolCatalogSnapshotId}`)
       };
     },
+    async writeContextSnapshot(snapshot: Record<string, unknown>) {
+      contextSnapshots.set(
+        `${String(snapshot["runId"])}:${String(snapshot["contextSnapshotId"])}`,
+        structuredClone(snapshot)
+      );
+      return { ok: true, value: snapshot };
+    },
+    async readContextSnapshot(runId: string, contextSnapshotId: string) {
+      return { ok: true, value: contextSnapshots.get(`${runId}:${contextSnapshotId}`) };
+    },
+    async writePromptMaterialization(runId: string, artifact: Record<string, unknown>) {
+      promptMaterializations.set(
+        `${runId}:${String(artifact["artifactId"])}`,
+        structuredClone(artifact)
+      );
+      return { ok: true, value: artifact };
+    },
+    async readPromptMaterialization(runId: string, artifactId: string) {
+      return { ok: true, value: promptMaterializations.get(`${runId}:${artifactId}`) };
+    },
     async writeRetryCheckpoint(runId: string, checkpoint: Record<string, unknown>) {
       retryCheckpoints.set(runId, structuredClone(checkpoint));
       return { ok: true, value: checkpoint };
@@ -6139,7 +6650,16 @@ function durableMemoryRepository() {
     async listSnapshots(projectId: string) {
       return {
         ok: true,
-        value: [...snapshots.values()].filter((snapshot) => snapshot["projectId"] === projectId)
+        value: [...snapshots.values()].filter((snapshot) => {
+          const scope = snapshot["scope"];
+          return (
+            snapshot["projectId"] === projectId ||
+            (typeof scope === "object" &&
+              scope !== null &&
+              !Array.isArray(scope) &&
+              (scope as Record<string, unknown>)["workspaceId"] === projectId)
+          );
+        })
       };
     },
     async writeRunError(runId: string, record: Record<string, unknown>) {

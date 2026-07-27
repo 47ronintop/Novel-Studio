@@ -1,6 +1,8 @@
 import type {
   CreateCreativeProjectInput,
+  CreativeProjectFileSession,
   DesktopApplication,
+  DesktopShellState,
   PreparedWorkspaceActivation,
   WorkspaceActivationDto
 } from "@novel-studio/application";
@@ -12,20 +14,20 @@ import type {
 } from "./agent-runtime-manager.js";
 
 export interface WorkspaceActivationCoordinator {
-  openCreativeProject(
-    projectRoot: string
-  ): Promise<Result<WorkspaceActivationDto, UnifiedError>>;
+  openCreativeProject(projectRoot: string): Promise<Result<WorkspaceActivationDto, UnifiedError>>;
   createCreativeProject(
     input: CreateCreativeProjectInput
   ): Promise<Result<WorkspaceActivationDto, UnifiedError>>;
   openEngineeringWorkspace(
     contentRoot: string
   ): Promise<Result<WorkspaceActivationDto, UnifiedError>>;
+  closeCurrentWorkspace(): Promise<Result<DesktopShellState, UnifiedError>>;
 }
 
 export interface CreateWorkspaceActivationCoordinatorOptions {
   readonly application: DesktopApplication;
   readonly runtimeManager: DesktopAgentRuntimeManager;
+  readonly creativeProjectFileSession?: CreativeProjectFileSession;
   readonly reportCleanupFailure?: ((error: UnifiedError) => void) | undefined;
 }
 
@@ -38,8 +40,29 @@ export function createWorkspaceActivationCoordinator(
     createCreativeProject: (input) =>
       activate(() => options.application.prepareCreateCreativeProject(input)),
     openEngineeringWorkspace: (contentRoot) =>
-      activate(() => options.application.prepareOpenEngineeringWorkspace(contentRoot))
+      activate(() => options.application.prepareOpenEngineeringWorkspace(contentRoot)),
+    closeCurrentWorkspace
   };
+
+  async function closeCurrentWorkspace(): Promise<Result<DesktopShellState, UnifiedError>> {
+    const allowed = options.application.canCloseWorkspace();
+    if (!allowed.ok) return allowed;
+    const active = options.runtimeManager.active();
+    const rollbackBinding = active?.scope === "workspace" ? active.binding : undefined;
+    const standalone = await options.runtimeManager.activateStandalone();
+    if (!standalone.ok) return standalone;
+
+    const closed = await options.application.closeWorkspace();
+    if (!closed.ok) {
+      if (rollbackBinding !== undefined) {
+        const restored = await options.runtimeManager.bindWorkspace(rollbackBinding);
+        if (!restored.ok) options.reportCleanupFailure?.(restored.error);
+      }
+      return closed;
+    }
+    options.creativeProjectFileSession?.deactivate();
+    return closed;
+  }
 
   async function activate(
     prepareApplication: () => Promise<Result<PreparedWorkspaceActivation, UnifiedError>>
@@ -55,8 +78,24 @@ export function createWorkspaceActivationCoordinator(
       return err(preparedRuntime.error);
     }
 
+    if ("creativeProject" in candidate.value && options.creativeProjectFileSession !== undefined) {
+      const preparedFiles = await options.creativeProjectFileSession.activate({
+        projectId: candidate.value.creativeProject.project.projectId,
+        workspaceId: candidate.value.context.workspaceId,
+        projectRoot: candidate.value.context.contentRoot
+      });
+      if (!preparedFiles.ok) {
+        options.runtimeManager.discardPreparedWorkspace(preparedRuntime.value);
+        await options.application.discardWorkspaceActivation(candidate.value.activationId);
+        return err(preparedFiles.error);
+      }
+    }
+
     const committed = options.application.commitWorkspaceActivation(candidate.value.activationId);
     options.runtimeManager.commitPreparedWorkspace(preparedRuntime.value);
+    if (!("creativeProject" in candidate.value)) {
+      options.creativeProjectFileSession?.deactivate();
+    }
     const finalized = await options.application.finalizeWorkspaceActivation(
       candidate.value.activationId
     );

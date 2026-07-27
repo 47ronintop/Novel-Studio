@@ -365,7 +365,9 @@ function RunDetails({ report }: { readonly report: AgentUsageReport }) {
                   <td data-label="Provider / Model">
                     {run.provider} / {run.model}
                   </td>
-                  <td data-label="Project">{run.projectId}</td>
+                  <td data-label="Project">
+                    {run.scope.kind === "standalone" ? "Standalone" : run.projectId}
+                  </td>
                   <td data-label="Tokens">{run.totalTokens.toLocaleString()}</td>
                   <td data-label="用量状态">{statusLabel(run.usageStatus)}</td>
                   <td data-label="费用">

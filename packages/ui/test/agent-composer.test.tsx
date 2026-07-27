@@ -28,6 +28,67 @@ describe("AgentComposer", () => {
     expect(host.querySelectorAll('[aria-label="上下文"]')).toHaveLength(0);
   });
 
+  test("keeps standalone chat to text, model, and stop controls", () => {
+    const onStop = vi.fn();
+    const permission = permissionControl({ onOpen: vi.fn() });
+    const { host, rerender } = renderComposer({
+      operationMode: "conversation",
+      contextMode: "standalone_chat",
+      onStop,
+      permission,
+      model: {
+        profiles: [{ id: "text-model", label: "Text Model", provider: "openai" }],
+        selectedProfileId: "text-model",
+        onSelect: vi.fn()
+      },
+      reasoning: {
+        visible: true,
+        values: ["low", "high"],
+        current: "high",
+        onSelect: vi.fn()
+      },
+      references: {
+        chips: [{ refId: "chapter:ch-01", label: "第一章", kind: "chapter" }],
+        available: [{ refId: "file:notes.md", label: "notes.md", kind: "project_file" }],
+        onAdd: vi.fn(),
+        onRemove: vi.fn(),
+        onPickFile: vi.fn()
+      },
+      contextStatus: {
+        state: "heavy",
+        usageLabel: "120k / 128k",
+        precision: "estimated",
+        sources: [{ refId: "chapter:ch-01", label: "第一章", detail: "4k · 精确" }]
+      }
+    });
+
+    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="Agent 请求"]')?.disabled).toBe(
+      false
+    );
+    expect(host.querySelector('[aria-label="启动 Agent 运行"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="已选引用"]')).toBeNull();
+    expect(host.querySelector('[aria-label="添加引用与执行审批"]')).toBeNull();
+    expect(host.querySelector('[aria-label="计划或执行模式"]')).toBeNull();
+    expect(host.querySelector('[aria-label="计划"]')).toBeNull();
+    expect(host.querySelector('[aria-label="执行"]')).toBeNull();
+    expect(host.querySelector('[aria-label="上下文较多 · 120k / 128k"]')).toBeNull();
+    expect(host.querySelector('[aria-label="执行审批"]')).toBeNull();
+    expect(permission.onOpen).not.toHaveBeenCalled();
+
+    const modelTrigger = host.querySelector<HTMLButtonElement>(
+      '[aria-label="模型与推理：Text Model · 高"]'
+    );
+    expect(modelTrigger).not.toBeNull();
+    act(() => modelTrigger?.click());
+    expect(document.querySelector('[data-model-menu="model"]')).not.toBeNull();
+    expect(document.querySelector('[data-model-menu="reasoning"]')).not.toBeNull();
+
+    rerender({ active: true });
+    expect(host.querySelector('[aria-label="启动 Agent 运行"]')).toBeNull();
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="停止 Agent 运行"]')?.click());
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
   test("sends trimmed text with Enter, preserves Shift+Enter, and disables whitespace", () => {
     const onSend = vi.fn();
     const { host, rerender } = renderComposer({ request: "  继续检查  ", onSend });

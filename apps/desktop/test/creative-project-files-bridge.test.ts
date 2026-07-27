@@ -1,0 +1,74 @@
+import { describe, expect, test, vi } from "vitest";
+
+import type { CreativeProjectFileTreeSnapshot, NovelStudioApi } from "@novel-studio/application";
+import { ok } from "@novel-studio/shared";
+
+import { createCreativeProjectFilesBridge } from "../src/renderer/creative-project-files-bridge.js";
+
+describe("CreativeProjectFilesBridge", () => {
+  test("refreshes node revision after the active-file guard saves before rename", async () => {
+    const snapshots = [
+      treeSnapshot("tree-before", "node-before", "notes/draft.md"),
+      treeSnapshot("tree-before", "node-after-save", "notes/draft.md"),
+      treeSnapshot("tree-after-rename", "node-after-rename", "notes/renamed.md")
+    ];
+    let refreshIndex = 0;
+    const lifecycleCommands: Record<string, unknown>[] = [];
+    const beforeActiveFileChange = vi.fn(async () => true);
+    const api = {
+      creativeProjectFiles: {
+        refresh: async () => {
+          const snapshot = snapshots[Math.min(refreshIndex++, snapshots.length - 1)];
+          if (snapshot === undefined) throw new Error("Expected a project file tree snapshot");
+          return ok(snapshot);
+        },
+        executeLifecycle: async (command: Record<string, unknown>) => {
+          lifecycleCommands.push(command);
+          return ok({});
+        }
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createCreativeProjectFilesBridge(api, { beforeActiveFileChange });
+
+    await bridge.activate({ projectId: "project-01", workspaceId: "workspace-01" });
+    expect(await bridge.requestOpenFile("notes/draft.md")).toBe(true);
+    await bridge.renamePath("notes/draft.md", "notes/renamed.md");
+
+    expect(beforeActiveFileChange).toHaveBeenLastCalledWith("rename_active_path");
+    expect(lifecycleCommands).toEqual([
+      expect.objectContaining({
+        kind: "renamePath",
+        sourcePath: "notes/draft.md",
+        targetPath: "notes/renamed.md",
+        expectedTreeRevision: "tree-before",
+        expectedSourceRevision: "node-after-save"
+      })
+    ]);
+    expect(bridge.getActiveFilePath()).toBe("notes/renamed.md");
+  });
+});
+
+function treeSnapshot(
+  treeRevision: string,
+  nodeRevision: string,
+  path: string
+): CreativeProjectFileTreeSnapshot {
+  return {
+    schemaVersion: "1.0",
+    projectId: "project-01",
+    workspaceId: "workspace-01",
+    policyVersion: "1.0",
+    treeRevision,
+    visibleNodeChecksum: "a".repeat(64),
+    truncated: false,
+    nodes: [
+      {
+        id: `creative-file:${path}`,
+        kind: "file",
+        name: path.split("/").at(-1) ?? path,
+        path,
+        nodeRevision
+      }
+    ]
+  };
+}

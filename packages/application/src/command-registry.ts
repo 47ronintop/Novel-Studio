@@ -8,14 +8,13 @@ export type WorkspaceApplicationCommandId =
   | "workspace.narrow-navigator"
   | "workspace.widen-navigator"
   | "workspace.narrow-inspector"
-  | "workspace.widen-inspector";
+  | "workspace.widen-inspector"
+  | "workspace.close-current";
 
 export type ApplicationCommandId = string;
 
 export type NativeMenuCommandId =
-  | "createCreativeProject"
-  | "openCreativeProject"
-  | "openEngineeringFolder";
+  "createCreativeProject" | "openCreativeProject" | "openEngineeringFolder";
 
 export type ApplicationCommandScope = "workspace" | "plugin";
 
@@ -38,6 +37,13 @@ export interface ApplicationCommand {
 export const DEFAULT_APPLICATION_COMMANDS: readonly (ApplicationCommand & {
   readonly id: WorkspaceApplicationCommandId;
 })[] = [
+  {
+    id: "workspace.close-current",
+    title: "关闭当前项目/工作区",
+    scope: "workspace",
+    riskLevel: "safe",
+    defaultShortcut: "Ctrl/Cmd+Shift+W"
+  },
   {
     id: "workspace.open-command-palette",
     title: "打开命令面板",

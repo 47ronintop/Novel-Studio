@@ -1,4 +1,5 @@
 import type {
+  AgentContextScope,
   AgentContextSourceInput,
   AgentReasoningEffort,
   AgentRunCommandResult,
@@ -13,19 +14,12 @@ import type {
   ContextBudgetSnapshot,
   ContextDraft,
   ContextDraftRef,
-  DecideChangeSetCommand,
-  DecideAgentPlanCommand,
-  DecidePlanRevisionCommand,
-  DecideToolApprovalCommand,
   PermissionSummary,
   PlanExecutionRecord,
-  RefreshAgentContextCommand,
-  ResumeAgentRunCommand,
-  RetryAgentRunStepCommand,
-  RetryRunTargetCommand,
   StartAgentRunCommand,
   StopAgentRunCommand
 } from "@novel-studio/agent-engine";
+import { agentContextScopeKey, normalizeAgentContextScope } from "@novel-studio/agent-engine";
 import type {
   AgentContextMode,
   AgentOperationMode,
@@ -63,13 +57,31 @@ import type { UnifiedError } from "@novel-studio/shared";
 type AgentPlanExecutionOptions = NonNullable<Parameters<AgentPlanReviewProps["onDecision"]>[1]>;
 
 export interface AgentRunBridgeContext {
-  readonly projectId: string;
+  /**
+   * The server-authoritative context identity. New callers should always provide this field.
+   * `projectId` remains a workspace-only compatibility input while the desktop shell migrates.
+   */
+  readonly scope?: AgentContextScope;
+  /** Legacy workspace-only identity. Never set for standalone. */
+  readonly projectId?: string;
   readonly workspaceKind?: "creativeProject" | "engineeringWorkspace";
+  /** Context mode derived from the active workspace surface. */
+  readonly surfaceContextMode?: Extract<AgentContextMode, "writing" | "general_file">;
+  /** The creative file currently open in the editor; manual refs remain separate. */
+  readonly activeResourceRef?: Extract<ContextDraftRef, { readonly kind: "project_file" }> | null;
+  /** UI dirty guard. Main still re-reads saved content and never accepts renderer content. */
+  readonly beforeStart?: () => boolean | Promise<boolean>;
   readonly conversationId?: string;
   readonly activeChapterId?: string;
   readonly chapterEditor?: ChapterEditorProps;
   readonly fileEditor?: PlainFileEditorProps;
   readonly settings?: ModelSettingsPanelProps;
+}
+
+interface ResolvedAgentRunBridgeContext extends AgentRunBridgeContext {
+  readonly scope: AgentContextScope;
+  readonly projectId?: string;
+  readonly workspaceKind?: "creativeProject" | "engineeringWorkspace";
 }
 
 interface ComposerModelChoice {
@@ -86,7 +98,7 @@ export interface AgentRunBridge {
   getComposerProps(): AgentComposerProps | undefined;
   getPlanReviewProps(): AgentPlanReviewProps | undefined;
   syncContext(context: AgentRunBridgeContext): AgentRunPanelProps;
-  load(projectId: string): Promise<AgentRunPanelProps>;
+  load(scopeOrProjectId: AgentContextScope | string): Promise<AgentRunPanelProps>;
   loadRun(runId: string | undefined): Promise<AgentRunPanelProps>;
   resetWriteAuthorization(): void;
   send(request: string): Promise<AgentRunPanelProps>;
@@ -144,7 +156,7 @@ interface BridgeState {
 }
 
 export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
-  let context: AgentRunBridgeContext | undefined;
+  let context: ResolvedAgentRunBridgeContext | undefined;
   let state: BridgeState = {
     operationMode: "planning",
     contextMode: "writing",
@@ -194,7 +206,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   const stage5BApi = api.agentRuns as unknown as OptionalStage5BApi;
 
   api.agentRuns.onEvent((event) => {
-    if (context?.projectId !== event.projectId) return;
+    if (context === undefined || !sameAgentScope(context.scope, scopeForRunEvent(event))) return;
     if (state.snapshot !== undefined && state.snapshot.runId !== event.runId) return;
     const nextSnapshot =
       state.snapshot === undefined
@@ -261,6 +273,22 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
 
   async function sendRun(request: string): Promise<AgentRunPanelProps> {
     if (state.startPending) return toProps();
+    if (context?.beforeStart !== undefined) {
+      try {
+        if (!(await context.beforeStart())) return toProps();
+      } catch (error) {
+        state = { ...state, errorMessage: thrownErrorMessage(error) };
+        notify();
+        return toProps();
+      }
+    } else if (context?.activeResourceRef != null && context.fileEditor?.dirty === true) {
+      state = {
+        ...state,
+        errorMessage: "当前项目文件尚未保存。请先保存或放弃修改，再启动 Agent。"
+      };
+      notify();
+      return toProps();
+    }
     state = {
       ...state,
       userRequest: request,
@@ -285,6 +313,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     };
     notify();
     try {
+      // A just-selected context mode/model may still be committing its draft revision. Starting
+      // against the older revision would discard that user-visible choice and, for engineering,
+      // could send a writing draft to the preflight.
+      if (draftInFlight !== undefined) await draftInFlight;
       // The draft is the source of truth for model/reasoning/refs when the composer is draft-backed;
       // otherwise fall back to the project's selected profile and the active chapter.
       const profileId = selectedRunModelProfileId(state.runDraft, context?.settings);
@@ -297,7 +329,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         return toProps();
       }
       if (context === undefined) {
-        state = { ...state, errorMessage: "项目尚未打开，无法启动 Agent。" };
+        state = { ...state, errorMessage: "Agent 会话尚未就绪。" };
         return toProps();
       }
       if (context.conversationId === undefined) {
@@ -307,34 +339,39 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       // Server-authoritative start: persist the user's intent as a draft, then start by reference.
       // The renderer authors only choices (mode, model, request, context refs) — never provider,
       // capabilities, context window, or resolved document content.
+      const standalone = isStandaloneScope(context.scope);
+      const operationMode = standalone ? "conversation" : state.operationMode;
+      const contextMode = standalone ? "standalone_chat" : state.contextMode;
       const writePolicy =
-        state.operationMode === "planning" ? "write_before_confirmation" : state.writePolicy;
+        operationMode === "planning" ? "write_before_confirmation" : state.writePolicy;
       const reasoningEffort = safeReasoningEffortForDraft(state.runDraft, context.settings);
       const modelName = selectedModelName(state.runDraft, context.settings, profileId);
-      const contextRefs = state.contextDraft?.refs ?? contextDraftRefs(context);
+      const contextRefs = standalone ? [] : (state.contextDraft?.refs ?? contextDraftRefs(context));
+      const activeResourceRef = standalone ? null : (context.activeResourceRef ?? null);
       const prepared = await api.agentRuns.prepareStart({
-        projectId: context.projectId,
+        ...scopeIdentity(context.scope),
         conversationId: context.conversationId,
         commandId: createCommandId("prepare"),
         userRequest: request,
-        operationMode: state.operationMode,
-        contextMode: state.contextMode,
+        operationMode,
+        contextMode,
         writePolicy,
         writePolicyAcknowledged:
-          state.operationMode === "execution" &&
+          operationMode === "execution" &&
           state.writePolicy === "user_preapproved_run" &&
           state.writePolicyAcknowledged,
         modelProfileId: profileId,
         ...(modelName === undefined ? {} : { modelName }),
         ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
-        contextRefs
+        contextRefs,
+        activeResourceRef
       });
       if (!prepared.ok) {
         state = { ...state, errorMessage: formatAgentStartError(prepared.error) };
         return toProps();
       }
       const command: StartAgentRunCommand = {
-        projectId: context.projectId,
+        ...scopeIdentity(context.scope),
         conversationId: context.conversationId,
         commandId: createCommandId("start"),
         expectedRunRevision: 0,
@@ -356,7 +393,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     await applyCommandResult(
       await api.agentRuns.stop({
         runId: snapshot.runId,
-        projectId: snapshot.projectId,
+        ...scopeIdentity(scopeForSnapshot(snapshot)),
         commandId: createCommandId("stop"),
         expectedRunRevision: snapshot.runRevision
       } satisfies StopAgentRunCommand)
@@ -367,44 +404,50 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   async function answerRun(answer: string): Promise<AgentRunPanelProps> {
     const snapshot = requireSnapshot();
     const questionId = state.pendingUserInput?.questionId;
-    if (snapshot === undefined || questionId === undefined) return toProps();
+    if (
+      snapshot === undefined ||
+      questionId === undefined ||
+      isStandaloneScope(scopeForSnapshot(snapshot))
+    ) {
+      return toProps();
+    }
     await applyCommandResult(
       await api.agentRuns.answerUserInput({
         runId: snapshot.runId,
-        projectId: snapshot.projectId,
+        ...scopeIdentity(scopeForSnapshot(snapshot)),
         commandId: createCommandId("answer"),
         expectedRunRevision: snapshot.runRevision,
         questionId,
         answer
-      })
+      } as never)
     );
     return toProps();
   }
 
   async function resumeRun(): Promise<AgentRunPanelProps> {
     const snapshot = requireSnapshot();
-    if (snapshot === undefined) return toProps();
+    if (snapshot === undefined || isStandaloneScope(scopeForSnapshot(snapshot))) return toProps();
     await applyCommandResult(
       await api.agentRuns.resume({
         runId: snapshot.runId,
-        projectId: snapshot.projectId,
+        ...scopeIdentity(scopeForSnapshot(snapshot)),
         commandId: createCommandId("resume"),
         expectedRunRevision: snapshot.runRevision
-      } satisfies ResumeAgentRunCommand)
+      } as never)
     );
     return toProps();
   }
 
   async function retryRun(): Promise<AgentRunPanelProps> {
     const snapshot = requireSnapshot();
-    if (snapshot === undefined) return toProps();
+    if (snapshot === undefined || isStandaloneScope(scopeForSnapshot(snapshot))) return toProps();
     await applyCommandResult(
       await api.agentRuns.retryStep({
         runId: snapshot.runId,
-        projectId: snapshot.projectId,
+        ...scopeIdentity(scopeForSnapshot(snapshot)),
         commandId: createCommandId("retry"),
         expectedRunRevision: snapshot.runRevision
-      } satisfies RetryAgentRunStepCommand)
+      } as never)
     );
     return toProps();
   }
@@ -414,7 +457,13 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     const request = (async () => {
       const snapshot = requireSnapshot();
       const diagnostic = state.diagnostic;
-      if (snapshot === undefined || diagnostic === undefined) return toProps();
+      if (
+        snapshot === undefined ||
+        diagnostic === undefined ||
+        isStandaloneScope(scopeForSnapshot(snapshot))
+      ) {
+        return toProps();
+      }
       const persistedTarget = diagnostic.retryTargets.find(
         (candidate) => candidate.kind === target.kind && candidate.id === target.id
       );
@@ -425,12 +474,12 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       await applyCommandResult(
         await api.agentRuns.retryTarget({
           runId: snapshot.runId,
-          projectId: snapshot.projectId,
+          ...scopeIdentity(scopeForSnapshot(snapshot)),
           commandId: createCommandId("retry_target"),
           expectedRunRevision: snapshot.runRevision,
           errorId: diagnostic.errorId,
           target: persistedTarget
-        } satisfies RetryRunTargetCommand)
+        } as never)
       );
       return toProps();
     })();
@@ -446,17 +495,17 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     decision: "refresh" | "exclude" | "cancel"
   ): Promise<AgentRunPanelProps> {
     const snapshot = requireSnapshot();
-    if (snapshot === undefined) return toProps();
+    if (snapshot === undefined || isStandaloneScope(scopeForSnapshot(snapshot))) return toProps();
     await applyCommandResult(
       await api.agentRuns.refreshContext({
         runId: snapshot.runId,
-        projectId: snapshot.projectId,
+        ...scopeIdentity(scopeForSnapshot(snapshot)),
         commandId: createCommandId("context"),
         expectedRunRevision: snapshot.runRevision,
         decision,
         sourceRefs: contextSources(context).map((source) => source.refId),
         currentSources: contextSources(context)
-      } satisfies RefreshAgentContextCommand)
+      } as never)
     );
     return toProps();
   }
@@ -467,11 +516,17 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   ): Promise<AgentRunPanelProps> {
     const snapshot = requireSnapshot();
     const plan = state.planArtifact;
-    if (snapshot === undefined || plan === undefined) return toProps();
+    if (
+      snapshot === undefined ||
+      plan === undefined ||
+      isStandaloneScope(scopeForSnapshot(snapshot))
+    ) {
+      return toProps();
+    }
     await applyCommandResult(
       await api.agentRuns.decidePlan({
         runId: snapshot.runId,
-        projectId: snapshot.projectId,
+        ...scopeIdentity(scopeForSnapshot(snapshot)),
         commandId: createCommandId("plan"),
         expectedRunRevision: snapshot.runRevision,
         planId: plan.planId,
@@ -489,7 +544,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
                 : {})
             }
           : {})
-      } satisfies DecideAgentPlanCommand)
+      } as never)
     );
     return toProps();
   }
@@ -498,12 +553,18 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     if (selectionInFlight !== undefined) return selectionInFlight;
     const snapshot = requireSnapshot();
     const changeSet = state.changeSet;
-    if (snapshot === undefined || changeSet === undefined) return Promise.resolve(toProps());
+    if (
+      snapshot === undefined ||
+      changeSet === undefined ||
+      isStandaloneScope(scopeForSnapshot(snapshot))
+    ) {
+      return Promise.resolve(toProps());
+    }
     state = { ...state, selectionPending: true };
     notify();
-    const command: DecideChangeSetCommand = {
+    const command = {
       runId: snapshot.runId,
-      projectId: snapshot.projectId,
+      ...scopeIdentity(scopeForSnapshot(snapshot)),
       commandId: createCommandId("change-set-selection"),
       expectedRunRevision: snapshot.runRevision,
       changeSetId: changeSet.changeSetId,
@@ -515,7 +576,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     };
     const request = (async () => {
       try {
-        await applyCommandResult(await api.agentRuns.decideChangeSet(command));
+        await applyCommandResult(await api.agentRuns.decideChangeSet(command as never));
       } finally {
         state = { ...state, selectionPending: false };
         selectionInFlight = undefined;
@@ -531,10 +592,16 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     if (approvalInFlight !== undefined) return approvalInFlight;
     const snapshot = requireSnapshot();
     const changeSet = state.changeSet;
-    if (snapshot === undefined || changeSet === undefined) return Promise.resolve(toProps());
-    const command: DecideChangeSetCommand = {
+    if (
+      snapshot === undefined ||
+      changeSet === undefined ||
+      isStandaloneScope(scopeForSnapshot(snapshot))
+    ) {
+      return Promise.resolve(toProps());
+    }
+    const command = {
       runId: snapshot.runId,
-      projectId: snapshot.projectId,
+      ...scopeIdentity(scopeForSnapshot(snapshot)),
       commandId: createCommandId("change-set-decision"),
       expectedRunRevision: snapshot.runRevision,
       changeSetId: changeSet.changeSetId,
@@ -544,7 +611,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     };
     const request = (async () => {
       try {
-        await applyCommandResult(await api.agentRuns.decideChangeSet(command));
+        await applyCommandResult(await api.agentRuns.decideChangeSet(command as never));
       } finally {
         approvalInFlight = undefined;
         notify();
@@ -564,13 +631,14 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       snapshot === undefined ||
       pending === undefined ||
       pending === null ||
-      snapshot.status !== "awaiting_tool_approval"
+      snapshot.status !== "awaiting_tool_approval" ||
+      isStandaloneScope(scopeForSnapshot(snapshot))
     ) {
       return Promise.resolve(toProps());
     }
-    const command: DecideToolApprovalCommand = {
+    const command = {
       runId: snapshot.runId,
-      projectId: snapshot.projectId,
+      ...scopeIdentity(scopeForSnapshot(snapshot)),
       commandId: createCommandId("tool-approval"),
       expectedRunRevision: snapshot.runRevision,
       bindingId: pending.binding.bindingId,
@@ -578,7 +646,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     };
     const request = (async () => {
       try {
-        await applyCommandResult(await api.agentRuns.decideToolApproval(command));
+        await applyCommandResult(await api.agentRuns.decideToolApproval(command as never));
       } finally {
         toolApprovalInFlight = undefined;
         notify();
@@ -593,7 +661,13 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   function undoAgentRun(): Promise<AgentRunPanelProps> {
     if (undoInFlight !== undefined) return undoInFlight;
     const snapshot = requireSnapshot();
-    if (snapshot === undefined || !canUndoAppliedRun(state)) return Promise.resolve(toProps());
+    if (
+      snapshot === undefined ||
+      !canUndoAppliedRun(state) ||
+      isStandaloneScope(scopeForSnapshot(snapshot))
+    ) {
+      return Promise.resolve(toProps());
+    }
     if (state.rollbackReview !== undefined && !state.rollbackReviewOpen) {
       state = { ...state, rollbackReviewOpen: true };
       notify();
@@ -604,10 +678,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           await api.agentRuns.undoRun({
             action: "request",
             runId: snapshot.runId,
-            projectId: snapshot.projectId,
+            ...scopeIdentity(scopeForSnapshot(snapshot)),
             commandId: createCommandId("undo-run"),
             expectedRunRevision: snapshot.runRevision
-          })
+          } as never)
         );
       } finally {
         undoInFlight = undefined;
@@ -630,7 +704,13 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     }
     const snapshot = requireSnapshot();
     const review = state.rollbackReview;
-    if (snapshot === undefined || review === undefined) return Promise.resolve(toProps());
+    if (
+      snapshot === undefined ||
+      review === undefined ||
+      isStandaloneScope(scopeForSnapshot(snapshot))
+    ) {
+      return Promise.resolve(toProps());
+    }
     const decisions = Object.entries(state.rollbackDecisions).map(([relativePath, decision]) => ({
       relativePath,
       decision
@@ -641,7 +721,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           await api.agentRuns.undoRun({
             action: "resolve",
             runId: snapshot.runId,
-            projectId: snapshot.projectId,
+            ...scopeIdentity(scopeForSnapshot(snapshot)),
             commandId: createCommandId("resolve-run-undo"),
             expectedRunRevision: snapshot.runRevision,
             reviewId: review.reviewId,
@@ -650,7 +730,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
               : decisions.length === 0
                 ? {}
                 : { decisions })
-          })
+          } as never)
         );
       } finally {
         undoInFlight = undefined;
@@ -679,6 +759,11 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       notify();
       return;
     }
+    if (context !== undefined && !sameAgentScope(context.scope, scopeForSnapshot(result.value))) {
+      state = { ...state, errorMessage: "The Agent run is outside the selected context." };
+      notify();
+      return;
+    }
     state = {
       ...state,
       snapshot: result.value,
@@ -702,6 +787,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       return;
     }
     const read = result.value;
+    if (context !== undefined && !sameAgentScope(context.scope, scopeForSnapshot(read.snapshot))) {
+      state = { ...state, errorMessage: "The Agent run is outside the selected context." };
+      return;
+    }
     const permission = await readBoundPermissionSummary(read.snapshot);
     const nextChangeSet = read.changeSet;
     const nextRollbackReview = rollbackReviewFromRead(read.rollbackReview);
@@ -755,6 +844,9 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     readonly summary: PermissionSummary | undefined;
     readonly errorMessage: string | undefined;
   }> {
+    if (isStandaloneScope(scopeForSnapshot(snapshot))) {
+      return { summary: undefined, errorMessage: undefined };
+    }
     if (snapshot.permissionSummaryId === null) {
       return { summary: undefined, errorMessage: undefined };
     }
@@ -770,10 +862,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     }
     const result = await readPermissionSummary({
       kind: "run",
-      projectId: snapshot.projectId,
+      ...scopeIdentity(scopeForSnapshot(snapshot)),
       runId: snapshot.runId,
       permissionSummaryId: snapshot.permissionSummaryId
-    });
+    } as never);
     if (!result.ok) return { summary: undefined, errorMessage: result.error.message };
     if (
       result.value === undefined ||
@@ -796,7 +888,12 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   }
 
   function planExecutionControl(): AgentPlanExecutionControl | undefined {
-    if (state.planExecution === undefined) return undefined;
+    if (
+      state.planExecution === undefined ||
+      (context !== undefined && isStandaloneScope(context.scope))
+    ) {
+      return undefined;
+    }
     const revisionRequest = pendingPlanRevisionRequest();
     return {
       record: state.planExecution,
@@ -851,12 +948,17 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     const snapshot = requireSnapshot();
     const request = pendingPlanRevisionRequest();
     const decidePlanRevision = stage5BApi.decidePlanRevision;
-    if (snapshot === undefined || request === undefined || decidePlanRevision === undefined) {
+    if (
+      snapshot === undefined ||
+      request === undefined ||
+      decidePlanRevision === undefined ||
+      isStandaloneScope(scopeForSnapshot(snapshot))
+    ) {
       return Promise.resolve(toProps());
     }
-    const command: DecidePlanRevisionCommand = {
+    const command = {
       runId: snapshot.runId,
-      projectId: snapshot.projectId,
+      ...scopeIdentity(scopeForSnapshot(snapshot)),
       commandId: createCommandId("plan-revision"),
       expectedRunRevision: snapshot.runRevision,
       requestId: request.requestId,
@@ -866,7 +968,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     };
     const pending = (async () => {
       try {
-        await applyCommandResult(await decidePlanRevision(command));
+        await applyCommandResult(await decidePlanRevision(command as never));
       } finally {
         planDecisionInFlight = undefined;
         notify();
@@ -879,14 +981,19 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   }
 
   function toProps(): AgentRunPanelProps {
-    const planExecution = planExecutionControl();
+    const scope =
+      context?.scope ??
+      (state.snapshot === undefined ? undefined : scopeForSnapshot(state.snapshot));
+    const standalone = scope !== undefined && isStandaloneScope(scope);
+    const planExecution = standalone ? undefined : planExecutionControl();
     const conversationId = context?.conversationId ?? state.snapshot?.conversationId ?? undefined;
     const pendingToolApproval = pendingToolApprovalProps(
       state.snapshot,
       toolApprovalInFlight !== undefined
     );
-    return {
-      projectId: context?.projectId ?? state.snapshot?.projectId ?? "",
+    const props = {
+      ...(scope === undefined ? {} : { scope }),
+      ...(scope?.kind === "workspace" ? { projectId: scope.workspaceId } : {}),
       ...(conversationId === undefined ? {} : { conversationId }),
       ...(state.snapshot === undefined ? {} : { runId: state.snapshot.runId }),
       ...(state.userRequest.length === 0 ? {} : { userRequest: state.userRequest }),
@@ -894,9 +1001,9 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       assistantText: state.assistantText,
       events: state.events,
       ...(state.pendingUserInput === undefined ? {} : { pendingUserInput: state.pendingUserInput }),
-      ...(pendingToolApproval === undefined ? {} : { pendingToolApproval }),
+      ...(standalone || pendingToolApproval === undefined ? {} : { pendingToolApproval }),
       ...(state.diagnostic === undefined ? {} : { diagnostic: state.diagnostic }),
-      ...(state.changeSet === undefined
+      ...(standalone || state.changeSet === undefined
         ? {}
         : {
             changeSetReview: {
@@ -936,7 +1043,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
               }
             }
           }),
-      ...(state.rollbackReview === undefined
+      ...(standalone || state.rollbackReview === undefined
         ? {}
         : {
             rollbackReview: {
@@ -948,7 +1055,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
                 notify();
               },
               decisions: state.rollbackDecisions,
-              onDecisionChange: (relativePath, decision) => {
+              onDecisionChange: (relativePath: string, decision: RollbackReviewDecision) => {
                 state = {
                   ...state,
                   rollbackDecisions: { ...state.rollbackDecisions, [relativePath]: decision }
@@ -968,7 +1075,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
             }
           }),
       ...(planExecution === undefined ? {} : { planExecution }),
-      ...(state.operationMode === "execution"
+      ...(!standalone && state.operationMode === "execution"
         ? {
             canUndoRun: canUndoAppliedRun(state),
             onUndoRun: () => {
@@ -978,21 +1085,23 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         : {}),
       ...(state.errorMessage === undefined ? {} : { errorMessage: state.errorMessage }),
       ...providerLabel(state.snapshot, context?.settings),
-      ...(context?.chapterEditor?.dirty === true
+      ...(!standalone && context?.chapterEditor?.dirty === true
         ? { contextSourceNotice: "使用未保存编辑器内容 · editor_buffer / dirty" }
         : {}),
-      onAnswerUserInput: (answer) => void answerRun(answer).then(notify),
+      onAnswerUserInput: (answer: string) => void answerRun(answer).then(notify),
       onResume: () => void resumeRun().then(notify),
       onRetryStep: () => void retryRun().then(notify),
-      onRetryTarget: (target) => void retryTargetRun(target).then(notify),
-      onRefreshContext: (decision) => void refreshRun(decision).then(notify),
-      ...(pendingToolApproval === undefined
+      onRetryTarget: (target: AgentRunRetryTarget) => void retryTargetRun(target).then(notify),
+      onRefreshContext: (decision: "refresh" | "exclude" | "cancel") =>
+        void refreshRun(decision).then(notify),
+      ...(standalone || pendingToolApproval === undefined
         ? {}
         : {
             onDecideToolApproval: (decision: "approve" | "reject") =>
               void decidePendingToolApproval(decision).then(notify)
           })
     };
+    return props as AgentRunPanelProps;
   }
 
   /**
@@ -1007,7 +1116,6 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     if (readRunDraft === undefined || ctx?.conversationId === undefined) return;
     const modelProfileId = selectedModelProfileId(ctx.settings);
     if (modelProfileId === undefined) return;
-    const projectId = ctx.projectId;
     const conversationId = ctx.conversationId;
     const modelName = selectedModelName(undefined, ctx.settings, modelProfileId);
     draftToken += 1;
@@ -1019,36 +1127,45 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       contextMode: state.contextMode,
       writePolicy: state.writePolicy,
       writePolicyAcknowledged: state.writePolicyAcknowledged,
-      contextRefs: contextDraftRefs(ctx)
+      contextRefs: contextDraftRefs(ctx),
+      activeResourceRef: ctx.activeResourceRef ?? null
     };
     state = { ...state, draftPending: true };
     void (async () => {
-      const result = await readRunDraft({ projectId, conversationId, initialize });
+      const result = await readRunDraft({
+        ...scopeIdentity(ctx.scope),
+        conversationId,
+        initialize
+      });
       if (token !== draftToken) return;
       if (!result.ok) {
         state = { ...state, draftPending: false };
         notify();
         return;
       }
-      const normalizeForEngineering =
-        ctx.workspaceKind === "engineeringWorkspace" &&
-        result.value.runDraft.contextMode !== "general_file";
+      const standalone = isStandaloneScope(ctx.scope);
+      const surfaceContextMode = desiredWorkspaceContextMode(ctx);
+      const normalizeForSurface =
+        surfaceContextMode !== undefined &&
+        result.value.runDraft.contextMode !== surfaceContextMode;
       state = {
         ...state,
         runDraft: result.value.runDraft,
         contextDraft: result.value.contextDraft,
-        operationMode: result.value.runDraft.operationMode,
-        contextMode: normalizeForEngineering ? "general_file" : result.value.runDraft.contextMode,
+        operationMode: standalone ? "conversation" : result.value.runDraft.operationMode,
+        contextMode: standalone
+          ? "standalone_chat"
+          : (surfaceContextMode ?? result.value.runDraft.contextMode),
         writePolicy:
-          result.value.runDraft.operationMode === "planning"
+          standalone || result.value.runDraft.operationMode === "planning"
             ? state.executionWritePolicy
             : result.value.runDraft.writePolicy,
         executionWritePolicy:
-          result.value.runDraft.operationMode === "execution"
+          !standalone && result.value.runDraft.operationMode === "execution"
             ? result.value.runDraft.writePolicy
             : state.executionWritePolicy,
         writePolicyAcknowledged: acknowledgementForSelection(
-          result.value.runDraft.operationMode,
+          standalone ? "conversation" : result.value.runDraft.operationMode,
           result.value.runDraft.writePolicy
         ),
         permissionSummary: undefined,
@@ -1056,10 +1173,11 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         draftPending: false
       };
       notify();
-      if (normalizeForEngineering) {
-        updateRunDraftChoice({ kind: "set_context_mode", contextMode: "general_file" }, true);
-        return;
+      if (normalizeForSurface && surfaceContextMode !== undefined) {
+        updateRunDraftChoice({ kind: "set_context_mode", contextMode: surfaceContextMode }, true);
       }
+      syncActiveResourceDraft();
+      if (normalizeForSurface) return;
       if (reconcileDraftModel()) return;
       await previewBudget(token);
     })();
@@ -1078,13 +1196,13 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       return;
     }
     const result = await previewContextBudget({
-      projectId: ctx.projectId,
+      ...scopeIdentity(ctx.scope),
       conversationId: ctx.conversationId,
       commandId: createCommandId("preview-budget"),
       runDraftId: draft.runDraftId,
       expectedDraftRevision: draft.revision,
       runDraftChecksum: draft.checksum
-    });
+    } as never);
     if (token !== draftToken) return;
     state = {
       ...state,
@@ -1123,7 +1241,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       const token = draftToken;
       if (ctx?.conversationId === undefined || draft === undefined) return;
       const result = await updateRunDraft({
-        projectId: ctx.projectId,
+        ...scopeIdentity(ctx.scope),
         conversationId: ctx.conversationId,
         commandId: createCommandId("draft-choice"),
         expectedDraftRevision: draft.revision,
@@ -1136,10 +1254,41 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     });
   }
 
+  function syncActiveResourceDraft(): void {
+    const updateContextDraft = draftApi.updateContextDraft;
+    const requested = context?.activeResourceRef ?? null;
+    if (
+      updateContextDraft === undefined ||
+      state.contextDraft === undefined ||
+      sameProjectFileRef(state.contextDraft.activeResourceRef, requested)
+    ) {
+      return;
+    }
+    void queueDraftMutation(async () => {
+      const ctx = context;
+      const draft = state.contextDraft;
+      const token = draftToken;
+      if (ctx?.conversationId === undefined || draft === undefined) return;
+      const ref = ctx.activeResourceRef ?? null;
+      if (sameProjectFileRef(draft.activeResourceRef, ref)) return;
+      const result = await updateContextDraft({
+        ...scopeIdentity(ctx.scope),
+        conversationId: ctx.conversationId,
+        commandId: createCommandId("draft-active-resource"),
+        contextDraftId: draft.contextDraftId,
+        expectedDraftRevision: draft.revision,
+        mutation: { kind: "set_active_resource", ref }
+      });
+      applyDraftResult(result, token);
+      await previewBudget(token);
+    });
+  }
+
   function updateOperationModeDraft(
     operationMode: AgentOperationMode,
     executionWritePolicy: AgentWritePolicy
   ): void {
+    if (context !== undefined && isStandaloneScope(context.scope)) return;
     const updateRunDraft = draftApi.updateRunDraft;
     if (updateRunDraft === undefined) return;
     void queueDraftMutation(async () => {
@@ -1148,7 +1297,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       const token = draftToken;
       if (ctx?.conversationId === undefined || draft === undefined) return;
       const modeResult = await updateRunDraft({
-        projectId: ctx.projectId,
+        ...scopeIdentity(ctx.scope),
         conversationId: ctx.conversationId,
         commandId: createCommandId("draft-mode"),
         expectedDraftRevision: draft.revision,
@@ -1161,7 +1310,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       // choice after switching back; selecting preapproval is itself the current-run acknowledgement.
       if (operationMode === "execution" && executionWritePolicy === "user_preapproved_run") {
         const policyResult = await updateRunDraft({
-          projectId: ctx.projectId,
+          ...scopeIdentity(ctx.scope),
           conversationId: ctx.conversationId,
           commandId: createCommandId("draft-mode-policy"),
           expectedDraftRevision: modeResult.value.runDraft.revision,
@@ -1189,7 +1338,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       const token = draftToken;
       if (ctx?.conversationId === undefined || draft === undefined) return;
       const result = await updateRunDraft({
-        projectId: ctx.projectId,
+        ...scopeIdentity(ctx.scope),
         conversationId: ctx.conversationId,
         commandId: createCommandId("draft-model"),
         expectedDraftRevision: draft.revision,
@@ -1222,7 +1371,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       const token = draftToken;
       if (ctx?.conversationId === undefined || draft === undefined) return;
       const result = await updateRunDraft({
-        projectId: ctx.projectId,
+        ...scopeIdentity(ctx.scope),
         conversationId: ctx.conversationId,
         commandId: createCommandId("draft-reasoning"),
         expectedDraftRevision: draft.revision,
@@ -1244,6 +1393,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   }
 
   function addReferenceValue(ref: ContextDraftRef): void {
+    if (context !== undefined && isStandaloneScope(context.scope)) return;
     const updateContextDraft = draftApi.updateContextDraft;
     if (updateContextDraft === undefined) return;
     void queueDraftMutation(async () => {
@@ -1252,7 +1402,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       const token = draftToken;
       if (ctx?.conversationId === undefined || draft === undefined) return;
       const result = await updateContextDraft({
-        projectId: ctx.projectId,
+        ...scopeIdentity(ctx.scope),
         conversationId: ctx.conversationId,
         commandId: createCommandId("draft-add-ref"),
         contextDraftId: draft.contextDraftId,
@@ -1265,6 +1415,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   }
 
   async function pickProjectFile(): Promise<void> {
+    if (context !== undefined && isStandaloneScope(context.scope)) return;
     const chooser = api.workspace?.chooseTextFile;
     if (chooser === undefined) return;
     let selected: Awaited<ReturnType<typeof chooser>>;
@@ -1292,6 +1443,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   }
 
   function removeReferenceDraft(refId: string): void {
+    if (context !== undefined && isStandaloneScope(context.scope)) return;
     const updateContextDraft = draftApi.updateContextDraft;
     if (updateContextDraft === undefined) return;
     void queueDraftMutation(async () => {
@@ -1300,7 +1452,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       const token = draftToken;
       if (ctx?.conversationId === undefined || draft === undefined) return;
       const result = await updateContextDraft({
-        projectId: ctx.projectId,
+        ...scopeIdentity(ctx.scope),
         conversationId: ctx.conversationId,
         commandId: createCommandId("draft-remove-ref"),
         contextDraftId: draft.contextDraftId,
@@ -1313,6 +1465,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   }
 
   function refreshContextDraftSources(): void {
+    if (context !== undefined && isStandaloneScope(context.scope)) return;
     const refreshContextDraft = draftApi.refreshContextDraft;
     if (refreshContextDraft === undefined) return;
     void queueDraftMutation(async () => {
@@ -1321,7 +1474,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       const token = draftToken;
       if (ctx?.conversationId === undefined || draft === undefined) return;
       const result = await refreshContextDraft({
-        projectId: ctx.projectId,
+        ...scopeIdentity(ctx.scope),
         conversationId: ctx.conversationId,
         commandId: createCommandId("draft-refresh"),
         contextDraftId: draft.contextDraftId,
@@ -1346,13 +1499,13 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     const budgetSnapshotId = snapshot.contextBudgetSnapshotId;
     void (async () => {
       const result = await compactContext({
-        projectId: snapshot.projectId,
+        ...scopeIdentity(scopeForSnapshot(snapshot)),
         runId: snapshot.runId,
         commandId: createCommandId("compact"),
         expectedRunRevision: snapshot.runRevision,
         contextBudgetSnapshotId: budgetSnapshotId,
         trigger: "manual"
-      });
+      } as never);
       if (!result.ok) {
         state = { ...state, errorMessage: result.error.message };
         notify();
@@ -1440,6 +1593,11 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         ? undefined
         : reasoningStrengthForChoice(settings, selectedChoice, selectedProfile);
     const reasoning = reasoningControl(selectedReasoningStrength, runDraft);
+    if (context !== undefined && isStandaloneScope(context.scope)) {
+      // Standalone may choose a text model and its reasoning level, but it never exposes project
+      // references, file pickers, context controls, or write/approval state.
+      return { model, reasoning };
+    }
     const references: AgentComposerReferenceControl = {
       chips: contextDraft.refs.map(refToChip),
       available: availableReferenceRefs(context, contextDraft).map(refToChip),
@@ -1542,6 +1700,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   }
 
   async function loadPermissionSummary(): Promise<void> {
+    if (context !== undefined && isStandaloneScope(context.scope)) return;
     permissionSummaryRequested = true;
     const readPermissionSummary = stage5BApi.readPermissionSummary;
     if (readPermissionSummary === undefined) return;
@@ -1580,12 +1739,12 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     notify();
     const result = await readPermissionSummary({
       kind: "draft",
-      projectId: ctx.projectId,
+      ...scopeIdentity(ctx.scope),
       conversationId: ctx.conversationId,
       runDraftId: draft.runDraftId,
       runDraftRevision: draft.revision,
       runDraftChecksum: draft.checksum
-    });
+    } as never);
     if (
       state.runDraft?.runDraftId !== draft.runDraftId ||
       state.runDraft.revision !== draft.revision
@@ -1602,10 +1761,11 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   }
 
   function toComposerProps(): AgentComposerProps {
+    const standalone = context !== undefined && isStandaloneScope(context.scope);
     return {
       request: state.userRequest,
-      operationMode: state.operationMode,
-      contextMode: state.contextMode,
+      operationMode: standalone ? "conversation" : state.operationMode,
+      contextMode: standalone ? "standalone_chat" : state.contextMode,
       writePolicy: state.writePolicy,
       writePolicyAcknowledged: state.writePolicyAcknowledged,
       active: state.snapshot !== undefined && !isTerminalRunStatus(state.snapshot.status),
@@ -1619,12 +1779,14 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
                 : "正在保存运行设置…"
           }
         : {}),
-      availableContextModes:
-        context?.workspaceKind === "engineeringWorkspace"
+      availableContextModes: standalone
+        ? ["standalone_chat"]
+        : context?.workspaceKind === "engineeringWorkspace"
           ? ["general_file"]
           : ["writing", "general_file"],
       ...composerDraftGroups(),
-      ...(stage5BApi.readPermissionSummary === undefined && state.permissionSummary === undefined
+      ...(standalone ||
+      (stage5BApi.readPermissionSummary === undefined && state.permissionSummary === undefined)
         ? {}
         : { permission: permissionControl() }),
       onRequestChange: (request) => {
@@ -1632,6 +1794,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         notify();
       },
       onOperationModeChange: (mode) => {
+        if (standalone) return;
         if (mode === "planning") permissionSummaryRequested = false;
         state = {
           ...state,
@@ -1650,12 +1813,13 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         updateOperationModeDraft(mode, state.executionWritePolicy);
       },
       onContextModeChange: (mode) => {
+        if (standalone) return;
         state = { ...state, contextMode: mode };
         notify();
         updateRunDraftChoice({ kind: "set_context_mode", contextMode: mode }, true);
       },
       onWritePolicyChange: (writePolicy) => {
-        if (state.operationMode !== "execution") return;
+        if (standalone || state.operationMode !== "execution") return;
         const writePolicyAcknowledged = writePolicy === "user_preapproved_run";
         state = {
           ...state,
@@ -1686,7 +1850,12 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   }
 
   function toPlanReviewProps(): AgentPlanReviewProps | undefined {
-    if (state.planArtifact === undefined) return undefined;
+    if (
+      state.planArtifact === undefined ||
+      (context !== undefined && isStandaloneScope(context.scope))
+    ) {
+      return undefined;
+    }
     return {
       contextMode: state.contextMode,
       plan: state.planArtifact,
@@ -1702,25 +1871,48 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     getProps: () => (context === undefined ? undefined : toProps()),
     getComposerProps: () => (context === undefined ? undefined : toComposerProps()),
     getPlanReviewProps: () => (context === undefined ? undefined : toPlanReviewProps()),
-    syncContext(nextContext) {
+    syncContext(nextContextInput) {
+      const nextContext = resolveAgentRunBridgeContext(nextContextInput);
       const previousSettings = context?.settings;
-      const projectChanged = context?.projectId !== nextContext.projectId;
+      const activeResourceChanged = !sameProjectFileRef(
+        context?.activeResourceRef ?? null,
+        nextContext.activeResourceRef ?? null
+      );
+      const scopeChanged =
+        context === undefined || !sameAgentScope(context.scope, nextContext.scope);
       const conversationChanged = context?.conversationId !== nextContext.conversationId;
       context = nextContext;
       if (
         conversationChanged ||
-        (projectChanged && state.snapshot?.projectId !== nextContext.projectId)
+        (scopeChanged &&
+          (state.snapshot === undefined ||
+            !sameAgentScope(scopeForSnapshot(state.snapshot), nextContext.scope)))
       ) {
         permissionSummaryRequested = false;
-        state = resetRunState(state);
+        state = resetRunState(state, nextContext.scope);
       }
-      if (
-        nextContext.workspaceKind === "engineeringWorkspace" &&
-        state.contextMode !== "general_file"
-      ) {
-        state = { ...state, contextMode: "general_file" };
+      if (isStandaloneScope(nextContext.scope)) {
+        state = {
+          ...state,
+          operationMode: "conversation",
+          contextMode: "standalone_chat",
+          writePolicy: "write_before_confirmation",
+          executionWritePolicy: "write_before_confirmation",
+          writePolicyAcknowledged: false,
+          permissionSummary: undefined,
+          permissionPending: false,
+          permissionError: undefined,
+          planArtifact: undefined,
+          planExecution: undefined,
+          changeSet: undefined,
+          rollbackReview: undefined
+        };
+      }
+      const desiredContextMode = desiredWorkspaceContextMode(nextContext);
+      if (desiredContextMode !== undefined && state.contextMode !== desiredContextMode) {
+        state = { ...state, contextMode: desiredContextMode };
         if (state.runDraft !== undefined) {
-          updateRunDraftChoice({ kind: "set_context_mode", contextMode: "general_file" }, true);
+          updateRunDraftChoice({ kind: "set_context_mode", contextMode: desiredContextMode }, true);
         }
       }
       // Settings can arrive after the permanent conversation surface selects a conversation. Load
@@ -1734,13 +1926,18 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       } else if (!conversationChanged && state.runDraft !== undefined) {
         reconcileDraftModel(previousSettings);
       }
+      if (!conversationChanged && activeResourceChanged && state.contextDraft !== undefined) {
+        syncActiveResourceDraft();
+      }
       return toProps();
     },
-    async load(projectId) {
-      if (context === undefined || context.projectId !== projectId) {
-        context = { projectId };
+    async load(scopeOrProjectId) {
+      const scope = resolveScopeInput(scopeOrProjectId, context?.workspaceKind);
+      if (context === undefined || !sameAgentScope(context.scope, scope)) {
+        context = resolveAgentRunBridgeContext({ scope });
+        state = resetRunState(state, scope);
       }
-      const listed = await api.agentRuns.list(projectId);
+      const listed = await listAgentRunsForScope(api, scope);
       if (!listed.ok) {
         state = { ...state, errorMessage: listed.error.message };
         return toProps();
@@ -1768,7 +1965,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           budgetPreview: state.budgetPreview,
           draftPending: state.draftPending
         };
-        state = resetRunState(state);
+        state = resetRunState(state, context?.scope);
         state = {
           ...state,
           ...(currentDraft.runDraft === undefined ? {} : { runDraft: currentDraft.runDraft }),
@@ -1792,12 +1989,12 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       }
       if (
         context === undefined ||
-        result.value.snapshot.projectId !== context.projectId ||
+        !sameAgentScope(scopeForSnapshot(result.value.snapshot), context.scope) ||
         (context.conversationId !== undefined &&
           result.value.snapshot.conversationId !== context.conversationId)
       ) {
         state = {
-          ...resetRunState(state),
+          ...resetRunState(state, context?.scope),
           errorMessage: "The Agent run is outside the selected conversation."
         };
         notify();
@@ -1870,11 +2067,12 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   return bridge;
 }
 
-function resetRunState(state: BridgeState): BridgeState {
+function resetRunState(state: BridgeState, scope?: AgentContextScope): BridgeState {
+  const standalone = scope !== undefined && isStandaloneScope(scope);
   return {
     ...state,
-    operationMode: "planning",
-    contextMode: "writing",
+    operationMode: standalone ? "conversation" : "planning",
+    contextMode: standalone ? "standalone_chat" : "writing",
     writePolicy: "write_before_confirmation",
     executionWritePolicy: "write_before_confirmation",
     writePolicyAcknowledged: false,
@@ -1903,6 +2101,94 @@ function resetRunState(state: BridgeState): BridgeState {
     permissionError: undefined,
     planExecution: undefined
   };
+}
+
+type ScopeCommandIdentity =
+  | { readonly scope: AgentContextScope }
+  | { readonly scope: AgentContextScope; readonly projectId: string };
+
+function resolveAgentRunBridgeContext(input: AgentRunBridgeContext): ResolvedAgentRunBridgeContext {
+  const scope = resolveScopeInput(input.scope ?? input.projectId, input.workspaceKind);
+  if (scope.kind === "standalone") {
+    if (input.projectId !== undefined || input.workspaceKind !== undefined) {
+      throw new Error("Standalone Agent context must not include workspace identity.");
+    }
+    const { scope: _scope, projectId: _projectId, workspaceKind: _workspaceKind, ...rest } = input;
+    void _scope;
+    void _projectId;
+    void _workspaceKind;
+    return {
+      ...rest,
+      scope
+    };
+  }
+  if (input.projectId !== undefined && input.projectId !== scope.workspaceId) {
+    throw new Error("Agent context scope and projectId do not match.");
+  }
+  if (input.workspaceKind !== undefined && input.workspaceKind !== scope.workspaceKind) {
+    throw new Error("Agent context scope and workspaceKind do not match.");
+  }
+  return {
+    ...input,
+    scope,
+    projectId: scope.workspaceId,
+    workspaceKind: scope.workspaceKind
+  };
+}
+
+function resolveScopeInput(
+  scopeOrProjectId: AgentContextScope | string | undefined,
+  workspaceKind: "creativeProject" | "engineeringWorkspace" | undefined
+): AgentContextScope {
+  if (typeof scopeOrProjectId === "string") {
+    return normalizeAgentContextScope(
+      undefined,
+      scopeOrProjectId,
+      workspaceKind ?? "creativeProject"
+    );
+  }
+  return normalizeAgentContextScope(scopeOrProjectId);
+}
+
+function scopeIdentity(scope: AgentContextScope): ScopeCommandIdentity {
+  return scope.kind === "workspace" ? { scope, projectId: scope.workspaceId } : { scope };
+}
+
+function scopeForSnapshot(snapshot: AgentRunSnapshot): AgentContextScope {
+  return normalizeAgentContextScope(
+    (snapshot as unknown as { readonly scope?: unknown }).scope,
+    (snapshot as unknown as { readonly projectId?: unknown }).projectId
+  );
+}
+
+function scopeForRunEvent(event: AgentRunEvent): AgentContextScope | undefined {
+  try {
+    return normalizeAgentContextScope(
+      (event as unknown as { readonly scope?: unknown }).scope,
+      (event as unknown as { readonly projectId?: unknown }).projectId
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function sameAgentScope(
+  left: AgentContextScope | undefined,
+  right: AgentContextScope | undefined
+): boolean {
+  return (
+    left !== undefined &&
+    right !== undefined &&
+    agentContextScopeKey(left) === agentContextScopeKey(right)
+  );
+}
+
+function isStandaloneScope(scope: AgentContextScope): boolean {
+  return scope.kind === "standalone";
+}
+
+function listAgentRunsForScope(api: NovelStudioApi, scope: AgentContextScope) {
+  return api.agentRuns.list(scope as never);
 }
 
 function canUndoAppliedRun(state: BridgeState): boolean {
@@ -1992,6 +2278,7 @@ function writeAuthorizationForSnapshot(
 }
 
 function contextSources(context: AgentRunBridgeContext | undefined): AgentContextSourceInput[] {
+  if (context?.scope !== undefined && isStandaloneScope(context.scope)) return [];
   if (context?.activeChapterId === undefined || context.chapterEditor === undefined) return [];
   return [
     {
@@ -2245,6 +2532,8 @@ function formatAgentStartError(error: UnifiedError): string {
 
 /** The active chapter as the single Context Draft ref; server reads its content at start. */
 function contextDraftRefs(context: AgentRunBridgeContext | undefined): ContextDraftRef[] {
+  if (context?.scope !== undefined && isStandaloneScope(context.scope)) return [];
+  if (context?.surfaceContextMode === "general_file") return [];
   if (context?.activeChapterId === undefined || context.chapterEditor === undefined) return [];
   return [
     {
@@ -2254,6 +2543,29 @@ function contextDraftRefs(context: AgentRunBridgeContext | undefined): ContextDr
       label: context.chapterEditor.chapter.frontmatter.title
     }
   ];
+}
+
+function desiredWorkspaceContextMode(
+  context: AgentRunBridgeContext | undefined
+): Extract<AgentContextMode, "writing" | "general_file"> | undefined {
+  if (context === undefined || (context.scope !== undefined && isStandaloneScope(context.scope))) {
+    return undefined;
+  }
+  return context.workspaceKind === "engineeringWorkspace"
+    ? "general_file"
+    : context.surfaceContextMode;
+}
+
+function sameProjectFileRef(
+  left: Extract<ContextDraftRef, { readonly kind: "project_file" }> | null,
+  right: Extract<ContextDraftRef, { readonly kind: "project_file" }> | null
+): boolean {
+  return (
+    left?.refId === right?.refId &&
+    left?.relativePath === right?.relativePath &&
+    left?.label === right?.label &&
+    left?.expectedChecksum === right?.expectedChecksum
+  );
 }
 
 /** The Stage 5 draft/budget/compaction API, viewed as optional for pre-Stage-5 hosts and test fakes. */
@@ -2295,6 +2607,7 @@ function availableReferenceRefs(
   context: AgentRunBridgeContext | undefined,
   contextDraft: ContextDraft | undefined
 ): ContextDraftRef[] {
+  if (context?.scope !== undefined && isStandaloneScope(context.scope)) return [];
   if (contextDraft === undefined) return [];
   const present = new Set(contextDraft.refs.map((ref) => ref.refId));
   const candidates: ContextDraftRef[] = [];

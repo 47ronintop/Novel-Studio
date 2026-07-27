@@ -7,6 +7,7 @@ import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@no
 import {
   createDesktopAgentRuntimeManager,
   type DesktopAgentRuntime,
+  type DesktopStandaloneAgentRuntime,
   type DesktopAgentWorkspaceBinding
 } from "../src/main/agent-runtime-manager.js";
 
@@ -17,6 +18,210 @@ afterEach(async () => {
 });
 
 describe("DesktopAgentRuntimeManager", () => {
+  test("keeps standalone state resident while routing events only from the active scope", async () => {
+    const workspaceRoot = await createRoot("standalone-routing-workspace");
+    const standaloneRoot = await createRoot("standalone-routing-state");
+    const workspaceRuntimes: ReturnType<typeof fakeRuntime>[] = [];
+    const standalone = fakeStandaloneRuntime(standaloneRoot);
+    const manager = createDesktopAgentRuntimeManager({
+      createRuntime(binding) {
+        const runtime = fakeRuntime(binding.workspaceId, binding.contentRoot, binding.stateRoot);
+        workspaceRuntimes.push(runtime);
+        return runtime as unknown as DesktopAgentRuntime;
+      },
+      createStandaloneRuntime: () => standalone as unknown as DesktopStandaloneAgentRuntime
+    });
+    const seen: string[] = [];
+    manager.subscribeAgentRunEvents((event) => seen.push(event.runId));
+
+    expect(await manager.activateStandalone()).toMatchObject({ ok: true });
+    expect(manager.activeScope()).toBe("standalone");
+    expect(manager.current()).toBeUndefined();
+    expect(manager.standalone()).toMatchObject({
+      scopeId: "standalone",
+      stateRoot: standaloneRoot
+    });
+    standalone.emit({ runId: "standalone_active" });
+
+    expect(
+      await manager.bindWorkspace(engineeringBinding("ws_standalone_routing", workspaceRoot))
+    ).toMatchObject({
+      ok: true
+    });
+    expect(manager.activeScope()).toBe("workspace");
+    standalone.emit({ runId: "standalone_hidden" });
+    workspaceRuntimes[0]?.emit({ runId: "workspace_active" });
+
+    expect(await manager.activateStandalone()).toMatchObject({ ok: true });
+    expect(manager.activeScope()).toBe("standalone");
+    workspaceRuntimes[0]?.emit({ runId: "workspace_disposed" });
+    standalone.emit({ runId: "standalone_restored" });
+
+    expect(seen).toEqual(["standalone_active", "workspace_active", "standalone_restored"]);
+    expect(standalone).toMatchObject({ disposeCalls: 0, prepareCalls: 1, subscribeCalls: 1 });
+    expect(workspaceRuntimes[0]).toMatchObject({ disposeCalls: 1, unsubscribeCalls: 1 });
+  });
+
+  test("blocks workspace activation while standalone owns a non-terminal run", async () => {
+    const workspaceRoot = await createRoot("standalone-active-workspace");
+    const standaloneRoot = await createRoot("standalone-active-state");
+    const standalone = fakeStandaloneRuntime(standaloneRoot, {
+      snapshots: [
+        {
+          runId: "standalone_running",
+          runRevision: 1,
+          status: "conversation_model"
+        }
+      ]
+    });
+    const createWorkspace = vi.fn((binding: DesktopAgentWorkspaceBinding) =>
+      fakeRuntime(binding.workspaceId, binding.contentRoot, binding.stateRoot)
+    );
+    const manager = createDesktopAgentRuntimeManager({
+      createRuntime: createWorkspace,
+      createStandaloneRuntime: () => standalone as unknown as DesktopStandaloneAgentRuntime
+    });
+
+    await manager.prepareStandalone();
+
+    await expect(
+      manager.bindWorkspace(engineeringBinding("ws_blocked", workspaceRoot))
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED" }
+    });
+    expect(createWorkspace).not.toHaveBeenCalled();
+    expect(manager.active()).toBeUndefined();
+  });
+
+  test("restores an active standalone run without treating its own scope as a switch", async () => {
+    const standaloneRoot = await createRoot("standalone-restore-state");
+    const standalone = fakeStandaloneRuntime(standaloneRoot, {
+      snapshots: [
+        {
+          runId: "standalone_restored_run",
+          runRevision: 3,
+          status: "conversation_model"
+        }
+      ]
+    });
+    const manager = createDesktopAgentRuntimeManager({
+      createRuntime(binding) {
+        return fakeRuntime(
+          binding.workspaceId,
+          binding.contentRoot,
+          binding.stateRoot
+        ) as unknown as DesktopAgentRuntime;
+      },
+      createStandaloneRuntime: () => standalone as unknown as DesktopStandaloneAgentRuntime
+    });
+
+    await expect(manager.activateStandalone()).resolves.toMatchObject({ ok: true });
+    expect(manager.active()).toMatchObject({ scope: "standalone" });
+  });
+
+  test("keeps the current workspace selected when standalone initialization fails", async () => {
+    const workspaceRoot = await createRoot("standalone-init-failure-workspace");
+    const workspaceRuntime = fakeRuntime("ws_init_failure", workspaceRoot, workspaceRoot);
+    const manager = createDesktopAgentRuntimeManager({
+      createRuntime: () => workspaceRuntime as unknown as DesktopAgentRuntime,
+      createStandaloneRuntime: () => {
+        throw new Error("state root unavailable");
+      }
+    });
+    await manager.bindWorkspace(engineeringBinding("ws_init_failure", workspaceRoot));
+
+    await expect(manager.activateStandalone()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_STANDALONE_RUNTIME_CREATE_FAILED" }
+    });
+    expect(manager.active()).toMatchObject({ scope: "workspace" });
+    expect(workspaceRuntime).toMatchObject({ disposeCalls: 0 });
+  });
+
+  test("blocks workspace close and replacement while a start preflight lease is held", async () => {
+    const rootA = await createRoot("start-lease-source");
+    const rootB = await createRoot("start-lease-target");
+    const standaloneRoot = await createRoot("start-lease-standalone");
+    const runtimes = new Map<string, ReturnType<typeof fakeRuntime>>();
+    const standalone = fakeStandaloneRuntime(standaloneRoot);
+    const manager = createDesktopAgentRuntimeManager({
+      createRuntime(binding) {
+        const runtime = fakeRuntime(binding.workspaceId, binding.contentRoot, binding.stateRoot);
+        runtimes.set(binding.workspaceId, runtime);
+        return runtime as unknown as DesktopAgentRuntime;
+      },
+      createStandaloneRuntime: () => standalone as unknown as DesktopStandaloneAgentRuntime
+    });
+    await manager.bindWorkspace(engineeringBinding("ws_start_lease_a", rootA));
+
+    const lease = manager.acquireActiveRunStartLease();
+    expect(lease).toMatchObject({ ok: true });
+    if (!lease.ok) throw new Error(lease.error.message);
+
+    await expect(manager.activateStandalone()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED" }
+    });
+    await expect(
+      manager.prepareWorkspace(engineeringBinding("ws_start_lease_b", rootB))
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED" }
+    });
+    expect(runtimes.get("ws_start_lease_a")).toMatchObject({ disposeCalls: 0 });
+    expect(runtimes.has("ws_start_lease_b")).toBe(false);
+
+    lease.value.release();
+    await expect(manager.activateStandalone()).resolves.toMatchObject({ ok: true });
+    expect(manager.active()).toMatchObject({ scope: "standalone" });
+  });
+
+  test("keeps workspace replacement closed to starts through commit", async () => {
+    const rootA = await createRoot("transition-gate-source");
+    const rootB = await createRoot("transition-gate-target");
+    const runtimes = new Map<string, ReturnType<typeof fakeRuntime>>();
+    let releaseCandidate: (() => void) | undefined;
+    const candidatePrepared = new Promise<void>((resolve) => {
+      releaseCandidate = resolve;
+    });
+    const manager = createDesktopAgentRuntimeManager({
+      createRuntime(binding) {
+        const runtime = fakeRuntime(binding.workspaceId, binding.contentRoot, binding.stateRoot, {
+          ...(binding.workspaceId === "ws_transition_gate_b"
+            ? { prepare: async () => candidatePrepared.then(() => ok(undefined)) }
+            : {})
+        });
+        runtimes.set(binding.workspaceId, runtime);
+        return runtime as unknown as DesktopAgentRuntime;
+      }
+    });
+    await manager.bindWorkspace(engineeringBinding("ws_transition_gate_a", rootA));
+
+    const preparing = manager.prepareWorkspace(engineeringBinding("ws_transition_gate_b", rootB));
+    await vi.waitFor(() => expect(runtimes.get("ws_transition_gate_b")?.prepareCalls).toBe(1));
+    expect(manager.acquireActiveRunStartLease()).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED" }
+    });
+
+    releaseCandidate?.();
+    const prepared = await preparing;
+    expect(prepared).toMatchObject({ ok: true });
+    if (!prepared.ok) throw new Error(prepared.error.message);
+    expect(manager.acquireActiveRunStartLease()).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED" }
+    });
+
+    manager.commitPreparedWorkspace(prepared.value);
+    const started = manager.acquireActiveRunStartLease();
+    expect(started).toMatchObject({ ok: true });
+    if (!started.ok) throw new Error(started.error.message);
+    expect(started.value.session).toBe(runtimes.get("ws_transition_gate_b")?.agentRunSession);
+    started.value.release();
+  });
+
   test("prepares a runtime without replacing the current workspace until commit", async () => {
     const rootA = await createRoot("atomic-a");
     const rootB = await createRoot("atomic-b");
@@ -503,4 +708,14 @@ function fakeRuntime(
     }
   };
   return runtime;
+}
+
+function fakeStandaloneRuntime(stateRoot: string, options: Parameters<typeof fakeRuntime>[3] = {}) {
+  const runtime = fakeRuntime("standalone", "", stateRoot, options);
+  const record = runtime as unknown as Record<string, unknown>;
+  delete record["workspaceId"];
+  delete record["contentRoot"];
+  record["scopeId"] = "standalone";
+  record["listRunSnapshots"] = () => runtime.agentRunSession.listAgentRuns();
+  return runtime as typeof runtime & { readonly scopeId: "standalone" };
 }

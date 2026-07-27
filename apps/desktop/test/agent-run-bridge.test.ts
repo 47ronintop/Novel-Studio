@@ -6,6 +6,7 @@ import type {
   ChangeSet,
   ContextBudgetSnapshot
 } from "@novel-studio/agent-engine";
+import { STANDALONE_AGENT_CONTEXT_SCOPE } from "@novel-studio/agent-engine";
 import {
   createAgentRunDraftSession,
   type AgentRunDraftSessionRepository,
@@ -15,6 +16,37 @@ import { createUnifiedError, err, ok, type JsonObject } from "@novel-studio/shar
 import type { ChapterEditorProps, ModelSettingsPanelProps } from "@novel-studio/ui";
 
 import { createAgentRunBridge } from "../src/renderer/agent-run-bridge.js";
+
+function workspaceScope(projectId: string) {
+  return {
+    kind: "workspace" as const,
+    workspaceKind: "creativeProject" as const,
+    workspaceId: projectId
+  };
+}
+
+function engineeringScope(workspaceId: string) {
+  return {
+    kind: "workspace" as const,
+    workspaceKind: "engineeringWorkspace" as const,
+    workspaceId
+  };
+}
+
+function engineeringRunSnapshot(): AgentRunSnapshot {
+  return {
+    ...snapshot,
+    schemaVersion: "1.2",
+    scope: engineeringScope("project-01"),
+    contextMode: "general_file",
+    contextProfileId: "engineering",
+    profileVersion: "1.0",
+    guidanceTemplateChecksum: "g".repeat(64),
+    conventionsArtifactId: null,
+    promptCachePolicyVersion: "1.0",
+    cachePrefixChecksum: "c".repeat(64)
+  } as unknown as AgentRunSnapshot;
+}
 
 const snapshot: AgentRunSnapshot = {
   schemaVersion: "1.0",
@@ -113,6 +145,114 @@ const settings = {
 } as ModelSettingsPanelProps;
 
 describe("Agent Run renderer bridge", () => {
+  test("starts a standalone text conversation without a project identity or project controls", async () => {
+    const { projectId: _projectId, ...legacySnapshot } = snapshot as unknown as Record<
+      string,
+      unknown
+    >;
+    void _projectId;
+    const standaloneSnapshot = {
+      ...legacySnapshot,
+      schemaVersion: "1.2",
+      scope: STANDALONE_AGENT_CONTEXT_SCOPE,
+      operationMode: "conversation",
+      contextMode: "standalone_chat",
+      contextProfileId: "standalone",
+      profileVersion: "1.0",
+      guidanceTemplateChecksum: "g".repeat(64),
+      conventionsArtifactId: null,
+      promptCachePolicyVersion: "1.0",
+      cachePrefixChecksum: "c".repeat(64),
+      status: "conversation_model"
+    } as unknown as AgentRunSnapshot;
+    let listener: ((event: AgentRunEvent) => void) | undefined;
+    const prepared: Record<string, unknown>[] = [];
+    const starts: Record<string, unknown>[] = [];
+    const api = {
+      agentRuns: {
+        onEvent: (next: (event: AgentRunEvent) => void) => {
+          listener = next;
+          return () => undefined;
+        },
+        list: async (scope: unknown) => {
+          expect(scope).toEqual(STANDALONE_AGENT_CONTEXT_SCOPE);
+          return ok([]);
+        },
+        prepareStart: async (command: Record<string, unknown>) => {
+          prepared.push(structuredClone(command));
+          return ok({
+            runDraft: { runDraftId: "standalone-draft", revision: 1, checksum: "d".repeat(64) },
+            contextDraft: { contextDraftId: "standalone-context", revision: 1 }
+          });
+        },
+        start: async (command: Record<string, unknown>) => {
+          starts.push(structuredClone(command));
+          return ok(standaloneSnapshot);
+        },
+        read: async () => ok({ snapshot: standaloneSnapshot, events: [] })
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      scope: STANDALONE_AGENT_CONTEXT_SCOPE,
+      conversationId: "standalone-conversation",
+      settings
+    });
+
+    await bridge.load(STANDALONE_AGENT_CONTEXT_SCOPE);
+    await bridge.send("请帮我整理这个想法");
+
+    expect(prepared).toEqual([
+      expect.objectContaining({
+        scope: STANDALONE_AGENT_CONTEXT_SCOPE,
+        conversationId: "standalone-conversation",
+        operationMode: "conversation",
+        contextMode: "standalone_chat",
+        contextRefs: []
+      })
+    ]);
+    expect(starts).toEqual([
+      expect.objectContaining({
+        scope: STANDALONE_AGENT_CONTEXT_SCOPE,
+        conversationId: "standalone-conversation"
+      })
+    ]);
+    for (const command of [...prepared, ...starts]) {
+      expect(command).not.toHaveProperty("projectId");
+    }
+    expect(bridge.getComposerProps()).toMatchObject({
+      operationMode: "conversation",
+      contextMode: "standalone_chat",
+      availableContextModes: ["standalone_chat"]
+    });
+    expect(bridge.getComposerProps()?.references).toBeUndefined();
+    expect(bridge.getComposerProps()?.permission).toBeUndefined();
+    expect(bridge.getPlanReviewProps()).toBeUndefined();
+
+    listener?.({
+      schemaVersion: "1.0",
+      runId: standaloneSnapshot.runId,
+      projectId: "another-project",
+      sequence: 2,
+      runRevision: 2,
+      type: "assistant_text_delta",
+      createdAt: "2026-07-27T00:00:00.000Z",
+      detail: { delta: "wrong scope" }
+    });
+    expect(bridge.getProps()?.assistantText).toBe("");
+    listener?.({
+      schemaVersion: "1.3",
+      scope: STANDALONE_AGENT_CONTEXT_SCOPE,
+      runId: standaloneSnapshot.runId,
+      sequence: 2,
+      runRevision: 2,
+      type: "assistant_text_delta",
+      createdAt: "2026-07-27T00:00:00.000Z",
+      detail: { delta: "standalone response" }
+    } as AgentRunEvent);
+    expect(bridge.getProps()?.assistantText).toBe("standalone response");
+  });
+
   test("projects pending tool approval and sends its durable binding decision", async () => {
     const pendingSnapshot = {
       ...snapshot,
@@ -813,6 +953,7 @@ describe("Agent Run renderer bridge", () => {
           expect(query).toEqual({
             kind: "run",
             projectId: "project-01",
+            scope: workspaceScope("project-01"),
             runId: executionSnapshot.runId,
             permissionSummaryId: "permission-summary-01"
           });
@@ -903,6 +1044,7 @@ describe("Agent Run renderer bridge", () => {
     expect(permissionQueries[1]).toEqual({
       kind: "run",
       projectId: "project-01",
+      scope: workspaceScope("project-01"),
       runId: executionSnapshot.runId,
       permissionSummaryId: "permission-summary-retry"
     });
@@ -2106,9 +2248,10 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
   });
 
   test("normalizes a persisted writing draft before sending from an engineering workspace", async () => {
-    const { api } = createDraftApi();
+    const { api } = createDraftApi({ activeRun: engineeringRunSnapshot() });
     await api.agentRuns.readRunDraft?.({
       projectId: "project-01",
+      scope: engineeringScope("project-01"),
       conversationId: "conversation-01",
       initialize: {
         modelProfileId: "profile-01",
@@ -2163,6 +2306,7 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     expect(preparedCommand).toMatchObject({ contextMode: "general_file" });
     const persisted = await api.agentRuns.readRunDraft?.({
       projectId: "project-01",
+      scope: engineeringScope("project-01"),
       conversationId: "conversation-01",
       initialize: {
         modelProfileId: "profile-01",
@@ -2180,9 +2324,10 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
   });
 
   test("loads and normalizes an engineering draft when settings are ready on first sync", async () => {
-    const { api } = createDraftApi();
+    const { api } = createDraftApi({ activeRun: engineeringRunSnapshot() });
     await api.agentRuns.readRunDraft?.({
       projectId: "project-01",
+      scope: engineeringScope("project-01"),
       conversationId: "conversation-01",
       initialize: {
         modelProfileId: "profile-01",
@@ -2222,6 +2367,7 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     expect(preparedCommand).toMatchObject({ contextMode: "general_file" });
     const persisted = await api.agentRuns.readRunDraft?.({
       projectId: "project-01",
+      scope: engineeringScope("project-01"),
       conversationId: "conversation-01",
       initialize: {
         modelProfileId: "profile-01",
@@ -2236,6 +2382,163 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
       ok: true,
       value: { runDraft: { contextMode: "general_file" } }
     });
+  });
+
+  test("binds a creative active file separately from manual refs and normalizes the surface", async () => {
+    const { api } = createDraftApi();
+    const seeded = await api.agentRuns.readRunDraft?.({
+      projectId: "project-01",
+      scope: workspaceScope("project-01"),
+      conversationId: "conversation-01",
+      initialize: {
+        modelProfileId: "profile-01",
+        operationMode: "planning",
+        contextMode: "writing",
+        writePolicy: "write_before_confirmation",
+        writePolicyAcknowledged: false,
+        contextRefs: [
+          {
+            kind: "project_file",
+            refId: "file:notes/reference.md",
+            relativePath: "notes/reference.md",
+            label: "reference.md"
+          }
+        ],
+        activeResourceRef: null
+      }
+    } as never);
+    expect(seeded).toMatchObject({
+      ok: true,
+      value: {
+        contextDraft: {
+          refs: [expect.objectContaining({ refId: "file:notes/reference.md" })]
+        }
+      }
+    });
+    let preparedCommand: Record<string, unknown> | undefined;
+    const originalPrepareStart = api.agentRuns.prepareStart;
+    api.agentRuns.prepareStart = async (command) => {
+      preparedCommand = command as Record<string, unknown>;
+      return originalPrepareStart(command);
+    };
+    const activeResourceRef = {
+      kind: "project_file" as const,
+      refId: "file:notes/current.md",
+      relativePath: "notes/current.md",
+      label: "current.md"
+    };
+    const bridge = createAgentRunBridge(api);
+
+    bridge.syncContext({
+      projectId: "project-01",
+      workspaceKind: "creativeProject",
+      conversationId: "conversation-01",
+      surfaceContextMode: "general_file",
+      activeResourceRef,
+      fileEditor: {
+        path: "notes/current.md",
+        fileName: "current.md",
+        content: "saved body",
+        dirty: false,
+        saveStatus: "Saved"
+      },
+      settings: draftSettings
+    });
+
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.model).toBeDefined());
+    await vi.waitFor(async () => {
+      const current = await api.agentRuns.readRunDraft?.({
+        projectId: "project-01",
+        scope: workspaceScope("project-01"),
+        conversationId: "conversation-01",
+        initialize: {
+          modelProfileId: "profile-01",
+          operationMode: "planning",
+          contextMode: "writing",
+          writePolicy: "write_before_confirmation",
+          writePolicyAcknowledged: false,
+          contextRefs: []
+        }
+      } as never);
+      expect(current).toMatchObject({
+        ok: true,
+        value: {
+          runDraft: { contextMode: "general_file" },
+          contextDraft: {
+            refs: [expect.objectContaining({ refId: "file:notes/reference.md" })],
+            activeResourceRef
+          }
+        }
+      });
+    });
+    await bridge.send("检查当前项目文件");
+
+    expect(preparedCommand).toMatchObject({
+      contextMode: "general_file",
+      contextRefs: [expect.objectContaining({ refId: "file:notes/reference.md" })],
+      activeResourceRef
+    });
+    expect((preparedCommand?.["contextRefs"] as readonly JsonObject[]) ?? []).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ refId: activeResourceRef.refId })])
+    );
+    const persisted = await api.agentRuns.readRunDraft?.({
+      projectId: "project-01",
+      scope: workspaceScope("project-01"),
+      conversationId: "conversation-01",
+      initialize: {
+        modelProfileId: "profile-01",
+        operationMode: "planning",
+        contextMode: "writing",
+        writePolicy: "write_before_confirmation",
+        writePolicyAcknowledged: false,
+        contextRefs: []
+      }
+    } as never);
+    expect(persisted).toMatchObject({
+      ok: true,
+      value: {
+        runDraft: { contextMode: "general_file" },
+        contextDraft: {
+          refs: [expect.objectContaining({ refId: "file:notes/reference.md" })],
+          activeResourceRef
+        }
+      }
+    });
+  });
+
+  test("does not prepare a run when the dirty creative-file guard cancels", async () => {
+    const { api } = createDraftApi();
+    const beforeStart = vi.fn(async () => false);
+    const prepareStart = vi.fn(api.agentRuns.prepareStart);
+    api.agentRuns.prepareStart = prepareStart;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      workspaceKind: "creativeProject",
+      conversationId: "conversation-01",
+      surfaceContextMode: "general_file",
+      activeResourceRef: {
+        kind: "project_file",
+        refId: "file:notes/current.md",
+        relativePath: "notes/current.md",
+        label: "current.md"
+      },
+      beforeStart,
+      fileEditor: {
+        path: "notes/current.md",
+        fileName: "current.md",
+        content: "dirty body",
+        dirty: true,
+        saveStatus: "Unsaved"
+      },
+      settings: draftSettings
+    });
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.model).toBeDefined());
+
+    await bridge.send("不要发送这次请求");
+
+    expect(beforeStart).toHaveBeenCalledOnce();
+    expect(prepareStart).not.toHaveBeenCalled();
   });
 
   test("reloads the selected conversation draft after clearing an empty run", async () => {

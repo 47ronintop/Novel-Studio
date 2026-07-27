@@ -8,8 +8,10 @@ import type {
   AgentReasoningEffort,
   AgentWritePolicy
 } from "./agent-run-types.js";
+import { normalizeAgentContextScope, type AgentContextScope } from "./agent-context-scope.js";
+import type { AgentWorkspaceKind } from "./agent-tool-capabilities.js";
 
-export interface AgentRunDraft {
+export interface AgentRunDraftV10 {
   readonly schemaVersion: "1.0";
   readonly runDraftId: string;
   readonly projectId: string;
@@ -31,6 +33,18 @@ export interface AgentRunDraft {
   readonly contextBudgetSnapshotId: string | null;
   readonly updatedAt: string;
 }
+
+export interface AgentRunDraftV11 extends Omit<
+  AgentRunDraftV10,
+  "schemaVersion" | "projectId" | "operationMode" | "contextMode"
+> {
+  readonly schemaVersion: "1.1";
+  readonly scope: AgentContextScope;
+  readonly operationMode: AgentOperationMode;
+  readonly contextMode: AgentContextMode;
+}
+
+export type AgentRunDraft = AgentRunDraftV11;
 
 export type AgentRunDraftMutation =
   | { readonly kind: "set_request"; readonly request: string }
@@ -55,7 +69,7 @@ export type CreateAgentRunDraftInput = Omit<
 >;
 
 export function createAgentRunDraft(input: CreateAgentRunDraftInput): AgentRunDraft {
-  return finalizeAgentRunDraft({ schemaVersion: "1.0", ...normalizePolicy(input), revision: 1 });
+  return finalizeAgentRunDraft({ schemaVersion: "1.1", ...normalizePolicy(input), revision: 1 });
 }
 
 /**
@@ -145,7 +159,7 @@ export function checksumAgentRunDraft(draft: Omit<AgentRunDraft, "checksum">): s
   return checksumText(
     stableSerialize({
       runDraftId: draft.runDraftId,
-      projectId: draft.projectId,
+      scope: draft.scope,
       conversationId: draft.conversationId,
       revision: draft.revision,
       userRequest: draft.userRequest,
@@ -164,6 +178,24 @@ export function checksumAgentRunDraft(draft: Omit<AgentRunDraft, "checksum">): s
   );
 }
 
+export function normalizeAgentRunDraft(
+  value: Readonly<Record<string, unknown>>,
+  legacyWorkspaceKind?: AgentWorkspaceKind
+): AgentRunDraft {
+  const { projectId: _legacyProjectId, ...withoutLegacyProjectId } = value;
+  void _legacyProjectId;
+  if (value["schemaVersion"] === "1.1") {
+    const scope = normalizeAgentContextScope(value["scope"], undefined, legacyWorkspaceKind);
+    return deepFreeze({ ...withoutLegacyProjectId, scope } as unknown as AgentRunDraft);
+  }
+  if (value["schemaVersion"] !== "1.0") throw new Error("AGENT_RUN_DRAFT_VERSION_UNSUPPORTED");
+  return deepFreeze({
+    ...withoutLegacyProjectId,
+    schemaVersion: "1.1",
+    scope: normalizeAgentContextScope(undefined, value["projectId"], legacyWorkspaceKind)
+  } as unknown as AgentRunDraft);
+}
+
 function nextRevision(
   draft: AgentRunDraft,
   patch: Partial<CreateAgentRunDraftInput>,
@@ -173,7 +205,7 @@ function nextRevision(
   void _schemaVersion;
   void _checksum;
   return finalizeAgentRunDraft({
-    schemaVersion: "1.0",
+    schemaVersion: "1.1",
     ...normalizePolicy({ ...base, ...patch, updatedAt }),
     revision: draft.revision + 1
   });

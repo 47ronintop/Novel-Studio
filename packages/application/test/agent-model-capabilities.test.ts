@@ -89,6 +89,32 @@ describe("agent model capability preflight", () => {
       applicationExports.resolveCatalogAgentModelCapabilities("openai-compatible", "gpt-4.1")
     ).toBeUndefined();
   });
+
+  test("accepts a text-only model for standalone conversation", () => {
+    const result = applicationExports.preflightAgentModelCapabilities({
+      profileId: "model_text_only",
+      provider: "openai-compatible",
+      modelName: "text-model",
+      capabilities: {
+        streaming: true,
+        toolCalling: false,
+        structuredArguments: false,
+        contextWindow: 32_000
+      },
+      requiredContextTokens: 8_000,
+      requireToolCapabilities: false
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        streaming: true,
+        toolCalling: false,
+        structuredArguments: false,
+        contextWindow: 32_000
+      }
+    });
+  });
 });
 
 describe("agent reasoning effort resolution", () => {

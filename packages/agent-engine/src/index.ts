@@ -92,10 +92,13 @@ export {
   applyAgentRunDraftMutation,
   bindContextDraft,
   checksumAgentRunDraft,
-  createAgentRunDraft
+  createAgentRunDraft,
+  normalizeAgentRunDraft
 } from "./agent-run-draft.js";
 export type {
   AgentRunDraft,
+  AgentRunDraftV10,
+  AgentRunDraftV11,
   AgentRunDraftMutation,
   CreateAgentRunDraftInput
 } from "./agent-run-draft.js";
@@ -103,12 +106,15 @@ export {
   applyContextDraftMutation,
   checksumContextDraft,
   createContextDraft,
+  normalizeContextDraft,
   refreshContextDraft,
   setContextDraftMode
 } from "./context-draft.js";
 export type {
   AgentContextRange,
   ContextDraft,
+  ContextDraftV10,
+  ContextDraftV11,
   ContextDraftMutation,
   ContextDraftRef,
   CreateContextDraftInput
@@ -134,6 +140,7 @@ export type {
 } from "./context-budget.js";
 export {
   calculateAgentUsageEstimatedCost,
+  normalizeAgentUsageRecord,
   usageRecordIdempotencyKey,
   validateAgentUsageRecord
 } from "./agent-usage-record.js";
@@ -185,12 +192,15 @@ export type {
   AgentContextSnapshot,
   AgentContextSnapshotV10,
   AgentContextSnapshotV11,
+  AgentContextSnapshotV12,
+  AgentContextMaterializationProvenance,
   AgentContextSource,
   AgentContextSourceInput,
   AgentContextSourceKind,
   AgentContextSourceState,
   AgentContextSourceV10,
   AgentContextSourceV11,
+  AgentContextSourceV12,
   CreateAgentContextSnapshotInput
 } from "./context-snapshot.js";
 export {
@@ -305,10 +315,19 @@ export type {
   TransitionPlanExecutionStepInput
 } from "./plan-execution.js";
 export {
+  attachLegacyProjectId,
   EMPTY_AGENT_RUN_USAGE_SUMMARY,
   normalizeAgentRunEvent,
   normalizeAgentRunSnapshot
 } from "./agent-run-types.js";
+export {
+  agentContextScopeKey,
+  isAgentContextScope,
+  normalizeAgentContextScope,
+  STANDALONE_AGENT_CONTEXT_SCOPE,
+  workspaceIdForAgentScope
+} from "./agent-context-scope.js";
+export type { AgentContextProfileId, AgentContextScope } from "./agent-context-scope.js";
 export type {
   AgentContextMode,
   DecideChangeSetCommand,
@@ -324,18 +343,22 @@ export type {
   AgentRunEventType,
   AgentRunEventTypeV11,
   AgentRunEventTypeV12,
+  AgentRunEventTypeV13,
   AgentRunEventV10,
   AgentRunEventV11,
   AgentRunEventV12,
+  AgentRunEventV13,
   AgentRunLimits,
   AgentRunRecoveryState,
   AgentRunSnapshot,
   AgentRunSnapshotPatch,
   AgentRunSnapshotV10,
   AgentRunSnapshotV11,
+  AgentRunSnapshotV12,
   AgentRunStatus,
   AgentRunStatusV11,
   AgentRunStatusV12,
+  AgentRunStatusV13,
   AgentRunUsageSummary,
   AgentWritePolicy,
   ToolApprovalBinding,

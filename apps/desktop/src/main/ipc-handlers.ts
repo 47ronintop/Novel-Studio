@@ -13,6 +13,9 @@ import type {
   AnswerAgentUserInputCommand,
   ApplicationIpcChannel,
   CompactContextCommand,
+  CreativeProjectFileLifecycleCommand,
+  CreativeProjectFileSession,
+  CreativeProjectFileSessionIdentity,
   DesktopApplication,
   ProjectCreationPreviewDto,
   ProjectTextFileSelectionDto,
@@ -25,7 +28,9 @@ import type {
   UpdateAgentRunDraftCommand,
   UpdateContextDraftCommand
 } from "@novel-studio/application";
+import { isAgentContextScope } from "@novel-studio/agent-engine";
 import type {
+  AgentContextScope,
   AgentRunEvent,
   DecideChangeSetCommand,
   DecideToolApprovalCommand,
@@ -82,6 +87,7 @@ import { createUnifiedError, err } from "@novel-studio/shared";
 import type { ModelSecretStore } from "./model-runtime.js";
 import type { DesktopAgentRuntimeManager } from "./agent-runtime-manager.js";
 import type { WorkspaceActivationCoordinator } from "./workspace-activation.js";
+import { normalizeCreativeProjectFilePath } from "@novel-studio/repository";
 
 export type ApplicationIpcHandlers = {
   readonly [Channel in ApplicationIpcChannel]: (...args: readonly unknown[]) => Promise<unknown>;
@@ -96,6 +102,7 @@ export interface ApplicationIpcHandlerOptions {
   readonly modelSecretStore?: ModelSecretStore;
   readonly publishAiSuggestionStreamEvent?: (event: AiWritingSuggestionStreamPushEvent) => void;
   readonly agentRunSession?: AgentRunSession;
+  readonly creativeProjectFileSession?: CreativeProjectFileSession;
   readonly agentRuntimeManager?: DesktopAgentRuntimeManager;
   readonly publishAgentRunEvent?: (event: AgentRunEvent) => void;
   readonly agentWriteSaveCoordinator?: AgentWriteSaveCoordinator;
@@ -232,8 +239,10 @@ export function createApplicationIpcHandlers(
   };
   options.agentRunSession?.subscribe(publishAgentRunEvent);
   options.agentRuntimeManager?.subscribeAgentRunEvents(publishAgentRunEvent);
+  const activeAgentRuntime = () =>
+    options.agentRuntimeManager?.active?.()?.runtime ?? options.agentRuntimeManager?.current?.();
   const currentAgentRunSession = (): AgentRunSession | undefined =>
-    options.agentRuntimeManager?.current()?.agentRunSession ?? options.agentRunSession;
+    activeAgentRuntime()?.agentRunSession ?? options.agentRunSession;
   const notifyAgentSettingsChanged = async <T>(
     request: Promise<Result<T, UnifiedError>>
   ): Promise<Result<T, UnifiedError>> => {
@@ -249,13 +258,13 @@ export function createApplicationIpcHandlers(
     return result;
   };
   const currentAgentConversationSession = (): AgentConversationSession | undefined =>
-    options.agentRuntimeManager?.current()?.agentConversationSession;
+    activeAgentRuntime()?.agentConversationSession;
   const currentAgentRunDraftSession = (): AgentRunDraftSession | undefined =>
-    options.agentRuntimeManager?.current()?.agentRunDraftSession;
+    activeAgentRuntime()?.agentRunDraftSession;
   const currentAgentContextSession = (): AgentContextSession | undefined =>
-    options.agentRuntimeManager?.current()?.agentContextSession;
+    activeAgentRuntime()?.agentContextSession;
   const currentAgentPermissionSession = (): AgentPermissionSession | undefined =>
-    options.agentRuntimeManager?.current()?.agentPermissionSession;
+    activeAgentRuntime()?.agentPermissionSession;
 
   async function chooseDirectory(
     purpose: DirectorySelection["purpose"],
@@ -356,6 +365,13 @@ export function createApplicationIpcHandlers(
         return Promise.resolve(application.executeCommand(""));
       }
 
+      if (commandId === "workspace.close-current") {
+        return (
+          options.workspaceActivationCoordinator?.closeCurrentWorkspace() ??
+          Promise.resolve(application.executeCommand(""))
+        );
+      }
+
       return Promise.resolve(application.executeCommand(commandId));
     },
     "application:project:choose-open-creative-directory": () =>
@@ -431,6 +447,32 @@ export function createApplicationIpcHandlers(
       return request === undefined
         ? Promise.resolve(invalidWorkspaceRequest())
         : application.saveEngineeringTextFile(request);
+    },
+    "application:creative-project-files:refresh": (input: unknown) => {
+      const identity = toCreativeProjectFileIdentity(input);
+      return identity === undefined || options.creativeProjectFileSession === undefined
+        ? Promise.resolve(invalidWorkspaceRequest())
+        : options.creativeProjectFileSession.refresh(identity);
+    },
+    "application:creative-project-files:read-text-file": (input: unknown) => {
+      const request = toCreativeProjectFileReadRequest(input);
+      return request === undefined || options.creativeProjectFileSession === undefined
+        ? Promise.resolve(invalidWorkspaceRequest())
+        : options.creativeProjectFileSession.readTextFile(request);
+    },
+    "application:creative-project-files:save-text-file": (input: unknown) => {
+      const request = toCreativeProjectFileSaveRequest(input);
+      return request === undefined || options.creativeProjectFileSession === undefined
+        ? Promise.resolve(invalidWorkspaceRequest())
+        : options.creativeProjectFileSession.saveTextFile(request);
+    },
+    "application:creative-project-files:execute-lifecycle": (input: unknown) => {
+      const command = toCreativeProjectFileLifecycleCommand(input);
+      return command === undefined ||
+        options.creativeProjectFileSession === undefined ||
+        !isCreativeProjectFileLifecycleAllowedByIpc(command, options.creativeProjectFileSession)
+        ? Promise.resolve(invalidWorkspaceRequest())
+        : options.creativeProjectFileSession.executeLifecycleCommand(command, "user");
     },
     "application:project:list-chapters": () => application.listProjectChapters(),
     "application:project:create-chapter": async (input: unknown) => {
@@ -686,17 +728,28 @@ export function createApplicationIpcHandlers(
     },
     "application:agent-run:compact-context": (command: unknown) => {
       const parsed = toCompactContextCommand(command);
-      const contextSession = currentAgentContextSession();
-      return parsed === undefined || contextSession === undefined
+      const session = currentAgentRunSession();
+      return parsed === undefined || session === undefined
         ? Promise.resolve(agentRunUnavailable())
-        : contextSession.compactContext(parsed);
+        : session.compactContext(parsed);
     },
     "application:agent-run:start": (command: unknown) => {
       const parsed = toStartAgentRunCommand(command);
       const session = currentAgentRunSession();
-      return parsed === undefined || session === undefined
-        ? Promise.resolve(agentRunUnavailable())
-        : session.startAgentRun(parsed);
+      if (parsed === undefined || session === undefined) {
+        return Promise.resolve(agentRunUnavailable());
+      }
+      const manager = options.agentRuntimeManager;
+      if (manager === undefined) return session.startAgentRun(parsed);
+
+      const lease = manager.acquireActiveRunStartLease();
+      if (!lease.ok) return Promise.resolve(lease);
+      try {
+        return lease.value.session.startAgentRun(parsed).finally(lease.value.release);
+      } catch (error) {
+        lease.value.release();
+        return Promise.reject(error);
+      }
     },
     "application:agent-run:stop": (command: unknown) => {
       const parsed = toStopAgentRunCommand(command);
@@ -818,11 +871,12 @@ export function createApplicationIpcHandlers(
         ? Promise.resolve(agentRunUnavailable())
         : session.readAgentRun(runId);
     },
-    "application:agent-run:list": (projectId: unknown) => {
+    "application:agent-run:list": (identity: unknown) => {
       const session = currentAgentRunSession();
-      return typeof projectId !== "string" || session === undefined
+      const scope = toAgentScopeIdentity(identity);
+      return scope === undefined || session === undefined
         ? Promise.resolve(agentRunUnavailable())
-        : session.listAgentRuns(projectId);
+        : session.listAgentRuns(scope.scope ?? scope.projectId ?? "");
     },
     "application:agent-conversation:create": (command: unknown) => {
       const parsed = toCreateAgentConversationCommand(command);
@@ -1129,11 +1183,13 @@ export function createApplicationIpcHandlers(
 
 function toStartAgentRunCommand(value: unknown): StartAgentRunCommand | undefined {
   if (!isRecord(value)) return undefined;
+  const identity = parseAgentScopeIdentity(value);
   // Draft-only by contract: the renderer may submit only a reference to a persisted run draft. Mode,
   // model, capabilities, the user request, and context sources are resolved server-side by the start
   // preflight — the renderer cannot author any of them. Reject the pre-Stage-5 wide field set.
   if (
     !hasOnlyKeys(value, [
+      "scope",
       "projectId",
       "conversationId",
       "commandId",
@@ -1145,7 +1201,7 @@ function toStartAgentRunCommand(value: unknown): StartAgentRunCommand | undefine
       "sourcePlanId",
       "sourcePlanRevision"
     ]) ||
-    !isSafeId(value["projectId"]) ||
+    identity === undefined ||
     !isSafeId(value["conversationId"]) ||
     !isSafeId(value["commandId"]) ||
     value["expectedRunRevision"] !== 0 ||
@@ -1158,15 +1214,17 @@ function toStartAgentRunCommand(value: unknown): StartAgentRunCommand | undefine
   ) {
     return undefined;
   }
-  return value as unknown as StartAgentRunCommand;
+  return { ...value, ...identity } as unknown as StartAgentRunCommand;
 }
 
 function toSyncStartDraftCommand(value: unknown): SyncStartDraftCommand | undefined {
   if (!isRecord(value)) return undefined;
+  const identity = parseAgentScopeIdentity(value);
   // Intent = user choices only. Provider, model capabilities, context window, and document content
   // are never accepted here; the start preflight resolves them server-side from the persisted draft.
   if (
     !hasOnlyKeys(value, [
+      "scope",
       "projectId",
       "conversationId",
       "commandId",
@@ -1178,32 +1236,42 @@ function toSyncStartDraftCommand(value: unknown): SyncStartDraftCommand | undefi
       "modelProfileId",
       "modelName",
       "reasoningEffort",
-      "contextRefs"
+      "contextRefs",
+      "activeResourceRef"
     ]) ||
-    !isSafeId(value["projectId"]) ||
+    identity === undefined ||
     !isSafeId(value["conversationId"]) ||
     !isSafeId(value["commandId"]) ||
     typeof value["userRequest"] !== "string" ||
-    (value["operationMode"] !== "planning" && value["operationMode"] !== "execution") ||
-    (value["contextMode"] !== "writing" && value["contextMode"] !== "general_file") ||
+    (value["operationMode"] !== "conversation" &&
+      value["operationMode"] !== "planning" &&
+      value["operationMode"] !== "execution") ||
+    (value["contextMode"] !== "standalone_chat" &&
+      value["contextMode"] !== "writing" &&
+      value["contextMode"] !== "general_file") ||
     (value["writePolicy"] !== "write_before_confirmation" &&
       value["writePolicy"] !== "user_preapproved_run") ||
     typeof value["writePolicyAcknowledged"] !== "boolean" ||
     !isNonEmptyString(value["modelProfileId"]) ||
     (value["modelName"] !== undefined && !isNonEmptyString(value["modelName"])) ||
     (value["reasoningEffort"] !== undefined && !isNonEmptyString(value["reasoningEffort"])) ||
-    !Array.isArray(value["contextRefs"])
+    !Array.isArray(value["contextRefs"]) ||
+    (value["activeResourceRef"] !== undefined &&
+      value["activeResourceRef"] !== null &&
+      !isProjectFileContextRef(value["activeResourceRef"]))
   ) {
     return undefined;
   }
-  return value as unknown as SyncStartDraftCommand;
+  if (!agentDraftModeMatchesScope(identity, value)) return undefined;
+  return { ...value, ...identity } as unknown as SyncStartDraftCommand;
 }
 
 function toReadAgentRunDraftCommand(value: unknown): ReadAgentRunDraftCommand | undefined {
+  if (!isRecord(value)) return undefined;
+  const identity = parseAgentScopeIdentity(value);
   if (
-    !isRecord(value) ||
-    !hasOnlyKeys(value, ["projectId", "conversationId", "initialize"]) ||
-    !isSafeId(value["projectId"]) ||
+    !hasOnlyKeys(value, ["scope", "projectId", "conversationId", "initialize"]) ||
+    identity === undefined ||
     !isSafeId(value["conversationId"]) ||
     !isRecord(value["initialize"])
   ) {
@@ -1215,8 +1283,12 @@ function toReadAgentRunDraftCommand(value: unknown): ReadAgentRunDraftCommand | 
     (initialize["modelName"] !== undefined && !isNonEmptyString(initialize["modelName"])) ||
     (initialize["reasoningEffort"] !== undefined &&
       !isNonEmptyString(initialize["reasoningEffort"])) ||
-    (initialize["operationMode"] !== "planning" && initialize["operationMode"] !== "execution") ||
-    (initialize["contextMode"] !== "writing" && initialize["contextMode"] !== "general_file") ||
+    (initialize["operationMode"] !== "conversation" &&
+      initialize["operationMode"] !== "planning" &&
+      initialize["operationMode"] !== "execution") ||
+    (initialize["contextMode"] !== "standalone_chat" &&
+      initialize["contextMode"] !== "writing" &&
+      initialize["contextMode"] !== "general_file") ||
     (initialize["writePolicy"] !== "write_before_confirmation" &&
       initialize["writePolicy"] !== "user_preapproved_run") ||
     (initialize["writePolicyAcknowledged"] !== undefined &&
@@ -1225,20 +1297,23 @@ function toReadAgentRunDraftCommand(value: unknown): ReadAgentRunDraftCommand | 
   ) {
     return undefined;
   }
-  return value as unknown as ReadAgentRunDraftCommand;
+  if (!agentDraftModeMatchesScope(identity, initialize)) return undefined;
+  return { ...value, ...identity } as unknown as ReadAgentRunDraftCommand;
 }
 
 function toUpdateAgentRunDraftCommand(value: unknown): UpdateAgentRunDraftCommand | undefined {
+  if (!isRecord(value)) return undefined;
+  const identity = parseAgentScopeIdentity(value);
   if (
-    !isRecord(value) ||
     !hasOnlyKeys(value, [
+      "scope",
       "projectId",
       "conversationId",
       "commandId",
       "expectedDraftRevision",
       "mutation"
     ]) ||
-    !isSafeId(value["projectId"]) ||
+    identity === undefined ||
     !isSafeId(value["conversationId"]) ||
     !isSafeId(value["commandId"]) ||
     !isPositiveInteger(value["expectedDraftRevision"]) ||
@@ -1246,13 +1321,18 @@ function toUpdateAgentRunDraftCommand(value: unknown): UpdateAgentRunDraftComman
   ) {
     return undefined;
   }
-  return value as unknown as UpdateAgentRunDraftCommand;
+  if (identity.scope?.kind === "standalone" && !isStandaloneRunDraftMutation(value["mutation"])) {
+    return undefined;
+  }
+  return { ...value, ...identity } as unknown as UpdateAgentRunDraftCommand;
 }
 
 function toUpdateContextDraftCommand(value: unknown): UpdateContextDraftCommand | undefined {
+  if (!isRecord(value)) return undefined;
+  const identity = parseAgentScopeIdentity(value);
   if (
-    !isRecord(value) ||
     !hasOnlyKeys(value, [
+      "scope",
       "projectId",
       "conversationId",
       "commandId",
@@ -1260,7 +1340,7 @@ function toUpdateContextDraftCommand(value: unknown): UpdateContextDraftCommand 
       "expectedDraftRevision",
       "mutation"
     ]) ||
-    !isSafeId(value["projectId"]) ||
+    identity === undefined ||
     !isSafeId(value["conversationId"]) ||
     !isSafeId(value["commandId"]) ||
     !isSafeId(value["contextDraftId"]) ||
@@ -1269,24 +1349,28 @@ function toUpdateContextDraftCommand(value: unknown): UpdateContextDraftCommand 
   ) {
     return undefined;
   }
-  return value as unknown as UpdateContextDraftCommand;
+  if (identity.scope?.kind === "standalone") return undefined;
+  return { ...value, ...identity } as unknown as UpdateContextDraftCommand;
 }
 
 function toRefreshContextDraftCommand(value: unknown): RefreshContextDraftCommand | undefined {
-  return isRecord(value) &&
+  if (!isRecord(value)) return undefined;
+  const identity = parseAgentScopeIdentity(value);
+  return identity !== undefined &&
+    identity.scope?.kind !== "standalone" &&
     hasOnlyKeys(value, [
+      "scope",
       "projectId",
       "conversationId",
       "commandId",
       "contextDraftId",
       "expectedDraftRevision"
     ]) &&
-    isSafeId(value["projectId"]) &&
     isSafeId(value["conversationId"]) &&
     isSafeId(value["commandId"]) &&
     isSafeId(value["contextDraftId"]) &&
     isPositiveInteger(value["expectedDraftRevision"])
-    ? (value as unknown as RefreshContextDraftCommand)
+    ? ({ ...value, ...identity } as unknown as RefreshContextDraftCommand)
     : undefined;
 }
 
@@ -1382,27 +1466,88 @@ function isContextDraftMutation(value: unknown): boolean {
       return (
         (value["ref"] === null || isRecord(value["ref"])) && hasOnlyKeys(value, ["kind", "ref"])
       );
+    case "set_active_resource":
+      return (
+        (value["ref"] === null || isProjectFileContextRef(value["ref"])) &&
+        hasOnlyKeys(value, ["kind", "ref"])
+      );
     default:
       return false;
   }
 }
 
+function isStandaloneRunDraftMutation(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  switch (value["kind"]) {
+    case "set_request":
+    case "set_model":
+    case "set_reasoning":
+      return true;
+    case "set_operation_mode":
+      return value["operationMode"] === "conversation";
+    case "set_context_mode":
+      return value["contextMode"] === "standalone_chat";
+    case "set_write_policy":
+      return (
+        value["writePolicy"] === "write_before_confirmation" && value["acknowledged"] === false
+      );
+    default:
+      return false;
+  }
+}
+
+function agentDraftModeMatchesScope(
+  identity: AgentScopeIdentity,
+  value: Record<string, unknown>
+): boolean {
+  if (identity.scope?.kind === "standalone") {
+    return (
+      value["operationMode"] === "conversation" &&
+      value["contextMode"] === "standalone_chat" &&
+      value["writePolicy"] === "write_before_confirmation" &&
+      (value["writePolicyAcknowledged"] === undefined ||
+        value["writePolicyAcknowledged"] === false) &&
+      (value["contextRefs"] === undefined ||
+        (Array.isArray(value["contextRefs"]) && value["contextRefs"].length === 0)) &&
+      (value["activeResourceRef"] === undefined || value["activeResourceRef"] === null)
+    );
+  }
+  return value["operationMode"] !== "conversation" && value["contextMode"] !== "standalone_chat";
+}
+
+function isProjectFileContextRef(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["kind", "refId", "relativePath", "label", "range", "expectedChecksum"]) &&
+    value["kind"] === "project_file" &&
+    isNonEmptyString(value["refId"]) &&
+    typeof value["relativePath"] === "string" &&
+    normalizeCreativeProjectFilePath(value["relativePath"], "file").ok &&
+    isNonEmptyString(value["label"]) &&
+    (value["expectedChecksum"] === undefined ||
+      (typeof value["expectedChecksum"] === "string" &&
+        /^[a-f0-9]{64}$/u.test(value["expectedChecksum"])))
+  );
+}
+
 function toCreateAgentConversationCommand(
   value: unknown
 ): CreateAgentConversationCommand | undefined {
-  return isRecord(value) &&
-    hasOnlyKeys(value, ["projectId", "commandId"]) &&
-    isSafeId(value["projectId"]) &&
+  if (!isRecord(value)) return undefined;
+  const identity = parseAgentScopeIdentity(value);
+  return identity !== undefined &&
+    hasOnlyKeys(value, ["scope", "projectId", "commandId"]) &&
     isSafeId(value["commandId"])
-    ? { projectId: value["projectId"], commandId: value["commandId"] }
+    ? { ...identity, commandId: value["commandId"] }
     : undefined;
 }
 
 function toListAgentConversationsQuery(value: unknown): ListAgentConversationsQuery | undefined {
+  if (!isRecord(value)) return undefined;
+  const identity = parseAgentScopeIdentity(value);
   if (
-    !isRecord(value) ||
-    !hasOnlyKeys(value, ["projectId", "includeArchived", "cursor", "limit"]) ||
-    !isSafeId(value["projectId"]) ||
+    !hasOnlyKeys(value, ["scope", "projectId", "includeArchived", "cursor", "limit"]) ||
+    identity === undefined ||
     (value["includeArchived"] !== undefined && typeof value["includeArchived"] !== "boolean") ||
     (value["cursor"] !== undefined && !isCursor(value["cursor"])) ||
     (value["limit"] !== undefined &&
@@ -1411,7 +1556,7 @@ function toListAgentConversationsQuery(value: unknown): ListAgentConversationsQu
     return undefined;
   }
   return {
-    projectId: value["projectId"],
+    ...identity,
     ...(value["includeArchived"] === undefined
       ? {}
       : { includeArchived: value["includeArchived"] }),
@@ -1421,30 +1566,33 @@ function toListAgentConversationsQuery(value: unknown): ListAgentConversationsQu
 }
 
 function toReadAgentConversationQuery(value: unknown): ReadAgentConversationQuery | undefined {
-  return isRecord(value) &&
-    hasOnlyKeys(value, ["projectId", "conversationId"]) &&
-    isSafeId(value["projectId"]) &&
+  if (!isRecord(value)) return undefined;
+  const identity = parseAgentScopeIdentity(value);
+  return identity !== undefined &&
+    hasOnlyKeys(value, ["scope", "projectId", "conversationId"]) &&
     isSafeId(value["conversationId"])
-    ? { projectId: value["projectId"], conversationId: value["conversationId"] }
+    ? { ...identity, conversationId: value["conversationId"] }
     : undefined;
 }
 
 function toChangeAgentConversationStatusCommand(
   value: unknown
 ): ChangeAgentConversationStatusCommand | undefined {
-  return isRecord(value) &&
+  if (!isRecord(value)) return undefined;
+  const identity = parseAgentScopeIdentity(value);
+  return identity !== undefined &&
     hasOnlyKeys(value, [
+      "scope",
       "projectId",
       "conversationId",
       "commandId",
       "expectedConversationRevision"
     ]) &&
-    isSafeId(value["projectId"]) &&
     isSafeId(value["conversationId"]) &&
     isSafeId(value["commandId"]) &&
     isNonNegativeInteger(value["expectedConversationRevision"])
     ? {
-        projectId: value["projectId"],
+        ...identity,
         conversationId: value["conversationId"],
         commandId: value["commandId"],
         expectedConversationRevision: value["expectedConversationRevision"]
@@ -1457,14 +1605,15 @@ function toSearchAgentConversationsQuery(
 ): SearchAgentConversationsQuery | undefined {
   if (
     !isRecord(value) ||
-    !hasOnlyKeys(value, ["projectId", "query", "includeArchived", "cursor", "limit"]) ||
+    !hasOnlyKeys(value, ["scope", "projectId", "query", "includeArchived", "cursor", "limit"]) ||
     typeof value["query"] !== "string" ||
     value["query"].length > 512
   ) {
     return undefined;
   }
   const list = toListAgentConversationsQuery({
-    projectId: value["projectId"],
+    ...(value["scope"] === undefined ? {} : { scope: value["scope"] }),
+    ...(value["projectId"] === undefined ? {} : { projectId: value["projectId"] }),
     ...(value["includeArchived"] === undefined
       ? {}
       : { includeArchived: value["includeArchived"] }),
@@ -1475,7 +1624,15 @@ function toSearchAgentConversationsQuery(
 }
 
 function toStopAgentRunCommand(value: unknown): StopAgentRunCommand | undefined {
-  return isRecord(value) ? (value as unknown as StopAgentRunCommand) : undefined;
+  if (!isRecord(value)) return undefined;
+  const identity = parseAgentScopeIdentity(value);
+  return identity !== undefined &&
+    hasOnlyKeys(value, ["runId", "scope", "projectId", "commandId", "expectedRunRevision"]) &&
+    isNonEmptyString(value["runId"]) &&
+    isSafeId(value["commandId"]) &&
+    isNonNegativeInteger(value["expectedRunRevision"])
+    ? ({ ...value, ...identity } as unknown as StopAgentRunCommand)
+    : undefined;
 }
 
 function toAnswerAgentUserInputCommand(value: unknown): AnswerAgentUserInputCommand | undefined {
@@ -1805,6 +1962,65 @@ function isNonNegativeInteger(value: unknown): value is number {
 
 function isPositiveInteger(value: unknown): value is number {
   return isNonNegativeInteger(value) && value > 0;
+}
+
+interface AgentScopeIdentity {
+  readonly scope?: AgentContextScope;
+  readonly projectId?: string;
+}
+
+function toAgentScopeIdentity(value: unknown): AgentScopeIdentity | undefined {
+  if (typeof value === "string") return isSafeId(value) ? { projectId: value } : undefined;
+  if (isExactAgentContextScope(value)) {
+    return {
+      scope:
+        value.kind === "standalone"
+          ? { kind: "standalone", scopeId: "standalone" }
+          : {
+              kind: "workspace",
+              workspaceKind: value.workspaceKind,
+              workspaceId: value.workspaceId
+            }
+    };
+  }
+  return isRecord(value) && hasOnlyKeys(value, ["scope", "projectId"])
+    ? parseAgentScopeIdentity(value)
+    : undefined;
+}
+
+function parseAgentScopeIdentity(value: Record<string, unknown>): AgentScopeIdentity | undefined {
+  const rawScope = value["scope"];
+  const rawProjectId = value["projectId"];
+  if (rawScope === undefined && rawProjectId === undefined) return undefined;
+  if (rawProjectId !== undefined && !isSafeId(rawProjectId)) return undefined;
+  if (rawScope === undefined) return { projectId: rawProjectId as string };
+  if (!isExactAgentContextScope(rawScope)) return undefined;
+
+  const scope: AgentContextScope =
+    rawScope.kind === "standalone"
+      ? { kind: "standalone", scopeId: "standalone" }
+      : {
+          kind: "workspace",
+          workspaceKind: rawScope.workspaceKind,
+          workspaceId: rawScope.workspaceId
+        };
+  if (
+    rawProjectId !== undefined &&
+    (scope.kind !== "workspace" || scope.workspaceId !== rawProjectId)
+  ) {
+    return undefined;
+  }
+  return {
+    scope,
+    ...(rawProjectId === undefined ? {} : { projectId: rawProjectId })
+  };
+}
+
+function isExactAgentContextScope(value: unknown): value is AgentContextScope {
+  if (!isAgentContextScope(value) || !isRecord(value)) return false;
+  return value["kind"] === "standalone"
+    ? hasOnlyKeys(value, ["kind", "scopeId"])
+    : hasOnlyKeys(value, ["kind", "workspaceKind", "workspaceId"]);
 }
 
 function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
@@ -2230,6 +2446,210 @@ function toEngineeringTextFileSaveRequest(
     content: value["content"],
     expectedChecksum: value["expectedChecksum"]
   };
+}
+
+function toCreativeProjectFileIdentity(
+  value: unknown
+): CreativeProjectFileSessionIdentity | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["projectId", "workspaceId"]) ||
+    !isSafeId(value["projectId"]) ||
+    !isSafeId(value["workspaceId"])
+  ) {
+    return undefined;
+  }
+  return { projectId: value["projectId"], workspaceId: value["workspaceId"] };
+}
+
+function toCreativeProjectFileReadRequest(
+  value: unknown
+): (CreativeProjectFileSessionIdentity & { readonly path: string }) | undefined {
+  if (!isRecord(value) || !hasOnlyKeys(value, ["projectId", "workspaceId", "path"])) {
+    return undefined;
+  }
+  const identity = toCreativeProjectFileIdentity({
+    projectId: value["projectId"],
+    workspaceId: value["workspaceId"]
+  });
+  if (
+    identity === undefined ||
+    typeof value["path"] !== "string" ||
+    !normalizeCreativeProjectFilePath(value["path"], "file").ok
+  ) {
+    return undefined;
+  }
+  return { ...identity, path: value["path"] };
+}
+
+function toCreativeProjectFileSaveRequest(value: unknown):
+  | (CreativeProjectFileSessionIdentity & {
+      readonly path: string;
+      readonly content: string;
+      readonly expectedTreeRevision: string;
+      readonly expectedNodeRevision: string;
+      readonly expectedChecksum: string;
+    })
+  | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      "projectId",
+      "workspaceId",
+      "path",
+      "content",
+      "expectedTreeRevision",
+      "expectedNodeRevision",
+      "expectedChecksum"
+    ])
+  ) {
+    return undefined;
+  }
+  const read = toCreativeProjectFileReadRequest({
+    projectId: value["projectId"],
+    workspaceId: value["workspaceId"],
+    path: value["path"]
+  });
+  if (
+    read === undefined ||
+    typeof value["content"] !== "string" ||
+    !isNonEmptyString(value["expectedTreeRevision"]) ||
+    !isNonEmptyString(value["expectedNodeRevision"]) ||
+    !isNonEmptyString(value["expectedChecksum"])
+  ) {
+    return undefined;
+  }
+  return {
+    ...read,
+    content: value["content"],
+    expectedTreeRevision: value["expectedTreeRevision"],
+    expectedNodeRevision: value["expectedNodeRevision"],
+    expectedChecksum: value["expectedChecksum"]
+  };
+}
+
+function toCreativeProjectFileLifecycleCommand(
+  value: unknown
+): CreativeProjectFileLifecycleCommand | undefined {
+  if (!isRecord(value)) return undefined;
+  const baseKeys = [
+    "schemaVersion",
+    "commandId",
+    "kind",
+    "projectId",
+    "workspaceId",
+    "expectedTreeRevision"
+  ];
+  if (
+    value["schemaVersion"] !== "1.0" ||
+    !isSafeId(value["commandId"]) ||
+    !isSafeId(value["projectId"]) ||
+    !isSafeId(value["workspaceId"]) ||
+    !isNonEmptyString(value["expectedTreeRevision"])
+  ) {
+    return undefined;
+  }
+  const base = {
+    schemaVersion: "1.0" as const,
+    commandId: value["commandId"],
+    projectId: value["projectId"],
+    workspaceId: value["workspaceId"],
+    expectedTreeRevision: value["expectedTreeRevision"]
+  };
+  if (
+    value["kind"] === "createTextFile" &&
+    hasOnlyKeys(value, [...baseKeys, "path", "content"]) &&
+    typeof value["path"] === "string" &&
+    normalizeCreativeProjectFilePath(value["path"], "file").ok &&
+    typeof value["content"] === "string"
+  ) {
+    return { ...base, kind: "createTextFile", path: value["path"], content: value["content"] };
+  }
+  if (
+    value["kind"] === "createDirectory" &&
+    hasOnlyKeys(value, [...baseKeys, "path"]) &&
+    typeof value["path"] === "string" &&
+    normalizeCreativeProjectFilePath(value["path"], "directory").ok
+  ) {
+    return { ...base, kind: "createDirectory", path: value["path"] };
+  }
+  if (
+    value["kind"] === "renamePath" &&
+    hasOnlyKeys(value, [...baseKeys, "sourcePath", "targetPath", "expectedSourceRevision"]) &&
+    typeof value["sourcePath"] === "string" &&
+    typeof value["targetPath"] === "string" &&
+    normalizeCreativeProjectFilePath(value["sourcePath"], "any").ok &&
+    normalizeCreativeProjectFilePath(value["targetPath"], "any").ok &&
+    isNonEmptyString(value["expectedSourceRevision"])
+  ) {
+    return {
+      ...base,
+      kind: "renamePath",
+      sourcePath: value["sourcePath"],
+      targetPath: value["targetPath"],
+      expectedSourceRevision: value["expectedSourceRevision"]
+    };
+  }
+  if (
+    value["kind"] === "deleteFile" &&
+    hasOnlyKeys(value, [...baseKeys, "path", "expectedSourceRevision", "confirmed"]) &&
+    typeof value["path"] === "string" &&
+    normalizeCreativeProjectFilePath(value["path"], "file").ok &&
+    isNonEmptyString(value["expectedSourceRevision"]) &&
+    value["confirmed"] === true
+  ) {
+    return {
+      ...base,
+      kind: "deleteFile",
+      path: value["path"],
+      expectedSourceRevision: value["expectedSourceRevision"],
+      confirmed: true
+    };
+  }
+  if (
+    value["kind"] === "deleteEmptyDirectory" &&
+    hasOnlyKeys(value, [...baseKeys, "path", "expectedSourceRevision", "confirmed"]) &&
+    typeof value["path"] === "string" &&
+    normalizeCreativeProjectFilePath(value["path"], "directory").ok &&
+    isNonEmptyString(value["expectedSourceRevision"]) &&
+    value["confirmed"] === true
+  ) {
+    return {
+      ...base,
+      kind: "deleteEmptyDirectory",
+      path: value["path"],
+      expectedSourceRevision: value["expectedSourceRevision"],
+      confirmed: true
+    };
+  }
+  return undefined;
+}
+
+function isCreativeProjectFileLifecycleAllowedByIpc(
+  command: CreativeProjectFileLifecycleCommand,
+  session: CreativeProjectFileSession
+): boolean {
+  if (command.kind !== "renamePath") return true;
+  const snapshot = session.getSnapshot();
+  const source =
+    snapshot === undefined
+      ? undefined
+      : findCreativeProjectFileTreeNode(snapshot.nodes, command.sourcePath);
+  return (
+    source !== undefined && normalizeCreativeProjectFilePath(command.targetPath, source.kind).ok
+  );
+}
+
+function findCreativeProjectFileTreeNode(
+  nodes: readonly import("@novel-studio/application").CreativeProjectFileTreeNode[],
+  path: string
+): import("@novel-studio/application").CreativeProjectFileTreeNode | undefined {
+  for (const node of nodes) {
+    if (node.path === path) return node;
+    const child = findCreativeProjectFileTreeNode(node.children ?? [], path);
+    if (child !== undefined) return child;
+  }
+  return undefined;
 }
 
 function invalidWorkspaceRequest<T>(): Result<T, UnifiedError> {

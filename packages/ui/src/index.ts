@@ -104,6 +104,8 @@ export { DiffReview } from "./diff-review.js";
 export { PlanArtifactReview } from "./plan-artifact-review.js";
 export type { PlanArtifactReviewProps } from "./plan-artifact-review.js";
 export { CreativeWorkspaceNavigator } from "./creative-workspace-navigator.js";
+export { ProjectFileTree } from "./project-file-tree.js";
+export type { ProjectFileTreeNode, ProjectFileTreeProps } from "./project-file-tree.js";
 export { EngineeringWorkspaceNavigator } from "./engineering-workspace-navigator.js";
 export type { EngineeringWorkspaceNavigatorProps as FormalEngineeringWorkspaceNavigatorProps } from "./engineering-workspace-navigator.js";
 export { PlainFileConflictReview } from "./plain-file-conflict-review.js";
@@ -157,6 +159,7 @@ export type {
   AiWorkflowBranchChoiceProps,
   AiSelectionReviewProps,
   RecoveryReviewProps,
+  CreativeProjectFilesNavigatorProps,
   CreativeWorkspaceNavigatorProps,
   OnboardingProps,
   OnboardingStepProps,

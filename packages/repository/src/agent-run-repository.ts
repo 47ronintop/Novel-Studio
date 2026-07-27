@@ -167,6 +167,43 @@ export class AgentRunFileRepository {
     );
   }
 
+  public writePromptMaterialization(
+    runId: string,
+    artifact: JsonObject
+  ): Promise<Result<JsonObject, UnifiedError>> {
+    const artifactId = readSafeString(artifact, "artifactId");
+    const contextSnapshotId = readSafeString(artifact, "contextSnapshotId");
+    if (
+      !isSafeId(runId) ||
+      artifactId === undefined ||
+      contextSnapshotId === undefined ||
+      artifact["runId"] !== runId ||
+      artifact["schemaVersion"] !== "1.0"
+    ) {
+      return Promise.resolve(this.invalidRecord("AGENT_PROMPT_MATERIALIZATION_INVALID"));
+    }
+    return this.writeJson(
+      this.runPath(runId, join("prompt-materializations", `${artifactId}.json`)),
+      artifact
+    );
+  }
+
+  public async readPromptMaterialization(
+    runId: string,
+    artifactId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    if (!isSafeId(runId) || !isSafeId(artifactId)) {
+      return this.invalidRecord("AGENT_PROMPT_MATERIALIZATION_INVALID");
+    }
+    const read = await this.readJson(
+      this.runPath(runId, join("prompt-materializations", `${artifactId}.json`))
+    );
+    if (!read.ok || read.value === undefined) return read;
+    return read.value["runId"] === runId && read.value["artifactId"] === artifactId
+      ? read
+      : this.invalidRecord("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  }
+
   public writePlanArtifact(plan: JsonObject): Promise<Result<JsonObject, UnifiedError>> {
     const planId = readSafeString(plan, "planId");
     const revision = plan["revision"];
@@ -658,7 +695,7 @@ export class AgentRunFileRepository {
         if (!snapshot.ok) return snapshot;
         if (
           snapshot.value !== undefined &&
-          (projectId === undefined || snapshot.value["projectId"] === projectId)
+          (projectId === undefined || snapshotWorkspaceId(snapshot.value) === projectId)
         ) {
           snapshots.push(snapshot.value);
         }
@@ -896,6 +933,13 @@ export class AgentRunFileRepository {
   }
 }
 
+function snapshotWorkspaceId(snapshot: JsonObject): string | undefined {
+  if (typeof snapshot["projectId"] === "string") return snapshot["projectId"];
+  const scope = snapshot["scope"];
+  if (!isJsonObject(scope) || scope["kind"] !== "workspace") return undefined;
+  return typeof scope["workspaceId"] === "string" ? scope["workspaceId"] : undefined;
+}
+
 function readRunId(value: JsonObject): string | undefined {
   return typeof value["runId"] === "string" && isSafeId(value["runId"])
     ? value["runId"]
@@ -904,12 +948,18 @@ function readRunId(value: JsonObject): string | undefined {
 
 /**
  * A persisted run snapshot is readable when its schemaVersion is a version this build understands
- * (v1.0 or v1.1) or is absent (a minimal legacy fixture). An explicit unknown/future version is
+ * (v1.0 through v1.3) or is absent (a minimal legacy fixture). An explicit unknown/future version is
  * rejected so it is never silently normalized as v1.0. Reads never rewrite the file.
  */
 function isSupportedAgentSchemaVersion(value: JsonObject): boolean {
   const version = value["schemaVersion"];
-  return version === undefined || version === "1.0" || version === "1.1";
+  return (
+    version === undefined ||
+    version === "1.0" ||
+    version === "1.1" ||
+    version === "1.2" ||
+    version === "1.3"
+  );
 }
 
 function readSafeString(value: JsonObject, key: string): string | undefined {

@@ -4,11 +4,11 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  createBootstrappedDefaultDesktopApplicationWithSnapshot,
   createProjectLockOwnerId,
-  DEFAULT_FIXTURE_CHAPTER_ID
+  createUnboundDesktopApplication
 } from "./application-composition.js";
 import { createDesktopAgentRuntime } from "./agent-run-runtime.js";
+import { createDesktopStandaloneAgentRuntime } from "./standalone-agent-runtime.js";
 import { createDesktopAgentRuntimeManager } from "./agent-runtime-manager.js";
 import type { DesktopAgentRuntimeManager } from "./agent-runtime-manager.js";
 import {
@@ -29,11 +29,13 @@ import { createSecureWebPreferences } from "./security.js";
 import {
   createAgentPricingRegistry,
   createAgentExternalToolSession,
+  createCreativeProjectFileSession,
   createMcpSettingsSession,
   mangleToolId,
   reasoningStrengthForModel,
   resolveCatalogAgentModelCapabilities
 } from "@novel-studio/application";
+import { CreativeProjectFileRepository } from "@novel-studio/repository";
 import type {
   AgentNetworkPolicy,
   AgentNetworkSettingsPort,
@@ -68,9 +70,6 @@ let activeAgentRuntimeManager: DesktopAgentRuntimeManager | undefined;
 let shutdownInProgress = false;
 
 export async function registerApplicationIpcHandlers(): Promise<void> {
-  const projectRoot =
-    process.env["NOVEL_STUDIO_PROJECT_ROOT"] ??
-    join(app.getPath("userData"), "projects", "minimal-chapter");
   const userDataRoot = process.env["NOVEL_STUDIO_USER_DATA_ROOT"] ?? app.getPath("userData");
   const modelSecretStore = createEncryptedFileModelSecretStore({
     userDataRoot,
@@ -82,6 +81,14 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
   });
   const projectLockOwnerId = createProjectLockOwnerId();
   const agentWriteSaveCoordinator = createAgentWriteSaveCoordinator();
+  const creativeProjectFileSession = createCreativeProjectFileSession({
+    createRepository: (activation) =>
+      new CreativeProjectFileRepository({
+        projectRoot: activation.projectRoot,
+        projectId: activation.projectId,
+        workspaceId: activation.workspaceId
+      })
+  });
   const agentPricingRegistry = createAgentPricingRegistry({
     version: "stage-5-2026-07-15",
     entries: []
@@ -105,18 +112,26 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         modelSecretStore
       })
   });
-  const bootstrapped = await createBootstrappedDefaultDesktopApplicationWithSnapshot({
-    projectRoot,
+  const application = await createUnboundDesktopApplication({
     userDataRoot,
     projectLockOwnerId,
     modelConnectionTester: modelRuntime.modelConnectionTester,
     modelDiscoveryPort: modelRuntime.modelDiscoveryPort,
     createAiProvider: modelRuntime.createAiProvider
   });
-  activeDesktopApplication = bootstrapped.application;
+  activeDesktopApplication = application;
   const failAgentWriteAt = readPositiveInteger(
     process.env["NOVEL_STUDIO_TEST_AGENT_WRITE_FAIL_AT"]
   );
+  const resolveAgentModelProfile = (profileId: string, modelNameOverride?: string) =>
+    resolveDesktopAgentModelProfile(activeDesktopApplication, profileId, modelNameOverride);
+  const resolveAgentModelStartFacts = (profileId: string, modelNameOverride?: string) =>
+    resolveDesktopAgentModelStartFacts(
+      activeDesktopApplication,
+      modelSecretStore,
+      profileId,
+      modelNameOverride
+    );
   const agentRuntimeManager = createDesktopAgentRuntimeManager({
     createRuntime: async (binding) => {
       const networkRuntime = await resolveDesktopNetworkRuntime({
@@ -163,6 +178,26 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         resumeAutosave: agentWriteSaveCoordinator.resumeAutosave,
         ...(failAgentWriteAt === undefined ? {} : { failAgentWriteAt }),
         createAgentModelDriver: modelRuntime.createAgentModelDriver,
+        ...(binding.kind !== "creativeProject"
+          ? {}
+          : {
+              readCreativeProjectFile: async (relativePath: string) => {
+                const identity = creativeProjectFileSession.getActiveIdentity();
+                if (identity === undefined || identity.workspaceId !== binding.workspaceId) {
+                  return err(
+                    createUnifiedError({
+                      code: "CREATIVE_PROJECT_FILE_SESSION_IDENTITY_REJECTED",
+                      category: "ValidationError",
+                      message: "The active creative project file session does not match this run.",
+                      recoverability: "user-action",
+                      suggestedAction: "Reopen the creative project and retry.",
+                      traceId: "desktop-agent-creative-project-file-reader"
+                    })
+                  );
+                }
+                return creativeProjectFileSession.readTextFile({ ...identity, path: relativePath });
+              }
+            }),
         readEditorBuffer: async (refId) => {
           const chapterId = refId.startsWith("chapter:")
             ? refId.slice("chapter:".length)
@@ -188,135 +223,41 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         syncSavedEditor: async (relativePath, options) => {
           await syncSavedEditorForPath(activeDesktopApplication, relativePath, options);
         },
-        resolveModelProfile: async (profileId, modelNameOverride) => {
-          const profiles = await activeDesktopApplication?.listModelProfiles();
-          if (profiles === undefined || !profiles.ok) return undefined;
-          const profile = profiles.value.profiles.find((entry) => entry.id === profileId);
-          if (profile === undefined) return undefined;
-          const modelProfile: LlmModelProfile = {
-            id: profile.id,
-            provider: profile.provider as LlmProviderId,
-            displayName: profile.displayName,
-            modelName: modelNameOverride ?? profile.modelName,
-            ...(profile.baseUrl === undefined ? {} : { baseUrl: profile.baseUrl }),
-            ...(profile.apiKeyRef.length === 0 ? {} : { apiKeyRef: profile.apiKeyRef }),
-            timeoutMs: profile.timeoutMs
-          };
-          return {
-            modelProfile,
-            parameters: {
-              temperature: profile.temperature,
-              maxTokens: profile.maxTokens,
-              ...(profile.topP === undefined ? {} : { topP: profile.topP })
-            }
-          };
-        },
-        resolveModelStartFacts: async (profileId, modelNameOverride) => {
-          // Server-authoritative facts: the connection comes from the stored profile; the selected
-          // model name is a user choice on that connection. Context window and reasoning strength
-          // are always resolved here, never trusted from IPC.
-          const profiles = await activeDesktopApplication?.listModelProfiles();
-          if (profiles === undefined || !profiles.ok) return undefined;
-          const profile = profiles.value.profiles.find((entry) => entry.id === profileId);
-          if (profile === undefined) return undefined;
-          const selectedModelName = modelNameOverride?.trim() || profile.modelName;
-
-          // A fresh installation has a model profile before it has a stored key. Keep the Agent
-          // usable in that state by binding the run to the local scripted driver. This is distinct
-          // from a real provider failure: once a key exists, missing/unknown capabilities remain a
-          // server-side validation error instead of being silently treated as a mock response.
-          const storedSecret =
-            profile.apiKeyRef.trim().length === 0
-              ? ({ ok: true as const, value: undefined } as const)
-              : await modelSecretStore.readSecret(profile.apiKeyRef);
-          const useScriptedAgent =
-            profile.provider === "demo" ||
-            profile.apiKeyRef.trim().length === 0 ||
-            (storedSecret.ok && storedSecret.value === undefined);
-          if (useScriptedAgent) {
-            return {
-              profileId: profile.id,
-              provider: "demo",
-              modelName: "desktop-scripted-agent",
-              capabilities: {
-                streaming: true,
-                toolCalling: true,
-                structuredArguments: true,
-                contextWindow: 128_000
-              },
-              requiredContextTokens: 8_000,
-              reasoningStrength: reasoningStrengthForModel("demo", "desktop-scripted-agent")
-            };
-          }
-
-          const discovery = await activeDesktopApplication?.discoverModelOptions(profileId);
-          const discovered =
-            discovery !== undefined && discovery.ok
-              ? discovery.value.models.find((model) => model.id === selectedModelName)
-              : undefined;
-          const catalogCapabilities = resolveCatalogAgentModelCapabilities(
-            profile.provider,
-            selectedModelName
-          );
-          const contextWindow =
-            discovered?.contextWindow !== undefined && discovered.contextWindow > 0
-              ? discovered.contextWindow
-              : selectedModelName === profile.modelName &&
-                  profile.contextWindow !== undefined &&
-                  profile.contextWindow > 0
-                ? profile.contextWindow
-                : catalogCapabilities?.contextWindow;
-          const streaming = discovered?.streaming ?? catalogCapabilities?.streaming;
-          const toolCalling = discovered?.toolCalling ?? catalogCapabilities?.toolCalling;
-          const structuredArguments =
-            discovered?.structuredArguments ?? catalogCapabilities?.structuredArguments;
-          const reasoningStrength =
-            discovered?.reasoningStrength ??
-            (selectedModelName === profile.modelName && discovery !== undefined && discovery.ok
-              ? discovery.value.reasoningStrength
-              : reasoningStrengthForModel(
-                  profile.provider,
-                  selectedModelName,
-                  profile.baseUrl,
-                  profile.reasoningEffortEnabled
-                ));
-          return {
-            profileId: profile.id,
-            provider: profile.provider,
-            modelName: selectedModelName,
-            capabilities: {
-              ...(streaming === undefined ? {} : { streaming }),
-              ...(toolCalling === undefined ? {} : { toolCalling }),
-              ...(structuredArguments === undefined ? {} : { structuredArguments }),
-              ...(contextWindow === undefined ? {} : { contextWindow })
-            },
-            requiredContextTokens: 8_000,
-            reasoningStrength
-          };
-        }
+        resolveModelProfile: resolveAgentModelProfile,
+        resolveModelStartFacts: resolveAgentModelStartFacts
       });
+    },
+    createStandaloneRuntime: async () => {
+      const created = await createDesktopStandaloneAgentRuntime({
+        userDataRoot,
+        createAgentModelDriver: modelRuntime.createAgentModelDriver,
+        resolveModelProfile: resolveAgentModelProfile,
+        resolveModelStartFacts: resolveAgentModelStartFacts
+      });
+      if (!created.ok) throw new Error(created.error.message);
+      return created.value;
     }
   });
-  const initialBinding = await agentRuntimeManager.bindWorkspace({
-    kind: "creativeProject",
-    workspaceId: bootstrapped.workspace.project.projectId,
-    contentRoot: bootstrapped.workspace.projectRoot,
-    stateRoot: bootstrapped.workspace.projectRoot,
-    activeChapterId:
-      bootstrapped.workspace.activeChapterId ??
-      bootstrapped.workspace.chapters[0]?.id ??
-      DEFAULT_FIXTURE_CHAPTER_ID
-  });
-  if (!initialBinding.ok) {
-    agentRuntimeManager.dispose();
-    await activeDesktopApplication.shutdown();
-    activeDesktopApplication = undefined;
-    throw new Error(initialBinding.error.message);
+  const standalonePrepared = await agentRuntimeManager.prepareStandalone();
+  if (!standalonePrepared.ok) {
+    process.emitWarning(standalonePrepared.error.message, {
+      code: standalonePrepared.error.code,
+      detail: "Standalone Agent is disabled; workspace open/create remains available."
+    });
+  } else {
+    const standaloneActivated = await agentRuntimeManager.activateStandalone();
+    if (!standaloneActivated.ok) {
+      process.emitWarning(standaloneActivated.error.message, {
+        code: standaloneActivated.error.code,
+        detail: "Standalone Agent is disabled; workspace open/create remains available."
+      });
+    }
   }
   activeAgentRuntimeManager = agentRuntimeManager;
   const workspaceActivationCoordinator = createWorkspaceActivationCoordinator({
-    application: bootstrapped.application,
+    application,
     runtimeManager: agentRuntimeManager,
+    creativeProjectFileSession,
     reportCleanupFailure: (error) => {
       process.emitWarning(error.message, {
         code: error.code,
@@ -339,6 +280,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
       }
     },
     agentRuntimeManager,
+    creativeProjectFileSession,
     agentWriteSaveCoordinator,
     agentNetworkSettingsSession,
     agentMcpSettingsSession,
@@ -367,6 +309,115 @@ function readPositiveInteger(value: string | undefined): number | undefined {
   if (value === undefined || !/^[1-9][0-9]*$/.test(value)) return undefined;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+async function resolveDesktopAgentModelProfile(
+  application: DesktopApplication | undefined,
+  profileId: string,
+  modelNameOverride?: string
+) {
+  const profiles = await application?.listModelProfiles();
+  if (profiles === undefined || !profiles.ok) return undefined;
+  const profile = profiles.value.profiles.find((entry) => entry.id === profileId);
+  if (profile === undefined) return undefined;
+  const modelProfile: LlmModelProfile = {
+    id: profile.id,
+    provider: profile.provider as LlmProviderId,
+    displayName: profile.displayName,
+    modelName: modelNameOverride ?? profile.modelName,
+    ...(profile.baseUrl === undefined ? {} : { baseUrl: profile.baseUrl }),
+    ...(profile.apiKeyRef.length === 0 ? {} : { apiKeyRef: profile.apiKeyRef }),
+    timeoutMs: profile.timeoutMs
+  };
+  return {
+    modelProfile,
+    parameters: {
+      temperature: profile.temperature,
+      maxTokens: profile.maxTokens,
+      ...(profile.topP === undefined ? {} : { topP: profile.topP })
+    }
+  };
+}
+
+async function resolveDesktopAgentModelStartFacts(
+  application: DesktopApplication | undefined,
+  modelSecretStore: ModelSecretStore,
+  profileId: string,
+  modelNameOverride?: string
+) {
+  const profiles = await application?.listModelProfiles();
+  if (profiles === undefined || !profiles.ok) return undefined;
+  const profile = profiles.value.profiles.find((entry) => entry.id === profileId);
+  if (profile === undefined) return undefined;
+  const selectedModelName = modelNameOverride?.trim() || profile.modelName;
+  const storedSecret =
+    profile.apiKeyRef.trim().length === 0
+      ? ({ ok: true as const, value: undefined } as const)
+      : await modelSecretStore.readSecret(profile.apiKeyRef);
+  if (
+    profile.provider === "demo" ||
+    profile.apiKeyRef.trim().length === 0 ||
+    (storedSecret.ok && storedSecret.value === undefined)
+  ) {
+    return {
+      profileId: profile.id,
+      provider: "demo",
+      modelName: "desktop-scripted-agent",
+      capabilities: {
+        streaming: true,
+        toolCalling: true,
+        structuredArguments: true,
+        contextWindow: 128_000
+      },
+      requiredContextTokens: 8_000,
+      reasoningStrength: reasoningStrengthForModel("demo", "desktop-scripted-agent")
+    };
+  }
+
+  const discovery = await application?.discoverModelOptions(profileId);
+  const discovered =
+    discovery !== undefined && discovery.ok
+      ? discovery.value.models.find((model) => model.id === selectedModelName)
+      : undefined;
+  const catalogCapabilities = resolveCatalogAgentModelCapabilities(
+    profile.provider,
+    selectedModelName
+  );
+  const contextWindow =
+    discovered?.contextWindow !== undefined && discovered.contextWindow > 0
+      ? discovered.contextWindow
+      : selectedModelName === profile.modelName &&
+          profile.contextWindow !== undefined &&
+          profile.contextWindow > 0
+        ? profile.contextWindow
+        : catalogCapabilities?.contextWindow;
+  const streaming = discovered?.streaming ?? catalogCapabilities?.streaming;
+  const toolCalling = discovered?.toolCalling ?? catalogCapabilities?.toolCalling;
+  const structuredArguments =
+    discovered?.structuredArguments ?? catalogCapabilities?.structuredArguments;
+  const reasoningStrength =
+    discovered?.reasoningStrength ??
+    (selectedModelName === profile.modelName && discovery !== undefined && discovery.ok
+      ? discovery.value.reasoningStrength
+      : reasoningStrengthForModel(
+          profile.provider,
+          selectedModelName,
+          profile.baseUrl,
+          profile.reasoningEffortEnabled
+        ));
+  return {
+    profileId: profile.id,
+    provider: profile.provider,
+    modelName: selectedModelName,
+    capabilities: {
+      ...(streaming === undefined ? {} : { streaming }),
+      ...(toolCalling === undefined ? {} : { toolCalling }),
+      ...(structuredArguments === undefined ? {} : { structuredArguments }),
+      ...(contextWindow === undefined ? {} : { contextWindow })
+    },
+    requiredContextTokens: 8_000,
+    reasoningStrength
+  };
 }
 
 async function resolveDesktopNetworkRuntime(input: {

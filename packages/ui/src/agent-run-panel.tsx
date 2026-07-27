@@ -372,6 +372,8 @@ function statusLabel(status: AgentRunPanelProps["status"]): string {
       return "空闲";
     case "planning_model":
       return "规划中";
+    case "conversation_model":
+      return "回复中";
     case "executing_model":
       return "执行中";
     case "executing_read_tool":

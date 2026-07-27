@@ -111,8 +111,7 @@ import type {
 } from "./user-preferences-session.js";
 import type { ContextCandidate } from "@novel-studio/context-engine";
 
-export type ActivityId =
-  "workspace" | "search" | "storyBible" | "timeline" | "studio" | "settings";
+export type ActivityId = "workspace" | "search" | "storyBible" | "timeline" | "studio" | "settings";
 
 export type SaveStatus = "Saved" | "Saving" | "Unsaved" | "Recovery available";
 
@@ -190,6 +189,7 @@ export interface DesktopShellState {
   readonly workspaceContext: WorkspaceContextDto;
   readonly workbenchMode: WorkbenchMode;
   readonly creativeNavigatorMode: CreativeNavigatorMode;
+  readonly creativeFileExpandedPathIds: readonly string[];
   readonly engineeringExpandedPathIds: readonly string[];
   readonly navigatorCollapsed: boolean;
   readonly navigatorExpandedSectionIds?: readonly string[];
@@ -206,6 +206,8 @@ export interface DesktopShellState {
 
 export interface DesktopApplication {
   shutdown(): Promise<Result<void, UnifiedError>>;
+  canCloseWorkspace(): Result<void, UnifiedError>;
+  closeWorkspace(): Promise<Result<DesktopShellState, UnifiedError>>;
   getShellState(): DesktopShellState;
   getActiveProjectWorkspace(): Result<ProjectWorkspaceSnapshot, UnifiedError>;
   listCommands(): readonly ApplicationCommand[];
@@ -448,11 +450,46 @@ export function createDesktopApplication(
       ) {
         firstError = releasedEngineering.error;
       }
-      const releasedAttached = await attachedCreativeEngineeringWorkspaceSession?.releaseWorkspaceLock();
+      const releasedAttached =
+        await attachedCreativeEngineeringWorkspaceSession?.releaseWorkspaceLock();
       if (releasedAttached !== undefined && !releasedAttached.ok && firstError === undefined) {
         firstError = releasedAttached.error;
       }
       return firstError === undefined ? ok(undefined) : err(firstError);
+    },
+    canCloseWorkspace() {
+      if (shellState.workspaceContext.kind === "none") return ok(undefined);
+      if (getActiveChapterEditorSession()?.getState()?.dirty === true) {
+        return err(workspaceCloseError("WORKSPACE_CLOSE_DIRTY", "Save or discard changes first."));
+      }
+      return ok(undefined);
+    },
+    async closeWorkspace() {
+      const allowed = this.canCloseWorkspace();
+      if (!allowed.ok) return allowed;
+      if (shellState.workspaceContext.kind === "none") return ok(shellState);
+
+      const releasedProject = await activeProjectWorkspaceSession?.releaseProjectLock();
+      if (releasedProject !== undefined && !releasedProject.ok) return releasedProject;
+      const releasedEngineering = await activeEngineeringWorkspaceSession?.releaseWorkspaceLock();
+      if (releasedEngineering !== undefined && !releasedEngineering.ok) return releasedEngineering;
+      const releasedAttached =
+        await attachedCreativeEngineeringWorkspaceSession?.releaseWorkspaceLock();
+      if (releasedAttached !== undefined && !releasedAttached.ok) return releasedAttached;
+
+      activeProjectWorkspaceSession = undefined;
+      activeEngineeringWorkspaceSession = undefined;
+      attachedCreativeEngineeringWorkspaceSession = undefined;
+      dynamicAiWritingWorkflowSession = undefined;
+      dynamicAiChapterEditorSession = undefined;
+      shellState = {
+        ...shellState,
+        projectTitle: "未打开项目",
+        workspaceContext: EMPTY_WORKSPACE_CONTEXT,
+        saveStatus: "Saved"
+      };
+      refreshProjectScopedBindings(undefined);
+      return ok(shellState);
     },
     getShellState: () =>
       withChapterSaveStatus(
@@ -674,7 +711,8 @@ export function createDesktopApplication(
       return activeProjectWorkspaceSession.discardRecoveryDraft(sessionId);
     },
     async refreshEngineeringTree() {
-      const session = activeEngineeringWorkspaceSession ?? attachedCreativeEngineeringWorkspaceSession;
+      const session =
+        activeEngineeringWorkspaceSession ?? attachedCreativeEngineeringWorkspaceSession;
       if (session === undefined) {
         return engineeringWorkspaceUnavailable();
       }
@@ -691,7 +729,10 @@ export function createDesktopApplication(
       }
 
       const attached = attachedCreativeEngineeringWorkspaceSession;
-      if (attached !== undefined && attached.getActivation()?.context.workspaceId === snapshot.project.projectId) {
+      if (
+        attached !== undefined &&
+        attached.getActivation()?.context.workspaceId === snapshot.project.projectId
+      ) {
         return attached.refreshWorkspace();
       }
 
@@ -706,14 +747,16 @@ export function createDesktopApplication(
       return ok(opened.value.snapshot);
     },
     async readEngineeringTextFile(path) {
-      const session = activeEngineeringWorkspaceSession ?? attachedCreativeEngineeringWorkspaceSession;
+      const session =
+        activeEngineeringWorkspaceSession ?? attachedCreativeEngineeringWorkspaceSession;
       if (session === undefined) {
         return engineeringWorkspaceUnavailable();
       }
       return session.readTextFile(path);
     },
     async saveEngineeringTextFile(input) {
-      const session = activeEngineeringWorkspaceSession ?? attachedCreativeEngineeringWorkspaceSession;
+      const session =
+        activeEngineeringWorkspaceSession ?? attachedCreativeEngineeringWorkspaceSession;
       if (session === undefined) {
         return engineeringWorkspaceUnavailable();
       }
@@ -1386,6 +1429,17 @@ function engineeringWorkspaceUnavailable<T>(): Result<T, UnifiedError> {
       traceId: "application-engineering-workspace"
     })
   );
+}
+
+function workspaceCloseError(code: string, message: string): UnifiedError {
+  return createUnifiedError({
+    code,
+    category: "UserError",
+    message,
+    recoverability: "user-action",
+    suggestedAction: "Resolve pending workspace state and retry closing the workspace.",
+    traceId: "application-workspace-close"
+  });
 }
 
 function projectSearchUnavailable<T>(): Result<T, UnifiedError> {

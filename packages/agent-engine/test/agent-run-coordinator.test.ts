@@ -133,7 +133,7 @@ describe("Agent Run Coordinator", () => {
     ]);
   });
 
-  test("authors a v1.1 snapshot and events with Stage 5 defaults", () => {
+  test("authors a scope-aware v1.2 snapshot and v1.3 events", () => {
     const coordinator = engineExports.createAgentRunCoordinator({
       now: () => "2026-07-13T00:00:00.000Z",
       createRunId: () => "run_v11"
@@ -161,7 +161,7 @@ describe("Agent Run Coordinator", () => {
     if (!started.ok) return;
     // The coordinator authors a complete v1.1 literal, not a v1.0 shape normalized later.
     expect(started.value).toMatchObject({
-      schemaVersion: "1.1",
+      schemaVersion: "1.2",
       modelProfileId: "model_01",
       permissionSummaryId: null,
       contextBudgetSnapshotId: null,
@@ -173,7 +173,7 @@ describe("Agent Run Coordinator", () => {
       usageSummary: { inputTokens: 0, outputTokens: 0, totalTokens: 0, usageStatus: "missing" }
     });
     expect(coordinator.readEvents("run_v11")[0]).toMatchObject({
-      schemaVersion: "1.1",
+      schemaVersion: "1.3",
       type: "run_started"
     });
   });

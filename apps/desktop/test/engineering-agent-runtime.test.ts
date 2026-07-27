@@ -74,7 +74,16 @@ describe("engineering Agent runtime", () => {
       await runtime.agentRunSession.startAgentRun(
         executionCommand(conversation.value.conversationId, "general_file")
       )
-    ).toMatchObject({ ok: true });
+    ).toMatchObject({
+      ok: true,
+      value: {
+        scope: {
+          kind: "workspace",
+          workspaceKind: "engineeringWorkspace",
+          workspaceId: "ws_engineering"
+        }
+      }
+    });
     let awaitingRevision = 0;
     let changeSet: Record<string, unknown> | undefined;
     await vi.waitFor(async () => {
@@ -89,18 +98,17 @@ describe("engineering Agent runtime", () => {
     });
     if (changeSet === undefined) throw new Error("Expected a staged engineering Change Set.");
 
-    expect(
-      await runtime.agentRunSession.decideChangeSet({
-        runId: "run-engineering-write",
-        projectId: "ws_engineering",
-        commandId: "apply-engineering-write",
-        expectedRunRevision: awaitingRevision,
-        changeSetId: String(changeSet["changeSetId"]),
-        revision: Number(changeSet["revision"]),
-        checksum: String(changeSet["checksum"]),
-        decision: "apply_selected"
-      })
-    ).toMatchObject({ ok: true });
+    const decision = await runtime.agentRunSession.decideChangeSet({
+      runId: "run-engineering-write",
+      projectId: "ws_engineering",
+      commandId: "apply-engineering-write",
+      expectedRunRevision: awaitingRevision,
+      changeSetId: String(changeSet["changeSetId"]),
+      revision: Number(changeSet["revision"]),
+      checksum: String(changeSet["checksum"]),
+      decision: "apply_selected"
+    });
+    if (!decision.ok) throw new Error(JSON.stringify(decision.error));
     await vi.waitFor(async () => {
       expect(await runtime.agentRunSession.readAgentRun("run-engineering-write")).toMatchObject({
         ok: true,

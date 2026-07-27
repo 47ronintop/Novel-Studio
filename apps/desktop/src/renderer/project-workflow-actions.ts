@@ -24,7 +24,9 @@ export interface ProjectWorkflowActionInputs {
   readonly settingsBridge: SettingsBridge | undefined;
   readonly storyBibleBridge: StoryBibleBridge | undefined;
   readonly studioBridge: StudioBridge | undefined;
+  readonly beforeWorkspaceTransition?: (() => Promise<boolean>) | undefined;
   readonly setChapterEditor: Dispatch<SetStateAction<ChapterEditorProps | undefined>>;
+  readonly clearFileEditor?: (() => void) | undefined;
   readonly setFileEditor?: Dispatch<SetStateAction<PlainFileEditorProps | undefined>> | undefined;
   readonly setProjectWorkflow: Dispatch<SetStateAction<ProjectWorkflowProps | undefined>>;
   readonly setSettings: Dispatch<SetStateAction<ModelSettingsPanelProps | undefined>>;
@@ -41,7 +43,9 @@ export function useProjectWorkflowActions({
   settingsBridge,
   storyBibleBridge,
   studioBridge,
+  beforeWorkspaceTransition,
   setChapterEditor,
+  clearFileEditor,
   setFileEditor,
   setProjectWorkflow,
   setSettings,
@@ -57,6 +61,7 @@ export function useProjectWorkflowActions({
         setShellState(await api.getShellState());
       }
       if (chapterBridge !== undefined && nextWorkflow.activeChapterId !== undefined) {
+        clearFileEditor?.();
         setFileEditor?.(undefined);
         setChapterEditor(undefined);
         setChapterEditor(await chapterBridge.load());
@@ -75,6 +80,7 @@ export function useProjectWorkflowActions({
     [
       api,
       chapterBridge,
+      clearFileEditor,
       settingsBridge,
       setChapterEditor,
       setFileEditor,
@@ -135,59 +141,51 @@ export function useProjectWorkflowActions({
     [setProjectWorkflow]
   );
 
+  const runWorkspaceTransition = useCallback(
+    async (operation: () => Promise<ProjectWorkflowProps>, status: "opening" | "creating") => {
+      if (beforeWorkspaceTransition !== undefined && !(await beforeWorkspaceTransition())) return;
+
+      const previous = projectWorkflowBridge?.getProps();
+      if (previous === undefined) return;
+      setProjectWorkflow({ ...previous, status });
+      try {
+        await refreshWorkspaceTransition(await operation());
+      } catch (error) {
+        restoreWorkspaceTransition(previous, error);
+      }
+    },
+    [
+      beforeWorkspaceTransition,
+      projectWorkflowBridge,
+      refreshWorkspaceTransition,
+      restoreWorkspaceTransition,
+      setProjectWorkflow
+    ]
+  );
+
   const handleOpenProject = useCallback(() => {
     if (projectWorkflowBridge === undefined) {
       return;
     }
 
-    const previous = projectWorkflowBridge.getProps();
-    setProjectWorkflow({ ...previous, status: "opening" });
-    void projectWorkflowBridge
-      .openProject()
-      .then(refreshWorkspaceTransition)
-      .catch((error: unknown) => restoreWorkspaceTransition(previous, error));
-  }, [
-    projectWorkflowBridge,
-    refreshWorkspaceTransition,
-    restoreWorkspaceTransition,
-    setProjectWorkflow
-  ]);
+    void runWorkspaceTransition(() => projectWorkflowBridge.openProject(), "opening");
+  }, [projectWorkflowBridge, runWorkspaceTransition]);
 
   const handleCreateProject = useCallback(() => {
     if (projectWorkflowBridge === undefined) {
       return;
     }
 
-    const previous = projectWorkflowBridge.getProps();
-    setProjectWorkflow({ ...previous, status: "creating" });
-    void projectWorkflowBridge
-      .createProject()
-      .then(refreshWorkspaceTransition)
-      .catch((error: unknown) => restoreWorkspaceTransition(previous, error));
-  }, [
-    projectWorkflowBridge,
-    refreshWorkspaceTransition,
-    restoreWorkspaceTransition,
-    setProjectWorkflow
-  ]);
+    void runWorkspaceTransition(() => projectWorkflowBridge.createProject(), "creating");
+  }, [projectWorkflowBridge, runWorkspaceTransition]);
 
   const handleCreateExampleProject = useCallback(() => {
     if (projectWorkflowBridge === undefined) {
       return;
     }
 
-    const previous = projectWorkflowBridge.getProps();
-    setProjectWorkflow({ ...previous, status: "creating" });
-    void projectWorkflowBridge
-      .createExampleProject()
-      .then(refreshWorkspaceTransition)
-      .catch((error: unknown) => restoreWorkspaceTransition(previous, error));
-  }, [
-    projectWorkflowBridge,
-    refreshWorkspaceTransition,
-    restoreWorkspaceTransition,
-    setProjectWorkflow
-  ]);
+    void runWorkspaceTransition(() => projectWorkflowBridge.createExampleProject(), "creating");
+  }, [projectWorkflowBridge, runWorkspaceTransition]);
 
   const handleCreateChapter = useCallback(() => {
     void projectWorkflowBridge?.createChapter().then(refreshProjectWorkflow);
@@ -221,13 +219,21 @@ export function useProjectWorkflowActions({
         .then((result) => {
           setProjectWorkflow(result.projectWorkflow);
           if (result.chapterEditor !== undefined) {
+            clearFileEditor?.();
             setFileEditor?.(undefined);
             setChapterEditor(chapterBridge?.adopt(result.chapterEditor) ?? result.chapterEditor);
           }
         })
         .catch(() => undefined);
     },
-    [chapterBridge, projectWorkflowBridge, setChapterEditor, setFileEditor, setProjectWorkflow]
+    [
+      chapterBridge,
+      clearFileEditor,
+      projectWorkflowBridge,
+      setChapterEditor,
+      setFileEditor,
+      setProjectWorkflow
+    ]
   );
 
   const handlePreviewRecoveryDraft = useCallback(

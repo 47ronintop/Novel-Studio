@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  normalizeAgentUsageRecord,
   usageRecordIdempotencyKey,
   validateAgentUsageRecord,
   type AgentUsageRecord
@@ -8,11 +9,15 @@ import {
 
 function baseRecord(overrides: Partial<AgentUsageRecord> = {}): AgentUsageRecord {
   return {
-    schemaVersion: "1.0",
+    schemaVersion: "1.1",
+    scope: {
+      kind: "workspace",
+      workspaceKind: "creativeProject",
+      workspaceId: "project_01"
+    },
     usageId: "usage_01",
     runId: "run_01",
     conversationId: "conv_01",
-    projectId: "project_01",
     roundId: "round_01",
     finalSequence: 12,
     provider: "demo",
@@ -48,6 +53,27 @@ describe("validateAgentUsageRecord", () => {
   test("accepts a well-formed record", () => {
     const result = validateAgentUsageRecord(baseRecord());
     expect(result.ok).toBe(true);
+  });
+
+  test("normalizes a legacy project record without retaining projectId", () => {
+    const legacy = {
+      ...baseRecord(),
+      schemaVersion: "1.0",
+      projectId: "legacy_project"
+    } as Record<string, unknown>;
+    delete legacy["scope"];
+
+    const normalized = normalizeAgentUsageRecord(legacy);
+
+    expect(normalized).toMatchObject({
+      schemaVersion: "1.1",
+      scope: {
+        kind: "workspace",
+        workspaceKind: "creativeProject",
+        workspaceId: "legacy_project"
+      }
+    });
+    expect("projectId" in normalized).toBe(false);
   });
 
   test("accepts a negative UTC offset (west-of-UTC timezone)", () => {

@@ -95,6 +95,12 @@ export interface CompactionInputs {
  */
 export interface CompactionArtifacts {
   readonly resultSnapshot: JsonObject;
+  /**
+   * Frozen prompt base bound to `resultSnapshot`. When present it must be persisted before the
+   * Context Snapshot pointer becomes reachable, so a crash cannot leave hydrate pointing at a
+   * prompt artifact that does not exist.
+   */
+  readonly promptMaterialization?: JsonObject;
   readonly budgetSnapshot: JsonObject;
   readonly usageRecord: JsonObject;
   readonly runSnapshot: JsonObject;
@@ -123,6 +129,10 @@ export interface CompactContextSourcesPort {
 export interface CompactionRunRepositoryPort {
   writeCompactionManifest(manifest: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
   writeCompactionRevision(revision: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
+  writePromptMaterialization?(
+    runId: string,
+    artifact: JsonObject
+  ): Promise<Result<JsonObject, UnifiedError>>;
   writeContextSnapshot(snapshot: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
   writeBudgetSnapshot(
     runId: string,
@@ -455,6 +465,16 @@ export function createAgentContextSession(
       revision as unknown as JsonObject
     );
     if (!revisionWritten.ok) return failed(revisionWritten.error);
+    if (artifacts.value.promptMaterialization !== undefined) {
+      if (runRepository.writePromptMaterialization === undefined) {
+        return failed(compactionPromptMaterializationUnavailable());
+      }
+      const promptWritten = await runRepository.writePromptMaterialization(
+        command.runId,
+        artifacts.value.promptMaterialization
+      );
+      if (!promptWritten.ok) return failed(promptWritten.error);
+    }
     const resultWritten = await runRepository.writeContextSnapshot(artifacts.value.resultSnapshot);
     if (!resultWritten.ok) return failed(resultWritten.error);
     const budgetWritten = await runRepository.writeBudgetSnapshot(
@@ -750,6 +770,17 @@ function compactionUnavailable(): UnifiedError {
     message: "Context compaction is not available for this run.",
     recoverability: "user-action",
     suggestedAction: "Retry once the compaction services are configured for this project.",
+    traceId: "agent-context-session"
+  });
+}
+
+function compactionPromptMaterializationUnavailable(): UnifiedError {
+  return createUnifiedError({
+    code: "AGENT_PROMPT_MATERIALIZATION_UNAVAILABLE",
+    category: "AgentError",
+    message: "The compacted prompt materialization cannot be persisted.",
+    recoverability: "user-action",
+    suggestedAction: "Retry once the prompt materialization repository is available.",
     traceId: "agent-context-session"
   });
 }

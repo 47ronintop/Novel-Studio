@@ -256,7 +256,11 @@ describe("desktop Agent Run runtime", () => {
     >;
     expect(record).toMatchObject({
       runId: "run-desktop-usage",
-      projectId: "project-01",
+      scope: {
+        kind: "workspace",
+        workspaceKind: "creativeProject",
+        workspaceId: "project-01"
+      },
       provider: "demo",
       model: "desktop-scripted-agent",
       inputTokens: 20,
@@ -271,6 +275,7 @@ describe("desktop Agent Run runtime", () => {
       timezone: "America/New_York",
       utcOffsetMinutes: -300
     });
+    expect(record).not.toHaveProperty("projectId");
     expect(record["usageId"]).toBe(
       `run-desktop-usage:model_round_run-desktop-usage_1:${String(record["finalSequence"])}`
     );
@@ -328,7 +333,14 @@ describe("desktop Agent Run runtime", () => {
           "utf8"
         )
       )
-    ).toMatchObject({ projectId: "project-01", conversationId });
+    ).toMatchObject({
+      scope: {
+        kind: "workspace",
+        workspaceKind: "creativeProject",
+        workspaceId: "project-01"
+      },
+      conversationId
+    });
     expect(
       JSON.parse(
         await readFile(
@@ -336,7 +348,14 @@ describe("desktop Agent Run runtime", () => {
           "utf8"
         )
       )
-    ).toMatchObject({ projectId: "project-01", conversationId });
+    ).toMatchObject({
+      scope: {
+        kind: "workspace",
+        workspaceKind: "creativeProject",
+        workspaceId: "project-01"
+      },
+      conversationId
+    });
 
     const archived = await runtime.agentConversationSession.createConversation({
       projectId: "project-01",
@@ -479,6 +498,199 @@ describe("desktop Agent Run runtime", () => {
     });
   });
 
+  test("places a checksum-matched active creative file at the dynamic prompt suffix", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-active-file-suffix-"));
+    roots.push(projectRoot);
+    await mkdir(join(projectRoot, "notes"), { recursive: true });
+    const manualContent = "Manual research context.\n";
+    const currentContent = "Current active file body.\n";
+    await writeFile(join(projectRoot, "notes", "research.md"), manualContent, "utf8");
+    await writeFile(join(projectRoot, "notes", "current.md"), currentContent, "utf8");
+    const roundMessages: Array<readonly { readonly role: string; readonly content: string }[]> = [];
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      createRunId: () => "run-active-file-suffix",
+      resolveModelStartFacts: async () => ({
+        profileId: "profile-active-file",
+        provider: "demo",
+        modelName: "active-file-model",
+        capabilities: {
+          streaming: true,
+          toolCalling: true,
+          structuredArguments: true,
+          contextWindow: 128000
+        },
+        requiredContextTokens: 8000,
+        reasoningStrength: { status: "hidden", reason: "test model" }
+      }),
+      modelDriver: {
+        async *streamRound(input) {
+          roundMessages.push(input.messages);
+          yield runtimeToolCall("finish-active-file-suffix", "finish", { summary: "Finished." });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+    const conversation = await runtime.agentConversationSession.createConversation({
+      projectId: "project-01",
+      commandId: "create-active-file-suffix-conversation"
+    });
+    expect(conversation).toMatchObject({ ok: true });
+    if (!conversation.ok) return;
+    const prepared = await runtime.agentRunDraftSession.syncStartDraft({
+      projectId: "project-01",
+      conversationId: conversation.value.conversationId,
+      commandId: "prepare-active-file-suffix-run",
+      userRequest: "Use the current project file.",
+      operationMode: "execution",
+      contextMode: "general_file",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      modelProfileId: "profile-active-file",
+      contextRefs: [],
+      activeResourceRef: {
+        kind: "project_file",
+        refId: "file:notes/current.md",
+        relativePath: "notes/current.md",
+        label: "Current",
+        expectedChecksum: sha256(currentContent)
+      }
+    });
+    expect(prepared).toMatchObject({ ok: true });
+    if (!prepared.ok) return;
+    const withManualRef = await runtime.agentRunDraftSession.updateContextDraft({
+      projectId: "project-01",
+      conversationId: conversation.value.conversationId,
+      commandId: "add-manual-active-file-suffix-ref",
+      contextDraftId: prepared.value.contextDraft.contextDraftId,
+      expectedDraftRevision: prepared.value.contextDraft.revision,
+      mutation: {
+        kind: "add_ref",
+        ref: {
+          kind: "project_file",
+          refId: "file:notes/research.md",
+          relativePath: "notes/research.md",
+          label: "Research"
+        }
+      }
+    });
+    expect(withManualRef).toMatchObject({ ok: true });
+    if (!withManualRef.ok) return;
+
+    expect(
+      await runtime.agentRunSession.startAgentRun({
+        projectId: "project-01",
+        conversationId: conversation.value.conversationId,
+        commandId: "start-active-file-suffix-run",
+        expectedRunRevision: 0,
+        runDraftId: withManualRef.value.runDraft.runDraftId,
+        runDraftRevision: withManualRef.value.runDraft.revision,
+        runDraftChecksum: withManualRef.value.runDraft.checksum
+      })
+    ).toMatchObject({ ok: true });
+    await vi.waitFor(async () => {
+      expect(await runtime.agentRunSession.readAgentRun("run-active-file-suffix")).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+
+    const firstRoundMessages = roundMessages[0] ?? [];
+    const requestIndex = firstRoundMessages.findIndex(
+      (message) => message.role === "user" && message.content === "Use the current project file."
+    );
+    const activeIndex = firstRoundMessages.findIndex((message) =>
+      message.content.includes("Current active file body.")
+    );
+    const manualIndex = firstRoundMessages.findIndex((message) =>
+      message.content.includes("Manual research context.")
+    );
+    expect(requestIndex).toBeGreaterThanOrEqual(0);
+    expect(manualIndex).toBeGreaterThan(requestIndex);
+    expect(activeIndex).toBeGreaterThan(manualIndex);
+    expect(firstRoundMessages.at(-1)?.content).toContain("Current active file body.");
+  });
+
+  test("fails closed when an active creative file changes after its checksum is captured", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-active-file-stale-"));
+    roots.push(projectRoot);
+    await mkdir(join(projectRoot, "notes"), { recursive: true });
+    const savedContent = "Saved active file body.\n";
+    await writeFile(join(projectRoot, "notes", "current.md"), savedContent, "utf8");
+    let modelRounds = 0;
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      createRunId: () => "run-active-file-stale",
+      resolveModelStartFacts: async () => ({
+        profileId: "profile-active-file",
+        provider: "demo",
+        modelName: "active-file-model",
+        capabilities: {
+          streaming: true,
+          toolCalling: true,
+          structuredArguments: true,
+          contextWindow: 128000
+        },
+        requiredContextTokens: 8000,
+        reasoningStrength: { status: "hidden", reason: "test model" }
+      }),
+      modelDriver: {
+        async *streamRound() {
+          modelRounds += 1;
+          yield runtimeToolCall("finish-active-file-stale", "finish", { summary: "Unexpected." });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+    const conversation = await runtime.agentConversationSession.createConversation({
+      projectId: "project-01",
+      commandId: "create-active-file-stale-conversation"
+    });
+    expect(conversation).toMatchObject({ ok: true });
+    if (!conversation.ok) return;
+    const prepared = await runtime.agentRunDraftSession.syncStartDraft({
+      projectId: "project-01",
+      conversationId: conversation.value.conversationId,
+      commandId: "prepare-active-file-stale-run",
+      userRequest: "Use the active project file.",
+      operationMode: "execution",
+      contextMode: "general_file",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      modelProfileId: "profile-active-file",
+      contextRefs: [],
+      activeResourceRef: {
+        kind: "project_file",
+        refId: "file:notes/current.md",
+        relativePath: "notes/current.md",
+        label: "Current",
+        expectedChecksum: sha256(savedContent)
+      }
+    });
+    expect(prepared).toMatchObject({ ok: true });
+    if (!prepared.ok) return;
+    await writeFile(join(projectRoot, "notes", "current.md"), "Externally changed body.\n", "utf8");
+
+    await expect(
+      runtime.agentRunSession.startAgentRun({
+        projectId: "project-01",
+        conversationId: conversation.value.conversationId,
+        commandId: "start-active-file-stale-run",
+        expectedRunRevision: 0,
+        runDraftId: prepared.value.runDraft.runDraftId,
+        runDraftRevision: prepared.value.runDraft.revision,
+        runDraftChecksum: prepared.value.runDraft.checksum
+      })
+    ).resolves.toMatchObject({ ok: false, error: { code: "AGENT_CONTEXT_STALE" } });
+    expect(modelRounds).toBe(0);
+  });
+
   test("injects and indexes persisted context from earlier runs in the same conversation", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-context-"));
     roots.push(projectRoot);
@@ -539,7 +751,7 @@ describe("desktop Agent Run runtime", () => {
     expect(roundMessages[1]).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          role: "system",
+          role: "user",
           content: expect.stringContaining("Untrusted conversation context")
         })
       ])
@@ -1215,7 +1427,7 @@ describe("desktop Agent Run runtime", () => {
     expect(await readFile(notesPath, "utf8")).toBe(notes);
   });
 
-  test("applies and undoes v2 lifecycle proposals through the trusted creative fallback", async () => {
+  test("applies allowed v2 file lifecycle proposals and rejects managed creative resources", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-v2-lifecycle-"));
     roots.push(projectRoot);
     const sourcePath = join(projectRoot, "draft.md");
@@ -1226,8 +1438,6 @@ describe("desktop Agent Run runtime", () => {
     const source = "Move this draft.\n";
     const obsolete = "Remove this file.\n";
     const created = "Created by the agent.\n";
-    const chapterBody = "雨夜里，故事开始了。";
-    const storyBible = JSON.stringify({ id: "hero", type: "character", name: "Lin" });
     await mkdir(join(projectRoot, "chapters"), { recursive: true });
     await mkdir(join(projectRoot, "characters"), { recursive: true });
     await writeFile(sourcePath, source, "utf8");
@@ -1255,12 +1465,12 @@ describe("desktop Agent Run runtime", () => {
             yield runtimeToolCall("create-v2-chapter", "create_resource", {
               kind: "chapter",
               title: "第一章",
-              content: chapterBody
+              content: "雨夜里，故事开始了。"
             });
             yield runtimeToolCall("create-v2-story-bible", "create_resource", {
               kind: "story_bible",
               assetType: "character",
-              content: storyBible
+              content: JSON.stringify({ id: "hero", type: "character", name: "Lin" })
             });
             yield runtimeToolCall("create-v2-file", "create_resource", {
               kind: "file",
@@ -1298,23 +1508,30 @@ describe("desktop Agent Run runtime", () => {
     await session.startAgentRun(executionCommand("general_file"));
     let awaitingRevision = 0;
     let changeSet: Record<string, unknown> | undefined;
-    let chapterRelativePath = "";
     await vi.waitFor(async () => {
       const read = await session.readAgentRun("run-desktop-v2-lifecycle");
       expect(read).toMatchObject({
         ok: true,
         value: {
           snapshot: { status: "awaiting_write_approval" },
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_failed",
+              detail: expect.objectContaining({
+                toolCallId: "create-v2-chapter",
+                code: "AGENT_CONTEXT_PROFILE_TOOL_REJECTED"
+              })
+            }),
+            expect.objectContaining({
+              type: "tool_failed",
+              detail: expect.objectContaining({
+                toolCallId: "create-v2-story-bible",
+                code: "AGENT_CONTEXT_PROFILE_TOOL_REJECTED"
+              })
+            })
+          ]),
           changeSet: {
             operations: expect.arrayContaining([
-              expect.objectContaining({
-                kind: "create_file",
-                relativePath: expect.stringMatching(/^chapters\/ch_[A-Za-z0-9_-]+\.md$/u)
-              }),
-              expect.objectContaining({
-                kind: "create_file",
-                relativePath: "characters/hero.json"
-              }),
               expect.objectContaining({ kind: "create_file", relativePath: "created.txt" }),
               expect.objectContaining({ kind: "create_directory", relativePath: "assets" }),
               expect.objectContaining({
@@ -1332,21 +1549,12 @@ describe("desktop Agent Run runtime", () => {
       };
       awaitingRevision = value.value.snapshot.runRevision;
       changeSet = value.value.changeSet;
-      const operations = value.value.changeSet["operations"] as readonly Record<string, unknown>[];
-      chapterRelativePath = String(
-        operations.find((operation) =>
-          String(operation["relativePath"]).startsWith("chapters/ch_")
-        )?.["relativePath"] ?? ""
-      );
     });
-    expect(chapterRelativePath).toMatch(/^chapters\/ch_[A-Za-z0-9_-]+\.md$/u);
     expect(await readFile(sourcePath, "utf8")).toBe(source);
     expect(await readFile(obsoletePath, "utf8")).toBe(obsolete);
     expect(await readdir(projectRoot)).not.toContain("created.txt");
     expect(await readdir(projectRoot)).not.toContain("assets");
-    await expect(readFile(join(projectRoot, chapterRelativePath), "utf8")).rejects.toMatchObject({
-      code: "ENOENT"
-    });
+    expect(await readdir(join(projectRoot, "chapters"))).toEqual([]);
     await expect(readFile(storyBiblePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     if (changeSet === undefined) throw new Error("Expected a staged lifecycle Change Set.");
 
@@ -1368,11 +1576,8 @@ describe("desktop Agent Run runtime", () => {
       });
     });
     expect(await readFile(createdPath, "utf8")).toBe(created);
-    expect(await readFile(join(projectRoot, chapterRelativePath), "utf8")).toContain(
-      'title: "第一章"'
-    );
-    expect(await readFile(join(projectRoot, chapterRelativePath), "utf8")).toContain(chapterBody);
-    expect(await readFile(storyBiblePath, "utf8")).toBe(storyBible);
+    expect(await readdir(join(projectRoot, "chapters"))).toEqual([]);
+    await expect(readFile(storyBiblePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     expect(await readFile(movedPath, "utf8")).toBe(source);
     await expect(readFile(sourcePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     await expect(readFile(obsoletePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
@@ -1392,15 +1597,13 @@ describe("desktop Agent Run runtime", () => {
     expect(await readFile(sourcePath, "utf8")).toBe(source);
     expect(await readFile(obsoletePath, "utf8")).toBe(obsolete);
     await expect(readFile(createdPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(readFile(join(projectRoot, chapterRelativePath), "utf8")).rejects.toMatchObject({
-      code: "ENOENT"
-    });
+    expect(await readdir(join(projectRoot, "chapters"))).toEqual([]);
     await expect(readFile(storyBiblePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     await expect(readFile(movedPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     expect(await readdir(projectRoot)).not.toContain("assets");
   });
 
-  test("rejects a syntax-valid settings candidate that fails the existing settings schema", async () => {
+  test("rejects managed settings paths before creating a general-file Change Set", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-agent-schema-"));
     roots.push(projectRoot);
     const settingsPath = join(projectRoot, "settings.json");
@@ -1437,23 +1640,140 @@ describe("desktop Agent Run runtime", () => {
       expect(await session.readAgentRun("run-desktop-settings-schema")).toMatchObject({
         ok: true,
         value: {
-          snapshot: { status: "awaiting_write_approval" },
-          changeSet: {
-            files: [
-              {
-                relativePath: "settings.json",
-                validation: {
-                  valid: false,
-                  syntax: { status: "valid" },
-                  schema: { status: "invalid" }
-                }
-              }
-            ]
-          }
+          snapshot: { status: "failed" },
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_failed",
+              detail: expect.objectContaining({
+                toolCallId: "proposal-settings",
+                code: "CREATIVE_PROJECT_FILE_PATH_REJECTED"
+              })
+            })
+          ])
         }
       });
     });
+    const rejected = await session.readAgentRun("run-desktop-settings-schema");
+    expect(rejected).not.toMatchObject({ value: { changeSet: expect.anything() } });
     expect(await readFile(settingsPath, "utf8")).toBe(settings);
+  });
+
+  test("rejects managed creative reads and directory lists before repository execution", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-managed-reads-"));
+    roots.push(projectRoot);
+    await mkdir(join(projectRoot, "chapters"), { recursive: true });
+    await writeFile(join(projectRoot, "settings.json"), "managed secret\n", "utf8");
+    let round = 0;
+    const session = createDesktopRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      activeChapterId: "chapter-unused",
+      createRunId: () => "run-desktop-managed-reads",
+      modelDriver: {
+        async *streamRound(input) {
+          round += 1;
+          if (round === 1) {
+            yield runtimeToolCall("read-managed-settings", "read_resource", {
+              ref: "file:settings.json"
+            });
+            yield runtimeToolCall("list-managed-chapters", "list_project_entries", {
+              path: "chapters"
+            });
+          } else {
+            const toolPayload = input.messages
+              .filter((message) => message.role === "tool")
+              .map((message) => message.content)
+              .join("\n");
+            expect(toolPayload).toContain("CREATIVE_PROJECT_FILE_PATH_REJECTED");
+            expect(toolPayload).not.toContain("managed secret");
+            yield runtimeToolCall("finish-managed-reads", "finish", { summary: "Rejected." });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+
+    await session.startAgentRun(executionCommand("general_file"));
+
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run-desktop-managed-reads")).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: { status: "completed" },
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_failed",
+              detail: expect.objectContaining({
+                toolCallId: "read-managed-settings",
+                code: "CREATIVE_PROJECT_FILE_PATH_REJECTED"
+              })
+            }),
+            expect.objectContaining({
+              type: "tool_failed",
+              detail: expect.objectContaining({
+                toolCallId: "list-managed-chapters",
+                code: "CREATIVE_PROJECT_FILE_PATH_REJECTED"
+              })
+            })
+          ])
+        }
+      });
+    });
+  });
+
+  test("filters managed creative paths from Agent search results", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-managed-search-"));
+    roots.push(projectRoot);
+    await mkdir(join(projectRoot, "chapters"), { recursive: true });
+    await mkdir(join(projectRoot, "notes"), { recursive: true });
+    await writeFile(join(projectRoot, "settings.json"), "visibilityneedle managed\n", "utf8");
+    await writeFile(join(projectRoot, "notes", "visible.md"), "visibilityneedle visible\n", "utf8");
+    let round = 0;
+    let observedToolPayload = "";
+    const session = createDesktopRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      activeChapterId: "chapter-unused",
+      createRunId: () => "run-desktop-managed-search",
+      featureFlags: createAgentFeatureFlags({
+        phaseA_searchEnabled: true,
+        revision: "desktop-managed-search-test"
+      }),
+      modelDriver: {
+        async *streamRound(input) {
+          round += 1;
+          if (round === 1) {
+            yield runtimeToolCall("search-managed-paths", "search_project", {
+              mode: "text",
+              query: "visibilityneedle",
+              maxResults: 10
+            });
+          } else {
+            observedToolPayload = input.messages
+              .filter((message) => message.role === "tool")
+              .map((message) => message.content)
+              .join("\n");
+            yield runtimeToolCall("finish-managed-search", "finish", { summary: "Filtered." });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+
+    await session.startAgentRun(executionCommand("general_file"));
+
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run-desktop-managed-search")).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed", contextMode: "general_file" } }
+      });
+    });
+    expect(observedToolPayload).toContain("notes/visible.md");
+    expect(observedToolPayload).not.toContain("settings.json");
   });
 
   test("composes the repository-backed search executor into the production runtime", async () => {
@@ -1625,11 +1945,15 @@ function desktopUsageRecord(
   finalSequence: number
 ): Record<string, unknown> {
   return {
-    schemaVersion: "1.0",
+    schemaVersion: "1.1",
+    scope: {
+      kind: "workspace",
+      workspaceKind: "creativeProject",
+      workspaceId: "project-01"
+    },
     usageId: `run_desktop:${roundId}:${String(finalSequence)}`,
     runId: "run_desktop",
     conversationId: "conversation_desktop",
-    projectId: "project-01",
     roundId,
     finalSequence,
     provider: "demo",

@@ -1,5 +1,12 @@
-import type { NovelStudioApi } from "@novel-studio/application";
+import type { NovelStudioApi, UserPreferencesSaveInput } from "@novel-studio/application";
+import {
+  STANDALONE_AGENT_CONTEXT_SCOPE,
+  agentContextScopeKey,
+  normalizeAgentContextScope,
+  type AgentContextScope
+} from "@novel-studio/agent-engine";
 import type {
+  AgentComposerProps,
   AgentComposerQuickAction,
   AgentConversationMainReview,
   AgentConversationWorkspaceShellProps,
@@ -8,7 +15,16 @@ import type {
   ChapterEditorProps,
   ChapterEditorSelection
 } from "@novel-studio/ui";
-import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction
+} from "react";
 
 import {
   createAgentConversationBridge,
@@ -17,6 +33,7 @@ import {
 import type { AgentRunBridge, AgentRunBridgeContext } from "./agent-run-bridge.js";
 
 export interface AgentConversationWorkspaceState {
+  readonly scope: AgentContextScope | undefined;
   readonly selectedConversationId: string | undefined;
   readonly workspace: AgentConversationWorkspaceShellProps | undefined;
 }
@@ -31,10 +48,44 @@ export interface AgentConversationWorkspacePresentation {
   readonly shouldClearPendingMainReview: boolean;
 }
 
+export interface StandaloneConversationSelection {
+  readonly getSelectedConversationId: () => string | undefined;
+  readonly onSelectedConversationIdChange: (conversationId: string | undefined) => void;
+  readonly setSelectedConversationId: Dispatch<SetStateAction<string | undefined>>;
+}
+
+export function useStandaloneConversationSelection(
+  persistUserPreferences: (input: UserPreferencesSaveInput) => void
+): StandaloneConversationSelection {
+  const [selectedConversationId, setSelectedConversationId] = useState<string | undefined>();
+  const selectedConversationIdRef = useRef<string | undefined>(undefined);
+  selectedConversationIdRef.current = selectedConversationId;
+  const getSelectedConversationId = useCallback(() => selectedConversationIdRef.current, []);
+  const onSelectedConversationIdChange = useCallback(
+    (conversationId: string | undefined) => {
+      selectedConversationIdRef.current = conversationId;
+      setSelectedConversationId(conversationId);
+      persistUserPreferences({
+        shell: { standaloneSelectedConversationId: conversationId ?? "" }
+      });
+    },
+    [persistUserPreferences]
+  );
+  return {
+    getSelectedConversationId,
+    onSelectedConversationIdChange,
+    setSelectedConversationId
+  };
+}
+
 export function useAgentRunWorkspaceEffects(input: {
   readonly agentRunBridge: AgentRunBridge | undefined;
+  readonly scope?: AgentContextScope;
   readonly projectId: string | undefined;
   readonly workspaceKind: "creativeProject" | "engineeringWorkspace" | "none";
+  readonly surfaceContextMode?: AgentRunBridgeContext["surfaceContextMode"];
+  readonly activeResourceRef?: AgentRunBridgeContext["activeResourceRef"];
+  readonly beforeStart?: AgentRunBridgeContext["beforeStart"];
   readonly conversationId: string | undefined;
   readonly activeChapterId: string | undefined;
   readonly chapterEditor: AgentRunBridgeContext["chapterEditor"];
@@ -44,8 +95,12 @@ export function useAgentRunWorkspaceEffects(input: {
 }): void {
   const {
     agentRunBridge,
+    scope: suppliedScope,
     projectId,
     workspaceKind,
+    surfaceContextMode,
+    activeResourceRef,
+    beforeStart,
     conversationId,
     activeChapterId,
     chapterEditor,
@@ -53,20 +108,28 @@ export function useAgentRunWorkspaceEffects(input: {
     settings,
     onAgentRunChange
   } = input;
+  const scope = resolveWorkspaceScope(suppliedScope, projectId, workspaceKind);
+  const scopeKey = scope === undefined ? undefined : agentContextScopeKey(scope);
 
   useLayoutEffect(() => {
-    if (agentRunBridge === undefined || projectId === undefined) {
+    if (agentRunBridge === undefined || scope === undefined) {
       onAgentRunChange(undefined);
       return;
     }
 
     const next = agentRunBridge.syncContext({
-      projectId,
-      workspaceKind: workspaceKind === "engineeringWorkspace" ? workspaceKind : "creativeProject",
+      scope,
+      ...(scope.kind === "workspace" ? { projectId: scope.workspaceId } : {}),
+      ...(scope.kind === "workspace" ? { workspaceKind: scope.workspaceKind } : {}),
+      ...(scope.kind === "standalone" || surfaceContextMode === undefined
+        ? {}
+        : { surfaceContextMode }),
+      ...(scope.kind === "standalone" ? {} : { activeResourceRef: activeResourceRef ?? null }),
+      ...(scope.kind === "standalone" || beforeStart === undefined ? {} : { beforeStart }),
       ...(conversationId === undefined ? {} : { conversationId }),
-      ...(activeChapterId === undefined ? {} : { activeChapterId }),
-      ...(chapterEditor === undefined ? {} : { chapterEditor }),
-      ...(fileEditor === undefined ? {} : { fileEditor }),
+      ...(scope.kind === "standalone" || activeChapterId === undefined ? {} : { activeChapterId }),
+      ...(scope.kind === "standalone" || chapterEditor === undefined ? {} : { chapterEditor }),
+      ...(scope.kind === "standalone" || fileEditor === undefined ? {} : { fileEditor }),
       ...(settings === undefined ? {} : { settings })
     });
     onAgentRunChange(next);
@@ -76,23 +139,26 @@ export function useAgentRunWorkspaceEffects(input: {
     chapterEditor,
     conversationId,
     fileEditor,
+    activeResourceRef,
+    beforeStart,
     onAgentRunChange,
-    projectId,
+    scopeKey,
     settings,
+    surfaceContextMode,
     workspaceKind
   ]);
 
   useEffect(() => {
-    if (agentRunBridge === undefined || projectId === undefined) return;
+    if (agentRunBridge === undefined || scope === undefined) return;
     return agentRunBridge.subscribe(() => {
       onAgentRunChange(agentRunBridge.getProps());
     });
-  }, [agentRunBridge, onAgentRunChange, projectId]);
+  }, [agentRunBridge, onAgentRunChange, scopeKey]);
 
   useEffect(() => {
-    if (agentRunBridge === undefined || projectId === undefined) return;
-    void agentRunBridge.load(projectId).then(onAgentRunChange);
-  }, [agentRunBridge, onAgentRunChange, projectId]);
+    if (agentRunBridge === undefined || scope === undefined) return;
+    void agentRunBridge.load(scope).then(onAgentRunChange);
+  }, [agentRunBridge, onAgentRunChange, scopeKey]);
 }
 
 export function decorateAgentConversationWorkspace(input: {
@@ -110,11 +176,14 @@ export function decorateAgentConversationWorkspace(input: {
   const workspace = input.workspace;
   if (workspace === undefined) return undefined;
 
+  const standalone = input.workspaceKind === "none";
   const creative = input.workspaceKind === "creativeProject";
-  const availableContextModes = creative
-    ? (["writing", "general_file"] as const)
-    : (["general_file"] as const);
-  const selection = input.aiWritingWorkflow?.selectionReview;
+  const availableContextModes = standalone
+    ? (["standalone_chat"] as const)
+    : creative
+      ? (["writing", "general_file"] as const)
+      : (["general_file"] as const);
+  const selection = standalone ? undefined : input.aiWritingWorkflow?.selectionReview;
   const hasSelection =
     input.chapterEditor !== undefined &&
     input.chapterSelection !== undefined &&
@@ -164,14 +233,16 @@ export function decorateAgentConversationWorkspace(input: {
   const composer =
     baseComposer === undefined
       ? undefined
-      : {
-          ...baseComposer,
-          contextMode: availableContextModes.some((mode) => mode === baseComposer.contextMode)
-            ? baseComposer.contextMode
-            : "general_file",
-          availableContextModes,
-          ...(quickActions === undefined ? {} : { quickActions })
-        };
+      : standalone
+        ? standaloneComposer(baseComposer)
+        : {
+            ...baseComposer,
+            contextMode: availableContextModes.some((mode) => mode === baseComposer.contextMode)
+              ? baseComposer.contextMode
+              : "general_file",
+            availableContextModes,
+            ...(quickActions === undefined ? {} : { quickActions })
+          };
   const workflowNotice =
     selection === undefined ? input.aiWritingWorkflow?.failure?.message : undefined;
   return {
@@ -188,24 +259,45 @@ export function decorateAgentConversationWorkspace(input: {
   };
 }
 
+function standaloneComposer(base: AgentComposerProps): AgentComposerProps {
+  const {
+    quickActions: _quickActions,
+    references: _references,
+    contextStatus: _contextStatus,
+    permission: _permission,
+    ...rest
+  } = base;
+  void _quickActions;
+  void _references;
+  void _contextStatus;
+  void _permission;
+  return {
+    ...rest,
+    operationMode: "conversation",
+    contextMode: "standalone_chat",
+    availableContextModes: ["standalone_chat"],
+    onOperationModeChange: () => undefined,
+    onContextModeChange: () => undefined,
+    onWritePolicyChange: () => undefined
+  };
+}
+
 export function resolveAgentConversationWorkspacePresentation(
   workspace: AgentConversationWorkspaceShellProps | undefined,
   activeProjectId: string | undefined,
-  pendingMainReview: PendingAgentConversationMainReview | undefined
+  pendingMainReview: PendingAgentConversationMainReview | undefined,
+  activeScope?: AgentContextScope
 ): AgentConversationWorkspacePresentation {
   if (activeProjectId === undefined) {
     return {
-      workspace: undefined,
+      workspace: activeScope?.kind === "standalone" ? workspace : undefined,
       shouldClearPendingMainReview: pendingMainReview !== undefined
     };
   }
   if (pendingMainReview === undefined) {
     return { workspace, shouldClearPendingMainReview: false };
   }
-  if (
-    pendingMainReview.projectId !== activeProjectId ||
-    workspace?.mainReview !== undefined
-  ) {
+  if (pendingMainReview.projectId !== activeProjectId || workspace?.mainReview !== undefined) {
     return { workspace, shouldClearPendingMainReview: true };
   }
   if (workspace === undefined) {
@@ -221,19 +313,50 @@ export function useAgentConversationWorkspace(input: {
   readonly api: NovelStudioApi | undefined;
   readonly agentRunBridge: AgentRunBridge | undefined;
   readonly agentRun: AgentRunPanelProps | undefined;
+  readonly scope?: AgentContextScope;
   readonly projectId: string | undefined;
+  readonly workspaceKind?: "creativeProject" | "engineeringWorkspace" | "none";
   readonly onAgentRunChange: (agentRun: AgentRunPanelProps) => void;
   readonly onOpenMainReview: (review: AgentConversationMainReview) => void;
+  readonly getStandaloneSelectedConversationId?: () => string | undefined;
+  readonly onStandaloneSelectedConversationIdChange?: (
+    conversationId: string | undefined
+  ) => void | Promise<void>;
 }): AgentConversationWorkspaceState {
-  const { api, agentRunBridge, agentRun, projectId, onAgentRunChange, onOpenMainReview } = input;
+  const {
+    api,
+    agentRunBridge,
+    agentRun,
+    scope: suppliedScope,
+    projectId,
+    workspaceKind,
+    onAgentRunChange,
+    onOpenMainReview,
+    getStandaloneSelectedConversationId,
+    onStandaloneSelectedConversationIdChange
+  } = input;
+  const scope = resolveWorkspaceScope(suppliedScope, projectId, workspaceKind);
+  const scopeKey = scope === undefined ? undefined : agentContextScopeKey(scope);
   const bridge = useMemo(
     () =>
-      api === undefined || agentRunBridge === undefined || projectId === undefined
+      api === undefined || agentRunBridge === undefined || scope === undefined
         ? undefined
         : createAgentConversationBridge(api, {
-            resetRunWriteAuthorization: () => agentRunBridge.resetWriteAuthorization()
+            resetRunWriteAuthorization: () => agentRunBridge.resetWriteAuthorization(),
+            ...(getStandaloneSelectedConversationId === undefined
+              ? {}
+              : { getStandaloneSelectedConversationId }),
+            ...(onStandaloneSelectedConversationIdChange === undefined
+              ? {}
+              : { onStandaloneSelectedConversationIdChange })
           }),
-    [agentRunBridge, api, projectId]
+    [
+      agentRunBridge,
+      api,
+      getStandaloneSelectedConversationId,
+      onStandaloneSelectedConversationIdChange,
+      scopeKey
+    ]
   );
   const [conversation, setConversation] = useState(() => bridge?.getProps());
 
@@ -243,14 +366,14 @@ export function useAgentConversationWorkspace(input: {
   }, [bridge]);
 
   useEffect(() => {
-    if (bridge === undefined || projectId === undefined) return;
+    if (bridge === undefined || scope === undefined) return;
     return bridge.subscribe(() => setConversation(bridge.getProps()));
-  }, [bridge]);
+  }, [bridge, scopeKey]);
 
   useEffect(() => {
-    if (bridge === undefined || projectId === undefined) return;
-    void bridge.load(projectId).then(setConversation);
-  }, [bridge, projectId]);
+    if (bridge === undefined || scope === undefined) return;
+    void bridge.load(scope).then(setConversation);
+  }, [bridge, scopeKey]);
 
   useEffect(() => {
     if (agentRunBridge === undefined || conversation === undefined) return;
@@ -265,13 +388,14 @@ export function useAgentConversationWorkspace(input: {
   ]);
 
   if (conversation === undefined) {
-    return { selectedConversationId: undefined, workspace: undefined };
+    return { scope, selectedConversationId: undefined, workspace: undefined };
   }
 
   const apply = (operation: Promise<typeof conversation>): void => {
     void operation.then(setConversation);
   };
   return {
+    scope,
     selectedConversationId: conversation.selectedConversationId,
     workspace: toAgentConversationWorkspaceProps(
       conversation,
@@ -308,4 +432,35 @@ export function useAgentConversationWorkspace(input: {
       }
     )
   };
+}
+
+function resolveWorkspaceScope(
+  suppliedScope: AgentContextScope | undefined,
+  projectId: string | undefined,
+  workspaceKind: "creativeProject" | "engineeringWorkspace" | "none" | undefined
+): AgentContextScope | undefined {
+  if (suppliedScope !== undefined) {
+    const scope = normalizeAgentContextScope(suppliedScope);
+    if (scope.kind === "standalone") {
+      if (projectId !== undefined || (workspaceKind !== undefined && workspaceKind !== "none")) {
+        throw new Error("Standalone Agent scope must not include workspace identity.");
+      }
+      return scope;
+    }
+    if (projectId !== undefined && projectId !== scope.workspaceId) {
+      throw new Error("Agent scope and projectId do not match.");
+    }
+    if (workspaceKind !== undefined && workspaceKind !== scope.workspaceKind) {
+      throw new Error("Agent scope and workspace kind do not match.");
+    }
+    return scope;
+  }
+  if (projectId !== undefined) {
+    return normalizeAgentContextScope(
+      undefined,
+      projectId,
+      workspaceKind === "engineeringWorkspace" ? "engineeringWorkspace" : "creativeProject"
+    );
+  }
+  return workspaceKind === "none" ? STANDALONE_AGENT_CONTEXT_SCOPE : undefined;
 }

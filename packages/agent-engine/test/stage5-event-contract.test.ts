@@ -46,10 +46,16 @@ const v10Snapshot: AgentRunSnapshotV10 = {
 };
 
 describe("Stage 5 run/context contract normalization", () => {
-  test("normalizes a v1.0 run snapshot into the v1.1 view with Stage 5 defaults", () => {
+  test("normalizes a v1.0 run snapshot into the scope-aware v1.2 view", () => {
     const normalized = normalizeAgentRunSnapshot(asJson(v10Snapshot));
 
-    expect(normalized.schemaVersion).toBe("1.1");
+    expect(normalized.schemaVersion).toBe("1.2");
+    expect(normalized.scope).toEqual({
+      kind: "workspace",
+      workspaceKind: "creativeProject",
+      workspaceId: "project_01"
+    });
+    expect(JSON.stringify(normalized)).not.toContain('"projectId"');
     // modelProfileId is a deliberate hoist of providerCapabilitySnapshot.profileId.
     expect(normalized.modelProfileId).toBe("model_01");
     expect(normalized.reasoningEffort).toBeUndefined();
@@ -74,7 +80,7 @@ describe("Stage 5 run/context contract normalization", () => {
     expect(normalized.conversationId).toBeNull();
   });
 
-  test("returns a complete v1.1 run snapshot unchanged", () => {
+  test("preserves v1.1 fields while adding the v1.2 scope fields", () => {
     const v11: AgentRunSnapshotV11 = {
       ...v10Snapshot,
       schemaVersion: "1.1",
@@ -100,12 +106,23 @@ describe("Stage 5 run/context contract normalization", () => {
       }
     };
     const normalized = normalizeAgentRunSnapshot(asJson(v11));
-    expect(normalized).toEqual(v11);
+    expect(normalized).toMatchObject({
+      schemaVersion: "1.2",
+      scope: {
+        kind: "workspace",
+        workspaceKind: "creativeProject",
+        workspaceId: "project_01"
+      },
+      permissionSummaryId: "perm_01",
+      activeCompactionId: "compaction_01",
+      recoveryState: "recovery_review",
+      usageSummary: v11.usageSummary
+    });
     // The v1.1 waiting states survive normalization.
     expect(normalized.status).toBe("context_compacting");
   });
 
-  test("normalizes a v1.0 event to the v1.1 view and keeps a v1.1 event intact", () => {
+  test("normalizes legacy events to the scope-aware v1.3 view", () => {
     const v10Event = {
       schemaVersion: "1.0",
       runId: "run_01",
@@ -115,7 +132,14 @@ describe("Stage 5 run/context contract normalization", () => {
       type: "tool_started",
       createdAt: "2026-07-13T00:00:01.000Z"
     };
-    expect(normalizeAgentRunEvent(v10Event).schemaVersion).toBe("1.1");
+    expect(normalizeAgentRunEvent(v10Event)).toMatchObject({
+      schemaVersion: "1.3",
+      scope: {
+        kind: "workspace",
+        workspaceKind: "creativeProject",
+        workspaceId: "project_01"
+      }
+    });
 
     const v11Event = {
       schemaVersion: "1.1",
@@ -126,7 +150,15 @@ describe("Stage 5 run/context contract normalization", () => {
       type: "context_compaction_started",
       createdAt: "2026-07-13T00:00:02.000Z"
     };
-    expect(normalizeAgentRunEvent(v11Event)).toEqual(v11Event);
+    expect(normalizeAgentRunEvent(v11Event)).toMatchObject({
+      schemaVersion: "1.3",
+      type: "context_compaction_started",
+      scope: {
+        kind: "workspace",
+        workspaceKind: "creativeProject",
+        workspaceId: "project_01"
+      }
+    });
   });
 
   test("normalizes a v1.0 context snapshot into per-source v1.1 accounting fields", () => {
@@ -148,8 +180,11 @@ describe("Stage 5 run/context contract normalization", () => {
       ],
       excludedSources: []
     };
-    const normalized = normalizeAgentContextSnapshot(asJson(v10Context));
-    expect(normalized.schemaVersion).toBe("1.1");
+    const normalized = normalizeAgentContextSnapshot(asJson(v10Context), {
+      scope: { kind: "workspace", workspaceKind: "creativeProject", workspaceId: "project_01" },
+      contextProfileId: "writing"
+    });
+    expect(normalized.schemaVersion).toBe("1.2");
     const source = normalized.sources[0];
     expect(source).toMatchObject({
       layer: "tool_result",
@@ -163,10 +198,19 @@ describe("Stage 5 run/context contract normalization", () => {
     expect(source?.checksum).toBe("a".repeat(64));
   });
 
-  test("createAgentContextSnapshot authors a v1.1 snapshot", () => {
+  test("createAgentContextSnapshot authors a v1.2 snapshot", () => {
     const snapshot = createAgentContextSnapshot({
       contextSnapshotId: "context_02",
       runId: "run_01",
+      scope: { kind: "workspace", workspaceKind: "creativeProject", workspaceId: "project_01" },
+      contextProfileId: "writing",
+      materialization: {
+        schemaVersion: "1.0",
+        profileVersion: "1.0",
+        guidanceTemplateChecksum: "guidance",
+        stablePrefixChecksum: "prefix",
+        messageOrderVersion: "1.0"
+      },
       createdAt: "2026-07-13T00:00:00.000Z",
       sources: [
         {
@@ -178,7 +222,7 @@ describe("Stage 5 run/context contract normalization", () => {
         }
       ]
     });
-    expect(snapshot.schemaVersion).toBe("1.1");
+    expect(snapshot.schemaVersion).toBe("1.2");
     expect(snapshot.sources[0]?.layer).toBe("editor");
     expect(snapshot.sources[0]?.state).toBe("active");
   });
@@ -197,6 +241,15 @@ describe("Stage 5 run/context contract normalization", () => {
     const contextView = createAgentContextSnapshot({
       contextSnapshotId: "context_03",
       runId: "run_01",
+      scope: { kind: "workspace", workspaceKind: "creativeProject", workspaceId: "project_01" },
+      contextProfileId: "writing",
+      materialization: {
+        schemaVersion: "1.0",
+        profileVersion: "1.0",
+        guidanceTemplateChecksum: "guidance",
+        stablePrefixChecksum: "prefix",
+        messageOrderVersion: "1.0"
+      },
       createdAt: "2026-07-13T00:00:00.000Z",
       sources: []
     });

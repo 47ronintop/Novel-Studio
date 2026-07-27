@@ -8,6 +8,7 @@
   "exports": {
     ".": {
       "types": "./src/index.ts",
+      "browser": "./dist/src/browser-index.js",
       "default": "./dist/src/index.js"
     }
   },

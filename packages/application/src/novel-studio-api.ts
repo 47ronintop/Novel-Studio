@@ -10,6 +10,7 @@ import type {
   UnifiedError
 } from "@novel-studio/shared";
 import type {
+  AgentContextScope,
   AgentRunCommandResult,
   AgentRunEvent,
   AgentRunSnapshot,
@@ -40,6 +41,14 @@ import type {
   UpdateContextDraftCommand
 } from "./agent-run-draft-session.js";
 import type { CompactContextResult } from "./agent-context-session.js";
+import type {
+  CreativeProjectFileDocument,
+  CreativeProjectFileLifecycleCommand,
+  CreativeProjectFileLifecycleReceipt,
+  CreativeProjectFileSaveResult,
+  CreativeProjectFileSessionIdentity,
+  CreativeProjectFileTreeSnapshot
+} from "./creative-project-file-session.js";
 import type {
   AiWritingSuggestion,
   AiWritingSelectionPreview,
@@ -202,6 +211,26 @@ export interface NovelStudioApi {
       readonly expectedChecksum: string;
     }): Promise<Result<EngineeringTextFileSaveResult, UnifiedError>>;
   };
+  creativeProjectFiles: {
+    refresh(
+      identity: CreativeProjectFileSessionIdentity
+    ): Promise<Result<CreativeProjectFileTreeSnapshot, UnifiedError>>;
+    readTextFile(
+      input: CreativeProjectFileSessionIdentity & { readonly path: string }
+    ): Promise<Result<CreativeProjectFileDocument, UnifiedError>>;
+    saveTextFile(
+      input: CreativeProjectFileSessionIdentity & {
+        readonly path: string;
+        readonly content: string;
+        readonly expectedTreeRevision: string;
+        readonly expectedNodeRevision: string;
+        readonly expectedChecksum: string;
+      }
+    ): Promise<Result<CreativeProjectFileSaveResult, UnifiedError>>;
+    executeLifecycle(
+      command: CreativeProjectFileLifecycleCommand
+    ): Promise<Result<CreativeProjectFileLifecycleReceipt, UnifiedError>>;
+  };
   ai: {
     generateChapterSuggestion(
       request: AiWritingSuggestionRequest
@@ -256,7 +285,9 @@ export interface NovelStudioApi {
     decideToolApproval(command: DecideToolApprovalCommand): Promise<AgentRunCommandResult>;
     undoRun(command: UndoRunCommand): Promise<AgentRunCommandResult>;
     read(runId: string): Promise<Result<AgentRunReadResult, UnifiedError>>;
-    list(projectId: string): Promise<Result<readonly AgentRunSnapshot[], UnifiedError>>;
+    list(
+      scopeOrProjectId: AgentContextScope | string
+    ): Promise<Result<readonly AgentRunSnapshot[], UnifiedError>>;
     onEvent(listener: (event: AgentRunEvent) => void): () => void;
   };
   agentConversations: {

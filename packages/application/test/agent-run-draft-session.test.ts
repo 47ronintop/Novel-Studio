@@ -93,6 +93,47 @@ describe("Agent Run Draft session", () => {
     expect(result.value.runDraft.contextDraftChecksum).toBe(result.value.contextDraft.checksum);
   });
 
+  test("persists a standalone conversation draft without a project identity", async () => {
+    const standalone = createAgentRunDraftSession({
+      repository: createMemoryRepository(),
+      scope: { kind: "standalone", scopeId: "standalone" },
+      now: () => "2026-07-16T00:00:00.000Z",
+      createId: () => `standalone_${(ids += 1)}`
+    });
+
+    const result = await standalone.readAgentRunDraft({
+      scope: { kind: "standalone", scopeId: "standalone" },
+      conversationId: "conv_standalone",
+      initialize: {
+        modelProfileId: "model_text_only",
+        operationMode: "conversation",
+        contextMode: "standalone_chat",
+        writePolicy: "write_before_confirmation",
+        contextRefs: []
+      }
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        runDraft: {
+          schemaVersion: "1.1",
+          scope: { kind: "standalone", scopeId: "standalone" },
+          operationMode: "conversation",
+          contextMode: "standalone_chat"
+        },
+        contextDraft: {
+          schemaVersion: "1.1",
+          scope: { kind: "standalone", scopeId: "standalone" },
+          refs: [],
+          activeResourceRef: null
+        }
+      }
+    });
+    expect(result.ok && Object.hasOwn(result.value.runDraft, "projectId")).toBe(false);
+    expect(result.ok && Object.hasOwn(result.value.contextDraft, "projectId")).toBe(false);
+  });
+
   test("reload returns the persisted draft without re-initializing", async () => {
     const first = await session.readAgentRunDraft(readCommand);
     const second = await session.readAgentRunDraft(readCommand);

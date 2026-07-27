@@ -52,6 +52,10 @@ describe("Electron security baseline", () => {
       "application:workspace:refresh-engineering-tree",
       "application:workspace:read-text-file",
       "application:workspace:save-text-file",
+      "application:creative-project-files:refresh",
+      "application:creative-project-files:read-text-file",
+      "application:creative-project-files:save-text-file",
+      "application:creative-project-files:execute-lifecycle",
       "application:project:list-chapters",
       "application:project:create-chapter",
       "application:project:rename-chapter",
@@ -155,6 +159,12 @@ describe("Electron security baseline", () => {
     expect(isApplicationIpcChannel("application:agent-run:undo")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-conversation:search")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-conversation:delete")).toBe(true);
+    expect(isApplicationIpcChannel("application:creative-project-files:refresh")).toBe(true);
+    expect(isApplicationIpcChannel("application:creative-project-files:read-text-file")).toBe(true);
+    expect(isApplicationIpcChannel("application:creative-project-files:save-text-file")).toBe(true);
+    expect(isApplicationIpcChannel("application:creative-project-files:execute-lifecycle")).toBe(
+      true
+    );
     expect(isApplicationIpcChannel("application:settings:list-model-profiles")).toBe(true);
     expect(isApplicationIpcChannel("application:settings:discover-models")).toBe(true);
     expect(isApplicationIpcChannel("application:settings:list-agent-usage")).toBe(true);
@@ -181,6 +191,34 @@ describe("Electron security baseline", () => {
     await api.project.chooseCreateParentDirectory();
     await api.workspace.chooseEngineeringDirectory();
     await api.workspace.chooseTextFile();
+    await api.creativeProjectFiles.refresh({
+      projectId: "project_security",
+      workspaceId: "workspace_security"
+    });
+    await api.creativeProjectFiles.readTextFile({
+      projectId: "project_security",
+      workspaceId: "workspace_security",
+      path: "notes/security.md"
+    });
+    await api.creativeProjectFiles.saveTextFile({
+      projectId: "project_security",
+      workspaceId: "workspace_security",
+      path: "notes/security.md",
+      content: "Security test content.\n",
+      expectedTreeRevision: "tree_security",
+      expectedNodeRevision: "node_security",
+      expectedChecksum: "checksum_security"
+    });
+    await api.creativeProjectFiles.executeLifecycle({
+      schemaVersion: "1.0",
+      commandId: "create_security_note",
+      kind: "createTextFile",
+      projectId: "project_security",
+      workspaceId: "workspace_security",
+      path: "notes/created-by-security-test.md",
+      content: "Created through the allowlisted bridge.\n",
+      expectedTreeRevision: "tree_security"
+    });
     await api.project.renameChapter({ chapterId: "ch_opening", title: "Opening" });
     await api.project.duplicateChapter({
       sourceChapterId: "ch_opening",
@@ -295,6 +333,10 @@ describe("Electron security baseline", () => {
       "application:project:choose-create-parent-directory",
       "application:workspace:choose-engineering-directory",
       "application:workspace:choose-text-file",
+      "application:creative-project-files:refresh",
+      "application:creative-project-files:read-text-file",
+      "application:creative-project-files:save-text-file",
+      "application:creative-project-files:execute-lifecycle",
       "application:project:rename-chapter",
       "application:project:duplicate-chapter",
       "application:project:delete-chapter",
@@ -344,7 +386,7 @@ describe("Electron security baseline", () => {
     await expect(handlers["application:get-shell-state"]()).resolves.toMatchObject({
       projectTitle: "未打开项目"
     });
-    await expect(handlers["application:list-commands"]()).resolves.toHaveLength(10);
+    await expect(handlers["application:list-commands"]()).resolves.toHaveLength(11);
     await expect(
       handlers["application:execute-command"]("workspace.toggle-inspector")
     ).resolves.toMatchObject({

@@ -74,6 +74,8 @@ export interface AgentModelCapabilityPreflightInput {
   readonly modelName: string;
   readonly capabilities: AgentModelCapabilityDeclaration;
   readonly requiredContextTokens: number;
+  /** Standalone conversation uses text generation only and freezes an empty tool catalog. */
+  readonly requireToolCapabilities?: boolean;
 }
 
 export interface AgentModelCapabilitySnapshot {
@@ -81,8 +83,8 @@ export interface AgentModelCapabilitySnapshot {
   readonly provider: string;
   readonly modelName: string;
   readonly streaming: true;
-  readonly toolCalling: true;
-  readonly structuredArguments: true;
+  readonly toolCalling: boolean;
+  readonly structuredArguments: boolean;
   readonly contextWindow: number;
   readonly requiredContextTokens: number;
 }
@@ -91,13 +93,14 @@ export function preflightAgentModelCapabilities(
   input: AgentModelCapabilityPreflightInput
 ): Result<AgentModelCapabilitySnapshot, UnifiedError> {
   const missingCapabilities: string[] = [];
+  const requireToolCapabilities = input.requireToolCapabilities ?? true;
   if (input.capabilities.streaming === false) {
     missingCapabilities.push("streaming");
   }
-  if (input.capabilities.toolCalling === false) {
+  if (requireToolCapabilities && input.capabilities.toolCalling === false) {
     missingCapabilities.push("toolCalling");
   }
-  if (input.capabilities.structuredArguments === false) {
+  if (requireToolCapabilities && input.capabilities.structuredArguments === false) {
     missingCapabilities.push("structuredArguments");
   }
   const configuredContextWindow = input.capabilities.contextWindow;
@@ -150,8 +153,8 @@ export function preflightAgentModelCapabilities(
     provider: input.provider,
     modelName: input.modelName,
     streaming: true,
-    toolCalling: true,
-    structuredArguments: true,
+    toolCalling: requireToolCapabilities || input.capabilities.toolCalling === true,
+    structuredArguments: requireToolCapabilities || input.capabilities.structuredArguments === true,
     contextWindow,
     requiredContextTokens: input.requiredContextTokens
   });

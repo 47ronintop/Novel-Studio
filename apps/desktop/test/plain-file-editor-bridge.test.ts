@@ -12,6 +12,7 @@ describe("plain file editor bridge", () => {
     const bridge = createPlainFileEditorBridge(api);
 
     const loaded = await bridge.openFile("notes/scene.md");
+    expect(bridge.getPersistedChecksum()).toBe("sha256:one");
     bridge.updateContent("Scene two\n");
     const saved = await bridge.save();
 
@@ -26,6 +27,7 @@ describe("plain file editor bridge", () => {
       dirty: false,
       saveStatus: "Saved"
     });
+    expect(bridge.getPersistedChecksum()).toBe("sha256:two");
     expect(calls).toEqual([
       ["read", "notes/scene.md"],
       [

@@ -45,18 +45,20 @@ describe("AgentConversationFileRepository", () => {
 
     await repository.createConversation(record);
     expect(await repository.createConversation(record)).toEqual({ ok: true, value: record });
-    expect(
-      await repository.createConversation({ ...record, title: "Different" })
-    ).toMatchObject({ ok: false, error: { code: "AGENT_CONVERSATION_CREATE_CONFLICT" } });
+    expect(await repository.createConversation({ ...record, title: "Different" })).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONVERSATION_CREATE_CONFLICT" }
+    });
 
     expect(await repository.writeSummary(summary)).toEqual({ ok: true, value: summary });
     expect(await repository.writeSummary(summary)).toEqual({ ok: true, value: summary });
     expect(
       await repository.writeSummary({ ...summary, content: "Different summary" })
     ).toMatchObject({ ok: false, error: { code: "AGENT_CONVERSATION_SUMMARY_CONFLICT" } });
-    expect(
-      await repository.writeSummary({ ...summary, throughRunLastSequence: 4 })
-    ).toMatchObject({ ok: false, error: { code: "AGENT_CONVERSATION_SUMMARY_CONFLICT" } });
+    expect(await repository.writeSummary({ ...summary, throughRunLastSequence: 4 })).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONVERSATION_SUMMARY_CONFLICT" }
+    });
     expect(await repository.readLatestSummary("conv_immutable")).toEqual({
       ok: true,
       value: summary
@@ -100,12 +102,19 @@ describe("AgentConversationFileRepository", () => {
     // Idempotent replay of the same revision returns the stored record.
     expect(await repository.writeRunDraft(runDraft)).toEqual({ ok: true, value: runDraft });
     // A different record at the same revision is a conflict.
-    expect(
-      await repository.writeRunDraft({ ...runDraft, userRequest: "changed" })
-    ).toMatchObject({ ok: false, error: { code: "AGENT_CONVERSATION_DRAFT_CONFLICT" } });
+    expect(await repository.writeRunDraft({ ...runDraft, userRequest: "changed" })).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONVERSATION_DRAFT_CONFLICT" }
+    });
 
-    expect(await repository.writeContextDraft(contextDraft)).toEqual({ ok: true, value: contextDraft });
-    expect(await repository.readLatestRunDraft("conv_draft")).toEqual({ ok: true, value: runDraft });
+    expect(await repository.writeContextDraft(contextDraft)).toEqual({
+      ok: true,
+      value: contextDraft
+    });
+    expect(await repository.readLatestRunDraft("conv_draft")).toEqual({
+      ok: true,
+      value: runDraft
+    });
     expect(await repository.readLatestContextDraft("conv_draft")).toEqual({
       ok: true,
       value: contextDraft
@@ -120,7 +129,10 @@ describe("AgentConversationFileRepository", () => {
         )
       )
     ).toEqual(runDraft);
-    expect(await repository.readLatestRunDraft("conv_absent")).toEqual({ ok: true, value: undefined });
+    expect(await repository.readLatestRunDraft("conv_absent")).toEqual({
+      ok: true,
+      value: undefined
+    });
   });
 
   test("updates status with optimistic revision control and persists command receipts", async () => {
@@ -128,7 +140,12 @@ describe("AgentConversationFileRepository", () => {
     const record = conversationRecord("conv_status", "2026-07-14T00:00:00.000Z");
     await repository.createConversation(record);
 
-    const archived = { ...record, revision: 2, status: "archived", updatedAt: "2026-07-14T02:00:00.000Z" };
+    const archived = {
+      ...record,
+      revision: 2,
+      status: "archived",
+      updatedAt: "2026-07-14T02:00:00.000Z"
+    };
     expect(
       await repository.updateConversation({
         conversationId: "conv_status",
@@ -139,12 +156,12 @@ describe("AgentConversationFileRepository", () => {
       })
     ).toEqual({ ok: true, value: archived });
     const conflict = await repository.updateConversation({
-        conversationId: "conv_status",
-        projectId: "project_01",
-        expectedRevision: 1,
-        status: "active",
-        updatedAt: "2026-07-14T03:00:00.000Z"
-      });
+      conversationId: "conv_status",
+      projectId: "project_01",
+      expectedRevision: 1,
+      status: "active",
+      updatedAt: "2026-07-14T03:00:00.000Z"
+    });
     expect(conflict).toMatchObject({
       ok: false,
       error: {
@@ -178,7 +195,7 @@ describe("AgentConversationFileRepository", () => {
     expect(
       await repository.updateConversation({
         conversationId: record.conversationId,
-        projectId: record.projectId,
+        projectId: record.scope.workspaceId,
         expectedRevision: 1,
         status: "deleted",
         updatedAt: "2026-07-14T01:00:00.000Z"
@@ -190,7 +207,7 @@ describe("AgentConversationFileRepository", () => {
 
     const archived = await repository.updateConversation({
       conversationId: record.conversationId,
-      projectId: record.projectId,
+      projectId: record.scope.workspaceId,
       expectedRevision: 1,
       status: "archived",
       updatedAt: "2026-07-14T01:00:00.000Z"
@@ -199,7 +216,7 @@ describe("AgentConversationFileRepository", () => {
 
     const deleted = await repository.updateConversation({
       conversationId: record.conversationId,
-      projectId: record.projectId,
+      projectId: record.scope.workspaceId,
       expectedRevision: 2,
       status: "deleted",
       updatedAt: "2026-07-14T02:00:00.000Z",
@@ -210,16 +227,19 @@ describe("AgentConversationFileRepository", () => {
       value: { revision: 3, status: "deleted", lastMutationCommandId: "cmd_delete" }
     });
     expect(await repository.readConversation(record.conversationId)).toEqual(deleted);
-    expect(await repository.listConversations({ projectId: record.projectId })).toEqual({
+    expect(await repository.listConversations({ projectId: record.scope.workspaceId })).toEqual({
       ok: true,
       value: { items: [], diagnostics: [] }
     });
     expect(
-      await repository.listConversations({ projectId: record.projectId, status: "archived" })
+      await repository.listConversations({
+        projectId: record.scope.workspaceId,
+        status: "archived"
+      })
     ).toEqual({ ok: true, value: { items: [], diagnostics: [] } });
     expect(
       await repository.searchConversations({
-        projectId: record.projectId,
+        projectId: record.scope.workspaceId,
         query: "deleted",
         includeArchived: true,
         documents: [
@@ -233,7 +253,7 @@ describe("AgentConversationFileRepository", () => {
     expect(
       await repository.updateConversation({
         conversationId: record.conversationId,
-        projectId: record.projectId,
+        projectId: record.scope.workspaceId,
         expectedRevision: 3,
         status: "active",
         updatedAt: "2026-07-14T03:00:00.000Z"
@@ -277,9 +297,7 @@ describe("AgentConversationFileRepository", () => {
       ok: true,
       value: {
         items: [valid],
-        diagnostics: [
-          { conversationId: "conv_corrupt", code: "AGENT_CONVERSATION_READ_FAILED" }
-        ]
+        diagnostics: [{ conversationId: "conv_corrupt", code: "AGENT_CONVERSATION_READ_FAILED" }]
       }
     });
     expect(await repository.readConversation("conv_corrupt")).toMatchObject({
@@ -345,14 +363,14 @@ describe("AgentConversationFileRepository", () => {
     const updates = await Promise.all([
       repository.updateConversation({
         conversationId: record.conversationId,
-        projectId: record.projectId,
+        projectId: record.scope.workspaceId,
         expectedRevision: 1,
         status: "archived",
         updatedAt: "2026-07-14T01:00:00.000Z"
       }),
       repository.updateConversation({
         conversationId: record.conversationId,
-        projectId: record.projectId,
+        projectId: record.scope.workspaceId,
         expectedRevision: 1,
         title: "Concurrent title",
         updatedAt: "2026-07-14T02:00:00.000Z"
@@ -532,6 +550,141 @@ describe("AgentConversationFileRepository", () => {
       documents: [{ conversationId: "conv_rebuild" }]
     });
   });
+
+  test("persists standalone records without projectId and isolates them by scope", async () => {
+    const { projectRoot, repository } = await createRepository();
+    const scope = standaloneScope();
+    const standalone = standaloneConversationRecord("conv_standalone", "2026-07-14T02:00:00.000Z");
+    const workspace = conversationRecord("conv_workspace", "2026-07-14T01:00:00.000Z");
+
+    expect(await repository.createConversation(standalone)).toMatchObject({
+      ok: true,
+      value: { conversationId: "conv_standalone", scope }
+    });
+    expect(await repository.createConversation(workspace)).toMatchObject({ ok: true });
+    expect(
+      await repository.createConversation({
+        ...standalone,
+        conversationId: workspace.conversationId
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_CONVERSATION_SCOPE_MISMATCH" } });
+    const persisted = JSON.parse(
+      await readFile(
+        join(projectRoot, "history", "conversations", "conv_standalone", "conversation.json"),
+        "utf8"
+      )
+    ) as Record<string, unknown>;
+    expect(persisted).toMatchObject({ schemaVersion: "1.1", scope });
+    expect(persisted).not.toHaveProperty("projectId");
+
+    expect(await repository.listConversations({ scope })).toMatchObject({
+      ok: true,
+      value: { items: [{ conversationId: "conv_standalone", scope }], diagnostics: [] }
+    });
+    expect(await repository.listConversations({ projectId: "project_01" })).toMatchObject({
+      ok: true,
+      value: { items: [{ conversationId: "conv_workspace" }], diagnostics: [] }
+    });
+    expect(await repository.readConversation("conv_standalone", workspace.scope)).toEqual({
+      ok: true,
+      value: undefined
+    });
+
+    expect(
+      await repository.updateConversation({
+        conversationId: standalone.conversationId,
+        scope,
+        expectedRevision: 1,
+        status: "archived",
+        updatedAt: "2026-07-14T03:00:00.000Z"
+      })
+    ).toMatchObject({ ok: true, value: { scope, revision: 2, status: "archived" } });
+
+    expect(
+      await repository.searchConversations({
+        scope,
+        query: "standalone",
+        documents: [
+          {
+            schemaVersion: "1.0" as const,
+            conversationId: standalone.conversationId,
+            scope,
+            title: "standalone chat",
+            status: "archived" as const,
+            updatedAt: "2026-07-14T03:00:00.000Z",
+            latestSummary: "",
+            userRequests: []
+          }
+        ]
+      })
+    ).toMatchObject({ ok: true, value: { items: [] } });
+    expect(
+      await repository.searchConversations({
+        scope,
+        query: "standalone",
+        includeArchived: true,
+        documents: [
+          {
+            schemaVersion: "1.0" as const,
+            conversationId: standalone.conversationId,
+            scope,
+            title: "standalone chat",
+            status: "archived" as const,
+            updatedAt: "2026-07-14T03:00:00.000Z",
+            latestSummary: "",
+            userRequests: []
+          }
+        ]
+      })
+    ).toMatchObject({ ok: true, value: { items: [{ conversationId: "conv_standalone" }] } });
+    const searchIndex = JSON.parse(
+      await readFile(join(projectRoot, "cache", "indexes", "conversations.json"), "utf8")
+    ) as Record<string, unknown>;
+    expect(searchIndex).toMatchObject({ schemaVersion: "1.0", scope });
+    expect(searchIndex).not.toHaveProperty("projectId");
+
+    expect(
+      await repository.createConversation({
+        ...standalone,
+        conversationId: "conv_invalid",
+        projectId: "x"
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_CONVERSATION_RECORD_INVALID" } });
+  });
+
+  test("reads legacy workspace records as scope records without copying them into standalone", async () => {
+    const { projectRoot, repository } = await createRepository();
+    const legacy = {
+      schemaVersion: "1.0" as const,
+      conversationId: "conv_legacy",
+      projectId: "project_01",
+      revision: 1,
+      title: "legacy",
+      status: "active" as const,
+      createdAt: "2026-07-14T00:00:00.000Z",
+      updatedAt: "2026-07-14T00:00:00.000Z"
+    };
+    const path = join(projectRoot, "history", "conversations", legacy.conversationId);
+    await mkdir(path, { recursive: true });
+    await writeFile(join(path, "conversation.json"), JSON.stringify(legacy), "utf8");
+
+    expect(await repository.readConversation(legacy.conversationId)).toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "1.1",
+        scope: {
+          kind: "workspace",
+          workspaceKind: "creativeProject",
+          workspaceId: "project_01"
+        }
+      }
+    });
+    expect(await repository.listConversations({ scope: standaloneScope() })).toEqual({
+      ok: true,
+      value: { items: [], diagnostics: [] }
+    });
+    expect(JSON.parse(await readFile(join(path, "conversation.json"), "utf8"))).toEqual(legacy);
+  });
 });
 
 async function createRepository() {
@@ -545,9 +698,30 @@ async function createRepository() {
 
 function conversationRecord(conversationId: string, updatedAt: string) {
   return {
-    schemaVersion: "1.0" as const,
+    schemaVersion: "1.1" as const,
     conversationId,
-    projectId: "project_01",
+    scope: {
+      kind: "workspace" as const,
+      workspaceKind: "creativeProject" as const,
+      workspaceId: "project_01"
+    },
+    revision: 1,
+    title: conversationId,
+    status: "active" as const,
+    createdAt: "2026-07-14T00:00:00.000Z",
+    updatedAt
+  };
+}
+
+function standaloneScope() {
+  return { kind: "standalone" as const, scopeId: "standalone" as const };
+}
+
+function standaloneConversationRecord(conversationId: string, updatedAt: string) {
+  return {
+    schemaVersion: "1.1" as const,
+    conversationId,
+    scope: standaloneScope(),
     revision: 1,
     title: conversationId,
     status: "active" as const,

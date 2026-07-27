@@ -6,6 +6,11 @@ import {
   type Result,
   type UnifiedError
 } from "@novel-studio/shared";
+import {
+  agentContextScopeKey,
+  normalizeAgentContextScope,
+  type AgentContextScope
+} from "@novel-studio/agent-engine";
 
 export const LEGACY_AGENT_CONVERSATION_ID = "legacy_agent_runs";
 
@@ -27,9 +32,11 @@ export interface AgentConversationDiagnostic {
 }
 
 export interface AgentConversationSummary {
-  readonly schemaVersion: "1.0";
+  readonly schemaVersion: "1.0" | "1.1";
+  readonly scope: AgentContextScope;
   readonly conversationId: string;
-  readonly projectId: string;
+  /** Legacy workspace-only identity; absent for standalone conversations. */
+  readonly projectId?: string;
   readonly revision: number;
   readonly title: string;
   readonly status: AgentConversationStatus;
@@ -61,13 +68,17 @@ export interface AgentConversationSearchPage {
   readonly nextCursor?: string;
 }
 
-export interface CreateAgentConversationCommand {
-  readonly projectId: string;
+export interface AgentConversationScopeIdentity {
+  readonly scope?: AgentContextScope;
+  /** Legacy workspace-only identity. */
+  readonly projectId?: string;
+}
+
+export interface CreateAgentConversationCommand extends AgentConversationScopeIdentity {
   readonly commandId: string;
 }
 
-export interface ChangeAgentConversationStatusCommand {
-  readonly projectId: string;
+export interface ChangeAgentConversationStatusCommand extends AgentConversationScopeIdentity {
   readonly conversationId: string;
   readonly commandId: string;
   readonly expectedConversationRevision: number;
@@ -80,15 +91,13 @@ export interface AgentConversationDeletion {
   readonly revision: number;
 }
 
-export interface ListAgentConversationsQuery {
-  readonly projectId: string;
+export interface ListAgentConversationsQuery extends AgentConversationScopeIdentity {
   readonly includeArchived?: boolean;
   readonly cursor?: string;
   readonly limit?: number;
 }
 
-export interface ReadAgentConversationQuery {
-  readonly projectId: string;
+export interface ReadAgentConversationQuery extends AgentConversationScopeIdentity {
   readonly conversationId: string;
 }
 
@@ -135,9 +144,13 @@ export interface AgentConversationPersistenceSearchPage {
 
 export interface AgentConversationPersistencePort {
   createConversation(record: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
-  readConversation(id: string): Promise<Result<JsonObject | undefined, UnifiedError>>;
+  readConversation(
+    id: string,
+    scope?: AgentContextScope
+  ): Promise<Result<JsonObject | undefined, UnifiedError>>;
   listConversations(input: {
-    readonly projectId: string;
+    readonly scope?: AgentContextScope;
+    readonly projectId?: string;
     readonly status?: AgentConversationStatus;
     readonly cursor?: string;
     readonly limit?: number;
@@ -146,16 +159,19 @@ export interface AgentConversationPersistencePort {
   writeCommandReceipt(
     conversationId: string,
     commandId: string,
-    receipt: JsonObject
+    receipt: JsonObject,
+    scope?: AgentContextScope
   ): Promise<Result<JsonObject, UnifiedError>>;
   readCommandReceipt(
     conversationId: string,
-    commandId: string
+    commandId: string,
+    scope?: AgentContextScope
   ): Promise<Result<JsonObject | undefined, UnifiedError>>;
   readLatestSummary?(conversationId: string): Promise<Result<JsonObject | undefined, UnifiedError>>;
   writeSummary?(summary: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
   searchConversations?(input: {
-    readonly projectId: string;
+    readonly scope?: AgentContextScope;
+    readonly projectId?: string;
     readonly query: string;
     readonly includeArchived?: boolean;
     readonly cursor?: string;
@@ -165,10 +181,17 @@ export interface AgentConversationPersistencePort {
 }
 
 export interface AgentConversationRunReaderPort {
-  listRunSnapshots(projectId: string): Promise<Result<JsonObject[], UnifiedError>>;
+  /** Legacy workspace-only run lookup. */
+  listRunSnapshots?(projectId: string): Promise<Result<JsonObject[], UnifiedError>>;
+  listRunSnapshotsForScope?(scope: AgentContextScope): Promise<Result<JsonObject[], UnifiedError>>;
   readRunEvents?(runId: string): Promise<Result<JsonObject[], UnifiedError>>;
-  hasPendingReview(input: {
+  /** Legacy workspace-only review lookup. */
+  hasPendingReview?(input: {
     readonly projectId: string;
+    readonly conversationId: string;
+  }): Promise<Result<boolean, UnifiedError>>;
+  hasPendingReviewForScope?(input: {
+    readonly scope: AgentContextScope;
     readonly conversationId: string;
   }): Promise<Result<boolean, UnifiedError>>;
 }
@@ -196,23 +219,28 @@ export interface AgentConversationSession {
     query: SearchAgentConversationsQuery
   ): Promise<Result<AgentConversationSearchPage, UnifiedError>>;
   assertRunMayStart(input: {
-    readonly projectId: string;
+    readonly scope?: AgentContextScope;
+    readonly projectId?: string;
     readonly conversationId: string;
   }): Promise<Result<AgentConversationSummary, UnifiedError>>;
   cancelRunStart(input: {
-    readonly projectId: string;
+    readonly scope?: AgentContextScope;
+    readonly projectId?: string;
     readonly conversationId: string;
   }): Promise<Result<void, UnifiedError>>;
   noteRunStarted(snapshot: JsonObject): Promise<Result<AgentConversationSummary, UnifiedError>>;
   noteRunTerminal(snapshot: JsonObject): Promise<Result<void, UnifiedError>>;
   loadContext(input: {
-    readonly projectId: string;
+    readonly scope?: AgentContextScope;
+    readonly projectId?: string;
     readonly conversationId: string;
   }): Promise<Result<readonly AgentConversationContextMessage[], UnifiedError>>;
 }
 
 export interface CreateAgentConversationSessionOptions {
-  readonly projectId: string;
+  readonly scope?: AgentContextScope;
+  /** Legacy workspace-only identity. */
+  readonly projectId?: string;
   readonly repository: AgentConversationPersistencePort;
   readonly runReader: AgentConversationRunReaderPort;
   readonly createConversationId?: (commandId: string) => string;
@@ -220,9 +248,10 @@ export interface CreateAgentConversationSessionOptions {
 }
 
 interface ParsedConversationRecord {
-  readonly schemaVersion: "1.0";
+  readonly schemaVersion: "1.0" | "1.1";
+  readonly scope: AgentContextScope;
   readonly conversationId: string;
-  readonly projectId: string;
+  readonly projectId?: string;
   readonly revision: number;
   readonly title: string;
   readonly status: PersistedAgentConversationStatus;
@@ -241,20 +270,55 @@ export function createAgentConversationSession(
   const summaryRefreshes = new Map<string, Promise<Result<JsonObject | undefined, UnifiedError>>>();
   const startReservations = new Set<string>();
   const knownRuns = new Map<string, Map<string, JsonObject>>();
+  const sessionScope = tryResolveConversationScope(options);
 
-  function requireBoundProject(projectId: string): Result<void, UnifiedError> {
-    return projectId === options.projectId
-      ? ok(undefined)
-      : failure("AGENT_CONVERSATION_PROJECT_MISMATCH");
+  function requireBoundScope(
+    identity: AgentConversationScopeIdentity
+  ): Result<AgentContextScope, UnifiedError> {
+    if (sessionScope === undefined) return failure("AGENT_CONVERSATION_SCOPE_INVALID");
+    if (identity.scope === undefined && identity.projectId === undefined) return ok(sessionScope);
+    if (identity.scope === undefined && identity.projectId !== undefined) {
+      return sessionScope.kind === "workspace" && sessionScope.workspaceId === identity.projectId
+        ? ok(sessionScope)
+        : failure("AGENT_CONVERSATION_PROJECT_MISMATCH");
+    }
+    let requestedScope: AgentContextScope;
+    try {
+      requestedScope = resolveConversationScope(identity);
+    } catch {
+      return failure(
+        identity.scope === undefined
+          ? "AGENT_CONVERSATION_PROJECT_MISMATCH"
+          : "AGENT_CONVERSATION_SCOPE_INVALID"
+      );
+    }
+    if (!sameScope(requestedScope, sessionScope)) {
+      return failure(
+        identity.scope === undefined
+          ? "AGENT_CONVERSATION_PROJECT_MISMATCH"
+          : "AGENT_CONVERSATION_SCOPE_MISMATCH"
+      );
+    }
+    return ok(sessionScope);
+  }
+
+  function belongsToSession(record: ParsedConversationRecord): boolean {
+    return sessionScope !== undefined && sameScope(record.scope, sessionScope);
   }
 
   async function runsFor(conversationId: string): Promise<Result<JsonObject[], UnifiedError>> {
-    const listed = await options.runReader.listRunSnapshots(options.projectId);
+    if (sessionScope === undefined) return failure("AGENT_CONVERSATION_SCOPE_INVALID");
+    const listed =
+      options.runReader.listRunSnapshotsForScope !== undefined
+        ? await options.runReader.listRunSnapshotsForScope(sessionScope)
+        : sessionScope.kind === "workspace" && options.runReader.listRunSnapshots !== undefined
+          ? await options.runReader.listRunSnapshots(sessionScope.workspaceId)
+          : failure<JsonObject[]>("AGENT_CONVERSATION_SCOPE_UNSUPPORTED");
     if (!listed.ok) return listed;
     const legacy = conversationId === LEGACY_AGENT_CONVERSATION_ID;
     const byRunId = new Map<string, JsonObject>();
     for (const run of listed.value) {
-      if (run["projectId"] !== options.projectId) continue;
+      if (!recordMatchesScope(run, sessionScope)) continue;
       const belongs = legacy
         ? run["conversationId"] === null || run["conversationId"] === undefined
         : run["conversationId"] === conversationId;
@@ -311,11 +375,7 @@ export function createAgentConversationSession(
     record: JsonObject
   ): Promise<Result<AgentConversationSummary, UnifiedError>> {
     const parsed = parseConversationRecord(record);
-    if (
-      parsed === undefined ||
-      parsed.projectId !== options.projectId ||
-      !isVisibleConversationRecord(parsed)
-    ) {
+    if (parsed === undefined || !belongsToSession(parsed) || !isVisibleConversationRecord(parsed)) {
       return failure("AGENT_CONVERSATION_RECORD_INVALID");
     }
     const runs = await runsFor(parsed.conversationId);
@@ -345,11 +405,7 @@ export function createAgentConversationSession(
     const record = await options.repository.readConversation(conversationId);
     if (!record.ok) return record;
     const parsed = parseConversationRecord(record.value);
-    if (
-      parsed === undefined ||
-      parsed.projectId !== options.projectId ||
-      !isVisibleConversationRecord(parsed)
-    ) {
+    if (parsed === undefined || !belongsToSession(parsed) || !isVisibleConversationRecord(parsed)) {
       return failure("AGENT_CONVERSATION_NOT_FOUND");
     }
     const runs = await runsFor(conversationId);
@@ -418,7 +474,8 @@ export function createAgentConversationSession(
     const receipt = await options.repository.writeCommandReceipt(
       conversationId,
       commandId,
-      asJsonObject(result)
+      asJsonObject(result),
+      sessionScope
     );
     return receipt.ok ? result : err(receipt.error);
   }
@@ -427,13 +484,17 @@ export function createAgentConversationSession(
     conversationId: string,
     commandId: string
   ): Promise<Result<AgentConversationSummary | undefined, UnifiedError>> {
-    const prior = await options.repository.readCommandReceipt(conversationId, commandId);
+    const prior = await options.repository.readCommandReceipt(
+      conversationId,
+      commandId,
+      sessionScope
+    );
     if (!prior.ok) return prior;
     const value = readObject(prior.value, "value");
     if (prior.value?.["ok"] !== true || value === undefined) return ok(undefined);
     const parsed = parseSummary(value);
     return parsed !== undefined &&
-      parsed.projectId === options.projectId &&
+      belongsToSession(parsed) &&
       parsed.conversationId === conversationId
       ? ok(parsed)
       : failure("AGENT_CONVERSATION_RECEIPT_INVALID");
@@ -448,7 +509,8 @@ export function createAgentConversationSession(
     const receipt = await options.repository.writeCommandReceipt(
       conversationId,
       commandId,
-      asJsonObject(result)
+      asJsonObject(result),
+      sessionScope
     );
     return receipt.ok ? result : err(receipt.error);
   }
@@ -457,7 +519,11 @@ export function createAgentConversationSession(
     conversationId: string,
     commandId: string
   ): Promise<Result<AgentConversationDeletion | undefined, UnifiedError>> {
-    const prior = await options.repository.readCommandReceipt(conversationId, commandId);
+    const prior = await options.repository.readCommandReceipt(
+      conversationId,
+      commandId,
+      sessionScope
+    );
     if (!prior.ok) return prior;
     const value = readObject(prior.value, "value");
     const receiptConversationId =
@@ -473,8 +539,8 @@ export function createAgentConversationSession(
     command: ChangeAgentConversationStatusCommand,
     status: AgentConversationStatus
   ): Promise<AgentConversationCommandResult> {
-    const project = requireBoundProject(command.projectId);
-    if (!project.ok) return project;
+    const scope = requireBoundScope(command);
+    if (!scope.ok) return scope;
     if (!isSafeId(command.conversationId) || !isSafeId(command.commandId)) {
       return failure("AGENT_CONVERSATION_COMMAND_INVALID");
     }
@@ -493,10 +559,13 @@ export function createAgentConversationSession(
       if (!prior.ok) return prior;
       if (prior.value !== undefined) return ok(prior.value);
 
-      const current = await options.repository.readConversation(command.conversationId);
+      const current = await options.repository.readConversation(
+        command.conversationId,
+        scope.value
+      );
       if (!current.ok) return current;
       const parsed = parseConversationRecord(current.value);
-      if (parsed === undefined || parsed.projectId !== options.projectId) {
+      if (parsed === undefined || !belongsToSession(parsed)) {
         return failure("AGENT_CONVERSATION_NOT_FOUND");
       }
       if (!isVisibleConversationRecord(parsed)) {
@@ -531,10 +600,18 @@ export function createAgentConversationSession(
         }
         const runs = await runsFor(command.conversationId);
         if (!runs.ok) return runs;
-        const pending = await options.runReader.hasPendingReview({
-          projectId: options.projectId,
-          conversationId: command.conversationId
-        });
+        const pending =
+          options.runReader.hasPendingReviewForScope !== undefined
+            ? await options.runReader.hasPendingReviewForScope({
+                scope: scope.value,
+                conversationId: command.conversationId
+              })
+            : scope.value.kind === "workspace" && options.runReader.hasPendingReview !== undefined
+              ? await options.runReader.hasPendingReview({
+                  projectId: scope.value.workspaceId,
+                  conversationId: command.conversationId
+                })
+              : failure<boolean>("AGENT_CONVERSATION_SCOPE_UNSUPPORTED");
         if (!pending.ok) return pending;
         if (
           pending.value ||
@@ -546,7 +623,7 @@ export function createAgentConversationSession(
 
       const updated = await options.repository.updateConversation({
         conversationId: command.conversationId,
-        projectId: options.projectId,
+        scope: scope.value,
         expectedRevision: command.expectedConversationRevision,
         status,
         updatedAt: laterTimestamp(parsed.updatedAt, now()),
@@ -554,7 +631,10 @@ export function createAgentConversationSession(
       });
       if (!updated.ok) {
         if (updated.error.code !== "AGENT_CONVERSATION_REVISION_CONFLICT") return updated;
-        const latest = await options.repository.readConversation(command.conversationId);
+        const latest = await options.repository.readConversation(
+          command.conversationId,
+          scope.value
+        );
         if (!latest.ok || latest.value === undefined) return updated;
         const latestSummary = await summaryFor(latest.value);
         return latestSummary.ok
@@ -570,8 +650,8 @@ export function createAgentConversationSession(
   async function deleteConversation(
     command: DeleteAgentConversationCommand
   ): Promise<AgentConversationDeleteResult> {
-    const project = requireBoundProject(command.projectId);
-    if (!project.ok) return project;
+    const scope = requireBoundScope(command);
+    if (!scope.ok) return scope;
     if (!isSafeId(command.conversationId) || !isSafeId(command.commandId)) {
       return failure("AGENT_CONVERSATION_COMMAND_INVALID");
     }
@@ -590,10 +670,13 @@ export function createAgentConversationSession(
       if (!prior.ok) return prior;
       if (prior.value !== undefined) return ok(prior.value);
 
-      const current = await options.repository.readConversation(command.conversationId);
+      const current = await options.repository.readConversation(
+        command.conversationId,
+        scope.value
+      );
       if (!current.ok) return current;
       const parsed = parseConversationRecord(current.value);
-      if (parsed === undefined || parsed.projectId !== options.projectId) {
+      if (parsed === undefined || !belongsToSession(parsed)) {
         return failure("AGENT_CONVERSATION_NOT_FOUND");
       }
       if (
@@ -623,7 +706,7 @@ export function createAgentConversationSession(
 
       const updated = await options.repository.updateConversation({
         conversationId: command.conversationId,
-        projectId: options.projectId,
+        scope: scope.value,
         expectedRevision: command.expectedConversationRevision,
         status: "deleted",
         updatedAt: laterTimestamp(parsed.updatedAt, now()),
@@ -631,7 +714,10 @@ export function createAgentConversationSession(
       });
       if (!updated.ok) {
         if (updated.error.code !== "AGENT_CONVERSATION_REVISION_CONFLICT") return updated;
-        const latest = await options.repository.readConversation(command.conversationId);
+        const latest = await options.repository.readConversation(
+          command.conversationId,
+          scope.value
+        );
         if (!latest.ok || latest.value === undefined) return updated;
         const latestSummary = await summaryFor(latest.value);
         return latestSummary.ok
@@ -651,8 +737,8 @@ export function createAgentConversationSession(
 
   const session: AgentConversationSession = {
     async createConversation(command) {
-      const project = requireBoundProject(command.projectId);
-      if (!project.ok) return project;
+      const scope = requireBoundScope(command);
+      if (!scope.ok) return scope;
       if (!isSafeId(command.commandId)) return failure("AGENT_CONVERSATION_COMMAND_INVALID");
       const conversationId = createConversationId(command.commandId);
       if (conversationId === LEGACY_AGENT_CONVERSATION_ID) {
@@ -665,13 +751,13 @@ export function createAgentConversationSession(
         if (!prior.ok) return prior;
         if (prior.value !== undefined) return ok(prior.value);
 
-        const existing = await options.repository.readConversation(conversationId);
+        const existing = await options.repository.readConversation(conversationId, scope.value);
         if (!existing.ok) return existing;
         let record = existing.value;
         const parsedExisting = parseConversationRecord(record);
         if (parsedExisting !== undefined) {
           if (
-            parsedExisting.projectId !== options.projectId ||
+            !belongsToSession(parsedExisting) ||
             parsedExisting.createdByCommandId !== command.commandId
           ) {
             return failure("AGENT_CONVERSATION_CREATE_CONFLICT");
@@ -680,9 +766,9 @@ export function createAgentConversationSession(
           if (record !== undefined) return failure("AGENT_CONVERSATION_RECORD_INVALID");
           const timestamp = now();
           const created = await options.repository.createConversation({
-            schemaVersion: "1.0",
+            schemaVersion: "1.1",
             conversationId,
-            projectId: options.projectId,
+            scope: scope.value,
             revision: 1,
             title: "新会话",
             status: "active",
@@ -700,11 +786,11 @@ export function createAgentConversationSession(
     },
 
     async listConversations(query) {
-      const project = requireBoundProject(query.projectId);
-      if (!project.ok) return project;
+      const scope = requireBoundScope(query);
+      if (!scope.ok) return scope;
       const limit = normalizedLimit(query.limit);
       const listed = await options.repository.listConversations({
-        projectId: options.projectId,
+        scope: scope.value,
         ...(query.includeArchived ? {} : { status: "active" as const }),
         ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
         limit
@@ -714,7 +800,7 @@ export function createAgentConversationSession(
       const diagnostics: AgentConversationDiagnostic[] = [...listed.value.diagnostics];
       for (const record of listed.value.items) {
         const parsed = parseConversationRecord(record);
-        if (parsed === undefined || parsed.projectId !== options.projectId) {
+        if (parsed === undefined || !belongsToSession(parsed)) {
           const invalidConversationId = readString(record, "conversationId");
           diagnostics.push({
             code: "AGENT_CONVERSATION_RECORD_INVALID",
@@ -735,11 +821,15 @@ export function createAgentConversationSession(
         }
         summaries.push(summary.value);
       }
-      if (query.cursor === undefined && summaries.length < limit) {
+      if (
+        scope.value.kind === "workspace" &&
+        query.cursor === undefined &&
+        summaries.length < limit
+      ) {
         const legacyRuns = await runsFor(LEGACY_AGENT_CONVERSATION_ID);
         if (!legacyRuns.ok) return legacyRuns;
         if (legacyRuns.value.length > 0) {
-          summaries.push(legacySummary(options.projectId, legacyRuns.value));
+          summaries.push(legacySummary(scope.value, legacyRuns.value));
         }
       }
       summaries.sort(compareConversationSummaries);
@@ -751,26 +841,29 @@ export function createAgentConversationSession(
     },
 
     async readConversation(query) {
-      const project = requireBoundProject(query.projectId);
-      if (!project.ok) return project;
+      const scope = requireBoundScope(query);
+      if (!scope.ok) return scope;
       if (!isSafeId(query.conversationId)) return failure("AGENT_CONVERSATION_ID_INVALID");
       if (query.conversationId === LEGACY_AGENT_CONVERSATION_ID) {
+        if (scope.value.kind !== "workspace") {
+          return failure("AGENT_CONVERSATION_NOT_FOUND");
+        }
         const runs = await runsFor(query.conversationId);
         if (!runs.ok) return runs;
         if (runs.value.length === 0) return failure("AGENT_CONVERSATION_NOT_FOUND");
         const projected = await runsForRead(query.conversationId, runs.value);
         return ok({
-          ...legacySummary(options.projectId, runs.value),
+          ...legacySummary(scope.value, runs.value),
           runs: projected.runs,
           diagnostics: projected.diagnostics
         });
       }
-      const record = await options.repository.readConversation(query.conversationId);
+      const record = await options.repository.readConversation(query.conversationId, scope.value);
       if (!record.ok) return record;
       const parsed = parseConversationRecord(record.value);
       if (
         parsed === undefined ||
-        parsed.projectId !== options.projectId ||
+        !belongsToSession(parsed) ||
         !isVisibleConversationRecord(parsed)
       ) {
         return failure("AGENT_CONVERSATION_NOT_FOUND");
@@ -810,8 +903,8 @@ export function createAgentConversationSession(
     },
 
     async searchConversations(query) {
-      const project = requireBoundProject(query.projectId);
-      if (!project.ok) return project;
+      const scope = requireBoundScope(query);
+      if (!scope.ok) return scope;
       const normalized = query.query.trim().toLocaleLowerCase();
       if (byteLength(normalized) > MAX_QUERY_BYTES) {
         return failure("AGENT_CONVERSATION_QUERY_INVALID");
@@ -822,7 +915,7 @@ export function createAgentConversationSession(
       let listCursor: string | undefined;
       do {
         const listed = await options.repository.listConversations({
-          projectId: options.projectId,
+          scope: scope.value,
           ...(query.includeArchived ? {} : { status: "active" as const }),
           ...(listCursor === undefined ? {} : { cursor: listCursor }),
           limit: MAX_PAGE_LIMIT
@@ -839,7 +932,7 @@ export function createAgentConversationSession(
       const documents: JsonObject[] = [];
       for (const record of records) {
         const parsed = parseConversationRecord(record);
-        if (parsed === undefined || parsed.projectId !== options.projectId) {
+        if (parsed === undefined || !belongsToSession(parsed)) {
           const invalidConversationId = readString(record, "conversationId");
           diagnostics.push({
             code: "AGENT_CONVERSATION_RECORD_INVALID",
@@ -871,7 +964,8 @@ export function createAgentConversationSession(
         documents.push({
           schemaVersion: "1.0",
           conversationId: parsed.conversationId,
-          projectId: parsed.projectId,
+          scope: parsed.scope,
+          ...(parsed.projectId === undefined ? {} : { projectId: parsed.projectId }),
           title: parsed.title,
           status: parsed.status,
           updatedAt: parsed.updatedAt,
@@ -887,7 +981,7 @@ export function createAgentConversationSession(
         options.repository.searchConversations === undefined
           ? ok(searchDocumentsInMemory(documents, normalized, query.limit))
           : await options.repository.searchConversations({
-              projectId: options.projectId,
+              scope: scope.value,
               query: normalized,
               ...(query.includeArchived === true ? { includeArchived: true } : {}),
               ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
@@ -912,17 +1006,17 @@ export function createAgentConversationSession(
     },
 
     async assertRunMayStart(input) {
-      const project = requireBoundProject(input.projectId);
-      if (!project.ok) return project;
+      const scope = requireBoundScope(input);
+      if (!scope.ok) return scope;
       if (!isSafeId(input.conversationId)) return failure("AGENT_CONVERSATION_ID_INVALID");
       if (input.conversationId === LEGACY_AGENT_CONVERSATION_ID) {
         return failure("AGENT_CONVERSATION_READ_ONLY");
       }
       return withConversationMutation(input.conversationId, async () => {
-        const record = await options.repository.readConversation(input.conversationId);
+        const record = await options.repository.readConversation(input.conversationId, scope.value);
         if (!record.ok) return record;
         const parsed = parseConversationRecord(record.value);
-        if (parsed === undefined || parsed.projectId !== options.projectId) {
+        if (parsed === undefined || !belongsToSession(parsed)) {
           return failure("AGENT_CONVERSATION_NOT_FOUND");
         }
         if (parsed.status === "deleted") return failure("AGENT_CONVERSATION_NOT_FOUND");
@@ -934,8 +1028,8 @@ export function createAgentConversationSession(
     },
 
     async cancelRunStart(input) {
-      const project = requireBoundProject(input.projectId);
-      if (!project.ok) return project;
+      const scope = requireBoundScope(input);
+      if (!scope.ok) return scope;
       if (!isSafeId(input.conversationId)) return failure("AGENT_CONVERSATION_ID_INVALID");
       return withConversationMutation(input.conversationId, () => {
         startReservations.delete(input.conversationId);
@@ -945,9 +1039,14 @@ export function createAgentConversationSession(
 
     async noteRunStarted(snapshot) {
       const conversationId = readString(snapshot, "conversationId");
-      const projectId = readString(snapshot, "projectId");
       const runId = readString(snapshot, "runId");
-      if (projectId !== options.projectId) return failure("AGENT_CONVERSATION_PROJECT_MISMATCH");
+      if (sessionScope === undefined || !recordMatchesScope(snapshot, sessionScope)) {
+        return failure(
+          snapshot["scope"] === undefined
+            ? "AGENT_CONVERSATION_PROJECT_MISMATCH"
+            : "AGENT_CONVERSATION_SCOPE_MISMATCH"
+        );
+      }
       if (
         conversationId === undefined ||
         conversationId === LEGACY_AGENT_CONVERSATION_ID ||
@@ -963,10 +1062,10 @@ export function createAgentConversationSession(
         knownRuns.set(conversationId, conversationRuns);
         startReservations.delete(conversationId);
 
-        const record = await options.repository.readConversation(conversationId);
+        const record = await options.repository.readConversation(conversationId, sessionScope);
         if (!record.ok) return record;
         const parsed = parseConversationRecord(record.value);
-        if (parsed === undefined || parsed.projectId !== options.projectId) {
+        if (parsed === undefined || !belongsToSession(parsed)) {
           return failure("AGENT_CONVERSATION_NOT_FOUND");
         }
         if (parsed.status === "deleted") return failure("AGENT_CONVERSATION_NOT_FOUND");
@@ -984,7 +1083,7 @@ export function createAgentConversationSession(
         }
         const updated = await options.repository.updateConversation({
           conversationId,
-          projectId: options.projectId,
+          scope: sessionScope,
           expectedRevision: parsed.revision,
           title,
           updatedAt
@@ -996,9 +1095,14 @@ export function createAgentConversationSession(
 
     async noteRunTerminal(snapshot) {
       const conversationId = readSafeId(snapshot, "conversationId");
-      const projectId = readSafeId(snapshot, "projectId");
       const runId = readSafeId(snapshot, "runId");
-      if (projectId !== options.projectId) return failure("AGENT_CONVERSATION_PROJECT_MISMATCH");
+      if (sessionScope === undefined || !recordMatchesScope(snapshot, sessionScope)) {
+        return failure(
+          snapshot["scope"] === undefined
+            ? "AGENT_CONVERSATION_PROJECT_MISMATCH"
+            : "AGENT_CONVERSATION_SCOPE_MISMATCH"
+        );
+      }
       if (
         conversationId === undefined ||
         conversationId === LEGACY_AGENT_CONVERSATION_ID ||
@@ -1014,18 +1118,18 @@ export function createAgentConversationSession(
     },
 
     async loadContext(input) {
-      const project = requireBoundProject(input.projectId);
-      if (!project.ok) return project;
+      const scope = requireBoundScope(input);
+      if (!scope.ok) return scope;
       if (!isSafeId(input.conversationId)) return failure("AGENT_CONVERSATION_ID_INVALID");
       if (input.conversationId === LEGACY_AGENT_CONVERSATION_ID) {
         return failure("AGENT_CONVERSATION_READ_ONLY");
       }
-      const record = await options.repository.readConversation(input.conversationId);
+      const record = await options.repository.readConversation(input.conversationId, scope.value);
       if (!record.ok) return record;
       const parsed = parseConversationRecord(record.value);
       if (
         parsed === undefined ||
-        parsed.projectId !== options.projectId ||
+        !belongsToSession(parsed) ||
         !isVisibleConversationRecord(parsed)
       ) {
         return failure("AGENT_CONVERSATION_NOT_FOUND");
@@ -1101,7 +1205,12 @@ function toConversationActivityEvent(event: JsonObject): JsonObject | undefined 
   const type = readString(event, "type");
   const schemaVersion = readString(event, "schemaVersion");
   const runId = readSafeId(event, "runId");
-  const projectId = readSafeId(event, "projectId");
+  let scope: AgentContextScope;
+  try {
+    scope = resolveConversationScope(scopeIdentityFromJson(event));
+  } catch {
+    return undefined;
+  }
   const sequence = readNonNegativeInteger(event, "sequence");
   const runRevision = readNonNegativeInteger(event, "runRevision");
   const createdAt = readString(event, "createdAt");
@@ -1110,7 +1219,6 @@ function toConversationActivityEvent(event: JsonObject): JsonObject | undefined 
     !CONVERSATION_ACTIVITY_EVENT_TYPES.has(type) ||
     schemaVersion === undefined ||
     runId === undefined ||
-    projectId === undefined ||
     sequence === undefined ||
     runRevision === undefined ||
     createdAt === undefined
@@ -1124,7 +1232,8 @@ function toConversationActivityEvent(event: JsonObject): JsonObject | undefined 
   return {
     schemaVersion,
     runId,
-    projectId,
+    scope,
+    ...(scope.kind === "workspace" ? { projectId: scope.workspaceId } : {}),
     sequence,
     runRevision,
     type,
@@ -1445,7 +1554,16 @@ function readNonNegativeInteger(value: JsonObject, key: string): number | undefi
 function parseConversationRecord(value: unknown): ParsedConversationRecord | undefined {
   if (!isJsonObject(value)) return undefined;
   const conversationId = readSafeId(value, "conversationId");
-  const projectId = readSafeId(value, "projectId");
+  let scope: AgentContextScope;
+  try {
+    scope =
+      value["schemaVersion"] === "1.0"
+        ? normalizeAgentContextScope(undefined, value["projectId"])
+        : resolveConversationScope(scopeIdentityFromJson(value));
+  } catch {
+    return undefined;
+  }
+  const projectId = scope.kind === "workspace" ? scope.workspaceId : undefined;
   const title = readString(value, "title")?.trim();
   const createdAt = readString(value, "createdAt");
   const updatedAt = readString(value, "updatedAt");
@@ -1454,9 +1572,8 @@ function parseConversationRecord(value: unknown): ParsedConversationRecord | und
   const createdByCommandId = readOptionalSafeId(value, "createdByCommandId");
   const lastMutationCommandId = readOptionalSafeId(value, "lastMutationCommandId");
   if (
-    value["schemaVersion"] !== "1.0" ||
+    (value["schemaVersion"] !== "1.0" && value["schemaVersion"] !== "1.1") ||
     conversationId === undefined ||
-    projectId === undefined ||
     title === undefined ||
     title.length === 0 ||
     createdAt === undefined ||
@@ -1470,9 +1587,10 @@ function parseConversationRecord(value: unknown): ParsedConversationRecord | und
     return undefined;
   }
   return {
-    schemaVersion: "1.0",
+    schemaVersion: value["schemaVersion"],
+    scope,
     conversationId,
-    projectId,
+    ...(projectId === undefined ? {} : { projectId }),
     revision: Number(revision),
     title,
     status,
@@ -1481,6 +1599,52 @@ function parseConversationRecord(value: unknown): ParsedConversationRecord | und
     ...(createdByCommandId === undefined ? {} : { createdByCommandId }),
     ...(lastMutationCommandId === undefined ? {} : { lastMutationCommandId })
   };
+}
+
+function tryResolveConversationScope(
+  identity: AgentConversationScopeIdentity
+): AgentContextScope | undefined {
+  try {
+    return resolveConversationScope(identity);
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveConversationScope(identity: AgentConversationScopeIdentity): AgentContextScope {
+  if (identity.scope === undefined) {
+    return normalizeAgentContextScope(undefined, identity.projectId);
+  }
+  const scope = normalizeAgentContextScope(identity.scope);
+  if (identity.projectId !== undefined) {
+    if (
+      scope.kind !== "workspace" ||
+      !isSafeId(identity.projectId) ||
+      scope.workspaceId !== identity.projectId
+    ) {
+      throw new Error("AGENT_CONVERSATION_SCOPE_INVALID");
+    }
+  }
+  return scope;
+}
+
+function scopeIdentityFromJson(value: JsonObject): AgentConversationScopeIdentity {
+  return {
+    ...(value["scope"] === undefined ? {} : { scope: value["scope"] as AgentContextScope }),
+    ...(value["projectId"] === undefined ? {} : { projectId: value["projectId"] as string })
+  };
+}
+
+function sameScope(left: AgentContextScope, right: AgentContextScope): boolean {
+  return agentContextScopeKey(left) === agentContextScopeKey(right);
+}
+
+function recordMatchesScope(value: JsonObject, scope: AgentContextScope): boolean {
+  try {
+    return sameScope(resolveConversationScope(scopeIdentityFromJson(value)), scope);
+  } catch {
+    return false;
+  }
 }
 
 function isVisibleConversationRecord(
@@ -1496,9 +1660,10 @@ function toSummary(
 ): AgentConversationSummary {
   const latest = runs[0];
   const publicRecord = {
-    schemaVersion: record.schemaVersion,
+    schemaVersion: "1.1" as const,
+    scope: record.scope,
     conversationId: record.conversationId,
-    projectId: record.projectId,
+    ...(record.projectId === undefined ? {} : { projectId: record.projectId }),
     revision: record.revision,
     title: record.title,
     status: record.status,
@@ -1517,12 +1682,16 @@ function toSummary(
   };
 }
 
-function legacySummary(projectId: string, runs: readonly JsonObject[]): AgentConversationSummary {
+function legacySummary(
+  scope: Extract<AgentContextScope, { readonly kind: "workspace" }>,
+  runs: readonly JsonObject[]
+): AgentConversationSummary {
   const latest = runs[0];
   return {
     schemaVersion: "1.0",
+    scope,
     conversationId: LEGACY_AGENT_CONVERSATION_ID,
-    projectId,
+    projectId: scope.workspaceId,
     revision: 0,
     title: "历史 Agent 运行",
     status: "active",

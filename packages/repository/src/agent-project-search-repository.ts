@@ -5,6 +5,11 @@ import { extname, isAbsolute, join, relative } from "node:path";
 
 import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
+import {
+  normalizeCreativeProjectFilePath,
+  normalizeCreativeProjectFilePolicy,
+  type CreativeProjectFilePolicy
+} from "./creative-project-file-repository.js";
 import { storageError, validationError } from "./errors.js";
 import { SearchIndexFileRepository } from "./search-index-repository.js";
 
@@ -164,6 +169,8 @@ export interface AgentProjectSearchRepositoryOptions {
   readonly traceId?: string;
   /** For creative projects — reuse existing search index repository. */
   readonly searchIndexRepository?: SearchIndexFileRepository;
+  /** When present, search only user-owned creative files allowed by this policy. */
+  readonly creativeProjectFilePolicy?: CreativeProjectFilePolicy;
 }
 
 function sha256(content: string): string {
@@ -234,9 +241,10 @@ function hasSameIdentity(left: Stats, right: Stats): boolean {
 
 async function readBoundedFile(
   handle: FileHandle,
-  expectedSize: number
+  expectedSize: number,
+  maxFileSizeBytes = MAX_FILE_SIZE_BYTES
 ): Promise<Uint8Array | undefined> {
-  if (expectedSize < 0 || expectedSize > MAX_FILE_SIZE_BYTES) return undefined;
+  if (expectedSize < 0 || expectedSize > maxFileSizeBytes) return undefined;
   const bytes = Buffer.allocUnsafe(expectedSize);
   let bytesRead = 0;
   while (bytesRead < bytes.length) {
@@ -342,15 +350,19 @@ export class AgentProjectSearchRepository {
 
     const maxResults = Math.min(input.maxResults ?? 50, MAX_RESULTS_HARD_LIMIT);
 
-    if (this.options.workspaceKind === "creativeProject") {
+    if (
+      this.options.workspaceKind === "creativeProject" &&
+      this.options.creativeProjectFilePolicy === undefined
+    ) {
       return this.searchCreativeProject(input.query, maxResults, includeGlobs, excludeGlobs);
     }
-    return this.searchEngineeringWorkspace(
+    return this.searchFileSystem(
       input.query,
       maxResults,
       includeGlobs,
       excludeGlobs,
-      input.signal
+      input.signal,
+      this.options.creativeProjectFilePolicy
     );
   }
 
@@ -440,13 +452,21 @@ export class AgentProjectSearchRepository {
     });
   }
 
-  private async searchEngineeringWorkspace(
+  private async searchFileSystem(
     query: string,
     maxResults: number,
     includeGlobs: readonly string[] | undefined,
     excludeGlobs: readonly string[] | undefined,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    creativeProjectFilePolicy?: CreativeProjectFilePolicy
   ): Promise<Result<AgentSearchResults, UnifiedError>> {
+    const normalizedCreativePolicy =
+      creativeProjectFilePolicy === undefined
+        ? undefined
+        : normalizeCreativeProjectFilePolicy(creativeProjectFilePolicy);
+    if (normalizedCreativePolicy !== undefined && !normalizedCreativePolicy.ok) {
+      return normalizedCreativePolicy;
+    }
     let canonicalRoot: string;
     try {
       canonicalRoot = await this.canonicalRoot;
@@ -468,6 +488,7 @@ export class AgentProjectSearchRepository {
       scannedBytes: 0,
       directoriesVisited: 0,
       filesVisited: 0,
+      visibleEntriesVisited: 0,
       deadlineAt: Date.now() + SEARCH_DEADLINE_MS,
       truncated: false
     };
@@ -481,7 +502,9 @@ export class AgentProjectSearchRepository {
       maxResults,
       items,
       state,
-      signal
+      signal,
+      normalizedCreativePolicy?.value,
+      0
     );
 
     const sorted = [...items].sort((a, b) => {
@@ -494,7 +517,10 @@ export class AgentProjectSearchRepository {
       items: Object.freeze(sorted),
       totalHits: state.totalHits,
       truncated: state.truncated,
-      indexVersion: "1.1"
+      indexVersion:
+        normalizedCreativePolicy === undefined
+          ? "1.1"
+          : `creative-project-files/${normalizedCreativePolicy.value.schemaVersion}`
     });
   }
 
@@ -512,10 +538,13 @@ export class AgentProjectSearchRepository {
       scannedBytes: number;
       directoriesVisited: number;
       filesVisited: number;
+      visibleEntriesVisited: number;
       deadlineAt: number;
       truncated: boolean;
     },
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    creativeProjectFilePolicy?: CreativeProjectFilePolicy,
+    depth = 0
   ): Promise<void> {
     if (signal?.aborted || state.truncated) return;
     if (Date.now() >= state.deadlineAt || state.directoriesVisited >= MAX_DIRECTORIES) {
@@ -551,7 +580,25 @@ export class AgentProjectSearchRepository {
       const entryRelative = relative(canonicalRoot, fullPath).replaceAll("\\", "/");
 
       if (entry.isDirectory()) {
-        if (blockedRoots.has(entry.name.toLowerCase())) continue;
+        if (creativeProjectFilePolicy === undefined) {
+          if (blockedRoots.has(entry.name.toLowerCase())) continue;
+        } else {
+          if (
+            !normalizeCreativeProjectFilePath(entryRelative, "directory", creativeProjectFilePolicy)
+              .ok
+          ) {
+            continue;
+          }
+          if (state.visibleEntriesVisited >= creativeProjectFilePolicy.maxItems) {
+            state.truncated = true;
+            break;
+          }
+          state.visibleEntriesVisited++;
+          if (depth + 1 >= creativeProjectFilePolicy.maxDepth) {
+            state.truncated = true;
+            continue;
+          }
+        }
         await this.traverseDirectory(
           fullPath,
           canonicalRoot,
@@ -561,7 +608,9 @@ export class AgentProjectSearchRepository {
           maxResults,
           items,
           state,
-          signal
+          signal,
+          creativeProjectFilePolicy,
+          depth + 1
         );
       } else if (entry.isFile()) {
         if (state.filesVisited >= MAX_FILES) {
@@ -569,10 +618,28 @@ export class AgentProjectSearchRepository {
           break;
         }
         state.filesVisited++;
-        if (!isSearchableEngineeringFile(entry.name)) continue;
+        if (creativeProjectFilePolicy === undefined) {
+          if (!isSearchableEngineeringFile(entry.name)) continue;
+        } else {
+          if (
+            !normalizeCreativeProjectFilePath(entryRelative, "file", creativeProjectFilePolicy).ok
+          ) {
+            continue;
+          }
+          if (state.visibleEntriesVisited >= creativeProjectFilePolicy.maxItems) {
+            state.truncated = true;
+            break;
+          }
+          state.visibleEntriesVisited++;
+        }
         if (!matchesGlobs(entryRelative, includeGlobs, excludeGlobs)) continue;
 
-        const bytes = await this.readVerifiedEngineeringFile(fullPath, canonicalRoot, state);
+        const bytes = await this.readVerifiedEngineeringFile(
+          fullPath,
+          canonicalRoot,
+          state,
+          creativeProjectFilePolicy?.maxTextBytes
+        );
         if (bytes === undefined) {
           if (state.scannedBytes >= MAX_TOTAL_SCANNED_BYTES) state.truncated = true;
           continue;
@@ -623,7 +690,8 @@ export class AgentProjectSearchRepository {
   private async readVerifiedEngineeringFile(
     fullPath: string,
     canonicalRoot: string,
-    state: { scannedBytes: number; truncated: boolean }
+    state: { scannedBytes: number; truncated: boolean },
+    maxFileSizeBytes = MAX_FILE_SIZE_BYTES
   ): Promise<Uint8Array | undefined> {
     if (state.scannedBytes >= MAX_TOTAL_SCANNED_BYTES) {
       state.truncated = true;
@@ -636,7 +704,7 @@ export class AgentProjectSearchRepository {
       // reject path swaps and traversal through a reparse point before any bytes are read.
       handle = await open(fullPath, constants.O_RDONLY | constants.O_NOFOLLOW);
       const openedStat = await handle.stat();
-      if (!openedStat.isFile() || openedStat.size > MAX_FILE_SIZE_BYTES) return undefined;
+      if (!openedStat.isFile() || openedStat.size > maxFileSizeBytes) return undefined;
       if (state.scannedBytes + openedStat.size > MAX_TOTAL_SCANNED_BYTES) {
         state.truncated = true;
         return undefined;
@@ -648,7 +716,7 @@ export class AgentProjectSearchRepository {
       }
 
       await this.afterPathIdentityVerified(fullPath);
-      const bytes = await readBoundedFile(handle, openedStat.size);
+      const bytes = await readBoundedFile(handle, openedStat.size, maxFileSizeBytes);
       if (bytes === undefined) return undefined;
       const postReadStat = await handle.stat();
       if (

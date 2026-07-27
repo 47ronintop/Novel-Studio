@@ -16,11 +16,18 @@ function latestRoot(): string {
 // Mirrors @novel-studio/agent-engine's AgentUsageRecord. The repository is a sibling layer that does
 // not import agent-engine, so tests describe the record shape structurally.
 interface AgentUsageRecord {
-  schemaVersion: "1.0";
+  schemaVersion: "1.1";
+  scope:
+    | { kind: "standalone"; scopeId: "standalone" }
+    | {
+        kind: "workspace";
+        workspaceKind: "creativeProject" | "engineeringWorkspace";
+        workspaceId: string;
+      };
   usageId: string;
   runId: string;
   conversationId: string;
-  projectId: string;
+  projectId?: string;
   roundId: string;
   finalSequence: number;
   provider: string;
@@ -58,11 +65,15 @@ afterEach(async () => {
 
 function baseRecord(overrides: Partial<AgentUsageRecord> = {}): AgentUsageRecord {
   const record: AgentUsageRecord = {
-    schemaVersion: "1.0" as const,
+    schemaVersion: "1.1" as const,
+    scope: {
+      kind: "workspace",
+      workspaceKind: "creativeProject",
+      workspaceId: "project_01"
+    },
     usageId: "",
     runId: "run_01",
     conversationId: "conv_01",
-    projectId: "project_01",
     roundId: "round_01",
     finalSequence: 12,
     provider: "demo",
@@ -181,6 +192,44 @@ describe("AgentUsageFileRepository", () => {
     expect(read).toEqual({ ok: true, value: undefined });
   });
 
+  test("normalizes a legacy 1.0 detail in memory without rewriting its persisted file", async () => {
+    const repository = await createRepository();
+    const userDataRoot = latestRoot();
+    const currentRecord = baseRecord({ runId: "legacy_run", roundId: "legacy_round" });
+    const persistedLegacyRecord = {
+      ...currentRecord,
+      schemaVersion: "1.0",
+      projectId: "legacy_project"
+    } as Record<string, unknown>;
+    delete persistedLegacyRecord["scope"];
+    const detailPath = join(
+      userDataRoot,
+      "agent-usage",
+      "details",
+      "legacy_run%3Alegacy_round%3A12.json"
+    );
+    const persistedContent = `${JSON.stringify(persistedLegacyRecord)}\n`;
+    await mkdir(join(userDataRoot, "agent-usage", "details"), { recursive: true });
+    await writeFile(detailPath, persistedContent, "utf8");
+
+    const read = await repository.readById(currentRecord.usageId);
+
+    expect(read).toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "1.1",
+        scope: {
+          kind: "workspace",
+          workspaceKind: "creativeProject",
+          workspaceId: "legacy_project"
+        },
+        usageId: currentRecord.usageId
+      }
+    });
+    expect(read.value).not.toHaveProperty("projectId");
+    expect(await readFile(detailPath, "utf8")).toBe(persistedContent);
+  });
+
   test("is first-wins across repository instances and does not lose concurrent daily totals", async () => {
     const firstRepository = await createRepository();
     const userDataRoot = latestRoot();
@@ -293,7 +342,11 @@ describe("AgentUsageFileRepository", () => {
     await repository.writeFinal(
       baseRecord({
         roundId: "r_match",
-        projectId: "stable_project_id",
+        scope: {
+          kind: "workspace",
+          workspaceKind: "engineeringWorkspace",
+          workspaceId: "stable_project_id"
+        },
         provider: "provider_a",
         model: "model_a",
         localDate: "2026-07-16",
@@ -743,7 +796,7 @@ describe("AgentUsageFileRepository", () => {
   test("rejects malformed record scalars and nested objects without writing details", async () => {
     const repository = await createRepository();
     const invalidRecords = [
-      baseRecord({ roundId: "schema_version", schemaVersion: "2.0" as "1.0" }),
+      baseRecord({ roundId: "schema_version", schemaVersion: "2.0" as "1.1" }),
       baseRecord({
         roundId: "conversation_object",
         conversationId: { prompt: "private" } as unknown as string

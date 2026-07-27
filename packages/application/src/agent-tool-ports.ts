@@ -39,6 +39,7 @@ export interface AgentSearchToolExecutor {
   searchText(input: {
     readonly runId: string;
     readonly projectId: string;
+    readonly contextMode?: "standalone_chat" | "writing" | "general_file";
     readonly query: string;
     readonly includeGlobs?: readonly string[];
     readonly excludeGlobs?: readonly string[];
@@ -49,6 +50,7 @@ export interface AgentSearchToolExecutor {
   findReferences(input: {
     readonly runId: string;
     readonly projectId: string;
+    readonly contextMode?: "standalone_chat" | "writing" | "general_file";
     readonly stableRef: string;
     readonly signal: AbortSignal;
   }): Promise<Result<AgentSearchToolResult, UnifiedError>>;

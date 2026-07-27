@@ -34,7 +34,7 @@ describe("CreativeWorkspaceNavigator", () => {
     vi.restoreAllMocks();
   });
 
-  test("renders exactly writing and story tabs without removed project-tree groups", () => {
+  test("renders writing, story, and project-file tabs without legacy project-tree groups", () => {
     render(<CreativeWorkspaceNavigator {...createCreativeProps()} />);
 
     const tablist = requiredElement<HTMLElement>(
@@ -43,10 +43,11 @@ describe("CreativeWorkspaceNavigator", () => {
     );
     const tabs = tablist.querySelectorAll<HTMLButtonElement>('[role="tab"]');
 
-    expect(tabs).toHaveLength(2);
+    expect(tabs).toHaveLength(3);
     expect(tabs[0]?.textContent).toContain("写作");
     expect(tabs[0]?.getAttribute("aria-selected")).toBe("true");
     expect(tabs[1]?.textContent).toContain("故事资料");
+    expect(tabs[2]?.textContent).toContain("项目文件");
     expect(host.textContent).not.toContain("Novel Studio");
     expect(host.textContent).not.toContain("提示词");
     expect(host.textContent).not.toContain("Agent");
@@ -191,13 +192,14 @@ describe("CreativeWorkspaceNavigator", () => {
       '[role="tablist"][aria-label="创作导航模式"]'
     );
     const firstTabs = tablists[0]?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-    if (firstTabs === undefined || firstTabs.length !== 2) {
-      throw new Error("Expected two creative navigator tabs.");
+    if (firstTabs === undefined || firstTabs.length !== 3) {
+      throw new Error("Expected three creative navigator tabs.");
     }
     const writingTab = firstTabs[0];
     const storyTab = firstTabs[1];
-    if (writingTab === undefined || storyTab === undefined) {
-      throw new Error("Expected writing and story tabs.");
+    const filesTab = firstTabs[2];
+    if (writingTab === undefined || storyTab === undefined || filesTab === undefined) {
+      throw new Error("Expected writing, story, and project-file tabs.");
     }
 
     writingTab.focus();
@@ -205,10 +207,18 @@ describe("CreativeWorkspaceNavigator", () => {
     expect(calls).toEqual(["story"]);
     expect(document.activeElement).toBe(storyTab);
 
-    keydown(storyTab, "Home");
+    keydown(storyTab, "ArrowRight");
+    expect(calls).toEqual(["story", "files"]);
+    expect(document.activeElement).toBe(filesTab);
+
+    keydown(filesTab, "ArrowRight");
+    expect(calls).toEqual(["story", "files", "writing"]);
+    expect(document.activeElement).toBe(writingTab);
+
+    keydown(filesTab, "Home");
     keydown(writingTab, "End");
-    keydown(storyTab, "ArrowLeft");
-    expect(calls).toEqual(["story", "writing", "story", "writing"]);
+    keydown(filesTab, "ArrowLeft");
+    expect(calls).toEqual(["story", "files", "writing", "writing", "files", "story"]);
 
     const controls = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]')).map(
       (tab) => tab.getAttribute("aria-controls")
@@ -217,6 +227,118 @@ describe("CreativeWorkspaceNavigator", () => {
     controls.forEach((id) =>
       expect(id === null ? null : host.querySelector(`#${id}`)).not.toBeNull()
     );
+  });
+
+  test("uses the generic project-file tree while hiding managed and unsafe paths", () => {
+    const calls: string[] = [];
+    const prompt = vi.spyOn(window, "prompt");
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(
+      <CreativeWorkspaceNavigator
+        {...createCreativeProps({
+          mode: "files",
+          projectFiles: {
+            nodes: [
+              {
+                id: "folder:notes",
+                name: "notes",
+                kind: "directory",
+                path: "notes",
+                children: [
+                  {
+                    id: "file:notes/outline.md",
+                    name: "outline.md",
+                    kind: "file",
+                    path: "notes/outline.md"
+                  },
+                  {
+                    id: "file:notes/source.ts",
+                    name: "source.ts",
+                    kind: "file",
+                    path: "notes/source.ts"
+                  }
+                ]
+              },
+              {
+                id: "file:project.json",
+                name: "project.json",
+                kind: "file",
+                path: "project.json"
+              },
+              {
+                id: "folder:chapters",
+                name: "chapters",
+                kind: "directory",
+                path: "chapters",
+                children: [
+                  {
+                    id: "file:chapters/hidden.md",
+                    name: "hidden.md",
+                    kind: "file",
+                    path: "chapters/hidden.md"
+                  }
+                ]
+              },
+              {
+                id: "file:outside",
+                name: "outside.md",
+                kind: "file",
+                path: "../outside.md"
+              }
+            ],
+            expandedPathIds: ["folder:notes"],
+            activeFilePath: "notes/outline.md",
+            onExpandedPathIdsChange: (pathIds) => calls.push(`expand:${pathIds.join(",")}`),
+            onFileOpen: (path) => calls.push(`open:${path}`),
+            onRefresh: () => calls.push("refresh"),
+            onCreateTextFile: (path) => calls.push(`create-file:${path}`),
+            onCreateDirectory: (path) => calls.push(`create-directory:${path}`),
+            onRenamePath: (sourcePath, targetPath) =>
+              calls.push(`rename:${sourcePath}:${targetPath}`),
+            onDeletePath: (path) => calls.push(`delete:${path}`)
+          }
+        })}
+      />
+    );
+
+    expect(host.querySelector('[data-navigator-group="files"]')).not.toBeNull();
+    expect(host.textContent).toContain("outline.md");
+    expect(host.textContent).not.toContain("project.json");
+    expect(host.textContent).not.toContain("chapters");
+    expect(host.textContent).not.toContain("hidden.md");
+    expect(host.textContent).not.toContain("source.ts");
+    expect(host.textContent).not.toContain("outside.md");
+
+    click(requiredElement(host, 'button[aria-label="打开文件：outline.md"]'));
+    click(requiredElement(host, 'button[aria-label="刷新项目文件"]'));
+    prompt.mockReturnValueOnce("notes/new.md");
+    click(requiredElement(host, 'button[aria-label="新建项目文件"]'));
+    prompt.mockReturnValueOnce("notes/assets");
+    click(requiredElement(host, 'button[aria-label="新建项目目录"]'));
+    click(requiredElement(host, 'summary[aria-label="项目文件更多操作"]'));
+    prompt.mockReturnValueOnce("notes/outline.md").mockReturnValueOnce("notes/renamed.md");
+    click(
+      requiredElement(
+        host,
+        '[data-project-file-actions="true"] .ns-navigator-action-menu button:first-child'
+      )
+    );
+    prompt.mockReturnValueOnce("notes/outline.md");
+    click(
+      requiredElement(
+        host,
+        '[data-project-file-actions="true"] .ns-navigator-action-menu button:last-child'
+      )
+    );
+
+    expect(calls).toEqual([
+      "open:notes/outline.md",
+      "refresh",
+      "create-file:notes/new.md",
+      "create-directory:notes/assets",
+      "rename:notes/outline.md:notes/renamed.md",
+      "delete:notes/outline.md"
+    ]);
   });
 
   function render(node: ReactNode): void {

@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
+import { normalizeAgentContextScope, type AgentContextScope } from "./agent-context-scope.js";
+import type { AgentWorkspaceKind } from "./agent-tool-capabilities.js";
 import type { AgentContextMode } from "./agent-run-types.js";
 import { validateAgentRelativePath } from "./path-guard.js";
 
@@ -30,6 +32,11 @@ export type ContextDraftRef =
       readonly relativePath: string;
       readonly label: string;
       readonly range?: AgentContextRange;
+      /**
+       * The on-disk SHA-256 captured for an automatically maintained active project file. Manual
+       * refs predate this guard and intentionally remain valid without it.
+       */
+      readonly expectedChecksum?: string;
     }
   | {
       readonly kind: "editor_selection";
@@ -39,7 +46,7 @@ export type ContextDraftRef =
       readonly range: AgentContextRange;
     };
 
-export interface ContextDraft {
+export interface ContextDraftV10 {
   readonly schemaVersion: "1.0";
   readonly contextDraftId: string;
   readonly conversationId: string;
@@ -51,32 +58,50 @@ export interface ContextDraft {
   readonly updatedAt: string;
 }
 
+export interface ContextDraftV11 extends Omit<
+  ContextDraftV10,
+  "schemaVersion" | "projectId" | "contextMode"
+> {
+  readonly schemaVersion: "1.1";
+  readonly scope: AgentContextScope;
+  readonly contextMode: AgentContextMode;
+  readonly activeResourceRef: Extract<ContextDraftRef, { readonly kind: "project_file" }> | null;
+}
+
+export type ContextDraft = ContextDraftV11;
+
 export type ContextDraftMutation =
   | { readonly kind: "add_ref"; readonly ref: ContextDraftRef }
   | { readonly kind: "remove_ref"; readonly refId: string }
   | {
       readonly kind: "set_selection";
       readonly ref: Extract<ContextDraftRef, { readonly kind: "editor_selection" }> | null;
+    }
+  | {
+      readonly kind: "set_active_resource";
+      readonly ref: Extract<ContextDraftRef, { readonly kind: "project_file" }> | null;
     };
 
 export interface CreateContextDraftInput {
   readonly contextDraftId: string;
   readonly conversationId: string;
-  readonly projectId: string;
+  readonly scope: AgentContextScope;
   readonly contextMode: AgentContextMode;
   readonly refs?: readonly ContextDraftRef[];
+  readonly activeResourceRef?: Extract<ContextDraftRef, { readonly kind: "project_file" }> | null;
   readonly updatedAt: string;
 }
 
 export function createContextDraft(input: CreateContextDraftInput): ContextDraft {
   return finalizeContextDraft({
-    schemaVersion: "1.0",
+    schemaVersion: "1.1",
     contextDraftId: input.contextDraftId,
     conversationId: input.conversationId,
-    projectId: input.projectId,
+    scope: input.scope,
     contextMode: input.contextMode,
     revision: 1,
-    refs: input.refs ?? [],
+    refs: input.scope.kind === "standalone" ? [] : (input.refs ?? []),
+    activeResourceRef: input.scope.kind === "standalone" ? null : (input.activeResourceRef ?? null),
     updatedAt: input.updatedAt
   });
 }
@@ -113,6 +138,23 @@ export function applyContextDraftMutation(
       const refs = mutation.ref === null ? withoutSelection : [...withoutSelection, mutation.ref];
       return ok(nextRevision(draft, refs, updatedAt));
     }
+    case "set_active_resource": {
+      if (draft.scope.kind === "standalone") {
+        return mutation.ref === null
+          ? ok(nextRevision(draft, [...draft.refs], updatedAt, null))
+          : err(
+              contextDraftError(
+                "CONTEXT_DRAFT_REF_SCOPE_INVALID",
+                "Standalone conversations cannot bind a project resource."
+              )
+            );
+      }
+      if (mutation.ref !== null) {
+        const rejection = validateRef(mutation.ref, draft.contextMode);
+        if (rejection !== undefined) return err(rejection);
+      }
+      return ok(nextRevision(draft, [...draft.refs], updatedAt, mutation.ref));
+    }
   }
 }
 
@@ -135,13 +177,14 @@ export function setContextDraftMode(
       ? draft.refs.filter((ref) => ref.kind !== "chapter" && ref.kind !== "story_bible")
       : draft.refs;
   return finalizeContextDraft({
-    schemaVersion: "1.0",
+    schemaVersion: "1.1",
     contextDraftId: draft.contextDraftId,
     conversationId: draft.conversationId,
-    projectId: draft.projectId,
+    scope: draft.scope,
     contextMode,
     revision: draft.revision + 1,
     refs,
+    activeResourceRef: contextMode === "writing" ? null : draft.activeResourceRef,
     updatedAt
   });
 }
@@ -151,15 +194,40 @@ export function checksumContextDraft(draft: Omit<ContextDraft, "checksum">): str
     stableSerialize({
       contextDraftId: draft.contextDraftId,
       conversationId: draft.conversationId,
-      projectId: draft.projectId,
+      scope: draft.scope,
       contextMode: draft.contextMode,
       revision: draft.revision,
-      refs: draft.refs
+      refs: draft.refs,
+      activeResourceRef: draft.activeResourceRef
     })
   );
 }
 
-function validateRef(ref: ContextDraftRef, contextMode: AgentContextMode): UnifiedError | undefined {
+export function normalizeContextDraft(
+  value: Readonly<Record<string, unknown>>,
+  legacyWorkspaceKind?: AgentWorkspaceKind
+): ContextDraft {
+  const { projectId: _legacyProjectId, ...withoutLegacyProjectId } = value;
+  void _legacyProjectId;
+  if (value["schemaVersion"] === "1.1") {
+    const scope = normalizeAgentContextScope(value["scope"], undefined, legacyWorkspaceKind);
+    return deepFreeze({ ...withoutLegacyProjectId, scope } as unknown as ContextDraft);
+  }
+  if (value["schemaVersion"] !== "1.0") throw new Error("CONTEXT_DRAFT_VERSION_UNSUPPORTED");
+  const scope = normalizeAgentContextScope(undefined, value["projectId"], legacyWorkspaceKind);
+  return deepFreeze({
+    ...withoutLegacyProjectId,
+    schemaVersion: "1.1",
+    scope,
+    refs: scope.kind === "standalone" ? [] : value["refs"],
+    activeResourceRef: null
+  } as unknown as ContextDraft);
+}
+
+function validateRef(
+  ref: ContextDraftRef,
+  contextMode: AgentContextMode
+): UnifiedError | undefined {
   if (contextMode === "general_file" && (ref.kind === "chapter" || ref.kind === "story_bible")) {
     return contextDraftError(
       "CONTEXT_DRAFT_REF_MODE_INVALID",
@@ -169,23 +237,35 @@ function validateRef(ref: ContextDraftRef, contextMode: AgentContextMode): Unifi
   if (ref.kind === "project_file") {
     const validated = validateAgentRelativePath(ref.relativePath);
     if (!validated.ok) return validated.error;
+    if (ref.expectedChecksum !== undefined && !isExpectedChecksum(ref.expectedChecksum)) {
+      return contextDraftError(
+        "CONTEXT_DRAFT_REF_CHECKSUM_INVALID",
+        "A project-file checksum must be a lowercase SHA-256 value."
+      );
+    }
   }
   return undefined;
+}
+
+function isExpectedChecksum(value: string): boolean {
+  return /^[a-f0-9]{64}$/u.test(value);
 }
 
 function nextRevision(
   draft: ContextDraft,
   refs: readonly ContextDraftRef[],
-  updatedAt: string
+  updatedAt: string,
+  activeResourceRef = draft.activeResourceRef
 ): ContextDraft {
   return finalizeContextDraft({
-    schemaVersion: "1.0",
+    schemaVersion: "1.1",
     contextDraftId: draft.contextDraftId,
     conversationId: draft.conversationId,
-    projectId: draft.projectId,
+    scope: draft.scope,
     contextMode: draft.contextMode,
     revision: draft.revision + 1,
-    refs,
+    refs: draft.scope.kind === "standalone" ? [] : refs,
+    activeResourceRef: draft.scope.kind === "standalone" ? null : activeResourceRef,
     updatedAt
   });
 }

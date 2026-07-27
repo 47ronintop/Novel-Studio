@@ -35,6 +35,7 @@ export interface RendererAppEffectsInput {
   readonly setOnboardingDismissed: Dispatch<SetStateAction<boolean>>;
   readonly setEditorPreferences: Dispatch<SetStateAction<EditorPreferences>>;
   readonly setAppearancePreferences: Dispatch<SetStateAction<UserAppearancePreferences>>;
+  readonly setStandaloneSelectedConversationId: Dispatch<SetStateAction<string | undefined>>;
   readonly setChapterEditor: Dispatch<SetStateAction<ChapterEditorProps | undefined>>;
   readonly setAiWritingWorkflow: Dispatch<SetStateAction<AiWritingWorkflowProps | undefined>>;
   readonly setStoryBible: Dispatch<SetStateAction<StoryBibleSummaryProps | undefined>>;
@@ -59,6 +60,7 @@ export function useRendererAppEffects(input: RendererAppEffectsInput): void {
     setCommands,
     setEditorPreferences,
     setAppearancePreferences,
+    setStandaloneSelectedConversationId,
     setOnboardingDismissed,
     setSettings,
     setShellState,
@@ -110,6 +112,7 @@ export function useRendererAppEffects(input: RendererAppEffectsInput): void {
       setOnboardingDismissed(result.value.onboarding.dismissed);
       setEditorPreferences(result.value.editor);
       setAppearancePreferences(result.value.appearance);
+      setStandaloneSelectedConversationId(result.value.shell.standaloneSelectedConversationId);
       setShellState((current) => applyShellPreferences(current, result.value.shell));
     });
 
@@ -122,7 +125,8 @@ export function useRendererAppEffects(input: RendererAppEffectsInput): void {
     setCommands,
     setEditorPreferences,
     setOnboardingDismissed,
-    setShellState
+    setShellState,
+    setStandaloneSelectedConversationId
   ]);
 
   useEffect(() => {

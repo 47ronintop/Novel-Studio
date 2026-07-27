@@ -1,6 +1,11 @@
 import { describe, expect, test, vi } from "vitest";
 
-import type { AgentRunEvent, AgentRunSnapshot } from "@novel-studio/agent-engine";
+import type {
+  AgentContextScope,
+  AgentRunEvent,
+  AgentRunSnapshot
+} from "@novel-studio/agent-engine";
+import { STANDALONE_AGENT_CONTEXT_SCOPE } from "@novel-studio/agent-engine";
 import type {
   AgentConversationReadResult,
   AgentConversationSummary,
@@ -13,7 +18,192 @@ import {
   toAgentConversationWorkspaceProps
 } from "../src/renderer/agent-conversation-bridge.js";
 
+function workspaceScope(projectId: string) {
+  return {
+    kind: "workspace" as const,
+    workspaceKind: "creativeProject" as const,
+    workspaceId: projectId
+  };
+}
+
 describe("AgentConversationBridge", () => {
+  test("keeps standalone conversation lifecycle commands inside the standalone scope", async () => {
+    const calls: Record<string, unknown>[] = [];
+    const records = new Map<string, AgentConversationSummary>();
+    const makeSummary = (
+      conversationId: string,
+      status: AgentConversationSummary["status"] = "active",
+      revision = 1
+    ): AgentConversationSummary => ({
+      schemaVersion: "1.1",
+      scope: STANDALONE_AGENT_CONTEXT_SCOPE,
+      conversationId,
+      revision,
+      title: conversationId,
+      status,
+      createdAt: "2026-07-27T00:00:00.000Z",
+      updatedAt: "2026-07-27T00:00:00.000Z",
+      runCount: 0,
+      summaryFreshness: "fresh"
+    });
+    records.set("standalone-existing", makeSummary("standalone-existing"));
+    const list = () => [...records.values()];
+    const api = {
+      agentRuns: { onEvent: () => () => undefined },
+      agentConversations: {
+        list: async (query: Record<string, unknown>) => {
+          calls.push(structuredClone(query));
+          return { ok: true as const, value: { items: list(), diagnostics: [] } };
+        },
+        read: async (query: Record<string, unknown>) => {
+          calls.push(structuredClone(query));
+          const summary = records.get(String(query["conversationId"]));
+          return summary === undefined
+            ? {
+                ok: false as const,
+                error: { code: "NOT_FOUND", message: "missing", retryable: false }
+              }
+            : { ok: true as const, value: { ...summary, runs: [], diagnostics: [] } };
+        },
+        create: async (command: Record<string, unknown>) => {
+          calls.push(structuredClone(command));
+          const summary = makeSummary("standalone-created");
+          records.set(summary.conversationId, summary);
+          return { ok: true as const, value: summary };
+        },
+        archive: async (command: Record<string, unknown>) => {
+          calls.push(structuredClone(command));
+          const current = records.get(String(command["conversationId"]));
+          if (current === undefined) throw new Error("Missing standalone conversation.");
+          const next = { ...current, status: "archived" as const, revision: current.revision + 1 };
+          records.set(next.conversationId, next);
+          return { ok: true as const, value: next };
+        },
+        restore: async (command: Record<string, unknown>) => {
+          calls.push(structuredClone(command));
+          const current = records.get(String(command["conversationId"]));
+          if (current === undefined) throw new Error("Missing standalone conversation.");
+          const next = { ...current, status: "active" as const, revision: current.revision + 1 };
+          records.set(next.conversationId, next);
+          return { ok: true as const, value: next };
+        },
+        delete: async (command: Record<string, unknown>) => {
+          calls.push(structuredClone(command));
+          const conversationId = String(command["conversationId"]);
+          const current = records.get(conversationId);
+          if (current === undefined) throw new Error("Missing standalone conversation.");
+          records.delete(conversationId);
+          return { ok: true as const, value: { conversationId, revision: current.revision + 1 } };
+        },
+        search: async (query: Record<string, unknown>) => {
+          calls.push(structuredClone(query));
+          return {
+            ok: true as const,
+            value: {
+              items: list().map((summary) => ({ ...summary, snippet: summary.title })),
+              diagnostics: []
+            }
+          };
+        }
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentConversationBridge(api, {
+      createCommandId: (action) => `standalone-${action}`
+    });
+
+    await bridge.load(STANDALONE_AGENT_CONTEXT_SCOPE);
+    await bridge.create();
+    await bridge.search("standalone");
+    await bridge.archive("standalone-existing");
+    await bridge.restore("standalone-existing");
+    await bridge.delete("standalone-existing");
+
+    expect(bridge.getProps()?.scope).toEqual(STANDALONE_AGENT_CONTEXT_SCOPE);
+    expect(bridge.getProps()).not.toHaveProperty("projectId");
+    expect(calls).not.toHaveLength(0);
+    for (const call of calls) {
+      expect(call).toMatchObject({ scope: STANDALONE_AGENT_CONTEXT_SCOPE });
+      expect(call).not.toHaveProperty("projectId");
+    }
+  });
+
+  test("restores only the standalone selection across workspace round-trips and bridge recreation", async () => {
+    const workspace = workspaceScope("project_01");
+    const fixture = createScopedConversationFixture([
+      scopedConversation(STANDALONE_AGENT_CONTEXT_SCOPE, "standalone-first"),
+      scopedConversation(STANDALONE_AGENT_CONTEXT_SCOPE, "standalone-second"),
+      scopedConversation(workspace, "workspace-default", "active", "planning_model"),
+      scopedConversation(workspace, "standalone-second")
+    ]);
+    let persistedSelection: string | undefined = "standalone-second";
+    const persistedWrites: Array<string | undefined> = [];
+    const options = {
+      getStandaloneSelectedConversationId: () => persistedSelection,
+      onStandaloneSelectedConversationIdChange: (conversationId: string | undefined) => {
+        persistedWrites.push(conversationId);
+        persistedSelection = conversationId;
+      }
+    };
+    const bridge = createAgentConversationBridge(fixture.api, options);
+
+    expect((await bridge.load(STANDALONE_AGENT_CONTEXT_SCOPE)).selectedConversationId).toBe(
+      "standalone-second"
+    );
+    expect((await bridge.load(workspace)).selectedConversationId).toBe("workspace-default");
+    expect((await bridge.load(STANDALONE_AGENT_CONTEXT_SCOPE)).selectedConversationId).toBe(
+      "standalone-second"
+    );
+    expect(persistedWrites).toEqual([]);
+
+    bridge.dispose();
+    const restartedBridge = createAgentConversationBridge(fixture.api, options);
+    expect(
+      (await restartedBridge.load(STANDALONE_AGENT_CONTEXT_SCOPE)).selectedConversationId
+    ).toBe("standalone-second");
+    expect(persistedWrites).toEqual([]);
+  });
+
+  test("falls back from deleted or archived standalone selections", async () => {
+    for (const persistedConversationId of ["deleted", "archived"] as const) {
+      const fixture = createScopedConversationFixture([
+        scopedConversation(STANDALONE_AGENT_CONTEXT_SCOPE, "fallback"),
+        scopedConversation(STANDALONE_AGENT_CONTEXT_SCOPE, "archived", "archived")
+      ]);
+      let persistedSelection: string | undefined = persistedConversationId;
+      const writes: Array<string | undefined> = [];
+      const bridge = createAgentConversationBridge(fixture.api, {
+        getStandaloneSelectedConversationId: () => persistedSelection,
+        onStandaloneSelectedConversationIdChange: (conversationId) => {
+          writes.push(conversationId);
+          persistedSelection = conversationId;
+        }
+      });
+
+      const state = await bridge.load(STANDALONE_AGENT_CONTEXT_SCOPE);
+
+      expect(state.selectedConversationId).toBe("fallback");
+      expect(state.errorMessage).toBeUndefined();
+      expect(writes).toEqual(["fallback"]);
+    }
+  });
+
+  test("keeps standalone selection usable when preference persistence fails", async () => {
+    const fixture = createScopedConversationFixture([
+      scopedConversation(STANDALONE_AGENT_CONTEXT_SCOPE, "fallback")
+    ]);
+    const bridge = createAgentConversationBridge(fixture.api, {
+      getStandaloneSelectedConversationId: () => "deleted",
+      onStandaloneSelectedConversationIdChange: async () => {
+        throw new Error("Preference storage is unavailable.");
+      }
+    });
+
+    const state = await bridge.load(STANDALONE_AGENT_CONTEXT_SCOPE);
+
+    expect(state.selectedConversationId).toBe("fallback");
+    expect(state.errorMessage).toBeUndefined();
+  });
+
   test("maps a loaded conversation to the navigator and main view contracts", async () => {
     const fixture = createApiFixture([
       conversation("conv_01", "run_01", "completed", "2026-07-14T00:00:00.000Z")
@@ -428,10 +618,19 @@ describe("AgentConversationBridge", () => {
     const state = await bridge.load("project_01");
 
     expect(fixture.listQueries).toEqual([
-      { projectId: "project_01", includeArchived: false, limit: 30 }
+      {
+        projectId: "project_01",
+        scope: workspaceScope("project_01"),
+        includeArchived: false,
+        limit: 30
+      }
     ]);
     expect(fixture.readQueries).toEqual([
-      { projectId: "project_01", conversationId: "conv_active" }
+      {
+        projectId: "project_01",
+        scope: workspaceScope("project_01"),
+        conversationId: "conv_active"
+      }
     ]);
     expect(state).toMatchObject({
       projectId: "project_01",
@@ -457,7 +656,9 @@ describe("AgentConversationBridge", () => {
     const resetsAfterLoad = resets;
 
     const created = await bridge.create();
-    expect(fixture.createCommands).toEqual([{ projectId: "project_01", commandId: "cmd_create" }]);
+    expect(fixture.createCommands).toEqual([
+      { projectId: "project_01", scope: workspaceScope("project_01"), commandId: "cmd_create" }
+    ]);
     expect(created.selectedConversationId).toBe("conv_created");
     expect(created.selectedConversation?.conversationId).toBe("conv_created");
     expect(resets).toBe(resetsAfterLoad + 1);
@@ -484,6 +685,7 @@ describe("AgentConversationBridge", () => {
     expect(fixture.archiveCommands).toEqual([
       {
         projectId: "project_01",
+        scope: workspaceScope("project_01"),
         conversationId: "conv_01",
         commandId: "cmd_archive",
         expectedConversationRevision: 1
@@ -495,6 +697,7 @@ describe("AgentConversationBridge", () => {
     expect(fixture.restoreCommands).toEqual([
       {
         projectId: "project_01",
+        scope: workspaceScope("project_01"),
         conversationId: "conv_01",
         commandId: "cmd_restore",
         expectedConversationRevision: 2
@@ -504,12 +707,44 @@ describe("AgentConversationBridge", () => {
 
     const searched = await bridge.search("first", true);
     expect(fixture.searchQueries).toEqual([
-      { projectId: "project_01", query: "first", includeArchived: true, limit: 30 }
+      {
+        projectId: "project_01",
+        scope: workspaceScope("project_01"),
+        query: "first",
+        includeArchived: true,
+        limit: 30
+      }
     ]);
     expect(searched.searchQuery).toBe("first");
     expect(searched.includeArchived).toBe(true);
     expect(searched.selectedConversationId).toBe("conv_01");
     expect(searched.selectedConversation?.conversationId).toBe("conv_01");
+  });
+
+  test("refreshes the authoritative revision before archiving after run metadata advances", async () => {
+    const initial = conversation("conv_01", "run_01", "completed", "2026-07-14T01:00:00.000Z");
+    const fixture = createApiFixture([initial]);
+    const bridge = createAgentConversationBridge(fixture.api, {
+      createCommandId: () => "cmd_archive"
+    });
+    await bridge.load("project_01");
+    fixture.setProjectConversations("project_01", [
+      {
+        ...initial,
+        revision: 2,
+        title: "Updated from the completed run",
+        updatedAt: "2026-07-14T02:00:00.000Z"
+      }
+    ]);
+
+    await bridge.archive("conv_01");
+
+    expect(fixture.archiveCommands).toEqual([
+      expect.objectContaining({
+        conversationId: "conv_01",
+        expectedConversationRevision: 2
+      })
+    ]);
   });
 
   test("deletes an archived conversation and moves selection to the next available conversation", async () => {
@@ -532,6 +767,7 @@ describe("AgentConversationBridge", () => {
     expect(fixture.deleteCommands).toEqual([
       {
         projectId: "project_01",
+        scope: workspaceScope("project_01"),
         conversationId: "conv_archived",
         commandId: "cmd_delete",
         expectedConversationRevision: 1
@@ -769,6 +1005,84 @@ function createApiFixture(initial: readonly AgentConversationSummary[]) {
       byProject.set(projectId, conversations);
     }
   };
+}
+
+function createScopedConversationFixture(initial: readonly AgentConversationSummary[]) {
+  const records = new Map<string, Map<string, AgentConversationSummary>>();
+  for (const conversation of initial) {
+    const scope = scopeForConversation(conversation);
+    const key = scopedFixtureKey(scope);
+    const conversations = records.get(key) ?? new Map<string, AgentConversationSummary>();
+    conversations.set(conversation.conversationId, conversation);
+    records.set(key, conversations);
+  }
+
+  const api = {
+    agentRuns: { onEvent: () => () => undefined },
+    agentConversations: {
+      async list(query: Record<string, unknown>) {
+        const conversations = [
+          ...(records.get(scopedFixtureKey(query["scope"] as AgentContextScope))?.values() ?? [])
+        ];
+        return {
+          ok: true as const,
+          value: {
+            items:
+              query["includeArchived"] === true
+                ? conversations
+                : conversations.filter((conversation) => conversation.status !== "archived"),
+            diagnostics: []
+          }
+        };
+      },
+      async read(query: Record<string, unknown>) {
+        const conversation = records
+          .get(scopedFixtureKey(query["scope"] as AgentContextScope))
+          ?.get(String(query["conversationId"]));
+        return conversation === undefined
+          ? {
+              ok: false as const,
+              error: { code: "NOT_FOUND", message: "missing", retryable: false }
+            }
+          : { ok: true as const, value: { ...conversation, runs: [], diagnostics: [] } };
+      }
+    }
+  } as unknown as NovelStudioApi;
+
+  return { api };
+}
+
+function scopedConversation(
+  scope: AgentContextScope,
+  conversationId: string,
+  status: AgentConversationSummary["status"] = "active",
+  lastRunStatus?: string
+): AgentConversationSummary {
+  return {
+    schemaVersion: "1.1",
+    scope,
+    conversationId,
+    revision: 1,
+    title: conversationId,
+    status,
+    createdAt: "2026-07-27T00:00:00.000Z",
+    updatedAt: "2026-07-27T00:00:00.000Z",
+    runCount: lastRunStatus === undefined ? 0 : 1,
+    summaryFreshness: "fresh",
+    ...(lastRunStatus === undefined ? {} : { lastRunId: `run-${conversationId}`, lastRunStatus })
+  };
+}
+
+function scopeForConversation(conversation: AgentConversationSummary): AgentContextScope {
+  const scope = (conversation as unknown as { readonly scope?: AgentContextScope }).scope;
+  if (scope === undefined) throw new Error("Scoped fixture conversations require a scope.");
+  return scope;
+}
+
+function scopedFixtureKey(scope: AgentContextScope): string {
+  return scope.kind === "standalone"
+    ? `standalone:${scope.scopeId}`
+    : `workspace:${scope.workspaceKind}:${scope.workspaceId}`;
 }
 
 function conversation(

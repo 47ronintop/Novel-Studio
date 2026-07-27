@@ -1,4 +1,9 @@
-import type { AgentRunEvent, AgentRunSnapshot } from "@novel-studio/agent-engine";
+import type {
+  AgentContextScope,
+  AgentRunEvent,
+  AgentRunSnapshot
+} from "@novel-studio/agent-engine";
+import { agentContextScopeKey, normalizeAgentContextScope } from "@novel-studio/agent-engine";
 import type {
   AgentConversationDiagnostic,
   AgentConversationListPage,
@@ -19,7 +24,9 @@ import type {
 import type { JsonObject } from "@novel-studio/shared";
 
 export interface AgentConversationWorkspaceProps {
-  readonly projectId: string;
+  readonly scope: AgentContextScope;
+  /** Legacy workspace-only identity; omitted for standalone conversations. */
+  readonly projectId?: string;
   readonly conversations: readonly AgentConversationSummary[];
   readonly selectedConversationId?: string;
   readonly activeConversationId?: string;
@@ -35,11 +42,15 @@ export interface AgentConversationWorkspaceProps {
 export interface AgentConversationBridgeOptions {
   readonly createCommandId?: (action: "create" | "archive" | "restore" | "delete") => string;
   readonly resetRunWriteAuthorization?: () => void;
+  readonly getStandaloneSelectedConversationId?: () => string | undefined;
+  readonly onStandaloneSelectedConversationIdChange?: (
+    conversationId: string | undefined
+  ) => void | Promise<void>;
 }
 
 export interface AgentConversationBridge {
   getProps(): AgentConversationWorkspaceProps | undefined;
-  load(projectId: string): Promise<AgentConversationWorkspaceProps>;
+  load(scopeOrProjectId: AgentContextScope | string): Promise<AgentConversationWorkspaceProps>;
   create(): Promise<AgentConversationWorkspaceProps>;
   select(conversationId: string): Promise<AgentConversationWorkspaceProps>;
   archive(conversationId: string): Promise<AgentConversationWorkspaceProps>;
@@ -63,7 +74,7 @@ export interface AgentConversationWorkspaceActions {
 }
 
 interface BridgeState {
-  readonly projectId: string | undefined;
+  readonly scope: AgentContextScope | undefined;
   readonly conversations: readonly AgentConversationSummary[];
   readonly selectedConversationId: string | undefined;
   readonly activeConversationId: string | undefined;
@@ -150,19 +161,71 @@ export function createAgentConversationBridge(
     };
   }
 
+  function getStandaloneSelectedConversationId(): string | undefined {
+    try {
+      const conversationId = options.getStandaloneSelectedConversationId?.();
+      return typeof conversationId === "string" && conversationId.trim().length > 0
+        ? conversationId
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async function persistStandaloneSelectedConversationId(
+    scope: AgentContextScope,
+    conversation: AgentConversationReadResult | undefined
+  ): Promise<void> {
+    if (scope.kind !== "standalone") return;
+    const conversationId =
+      conversation?.status === "active" ? conversation.conversationId : undefined;
+    if (
+      options.getStandaloneSelectedConversationId !== undefined &&
+      conversationId === getStandaloneSelectedConversationId()
+    ) {
+      return;
+    }
+    try {
+      await options.onStandaloneSelectedConversationIdChange?.(conversationId);
+    } catch {
+      // Preference persistence must not interrupt conversation selection.
+    }
+  }
+
+  function preferredConversationIdForScope(scope: AgentContextScope): string | undefined {
+    const persistedConversationId =
+      scope.kind === "standalone" ? getStandaloneSelectedConversationId() : undefined;
+    if (
+      persistedConversationId !== undefined &&
+      state.conversations.some(
+        (conversation) =>
+          conversation.conversationId === persistedConversationId &&
+          conversation.status === "active"
+      )
+    ) {
+      return persistedConversationId;
+    }
+    return preferredConversationId(state.conversations);
+  }
+
   async function hydrateSelection(
     conversationId: string | undefined
   ): Promise<AgentConversationReadResult | undefined> {
-    const projectId = state.projectId;
-    if (projectId === undefined || conversationId === undefined) {
+    const scope = state.scope;
+    if (scope === undefined || conversationId === undefined) {
       resetSelection();
+      if (scope !== undefined) await persistStandaloneSelectedConversationId(scope, undefined);
       return undefined;
     }
-    const read = await api.agentConversations.read({ projectId, conversationId });
+    const read = await api.agentConversations.read({
+      ...scopeIdentity(scope),
+      conversationId
+    });
     if (!read.ok) {
       state = { ...state, errorMessage: read.error.message };
       return undefined;
     }
+    if (!sameAgentScope(state.scope, scope)) return undefined;
     if (state.selectedConversationId !== conversationId) {
       options.resetRunWriteAuthorization?.();
     }
@@ -174,14 +237,15 @@ export function createAgentConversationBridge(
       selectedConversation: read.value,
       errorMessage: undefined
     };
+    await persistStandaloneSelectedConversationId(scope, read.value);
     return read.value;
   }
 
   async function refreshList(): Promise<boolean> {
-    const projectId = state.projectId;
-    if (projectId === undefined) return false;
+    const scope = state.scope;
+    if (scope === undefined) return false;
     const listed = await api.agentConversations.list({
-      projectId,
+      ...scopeIdentity(scope),
       includeArchived: state.includeArchived,
       limit: DEFAULT_PAGE_LIMIT
     });
@@ -189,12 +253,13 @@ export function createAgentConversationBridge(
       state = { ...state, errorMessage: listed.error.message };
       return false;
     }
+    if (!sameAgentScope(state.scope, scope)) return false;
     applyListPage(listed.value);
     return true;
   }
 
   /** Keep the first-run experience conversational: create the backing history entry silently. */
-  async function createAndSelectConversation(projectId: string): Promise<void> {
+  async function createAndSelectConversation(scope: AgentContextScope): Promise<void> {
     if (createInFlight !== undefined) {
       await createInFlight;
       return;
@@ -202,14 +267,14 @@ export function createAgentConversationBridge(
 
     const operation = (async () => {
       const created = await api.agentConversations.create({
-        projectId,
+        ...scopeIdentity(scope),
         commandId: createCommandId("create")
       });
       if (!created.ok) {
         state = { ...state, loading: false, errorMessage: created.error.message };
         return;
       }
-      if (state.projectId !== projectId) return;
+      if (!sameAgentScope(state.scope, scope)) return;
       mergeSummary(created.value);
       await refreshList();
       await hydrateSelection(created.value.conversationId);
@@ -223,12 +288,13 @@ export function createAgentConversationBridge(
   }
 
   async function routeRunEvent(event: AgentRunEvent): Promise<void> {
-    if (state.projectId !== event.projectId) return;
+    const scope = state.scope;
+    if (scope === undefined || !sameAgentScope(scope, scopeForRunEvent(event))) return;
     let conversationId = runConversationIds.get(event.runId);
     let snapshot: AgentRunSnapshot | undefined;
     if (conversationId === undefined) {
       const read = await api.agentRuns.read(event.runId);
-      if (!read.ok || read.value.snapshot.projectId !== state.projectId) return;
+      if (!read.ok || !sameAgentScope(scopeForSnapshot(read.value.snapshot), state.scope)) return;
       snapshot = read.value.snapshot;
       conversationId = snapshot.conversationId ?? undefined;
       if (conversationId === undefined) return;
@@ -238,7 +304,7 @@ export function createAgentConversationBridge(
     let summary = knownConversations.get(conversationId);
     if (summary === undefined) {
       const read = await api.agentConversations.read({
-        projectId: event.projectId,
+        ...scopeIdentity(scope),
         conversationId
       });
       if (!read.ok) return;
@@ -283,18 +349,28 @@ export function createAgentConversationBridge(
     conversationId: string,
     action: "archive" | "restore"
   ): Promise<AgentConversationWorkspaceProps> {
-    const projectId = state.projectId;
-    const summary = knownConversations.get(conversationId);
-    if (projectId === undefined || summary === undefined) {
+    const scope = state.scope;
+    if (scope === undefined || !knownConversations.has(conversationId)) {
       state = { ...state, errorMessage: "The Agent conversation is not available." };
       return requireProps();
     }
     setLoading(true);
+    const latest = await api.agentConversations.read({
+      ...scopeIdentity(scope),
+      conversationId
+    });
+    if (!latest.ok) {
+      state = { ...state, loading: false, errorMessage: latest.error.message };
+      notify();
+      return requireProps();
+    }
+    mergeSummary(latest.value);
+    rememberRuns(latest.value);
     const command = {
-      projectId,
+      ...scopeIdentity(scope),
       conversationId,
       commandId: createCommandId(action),
-      expectedConversationRevision: summary.revision
+      expectedConversationRevision: latest.value.revision
     };
     const result =
       action === "archive"
@@ -324,18 +400,28 @@ export function createAgentConversationBridge(
   async function deleteConversation(
     conversationId: string
   ): Promise<AgentConversationWorkspaceProps> {
-    const projectId = state.projectId;
-    const summary = knownConversations.get(conversationId);
-    if (projectId === undefined || summary === undefined) {
+    const scope = state.scope;
+    if (scope === undefined || !knownConversations.has(conversationId)) {
       state = { ...state, errorMessage: "The Agent conversation is not available." };
       return requireProps();
     }
     setLoading(true);
+    const latest = await api.agentConversations.read({
+      ...scopeIdentity(scope),
+      conversationId
+    });
+    if (!latest.ok) {
+      state = { ...state, loading: false, errorMessage: latest.error.message };
+      notify();
+      return requireProps();
+    }
+    mergeSummary(latest.value);
+    rememberRuns(latest.value);
     const result = await api.agentConversations.delete({
-      projectId,
+      ...scopeIdentity(scope),
       conversationId,
       commandId: createCommandId("delete"),
-      expectedConversationRevision: summary.revision
+      expectedConversationRevision: latest.value.revision
     });
     if (!result.ok) {
       if (result.latestConversation !== undefined) mergeSummary(result.latestConversation);
@@ -373,19 +459,20 @@ export function createAgentConversationBridge(
   }
 
   const bridge: AgentConversationBridge = {
-    getProps: () => (state.projectId === undefined ? undefined : toProps(state)),
-    async load(projectId) {
-      const projectChanged = state.projectId !== projectId;
-      if (projectChanged) {
-        if (state.projectId !== undefined) options.resetRunWriteAuthorization?.();
+    getProps: () => (state.scope === undefined ? undefined : toProps(state)),
+    async load(scopeOrProjectId) {
+      const scope = resolveScopeInput(scopeOrProjectId);
+      const scopeChanged = !sameAgentScope(state.scope, scope);
+      if (scopeChanged) {
+        if (state.scope !== undefined) options.resetRunWriteAuthorization?.();
         runConversationIds.clear();
         knownConversations.clear();
-        state = { ...emptyState(), projectId, loading: true };
+        state = { ...emptyState(), scope, loading: true };
       } else {
         setLoading(true);
       }
       const listed = await api.agentConversations.list({
-        projectId,
+        ...scopeIdentity(scope),
         includeArchived: false,
         limit: DEFAULT_PAGE_LIMIT
       });
@@ -394,19 +481,20 @@ export function createAgentConversationBridge(
         notify();
         return requireProps();
       }
+      if (!sameAgentScope(state.scope, scope)) return requireProps();
       applyListPage(listed.value);
-      const preferred = preferredConversationId(state.conversations);
-      if (preferred === undefined) await createAndSelectConversation(projectId);
+      const preferred = preferredConversationIdForScope(scope);
+      if (preferred === undefined) await createAndSelectConversation(scope);
       else await hydrateSelection(preferred);
       state = { ...state, loading: false };
       notify();
       return requireProps();
     },
     async create() {
-      const projectId = state.projectId;
-      if (projectId === undefined) return requireProps();
+      const scope = state.scope;
+      if (scope === undefined) return requireProps();
       setLoading(true);
-      await createAndSelectConversation(projectId);
+      await createAndSelectConversation(scope);
       state = { ...state, loading: false };
       notify();
       return requireProps();
@@ -422,15 +510,15 @@ export function createAgentConversationBridge(
     restore: (conversationId) => runStatusCommand(conversationId, "restore"),
     delete: deleteConversation,
     async search(query, includeArchived = state.includeArchived) {
-      const projectId = state.projectId;
-      if (projectId === undefined) return requireProps();
+      const scope = state.scope;
+      if (scope === undefined) return requireProps();
       state = { ...state, searchQuery: query, includeArchived };
       setLoading(true);
       if (query.trim().length === 0) {
         await refreshList();
       } else {
         const searched = await api.agentConversations.search({
-          projectId,
+          ...scopeIdentity(scope),
           query,
           includeArchived,
           limit: DEFAULT_PAGE_LIMIT
@@ -459,7 +547,7 @@ export function createAgentConversationBridge(
   return bridge;
 
   function requireProps(): AgentConversationWorkspaceProps {
-    if (state.projectId === undefined) {
+    if (state.scope === undefined) {
       throw new Error("AgentConversationBridge must be loaded before use.");
     }
     return toProps(state);
@@ -468,7 +556,7 @@ export function createAgentConversationBridge(
 
 function emptyState(): BridgeState {
   return {
-    projectId: undefined,
+    scope: undefined,
     conversations: [],
     selectedConversationId: undefined,
     activeConversationId: undefined,
@@ -483,9 +571,10 @@ function emptyState(): BridgeState {
 }
 
 function toProps(state: BridgeState): AgentConversationWorkspaceProps {
-  if (state.projectId === undefined) throw new Error("Agent conversation project is missing.");
+  if (state.scope === undefined) throw new Error("Agent conversation scope is missing.");
   return {
-    projectId: state.projectId,
+    scope: state.scope,
+    ...(state.scope.kind === "workspace" ? { projectId: state.scope.workspaceId } : {}),
     conversations: state.conversations,
     ...(state.selectedConversationId === undefined
       ? {}
@@ -523,19 +612,19 @@ export function toAgentConversationWorkspaceProps(
     selectedRunIds.add(state.selectedConversation.lastRunId);
   }
   const selectedConversationId = state.selectedConversation?.conversationId;
+  const agentRunMatchesScope =
+    agentRun !== undefined && sameAgentScope(scopeForAgentRunPanel(agentRun), state.scope);
   const agentRunMatchesSelectedConversation =
-    agentRun !== undefined &&
-    agentRun.projectId === state.projectId &&
+    agentRunMatchesScope &&
     selectedConversationId !== undefined &&
     agentRun.conversationId === selectedConversationId;
   const selectedAgentRun =
-    agentRun === undefined
+    agentRun === undefined || !agentRunMatchesScope
       ? undefined
       : agentRunMatchesSelectedConversation ||
           (agentRun.runId !== undefined && selectedRunIds.has(agentRun.runId)) ||
           (agentRun.runId === undefined &&
             agentRun.errorMessage !== undefined &&
-            agentRun.projectId === state.projectId &&
             state.selectedConversation !== undefined)
         ? agentRun
         : undefined;
@@ -931,9 +1020,11 @@ function runSummaryFromSnapshot(
   snapshot: AgentRunSnapshot | undefined,
   event: AgentRunEvent
 ): Readonly<Record<string, unknown>> {
+  const scope = snapshot === undefined ? scopeForRunEvent(event) : scopeForSnapshot(snapshot);
   return {
     runId: event.runId,
-    projectId: event.projectId,
+    ...(scope === undefined ? {} : { scope }),
+    ...(scope?.kind === "workspace" ? { projectId: scope.workspaceId } : {}),
     ...(snapshot?.conversationId === undefined ? {} : { conversationId: snapshot.conversationId }),
     userRequest: snapshot?.userRequest ?? "Agent request",
     status: snapshot?.status ?? statusForEvent(event.type, "created") ?? "created",
@@ -979,10 +1070,12 @@ const CONVERSATION_ACTIVITY_EVENT_TYPES = new Set<AgentRunEvent["type"]>([
 ]);
 
 function toConversationActivityEventRecord(event: AgentRunEvent): JsonObject {
+  const scope = scopeForRunEvent(event);
   return {
     schemaVersion: event.schemaVersion,
     runId: event.runId,
-    projectId: event.projectId,
+    ...(scope === undefined ? {} : { scope: scope as unknown as JsonObject }),
+    ...(scope?.kind === "workspace" ? { projectId: scope.workspaceId } : {}),
     sequence: event.sequence,
     runRevision: event.runRevision,
     type: event.type,
@@ -1004,7 +1097,7 @@ function isAgentRunEventRecord(event: JsonObject): boolean {
   return (
     typeof event["schemaVersion"] === "string" &&
     typeof event["runId"] === "string" &&
-    typeof event["projectId"] === "string" &&
+    (typeof event["projectId"] === "string" || scopeFromUnknown(event["scope"]) !== undefined) &&
     Number.isSafeInteger(event["sequence"]) &&
     Number.isSafeInteger(event["runRevision"]) &&
     typeof event["type"] === "string" &&
@@ -1014,6 +1107,68 @@ function isAgentRunEventRecord(event: JsonObject): boolean {
 
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+type ScopeCommandIdentity =
+  | { readonly scope: AgentContextScope }
+  | { readonly scope: AgentContextScope; readonly projectId: string };
+
+function resolveScopeInput(scopeOrProjectId: AgentContextScope | string): AgentContextScope {
+  return typeof scopeOrProjectId === "string"
+    ? normalizeAgentContextScope(undefined, scopeOrProjectId)
+    : normalizeAgentContextScope(scopeOrProjectId);
+}
+
+function scopeIdentity(scope: AgentContextScope): ScopeCommandIdentity {
+  return scope.kind === "workspace" ? { scope, projectId: scope.workspaceId } : { scope };
+}
+
+function scopeForSnapshot(snapshot: AgentRunSnapshot): AgentContextScope {
+  return normalizeAgentContextScope(
+    (snapshot as unknown as { readonly scope?: unknown }).scope,
+    (snapshot as unknown as { readonly projectId?: unknown }).projectId
+  );
+}
+
+function scopeForRunEvent(event: AgentRunEvent): AgentContextScope | undefined {
+  try {
+    return normalizeAgentContextScope(
+      (event as unknown as { readonly scope?: unknown }).scope,
+      (event as unknown as { readonly projectId?: unknown }).projectId
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function scopeForAgentRunPanel(agentRun: AgentRunPanelProps): AgentContextScope | undefined {
+  try {
+    return normalizeAgentContextScope(
+      (agentRun as unknown as { readonly scope?: unknown }).scope,
+      (agentRun as unknown as { readonly projectId?: unknown }).projectId
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function scopeFromUnknown(value: unknown): AgentContextScope | undefined {
+  try {
+    return normalizeAgentContextScope(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function sameAgentScope(
+  left: AgentContextScope | undefined,
+  right: AgentContextScope | undefined
+): boolean {
+  return (
+    left !== undefined &&
+    right !== undefined &&
+    agentContextScopeKey(left) === agentContextScopeKey(right)
+  );
 }
 
 function laterTimestamp(current: string, candidate: string): string {

@@ -261,7 +261,9 @@ function ModelReasoningMenu(props: ModelReasoningMenuProps): ReactNode {
 }
 
 function operationModeLabel(mode: AgentComposerProps["operationMode"]): string {
-  return mode === "planning" ? "计划" : "执行";
+  if (mode === "planning") return "计划";
+  if (mode === "execution") return "执行";
+  return "会话";
 }
 
 export function AgentComposer(props: AgentComposerProps) {
@@ -284,6 +286,10 @@ export function AgentComposer(props: AgentComposerProps) {
   const model = props.model;
   const reasoning = props.reasoning;
   const references = props.references;
+  // Standalone has no project-backed context or write capabilities. Treat either
+  // standalone fact as sufficient so a malformed upstream draft cannot expose them.
+  const isStandaloneConversation =
+    props.operationMode === "conversation" || props.contextMode === "standalone_chat";
   const selectedModel = model?.profiles.find((profile) => profile.id === model.selectedProfileId);
   const selectedModelLabel =
     selectedModel?.label ??
@@ -307,7 +313,7 @@ export function AgentComposer(props: AgentComposerProps) {
           placeholder="说明你想续写、修改、分析或规划的内容…"
           value={props.request}
         />
-        {references !== undefined && references.chips.length > 0 ? (
+        {!isStandaloneConversation && references !== undefined && references.chips.length > 0 ? (
           <ul aria-label="已选引用" className="ns-agent-composer-reference-chips-inset">
             {references.chips.map((chip) => (
               <li key={chip.refId}>
@@ -326,136 +332,142 @@ export function AgentComposer(props: AgentComposerProps) {
         ) : null}
         <div className="ns-agent-composer-toolbar">
           <div aria-label="会话工具栏" className="ns-agent-composer-footer" role="toolbar">
-            <AgentPopover
-              disabled={false}
-              onOpenChange={(open) => {
-                if (open && props.operationMode === "execution") props.permission?.onOpen();
-              }}
-              panelClassName="ns-agent-composer-add-popover"
-              panelLabel="添加引用与执行审批"
-              rootClassName="ns-agent-composer-add-popover-root"
-              triggerClassName="ns-agent-composer-ref-add-trigger"
-              triggerContent={<Plus aria-hidden="true" size={14} />}
-              triggerLabel="添加引用与执行审批"
-              triggerTitle="添加引用与执行审批"
-            >
-              {({ close }) => (
-                <div className="ns-agent-composer-add-menu">
-                  <section aria-label="上下文引用" className="ns-agent-composer-add-section">
-                    <p className="ns-agent-composer-add-heading">上下文引用</p>
-                    <ul
-                      aria-label="可添加的引用"
-                      className="ns-agent-composer-option-list"
-                      role="listbox"
-                    >
-                      {references === undefined || references.available.length === 0 ? (
-                        <li className="ns-agent-context-empty">暂无可添加的引用</li>
-                      ) : (
-                        references.available.map((ref) => (
-                          <li key={ref.refId}>
-                            <button
-                              data-reference-option={ref.refId}
-                              disabled={draftDisabled}
-                              onClick={() => {
-                                references.onAdd(ref.refId);
-                                close();
-                              }}
-                              type="button"
-                            >
-                              {ref.label}
-                            </button>
-                          </li>
-                        ))
+            {isStandaloneConversation ? null : (
+              <>
+                <AgentPopover
+                  disabled={false}
+                  onOpenChange={(open) => {
+                    if (open && props.operationMode === "execution") props.permission?.onOpen();
+                  }}
+                  panelClassName="ns-agent-composer-add-popover"
+                  panelLabel="添加引用与执行审批"
+                  rootClassName="ns-agent-composer-add-popover-root"
+                  triggerClassName="ns-agent-composer-ref-add-trigger"
+                  triggerContent={<Plus aria-hidden="true" size={14} />}
+                  triggerLabel="添加引用与执行审批"
+                  triggerTitle="添加引用与执行审批"
+                >
+                  {({ close }) => (
+                    <div className="ns-agent-composer-add-menu">
+                      <section aria-label="上下文引用" className="ns-agent-composer-add-section">
+                        <p className="ns-agent-composer-add-heading">上下文引用</p>
+                        <ul
+                          aria-label="可添加的引用"
+                          className="ns-agent-composer-option-list"
+                          role="listbox"
+                        >
+                          {references === undefined || references.available.length === 0 ? (
+                            <li className="ns-agent-context-empty">暂无可添加的引用</li>
+                          ) : (
+                            references.available.map((ref) => (
+                              <li key={ref.refId}>
+                                <button
+                                  data-reference-option={ref.refId}
+                                  disabled={draftDisabled}
+                                  onClick={() => {
+                                    references.onAdd(ref.refId);
+                                    close();
+                                  }}
+                                  type="button"
+                                >
+                                  {ref.label}
+                                </button>
+                              </li>
+                            ))
+                          )}
+                        </ul>
+                        {references?.onPickFile === undefined ? null : (
+                          <button
+                            className="ns-agent-composer-add-file"
+                            disabled={draftDisabled}
+                            onClick={() => {
+                              references.onPickFile?.();
+                              close();
+                            }}
+                            type="button"
+                          >
+                            <FilePlus2 aria-hidden="true" size={14} />
+                            添加项目文件…
+                          </button>
+                        )}
+                      </section>
+                      {props.operationMode === "planning" ? null : (
+                        <>
+                          <div className="ns-agent-composer-add-divider" role="separator" />
+                          <AgentPermissionMenu
+                            {...(props.permission === undefined
+                              ? {}
+                              : { control: props.permission })}
+                            onWritePolicyChange={props.onWritePolicyChange}
+                            policyDisabled={draftDisabled}
+                            writePolicy={props.writePolicy}
+                          />
+                        </>
                       )}
-                    </ul>
-                    {references?.onPickFile === undefined ? null : (
+                    </div>
+                  )}
+                </AgentPopover>
+
+                <AgentPopover
+                  disabled={draftDisabled}
+                  initialFocus={
+                    props.operationMode === "planning" ? planningOptionRef : executionOptionRef
+                  }
+                  panelClassName="ns-agent-composer-mode-popover"
+                  panelLabel="计划或执行模式"
+                  rootClassName="ns-agent-composer-mode-popover-root"
+                  triggerClassName="ns-agent-composer-mode-trigger"
+                  triggerContent={
+                    <>
+                      <span>{operationModeLabel(props.operationMode)}</span>
+                      <ChevronDown aria-hidden="true" size={12} />
+                    </>
+                  }
+                  triggerLabel={operationModeLabel(props.operationMode)}
+                  triggerTitle="选择计划或执行模式"
+                >
+                  {({ close }) => (
+                    <div aria-label="计划或执行模式" role="group">
                       <button
-                        className="ns-agent-composer-add-file"
+                        aria-label="计划"
+                        aria-pressed={props.operationMode === "planning"}
+                        data-mode-option="planning"
                         disabled={draftDisabled}
                         onClick={() => {
-                          references.onPickFile?.();
+                          props.onOperationModeChange("planning");
                           close();
                         }}
+                        onKeyDown={rovePopoverOptions}
+                        ref={planningOptionRef}
                         type="button"
                       >
-                        <FilePlus2 aria-hidden="true" size={14} />
-                        添加项目文件…
+                        <span>计划</span>
+                        <small>分析并制定方案</small>
                       </button>
-                    )}
-                  </section>
-                  {props.operationMode === "planning" ? null : (
-                    <>
-                      <div className="ns-agent-composer-add-divider" role="separator" />
-                      <AgentPermissionMenu
-                        {...(props.permission === undefined ? {} : { control: props.permission })}
-                        onWritePolicyChange={props.onWritePolicyChange}
-                        policyDisabled={draftDisabled}
-                        writePolicy={props.writePolicy}
-                      />
-                    </>
+                      <button
+                        aria-label="执行"
+                        aria-pressed={props.operationMode === "execution"}
+                        data-mode-option="execution"
+                        disabled={draftDisabled}
+                        onClick={() => {
+                          props.onOperationModeChange("execution");
+                          close();
+                        }}
+                        onKeyDown={rovePopoverOptions}
+                        ref={executionOptionRef}
+                        type="button"
+                      >
+                        <span>执行</span>
+                        <small>按审批策略修改</small>
+                      </button>
+                    </div>
                   )}
-                </div>
-              )}
-            </AgentPopover>
+                </AgentPopover>
 
-            <AgentPopover
-              disabled={draftDisabled}
-              initialFocus={
-                props.operationMode === "planning" ? planningOptionRef : executionOptionRef
-              }
-              panelClassName="ns-agent-composer-mode-popover"
-              panelLabel="计划或执行模式"
-              rootClassName="ns-agent-composer-mode-popover-root"
-              triggerClassName="ns-agent-composer-mode-trigger"
-              triggerContent={
-                <>
-                  <span>{operationModeLabel(props.operationMode)}</span>
-                  <ChevronDown aria-hidden="true" size={12} />
-                </>
-              }
-              triggerLabel={operationModeLabel(props.operationMode)}
-              triggerTitle="选择计划或执行模式"
-            >
-              {({ close }) => (
-                <div aria-label="计划或执行模式" role="group">
-                  <button
-                    aria-label="计划"
-                    aria-pressed={props.operationMode === "planning"}
-                    data-mode-option="planning"
-                    disabled={draftDisabled}
-                    onClick={() => {
-                      props.onOperationModeChange("planning");
-                      close();
-                    }}
-                    onKeyDown={rovePopoverOptions}
-                    ref={planningOptionRef}
-                    type="button"
-                  >
-                    <span>计划</span>
-                    <small>分析并制定方案</small>
-                  </button>
-                  <button
-                    aria-label="执行"
-                    aria-pressed={props.operationMode === "execution"}
-                    data-mode-option="execution"
-                    disabled={draftDisabled}
-                    onClick={() => {
-                      props.onOperationModeChange("execution");
-                      close();
-                    }}
-                    onKeyDown={rovePopoverOptions}
-                    ref={executionOptionRef}
-                    type="button"
-                  >
-                    <span>执行</span>
-                    <small>按审批策略修改</small>
-                  </button>
-                </div>
-              )}
-            </AgentPopover>
-
-            {props.contextStatus === undefined ? null : (
-              <AgentContextMenu control={props.contextStatus} disabled={draftDisabled} />
+                {props.contextStatus === undefined ? null : (
+                  <AgentContextMenu control={props.contextStatus} disabled={draftDisabled} />
+                )}
+              </>
             )}
 
             {model === undefined ? null : (

@@ -15,11 +15,13 @@ const chapterRef: ContextDraftRef = {
   label: "第 1 章"
 };
 
-function baseDraft(overrides: Partial<Parameters<typeof createContextDraft>[0]> = {}): ContextDraft {
+function baseDraft(
+  overrides: Partial<Parameters<typeof createContextDraft>[0]> = {}
+): ContextDraft {
   return createContextDraft({
     contextDraftId: "context_draft_01",
     conversationId: "conv_01",
-    projectId: "project_01",
+    scope: { kind: "workspace", workspaceKind: "creativeProject", workspaceId: "project_01" },
     contextMode: "writing",
     updatedAt: "2026-07-16T00:00:00.000Z",
     ...overrides
@@ -29,16 +31,21 @@ function baseDraft(overrides: Partial<Parameters<typeof createContextDraft>[0]> 
 describe("Context Draft value object", () => {
   test("creates revision 1 with a checksum and no refs by default", () => {
     const draft = baseDraft();
-    expect(draft.schemaVersion).toBe("1.0");
+    expect(draft.schemaVersion).toBe("1.1");
     expect(draft.revision).toBe(1);
     expect(draft.refs).toEqual([]);
+    expect(draft.activeResourceRef).toBeNull();
     expect(draft.checksum).toMatch(/^[0-9a-f]{64}$/);
     expect(Object.isFrozen(draft)).toBe(true);
   });
 
   test("add_ref produces one next revision with a changed checksum", () => {
     const draft = baseDraft();
-    const result = applyContextDraftMutation(draft, { kind: "add_ref", ref: chapterRef }, "2026-07-16T00:01:00.000Z");
+    const result = applyContextDraftMutation(
+      draft,
+      { kind: "add_ref", ref: chapterRef },
+      "2026-07-16T00:01:00.000Z"
+    );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.revision).toBe(2);
@@ -48,14 +55,22 @@ describe("Context Draft value object", () => {
 
   test("rejects a duplicate ref", () => {
     const draft = baseDraft({ refs: [chapterRef] });
-    const result = applyContextDraftMutation(draft, { kind: "add_ref", ref: chapterRef }, "2026-07-16T00:01:00.000Z");
+    const result = applyContextDraftMutation(
+      draft,
+      { kind: "add_ref", ref: chapterRef },
+      "2026-07-16T00:01:00.000Z"
+    );
     expect(result).toMatchObject({ ok: false, error: { code: "CONTEXT_DRAFT_REF_DUPLICATE" } });
   });
 
   test("rejects chapter and Story Bible refs in general-file mode", () => {
     const draft = baseDraft({ contextMode: "general_file" });
     expect(
-      applyContextDraftMutation(draft, { kind: "add_ref", ref: chapterRef }, "2026-07-16T00:01:00.000Z")
+      applyContextDraftMutation(
+        draft,
+        { kind: "add_ref", ref: chapterRef },
+        "2026-07-16T00:01:00.000Z"
+      )
     ).toMatchObject({ ok: false, error: { code: "CONTEXT_DRAFT_REF_MODE_INVALID" } });
     expect(
       applyContextDraftMutation(
@@ -75,7 +90,12 @@ describe("Context Draft value object", () => {
       draft,
       {
         kind: "add_ref",
-        ref: { kind: "project_file", refId: "pf:escape", relativePath: "../secrets.md", label: "外部" }
+        ref: {
+          kind: "project_file",
+          refId: "pf:escape",
+          relativePath: "../secrets.md",
+          label: "外部"
+        }
       },
       "2026-07-16T00:01:00.000Z"
     );
@@ -88,11 +108,78 @@ describe("Context Draft value object", () => {
       draft,
       {
         kind: "add_ref",
-        ref: { kind: "project_file", refId: "pf:notes", relativePath: "notes/outline.md", label: "大纲" }
+        ref: {
+          kind: "project_file",
+          refId: "pf:notes",
+          relativePath: "notes/outline.md",
+          label: "大纲"
+        }
       },
       "2026-07-16T00:01:00.000Z"
     );
     expect(result.ok).toBe(true);
+  });
+
+  test("tracks an active project-file checksum without requiring it for manual refs", () => {
+    const manualRef: ContextDraftRef = {
+      kind: "project_file",
+      refId: "pf:research",
+      relativePath: "notes/research.md",
+      label: "研究笔记"
+    };
+    const draft = baseDraft({ contextMode: "general_file", refs: [manualRef] });
+    const active = {
+      kind: "project_file" as const,
+      refId: "pf:current",
+      relativePath: "notes/current.md",
+      label: "当前文件",
+      expectedChecksum: "a".repeat(64)
+    };
+    const first = applyContextDraftMutation(
+      draft,
+      { kind: "set_active_resource", ref: active },
+      "2026-07-16T00:01:00.000Z"
+    );
+    expect(first).toMatchObject({
+      ok: true,
+      value: { refs: [manualRef], activeResourceRef: active }
+    });
+    if (!first.ok) return;
+
+    const updated = applyContextDraftMutation(
+      first.value,
+      {
+        kind: "set_active_resource",
+        ref: { ...active, expectedChecksum: "b".repeat(64) }
+      },
+      "2026-07-16T00:02:00.000Z"
+    );
+    expect(updated.ok).toBe(true);
+    if (!updated.ok) return;
+    expect(updated.value.checksum).not.toBe(first.value.checksum);
+    expect(updated.value.activeResourceRef?.expectedChecksum).toBe("b".repeat(64));
+  });
+
+  test("rejects a malformed expected checksum on a project-file ref", () => {
+    const draft = baseDraft({ contextMode: "general_file" });
+    const result = applyContextDraftMutation(
+      draft,
+      {
+        kind: "set_active_resource",
+        ref: {
+          kind: "project_file",
+          refId: "pf:current",
+          relativePath: "notes/current.md",
+          label: "当前文件",
+          expectedChecksum: "not-a-sha256"
+        }
+      },
+      "2026-07-16T00:01:00.000Z"
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "CONTEXT_DRAFT_REF_CHECKSUM_INVALID" }
+    });
   });
 
   test("set_selection replaces the prior editor selection and clears it with null", () => {
@@ -104,14 +191,28 @@ describe("Context Draft value object", () => {
       range: { start: 0, end: 10 }
     };
     const second = { ...first, refId: "sel:2", editorRevision: 5, range: { start: 5, end: 20 } };
-    const withFirst = applyContextDraftMutation(baseDraft(), { kind: "set_selection", ref: first }, "t1");
+    const withFirst = applyContextDraftMutation(
+      baseDraft(),
+      { kind: "set_selection", ref: first },
+      "t1"
+    );
     expect(withFirst.ok).toBe(true);
     if (!withFirst.ok) return;
-    const withSecond = applyContextDraftMutation(withFirst.value, { kind: "set_selection", ref: second }, "t2");
+    const withSecond = applyContextDraftMutation(
+      withFirst.value,
+      { kind: "set_selection", ref: second },
+      "t2"
+    );
     expect(withSecond.ok).toBe(true);
     if (!withSecond.ok) return;
-    expect(withSecond.value.refs.filter((ref) => ref.kind === "editor_selection")).toEqual([second]);
-    const cleared = applyContextDraftMutation(withSecond.value, { kind: "set_selection", ref: null }, "t3");
+    expect(withSecond.value.refs.filter((ref) => ref.kind === "editor_selection")).toEqual([
+      second
+    ]);
+    const cleared = applyContextDraftMutation(
+      withSecond.value,
+      { kind: "set_selection", ref: null },
+      "t3"
+    );
     expect(cleared.ok).toBe(true);
     if (!cleared.ok) return;
     expect(cleared.value.refs.some((ref) => ref.kind === "editor_selection")).toBe(false);
@@ -119,7 +220,11 @@ describe("Context Draft value object", () => {
 
   test("remove_ref drops the ref and refresh bumps the revision without changing refs", () => {
     const draft = baseDraft({ refs: [chapterRef] });
-    const removed = applyContextDraftMutation(draft, { kind: "remove_ref", refId: "chapter:ch_01" }, "t1");
+    const removed = applyContextDraftMutation(
+      draft,
+      { kind: "remove_ref", refId: "chapter:ch_01" },
+      "t1"
+    );
     expect(removed.ok).toBe(true);
     if (!removed.ok) return;
     expect(removed.value.refs).toEqual([]);

@@ -125,6 +125,13 @@ describe("desktop application command bridge", () => {
   test("registers only safe M4 commands with risk levels", () => {
     expect(DEFAULT_APPLICATION_COMMANDS).toEqual([
       {
+        id: "workspace.close-current",
+        title: "关闭当前项目/工作区",
+        scope: "workspace",
+        riskLevel: "safe",
+        defaultShortcut: "Ctrl/Cmd+Shift+W"
+      },
+      {
         id: "workspace.open-command-palette",
         title: "打开命令面板",
         scope: "workspace",

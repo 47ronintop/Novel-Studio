@@ -13,14 +13,12 @@ import type {
   ChapterEditorSelection,
   ChapterEditorProps,
   CommandPaletteFeedback,
-  EditorPreferences,
   ModelSettingsDraft,
-  PlainFileEditorProps,
   SettingsPanelSection,
   StoryBibleEditorDraft,
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
-import { DEFAULT_EDITOR_PREFERENCES, ProjectCreateDialog } from "@novel-studio/ui";
+import { ProjectCreateDialog } from "@novel-studio/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { createAiWritingWorkflowBridge } from "./ai-writing-workflow-bridge.js";
@@ -32,16 +30,17 @@ import { createStoryBibleBridge } from "./story-bible-bridge.js";
 import { createEngineeringWorkspaceBridge } from "./engineering-workspace-bridge.js";
 import { createSettingsBridge } from "./settings-bridge.js";
 import { createStudioBridge } from "./studio-bridge.js";
-import { createPlainFileEditorBridge } from "./plain-file-editor-bridge.js";
 import { createAgentRunBridge } from "./agent-run-bridge.js";
 import {
   decorateAgentConversationWorkspace,
   resolveAgentConversationWorkspacePresentation,
   useAgentConversationWorkspace,
   useAgentRunWorkspaceEffects,
+  useStandaloneConversationSelection,
   type PendingAgentConversationMainReview
 } from "./agent-conversation-workspace.js";
 import {
+  agentScopeFromWorkspaceContext,
   createChapterEditorRuntime,
   createOnboardingProps,
   getNovelStudioApi,
@@ -61,14 +60,15 @@ import { useSettingsPanelActions } from "./settings-panel-actions.js";
 import { useShellPreferenceActions } from "./shell-preference-actions.js";
 import { createWorkspaceNavigation, type WorkspaceNavigation } from "./workspace-navigation.js";
 import { useStudioActions } from "./studio-actions.js";
+import {
+  createCreativeProjectFileShellBindings,
+  useWorkspaceFileEditorRuntime
+} from "./workspace-file-editor-runtime.js";
 
 export function App() {
   const [api] = useState(() => getNovelStudioApi());
   const [chapterBridge] = useState(() =>
     api === undefined ? undefined : createChapterEditorBridge(api)
-  );
-  const [plainFileBridge] = useState(() =>
-    api === undefined ? undefined : createPlainFileEditorBridge(api)
   );
   const [projectWorkflowBridge] = useState(() =>
     api === undefined ? undefined : createProjectWorkflowBridge(api)
@@ -98,7 +98,6 @@ export function App() {
   const [shellState, setShellState] = useState<DesktopShellState>(rendererShellState);
   const [commands, setCommands] = useState<readonly ApplicationCommand[]>(rendererCommands);
   const [chapterEditor, setChapterEditor] = useState<ChapterEditorProps | undefined>();
-  const [fileEditor, setFileEditor] = useState<PlainFileEditorProps | undefined>();
   const [engineeringWorkspace, setEngineeringWorkspace] = useState<
     EngineeringWorkspaceSnapshot | undefined
   >(() => engineeringWorkspaceBridge?.getProps().workspace);
@@ -116,14 +115,55 @@ export function App() {
     aiWritingWorkflowBridge?.getProps()
   );
   const [agentRun, setAgentRun] = useState(() => agentRunBridge?.getProps());
+  const workspaceContext = shellState.workspaceContext;
   const activeProjectId =
-    shellState.workspaceContext.kind === "none"
-      ? undefined
-      : shellState.workspaceContext.workspaceId;
+    workspaceContext.kind === "none" ? undefined : workspaceContext.workspaceId;
+  const activeAgentScope = agentScopeFromWorkspaceContext(workspaceContext);
   const activeCreativeProjectId =
-    shellState.workspaceContext.kind === "creativeProject"
-      ? shellState.workspaceContext.projectId
-      : undefined;
+    workspaceContext.kind === "creativeProject" ? workspaceContext.projectId : undefined;
+  const activeCreativeWorkspaceId =
+    workspaceContext.kind === "creativeProject" ? workspaceContext.workspaceId : undefined;
+  const persistUserPreferences = useCallback(
+    (input: UserPreferencesSaveInput) => {
+      if (api === undefined) return;
+      void api.preferences.save(input);
+    },
+    [api]
+  );
+  const standaloneConversationSelection =
+    useStandaloneConversationSelection(persistUserPreferences);
+  const fileEditorRuntime = useWorkspaceFileEditorRuntime({
+    api,
+    activeCreativeProjectId,
+    activeCreativeWorkspaceId,
+    creativeExpandedPathIds: shellState.creativeFileExpandedPathIds,
+    creativeWorkspaceActive: shellState.workspaceContext.kind === "creativeProject",
+    chapterBridge,
+    projectWorkflowBridge,
+    persistUserPreferences,
+    setChapterEditor
+  });
+  const {
+    fileEditor,
+    fileEditorScope,
+    plainFileBridge,
+    creativePlainFileBridgeRef,
+    creativeProjectFilesBridge,
+    creativeProjectFiles,
+    editorPreferences,
+    setEditorPreferences,
+    onEditorPreferencesChange,
+    onFocusModeToggle,
+    focusModeToggleRef,
+    activeCreativeFileRef,
+    setEngineeringFileEditor,
+    setCreativeFileEditor,
+    clearFileEditor,
+    clearCreativeFile,
+    clearWorkspaceFileEditors,
+    guardCreativeFile,
+    guardWorkspaceFileEditors
+  } = fileEditorRuntime;
   const [pendingMainReview, setPendingMainReview] = useState<
     PendingAgentConversationMainReview | undefined
   >();
@@ -132,14 +172,20 @@ export function App() {
     api,
     agentRunBridge,
     agentRun,
+    scope: activeAgentScope,
     projectId: activeProjectId,
+    workspaceKind: shellState.workspaceContext.kind,
     onAgentRunChange: setAgentRun,
-    onOpenMainReview: (review) => workspaceNavigationRef.current?.openMainReview(review)
+    onOpenMainReview: (review) => workspaceNavigationRef.current?.openMainReview(review),
+    getStandaloneSelectedConversationId: standaloneConversationSelection.getSelectedConversationId,
+    onStandaloneSelectedConversationIdChange:
+      standaloneConversationSelection.onSelectedConversationIdChange
   });
   const agentConversationWorkspacePresentation = resolveAgentConversationWorkspacePresentation(
     agentConversationWorkspace.workspace,
     activeProjectId,
-    pendingMainReview
+    pendingMainReview,
+    agentConversationWorkspace.scope
   );
   const [studio, setStudio] = useState(() => studioBridge?.getProps());
   const [shortcutState, setShortcutState] = useState({ commandPaletteOpen: false });
@@ -153,9 +199,6 @@ export function App() {
   const [navigatorSearchQuery, setNavigatorSearchQuery] = useState("");
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
   const [projectCreateDialogOpen, setProjectCreateDialogOpen] = useState(false);
-  const [editorPreferences, setEditorPreferences] = useState<EditorPreferences>(
-    DEFAULT_EDITOR_PREFERENCES
-  );
   const [appearancePreferences, setAppearancePreferences] = useState<UserAppearancePreferences>({
     theme: "dark",
     accentColor: "teal"
@@ -222,8 +265,17 @@ export function App() {
 
   useAgentRunWorkspaceEffects({
     agentRunBridge,
+    scope: activeAgentScope,
     projectId: activeProjectId,
     workspaceKind: shellState.workspaceContext.kind,
+    surfaceContextMode:
+      shellState.workspaceContext.kind === "creativeProject"
+        ? shellState.workbenchMode === "engineering" || shellState.creativeNavigatorMode === "files"
+          ? "general_file"
+          : "writing"
+        : undefined,
+    activeResourceRef: activeCreativeFileRef,
+    beforeStart: activeCreativeFileRef === null ? undefined : guardCreativeFile,
     conversationId: agentConversationWorkspace.selectedConversationId,
     activeChapterId: projectWorkflow?.activeChapterId ?? chapterEditor?.chapter.frontmatter.id,
     chapterEditor,
@@ -246,6 +298,7 @@ export function App() {
     setOnboardingDismissed,
     setEditorPreferences,
     setAppearancePreferences,
+    setStandaloneSelectedConversationId: standaloneConversationSelection.setSelectedConversationId,
     setChapterEditor,
     setStoryBible,
     setStoryBibleEditor,
@@ -351,8 +404,9 @@ export function App() {
     settingsBridge,
     storyBibleBridge,
     studioBridge,
+    beforeWorkspaceTransition: guardWorkspaceFileEditors,
     setChapterEditor,
-    setFileEditor,
+    clearFileEditor,
     setProjectWorkflow,
     setSettings,
     setShellState,
@@ -360,37 +414,22 @@ export function App() {
     setStoryBibleEditor,
     setStudio
   });
-
-  const persistUserPreferences = useCallback(
-    (input: UserPreferencesSaveInput) => {
-      if (api === undefined) {
-        return;
-      }
-
-      void api.preferences.save(input);
-    },
-    [api]
-  );
   const {
     handleCreativeNavigatorModeSelect,
+    handleCreativeFileExpandedPathIdsChange,
     handleNavigatorExpandedSectionIdsChange,
     handleEngineeringExpandedPathIdsChange
   } = useShellPreferenceActions(setShellState, persistUserPreferences);
   const handleOpenEngineeringWorkspace = useCallback(() => {
-    if (api === undefined || engineeringWorkspaceBridge === undefined) {
-      return;
-    }
+    if (api === undefined || engineeringWorkspaceBridge === undefined) return;
 
-    void engineeringWorkspaceBridge
-      .openEngineeringWorkspace()
-      .then(async (next) => {
-        if (next.status !== "ready" || next.workspace === undefined) {
-          return;
-        }
-        setShellState(await api.getShellState());
-      })
-      .catch(() => undefined);
-  }, [api, engineeringWorkspaceBridge]);
+    void (async () => {
+      if (!(await guardWorkspaceFileEditors())) return;
+      const next = await engineeringWorkspaceBridge.openEngineeringWorkspace();
+      if (next.status !== "ready" || next.workspace === undefined) return;
+      setShellState(await api.getShellState());
+    })().catch(() => undefined);
+  }, [api, engineeringWorkspaceBridge, guardWorkspaceFileEditors]);
 
   const applyActivity = useCallback(
     (activityId: ActivityId) => {
@@ -465,7 +504,11 @@ export function App() {
         return;
       }
 
-      void commandExecutionBridge.execute(commandId).then((result) => {
+      void (async () => {
+        if (commandId === "workspace.close-current" && !(await guardWorkspaceFileEditors())) {
+          return;
+        }
+        const result = await commandExecutionBridge.execute(commandId);
         if (!result.ok) {
           setCommandPaletteFeedback({
             kind: "error",
@@ -476,6 +519,16 @@ export function App() {
             commandPaletteOpen: true
           }));
           return;
+        }
+
+        if (commandId === "workspace.close-current") {
+          clearWorkspaceFileEditors();
+          engineeringWorkspaceBridge?.clear();
+          setProjectWorkflow(undefined);
+          setChapterEditor(undefined);
+          setEngineeringWorkspace(undefined);
+          setStoryBibleEditor(undefined);
+          setPendingMainReview(undefined);
         }
 
         setShellState((current) => {
@@ -498,71 +551,17 @@ export function App() {
           ...current,
           commandPaletteOpen: false
         }));
-      });
-    },
-    [commandExecutionBridge, persistUserPreferences]
-  );
-
-  const decorateFileEditor = useCallback(
-    (nextFileEditor: PlainFileEditorProps | undefined): PlainFileEditorProps | undefined => {
-      if (nextFileEditor === undefined) {
-        return undefined;
-      }
-
-      return {
-        ...nextFileEditor,
-        editorPreferences,
-        ...(nextFileEditor.readOnlyReason === undefined
-          ? {
-              onContentChange: (content: string) => {
-                const updated = plainFileBridge?.updateContent(content);
-                setFileEditor(decorateFileEditor(updated));
-              },
-              onSave: () => {
-                const saving = plainFileBridge?.beginSave();
-                if (saving !== undefined) {
-                  setFileEditor(decorateFileEditor(saving));
-                }
-                void plainFileBridge?.save().then((saved) => {
-                  setFileEditor(decorateFileEditor(saved));
-                });
-              }
-            }
-          : {}),
-        onClose: () => {
-          plainFileBridge?.clear();
-          setFileEditor(undefined);
-          if (
-            chapterBridge !== undefined &&
-            projectWorkflowBridge?.getProps().activeChapterId !== undefined
-          ) {
-            void chapterBridge.load().then(setChapterEditor);
-          }
-        },
-        onReloadFromDisk: () => {
-          nextFileEditor.onReloadFromDisk?.();
-          setFileEditor(decorateFileEditor(plainFileBridge?.getProps()));
-        },
-        onKeepDraft: () => {
-          nextFileEditor.onKeepDraft?.();
-          setFileEditor(decorateFileEditor(plainFileBridge?.getProps()));
-        },
-        onEditorPreferencesChange: (preferences: EditorPreferences) => {
-          setEditorPreferences(preferences);
-          persistUserPreferences({ editor: preferences });
-        },
-        onFocusModeToggle: () => handleCommandExecute("workspace.toggle-focus-mode")
-      };
+      })();
     },
     [
-      chapterBridge,
-      editorPreferences,
-      handleCommandExecute,
-      persistUserPreferences,
-      plainFileBridge,
-      projectWorkflowBridge
+      commandExecutionBridge,
+      clearWorkspaceFileEditors,
+      engineeringWorkspaceBridge,
+      guardWorkspaceFileEditors,
+      persistUserPreferences
     ]
   );
+  focusModeToggleRef.current = () => handleCommandExecute("workspace.toggle-focus-mode");
 
   const workspaceNavigation = createWorkspaceNavigation({
     getWorkspaceContext: () => shellState.workspaceContext,
@@ -570,11 +569,14 @@ export function App() {
     chapterEditorBridge: chapterBridge,
     storyBibleBridge,
     plainFileBridge,
+    creativePlainFileBridge: creativePlainFileBridgeRef.current,
+    creativeProjectFilesBridge,
+    canLeaveCreativeFile: guardWorkspaceFileEditors,
     setShellState,
     setProjectWorkflow,
     setChapterEditor,
-    setFileEditor: (next) =>
-      setFileEditor(next === undefined ? undefined : decorateFileEditor(next)),
+    setFileEditor: setEngineeringFileEditor,
+    setCreativeFileEditor,
     setStoryBibleEditor,
     setMainReview: (review: AgentConversationMainReview) => {
       if (activeProjectId !== undefined) {
@@ -592,6 +594,22 @@ export function App() {
       )
   });
   workspaceNavigationRef.current = workspaceNavigation;
+  const creativeProjectFileShell = createCreativeProjectFileShellBindings({
+    navigator: creativeProjectFiles,
+    bridge: creativeProjectFilesBridge,
+    expandedPathIds: shellState.creativeFileExpandedPathIds,
+    fileEditorScope,
+    onExpandedPathIdsChange: handleCreativeFileExpandedPathIdsChange,
+    onFileOpen: (path) => void workspaceNavigation.navigateToCreativeFile(path),
+    onNavigatorModeSelect: handleCreativeNavigatorModeSelect,
+    guardCreativeFile,
+    clearCreativeFile,
+    onReturnToWriting: () => {
+      if (chapterBridge !== undefined && projectWorkflowBridge?.getProps().activeChapterId) {
+        void chapterBridge.load().then(setChapterEditor);
+      }
+    }
+  });
   const handleActivitySelect = useCallback(
     (activityId: ActivityId) => {
       if (activityId === "workspace") {
@@ -854,11 +872,8 @@ export function App() {
           editorPreferences,
           onBodyChange: handleBodyChange,
           onSelectionChange: handleSelectionChange,
-          onEditorPreferencesChange: (preferences: EditorPreferences) => {
-            setEditorPreferences(preferences);
-            persistUserPreferences({ editor: preferences });
-          },
-          onFocusModeToggle: () => handleCommandExecute("workspace.toggle-focus-mode"),
+          onEditorPreferencesChange,
+          onFocusModeToggle,
           onSelectionReviewAccept: handleApplyAiSuggestion,
           onSelectionReviewReject: handleRejectSelectionReview,
           onSelectionReviewUndo: handleUndoSelectionReview,
@@ -879,10 +894,7 @@ export function App() {
             editor: editorPreferences
           },
           onAppearancePreferencesChange: handleAppearancePreferencesChange,
-          onEditorPreferencesChange: (preferences: EditorPreferences) => {
-            setEditorPreferences(preferences);
-            persistUserPreferences({ editor: preferences });
-          },
+          onEditorPreferencesChange,
           usage:
             settings.usage === undefined
               ? undefined
@@ -935,6 +947,8 @@ export function App() {
         studio={studio}
         chapterEditor={interactiveChapterEditor}
         fileEditor={fileEditor}
+        fileEditorScope={fileEditorScope}
+        creativeProjectFiles={creativeProjectFileShell.navigator}
         onboarding={onboarding}
         storyBible={storyBible}
         storyBibleEditor={storyBibleEditor}
@@ -987,7 +1001,7 @@ export function App() {
         onStudioSave={handleStudioSave}
         onStudioRestoreVersion={handleStudioRestoreVersion}
         onStoryBibleDraftChange={handleStoryBibleDraftChange}
-        onCreativeNavigatorModeSelect={handleCreativeNavigatorModeSelect}
+        onCreativeNavigatorModeSelect={creativeProjectFileShell.onNavigatorModeSelect}
         engineeringWorkspace={engineeringWorkspace}
         onEngineeringExpandedPathIdsChange={handleEngineeringExpandedPathIdsChange}
         onRefreshEngineeringTree={() => void engineeringWorkspaceBridge?.refreshEngineeringTree()}

@@ -58,7 +58,7 @@ export function createUserPreferencesSession(
       }
 
       const next = normalizeUserPreferences({
-        schemaVersion: "1.0",
+        schemaVersion: "1.2",
         onboarding: {
           ...baseResult.value.onboarding,
           ...input.onboarding
@@ -102,7 +102,7 @@ export function createUserPreferencesSession(
 
 export function createDefaultUserPreferences(): UserPreferencesSnapshot {
   return {
-    schemaVersion: "1.0",
+    schemaVersion: "1.2",
     onboarding: {
       dismissed: false
     },
@@ -123,6 +123,7 @@ function normalizeUserPreferences(preferences: UserPreferencesSnapshot): UserPre
   const shell = preferences.shell as UserPreferencesSnapshot["shell"] | undefined;
   return {
     ...preferences,
+    schemaVersion: "1.2",
     editor: normalizeEditorPreferences(preferences.editor ?? createDefaultUserPreferences().editor),
     appearance: normalizeAppearancePreferences(preferences.appearance as AppearancePreferenceInput),
     shell: normalizeShellPreferences(shell)
@@ -135,11 +136,16 @@ function normalizeShellPreferences(
   const legacyShell =
     preferences === undefined ||
     !Object.prototype.hasOwnProperty.call(preferences, "workbenchMode");
+  const standaloneSelectedConversationId = normalizeStandaloneSelectedConversationId(
+    preferences?.standaloneSelectedConversationId
+  );
 
   return {
     workbenchMode: normalizeWorkbenchMode(preferences?.workbenchMode),
     creativeNavigatorMode: normalizeCreativeNavigatorMode(preferences?.creativeNavigatorMode),
+    creativeFileExpandedPathIds: normalizeStringArray(preferences?.creativeFileExpandedPathIds),
     engineeringExpandedPathIds: normalizeStringArray(preferences?.engineeringExpandedPathIds),
+    ...(standaloneSelectedConversationId === undefined ? {} : { standaloneSelectedConversationId }),
     navigatorCollapsed:
       preferences?.navigatorCollapsed ?? DEFAULT_USER_SHELL_PREFERENCES.navigatorCollapsed,
     navigatorExpandedSectionIds: normalizeStringArray(preferences?.navigatorExpandedSectionIds),
@@ -165,7 +171,7 @@ function normalizeWorkbenchMode(value: unknown): UserPreferencesSnapshot["shell"
 function normalizeCreativeNavigatorMode(
   value: unknown
 ): UserPreferencesSnapshot["shell"]["creativeNavigatorMode"] {
-  return value === "story" ? "story" : "writing";
+  return value === "story" || value === "files" ? value : "writing";
 }
 
 function normalizeAppearancePreferences(
@@ -204,6 +210,10 @@ function normalizeStringArray(value: unknown): readonly string[] {
   }
 
   return [...new Set(value.filter((item): item is string => typeof item === "string"))];
+}
+
+function normalizeStandaloneSelectedConversationId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 function clampNumber(value: number, min: number, max: number): number {

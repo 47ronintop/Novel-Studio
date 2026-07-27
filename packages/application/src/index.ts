@@ -398,10 +398,41 @@ export type {
 export {
   createAgentRunSession,
   evaluateContextBudgetPressure,
-  buildAgentSystemGuidance,
-  estimateAgentSystemReserveTokens,
-  AGENT_SYSTEM_GUIDANCE_VERSION
+  estimateAgentSystemReserveTokens
 } from "./agent-run-session.js";
+export {
+  AGENT_SYSTEM_GUIDANCE_VERSION,
+  buildAgentSystemGuidance,
+  buildAgentSystemPrompt
+} from "./agent-system-prompt.js";
+export type { AgentConventionsArtifactReference } from "./agent-system-prompt.js";
+export {
+  AGENT_CONTEXT_PROFILE_VERSION,
+  createStandaloneRuntimeFacts,
+  resolveAgentContextProfile,
+  tryResolveAgentContextProfile
+} from "./agent-context-profile.js";
+export type {
+  AgentContextProfile,
+  AgentContextProfileId,
+  AgentContextRuntimeFacts
+} from "./agent-context-profile.js";
+export {
+  createAgentPromptMaterializationArtifact,
+  materializeAgentPrompt,
+  materializeProjectDataSource,
+  parseAgentPromptMaterializationArtifact,
+  promptMaterializationArtifactId,
+  rematerializeAgentPromptArtifact
+} from "./agent-prompt-materializer.js";
+export type {
+  AgentPromptMaterializationArtifact,
+  CreateAgentPromptMaterializationArtifactInput,
+  AgentPromptMaterialization,
+  MaterializeAgentPromptInput,
+  MaterializedAgentMessage,
+  MaterializedAgentMessageRole
+} from "./agent-prompt-materializer.js";
 export { createAgentRunDraftSession } from "./agent-run-draft-session.js";
 export { createAgentContextSession } from "./agent-context-session.js";
 export type {
@@ -537,6 +568,24 @@ export type {
   VersionGroupTransactionApplyInput
 } from "./version-group-session.js";
 export type { CreateLlmAgentRunModelDriverOptions } from "./agent-run-model-driver.js";
+export {
+  CREATIVE_PROJECT_FILE_SESSION_VERSION,
+  createCreativeProjectFileSession
+} from "./creative-project-file-session.js";
+export type {
+  CreateCreativeProjectFileSessionOptions,
+  CreativeProjectFileDocument,
+  CreativeProjectFileLifecycleCommand,
+  CreativeProjectFileLifecycleReceipt,
+  CreativeProjectFileMutationOrigin,
+  CreativeProjectFileRepositoryPort,
+  CreativeProjectFileSaveResult,
+  CreativeProjectFileSession,
+  CreativeProjectFileSessionActivation,
+  CreativeProjectFileSessionIdentity,
+  CreativeProjectFileTreeNode,
+  CreativeProjectFileTreeSnapshot
+} from "./creative-project-file-session.js";
 export type {
   AgentRunEvent,
   AgentRunErrorRecord,
@@ -545,6 +594,7 @@ export type {
   AgentRunStatus,
   AgentRunStatusV11,
   AgentRunStatusV12,
+  AgentRunStatusV13,
   AgentContextMode,
   AgentOperationMode,
   AgentWritePolicy,

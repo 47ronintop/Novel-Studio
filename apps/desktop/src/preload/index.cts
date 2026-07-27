@@ -27,6 +27,12 @@ import type {
   ConfigAssetSnapshot,
   ConfigAssetType,
   ConfigVersionSummary,
+  CreativeProjectFileDocument,
+  CreativeProjectFileLifecycleCommand,
+  CreativeProjectFileLifecycleReceipt,
+  CreativeProjectFileSaveResult,
+  CreativeProjectFileSessionIdentity,
+  CreativeProjectFileTreeSnapshot,
   CreateCreativeProjectRequest,
   CreateAgentConversationCommand,
   DeleteAgentConversationCommand,
@@ -76,6 +82,7 @@ import type {
   UpdateContextDraftCommand
 } from "@novel-studio/application";
 import type {
+  AgentContextScope,
   AgentRunCommandResult,
   AgentRunEvent,
   AgentRunSnapshot,
@@ -232,6 +239,36 @@ const api: NovelStudioApi = {
         input
       )
   },
+  creativeProjectFiles: {
+    refresh: (identity: CreativeProjectFileSessionIdentity) =>
+      invokeTyped<Result<CreativeProjectFileTreeSnapshot, UnifiedError>>(
+        "application:creative-project-files:refresh",
+        identity
+      ),
+    readTextFile: (input: CreativeProjectFileSessionIdentity & { readonly path: string }) =>
+      invokeTyped<Result<CreativeProjectFileDocument, UnifiedError>>(
+        "application:creative-project-files:read-text-file",
+        input
+      ),
+    saveTextFile: (
+      input: CreativeProjectFileSessionIdentity & {
+        readonly path: string;
+        readonly content: string;
+        readonly expectedTreeRevision: string;
+        readonly expectedNodeRevision: string;
+        readonly expectedChecksum: string;
+      }
+    ) =>
+      invokeTyped<Result<CreativeProjectFileSaveResult, UnifiedError>>(
+        "application:creative-project-files:save-text-file",
+        input
+      ),
+    executeLifecycle: (command: CreativeProjectFileLifecycleCommand) =>
+      invokeTyped<Result<CreativeProjectFileLifecycleReceipt, UnifiedError>>(
+        "application:creative-project-files:execute-lifecycle",
+        command
+      )
+  },
   ai: {
     generateChapterSuggestion: (request: AiWritingSuggestionRequest) =>
       invokeTyped<Result<AiWritingSuggestion, UnifiedError>>(
@@ -333,10 +370,10 @@ const api: NovelStudioApi = {
       invokeTyped<AgentRunCommandResult>("application:agent-run:undo", command),
     read: (runId: string) =>
       invokeTyped<Result<AgentRunReadResult, UnifiedError>>("application:agent-run:read", runId),
-    list: (projectId: string) =>
+    list: (scopeOrProjectId: AgentContextScope | string) =>
       invokeTyped<Result<readonly AgentRunSnapshot[], UnifiedError>>(
         "application:agent-run:list",
-        projectId
+        scopeOrProjectId
       ),
     onEvent: (listener: (event: AgentRunEvent) => void) => {
       const wrapped = (_event: Electron.IpcRendererEvent, payload: unknown) => {
@@ -618,10 +655,26 @@ function isAiWritingSuggestionStreamPushEvent(
 function isAgentRunEvent(value: unknown): value is AgentRunEvent {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const event = value as Record<string, unknown>;
+  const schemaVersion = event["schemaVersion"];
+  const scope = event["scope"];
+  const hasScope =
+    schemaVersion === "1.3" &&
+    typeof scope === "object" &&
+    scope !== null &&
+    !Array.isArray(scope) &&
+    (((scope as Record<string, unknown>)["kind"] === "standalone" &&
+      (scope as Record<string, unknown>)["scopeId"] === "standalone") ||
+      ((scope as Record<string, unknown>)["kind"] === "workspace" &&
+        ((scope as Record<string, unknown>)["workspaceKind"] === "creativeProject" ||
+          (scope as Record<string, unknown>)["workspaceKind"] === "engineeringWorkspace") &&
+        typeof (scope as Record<string, unknown>)["workspaceId"] === "string"));
   return (
-    (event["schemaVersion"] === "1.0" || event["schemaVersion"] === "1.1") &&
+    (schemaVersion === "1.0" ||
+      schemaVersion === "1.1" ||
+      schemaVersion === "1.2" ||
+      schemaVersion === "1.3") &&
     typeof event["runId"] === "string" &&
-    typeof event["projectId"] === "string" &&
+    (hasScope || typeof event["projectId"] === "string") &&
     typeof event["sequence"] === "number" &&
     Number.isInteger(event["sequence"]) &&
     typeof event["runRevision"] === "number" &&

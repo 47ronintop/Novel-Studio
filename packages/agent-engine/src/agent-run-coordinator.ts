@@ -1,13 +1,13 @@
 import { createUnifiedError } from "@novel-studio/shared";
 
-import { EMPTY_AGENT_RUN_USAGE_SUMMARY } from "./agent-run-types.js";
+import { attachLegacyProjectId, EMPTY_AGENT_RUN_USAGE_SUMMARY } from "./agent-run-types.js";
+import { agentContextScopeKey, type AgentContextScope } from "./agent-context-scope.js";
 import { agentRunToolCatalogSnapshotId } from "./agent-run-tool-catalog.js";
 import type {
   AgentRunCommandResult,
   AgentRunCoordinator,
   AgentRunEvent,
-  AgentRunEventTypeV11,
-  AgentRunEventTypeV12,
+  AgentRunEventTypeV13,
   AgentRunLimits,
   AgentRunSnapshot
 } from "./agent-run-types.js";
@@ -30,12 +30,17 @@ export function createAgentRunCoordinator(
   const createRunId = options.createRunId ?? createDefaultRunId;
   const runs = new Map<string, AgentRunSnapshot>();
   const events = new Map<string, AgentRunEvent[]>();
-  const activeRunByProject = new Map<string, string>();
+  const activeRunByScope = new Map<string, string>();
   const commandReceipts = new Map<string, AgentRunCommandResult>();
 
   return {
     startRun(command) {
-      const receiptKey = commandReceiptKey(command.projectId, command.commandId);
+      const scope = resolveCommandScope(command);
+      if (scope === undefined) {
+        return failure("AGENT_CONTEXT_SCOPE_INVALID", "The Agent run scope is invalid.");
+      }
+      const scopeKey = agentContextScopeKey(scope);
+      const receiptKey = commandReceiptKey(scopeKey, command.commandId);
       const receipt = commandReceipts.get(receiptKey);
       if (receipt !== undefined) {
         return receipt;
@@ -48,7 +53,7 @@ export function createAgentRunCoordinator(
         commandReceipts.set(receiptKey, result);
         return result;
       }
-      const activeRunId = activeRunByProject.get(command.projectId);
+      const activeRunId = activeRunByScope.get(scopeKey);
       if (activeRunId !== undefined) {
         const result = failure("AGENT_RUN_ALREADY_ACTIVE", "An Agent run is already active.");
         commandReceipts.set(receiptKey, result);
@@ -91,16 +96,21 @@ export function createAgentRunCoordinator(
 
       const timestamp = now();
       const runId = createRunId();
-      const snapshot: AgentRunSnapshot = {
-        schemaVersion: "1.1",
+      const snapshot = attachLegacyProjectId({
+        schemaVersion: "1.2",
         runId,
-        projectId: command.projectId,
+        scope,
         conversationId: command.conversationId,
         operationMode: command.operationMode,
         contextMode: command.contextMode,
         writePolicy,
         userRequest: command.userRequest,
-        status: command.operationMode === "planning" ? "planning_model" : "executing_model",
+        status:
+          command.operationMode === "conversation"
+            ? "conversation_model"
+            : command.operationMode === "planning"
+              ? "planning_model"
+              : "executing_model",
         runRevision: 1,
         lastSequence: 1,
         startedAt: timestamp,
@@ -128,23 +138,44 @@ export function createAgentRunCoordinator(
         toolCatalogSnapshotId:
           command.toolCatalogRevision === undefined ? null : agentRunToolCatalogSnapshotId(runId),
         toolCatalogRevision: command.toolCatalogRevision ?? null,
-        pendingToolApproval: null
-      };
+        pendingToolApproval: null,
+        contextProfileId:
+          command.contextProfileId ??
+          (scope.kind === "standalone"
+            ? "standalone"
+            : scope.workspaceKind === "engineeringWorkspace"
+              ? "engineering"
+              : command.contextMode === "writing"
+                ? "writing"
+                : "creative_general"),
+        profileVersion: command.profileVersion ?? "1.0",
+        guidanceTemplateChecksum: command.guidanceTemplateChecksum ?? "legacy",
+        conventionsArtifactId: command.conventionsArtifactId ?? null,
+        promptCachePolicyVersion: command.promptCachePolicyVersion ?? "none@1.0",
+        cachePrefixChecksum: command.cachePrefixChecksum ?? "legacy"
+      } as Omit<AgentRunSnapshot, "projectId">);
       runs.set(runId, snapshot);
-      activeRunByProject.set(command.projectId, runId);
+      activeRunByScope.set(scopeKey, runId);
       events.set(runId, [toEvent(snapshot, "run_started", timestamp)]);
       const result = { ok: true as const, value: snapshot };
       commandReceipts.set(receiptKey, result);
       return result;
     },
     stopRun(command) {
-      const receiptKey = commandReceiptKey(command.projectId, command.commandId);
+      const scope = resolveCommandScope(command);
+      if (scope === undefined) {
+        return failure("AGENT_CONTEXT_SCOPE_INVALID", "The Agent run scope is invalid.");
+      }
+      const receiptKey = commandReceiptKey(agentContextScopeKey(scope), command.commandId);
       const receipt = commandReceipts.get(receiptKey);
       if (receipt !== undefined) {
         return receipt;
       }
       const snapshot = runs.get(command.runId);
-      if (snapshot === undefined || snapshot.projectId !== command.projectId) {
+      if (
+        snapshot === undefined ||
+        agentContextScopeKey(snapshot.scope) !== agentContextScopeKey(scope)
+      ) {
         const result = failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
         commandReceipts.set(receiptKey, result);
         return result;
@@ -168,15 +199,15 @@ export function createAgentRunCoordinator(
       }
 
       const timestamp = now();
-      const stopped: AgentRunSnapshot = {
+      const stopped = attachLegacyProjectId({
         ...snapshot,
         status: "cancelled",
         runRevision: snapshot.runRevision + 1,
         lastSequence: snapshot.lastSequence + 1,
         updatedAt: timestamp
-      };
+      } as Omit<AgentRunSnapshot, "projectId">);
       runs.set(stopped.runId, stopped);
-      activeRunByProject.delete(stopped.projectId);
+      activeRunByScope.delete(agentContextScopeKey(stopped.scope));
       events.get(stopped.runId)?.push(toEvent(stopped, "run_cancelled", timestamp));
       const result = { ok: true as const, value: stopped };
       commandReceipts.set(receiptKey, result);
@@ -191,17 +222,17 @@ export function createAgentRunCoordinator(
         return failure("AGENT_RUN_ALREADY_TERMINAL", "The Agent run has already ended.");
       }
       const timestamp = now();
-      const next: AgentRunSnapshot = {
+      const next = attachLegacyProjectId({
         ...snapshot,
         ...input.snapshotPatch,
         status: input.status as AgentRunSnapshot["status"],
         runRevision: snapshot.runRevision + 1,
         lastSequence: snapshot.lastSequence + 1,
         updatedAt: timestamp
-      };
+      } as Omit<AgentRunSnapshot, "projectId">);
       runs.set(next.runId, next);
       if (isTerminal(next.status)) {
-        activeRunByProject.delete(next.projectId);
+        activeRunByScope.delete(agentContextScopeKey(next.scope));
       }
       events.get(next.runId)?.push({
         ...toEvent(next, input.type, timestamp),
@@ -227,12 +258,12 @@ export function createAgentRunCoordinator(
         );
       }
       const timestamp = now();
-      const next: AgentRunSnapshot = {
+      const next = attachLegacyProjectId({
         ...snapshot,
         runRevision: snapshot.runRevision + 1,
         lastSequence: snapshot.lastSequence + 1,
         updatedAt: timestamp
-      };
+      } as Omit<AgentRunSnapshot, "projectId">);
       runs.set(next.runId, next);
       events.get(next.runId)?.push({
         ...toEvent(next, input.type, timestamp),
@@ -263,20 +294,20 @@ export function createAgentRunCoordinator(
       ) {
         return failure("AGENT_RUN_RESTORE_INVALID", "The persisted Agent run is inconsistent.");
       }
-      const activeRunId = activeRunByProject.get(snapshot.projectId);
+      const activeRunId = activeRunByScope.get(agentContextScopeKey(snapshot.scope));
       if (activeRunId !== undefined && !isTerminal(snapshot.status)) {
         return failure("AGENT_RUN_ALREADY_ACTIVE", "An Agent run is already active.");
       }
-      const restoredSnapshot: AgentRunSnapshot = {
+      const restoredSnapshot = attachLegacyProjectId({
         ...snapshot,
         conversationId:
           typeof snapshot.conversationId === "string" ? snapshot.conversationId : null,
         writePolicy: "write_before_confirmation"
-      };
+      } as Omit<AgentRunSnapshot, "projectId">);
       runs.set(restoredSnapshot.runId, restoredSnapshot);
       events.set(snapshot.runId, [...restoredEvents]);
       if (!isTerminal(restoredSnapshot.status)) {
-        activeRunByProject.set(restoredSnapshot.projectId, restoredSnapshot.runId);
+        activeRunByScope.set(agentContextScopeKey(restoredSnapshot.scope), restoredSnapshot.runId);
       }
       return { ok: true, value: restoredSnapshot };
     },
@@ -289,31 +320,20 @@ export function createAgentRunCoordinator(
   };
 }
 
-const V12_ONLY_EVENT_TYPES = new Set<AgentRunEventTypeV12>([
-  "tool_approval_requested",
-  "tool_approval_resolved",
-  "capability_revoked",
-  "process_output",
-  "external_outcome_unknown"
-]);
-
-/** Writes v1.2 only for the 5 new Task 0.4 event types; every existing v1.1 type stays v1.1. */
 function toEvent(
   snapshot: AgentRunSnapshot,
-  type: AgentRunEventTypeV12,
+  type: AgentRunEventTypeV13,
   createdAt: string
 ): AgentRunEvent {
-  const base = {
+  return attachLegacyProjectId({
+    schemaVersion: "1.3" as const,
     runId: snapshot.runId,
-    projectId: snapshot.projectId,
+    scope: snapshot.scope,
     sequence: snapshot.lastSequence,
     runRevision: snapshot.runRevision,
-    createdAt
-  };
-  if (V12_ONLY_EVENT_TYPES.has(type)) {
-    return { ...base, schemaVersion: "1.2", type };
-  }
-  return { ...base, schemaVersion: "1.1", type: type as AgentRunEventTypeV11 };
+    createdAt,
+    type
+  });
 }
 
 function failure(code: string, message: string): AgentRunCommandResult {
@@ -336,6 +356,20 @@ function createCoordinatorError(code: string, message: string) {
 
 function commandReceiptKey(projectId: string, commandId: string): string {
   return `${projectId}:${commandId}`;
+}
+
+function resolveCommandScope(command: {
+  readonly scope?: AgentContextScope;
+  readonly projectId?: string;
+}): AgentContextScope | undefined {
+  if (command.scope !== undefined) return command.scope;
+  return isSafeId(command.projectId)
+    ? {
+        kind: "workspace",
+        workspaceKind: "creativeProject",
+        workspaceId: command.projectId
+      }
+    : undefined;
 }
 
 function isTerminal(status: AgentRunSnapshot["status"]): boolean {

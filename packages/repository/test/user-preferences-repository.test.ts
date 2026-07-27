@@ -28,7 +28,7 @@ describe("UserPreferencesFileRepository", () => {
     const repository = new UserPreferencesFileRepository({ userDataRoot: root });
 
     const written = await repository.writeUserPreferences({
-      schemaVersion: "1.0",
+      schemaVersion: "1.2",
       onboarding: { dismissed: true },
       editor: {
         fontFamily: "serif",
@@ -42,7 +42,9 @@ describe("UserPreferencesFileRepository", () => {
       shell: {
         workbenchMode: "creative",
         creativeNavigatorMode: "writing",
+        creativeFileExpandedPathIds: [],
         engineeringExpandedPathIds: [],
+        standaloneSelectedConversationId: "standalone-conversation-01",
         navigatorCollapsed: true,
         navigatorExpandedSectionIds: ["chapters", "prompts"],
         inspectorCollapsed: false,
@@ -63,6 +65,7 @@ describe("UserPreferencesFileRepository", () => {
     expect(written.ok).toBe(true);
     expect(readBack).toEqual(written);
     expect(raw).toContain('"accentColor": "amber"');
+    expect(raw).toContain('"standaloneSelectedConversationId": "standalone-conversation-01"');
     expect(raw).not.toContain('"density"');
     expect(raw).not.toContain("apiKey");
     expect(raw).not.toContain("正文");

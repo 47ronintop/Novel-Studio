@@ -64,8 +64,14 @@ describe("Agent Run IPC", () => {
         calls.push(`read:${runId}`);
         return { ok: true, value: { snapshot: snapshot("planning_model", 3, 3), events: [] } };
       },
-      async listAgentRuns(projectId: string) {
-        calls.push(`list:${projectId}`);
+      async listAgentRuns(scopeOrProjectId: unknown) {
+        calls.push(
+          `list:${
+            typeof scopeOrProjectId === "string"
+              ? scopeOrProjectId
+              : JSON.stringify(scopeOrProjectId)
+          }`
+        );
         return { ok: true, value: [snapshot("planning_model", 3, 3)] };
       },
       subscribe(listener: (event: Record<string, unknown>) => void) {
@@ -223,6 +229,7 @@ describe("Agent Run IPC", () => {
     });
     await handlers["application:agent-run:read"]("run-ipc");
     await handlers["application:agent-run:list"]("project-01");
+    await handlers["application:agent-run:list"]({ kind: "standalone", scopeId: "standalone" });
     await handlers["application:agent-run:stop"]({
       projectId: "project-01",
       runId: "run-ipc",
@@ -256,8 +263,70 @@ describe("Agent Run IPC", () => {
       "undo:undo-01",
       "read:run-ipc",
       "list:project-01",
+      'list:{"kind":"standalone","scopeId":"standalone"}',
       "stop:stop-01"
     ]);
+  });
+
+  test("holds the active runtime start lease until delayed preflight settles", async () => {
+    let startEntered: (() => void) | undefined;
+    const startStarted = new Promise<void>((resolve) => {
+      startEntered = resolve;
+    });
+    let finishStart: ((value: unknown) => void) | undefined;
+    const startFinished = new Promise<unknown>((resolve) => {
+      finishStart = resolve;
+    });
+    const session = {
+      async startAgentRun() {
+        startEntered?.();
+        return startFinished;
+      }
+    };
+    let leaseCount = 0;
+    let releaseCount = 0;
+    const runtime = { agentRunSession: session };
+    const handlers = createApplicationIpcHandlers(
+      {} as DesktopApplication,
+      {
+        agentRuntimeManager: {
+          active: () => ({ scope: "workspace", binding: {}, runtime }),
+          acquireActiveRunStartLease() {
+            leaseCount += 1;
+            let released = false;
+            return {
+              ok: true,
+              value: {
+                session,
+                release() {
+                  if (released) return;
+                  released = true;
+                  releaseCount += 1;
+                }
+              }
+            };
+          },
+          subscribeAgentRunEvents: () => () => undefined
+        }
+      } as never
+    ) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+
+    const started = handlers["application:agent-run:start"]({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      commandId: "start-lease-01",
+      expectedRunRevision: 0,
+      runDraftId: "draft-01",
+      runDraftRevision: 1,
+      runDraftChecksum: "checksum-01"
+    });
+    await startStarted;
+    expect(leaseCount).toBe(1);
+    expect(releaseCount).toBe(0);
+
+    finishStart?.({ ok: true, value: snapshot("planning_model", 1, 1) });
+    await expect(started).resolves.toMatchObject({ ok: true });
+    expect(releaseCount).toBe(1);
   });
 
   test("preload exposes typed Agent Run commands and filters event payloads", async () => {
@@ -793,7 +862,12 @@ describe("Agent Run IPC", () => {
       workspaceId: "project-01",
       projectId: "project-01",
       projectRoot: "C:/project-01",
-      agentRunSession: {},
+      agentRunSession: {
+        async compactContext(command: Record<string, unknown>) {
+          calls.push(`compact:${String(command["trigger"])}`);
+          return { ok: true, value: { compactionId: "compaction-01" } };
+        }
+      },
       agentRunDraftSession: {
         async readAgentRunDraft(command: Record<string, unknown>) {
           calls.push(`read-run-draft:${String(command["conversationId"])}`);
@@ -822,10 +896,6 @@ describe("Agent Run IPC", () => {
         async previewContextBudget(command: Record<string, unknown>) {
           calls.push(`preview-budget:${String(command["commandId"])}`);
           return { ok: true, value: { contextBudgetSnapshotId: "budget-01" } };
-        },
-        async compactContext(command: Record<string, unknown>) {
-          calls.push(`compact:${String(command["trigger"])}`);
-          return { ok: true, value: { compactionId: "compaction-01" } };
         }
       }
     };

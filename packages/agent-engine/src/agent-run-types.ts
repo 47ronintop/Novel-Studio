@@ -2,9 +2,15 @@ import type { JsonObject, UnifiedError } from "@novel-studio/shared";
 import type { ChangeSetFileSelection, ChangeSetOperationSelection } from "./change-set.js";
 import type { AgentContextSourceInput } from "./context-snapshot.js";
 import type { AgentToolFacadeVersion } from "./tool-registry.js";
+import type { AgentWorkspaceKind } from "./agent-tool-capabilities.js";
+import {
+  normalizeAgentContextScope,
+  type AgentContextProfileId,
+  type AgentContextScope
+} from "./agent-context-scope.js";
 
-export type AgentOperationMode = "planning" | "execution";
-export type AgentContextMode = "writing" | "general_file";
+export type AgentOperationMode = "conversation" | "planning" | "execution";
+export type AgentContextMode = "standalone_chat" | "writing" | "general_file";
 export type AgentWritePolicy = "write_before_confirmation" | "user_preapproved_run";
 /** Provider-declared reasoning effort. Known values are labels, not a closed protocol enum. */
 export type AgentReasoningEffort = string;
@@ -35,6 +41,7 @@ export type AgentRunStatusV11 = AgentRunStatus | "context_compacting" | "awaitin
  */
 export type AgentRunStatusV12 =
   AgentRunStatusV11 | "awaiting_tool_approval" | "awaiting_external_outcome_resolution";
+export type AgentRunStatusV13 = AgentRunStatusV12 | "conversation_model";
 
 export type AgentRunRecoveryState =
   "none" | "retryable" | "awaiting_context_refresh" | "recovery_review" | "terminal";
@@ -60,8 +67,8 @@ export interface AgentProviderCapabilitySnapshot {
   readonly provider: string;
   readonly modelName: string;
   readonly streaming: true;
-  readonly toolCalling: true;
-  readonly structuredArguments: true;
+  readonly toolCalling: boolean;
+  readonly structuredArguments: boolean;
   readonly contextWindow: number;
   readonly requiredContextTokens: number;
 }
@@ -132,11 +139,31 @@ export interface AgentRunSnapshotV11 extends Omit<AgentRunSnapshotV10, "schemaVe
   readonly pendingToolApproval?: PendingToolApproval | null;
 }
 
+/** C1 v1.2 snapshot. JSON persistence uses `scope`; `projectId` is runtime-only compatibility. */
+export interface AgentRunSnapshotV12 extends Omit<
+  AgentRunSnapshotV11,
+  "schemaVersion" | "status" | "operationMode" | "contextMode" | "projectId"
+> {
+  readonly schemaVersion: "1.2";
+  readonly scope: AgentContextScope;
+  readonly operationMode: AgentOperationMode;
+  readonly contextMode: AgentContextMode;
+  readonly status: AgentRunStatusV13;
+  readonly contextProfileId: AgentContextProfileId;
+  readonly profileVersion: string;
+  readonly guidanceTemplateChecksum: string;
+  readonly conventionsArtifactId: string | null;
+  readonly promptCachePolicyVersion: string;
+  readonly cachePrefixChecksum: string;
+  /** Non-enumerable workspace compatibility accessor; absent at runtime for standalone. */
+  readonly projectId: string;
+}
+
 /**
  * The active run snapshot type consumed across Application/IPC/renderer. Aliased to the v1.1 view:
  * new runs are authored as v1.1 and old v1.0 files are normalized on read.
  */
-export type AgentRunSnapshot = AgentRunSnapshotV11;
+export type AgentRunSnapshot = AgentRunSnapshotV12;
 
 /** The persisted v1.0 run event shape. Retained for read compatibility with pre-Stage-5 files. */
 export interface AgentRunEventV10 {
@@ -162,13 +189,25 @@ export interface AgentRunEventV12 extends Omit<AgentRunEventV10, "schemaVersion"
   readonly type: AgentRunEventTypeV12;
 }
 
+export interface AgentRunEventV13 extends Omit<
+  AgentRunEventV10,
+  "schemaVersion" | "type" | "projectId"
+> {
+  readonly schemaVersion: "1.3";
+  readonly scope: AgentContextScope;
+  readonly type: AgentRunEventTypeV13;
+  /** Non-enumerable workspace compatibility accessor; absent at runtime for standalone. */
+  readonly projectId: string;
+}
+
 /**
  * The active run event type. Unlike the snapshot, the v1.1 event added no required fields — only
  * new event-type union members — so a persisted v1.0 event is structurally valid here. The alias
  * accepts both versions; `normalizeAgentRunEvent` still lifts persisted events to the v1.1 view.
  * Task 0.4: v1.2 events are accepted here for new runs but written as v1.2 on disk.
  */
-export type AgentRunEvent = AgentRunEventV10 | AgentRunEventV11 | AgentRunEventV12;
+export type AgentRunEvent =
+  AgentRunEventV10 | AgentRunEventV11 | AgentRunEventV12 | AgentRunEventV13;
 
 export type AgentRunEventType =
   | "run_started"
@@ -231,6 +270,8 @@ export type AgentRunEventTypeV12 =
   | "capability_revoked"
   | "process_output"
   | "external_outcome_unknown";
+
+export type AgentRunEventTypeV13 = AgentRunEventTypeV12 | "conversation_model";
 
 /**
  * Task C.2 — ToolApprovalBinding discriminated union.
@@ -312,12 +353,13 @@ export interface AgentRunSnapshotPatch {
   readonly toolFacadeVersion?: AgentToolFacadeVersion;
   readonly toolCatalogSnapshotId?: string | null;
   readonly toolCatalogRevision?: string | null;
+  readonly cachePrefixChecksum?: string;
 }
 
 export interface RecordAgentRunEventInput {
   readonly runId: string;
-  readonly status: AgentRunStatusV12;
-  readonly type: AgentRunEventTypeV12;
+  readonly status: AgentRunStatusV13;
+  readonly type: AgentRunEventTypeV13;
   readonly detail?: JsonObject;
   readonly snapshotPatch?: AgentRunSnapshotPatch;
 }
@@ -340,7 +382,10 @@ export interface RecordTerminalAgentRunAuditEventInput {
  * content.
  */
 export interface StartAgentRunCommand {
-  readonly projectId: string;
+  /** Server-authoritative scope. Standalone commands omit the legacy projectId entirely. */
+  readonly scope?: AgentContextScope;
+  /** Legacy workspace-only identity. */
+  readonly projectId?: string;
   readonly conversationId: string;
   readonly commandId: string;
   readonly expectedRunRevision: 0;
@@ -360,7 +405,9 @@ export interface StartAgentRunCommand {
  * accepted over IPC.
  */
 export interface ResolvedAgentRunStartInput {
-  readonly projectId: string;
+  /** Legacy workspace-only identity; standalone resolved starts omit it. */
+  readonly projectId?: string;
+  readonly scope?: AgentContextScope;
   readonly conversationId: string;
   readonly commandId: string;
   readonly expectedRunRevision: 0;
@@ -384,11 +431,19 @@ export interface ResolvedAgentRunStartInput {
   readonly toolFacadeVersion?: AgentToolFacadeVersion;
   /** Revision of the immutable catalog that Application will persist before driving the run. */
   readonly toolCatalogRevision?: string;
+  readonly contextProfileId?: AgentContextProfileId;
+  readonly profileVersion?: string;
+  readonly guidanceTemplateChecksum?: string;
+  readonly conventionsArtifactId?: string | null;
+  readonly promptCachePolicyVersion?: string;
+  readonly cachePrefixChecksum?: string;
 }
 
 export interface StopAgentRunCommand {
   readonly runId: string;
-  readonly projectId: string;
+  readonly scope?: AgentContextScope;
+  /** Legacy workspace-only identity. */
+  readonly projectId?: string;
   readonly commandId: string;
   readonly expectedRunRevision: number;
 }
@@ -519,7 +574,10 @@ export interface AgentRunCoordinator {
  * Normalize a persisted run snapshot (v1.0 or v1.1) into the v1.1 internal view. v1.1 records are
  * returned as-is; v1.0 records are backfilled with Stage 5 defaults. This never rewrites disk files.
  */
-export function normalizeAgentRunSnapshot(value: JsonObject): AgentRunSnapshotV11 {
+export function normalizeAgentRunSnapshot(
+  value: JsonObject,
+  legacyWorkspaceKind?: AgentWorkspaceKind
+): AgentRunSnapshotV12 {
   const conversationId =
     typeof value["conversationId"] === "string" ? value["conversationId"] : null;
   const toolFacadeVersion = value["toolFacadeVersion"] === "v2" ? "v2" : "v1";
@@ -527,48 +585,108 @@ export function normalizeAgentRunSnapshot(value: JsonObject): AgentRunSnapshotV1
     typeof value["toolCatalogSnapshotId"] === "string" ? value["toolCatalogSnapshotId"] : null;
   const toolCatalogRevision =
     typeof value["toolCatalogRevision"] === "string" ? value["toolCatalogRevision"] : null;
-  if (value["schemaVersion"] === "1.1") {
-    return {
-      ...value,
+  if (value["schemaVersion"] === "1.2") {
+    const scope = normalizeAgentContextScope(value["scope"], undefined, legacyWorkspaceKind);
+    return attachLegacyProjectId({
+      ...withoutLegacyProjectId(value),
+      scope,
       conversationId,
       toolFacadeVersion,
       toolCatalogSnapshotId,
       toolCatalogRevision
-    } as unknown as AgentRunSnapshotV11;
+    } as unknown as AgentRunSnapshotV12);
+  }
+  if (value["schemaVersion"] !== "1.0" && value["schemaVersion"] !== "1.1") {
+    throw new Error("AGENT_RUN_SNAPSHOT_VERSION_UNSUPPORTED");
   }
   const capability = value["providerCapabilitySnapshot"];
   const modelProfileId =
     isRecord(capability) && typeof capability["profileId"] === "string"
       ? capability["profileId"]
       : "";
-  return {
-    ...value,
+  const contextMode = value["contextMode"] === "writing" ? "writing" : "general_file";
+  const contextProfileId: AgentContextProfileId =
+    contextMode === "writing" ? "writing" : "creative_general";
+  const scope = normalizeAgentContextScope(undefined, value["projectId"], legacyWorkspaceKind);
+  const stage5Fields =
+    value["schemaVersion"] === "1.1"
+      ? value
+      : {
+          ...value,
+          modelProfileId,
+          permissionSummaryId: null,
+          permissionSummaryChecksum: null,
+          contextBudgetSnapshotId: null,
+          activeCompactionId: null,
+          planExecutionId: null,
+          planExecutionRevision: null,
+          activeErrorId: null,
+          recoveryState: "none",
+          usageSummary: EMPTY_AGENT_RUN_USAGE_SUMMARY,
+          pendingToolApproval: null
+        };
+  return attachLegacyProjectId({
+    ...withoutLegacyProjectId(stage5Fields as unknown as JsonObject),
     conversationId,
-    schemaVersion: "1.1",
-    modelProfileId,
-    permissionSummaryId: null,
-    permissionSummaryChecksum: null,
-    contextBudgetSnapshotId: null,
-    activeCompactionId: null,
-    planExecutionId: null,
-    planExecutionRevision: null,
-    activeErrorId: null,
-    recoveryState: "none",
-    usageSummary: EMPTY_AGENT_RUN_USAGE_SUMMARY,
-    pendingToolApproval: null,
+    schemaVersion: "1.2",
+    scope,
+    contextProfileId,
+    profileVersion: "legacy",
+    guidanceTemplateChecksum: "legacy",
+    conventionsArtifactId: null,
+    promptCachePolicyVersion: "none@1.0",
+    cachePrefixChecksum: "legacy",
     toolFacadeVersion,
     toolCatalogSnapshotId,
     toolCatalogRevision
-  } as unknown as AgentRunSnapshotV11;
+  } as unknown as AgentRunSnapshotV12);
 }
 
-/** Normalize a persisted run event (v1.0, v1.1, or v1.2) into the v1.1 view for backward compat. */
-export function normalizeAgentRunEvent(value: JsonObject): AgentRunEventV11 {
-  return value["schemaVersion"] === "1.1" || value["schemaVersion"] === "1.2"
-    ? (value as unknown as AgentRunEventV11)
-    : ({ ...value, schemaVersion: "1.1" } as unknown as AgentRunEventV11);
+/** Normalize persisted run events into the scope-aware v1.3 view without rewriting disk. */
+export function normalizeAgentRunEvent(
+  value: JsonObject,
+  legacyWorkspaceKind?: AgentWorkspaceKind
+): AgentRunEventV13 {
+  if (value["schemaVersion"] === "1.3") {
+    return attachLegacyProjectId({
+      ...withoutLegacyProjectId(value),
+      scope: normalizeAgentContextScope(value["scope"], undefined, legacyWorkspaceKind)
+    } as unknown as AgentRunEventV13);
+  }
+  if (
+    value["schemaVersion"] !== "1.0" &&
+    value["schemaVersion"] !== "1.1" &&
+    value["schemaVersion"] !== "1.2"
+  ) {
+    throw new Error("AGENT_RUN_EVENT_VERSION_UNSUPPORTED");
+  }
+  return attachLegacyProjectId({
+    ...withoutLegacyProjectId(value),
+    schemaVersion: "1.3",
+    scope: normalizeAgentContextScope(undefined, value["projectId"], legacyWorkspaceKind)
+  } as unknown as AgentRunEventV13);
+}
+
+export function attachLegacyProjectId<T extends { readonly scope: AgentContextScope }>(
+  value: T
+): T & { readonly projectId: string } {
+  if (value.scope.kind === "workspace" && !("projectId" in value)) {
+    Object.defineProperty(value, "projectId", {
+      configurable: false,
+      enumerable: false,
+      value: value.scope.workspaceId,
+      writable: false
+    });
+  }
+  return value as T & { readonly projectId: string };
 }
 
 function isRecord(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function withoutLegacyProjectId(value: JsonObject): JsonObject {
+  const { projectId: _projectId, ...rest } = value;
+  void _projectId;
+  return rest;
 }

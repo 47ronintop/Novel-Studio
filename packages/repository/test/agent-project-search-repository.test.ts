@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { AgentProjectSearchRepository } from "../src/agent-project-search-repository.js";
+import { DEFAULT_CREATIVE_PROJECT_FILE_POLICY } from "../src/creative-project-file-repository.js";
 
 const roots: string[] = [];
 
@@ -343,5 +344,29 @@ describe("AgentProjectSearchRepository — engineering workspace", () => {
     const result = await repo.searchText({ query: "test", includeGlobs: ["CON.md"] });
     // CON is a Windows device name in a glob — should be rejected
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("AgentProjectSearchRepository — creative project files", () => {
+  test("searches allowed project files without scanning managed or unsupported paths", async () => {
+    const root = await makeProjectRoot();
+    await mkdir(join(root, "notes"), { recursive: true });
+    await mkdir(join(root, "chapters"), { recursive: true });
+    await writeFile(join(root, "notes", "visible.md"), "creative search marker", "utf8");
+    await writeFile(join(root, "settings.json"), "creative search marker", "utf8");
+    await writeFile(join(root, "chapters", "managed.md"), "creative search marker", "utf8");
+    await writeFile(join(root, "notes", "unsupported.ts"), "creative search marker", "utf8");
+
+    const repo = new AgentProjectSearchRepository({
+      projectRoot: root,
+      workspaceKind: "creativeProject",
+      creativeProjectFilePolicy: DEFAULT_CREATIVE_PROJECT_FILE_POLICY
+    });
+    const result = await repo.searchText({ query: "creative search marker" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.items.map((item) => item.relativePath)).toEqual(["notes/visible.md"]);
+    expect(result.value.indexVersion).toBe("creative-project-files/1.0");
   });
 });

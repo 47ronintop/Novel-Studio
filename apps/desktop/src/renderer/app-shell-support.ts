@@ -5,6 +5,7 @@
   NovelStudioApi,
   UserPreferencesSaveInput
 } from "@novel-studio/application";
+import type { AgentContextScope } from "@novel-studio/agent-engine";
 import {
   DEFAULT_USER_SHELL_PREFERENCES,
   EMPTY_WORKSPACE_CONTEXT,
@@ -52,6 +53,18 @@ export const rendererShellState: DesktopShellState = {
   ],
   bottomPanelTabs: ["工作流运行", "问题", "搜索", "日志"]
 };
+
+export function agentScopeFromWorkspaceContext(
+  context: DesktopShellState["workspaceContext"]
+): AgentContextScope {
+  return context.kind === "none"
+    ? { kind: "standalone", scopeId: "standalone" }
+    : {
+        kind: "workspace",
+        workspaceKind: context.kind,
+        workspaceId: context.workspaceId
+      };
+}
 
 export const rendererCommands: readonly ApplicationCommand[] = [
   {
@@ -231,6 +244,7 @@ export function shellPreferencesFromState(
   return {
     workbenchMode: shellState.workbenchMode,
     creativeNavigatorMode: shellState.creativeNavigatorMode,
+    creativeFileExpandedPathIds: shellState.creativeFileExpandedPathIds,
     engineeringExpandedPathIds: shellState.engineeringExpandedPathIds,
     navigatorCollapsed: shellState.navigatorCollapsed,
     navigatorExpandedSectionIds:
@@ -259,6 +273,9 @@ export function applyShellPreferences(
     ...(preferences.creativeNavigatorMode === undefined
       ? {}
       : { creativeNavigatorMode: preferences.creativeNavigatorMode }),
+    ...(preferences.creativeFileExpandedPathIds === undefined
+      ? {}
+      : { creativeFileExpandedPathIds: preferences.creativeFileExpandedPathIds }),
     ...(preferences.engineeringExpandedPathIds === undefined
       ? {}
       : { engineeringExpandedPathIds: preferences.engineeringExpandedPathIds }),

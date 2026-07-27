@@ -129,6 +129,112 @@ describe("workspace navigation", () => {
     expect(state.chapterEditor).toBe(previousChapter);
   });
 
+  test("keeps the creative workbench unchanged when the dirty-file guard cancels an engineering switch", async () => {
+    const state = createState({
+      workbenchMode: "creative",
+      creativeNavigatorMode: "files",
+      activeActivity: "workspace"
+    });
+    const previousShell = state.shellState;
+    const previousFile = state.fileEditor;
+    const canLeaveCreativeFile = vi.fn(async () => false);
+    const navigation = createWorkspaceNavigation({
+      ...state.dependencies([]),
+      canLeaveCreativeFile
+    });
+
+    navigation.selectWorkbench("engineering");
+    await Promise.resolve();
+
+    expect(canLeaveCreativeFile).toHaveBeenCalledOnce();
+    expect(state.shellState).toBe(previousShell);
+    expect(state.fileEditor).toBe(previousFile);
+  });
+
+  test("keeps the engineering workbench unchanged when the dirty-file guard cancels a creative switch", async () => {
+    const state = createState({
+      workbenchMode: "engineering",
+      creativeNavigatorMode: "files",
+      activeActivity: "workspace"
+    });
+    const previousShell = state.shellState;
+    const canLeaveCreativeFile = vi.fn(async () => false);
+    const navigation = createWorkspaceNavigation({
+      ...state.dependencies([]),
+      canLeaveCreativeFile
+    });
+
+    navigation.selectWorkbench("creative");
+    await Promise.resolve();
+
+    expect(canLeaveCreativeFile).toHaveBeenCalledOnce();
+    expect(state.shellState).toBe(previousShell);
+  });
+
+  test("does not open an engineering file when the dirty-file guard is canceled", async () => {
+    const state = createState({
+      workbenchMode: "creative",
+      creativeNavigatorMode: "files",
+      activeActivity: "workspace"
+    });
+    const previousShell = state.shellState;
+    const previousFile = state.fileEditor;
+    const previousChapter = state.chapterEditor;
+    const canLeaveCreativeFile = vi.fn(async () => false);
+    const openFile = vi.fn(async (path: string) => fileEditor(path));
+    const navigation = createWorkspaceNavigation({
+      ...state.dependencies([]),
+      canLeaveCreativeFile,
+      plainFileBridge: { openFile }
+    });
+
+    await navigation.navigateToFile("notes/target.md");
+
+    expect(canLeaveCreativeFile).toHaveBeenCalledOnce();
+    expect(openFile).not.toHaveBeenCalled();
+    expect(state.shellState).toBe(previousShell);
+    expect(state.fileEditor).toBe(previousFile);
+    expect(state.chapterEditor).toBe(previousChapter);
+  });
+
+  test("does not open a creative file when the dirty-file guard is canceled", async () => {
+    const state = createState({
+      workbenchMode: "creative",
+      creativeNavigatorMode: "files",
+      activeActivity: "workspace"
+    });
+    const previousShell = state.shellState;
+    const previousFile = state.fileEditor;
+    const previousChapter = state.chapterEditor;
+    const canLeaveCreativeFile = vi.fn(async () => false);
+    const requestOpenFile = vi.fn(async () => true);
+    const openFile = vi.fn(async (path: string) => fileEditor(path));
+    const setCreativeFileEditor = vi.fn();
+    const navigation = createWorkspaceNavigation({
+      ...state.dependencies([]),
+      canLeaveCreativeFile,
+      creativeProjectFilesBridge: {
+        requestOpenFile,
+        clearActiveFile: vi.fn()
+      },
+      creativePlainFileBridge: {
+        openFile,
+        clear: vi.fn()
+      },
+      setCreativeFileEditor
+    });
+
+    await navigation.navigateToCreativeFile("notes/target.md");
+
+    expect(canLeaveCreativeFile).toHaveBeenCalledOnce();
+    expect(requestOpenFile).not.toHaveBeenCalled();
+    expect(openFile).not.toHaveBeenCalled();
+    expect(setCreativeFileEditor).not.toHaveBeenCalled();
+    expect(state.shellState).toBe(previousShell);
+    expect(state.fileEditor).toBe(previousFile);
+    expect(state.chapterEditor).toBe(previousChapter);
+  });
+
   test("delegates workspace lifecycle intents and rejects creative mode in engineering context", () => {
     const state = createState({
       workspaceContext: {

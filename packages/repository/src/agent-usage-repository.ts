@@ -2,7 +2,13 @@ import { mkdir, readFile, readdir, unlink } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 
-import { validateAgentUsageRecord, type AgentUsageRecord } from "@novel-studio/agent-engine";
+import {
+  isAgentContextScope,
+  normalizeAgentUsageRecord,
+  validateAgentUsageRecord,
+  type AgentContextScope,
+  type AgentUsageRecord
+} from "@novel-studio/agent-engine";
 import { err, ok, type JsonObject, type Result, type UnifiedError } from "@novel-studio/shared";
 
 import { writeTextAtomically } from "./atomic-write.js";
@@ -51,10 +57,11 @@ export interface AgentUsageRepositoryDailyBucket {
 }
 
 export interface AgentUsageRepositoryRunSummary {
+  readonly scope: AgentContextScope;
   readonly usageId: string;
   readonly runId: string;
   readonly conversationId: string;
-  readonly projectId: string;
+  readonly projectId?: string;
   readonly provider: string;
   readonly model: string;
   readonly totalTokens: number;
@@ -114,10 +121,13 @@ export class AgentUsageFileRepository {
   public async writeFinal(record: JsonObject): Promise<Result<JsonObject, UnifiedError>> {
     const redaction = assertRedacted(record);
     if (redaction !== undefined) return err(this.redactionRequired(redaction));
+    if (record["schemaVersion"] !== "1.1") return this.invalid("AGENT_USAGE_RECORD_INVALID");
     const validated = validateUsageRecord(record);
     if (!validated.ok) return err(validated.error);
 
-    return enqueueUsageMutation(this.options.userDataRoot, () => this.writeFinalLocked(record));
+    return enqueueUsageMutation(this.options.userDataRoot, () =>
+      this.writeFinalLocked(validated.value)
+    );
   }
 
   private async writeFinalLocked(record: JsonObject): Promise<Result<JsonObject, UnifiedError>> {
@@ -187,7 +197,9 @@ export class AgentUsageFileRepository {
   private async readByIdUnlocked(
     usageId: string
   ): Promise<Result<JsonObject | undefined, UnifiedError>> {
-    return this.readJson(this.detailPath(usageId));
+    const stored = await this.readJson(this.detailPath(usageId));
+    if (!stored.ok || stored.value === undefined) return stored;
+    return validateUsageRecord(stored.value);
   }
 
   public async queryDetails(
@@ -306,7 +318,7 @@ export class AgentUsageFileRepository {
   }
 
   private async repairDetailsLocked(): Promise<Result<void, UnifiedError>> {
-    const details = await this.readJsonDirectory(this.usagePath("details"));
+    const details = await this.readAllDetails();
     if (!details.ok) return details as Result<void, UnifiedError>;
     for (const detail of details.value) {
       const redaction = assertRedacted(detail);
@@ -370,7 +382,17 @@ export class AgentUsageFileRepository {
   }
 
   private async readAllDetails(): Promise<Result<readonly JsonObject[], UnifiedError>> {
-    return this.readJsonDirectory(this.usagePath("details"));
+    const stored = await this.readJsonDirectory(this.usagePath("details"));
+    if (!stored.ok) return stored;
+    const normalized: JsonObject[] = [];
+    for (const record of stored.value) {
+      const redaction = assertRedacted(record);
+      if (redaction !== undefined) return err(this.redactionRequired(redaction));
+      const validated = validateUsageRecord(record);
+      if (!validated.ok) return err(validated.error);
+      normalized.push(validated.value);
+    }
+    return ok(normalized);
   }
 
   private async readJsonDirectory(
@@ -674,12 +696,18 @@ function stableJson(value: unknown): string {
 }
 
 function validateUsageRecord(record: JsonObject): Result<JsonObject, UnifiedError> {
-  if (record["schemaVersion"] !== "1.0") return validationError("schemaVersion");
-  const runId = record["runId"];
-  const roundId = record["roundId"];
-  const conversationId = record["conversationId"];
-  const projectId = record["projectId"];
-  const usageId = record["usageId"];
+  let normalized: AgentUsageRecord;
+  try {
+    normalized = normalizeAgentUsageRecord(record);
+  } catch {
+    return validationError("schemaVersion");
+  }
+  const candidate = normalized as unknown as JsonObject;
+  const runId = candidate["runId"];
+  const roundId = candidate["roundId"];
+  const conversationId = candidate["conversationId"];
+  const scope = candidate["scope"];
+  const usageId = candidate["usageId"];
   if (
     typeof runId !== "string" ||
     !isSafeId(runId) ||
@@ -687,37 +715,36 @@ function validateUsageRecord(record: JsonObject): Result<JsonObject, UnifiedErro
     !isSafeId(roundId) ||
     typeof conversationId !== "string" ||
     !isSafeId(conversationId, true) ||
-    typeof projectId !== "string" ||
-    !isSafeId(projectId) ||
+    !isAgentContextScope(scope) ||
     typeof usageId !== "string" ||
     !isSafeUsageId(usageId)
   ) {
     return validationError("identity");
   }
-  const terminationReason = record["terminationReason"];
+  const terminationReason = candidate["terminationReason"];
   if (
-    !isBoundedIdentifier(record["provider"], false) ||
-    !isBoundedIdentifier(record["model"], false) ||
+    !isBoundedIdentifier(candidate["provider"], false) ||
+    !isBoundedIdentifier(candidate["model"], false) ||
     typeof terminationReason !== "string" ||
     !TERMINATION_REASONS.has(terminationReason)
   ) {
     return validationError("record scalar");
   }
-  if (usageId !== `${runId}:${roundId}:${String(record["finalSequence"])}`) {
+  if (usageId !== `${runId}:${roundId}:${String(candidate["finalSequence"])}`) {
     return validationError("usageId");
   }
-  if (!isLocalDate(record["localDate"]) || !isUtcIsoTimestamp(record["timestamp"])) {
+  if (!isLocalDate(candidate["localDate"]) || !isUtcIsoTimestamp(candidate["timestamp"])) {
     return validationError("timestamp");
   }
-  if (!isIanaTimezone(record["timezone"])) return validationError("timezone");
+  if (!isIanaTimezone(candidate["timezone"])) return validationError("timezone");
   if (
-    typeof record["utcOffsetMinutes"] !== "number" ||
-    !Number.isInteger(record["utcOffsetMinutes"]) ||
-    Math.abs(record["utcOffsetMinutes"]) > 900
+    typeof candidate["utcOffsetMinutes"] !== "number" ||
+    !Number.isInteger(candidate["utcOffsetMinutes"]) ||
+    Math.abs(candidate["utcOffsetMinutes"]) > 900
   ) {
     return validationError("utcOffsetMinutes");
   }
-  const cost = record["cost"];
+  const cost = candidate["cost"];
   const costStatus = isJsonObject(cost) ? cost["status"] : undefined;
   if (
     !isJsonObject(cost) ||
@@ -731,11 +758,11 @@ function validateUsageRecord(record: JsonObject): Result<JsonObject, UnifiedErro
   ) {
     return validationError("cost.amount");
   }
-  const pricingVersion = record["pricingVersion"];
+  const pricingVersion = candidate["pricingVersion"];
   if (pricingVersion !== null && !isBoundedIdentifier(pricingVersion, false)) {
     return validationError("pricingVersion");
   }
-  const unitPrices = record["unitPrices"];
+  const unitPrices = candidate["unitPrices"];
   if (unitPrices !== null) {
     if (
       !isJsonObject(unitPrices) ||
@@ -751,8 +778,8 @@ function validateUsageRecord(record: JsonObject): Result<JsonObject, UnifiedErro
       return validationError("unitPrices");
     }
   }
-  const domain = validateAgentUsageRecord(record as unknown as AgentUsageRecord);
-  return domain.ok ? ok(record) : err(domain.error);
+  const domain = validateAgentUsageRecord(normalized);
+  return domain.ok ? ok(candidate) : err(domain.error);
 }
 
 const ABSOLUTE_PATH = /(^|[\s"'([])(\/[^\s"']|[A-Za-z]:[\\/])/;
@@ -841,9 +868,11 @@ function usageFileName(usageId: string): string {
 
 const ALLOWED_USAGE_FIELDS = new Set([
   "schemaVersion",
+  "scope",
   "usageId",
   "runId",
   "conversationId",
+  // Legacy 1.0 read compatibility; validateAgentUsageRecord rejects it on new 1.1 writes.
   "projectId",
   "roundId",
   "finalSequence",
@@ -943,17 +972,20 @@ function matchesQuery(record: JsonObject, query: AgentUsageRepositoryQuery): boo
     localDate <= query.range.toLocalDate &&
     (query.provider === undefined || record["provider"] === query.provider) &&
     (query.model === undefined || record["model"] === query.model) &&
-    (query.projectId === undefined || record["projectId"] === query.projectId)
+    (query.projectId === undefined || usageProjectId(record) === query.projectId)
   );
 }
 
 function toRunSummary(record: JsonObject): AgentUsageRepositoryRunSummary {
   const cost = isJsonObject(record["cost"]) ? record["cost"] : {};
+  const scope = usageScope(record);
+  const projectId = usageProjectId(record);
   return {
+    scope,
     usageId: stringField(record, "usageId"),
     runId: stringField(record, "runId"),
     conversationId: stringField(record, "conversationId"),
-    projectId: stringField(record, "projectId"),
+    ...(projectId === undefined ? {} : { projectId }),
     provider: stringField(record, "provider"),
     model: stringField(record, "model"),
     totalTokens: numberField(record, "totalTokens"),
@@ -972,9 +1004,9 @@ function createAggregateDimension(record: JsonObject): JsonObject {
   const status = costStatus(cost["status"]);
   return {
     usageId: stringField(record, "usageId"),
+    scope: usageScope(record),
     provider: stringField(record, "provider"),
     model: stringField(record, "model"),
-    projectId: stringField(record, "projectId"),
     recordCount: 1,
     inputTokens: numberField(record, "inputTokens"),
     outputTokens: numberField(record, "outputTokens"),
@@ -997,7 +1029,7 @@ function projectAggregate(
     (dimension) =>
       (query.provider === undefined || dimension["provider"] === query.provider) &&
       (query.model === undefined || dimension["model"] === query.model) &&
-      (query.projectId === undefined || dimension["projectId"] === query.projectId)
+      (query.projectId === undefined || usageProjectId(dimension) === query.projectId)
   );
   const hasFilters =
     query.provider !== undefined || query.model !== undefined || query.projectId !== undefined;
@@ -1027,6 +1059,23 @@ function projectAggregate(
     hasUnknownCost: filtered.some((dimension) => dimension["hasUnknownCost"] === true),
     ...(query.includeModelBreakdown === true ? { models: aggregateModels(filtered) } : {})
   };
+}
+
+function usageScope(record: JsonObject): AgentContextScope {
+  if (isAgentContextScope(record["scope"])) return record["scope"];
+  const projectId = stringField(record, "projectId");
+  return {
+    kind: "workspace",
+    workspaceKind: "creativeProject",
+    workspaceId: projectId
+  };
+}
+
+function usageProjectId(record: JsonObject): string | undefined {
+  const scope = record["scope"];
+  if (isAgentContextScope(scope)) return scope.kind === "workspace" ? scope.workspaceId : undefined;
+  const legacyProjectId = stringField(record, "projectId");
+  return legacyProjectId.length === 0 ? undefined : legacyProjectId;
 }
 
 function aggregateModels(

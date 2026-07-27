@@ -1,6 +1,11 @@
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 import type { LlmCost } from "@novel-studio/llm-adapter";
 
+import {
+  isAgentContextScope,
+  normalizeAgentContextScope,
+  type AgentContextScope
+} from "./agent-context-scope.js";
 import type { AgentContextPrecision } from "./context-snapshot.js";
 
 /**
@@ -21,11 +26,11 @@ export interface AgentUsageUnitPriceSnapshot {
  * text, file contents, paths, or credentials (the repository enforces that boundary on write).
  */
 export interface AgentUsageRecord {
-  readonly schemaVersion: "1.0";
+  readonly schemaVersion: "1.1";
+  readonly scope: AgentContextScope;
   readonly usageId: string;
   readonly runId: string;
   readonly conversationId: string;
-  readonly projectId: string;
   readonly roundId: string;
   readonly finalSequence: number;
   readonly provider: string;
@@ -98,10 +103,10 @@ const LOCAL_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_OFFSET_MINUTES = 15 * 60;
 const RECORD_FIELDS = new Set([
   "schemaVersion",
+  "scope",
   "usageId",
   "runId",
   "conversationId",
-  "projectId",
   "roundId",
   "finalSequence",
   "provider",
@@ -144,6 +149,9 @@ export function validateAgentUsageRecord(
   record: AgentUsageRecord
 ): Result<AgentUsageRecord, UnifiedError> {
   if (!hasOnlyFields(record, RECORD_FIELDS)) return err(invalid(record, "record fields"));
+  if (record.schemaVersion !== "1.1" || !isAgentContextScope(record.scope)) {
+    return err(invalid(record, "scope"));
+  }
   const required: readonly [string, number][] = [
     ["inputTokens", record.inputTokens],
     ["outputTokens", record.outputTokens],
@@ -182,6 +190,33 @@ export function validateAgentUsageRecord(
     return err(invalid(record, "utcOffsetMinutes"));
   }
   return ok(record);
+}
+
+/**
+ * Read compatibility for persisted Stage 5 usage. New writes are always 1.1 and scope-owned;
+ * legacy 1.0 records are normalized in memory without rewriting their files.
+ */
+export function normalizeAgentUsageRecord(value: unknown): AgentUsageRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("AGENT_USAGE_RECORD_INVALID");
+  }
+  const raw = value as Record<string, unknown>;
+  let candidate: Record<string, unknown>;
+  if (raw["schemaVersion"] === "1.1") {
+    candidate = { ...raw, scope: normalizeAgentContextScope(raw["scope"]) };
+  } else if (raw["schemaVersion"] === "1.0") {
+    candidate = {
+      ...raw,
+      schemaVersion: "1.1",
+      scope: normalizeAgentContextScope(undefined, raw["projectId"])
+    };
+    delete candidate["projectId"];
+  } else {
+    throw new Error("AGENT_USAGE_RECORD_VERSION_UNSUPPORTED");
+  }
+  const validated = validateAgentUsageRecord(candidate as unknown as AgentUsageRecord);
+  if (!validated.ok) throw new Error(validated.error.code);
+  return validated.value;
 }
 
 function validateCost(record: AgentUsageRecord): boolean {

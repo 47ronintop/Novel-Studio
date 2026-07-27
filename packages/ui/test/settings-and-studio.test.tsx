@@ -428,6 +428,11 @@ describe("M8 Settings and Studio UI", () => {
             ],
             runs: [
               {
+                scope: {
+                  kind: "workspace",
+                  workspaceKind: "creativeProject",
+                  workspaceId: "project_01"
+                },
                 usageId: "run_01:round_02:7",
                 runId: "run_01",
                 conversationId: "conversation_01",

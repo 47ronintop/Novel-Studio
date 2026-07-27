@@ -41,8 +41,20 @@ export function useShellPreferenceActions(
     [persistUserPreferences, setShellState]
   );
 
+  const handleCreativeFileExpandedPathIdsChange = useCallback(
+    (pathIds: readonly string[]) => {
+      setShellState((current) => {
+        const next = { ...current, creativeFileExpandedPathIds: [...pathIds] };
+        persistUserPreferences({ shell: shellPreferencesFromState(next) });
+        return next;
+      });
+    },
+    [persistUserPreferences, setShellState]
+  );
+
   return {
     handleCreativeNavigatorModeSelect,
+    handleCreativeFileExpandedPathIdsChange,
     handleNavigatorExpandedSectionIdsChange,
     handleEngineeringExpandedPathIdsChange
   };

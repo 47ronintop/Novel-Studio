@@ -20,9 +20,7 @@ export interface DesktopAgentWorkspaceBinding {
   readonly activeChapterId?: string;
 }
 
-export interface DesktopAgentRuntime {
-  readonly workspaceId: string;
-  readonly contentRoot: string;
+interface DesktopAgentRuntimeSessions {
   readonly stateRoot: string;
   readonly agentRunSession: AgentRunSession;
   readonly agentConversationSession: AgentConversationSession;
@@ -37,6 +35,34 @@ export interface DesktopAgentRuntime {
   readonly revokeSettingsCapabilities?: () => void;
 }
 
+export interface DesktopAgentRuntime extends DesktopAgentRuntimeSessions {
+  readonly workspaceId: string;
+  readonly contentRoot: string;
+}
+
+/**
+ * Application-scoped runtime identity. It deliberately has neither a project ID nor a content
+ * root: callers must not be able to mistake it for a workspace binding.
+ */
+export interface DesktopStandaloneAgentRuntime extends DesktopAgentRuntimeSessions {
+  readonly scopeId: "standalone";
+  /** Scope-owned listing avoids adapting standalone identity into a project ID. */
+  readonly listRunSnapshots: () => Promise<Result<readonly AgentRunSnapshot[], UnifiedError>>;
+}
+
+export type DesktopAgentRuntimeScope = "standalone" | "workspace";
+
+export type ActiveDesktopAgentRuntime =
+  | {
+      readonly scope: "standalone";
+      readonly runtime: DesktopStandaloneAgentRuntime;
+    }
+  | {
+      readonly scope: "workspace";
+      readonly binding: DesktopAgentWorkspaceBinding;
+      readonly runtime: DesktopAgentRuntime;
+    };
+
 export interface PreparedDesktopAgentWorkspace {
   readonly binding: DesktopAgentWorkspaceBinding;
   readonly runtime: DesktopAgentRuntime;
@@ -44,14 +70,38 @@ export interface PreparedDesktopAgentWorkspace {
 
 export type DesktopAgentWorkspacePreparation = PreparedDesktopAgentWorkspace;
 
+/**
+ * Keeps the runtime selected for the duration of server-authoritative start preflight.
+ * The lease is deliberately Main-only: renderer commands continue to target the active runtime.
+ */
+export interface DesktopAgentRunStartLease {
+  readonly session: AgentRunSession;
+  release(): void;
+}
+
 export interface DesktopAgentRuntimeManager {
+  /** Initialize the persistent application-scoped runtime without selecting a workspace. */
+  prepareStandalone(): Promise<Result<DesktopStandaloneAgentRuntime, UnifiedError>>;
+  /** Select standalone after proving no workspace run would be hidden by the transition. */
+  activateStandalone(): Promise<Result<void, UnifiedError>>;
   bindWorkspace(binding: DesktopAgentWorkspaceBinding): Promise<Result<void, UnifiedError>>;
   prepareWorkspace(
     binding: DesktopAgentWorkspaceBinding
   ): Promise<Result<PreparedDesktopAgentWorkspace, UnifiedError>>;
   commitPreparedWorkspace(prepared: PreparedDesktopAgentWorkspace): void;
   discardPreparedWorkspace(prepared: PreparedDesktopAgentWorkspace): void;
+  /** Backward-compatible current workspace accessor; undefined while standalone is active. */
   current(): DesktopAgentRuntime | undefined;
+  /** The persistent standalone runtime, including while a workspace is selected. */
+  standalone(): DesktopStandaloneAgentRuntime | undefined;
+  /** The runtime whose event stream and IPC surface are currently active. */
+  active(): ActiveDesktopAgentRuntime | undefined;
+  activeScope(): DesktopAgentRuntimeScope | undefined;
+  /**
+   * Atomically reserves the active runtime while a start command completes preflight. Workspace
+   * transitions use the same gate so they cannot hide a run that has not been persisted yet.
+   */
+  acquireActiveRunStartLease(): Result<DesktopAgentRunStartLease, UnifiedError>;
   currentWorkspace():
     | {
         readonly workspaceId: string;
@@ -77,6 +127,9 @@ export interface CreateDesktopAgentRuntimeManagerOptions {
   readonly createRuntime: (
     binding: DesktopAgentWorkspaceBinding
   ) => DesktopAgentRuntime | Promise<DesktopAgentRuntime>;
+  /** Main supplies this app-owned factory; renderer input never participates in standalone paths. */
+  readonly createStandaloneRuntime?:
+    (() => DesktopStandaloneAgentRuntime | Promise<DesktopStandaloneAgentRuntime>) | undefined;
 }
 
 export function createDesktopAgentRuntimeManager(
@@ -85,15 +138,23 @@ export function createDesktopAgentRuntimeManager(
   let runtime: DesktopAgentRuntime | undefined;
   let currentBinding: DesktopAgentWorkspaceBinding | undefined;
   let unsubscribeRuntime: (() => void) | undefined;
+  let standaloneRuntime: DesktopStandaloneAgentRuntime | undefined;
+  let unsubscribeStandaloneRuntime: (() => void) | undefined;
+  let standalonePreparation:
+    Promise<Result<DesktopStandaloneAgentRuntime, UnifiedError>> | undefined;
+  let selectedScope: DesktopAgentRuntimeScope | undefined;
   const listeners = new Set<(event: AgentRunEvent) => void>();
   const preparedStates = new Map<
     PreparedDesktopAgentWorkspace,
     {
       readonly unsubscribe: () => void;
+      readonly transition: symbol;
       state: "prepared" | "committed" | "discarded";
     }
   >();
   const pendingPreparations = new Set<PreparedDesktopAgentWorkspace>();
+  let activeScopeTransition: symbol | undefined;
+  let activeStartLeaseCount = 0;
   let settingsRefreshGeneration = 0;
   let settingsRefreshTail: Promise<void> = Promise.resolve();
   let deferredSettingsRefresh:
@@ -104,12 +165,119 @@ export function createDesktopAgentRuntimeManager(
       }
     | undefined;
 
-  async function hasActiveRun(): Promise<Result<boolean, UnifiedError>> {
+  async function hasWorkspaceActiveRun(): Promise<Result<boolean, UnifiedError>> {
     if (runtime === undefined) return ok(false);
     const listed = await runtime.agentRunSession.listAgentRuns(runtime.workspaceId);
     return listed.ok
       ? ok(listed.value.some((snapshot) => !isTerminal(snapshot.status)))
       : err(listed.error);
+  }
+
+  async function hasStandaloneActiveRun(): Promise<Result<boolean, UnifiedError>> {
+    if (standaloneRuntime === undefined) return ok(false);
+    const listed = await standaloneRuntime.listRunSnapshots();
+    return listed.ok
+      ? ok(listed.value.some((snapshot) => !isTerminal(snapshot.status)))
+      : err(listed.error);
+  }
+
+  async function hasActiveRun(): Promise<Result<boolean, UnifiedError>> {
+    if (activeStartLeaseCount > 0) return ok(true);
+    const [workspace, standalone] = await Promise.all([
+      hasWorkspaceActiveRun(),
+      hasStandaloneActiveRun()
+    ]);
+    if (!workspace.ok) return workspace;
+    if (!standalone.ok) return standalone;
+    return ok(workspace.value || standalone.value);
+  }
+
+  function beginScopeTransition(): Result<symbol, UnifiedError> {
+    if (activeScopeTransition !== undefined || activeStartLeaseCount > 0) {
+      return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
+    }
+    const transition = Symbol("desktop-agent-runtime-transition");
+    activeScopeTransition = transition;
+    return ok(transition);
+  }
+
+  function endScopeTransition(transition: symbol): void {
+    if (activeScopeTransition === transition) activeScopeTransition = undefined;
+  }
+
+  function acquireActiveRunStartLease(): Result<DesktopAgentRunStartLease, UnifiedError> {
+    if (activeScopeTransition !== undefined) {
+      return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
+    }
+    const session =
+      selectedScope === "workspace"
+        ? runtime?.agentRunSession
+        : selectedScope === "standalone"
+          ? standaloneRuntime?.agentRunSession
+          : undefined;
+    if (session === undefined) return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
+
+    activeStartLeaseCount += 1;
+    let released = false;
+    return ok({
+      session,
+      release() {
+        if (released) return;
+        released = true;
+        activeStartLeaseCount -= 1;
+      }
+    });
+  }
+
+  function forwardEvent(
+    scope: DesktopAgentRuntimeScope,
+    candidate: DesktopAgentRuntime | DesktopStandaloneAgentRuntime,
+    event: AgentRunEvent
+  ): void {
+    if (selectedScope !== scope) return;
+    if (scope === "workspace" ? runtime !== candidate : standaloneRuntime !== candidate) return;
+    for (const listener of listeners) listener(event);
+  }
+
+  async function createStandalone(): Promise<Result<DesktopStandaloneAgentRuntime, UnifiedError>> {
+    if (standaloneRuntime !== undefined) return ok(standaloneRuntime);
+    const factory = options.createStandaloneRuntime;
+    if (factory === undefined) return err(runtimeError("AGENT_STANDALONE_RUNTIME_UNAVAILABLE"));
+
+    let candidate: DesktopStandaloneAgentRuntime;
+    try {
+      candidate = await factory();
+    } catch {
+      return err(runtimeError("AGENT_STANDALONE_RUNTIME_CREATE_FAILED"));
+    }
+    if (candidate.scopeId !== "standalone") {
+      candidate.dispose?.();
+      return err(runtimeError("AGENT_STANDALONE_RUNTIME_INVALID"));
+    }
+    try {
+      const prepared = await candidate.prepare();
+      if (!prepared.ok) {
+        candidate.dispose?.();
+        return prepared;
+      }
+      const unsubscribe = candidate.agentRunSession.subscribe((event) => {
+        forwardEvent("standalone", candidate, event);
+      });
+      standaloneRuntime = candidate;
+      unsubscribeStandaloneRuntime = unsubscribe;
+      return ok(candidate);
+    } catch {
+      candidate.dispose?.();
+      return err(runtimeError("AGENT_STANDALONE_RUNTIME_PREPARE_FAILED"));
+    }
+  }
+
+  function disposeWorkspaceRuntime(): void {
+    unsubscribeRuntime?.();
+    unsubscribeRuntime = undefined;
+    runtime?.dispose?.();
+    runtime = undefined;
+    currentBinding = undefined;
   }
 
   async function stopActiveRunsForSettingsRefresh(
@@ -147,7 +315,7 @@ export function createDesktopAgentRuntimeManager(
         if (stopped.error.code === "AGENT_RUN_ALREADY_TERMINAL") continue;
         return err(stopped.error);
       }
-      const remaining = await hasActiveRun();
+      const remaining = await hasWorkspaceActiveRun();
       if (!remaining.ok) return remaining;
       if (!remaining.value) return ok(undefined);
       if (mustWaitForTerminal || !shouldRetry) {
@@ -255,11 +423,47 @@ export function createDesktopAgentRuntimeManager(
   }
 
   const manager: DesktopAgentRuntimeManager = {
+    async prepareStandalone() {
+      if (standalonePreparation !== undefined) return standalonePreparation;
+      const preparation = createStandalone();
+      standalonePreparation = preparation;
+      const clear = () => {
+        if (standalonePreparation === preparation) standalonePreparation = undefined;
+      };
+      void preparation.then(clear, clear);
+      return preparation;
+    },
+    async activateStandalone() {
+      const transition = beginScopeTransition();
+      if (!transition.ok) return transition;
+      try {
+        const activeWorkspaceRun = await hasWorkspaceActiveRun();
+        if (!activeWorkspaceRun.ok) return activeWorkspaceRun;
+        if (activeWorkspaceRun.value)
+          return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
+
+        const prepared = await this.prepareStandalone();
+        if (!prepared.ok) return prepared;
+        const activeAfterPrepare = await hasWorkspaceActiveRun();
+        if (!activeAfterPrepare.ok) return activeAfterPrepare;
+        if (activeAfterPrepare.value)
+          return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
+        // A closed workspace has no runtime that can accidentally remain reachable through Main.
+        // Standalone remains allocated when a workspace is opened, but the reverse transition tears
+        // down workspace-only state after its active-run guard has passed.
+        disposeWorkspaceRuntime();
+        selectedScope = "standalone";
+        return ok(undefined);
+      } finally {
+        endScopeTransition(transition.value);
+      }
+    },
     async bindWorkspace(binding) {
       if (
         runtime !== undefined &&
         currentBinding !== undefined &&
-        isSameBinding(currentBinding, binding, runtime)
+        isSameBinding(currentBinding, binding, runtime) &&
+        selectedScope === "workspace"
       ) {
         return ok(undefined);
       }
@@ -275,73 +479,85 @@ export function createDesktopAgentRuntimeManager(
       ) {
         return err(runtimeError("AGENT_RUNTIME_WORKSPACE_INVALID"));
       }
-      let canonicalContentRoot: string;
-      let canonicalStateRoot: string;
+      const transition = beginScopeTransition();
+      if (!transition.ok) return transition;
+      let retainTransition = false;
       try {
-        [canonicalContentRoot, canonicalStateRoot] = await Promise.all([
-          realpath(binding.contentRoot),
-          realpath(binding.stateRoot)
-        ]);
-      } catch {
-        return err(runtimeError("AGENT_RUNTIME_WORKSPACE_ROOT_INVALID"));
-      }
-      const canonicalBinding: DesktopAgentWorkspaceBinding = {
-        ...binding,
-        contentRoot: canonicalContentRoot,
-        stateRoot: canonicalStateRoot
-      };
-      const active = await hasActiveRun();
-      if (!active.ok) return active;
-      if (active.value) return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
-      const sourceRuntime = runtime;
+        let canonicalContentRoot: string;
+        let canonicalStateRoot: string;
+        try {
+          [canonicalContentRoot, canonicalStateRoot] = await Promise.all([
+            realpath(binding.contentRoot),
+            realpath(binding.stateRoot)
+          ]);
+        } catch {
+          return err(runtimeError("AGENT_RUNTIME_WORKSPACE_ROOT_INVALID"));
+        }
+        const canonicalBinding: DesktopAgentWorkspaceBinding = {
+          ...binding,
+          contentRoot: canonicalContentRoot,
+          stateRoot: canonicalStateRoot
+        };
+        const active = await hasActiveRun();
+        if (!active.ok) return active;
+        if (active.value) return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
+        const sourceRuntime = runtime;
 
-      let candidate: DesktopAgentRuntime;
-      try {
-        candidate = await options.createRuntime(canonicalBinding);
-      } catch {
-        return err(runtimeError("AGENT_RUNTIME_CREATE_FAILED"));
-      }
+        let candidate: DesktopAgentRuntime;
+        try {
+          candidate = await options.createRuntime(canonicalBinding);
+        } catch {
+          return err(runtimeError("AGENT_RUNTIME_CREATE_FAILED"));
+        }
 
-      let prepareResult: Result<void, UnifiedError>;
-      try {
-        prepareResult = await candidate.prepare();
-      } catch {
-        candidate.dispose?.();
-        return err(runtimeError("AGENT_RUNTIME_PREPARE_FAILED"));
-      }
-      if (!prepareResult.ok) {
-        candidate.dispose?.();
-        return prepareResult;
-      }
+        let prepareResult: Result<void, UnifiedError>;
+        try {
+          prepareResult = await candidate.prepare();
+        } catch {
+          candidate.dispose?.();
+          return err(runtimeError("AGENT_RUNTIME_PREPARE_FAILED"));
+        }
+        if (!prepareResult.ok) {
+          candidate.dispose?.();
+          return prepareResult;
+        }
 
-      const activeBeforeCommit = await hasActiveRun();
-      if (!activeBeforeCommit.ok) {
-        candidate.dispose?.();
-        return activeBeforeCommit;
-      }
-      if (runtime !== sourceRuntime || activeBeforeCommit.value) {
-        candidate.dispose?.();
-        return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
-      }
+        const activeBeforeCommit = await hasActiveRun();
+        if (!activeBeforeCommit.ok) {
+          candidate.dispose?.();
+          return activeBeforeCommit;
+        }
+        if (runtime !== sourceRuntime || activeBeforeCommit.value) {
+          candidate.dispose?.();
+          return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
+        }
 
-      let unsubscribeCandidate: () => void;
-      try {
-        unsubscribeCandidate = candidate.agentRunSession.subscribe((event) => {
-          if (runtime !== candidate) return;
-          if (isTerminalRunEvent(event.type)) scheduleDeferredSettingsRefresh(candidate);
-          for (const listener of listeners) listener(event);
+        let unsubscribeCandidate: () => void;
+        try {
+          unsubscribeCandidate = candidate.agentRunSession.subscribe((event) => {
+            if (runtime !== candidate) return;
+            if (isTerminalRunEvent(event.type)) scheduleDeferredSettingsRefresh(candidate);
+            forwardEvent("workspace", candidate, event);
+          });
+        } catch {
+          candidate.dispose?.();
+          return err(runtimeError("AGENT_RUNTIME_PREPARE_FAILED"));
+        }
+        const prepared: PreparedDesktopAgentWorkspace = {
+          binding: canonicalBinding,
+          runtime: candidate
+        };
+        preparedStates.set(prepared, {
+          unsubscribe: unsubscribeCandidate,
+          transition: transition.value,
+          state: "prepared"
         });
-      } catch {
-        candidate.dispose?.();
-        return err(runtimeError("AGENT_RUNTIME_PREPARE_FAILED"));
+        pendingPreparations.add(prepared);
+        retainTransition = true;
+        return ok(prepared);
+      } finally {
+        if (!retainTransition) endScopeTransition(transition.value);
       }
-      const prepared: PreparedDesktopAgentWorkspace = {
-        binding: canonicalBinding,
-        runtime: candidate
-      };
-      preparedStates.set(prepared, { unsubscribe: unsubscribeCandidate, state: "prepared" });
-      pendingPreparations.add(prepared);
-      return ok(prepared);
     },
     commitPreparedWorkspace(prepared) {
       const state = preparedStates.get(prepared);
@@ -352,10 +568,12 @@ export function createDesktopAgentRuntimeManager(
       runtime = prepared.runtime;
       currentBinding = prepared.binding;
       unsubscribeRuntime = state.unsubscribe;
+      selectedScope = "workspace";
       previousUnsubscribe?.();
       previousRuntime?.dispose?.();
       preparedStates.delete(prepared);
       pendingPreparations.delete(prepared);
+      endScopeTransition(state.transition);
     },
     discardPreparedWorkspace(prepared) {
       const state = preparedStates.get(prepared);
@@ -365,10 +583,20 @@ export function createDesktopAgentRuntimeManager(
       prepared.runtime.dispose?.();
       preparedStates.delete(prepared);
       pendingPreparations.delete(prepared);
+      endScopeTransition(state.transition);
     },
-    current: () => runtime,
+    current: () => (selectedScope === "workspace" ? runtime : undefined),
+    standalone: () => standaloneRuntime,
+    active: () =>
+      selectedScope === "standalone" && standaloneRuntime !== undefined
+        ? { scope: "standalone", runtime: standaloneRuntime }
+        : selectedScope === "workspace" && runtime !== undefined && currentBinding !== undefined
+          ? { scope: "workspace", binding: currentBinding, runtime }
+          : undefined,
+    activeScope: () => selectedScope,
+    acquireActiveRunStartLease,
     currentWorkspace: () =>
-      runtime === undefined
+      runtime === undefined || selectedScope !== "workspace"
         ? undefined
         : {
             workspaceId: runtime.workspaceId,
@@ -406,11 +634,12 @@ export function createDesktopAgentRuntimeManager(
     dispose() {
       settingsRefreshGeneration += 1;
       deferredSettingsRefresh = undefined;
-      unsubscribeRuntime?.();
-      unsubscribeRuntime = undefined;
-      runtime?.dispose?.();
-      runtime = undefined;
-      currentBinding = undefined;
+      disposeWorkspaceRuntime();
+      unsubscribeStandaloneRuntime?.();
+      unsubscribeStandaloneRuntime = undefined;
+      standaloneRuntime?.dispose?.();
+      standaloneRuntime = undefined;
+      selectedScope = undefined;
       for (const prepared of [...pendingPreparations]) {
         this.discardPreparedWorkspace(prepared);
       }
@@ -457,12 +686,17 @@ function isSafeId(value: string): boolean {
 }
 
 function runtimeError(code: string): UnifiedError {
+  const standalone = code.startsWith("AGENT_STANDALONE_");
   return createUnifiedError({
     code,
     category: "AgentError",
-    message: "The Agent runtime could not switch workspaces.",
+    message: standalone
+      ? "The standalone Agent runtime could not be initialized."
+      : "The Agent runtime could not switch workspaces.",
     recoverability: "user-action",
-    suggestedAction: "Stop the active run or reopen the workspace and retry.",
+    suggestedAction: standalone
+      ? "Check application storage and model settings, then retry."
+      : "Stop the active run or reopen the workspace and retry.",
     traceId: "desktop-agent-runtime-manager"
   });
 }

@@ -30,6 +30,11 @@ function daily(localDate = "2026-07-16"): AgentUsageDailyBucket {
 
 function run(): AgentUsageRunSummary {
   return {
+    scope: {
+      kind: "workspace",
+      workspaceKind: "creativeProject",
+      workspaceId: "project_01"
+    },
     usageId: "run_01:round_02:7",
     runId: "run_01",
     conversationId: "conversation_01",

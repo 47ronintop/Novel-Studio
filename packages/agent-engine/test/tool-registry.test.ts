@@ -3,6 +3,30 @@ import { describe, expect, test } from "vitest";
 import * as engineExports from "../src/index.js";
 
 describe("Agent tool registry", () => {
+  test("freezes standalone conversation to an empty tool catalog", () => {
+    for (const facadeVersion of ["v1", "v2"] as const) {
+      expect(
+        engineExports.listAgentTools({
+          facadeVersion,
+          operationMode: "conversation",
+          contextMode: "standalone_chat",
+          writePolicy: "write_before_confirmation",
+          capabilitySnapshot: {
+            workspaceKind: "creativeProject",
+            searchEnabled: true,
+            fileLifecycleEnabled: true,
+            controlledExecutionEnabled: true,
+            gitReadEnabled: true,
+            networkReadEnabled: true,
+            pluginToolsEnabled: true,
+            mcpToolsEnabled: true,
+            featureFlagRevision: "must-not-leak"
+          }
+        })
+      ).toEqual([]);
+    }
+  });
+
   test("exposes the exact operation and context mode matrices", () => {
     const listTools = (engineExports as unknown as Record<string, unknown>)["listAgentTools"];
     expect(typeof listTools).toBe("function");

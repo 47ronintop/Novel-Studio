@@ -150,6 +150,11 @@ export interface ListAgentToolsInput {
 }
 
 export function listAgentTools(input: ListAgentToolsInput): readonly AgentToolDescriptor[] {
+  // Standalone conversation is intentionally a text-only profile. Fail closed for every
+  // standalone_chat combination so an invalid renderer mode cannot acquire project tools.
+  if (input.operationMode === "conversation" || input.contextMode === "standalone_chat") {
+    return [];
+  }
   return input.facadeVersion === "v2" ? listV2AgentTools(input) : listV1AgentTools(input);
 }
 

@@ -4,9 +4,12 @@ import {
   bindContextDraft,
   createAgentRunDraft,
   createContextDraft,
+  normalizeAgentRunDraft,
+  normalizeContextDraft,
   refreshContextDraft,
   setContextDraftMode,
   type AgentContextMode,
+  type AgentContextScope,
   type AgentOperationMode,
   type AgentReasoningEffort,
   type AgentRunDraft,
@@ -44,16 +47,20 @@ export interface AgentRunDraftInitialization {
   readonly writePolicy: AgentWritePolicy;
   readonly writePolicyAcknowledged?: boolean;
   readonly contextRefs?: readonly ContextDraftRef[];
+  readonly activeResourceRef?: Extract<ContextDraftRef, { readonly kind: "project_file" }> | null;
 }
 
 export interface ReadAgentRunDraftCommand {
-  readonly projectId: string;
+  /** Legacy workspace-only identity; standalone commands omit it. */
+  readonly projectId?: string;
+  readonly scope?: AgentContextScope;
   readonly conversationId: string;
   readonly initialize: AgentRunDraftInitialization;
 }
 
 export interface UpdateAgentRunDraftCommand {
-  readonly projectId: string;
+  readonly projectId?: string;
+  readonly scope?: AgentContextScope;
   readonly conversationId: string;
   readonly commandId: string;
   readonly expectedDraftRevision: number;
@@ -61,7 +68,8 @@ export interface UpdateAgentRunDraftCommand {
 }
 
 export interface UpdateContextDraftCommand {
-  readonly projectId: string;
+  readonly projectId?: string;
+  readonly scope?: AgentContextScope;
   readonly conversationId: string;
   readonly commandId: string;
   readonly contextDraftId: string;
@@ -70,7 +78,8 @@ export interface UpdateContextDraftCommand {
 }
 
 export interface RefreshContextDraftCommand {
-  readonly projectId: string;
+  readonly projectId?: string;
+  readonly scope?: AgentContextScope;
   readonly conversationId: string;
   readonly commandId: string;
   readonly contextDraftId: string;
@@ -79,7 +88,8 @@ export interface RefreshContextDraftCommand {
 
 /** A start-time reference to an already-persisted run draft revision. Verified, never initialized. */
 export interface ResolveStartDraftCommand {
-  readonly projectId: string;
+  readonly projectId?: string;
+  readonly scope?: AgentContextScope;
   readonly conversationId: string;
   readonly runDraftId: string;
   readonly runDraftRevision: number;
@@ -93,7 +103,8 @@ export interface ResolveStartDraftCommand {
  * should carry.
  */
 export interface SyncStartDraftCommand {
-  readonly projectId: string;
+  readonly projectId?: string;
+  readonly scope?: AgentContextScope;
   readonly conversationId: string;
   readonly commandId: string;
   readonly userRequest: string;
@@ -105,6 +116,7 @@ export interface SyncStartDraftCommand {
   readonly modelName?: string;
   readonly reasoningEffort?: AgentReasoningEffort;
   readonly contextRefs: readonly ContextDraftRef[];
+  readonly activeResourceRef?: Extract<ContextDraftRef, { readonly kind: "project_file" }> | null;
 }
 
 export interface AgentRunDraftView {
@@ -125,6 +137,7 @@ export interface AgentRunDraftSession {
 
 export interface CreateAgentRunDraftSessionOptions {
   readonly repository: AgentRunDraftSessionRepository;
+  readonly scope?: AgentContextScope;
   readonly now?: () => string;
   readonly createId?: () => string;
 }
@@ -136,6 +149,8 @@ export function createAgentRunDraftSession(
   const createId = options.createId ?? createDefaultId;
   const receipts = new Map<string, AgentRunDraftResult>();
   const inFlight = new Map<string, Promise<AgentRunDraftResult>>();
+  const legacyWorkspaceKind =
+    options.scope?.kind === "workspace" ? options.scope.workspaceKind : undefined;
 
   async function load(
     conversationId: string
@@ -155,10 +170,26 @@ export function createAgentRunDraftSession(
         )
       );
     }
-    return ok({
-      runDraft: runDraft.value as unknown as AgentRunDraft,
-      contextDraft: contextDraft.value as unknown as ContextDraft
-    });
+    try {
+      const normalizedRunDraft = normalizeAgentRunDraft(runDraft.value, legacyWorkspaceKind);
+      const normalizedContextDraft = normalizeContextDraft(contextDraft.value, legacyWorkspaceKind);
+      if (scopeKey(normalizedRunDraft.scope) !== scopeKey(normalizedContextDraft.scope)) {
+        return err(
+          draftError(
+            "AGENT_RUN_DRAFT_SCOPE_MISMATCH",
+            "The Agent run draft and Context Draft belong to different scopes."
+          )
+        );
+      }
+      return ok({ runDraft: normalizedRunDraft, contextDraft: normalizedContextDraft });
+    } catch {
+      return err(
+        draftError(
+          "AGENT_RUN_DRAFT_VERSION_UNSUPPORTED",
+          "The persisted Agent run draft version is not supported."
+        )
+      );
+    }
   }
 
   async function persist(
@@ -175,7 +206,10 @@ export function createAgentRunDraftSession(
     return runWritten.ok ? ok(view) : err(runWritten.error);
   }
 
-  function initialize(command: ReadAgentRunDraftCommand): AgentRunDraftView {
+  function initialize(
+    command: ReadAgentRunDraftCommand,
+    scope: AgentContextScope
+  ): AgentRunDraftView {
     const timestamp = now();
     const init = command.initialize;
     const contextDraftId = createId();
@@ -188,14 +222,15 @@ export function createAgentRunDraftSession(
     const contextDraft = createContextDraft({
       contextDraftId,
       conversationId: command.conversationId,
-      projectId: command.projectId,
+      scope,
       contextMode: init.contextMode,
       refs,
+      activeResourceRef: init.activeResourceRef ?? null,
       updatedAt: timestamp
     });
     const runDraft = createAgentRunDraft({
       runDraftId: createId(),
-      projectId: command.projectId,
+      scope: contextDraft.scope,
       conversationId: command.conversationId,
       userRequest: "",
       operationMode: init.operationMode,
@@ -215,14 +250,12 @@ export function createAgentRunDraftSession(
   }
 
   function runOnce(
-    command: {
-      readonly projectId: string;
-      readonly conversationId: string;
-      readonly commandId: string;
-    },
+    scope: AgentContextScope,
+    conversationId: string,
+    commandId: string,
     execute: () => Promise<AgentRunDraftResult>
   ): Promise<AgentRunDraftResult> {
-    const key = `${command.projectId}:${command.conversationId}:${command.commandId}`;
+    const key = `${scopeKey(scope)}:${conversationId}:${commandId}`;
     const cached = receipts.get(key);
     if (cached !== undefined) return Promise.resolve(cached);
     const active = inFlight.get(key);
@@ -241,20 +274,26 @@ export function createAgentRunDraftSession(
 
   return {
     async readAgentRunDraft(command) {
+      const scope = resolveDraftCommandScope(command, options.scope);
+      if (!scope.ok) return err(scope.error);
       const loaded = await load(command.conversationId);
       if (!loaded.ok) return err(loaded.error);
-      if (loaded.value !== undefined) return ok(loaded.value);
-      return persist(initialize(command));
+      if (loaded.value !== undefined) return validateDraftScope(loaded.value, scope.value);
+      return persist(initialize(command, scope.value));
     },
 
     updateAgentRunDraft(command) {
-      return runOnce(command, async () => {
+      const scope = resolveDraftCommandScope(command, options.scope);
+      if (!scope.ok) return Promise.resolve(err(scope.error));
+      return runOnce(scope.value, command.conversationId, command.commandId, async () => {
         const loaded = await load(command.conversationId);
         if (!loaded.ok) return err(loaded.error);
         if (loaded.value === undefined) {
           return err(draftError("AGENT_RUN_DRAFT_NOT_FOUND", "No Agent run draft exists yet."));
         }
-        const view = loaded.value;
+        const scoped = validateDraftScope(loaded.value, scope.value);
+        if (!scoped.ok) return scoped;
+        const view = scoped.value;
         if (view.runDraft.revision !== command.expectedDraftRevision) {
           return err(revisionConflict(view));
         }
@@ -284,13 +323,17 @@ export function createAgentRunDraftSession(
     },
 
     updateContextDraft(command) {
-      return runOnce(command, async () => {
+      const scope = resolveDraftCommandScope(command, options.scope);
+      if (!scope.ok) return Promise.resolve(err(scope.error));
+      return runOnce(scope.value, command.conversationId, command.commandId, async () => {
         const loaded = await load(command.conversationId);
         if (!loaded.ok) return err(loaded.error);
         if (loaded.value === undefined) {
           return err(draftError("AGENT_RUN_DRAFT_NOT_FOUND", "No Agent run draft exists yet."));
         }
-        const view = loaded.value;
+        const scoped = validateDraftScope(loaded.value, scope.value);
+        if (!scoped.ok) return scoped;
+        const view = scoped.value;
         if (view.contextDraft.contextDraftId !== command.contextDraftId) {
           return err(draftError("CONTEXT_DRAFT_NOT_FOUND", "The context draft does not exist."));
         }
@@ -304,13 +347,17 @@ export function createAgentRunDraftSession(
     },
 
     refreshContextDraft(command) {
-      return runOnce(command, async () => {
+      const scope = resolveDraftCommandScope(command, options.scope);
+      if (!scope.ok) return Promise.resolve(err(scope.error));
+      return runOnce(scope.value, command.conversationId, command.commandId, async () => {
         const loaded = await load(command.conversationId);
         if (!loaded.ok) return err(loaded.error);
         if (loaded.value === undefined) {
           return err(draftError("AGENT_RUN_DRAFT_NOT_FOUND", "No Agent run draft exists yet."));
         }
-        const view = loaded.value;
+        const scoped = validateDraftScope(loaded.value, scope.value);
+        if (!scoped.ok) return scoped;
+        const view = scoped.value;
         if (view.contextDraft.contextDraftId !== command.contextDraftId) {
           return err(draftError("CONTEXT_DRAFT_NOT_FOUND", "The context draft does not exist."));
         }
@@ -323,6 +370,8 @@ export function createAgentRunDraftSession(
     },
 
     async resolveStartDraft(command) {
+      const scope = resolveDraftCommandScope(command, options.scope);
+      if (!scope.ok) return err(scope.error);
       // Read-only: a run start references an already-persisted draft; it never initializes one.
       const loaded = await load(command.conversationId);
       if (!loaded.ok) return err(loaded.error);
@@ -334,7 +383,9 @@ export function createAgentRunDraftSession(
           )
         );
       }
-      const view = loaded.value;
+      const scoped = validateDraftScope(loaded.value, scope.value);
+      if (!scoped.ok) return scoped;
+      const view = scoped.value;
       if (view.runDraft.revision !== command.runDraftRevision) {
         return err(revisionConflict(view));
       }
@@ -350,27 +401,33 @@ export function createAgentRunDraftSession(
     },
 
     syncStartDraft(command) {
-      return runOnce(command, async () => {
+      const scope = resolveDraftCommandScope(command, options.scope);
+      if (!scope.ok) return Promise.resolve(err(scope.error));
+      return runOnce(scope.value, command.conversationId, command.commandId, async () => {
         const loaded = await load(command.conversationId);
         if (!loaded.ok) return err(loaded.error);
         if (loaded.value === undefined) {
           // No draft yet: initialize the whole state from the intent in one revision.
-          const view = initialize({
-            projectId: command.projectId,
-            conversationId: command.conversationId,
-            initialize: {
-              modelProfileId: command.modelProfileId,
-              ...(command.modelName === undefined ? {} : { modelName: command.modelName }),
-              ...(command.reasoningEffort === undefined
-                ? {}
-                : { reasoningEffort: command.reasoningEffort }),
-              operationMode: command.operationMode,
-              contextMode: command.contextMode,
-              writePolicy: command.writePolicy,
-              writePolicyAcknowledged: command.writePolicyAcknowledged,
-              contextRefs: command.contextRefs
-            }
-          });
+          const view = initialize(
+            {
+              scope: scope.value,
+              conversationId: command.conversationId,
+              initialize: {
+                modelProfileId: command.modelProfileId,
+                ...(command.modelName === undefined ? {} : { modelName: command.modelName }),
+                ...(command.reasoningEffort === undefined
+                  ? {}
+                  : { reasoningEffort: command.reasoningEffort }),
+                operationMode: command.operationMode,
+                contextMode: command.contextMode,
+                writePolicy: command.writePolicy,
+                writePolicyAcknowledged: command.writePolicyAcknowledged,
+                contextRefs: command.contextRefs,
+                activeResourceRef: command.activeResourceRef ?? null
+              }
+            },
+            scope.value
+          );
           const withRequest = applyAgentRunDraftMutation(
             view.runDraft,
             { kind: "set_request", request: command.userRequest },
@@ -379,7 +436,8 @@ export function createAgentRunDraftSession(
           if (!withRequest.ok) return err(withRequest.error);
           return persist({ runDraft: withRequest.value, contextDraft: view.contextDraft });
         }
-        return persist(syncToIntent(loaded.value, command, now));
+        const scoped = validateDraftScope(loaded.value, scope.value);
+        return scoped.ok ? persist(syncToIntent(scoped.value, command, now)) : scoped;
       });
     }
   };
@@ -398,6 +456,15 @@ function syncToIntent(
   let contextDraft = view.contextDraft;
   if (contextDraft.contextMode !== command.contextMode) {
     contextDraft = setContextDraftMode(contextDraft, command.contextMode, now());
+  }
+  const activeResourceRef = command.activeResourceRef ?? null;
+  if (!sameActiveResource(contextDraft.activeResourceRef, activeResourceRef)) {
+    const updated = applyContextDraftMutation(
+      contextDraft,
+      { kind: "set_active_resource", ref: activeResourceRef },
+      now()
+    );
+    if (updated.ok) contextDraft = updated.value;
   }
   let runDraft = view.runDraft;
   const mutations: AgentRunDraftMutation[] = [
@@ -421,6 +488,18 @@ function syncToIntent(
     if (next.ok) runDraft = next.value;
   }
   return rebind(runDraft, contextDraft, now());
+}
+
+function sameActiveResource(
+  left: Extract<ContextDraftRef, { readonly kind: "project_file" }> | null,
+  right: Extract<ContextDraftRef, { readonly kind: "project_file" }> | null
+): boolean {
+  return (
+    left?.refId === right?.refId &&
+    left?.relativePath === right?.relativePath &&
+    left?.label === right?.label &&
+    left?.expectedChecksum === right?.expectedChecksum
+  );
 }
 
 function rebind(
@@ -470,4 +549,46 @@ function draftError(code: string, message: string): UnifiedError {
 
 function createDefaultId(): string {
   return `draft_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function resolveDraftCommandScope(
+  identity: { readonly scope?: AgentContextScope; readonly projectId?: string },
+  boundScope?: AgentContextScope
+): Result<AgentContextScope, UnifiedError> {
+  const requested =
+    identity.scope ??
+    (identity.projectId === undefined
+      ? boundScope
+      : boundScope?.kind === "workspace" && boundScope.workspaceId === identity.projectId
+        ? boundScope
+        : {
+            kind: "workspace" as const,
+            workspaceKind: "creativeProject" as const,
+            workspaceId: identity.projectId
+          });
+  if (
+    requested === undefined ||
+    (identity.projectId !== undefined &&
+      (requested.kind !== "workspace" || requested.workspaceId !== identity.projectId)) ||
+    (boundScope !== undefined && scopeKey(requested) !== scopeKey(boundScope))
+  ) {
+    return err(
+      draftError("AGENT_RUN_DRAFT_SCOPE_MISMATCH", "The Agent run draft scope is not active.")
+    );
+  }
+  return ok(boundScope ?? requested);
+}
+
+function validateDraftScope(
+  view: AgentRunDraftView,
+  scope: AgentContextScope
+): AgentRunDraftResult {
+  return scopeKey(view.runDraft.scope) === scopeKey(scope) &&
+    scopeKey(view.contextDraft.scope) === scopeKey(scope)
+    ? ok(view)
+    : err(draftError("AGENT_RUN_DRAFT_SCOPE_MISMATCH", "The Agent run draft scope is not active."));
+}
+
+function scopeKey(scope: AgentContextScope): string {
+  return scope.kind === "standalone" ? "standalone" : `${scope.workspaceKind}:${scope.workspaceId}`;
 }
