@@ -1,16 +1,21 @@
 # Novel Studio 双工作台上下文工程设计
 
 **日期：** 2026-07-26
+**更新：** 2026-07-27（补充 standalone 会话与 Provider prompt cache 合同）
 **状态：** Ready（上位计划批次 1-5 已完成；下一步 C1，上下文能力尚未实现）
 **实现基线：** `7626853`（Provider、v2 工具目录、网络/MCP 与审批前置合同已冻结）
 **实施计划：** `docs/superpowers/plans/2026-07-26-context-engineering-two-workbenches.md`
-**范围：** Agent 运行的系统提示装配、初始上下文、项目约定文件、工作区定向块、上下文预算、压缩模板；不改变工具安全边界与审批链路。本文定义目标合同，不表示 C1-C5 已实现。
+**范围：** 未打开项目时的应用级 standalone 会话，以及 Agent 运行的系统提示装配、初始上下文、项目约定文件、工作区定向块、上下文预算、Provider prompt cache 与压缩模板；不改变工具安全边界与审批链路。本文定义目标合同，不表示 C1-C6 已实现。
 
 ---
 
 ## 1. 背景与问题
 
-Novel Studio 有两个工作台：创作工作台（`creativeProject`）与工程工作台（`engineeringWorkspace`）。两者的 Agent 走**同一条运行时代码路径**（`createDesktopAgentRuntime`，`apps/desktop/src/main/agent-run-runtime.ts:99`），当前的"上下文差异"只有四处：
+Novel Studio 有两个工作台：创作工作台（`creativeProject`）与工程工作台（`engineeringWorkspace`），并有一个未绑定工作区的 Shell 状态（`workspaceContext.kind === "none"`）。`none` 不是第三个工作台；它需要一个应用级 standalone 会话作用域。
+
+当前 `none` 只是禁用态：Renderer 把 `activeProjectId` 置为 `undefined`（`apps/desktop/src/renderer/App.tsx:119-122`），不创建 conversation bridge（`agent-conversation-workspace.ts:229-268`），UI 显示但禁用 composer（`packages/ui/src/workspace-shell.tsx:247-274`）；Main 的 runtime binding 仅接受两类 workspace，生产启动还会默认创建并绑定 `minimal-chapter`（`apps/desktop/src/main/index.ts:70-108,300-314`）。因此现在并不存在“无项目会话的空上下文”，而是根本没有可运行会话。
+
+两个工作台的 Agent 走**同一条运行时代码路径**（`createDesktopAgentRuntime`，`apps/desktop/src/main/agent-run-runtime.ts:99`），当前的"上下文差异"只有四处：
 
 | 差异点     | 现状                                                                                                                                     | 佐证                                                                        |
 | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
@@ -26,6 +31,8 @@ Novel Studio 有两个工作台：创作工作台（`creativeProject`）与工�
 3. **预算不诚实。** `toolReserve: 0` 写死（`agent-run-runtime.ts:805,890`）；`systemReserve` 只计当前 4 行指导。工具 schema（v1 最多 15-16 个工具的 JSON schema）实际占用完全未计入。
 4. **压缩不分模式。** `agent-compaction-composer.ts` 的保护/驱逐分类和（预留的）模型辅助摘要对写作与工程一视同仁；写作被压掉的可能是伏笔与人物状态，工程被压掉的可能是"改过哪些文件"。
 5. **检索引导缺失。** 指导文字没有教模型"先搜后写/先读后改"的 JIT 检索策略，而这是 Claude Code/Codex 上下文工程的核心行为约束。
+6. **Provider 缓存只记账、不可控。** `LlmUsage` 只有混合的 `cachedTokens`；Anthropic 把 cache creation/read 合并，Gemini 只读取返回的 cached token，OpenAI-compatible 尚未解析 cached-token detail。`LlmRequest` 没有 cache policy、稳定前缀身份、TTL 或 Provider cache handle，无法证明或验收缓存命中率。
+7. **无项目会话缺失。** Conversation/Run/Draft/Context 均以 `projectId` 绑定，Agent `workspaceKind` 排除 `none`，且无“关闭当前工作区”返回未绑定态的生产流程。不能通过伪造 projectId、沿用上一个 cwd 或把 `general_file` 当作纯会话来规避这个缺口。
 
 `packages/context-engine`（workflow 步骤用的 Context Bundle，见 `CONTEXT_ENGINE.md`）与 Agent 运行上下文是**两套独立系统**，本设计不合并它们；Context Engine 的"显式候选 + 预算 + 排除 trace"原则被本设计沿用到 Agent 侧。
 
@@ -63,12 +70,14 @@ Novel Studio 有两个工作台：创作工作台（`creativeProject`）与工�
 
 **目标**
 
-1. 把"(工作台, contextMode)"升级为**三个显式的 Context Profile**，每个 profile 拥有自己的系统提示装配、初始上下文最小集、预算参数与压缩模板。
-2. 引入**用户可写的项目约定文件**（工程 = `AGENTS.md`，创作 = `conventions/writing.md`），以受信任的用户/数据层注入；不得借助文本声明把仓库文件提升为 system role。
-3. 引入**工作区定向块**：极小、确定性、服务器构建的结构索引（写作 = 章节清单 + Story Bible 索引；工程 = 有界目录骨架）。
-4. 预算诚实化：`toolReserve` 按冻结工具目录实计，`systemReserve` 覆盖全部注入层。
-5. 压缩按 profile 分类与出摘要：写作保情节/人物/伏笔/用户决定，工程保文件改动/待办/错误。
-6. 指导文字 v2：加入 JIT 检索行为约束（先搜后写、先读后改、不臆造未读内容）。
+1. 把“会话作用域 + 工作台 + contextMode”升级为**四个显式的 Context Profile**：应用级 `standalone`，以及工作区级 `writing | creative_general | engineering`。
+2. 未打开项目时提供可创建、继续、搜索、归档和删除的 standalone 会话；它使用应用级持久化根，不伪造项目身份，不获得项目文件或执行工具。
+3. 引入**用户可写的项目约定文件**（工程 = `AGENTS.md`，创作 = `conventions/writing.md`），以受信任的用户/数据层注入；不得借助文本声明把仓库文件提升为 system role。
+4. 引入**工作区定向块**：极小、确定性、服务器构建的结构索引（写作 = 章节清单 + Story Bible 索引；工程 = 有界目录骨架）。
+5. 预算诚实化：`toolReserve` 按冻结工具目录实计，`systemReserve` 覆盖全部注入层。
+6. 压缩按 profile 分类与出摘要：standalone 保用户目标/决定/未决问题，writing 保情节/人物/伏笔，creative_general 保正在处理的文件/用户决定/未完成项，engineering 保文件改动/待办/错误。
+7. 指导文字 v2：加入 JIT 检索行为约束（先搜后写、先读后改、不臆造未读内容）；standalone 明确告知模型当前无项目、无可读文件。
+8. 建立 Provider-capability-aware prompt cache：稳定前缀可验证、缓存读/写分开记账、命中率可观测，不支持的 Provider 确定性降级为无缓存。
 
 **非目标**
 
@@ -77,32 +86,40 @@ Novel Studio 有两个工作台：创作工作台（`creativeProject`）与工�
 - 不改变 untrusted-data envelope、审批、Change Set、事务与撤销链路。
 - 不合并 `packages/context-engine` 与 Agent 运行上下文。
 - 不新增模型可见工具（复用 v2 门面）。
+- 不自建跨 Provider/跨账户/跨工作区的共享 prompt cache，不宣称一个对所有 Provider 都可保证的固定命中率。
+- Standalone 首个竖切不开放项目文件、shell/任务、Git、Change Set、网络或 MCP 工具，不把 standalone 会话自动迁移/合并到后续打开的工作区会话。
 
 ## 4. Context Profile
 
 ### 4.1 定义
 
 ```
-AgentContextProfileId = "writing" | "creative_general" | "engineering"
-resolveAgentContextProfile(workspaceKind, contextMode) → AgentContextProfile
+AgentContextScope =
+  | { kind: "standalone"; scopeId: "standalone" }
+  | { kind: "workspace"; workspaceKind: "creativeProject" | "engineeringWorkspace"; workspaceId: string }
+
+AgentOperationMode = "conversation" | "planning" | "execution"
+AgentContextMode = "standalone_chat" | "writing" | "general_file"
+AgentContextProfileId = "standalone" | "writing" | "creative_general" | "engineering"
+resolveAgentContextProfile(scope, operationMode, contextMode) → AgentContextProfile
 ```
 
-|              | `writing`                                                      | `creative_general`                       | `engineering`                               |
-| ------------ | -------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------- |
-| 触发         | creativeProject × writing                                      | creativeProject × general_file           | engineeringWorkspace ×（恒）general_file    |
-| 身份指导     | 小说协作者：叙事连续性、人物一致、不臆造设定                   | 创作项目内的文件助手：忠实文本、最小改动 | 工程助手：读改分离、最小 diff、遵守项目约定 |
-| 风格包       | `DEFAULT_AI_WRITING_STYLE_RULE_PACK`（保留）                   | 无                                       | 无                                          |
-| 约定文件     | `conventions/writing.md`（content root）                       | `conventions/writing.md`                 | `AGENTS.md`（workspace root）               |
-| 定向块       | 章节清单（id/标题/字数）+ Story Bible 资产索引（id/名称/类型） | 目录骨架（有界）                         | 目录骨架（有界，深 2 层、条目封顶）         |
-| 初始正文     | 当前章节（现状保留）                                           | 当前打开文件（现状保留）                 | 无正文——全部 JIT 检索                       |
-| 检索指导     | 先查设定/前文再落笔                                            | 先读后改                                 | 先搜索后读取，先读取后提改                  |
-| 压缩摘要模板 | 情节事实/人物状态/伏笔/用户决定                                | 通用（文件与决定）                       | 改过的文件/待办/报错/下一步                 |
+| profile            | 触发                                              | 身份/工具策略                                      | 约定/定向块                                      | 初始正文       | 压缩摘要模板                       |
+| ------------------ | ------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------- | -------------- | -------------------------------------- |
+| `standalone`       | standalone × conversation × standalone_chat     | 通用对话助手；明确无项目/文件；模型工具目录为空 | 无                                                 | 无             | 用户目标/已确定决定/未决问题/下一步 |
+| `writing`          | creativeProject × planning/execution × writing    | 小说协作者；写作风格包；先查设定/前文再落笔         | `conventions/writing.md` + 章节/Story Bible 索引 | 当前章节         | 情节事实/人物状态/伏笔/用户决定      |
+| `creative_general` | creativeProject × planning/execution × general_file | 创作项目文件助手；忠实文本、最小改动；先读后改       | `conventions/writing.md` + 有界目录骨架       | 当前打开文件     | 文件/用户决定/未完成项                |
+| `engineering`      | engineeringWorkspace × planning/execution × general_file | 工程助手；读改分离、最小 diff；先搜索后读取             | `AGENTS.md` + 有界目录骨架                   | 无，全部 JIT 检索 | 改过的文件/待办/报错/下一步           |
 
-Profile 由服务器解析：`workspaceKind` 取自冻结的 capability snapshot（`agent-tool-capabilities` 里已有该字段，desktop 在 `agent-run-runtime.ts:254` 写入），`contextMode` 取自 run snapshot；同时冻结紧凑的 runtime facts（cwd/project root、sandbox/trust、approval、write policy、network/MCP availability、provider/model、tool catalog revision）。渲染层无法伪造 profile 或 runtime facts。Profile 带版本号（沿用并提升 `AGENT_SYSTEM_GUIDANCE_VERSION` → `2.0`），system_guidance 审计源的 refId 升级为 `system_guidance:{profileId}@{version}`。新 run 的 profile/template/artifact 版本在 start 时冻结；旧 run 只从持久化 artifact 恢复，不能用当前 builder 重写原输入。
+Profile 由服务器解析。Workspace profile 的 `workspaceKind` 取自冻结 capability snapshot，`contextMode` 取自 run snapshot；standalone scope 只能解析为 `conversation + standalone_chat`，不允许 renderer 把它切成 writing/general_file/planning/execution。Main 同时冻结紧凑 runtime facts：standalone 为 `workspaceBound=false`、`cwd/projectRoot=null`、project trust/write approval 为 `not_applicable`、tool catalog 为空；workspace profile 则冻结 cwd/root、sandbox/trust、approval、write policy、network/MCP availability、provider/model 与 tool catalog revision。
+
+渲染层无法伪造 scope、profile 或 runtime facts。Profile 带版本号（`AGENT_SYSTEM_GUIDANCE_VERSION` → `2.0`），system_guidance 审计源 refId 为 `system_guidance:{profileId}@{version}`。新 run 的 scope/profile/template/artifact 版本在 start 时冻结；旧 run 只从持久化 artifact 恢复，不能用当前 builder 重写原输入。
 
 ### 4.2 分层系统提示（信任分层）
 
-应用自有的身份、安全和工具规约沿现有 **trusted systemPrompt seam**（`agent-run-session.ts:1908-1911`）注入。项目约定文件不能进入同一个 system role；当前 model driver 只有一个真正的 system message，头部声明不能在消息内部建立低于 system 的权限。约定文件应作为带来源、版本、checksum 和 `instructionPolicy` 的用户/数据消息注入，并受 workspace trust 与显式启用状态约束：
+应用自有的身份、安全和工具规约沿现有 **trusted systemPrompt seam**（`agent-run-session.ts:1908-1911`）注入。Standalone system prompt 必须明示 `workspaceBound=false`、当前没有可读写项目，不得声称已查看本地文件或可执行项目操作。
+
+项目约定文件不能进入同一个 system role；当前 model driver 只有一个真正的 system message，头部声明不能在消息内部建立低于 system 的权限。约定文件应作为带来源、版本、checksum 和 `instructionPolicy` 的用户/数据消息注入，并受 workspace trust 与显式启用状态约束：
 
 ```
 [1 系统层]   身份 + 安全边界 + 工具行为约束（app authored，随 profile 版本冻结）
@@ -111,12 +128,13 @@ Profile 由服务器解析：`workspaceKind` 取自冻结的 capability snapshot
 [4 约定层]   用户项目约定文件全文（user/data message；不得覆盖系统层安全规则）
 ```
 
-关键信任决定：约定文件是**用户/数据层上下文**，不是 system authority；workspace trust 和显式启用是必要前置条件。约定层有 token 上限（默认 4000 token，超限截断并在 UI 提示），持久化为不可变 Context Artifact，记录原文 checksum、实际注入片段 checksum、截断范围和 profile/template 版本，参与 staleness 检测。项目里其他文件内容仍一律走 `untrusted_project_data` 封套（`agent-run-session.ts:2727-2735`），本设计不开任何口子。
+关键信任决定：约定文件是**用户/数据层上下文**，不是 system authority；workspace trust 和显式启用是必要前置条件。约定层有 token 上限（默认 4000 token，超限截断并在 UI 提示），持久化为不可变 Context Artifact，记录原文 checksum、实际注入片段 checksum、截断范围和 profile/template 版本，参与 staleness 检测。项目里其他文件内容仍一律走 `untrusted_project_data` 封套（`agent-run-session.ts:2727-2735`），本设计不开任何口子。Standalone 没有约定层，也不读取用户上次打开的项目约定。
 
 ### 4.3 工作区定向块
 
 服务器构建、确定性、封顶的结构索引，作为**初始上下文数据消息**注入（与现有 initialContextSources 同一机制，`agent-run-session.ts:3925-3944`），sourceKind 新增 `workspace_outline`：
 
+- **Standalone**：不创建 `workspace_outline`，不调用任何 project reader/index port，不把最近工作区或进程 cwd 当成隐式根目录。
 - **工程**：从受 canonical-root/no-symlink 守卫保护的 metadata/index port 派生有界树——深度 ≤ 2，总条目 ≤ 200，扫描同时受 entry/byte/time 上限约束，超出以 `…(+N)` 标注；不得直接调用绕过守卫的领域 repository。
 - **写作**：章节清单（通过受守卫的 metadata port：id、标题、字数）+ Story Bible 资产索引（assetId、名称、类型；**不含正文**）。索引不得为构建列表而读取整章正文。
 - 定向块是**数据**不是权威：仍包 `untrusted_project_data` 封套（内容源自项目元数据）；压缩时归类为可驱逐、可重读（模型可用 list/search 工具重新获取）。
@@ -128,13 +146,16 @@ Profile 由服务器解析：`workspaceKind` 取自冻结的 capability snapshot
 
 ### 4.4 初始上下文最小集
 
-| profile          | app-authored system prompt | 数据消息（含约定/定向块）                                |
-| ---------------- | -------------------------- | -------------------------------------------------------- |
-| writing          | 层 1/2/3                   | 用户请求 → 会话摘要（如有）→ 约定 → 定向块 → 当前章节    |
-| creative_general | 层 1/2                     | 用户请求 → 会话摘要（如有）→ 约定 → 定向块 → 当前文件    |
-| engineering      | 层 1/2                     | 用户请求 → 会话摘要（如有）→ 约定 → 定向块（无正文预载） |
+| profile          | app-authored system prompt | 数据消息（稳定前缀在前）                                |
+| ---------------- | -------------------------- | ------------------------------------------------------------ |
+| standalone       | standalone 层 1/2           | 用户请求 → 会话摘要（如有）                          |
+| writing          | 层 1/2/3                   | 约定 → 定向块 → 用户请求 → 会话摘要（如有）→ 当前章节    |
+| creative_general | 层 1/2                     | 约定 → 定向块 → 用户请求 → 会话摘要（如有）→ 当前文件    |
+| engineering      | 层 1/2                     | 约定 → 定向块 → 用户请求 → 会话摘要（如有）（无正文预载） |
 
-其余一切靠工具拉取。必须保持 Stage 5 的固定消息顺序：app-authored system prompt 之后，`user_request` 是第一条非 system 事实消息；可选 `conversation_summary` 只能位于用户请求之后，不能为方便装配而前移。随后依次注入约定、定向块和显式引用；start、refresh、exclude、compact 与 hydrate 都从持久化 artifact 按同一顺序 materialize。这与现有 `initialContextSources` 管线兼容：定向块由 main 侧在 start preflight 时追加为一个 source，渲染层 `contextDraftRefs` 不变。
+其余一切靠工具拉取。C1 将 Stage 5 消息顺序升级为两段式 materialization：app-authored system prompt 和冻结工具目录之后，先放置带 `untrusted_project_data` 封套的 `project_conventions` 与 `workspace_outline`，形成稳定 `project_context_prefix`；`user_request` 仍是第一条用户创作的任务指令，但不再是第一条非 system 数据消息。可选 `conversation_summary` 只位于用户请求之后，随后是显式引用与当前正文。这个顺序不提升项目数据权限；更晚的用户请求仍优先于项目约定，系统安全规则仍最高。
+
+start、refresh、exclude、compact 与 hydrate 必须从持久化 artifact 按同一顺序 materialize。Workspace profile 的 `project_context_prefix` 逻辑 checksum 由 scope/profile/template 版本、Provider connection/account/model/policy、tool catalog revision、信任状态、约定 artifact checksum 和定向块 manifest/materialized checksum 共同决定；standalone 的稳定前缀只包含 standalone system prompt、空工具目录与同样的 Provider/scope 身份。任一输入变化必须生成新前缀身份，禁止将旧缓存当成新上下文。
 
 ### 4.5 预算诚实化
 
@@ -142,31 +163,62 @@ Profile 由服务器解析：`workspaceKind` 取自冻结的 capability snapshot
 
 - `systemReserve` = 对 app-authored system prompt、固定 conversation/control wrapper 以及约定 user/data envelope 的完整装配估算，替换现在只算指导文字的 `estimateAgentSystemReserveTokens(contextMode)`（`agent-run-session.ts:941-947`）。签名升级为接收 profile + 约定 artifact。
 - `toolReserve` = 对该 run 冻结的 provider-specific 工具目录（包括批次 4 的多 Provider schema/count 能力和批次 5 的网络/MCP descriptors）及最大工具结果摘要的确定性估算，替换写死的 0（`agent-run-runtime.ts:805,890`）。以 `7626853` 的 Provider 与动态 descriptor 合同作为 C4 计算基线。
-- `previewContextBudget`（desktop `agent-run-runtime.ts:844-901`）与 run 启动、compaction 重算三处必须用同一套解析函数，禁止各自复算。
+- Standalone 的工具目录为空，所以 `toolReserve=0` 是有冻结 catalog checksum 作证的正常结果，不是未计算占位值；其 system/conversation wrapper 仍完整计入 `systemReserve`/usedTokens。
+- `previewContextBudget`（desktop `agent-run-runtime.ts:844-901`）、run start、每轮 round 与 compaction 重算四处必须用同一套解析函数，禁止各自复算。
 - 预算必须覆盖 conversation envelope、JSON 包装、system/data message、工具 schema、结果摘要、summary/pointer artifact，并使用 Provider 可验证的 tokenizer；未知 context window 必须 fail closed。
 
-### 4.6 压缩按 profile
+### 4.6 Provider Prompt Cache 与可观测性
+
+缓存是 Provider 能力，不是本地 Context Artifact 的别名。Artifact 保证恢复与审计，prompt cache 减少 Provider 重复处理的输入 token；两者必须分开建模。
+
+1. **能力模式**：Provider 快照增加 `PromptCacheMode = "none" | "automatic_prefix" | "explicit_breakpoints" | "explicit_resource"`，并冻结 policy version、TTL 上限、最小可缓存 token 与用量字段语义。未验证、未报告或不支持时一律使用 `none`，不向兼容端点盲发 Provider 私有字段。
+2. **缓存边界**：可缓存区只包含 app-authored system prompt、冻结工具 schema 和 workspace profile 的 `project_context_prefix`；standalone 只有 system/空工具前缀。用户请求、conversation history、当前章节/文件正文、工具结果与模型摘要默认属动态后缀。Provider 若只支持自动前缀缓存，只依赖精确字节前缀；若支持显式 breakpoint/resource，由 adapter 在同一权限角色内标注缓存边界，不能为缓存把项目数据移入 system role。
+3. **服务器权威与失效**：cache identity 只能由 Main 使用冻结 runtime facts 与 artifact checksum 派生，renderer/模型/项目文件不能指定 cache key/handle。Provider connection/account/model、adapter/policy version、tool catalog、profile/template、scope，以及 workspace trust、约定或定向块任一变化都必须 miss/新建；standalone 与任何 workspace 缓存永不共用。显式资源按 TTL 过期，工作区切换或信任撤销后禁止继续引用。
+4. **Provider 适配**：Anthropic adapter 分开处理 cache creation/read 并仅在能力已验证时发送 cache-control block；Gemini 只在 cached-content 资源创建、TTL、失效和清理全部接线时使用 `explicit_resource`；OpenAI-compatible 默认仅使用已验证的自动前缀能力，并解析端点实际返回的 cached-token detail。任一 Provider 缓存错误只允许在确认请求未产生外部副作用时降级为无缓存重试。
+5. **用量与定价**：统一用量增加可选 `cacheReadTokens`、`cacheWriteTokens`、`cacheEligibleInputTokens`、`cacheOutcome = hit | miss | bypass | unknown`、`cacheBypassReason` 与 `cacheUsageStatus = actual | derived | unavailable`，保留 `cachedTokens` 仅作旧记录兼容派生值。Outcome 描述本次请求是否使用缓存，usage status 描述 token 口径是否可验证，两者不得混用。仅在 Provider 有可验证分母时展示 `cacheHitRate = cacheReadTokens / cacheEligibleInputTokens`；否则显示“不可用”，禁止用混合 token 猜测。定价分开 cache read/write 单价，并标注 actual/estimated/unknown。
+6. **UI 与审计**：用量页按 run/日显示缓存读取、写入、命中率（可计算时）和估算节省；Run 详情显示模式、prefix checksum 短摘要、hit/miss/bypass 原因。持久化不得包含 prompt 原文、原始路径、密钥或 Provider 资源秘密；远程 handle 只能作为 Main-owned opaque ref 保存。
+
+### 4.7 压缩按 profile
 
 现有三阶段合同不变（确定性清理 → 有限模型摘要 → awaiting_context_refresh；阈值 WARN 0.7 / COMPACT 0.85，`agent-run-session.ts:510-519`），但压缩必须通过同一 prompt materializer 更新真实 model input。本设计只加两点：
 
 1. **分类扩展**（`apps/desktop/src/main/agent-compaction-composer.ts`）：`project_conventions` → 受保护事实（映射 `explicit_ref` 类）；`workspace_outline` → 可驱逐 `rereadable_body`（指针留"可用 list_project_entries 重读"）。
-2. **摘要模板按 profile**：`CompactionModelAssistantPort` 的摘要指令由 profile 提供——writing 模板要求保留：已确立的情节事实、人物当前状态、未回收伏笔、用户明确决定；engineering 模板要求保留：已修改文件与改动意图、未完成任务、最近错误输出要点、下一步。端口必须返回摘要正文、provenance、tokenCount、checksum 和 precision，摘要作为新的不可变 source/artifact 写入结果 Snapshot；未达目标且没有可验证摘要时 fail closed，不得提交伪成功 revision。
+2. **摘要模板按 profile**：`CompactionModelAssistantPort` 的摘要指令由 profile 提供——standalone 保留用户目标、已确定决定、约束、未决问题与下一步，不生成虚假文件/工作区状态；writing 保留已确立情节事实、人物当前状态、未回收伏笔、用户明确决定；creative_general 保留正在处理的文件、用户决定、未完成项与下一步；engineering 保留已修改文件与改动意图、未完成任务、最近错误输出要点、下一步。端口必须返回摘要正文、provenance、tokenCount、checksum 和 precision，摘要作为新的不可变 source/artifact 写入结果 Snapshot；未达目标且没有可验证摘要时 fail closed，不得提交伪成功 revision。
 
-### 4.7 提及建议（P2，确定性）
+### 4.8 提及建议（P2，确定性）
 
 对标 NovelCrafter：在 composer 的引用建议里增加**别名提及扫描**——用 Story Bible 资产名称/别名对当前章节与用户请求做纯字符串匹配，命中者作为"建议引用"chips 出现，**用户点选才注入**（复用现有 ContextDraft refs 管线与 `queueDraftMutation`）。无向量、无模型调用、无自动注入，不触碰 §12 延期红线。
+
+### 4.9 Standalone 会话生命周期
+
+Standalone 是应用级会话作用域，不是伪工作区。下列合同必须同时成立：
+
+1. **持久化与身份**：Main 从 Electron `userDataRoot` 派生固定、受守卫的 standalone state root（如 `agent/standalone`），存放 conversation、run、draft、context、artifact、usage 与幂等 command receipt。conversation/run/context 数据合同共用 discriminated `AgentContextScope`，禁止使用伪 `projectId="standalone"` 兼容。旧会话均 normalize 为 workspace scope，不迁移、不复制到 standalone。
+2. **运行时**：`DesktopAgentRuntimeManager` 拥有一个常驻 standalone runtime 和最多一个 active workspace runtime；Shell `kind=none` 时 IPC 只路由到 standalone，工作区激活时只路由到该 workspace。两个 scope 的 active run、conversation selection、draft、event stream 与 cache 不共享，切换不得让隐藏 runtime 继续执行。
+3. **模型与工具**：standalone 只要求对话所需的文本生成/流式能力，不因没有 tool calling/structured arguments 而拒绝支持文本对话的模型。工具目录冻结为空，`conversation` 模式以正常 assistant completion 结束，不要求 `finish_plan`，不产生可执行 Plan Artifact。
+4. **UI**：未打开项目时保留现有完整 Agent Conversation View，但启用新建/选择/搜索/归档/删除与发送。Composer 固定显示“会话”模式，隐藏计划/执行、写入授权、项目引用与工作区来源控件；模型未配置时禁用原因应指向模型设置，不再提示必须打开项目。
+5. **启动与切换**：生产启动不再无条件创建/打开 `minimal-chapter`；fixture/demo bootstrap 与 production startup 分离。若不存在可恢复的最近工作区，或用户未选择/未允许恢复，Shell 保持 `none` 并载入 standalone 会话。应用新增“关闭当前项目/工作区”命令，经现有未保存、active run、lock 与 runtime prepare/commit 守门后返回 `none`。
+6. **连续性**：打开项目时 standalone 会话持久化但从当前工作区 UI 隐藏；关闭工作区后恢复 standalone 会话列表与上次选中项。不将 standalone summary/history 自动注入新 workspace run。未来如需“带上下文打开项目”，必须以用户明确选择的可审计 handoff artifact 单独设计。
+7. **关闭/失败**：切换 scope 前若有 active run，必须先完成、用户停止或明确取消切换；不得将运行中 run 静默遗留在隐藏 scope。Standalone repository/runtime 初始化失败时 fail closed 并保留打开/创建项目入口，不回退到伪内存会话。
 
 ## 5. 数据合同变化
 
 | 合同                             | 变化                                                                                                                             | 兼容性                                                               |
 | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `AgentContextSnapshot` / source  | 新 `1.2` 增加 `project_conventions`、`workspace_outline`、dependency manifest 与 materialization provenance                      | reader 显式 normalize `1.0/1.1 -> 1.2`；新 run 只写 `1.2`            |
+| `AgentContextScope` / mode        | 新增 standalone/workspace discriminated scope、`AgentOperationMode="conversation"` 与 `AgentContextMode="standalone_chat"` | 旧 mode 保持；workspace 拒绝 standalone_chat，standalone 拒绝 planning/execution/writing/general_file |
+| Agent conversation record        | 新 `1.1` 以 scope 取代必填 `projectId`；standalone 可持久化而不伪造项目 | `1.0 projectId -> 1.1 workspace scope`；旧记录只读 normalize，不复制到 standalone |
+| `AgentContextSnapshot` / source  | 新 `1.2` 增加 scope/profile、`project_conventions`、`workspace_outline`、dependency manifest 与 materialization provenance | reader 显式 normalize `1.0/1.1 -> 1.2`；旧记录归 workspace scope，新 run 只写 `1.2` |
 | layer 映射                       | `project_conventions` → `explicit_ref`；`workspace_outline` → `tool_result`                                                      | 在 `1.2` source validator/default layer 中显式处理                   |
 | `AGENT_SYSTEM_GUIDANCE_VERSION`  | `1.0` → `2.0`，refId 固定为 `system_guidance:{profileId}@{version}`                                                              | 旧 run 只重放持久化 artifact，不用当前模板重写旧输入                 |
-| `AgentRunSnapshot`               | 新 `1.2` 增加 `contextProfileId`、`profileVersion`、`guidanceTemplateChecksum`、`conventionsArtifactId`（均绑定 start 时冻结值） | reader 显式 normalize `1.0/1.1 -> 1.2`；新 run 只写 `1.2`            |
+| `AgentRunSnapshot`               | 新 `1.2` 增加 scope、`contextProfileId`、`profileVersion`、`guidanceTemplateChecksum`、`conventionsArtifactId`、`promptCachePolicyVersion`、`cachePrefixChecksum`；standalone 不必填 projectId | reader 显式 normalize `1.0/1.1 -> 1.2`；旧 run 归 workspace scope；新 run 只写 `1.2` |
+| `AgentRunEvent` / status          | 新 event `1.3` 允许 `conversation_model` 状态与 standalone scope facts，不改写已发布 1.2 严格枚举 | 1.0/1.1/1.2 保持可读；只有新 conversation 事件写 1.3 |
 | Context materialization artifact | 新独立 `1.0` artifact 保存 source/artifact ID、reader/dependency identity、原文与注入 checksum、tokenCount、truncationRange      | 正文或摘要只经不可变 artifact 引用；hydrate 不从当前文件重写历史输入 |
 | 约定文件路径                     | 固定：工程 `AGENTS.md`、创作 `conventions/writing.md`；只经受守卫的 project instruction reader 读取，须 workspace trust/显式启用 | 不提升为 system authority；无新文件系统权限面                        |
 | 预算输入                         | `resolveBudgetInputs` 增加约定文本与工具目录输入                                                                                 | desktop 内部seam，`AgentContextBudgetInputsPort` 加法扩展            |
+| `LlmRequest` / Provider 能力      | 加法增加 prompt cache mode/policy、稳定前缀身份与可选 opaque resource ref；能力快照冻结语义 | 默认 `none`；旧 Provider/fixture 不发送任何缓存字段                  |
+| `LlmUsage` / usage record         | 新增 cache read/write/eligible、outcome/bypass reason 与 usage status，`cachedTokens` 仅作兼容派生值；定价拆分 cache read/write | 旧记录读取为 `cacheOutcome=unknown`、`cacheUsageStatus=unavailable`；不伪造命中率 |
+| Prompt cache artifact             | 新 `1.0` 保存 Provider connection/account isolation identity、model/scope、policy version、prefix checksum、TTL/时间戳与 Main-owned opaque ref | 不保存账户秘密、prompt 原文或密钥；未知版本 fail closed                     |
+| Standalone state root             | Main 从 `userDataRoot` 派生固定 scope root，复用 scope-aware conversation/run/draft/context/artifact/usage/command-receipt ports | 不接受 renderer 路径，不读项目根，不改写旧 workspace 数据 |
 
 兼容规则是硬约束：任何新增持久化字段、枚举值或结构都必须声明新 schema 版本、validator、normalizer 和 repository 可读版本；禁止把上述字段静默塞进现有 `AgentRunSnapshot 1.1` 或 `AgentContextSnapshot 1.1`。旧文件只读规范化，不批量改写；未知版本 fail closed。
 
@@ -177,22 +229,33 @@ Profile 由服务器解析：`workspaceKind` 取自冻结的 capability snapshot
 3. 所有新读取通过受 canonical-root/no-symlink 守卫保护的 project reader/index port，不直接使用绕过守卫的领域 repository，不新增文件系统访问面。
 4. 工程工作台遵循现有“提案 + 审批后应用”的写入合同；本设计不扩大工具能力或绕过 Change Set/审批。
 5. Profile、约定文本、定向块全部在 run 启动时服务器解析并冻结；运行中只随 compaction/refresh 按既有合同变化。
+6. Prompt cache 不得跨 Provider、账户、model、scope/workspace identity 或 trust revision 复用；缓存 hit/miss/bypass 只影响性能与费用，不得改变模型可见内容、角色、工具、审批或恢复语义。
+7. Standalone scope 没有 project/workspace identity、root、cwd、trust 或写入授权；任何要求 workspace identity 的 reader、工具或 IPC 必须拒绝 standalone。其冻结工具目录恒为空，Provider adapter 不得补入文件、shell/任务、Git、Change Set、网络或 MCP 工具。
+8. Standalone 与 workspace 的 state root、conversation/run/draft/context/artifact/usage、事件订阅和 cache identity 必须隔离；scope 切换不能串用选中会话、摘要、工具结果或 active run，也不得把隐藏 scope 的内容自动注入当前 scope。
+9. 生产启动与“关闭当前项目/工作区”不能创建默认项目、复用最近 cwd 或用内存会话掩盖 standalone 初始化失败；失败时应保持可诊断的禁用态并保留打开/创建工作区入口。
 
 ## 7. 与既有计划的关系
 
 - 上位计划批次 1-5 已在 `7626853` 前完成；Anthropic/Gemini 原生 adapter、OpenAI-compatible 合同、v2 工具目录、网络/MCP descriptors 与数据外发审批现在是本设计的冻结前置基线。
-- 本次只把设计状态推进到 Ready，不把 Context Profile、约定文件、定向块、动态预算或模型摘要标成已实现；下一实现批次是 C1。
+- 本次只把设计状态推进到 Ready，不把 Context Profile、约定文件、定向块、动态预算、prompt cache 或模型摘要标成已实现；下一实现批次是 C1。
+- C1 同时交付 scope/profile/schema 基础和 standalone 会话纵向闭环（应用级存储、空工具 runtime、IPC/UI、启动/关闭工作区与恢复）；它不是第三个工作台，也不是可推迟到 C6 的 UI 收尾。
+- C2-C3 只作用于三个 workspace profile；standalone 不读取项目约定、不生成工作区定向块。
 - C4 直接消费 `7626853` 的 Provider/tool-schema/network/MCP 合同，不再保留“批次 4/5 未定”的占位数字。
+- C5 在 C1 的稳定前缀 seam 和 C2-C4 的 artifact/预算之上接入 Provider cache；C6 承载可裁剪的提及建议与 UI 收尾。
 - 实施时必须以当前 Stage 5A 代码重新建立差异基线，并遵守 §5 的显式 schema 升级。继续延期：向量/语义检索、自动注入、记忆自动写入和跨模型降级。
 
 ## 8. 测试与验收要点
 
-1. **profile 解析**：三组合各自快照测试；工程 × writing 被预检拒绝的现有测试保持绿。
-2. **系统提示装配**：system role 只含 app-authored 层；约定文件以 user/data message 注入，断言 workspace trust、显式启用、超限截断和恶意指令不能改变安全/审批策略。
-3. **约定文件**：存在/缺失/超限/运行中被改（触发 context_stale）/staleness 恢复；路径越界拒绝。
-4. **定向块**：条目封顶、blockedRoots 过滤、无 Story Bible 时写作定向块降级为仅章节清单；工程空目录不报错。
-5. **预算**：toolReserve 随 Provider、v2、网络/MCP 目录变化；systemReserve 覆盖实际 wrapper；preview/start/round/compaction 同值，未知能力 fail closed。
-6. **压缩**：conventions 受保护、outline 被驱逐且留指针；摘要正文/provenance/tokenCount 写入 artifact；两套模板断言关键字段；真实 prompt 随结果 Snapshot 更新。
-7. **E2E**：真实 Electron 下，工程工作台新 run 首轮消息含目录骨架，创作写作 run 首轮消息含章节清单 + Story Bible 索引；`查看来源` 面板出现新 source kinds。
-8. 真实 Electron 下断言 start、refresh、exclude、compact、reload 后 Provider 收到的完整消息；C4 以 `7626853` 为基线覆盖多 Provider、网络/MCP 与数据外发审批 E2E。
-9. 全量 `--no-file-parallelism` 套件、typecheck、lint、既有 agent-context-runtime E2E 全绿。
+1. **scope/profile 解析**：四个合法 profile 组合各自快照测试；standalone 只接受 `conversation × standalone_chat`，workspace 拒绝 `standalone_chat`，standalone 拒绝 planning/execution/writing/general_file，工程 × writing 被预检拒绝的现有测试保持绿。
+2. **standalone 隔离**：scope-aware repository/runtime/IPC 测试断言应用级 state root 可持久化且不伪造 `projectId`；standalone 与 workspace 的会话、draft、run、event、artifact、usage 和 cache 不串用，任何 project reader 与工具调用均被拒绝。
+3. **系统提示装配**：system role 只含 app-authored 层；standalone 明示无项目且工具目录为空；约定文件以 user/data message 注入，断言 workspace trust、显式启用、超限截断和恶意指令不能改变安全/审批策略。
+4. **约定文件**：存在/缺失/超限/运行中被改（触发 context_stale）/staleness 恢复；路径越界拒绝。
+5. **定向块**：条目封顶、blockedRoots 过滤、无 Story Bible 时写作定向块降级为仅章节清单；工程空目录不报错；standalone 不调用 outline reader。
+6. **预算**：toolReserve 随 Provider、v2、网络/MCP 目录变化；standalone 的空 catalog 产生可证的 `toolReserve=0`；systemReserve 覆盖实际 wrapper；preview/start/round/compaction 同值，未知能力 fail closed。
+7. **Prompt cache**：相同冻结输入产生相同逻辑/物理 prefix checksum；改用户请求只改动态后缀，改约定/定向块/tool catalog/provider connection/account/model/scope/trust 必须失效。覆盖 `none`、显式 breakpoint、显式 resource 与不支持字段的确定性降级；断言 standalone/workspace 不共用缓存，Anthropic/Gemini/OpenAI-compatible 请求及用量归一化，命中率无可验证分母时为 unavailable。
+8. **压缩**：conventions 受保护、outline 被驱逐且留指针；摘要正文/provenance/tokenCount 写入 artifact；四个 profile 的模板断言关键字段，standalone 摘要不得生成文件/工作区事实；真实 prompt 随结果 Snapshot 更新，前缀变化产生新 cache identity。
+9. **workspace E2E**：真实 Electron 下，工程工作台新 run 首轮消息含目录骨架，创作写作 run 首轮消息含章节清单 + Story Bible 索引；`查看来源` 面板出现新 source kinds。
+10. **standalone E2E**：无恢复工作区的生产首次启动停留在 `none` 且不创建 `minimal-chapter`；用户可新建、发送、搜索、归档、删除，重启后恢复列表与上次选中项。Provider 请求不含工具 schema、项目 source、旧 cwd 或最近工作区内容；只具文本生成/流式能力的模型可完成会话。
+11. **scope 切换 E2E**：打开项目后隐藏但保留 standalone，会话/事件只路由到 workspace；关闭工作区后恢复 standalone 选择。active run 或未保存状态按既有守门阻止/确认切换，不发生后台隐藏 run 或自动上下文迁移。
+12. 真实 Electron 下断言 start、refresh、exclude、compact、reload 后 Provider 收到的完整消息；C4 以 `7626853` 为基线覆盖多 Provider、网络/MCP 与数据外发审批 E2E，C5 覆盖缓存 hit/miss/bypass 和 TTL/失效 E2E。
+13. 全量 `--no-file-parallelism` 套件、typecheck、lint、既有 agent-context-runtime E2E 全绿。
