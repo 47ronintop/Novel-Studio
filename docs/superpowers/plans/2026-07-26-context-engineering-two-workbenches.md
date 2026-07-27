@@ -1,8 +1,8 @@
 # Novel Studio 双工作台上下文工程实施计划
 
 - **日期：** 2026-07-26
-- **更新：** 2026-07-27（补充 standalone 会话与 Provider prompt cache 批次）
-- **状态：** Ready（前置批次 1-5 已完成；下一步 C1，C1-C6 尚未实现）
+- **更新：** 2026-07-27（补充 standalone 会话、创作项目文件模式与 Provider prompt cache 批次）
+- **状态：** Ready（前置批次 1-5 已完成；下一步 C1A，C1-C6 尚未实现）
 - **实现基线：** `7626853`（Provider、v2 工具目录、网络/MCP 与审批合同已冻结）
 - **设计依据：** `docs/superpowers/specs/2026-07-26-context-engineering-two-workbenches-design.md`
 - **上位计划：** `docs/superpowers/plans/2026-07-26-agent-tool-functional-priorities.md`（批次 1-5 Complete；代码提交 `7626853`）
@@ -12,6 +12,9 @@
 - 产品仍是创作、工程两个工作台；未绑定项目的 Shell `none` 状态不是第三个工作台。上下文解析改为四个显式 Context Profile：应用级 `standalone`，以及 workspace 级 `writing | creative_general | engineering`。
 - Standalone 仅允许 `conversation × standalone_chat`，使用 `userDataRoot` 下的应用级持久化根，不伪造 `projectId`，不继承最近工作区、cwd、项目正文或工具；其模型工具目录恒为空。
 - 未打开项目时用户可新建、继续、搜索、归档、删除并发送 standalone 会话。生产启动不再无条件打开 `minimal-chapter`；新增“关闭当前项目/工作区”流程，打开工作区时隐藏但保留 standalone，关闭后恢复，不自动迁移上下文。
+- 当前创作工作台并没有可用的通用文件模式：只有底层 `general_file` 类型与工具过滤，创作导航仍只有“写作/故事资料”，普通文件导航还会切到工程工作台。本计划增加创作工作台内第三个“项目文件”标签；它不是第三个工作台，也不复用 `engineeringWorkspace` identity/runtime。
+- “项目文件”只展示用户自有 UTF-8 文本（首版 `.md/.txt/.json/.yaml/.yml/.toml/.csv`），由版本化 `CreativeProjectFilePolicy` 在 tree/read/save/lifecycle/Agent mutation 全入口隐藏并拒绝章节、Story Bible、Studio 配置/历史/缓存以及其他 managed/内部路径。打开普通文件自动解析 `creative_general`，不增加 Composer 模式选择器。
+- 当前普通文件自动成为下一次 run 的唯一活动文件引用，同时保留用户手动加入的其他普通文件 refs；dirty 文件必须先保存或放弃，不能把旧磁盘正文交给 Agent。`creative_general` 不获得 Shell、任务、Git 或章节/Story Bible mutation，Agent 普通文件写入继续走 Change Set/审批。
 - 规划两类用户可写项目约定文件：工程 `AGENTS.md`、创作 `conventions/writing.md`，以 workspace trust 约束的 user/data message 注入；不得进入同一个 trusted system role。
 - 引入服务器构建的定向块（章节清单 + Story Bible 索引 / 有界目录骨架），作为初始上下文数据消息。
 - `toolReserve`/`systemReserve` 诚实化。
@@ -22,7 +25,7 @@
 
 ## 2. 批次划分
 
-执行顺序：C1 →（C2 ∥ C3）→ C4 → C5 → C6。C1 先完成 scope/profile/schema 基础，再交付 standalone 纵向闭环；C2-C3 只处理三个 workspace profile。上位计划批次 4/5 已完成；C4 直接使用 `7626853` 的 Provider、冻结工具目录、网络/MCP descriptor 和审批合同，C5 再基于 C1-C4 的稳定 materialization/artifact/预算合同接入 prompt cache。
+执行顺序：C1A →（C1B ∥ C1C）→（C2 ∥ C3）→ C4 → C5 → C6。C1A 先完成 scope/profile/schema 基础；随后 C1B 交付 standalone，C1C 交付创作项目文件，两个纵向闭环可并行但都必须完成后才进入 C2-C3。C2-C3 只处理三个 workspace profile。上位计划批次 4/5 已完成；C4 直接使用 `7626853` 的 Provider、冻结工具目录、网络/MCP descriptor 和审批合同，C5 再基于 C1-C4 的稳定 materialization/artifact/预算合同接入 prompt cache。
 
 ### 批次 C0：运行时上下文闭环与延期期间修复（吸收到 C1-C4，不再单独排期）
 
@@ -37,9 +40,9 @@
 
 **完成条件：** 现有功能链路中不存在“snapshot 已排除但 prompt 仍有正文”“reload 丢失初始 refs”“预算为空仍可启动/压缩”的路径；不改变工具集合。
 
-### 批次 C1：Scope/Profile 基础、Standalone 会话纵向闭环与指导 v2（批次 4/5 后）
+### 批次 C1：Scope/Profile 基础、Standalone 与创作项目文件纵向闭环、指导 v2（批次 4/5 后）
 
-**目标：** 四个 profile 显式化并交付“未打开项目也能持久会话”的完整路径；不新增项目文件或外部工具 IO，不新增 workspace 模型可见工具。
+**目标：** 四个 profile 显式化，交付“未打开项目也能持久会话”和“创作工作台可处理用户项目文件”两条完整路径；复用冻结的 v2 模型工具名称，不增加工程执行能力或绕过既有审批。
 
 **C1A：Scope/Profile 与持久化合同**
 
@@ -47,7 +50,7 @@
 2. `buildAgentSystemGuidance` 重构为 `buildAgentSystemPrompt(profile, { conventionsArtifact? })`：system role 只装配 app-authored 层；约定 artifact 作为 user/data message 接入，`AGENT_SYSTEM_GUIDANCE_VERSION` → `2.0`；风格包仅 writing。Standalone prompt 明示无项目/文件/工具，不得声称已读取本地内容。保留旧函数导出别名直到调用点全部迁移。
 3. system_guidance 审计源 refId 升级为 `system_guidance:{profileId}@{version}`；新 run 的 scope/profile/template/artifact 版本在 start 时冻结，hydrate 只恢复持久化 artifact，不能用当前 builder 重写旧 run 输入。
 4. prompt materializer 建立两段式顺序：app-authored system prompt/冻结工具目录后，workspace profile 先放置带 data envelope 的约定与定向块，形成稳定 `project_context_prefix`；再放置用户请求、conversation summary、显式引用与当前正文。Standalone 只有 system/空工具稳定前缀，随后是用户请求和会话摘要。start/refresh/exclude/compact/hydrate 必须同序，项目数据不得因前缀位置提升为 system authority。
-5. 显式升级持久化合同：conversation record `1.1` 以 scope 取代必填 `projectId`；`AgentRunSnapshot 1.2`、`AgentContextSnapshot 1.2` 和 `AgentRunEvent 1.3` 增加 scope/profile/conversation 所需字段。补 validator、旧版本 normalizer 和 repository 可读版本；旧记录只规范化为 workspace scope，不迁移或复制到 standalone，未知版本 fail closed。
+5. 显式升级持久化合同：conversation record、Agent Run Draft 与 Context Draft 升 `1.1` 并以 scope 取代必填 `projectId`；`AgentRunSnapshot 1.2`、`AgentContextSnapshot 1.2` 和 `AgentRunEvent 1.3` 增加 scope/profile/conversation 所需字段。补 validator、旧版本 normalizer 和 repository 可读版本；旧记录只规范化为 workspace scope，不迁移或复制到 standalone，未知版本 fail closed。
 6. `estimateAgentSystemReserveTokens` 升级为按完整装配文本估算（签名接收 profile；约定文本参数 C2 接通）；standalone 的 `toolReserve=0` 必须来自冻结空 catalog 及其 checksum，而不是沿用占位常量。
 
 **C1B：Standalone 真实用户纵向闭环**
@@ -60,7 +63,19 @@
 12. Scope 切换前若有 active run，必须等待完成、由用户停止或取消切换；不得留下隐藏后台 run。Standalone repository/runtime 初始化失败时 fail closed，保留打开/创建工作区入口，不回退到不可恢复的内存会话。
 13. 测试：四个 profile 的合法/非法组合、固定消息顺序、稳定前缀边界/checksum、冻结 runtime facts、版本/normalizer/artifact 恢复；fresh production start 无默认项目；standalone 新建/发送/搜索/归档/删除、重启恢复、文本模型能力、空工具请求；打开/关闭 workspace 的路由与选择恢复、active run 守门、两个 scope 数据/事件/cache 不串用；工程 × writing 拒绝回归保持绿。
 
-**完成条件：** 未打开项目时用户可完成并恢复真实会话，Provider 看不到项目上下文或工具；打开/关闭工作区后两个 scope 各自连续且不串流。每轮 system prompt 由 profile 驱动，start/refresh/exclude/compact/hydrate 从冻结 artifact 生成同序 model input，全量套件绿。
+**C1C：创作项目文件真实用户纵向闭环**
+
+14. Shared/preferences 合同：`CreativeNavigatorMode` 增加 `files`，`UserShellPreferences` 增加独立 `creativeFileExpandedPathIds`，偏好快照升 `1.1` 并补 validator/normalizer；旧偏好展开列表补 `[]`，未知 mode 回退 `writing`。新增 `CreativeProjectFilePolicy 1.0`、`CreativeProjectFileTreeSnapshot 1.0` 以及版本化文件生命周期 command/receipt，所有 UI identity 只保存 project-relative path/id，不保存根目录。
+15. `packages/application` 新增 `CreativeProjectFileSession`；Main 只从当前已激活 `creativeProject` 派生 canonical root，创建受守卫的 tree/read/save/lifecycle repository。Renderer 命令必须携带当前 project/workspace identity、project-relative path 与 expected tree revision，不能传 root；切换项目后旧 snapshot/command fail closed。可从 `EngineeringWorkspaceFileRepository` 抽取 path guard、UTF-8/大小限制、原子保存和 checksum 冲突原语，但不得 attach engineering session 或复用其 runtime identity。
+16. 单一文件策略贯穿所有入口：首版仅显示 `.md/.txt/.json/.yaml/.yml/.toml/.csv` 文件及未被阻断的目录（包括用户新建的空目录）；路径先统一分隔符、折叠 `.` 并按平台规则规范大小写，再按完整 segment 匹配。隐藏并拒绝 `project.json`、`settings.json`、`chapters/characters/world/outline/timeline/memories/prompts/agents/workflow/workflows/plugins/history/cache/.novel-studio`，以及 `.git/.svn/.hg/node_modules/dist/release/build/out/coverage/.cache/__pycache__`。绝对路径、`..`、设备名、符号链接/reparse point、非 UTF-8、超限与 unsupported extension 全部拒绝；tree/read/save/create/rename/delete、outline reader 和 Agent mutation 必须共用同一 policy/version。
+17. 生命周期 repository/API 覆盖 `createTextFile`、`createDirectory`、`renamePath`、`deleteFile`、`deleteEmptyDirectory`：command id 与 receipt 幂等、名称/扩展名/目标不存在/expected tree revision 校验、原子写入；tree 节点携带不需读取正文的 Main-generated opaque `nodeRevision`，重命名或删除还要校验 `expectedSourceRevision`，避免作用于外部替换后的节点。删除二次确认；重命名仅接受用户直接操作或已批准 Agent Change Set；首版拒绝非空目录删除，非空目录重命名前由 Main 有界遍历并确认整棵子树通过同一 policy、无隐藏/不支持节点或 symlink/reparse point，否则拒绝。成功后递增结构 tree revision，刷新树并更新或关闭活动 editor identity；普通文件保存只更新文档 checksum/content revision 与 node revision。
+18. UI 新增创作导航固定第三标签“项目文件”，包含筛选、刷新、新建文件、新建目录、重命名、删除、空态与截断/错误反馈；从工程导航抽取无 workspace 语义的通用树行组件。参数化 `PlainFileEditorBridge`，明确绑定 `creativeProjectFile | engineeringWorkspaceFile` API scope，复用单文件编辑、UTF-8、大小限制、expected-checksum conflict UI；创作首版不增加多标签编辑器。
+19. 新增独立 `navigateToCreativeFile`/creative files surface 路径，选择标签或打开文件始终保持 `WorkbenchMode="creative"`，不得调用现有会切换工程工作台的 `navigateToFile`。选择项目文件时清除章节主编辑器并把新 draft 设为 `general_file`，打开章节/故事资料恢复 `writing` 并清空普通文件 `activeResourceRef`；从 dirty 普通文件打开另一文件、切换创作标签或离开项目时统一走“保存 / 放弃 / 取消”守门。不在 Composer 增加人工模式切换，Inspector/权限摘要显示 Main 解析的 `creative_general`。跨 profile 计划执行必须重新 preflight，已启动 run 不随导航改写。
+20. Context Draft `1.1` 增加独立 `activeResourceRef`；活动普通文件自动维护至多一个 `project_file` active ref，但保留用户手动加入的其他普通文件 refs。start 时 Main 按 creative project identity/policy 重新读取并冻结 `disk_file` source、checksum 与 artifact，无活动文件时 `activeResourceRef=null`，仍允许空 `creative_general` 规划/提议创建。dirty 文件启动、移动或删除前必须保存或放弃，不得读取旧磁盘正文；外部修改进入 expected-checksum conflict/context-stale 流程，不静默替换 editor buffer 或活动 artifact。
+21. `creative_general` 的 capability/tool snapshot 固定 `controlledExecutionEnabled=false`、`gitReadEnabled=false`，并过滤章节/Story Bible 专用 mutation；允许 v2 list/read/search/edit，以及 feature flag 与审批允许的 create/manage，Agent 写入仍生成 Change Set。网络/MCP 只按创作项目既有设置、数据外发审批与冻结 descriptor 开放。无活动文件、空树、树截断、会话初始化失败都提供可诊断状态，不自动切换工程工作台降级。
+22. 聚焦测试与 Electron E2E：三标签及偏好恢复、文件/目录生命周期、幂等与旧 tree/node revision、managed/ignored/unsupported/越界/symlink/reparse-point 拒绝、非空目录安全重命名/删除拒绝、scope-aware editor API、自动 `creative_general`/current-file ref、dirty 导航/start/move/delete 守门、conflict/stale、受限工具目录与 Change Set；验证三种创作标签往返不切换工作台，当前文件正文进入动态后缀而非稳定缓存前缀。
+
+**完成条件：** 未打开项目时用户可完成并恢复真实会话，Provider 看不到项目上下文或工具；创作用户可在同一创作工作台完成普通文本文件的浏览、创建、打开、编辑、重命名、删除并以正确 profile 启动 Agent，managed 数据与工程工具不可达。每轮 system prompt 由 profile 驱动，start/refresh/exclude/compact/hydrate 从冻结 artifact 生成同序 model input，C1A-C1C 聚焦套件与 Electron 纵向 E2E 全绿。
 
 ### 批次 C2：项目约定文件（受信任的用户/数据层）
 
@@ -80,15 +95,16 @@
 **目标：** 三个 workspace profile 的初始上下文最小集成型；standalone 不读取项目定向块。
 
 1. `packages/application` 定义 `WorkspaceOutlineReader` 只读端口，Main 注入受 canonical-root/no-symlink 守卫保护的 metadata/index 实现；输入只接受服务器解析的 workspace identity、profile 和硬限制，不接受 renderer 根路径或正文：
-   - 工程/创作通用：递归深 ≤ 2、条目 ≤ 200，并同时限制扫描 entry/byte/time；
+   - 工程：从 engineering workspace repository/index 派生递归深 ≤ 2、条目 ≤ 200 的目录骨架，并同时限制扫描 entry/byte/time；
+   - 创作通用：只从 C1C 的 `CreativeProjectFileTreeSnapshot` 与同版本 policy 派生用户文件骨架，使用相同深度/条目/entry/byte/time 上限，不另行扫描、不得混入 managed/内部路径；
    - 写作：章节清单（id/标题/字数）+ Story Bible 资产索引（assetId/名称/类型，无正文），不得为索引读取整章正文。
-2. reader 返回结构化条目、装配文本与 dependency manifest；manifest 至少记录 `readerVersion`、profile、canonical root identity、限制/截断状态，以及工程目录条目集合 revision/checksum，或章节索引与 Story Bible 索引 revision/checksum。artifact 同时保存 manifest checksum 与 materialized checksum。
+2. reader 返回结构化条目、装配文本与 dependency manifest；manifest 至少记录 `readerVersion`、profile、canonical root identity、限制/截断状态，以及工程目录条目集合 revision/checksum、创作文件结构 tree revision/policy version/visible-node checksum，或章节索引与 Story Bible 索引 revision/checksum。创作 visible-node checksum 只覆盖相对路径/类型，不含正文或文件 checksum。artifact 同时保存 manifest checksum 与 materialized checksum。
 3. start preflight 把定向块追加为 initialContextSources 之一：sourceKind `workspace_outline`，走现有 `untrusted_project_data` 数据消息管线；目标 ≤ 1500 token，超预算先裁定向块。
 4. 只在 start 或用户确认的 context refresh 重建。stale reader 比较 dependency manifest；新增、删除、重命名或 revision 变化触发 `context_stale -> awaiting_context_refresh`，不得静默替换。refresh 写新 artifact/source revision；依赖缺失产生可审计降级块。
 5. 压缩分类：`agent-compaction-composer.ts` 把 `workspace_outline` 归可驱逐 `rereadable_body`，只保留 dependency manifest/pointer 与 list/search 重读提示；`project_conventions` 归受保护事实。hydrate 不得从旧正文复活已驱逐内容。
-6. 测试：封顶与截断标注、blockedRoots 过滤、manifest 变化/stale/refresh/reload、无 Story Bible 降级、空目录、压缩驱逐与指针、E2E（工程新 run 首轮含目录骨架；写作新 run 含章节清单 + 设定索引）。
+6. 测试：封顶与截断标注、blockedRoots 过滤、manifest 变化/stale/refresh/reload、无 Story Bible 降级、工程空目录、创作空用户文件树、创作 managed 路径不泄漏、压缩驱逐与指针、E2E（工程新 run 首轮含工程目录骨架；创作通用含用户文件骨架；写作含章节清单 + 设定索引）。
 
-**完成条件：** 工程 Agent 不再从零摸目录；写作 Agent 开局知道有哪些章节与设定可查；压缩正确分类两种新源。
+**完成条件：** 工程 Agent 不再从零摸目录；创作通用 Agent 开局知道有哪些用户文件可查；写作 Agent 开局知道有哪些章节与设定可查；压缩正确分类两种新源。
 
 ### 批次 C4：预算诚实化（排在上位计划批次 4/5 后）
 
@@ -107,12 +123,12 @@
 **目标：** 在不改变 prompt 语义与安全边界的前提下，使支持缓存的 Provider 可复用稳定前缀，并将 hit/miss/bypass、缓存读/写 token 与费用语义做到可验证。
 
 1. Provider capability snapshot 增加 `PromptCacheMode = none | automatic_prefix | explicit_breakpoints | explicit_resource`、policy version、TTL/最小 token 限制与 usage 语义；未验证能力默认 `none`。
-2. C1 materializer 输出逻辑 prefix identity，Provider adapter 输出物理 payload checksum；identity 绑定 provider/account/model、adapter/policy version、scope、profile/template 与 tool catalog revision；workspace profile 再绑定 workspace/trust、conventions artifact 和 outline manifest/materialized checksum。Standalone 与任何 workspace 永不共用 identity。
+2. C1 materializer 输出逻辑 prefix identity，Provider adapter 输出物理 payload checksum；identity 绑定 provider/account/model、adapter/policy version、scope、profile/template 与 tool catalog revision；workspace profile 再绑定 workspace/trust、conventions artifact 和 outline manifest/materialized checksum。`creative_general` 的 outline manifest 必须包含 C1C 的文件 tree revision/policy version/visible-node checksum；当前文件 artifact/checksum 只属于动态后缀与 run 恢复，不进入稳定 prefix identity，因此只改正文不会无谓失效相同的目录前缀。Standalone 与任何 workspace 永不共用 identity。
 3. 扩展 `LlmRequest`：仅由 Main 注入 cache policy/前缀身份/可选 opaque resource ref；Anthropic 接 cache-control block，Gemini 只在 cached-content 资源全生命周期完成时启用，OpenAI-compatible 只使用端点已验证的自动前缀/用量字段；不向其他端点盲发私有字段。
 4. 扩展 `LlmUsage`、Run usage summary、usage repository 与 pricing registry：分开 `cacheReadTokens`、`cacheWriteTokens`、`cacheEligibleInputTokens`、`cacheOutcome`、`cacheBypassReason`、`cacheUsageStatus` 及 read/write 单价；`cachedTokens` 仅作旧数据兼容派生值。Outcome 表示 hit/miss/bypass，usage status 表示 actual/derived/unavailable，不得混为一个状态。
 5. 只在分母可验证时计算 `cacheHitRate`；用量页和 Run 详情显示 cache mode、hit/miss/bypass 原因、读/写 token、命中率（可用时）和 actual/estimated 节省，不显示原始 cache handle/prompt/路径。
 6. 显式 cache resource 的创建、复用、TTL 过期、scope/工作区切换、trust 撤销和应用关闭清理均由 Main 拥有；远程删除结果不可证时保留可审计状态，不自动重试外部副作用。
-7. 测试：稳定前缀 byte/checksum，用户请求只改后缀，约定/outline/tools/provider/model/trust 变化必须失效；standalone/workspace 不共享缓存；三类 Provider 请求合同与 usage 归一化；不支持 Provider 不发缓存字段；缓存失败不改变模型输入、审批与工具语义。
+7. 测试：稳定前缀 byte/checksum，用户请求或创作当前文件正文只改后缀，约定/outline（含创作文件 tree manifest）/tools/provider/model/trust 变化必须失效；standalone/workspace 不共享缓存；三类 Provider 请求合同与 usage 归一化；不支持 Provider 不发缓存字段；缓存失败不改变模型输入、审批与工具语义。
 
 **完成条件：** 同一冻结前缀在同一 Provider connection/account/model/scope/policy 下可重用；任意身份或信任变化必然 miss/bypass；不支持缓存的 Provider 与旧 run 行为保持不变；缓存读/写与命中率可审计。
 
@@ -133,12 +149,16 @@
 | 打开/关闭工作区遗留隐藏 active run 或丢失选择 | 复用 prepare/commit、未保存、lock 与 active run 守门；切换失败保持原 scope，重启/往返测试恢复各自上次选中项 |
 | 生产启动仍被 fixture 强制打开默认项目 | production startup 与 fixture/demo bootstrap 分离；fresh-profile Electron E2E 断言 `none` 且不存在 `minimal-chapter` 副作用 |
 | Standalone 初始化失败退化为易丢失内存会话 | fail closed，显示可诊断禁用原因并保留打开/创建工作区入口，不创建临时伪 scope |
+| 创作项目文件误借工程 workspace 身份或工具 | 独立 `CreativeProjectFileSession` 与 scope-aware editor API；Main 从 active creative project 派生 root，禁止 renderer root/attached engineering runtime；工具快照恒禁 Shell/任务/Git |
+| 文件树隐藏 managed 路径但直调 API 仍可读写 | 版本化单一 policy 贯穿 tree/read/save/lifecycle/outline/Agent mutation；canonical-root/no-symlink/reparse-point 与跨项目 identity 测试 |
+| 重命名/删除目录误处理隐藏的 Studio 数据 | 非空目录删除恒拒绝；非空目录重命名前由 Main 有界遍历并要求全部节点通过同一 policy；删除二次确认，旧 tree/node revision 与目标冲突 fail closed |
+| dirty 普通文件让 Agent 读取旧磁盘正文 | start、move、delete 前统一保存/放弃守门；Main 按 expected checksum 冻结 source，外部修改进入 conflict/context stale |
 | 约定文件被用于提示注入攻击 | 不进入 system role；workspace trust + 显式启用 + data envelope + token 封顶 + 恶意约定/网络/写入工具测试 |
 | 定向块超预算挤占正文 | 1500 token 封顶 + 最先被裁 + 可驱逐可重读 |
 | guidance/profile/约定版本升级破坏旧 run 恢复 | 保存 scope/profileVersion、template checksum、conventions artifact、原文/注入 checksum；旧 run 只重放不可变 artifact |
 | systemReserve 增大导致小窗口模型预算不足 | 现有 `AGENT_CONTEXT_BUDGET_INSUFFICIENT` fail-closed 路径已覆盖；约定层超限先截断 |
 | Provider/网络合同后续演进 | C4 以 `7626853` 的冻结 tool catalog revision 与动态 descriptor checksum 为输入；变化只影响新 run |
-| 动态内容进入前缀导致命中率虚高/失效 | C1 只将冻结约定与定向块纳入 `project_context_prefix`；快照测试断言用户请求/正文/工具结果均在后缀 |
+| 动态内容进入前缀导致命中率虚高/失效 | C1 只将冻结约定与定向块纳入 `project_context_prefix`；创作文件 tree manifest 属定向块，当前文件正文/checksum 属动态后缀；快照测试断言用户请求/正文/工具结果均在后缀 |
 | 缓存跨 scope 或信任边界复用 | cache identity 强绑定 Provider/account/model/scope/workspace/trust/policy 与 artifact checksum；任一变化必须 miss/bypass |
 | Provider 缓存语义不一致 | capability snapshot + provider-native adapter；无可验证分母不显示命中率，未知能力降级 `none` |
 | 显式远程 cache 资源泄漏或清理结果不明 | Main-owned opaque ref + TTL + lifecycle journal；不持久化 prompt/密钥，结果不可证时不自动重试 |
@@ -155,7 +175,9 @@
 8. Prompt cache 是可选 Provider 优化；hit/miss/bypass 不得改变模型可见内容与 run 结果。不支持缓存的 Provider 是正常降级路径，不是启动失败。
 9. Standalone 只提供纯会话：不得伪造 projectId/cwd，不得接入项目、shell/任务、Git、Change Set、网络或 MCP 工具；仅具文本生成/流式能力的模型不应因缺少 tool calling 而被拒绝。
 10. Scope 切换不得自动迁移 history/summary、留下隐藏 active run 或回退到内存会话；C1 的 standalone 存储、运行时和 UI 必须作为同一纵向闭环完成。
+11. 创作项目文件必须作为 C1C 的单一纵向闭环交付：没有第三导航标签、独立文件会话、编辑器、活动文件自动上下文、dirty guard、managed-path 拒绝或 Electron E2E 中任一项，都不能把 `creative_general` 标为已实现，也不能把缺项推到可裁剪 C6。
+12. 文件树只负责用户自有普通文本；章节、Story Bible 与 Studio 内部状态继续由专用 repository/UI 管理。抽取共享文件/树原语时不得把 engineering workspace identity、Shell/任务/Git 能力带入创作工作台。
 
 ## 5. 下一步
 
-从 C1A（Scope/Profile 与持久化合同）开始，再完成 C1B（Standalone 真实用户纵向闭环）；C1 的 fresh-start、会话恢复、空工具请求和 scope 往返 E2E 全绿后，才并行进入 C2 + C3，随后 C4、C5，最后 C6。本轮只更新设计与实施文档，不包含 C1-C6 代码。
+从 C1A（Scope/Profile 与持久化合同）开始，再并行完成 C1B（Standalone 真实用户纵向闭环）与 C1C（创作项目文件真实用户纵向闭环）。C1 的 fresh-start/会话恢复/空工具请求/scope 往返，以及创作项目文件导航/生命周期/活动文件上下文/权限隔离 E2E 全绿后，才并行进入 C2 + C3，随后 C4、C5，最后 C6。本轮只更新设计与实施文档，不包含 C1-C6 代码。
