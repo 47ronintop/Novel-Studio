@@ -54,9 +54,9 @@ test("generates an AI writing suggestion and applies it only after confirmation"
     const body = page.getByLabel("章节正文");
     await expect(body).toBeVisible();
     await replaceCodeMirrorText(page, body, "Opening line.");
-    const composer = await openAgentComposer(page);
+    await openAgentComposer(page);
 
-    const review = await requestSelectionReview(page, body, composer, "改写当前选区");
+    const review = await requestSelectionReview(page, body);
     await expect(review).toContainText("Opening line.");
     const proposedText = await readSelectionProposal(review);
 
@@ -107,14 +107,9 @@ test("completes the core writing journey across save, close, reopen, and continu
     const body = page.getByLabel("章节正文");
     await expect(body).toBeVisible();
     await replaceCodeMirrorText(page, body, "Core journey opening line.");
-    const composer = await openAgentComposer(page);
+    await openAgentComposer(page);
 
-    const review = await requestSelectionReview(
-      page,
-      body,
-      composer,
-      "检查文风与一致性"
-    );
+    const review = await requestSelectionReview(page, body);
     await expect(review.getByLabel("AI 文风规则检查")).toBeVisible();
     appliedBody = await readSelectionProposal(review);
 
@@ -149,7 +144,7 @@ test("completes the core writing journey across save, close, reopen, and continu
   const secondApp = await electron.launch({
     args: [electronMain],
     env: createElectronEnv({
-      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Second Default Project"),
+      NOVEL_STUDIO_PROJECT_ROOT: projectRoot,
       NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "Second User Data")
     })
   });
@@ -157,14 +152,21 @@ test("completes the core writing journey across save, close, reopen, and continu
   try {
     const page = await secondApp.firstWindow();
 
-    await queueDirectorySelection(secondApp, projectRoot);
-    await openAgentComposer(page);
-
+    const chapterList = page.getByLabel("章节列表");
+    await expect(chapterList).toBeVisible({ timeout: 15_000 });
+    const recoveryReview = page.getByLabel("章节恢复审阅");
+    if (await recoveryReview.isVisible()) {
+      await recoveryReview.getByRole("button", { name: "丢弃恢复草稿" }).click();
+      await expect(recoveryReview).toHaveCount(0);
+    }
+    await chapterList.getByRole("button").first().click();
     const body = page.getByLabel("章节正文");
+    await expect(body).toBeVisible();
+    await openAgentComposer(page);
     await expect
       .poll(async () => (await readCodeMirrorText(body)).trimEnd())
       .toBe(appliedBody.trimEnd());
-    await expect(page.getByLabel("版本历史")).toContainText("Before AI apply");
+    await expect(page.getByLabel("版本历史", { exact: true })).toContainText("Before AI apply");
 
     const continuedBody = `${appliedBody}${appliedBody.endsWith("\n") ? "" : "\n"}Continued after reopen.`;
     await replaceCodeMirrorText(page, body, continuedBody);
@@ -201,7 +203,21 @@ test("routes a real Electron selection preview to a local OpenAI-compatible serv
 
     if (request.method === "GET" && request.url === "/v1/models") {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ data: [{ id: "local-test-model" }] }));
+      response.end(
+        JSON.stringify({
+          data: [
+            {
+              id: "local-test-model",
+              context_window: 128000,
+              capabilities: {
+                streaming: true,
+                tool_calling: true,
+                structured_arguments: true
+              }
+            }
+          ]
+        })
+      );
       return;
     }
 
@@ -264,7 +280,7 @@ test("routes a real Electron selection preview to a local OpenAI-compatible serv
   try {
     const page = await electronApp.firstWindow();
     await queueDirectorySelection(electronApp, projectRoot);
-    const composer = await openAgentComposer(page);
+    await openAgentComposer(page);
     const body = page.getByLabel("章节正文");
     await replaceCodeMirrorText(page, body, "Real provider opening.");
 
@@ -279,12 +295,14 @@ test("routes a real Electron selection preview to a local OpenAI-compatible serv
     await page.getByRole("button", { name: "保存模型配置" }).click();
     await expect(page.getByText("模型配置已保存。", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "测试连接", exact: true }).click();
-    await expect(page.locator(".ns-project-feedback")).toHaveText(
-      "Connected to openai-compatible/local-test-model."
-    );
+    await expect(
+      page
+        .locator(".ns-project-feedback")
+        .filter({ hasText: "Connected to openai-compatible/local-test-model." })
+    ).toHaveText("Connected to openai-compatible/local-test-model.");
     await page.getByRole("button", { name: "关闭设置" }).click();
 
-    const review = await requestSelectionReview(page, body, composer, "改写当前选区");
+    const review = await requestSelectionReview(page, body);
 
     await expect(review).toContainText("Real provider opening, refined.");
     await expect(page.getByText("当前是演示模式，未配置真实Key。")).toHaveCount(0);
@@ -374,12 +392,10 @@ async function queueDirectorySelection(
 
 async function requestSelectionReview(
   page: Page,
-  editor: Locator,
-  composer: Locator,
-  actionName: "改写当前选区" | "检查文风与一致性"
+  editor: Locator
 ): Promise<Locator> {
   await selectAllCodeMirrorText(page, editor);
-  const action = composer.getByRole("button", { name: actionName });
+  const action = page.getByRole("button", { name: "Preview selection rewrite" });
   await expect(action).toBeEnabled();
   await action.click();
   const review = page.getByLabel("Selection AI review");

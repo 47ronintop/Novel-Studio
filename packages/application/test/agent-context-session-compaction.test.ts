@@ -1,4 +1,5 @@
 import { err, ok, type JsonObject, type Result, type UnifiedError } from "@novel-studio/shared";
+import { createHash } from "node:crypto";
 import { describe, expect, test } from "vitest";
 
 import {
@@ -18,6 +19,7 @@ import {
 } from "../src/agent-run-draft-session.js";
 import {
   createPlanExecutionProtectedFact,
+  createDeterministicTokenEstimator,
   type CompactContextCommand,
   type EvictableContextSource,
   type PlanExecutionRecord,
@@ -46,6 +48,7 @@ function evictable(overrides: Partial<EvictableContextSource> = {}): EvictableCo
 }
 
 function inputs(overrides: Partial<CompactionInputs> = {}): CompactionInputs {
+  const evidence = "persisted compaction evidence";
   return {
     sourceSnapshotId: "context_src",
     throughSequence: 20,
@@ -54,6 +57,15 @@ function inputs(overrides: Partial<CompactionInputs> = {}): CompactionInputs {
     evictableSources: [evictable()],
     currentTokens: 10000,
     targetTokens: 7000,
+    modelSummary: {
+      profileId: "writing",
+      evidence,
+      evidenceChecksum: createHash("sha256").update(evidence, "utf8").digest("hex"),
+      maxSummaryTokens: 1000,
+      provider: "demo",
+      model: "large",
+      modelProfileId: "profile-01"
+    },
     ...overrides
   };
 }
@@ -113,6 +125,7 @@ function command(overrides: Partial<CompactContextCommand> = {}): CompactContext
 }
 
 function recordingRepository(order: string[]): CompactionRunRepositoryPort {
+  const summaries = new Map<string, JsonObject>();
   return {
     async writeCompactionManifest(manifest) {
       order.push("manifest");
@@ -121,6 +134,14 @@ function recordingRepository(order: string[]): CompactionRunRepositoryPort {
     async writeCompactionRevision(revision) {
       order.push("revision");
       return ok(revision);
+    },
+    async writeCompactionSummaryArtifact(runId, artifact) {
+      order.push("summary");
+      summaries.set(`${runId}:${String(artifact["artifactId"])}`, structuredClone(artifact));
+      return ok(artifact);
+    },
+    async readCompactionSummaryArtifact(runId, artifactId) {
+      return ok(summaries.get(`${runId}:${artifactId}`));
     },
     async writeContextSnapshot(snapshot) {
       order.push("result");
@@ -133,6 +154,35 @@ function recordingRepository(order: string[]): CompactionRunRepositoryPort {
     async commitCompaction(snapshot) {
       order.push("commit");
       return ok(snapshot);
+    }
+  };
+}
+
+function validModelSummary(
+  input: Parameters<CompactionModelAssistantPort["summarizeEvictable"]>[0]
+) {
+  const body = JSON.stringify({
+    plotFacts: ["The bridge collapsed"],
+    characterStates: ["Mara is injured"],
+    foreshadowing: ["The key remains unexplained"],
+    userDecisions: ["Keep Mara alive"]
+  });
+  const count = createDeterministicTokenEstimator().count(body, "profile-01");
+  return {
+    inputTokens: 500,
+    summary: {
+      body,
+      provenance: {
+        kind: "model_assisted" as const,
+        provider: "demo",
+        model: "large",
+        modelProfileId: "profile-01",
+        templateVersion: "1.0" as const,
+        inputChecksum: input.evidenceChecksum
+      },
+      tokenCount: count.tokens,
+      checksum: createHash("sha256").update(body, "utf8").digest("hex"),
+      precision: count.precision
     }
   };
 }
@@ -171,7 +221,8 @@ const budgetInputsStub: AgentContextBudgetInputsPort = {
         systemReserve: 1000,
         requiredContextTokens: 8000
       },
-      contents: []
+      contents: [],
+      resolved: {} as never
     });
   }
 };
@@ -276,14 +327,10 @@ describe("compactContext — cross-repository commit ordering", () => {
       compactionSources: source,
       runRepository: repository,
       modelAssistant: {
-        async summarizeEvictable() {
+        async summarizeEvictable(input) {
           summarizerCalls += 1;
           return ok({
-            summaryChecksum: "d".repeat(64),
-            inputTokens: 500,
-            outputTokens: 120,
-            precision: "reported",
-            body: "must not persist",
+            ...validModelSummary(input),
             providerFrame: { authorization: "Bearer must-not-persist" }
           });
         }
@@ -308,11 +355,12 @@ describe("compactContext — cross-repository commit ordering", () => {
     expect(new Set(usageIds)).toEqual(new Set(["run_01:compaction_1:20"]));
     expect(
       receipts.find((receipt) => receipt["status"] === "model_completed")?.["modelResult"]
-    ).toEqual({
-      summaryChecksum: "d".repeat(64),
+    ).toMatchObject({
+      summaryArtifactId: "summary_compaction_1",
+      summaryChecksum: expect.stringMatching(/^[a-f0-9]{64}$/u),
       inputTokens: 500,
-      outputTokens: 120,
-      precision: "reported"
+      outputTokens: expect.any(Number),
+      precision: "estimated"
     });
     expect(JSON.stringify(receipts)).not.toMatch(/must not persist|providerFrame|authorization/i);
   });
@@ -324,12 +372,11 @@ describe("compactContext — cross-repository commit ordering", () => {
       runRepository: recordingRepository(order),
       usageSink: recordingUsageSink(order),
       modelAssistant: {
-        async summarizeEvictable() {
+        async summarizeEvictable(input) {
+          const valid = validModelSummary(input);
           return ok({
-            summaryChecksum: "not-a-checksum",
-            inputTokens: 500,
-            outputTokens: 120,
-            precision: "reported" as const
+            ...valid,
+            summary: { ...valid.summary, checksum: "not-a-checksum" }
           });
         }
       }
@@ -337,7 +384,7 @@ describe("compactContext — cross-repository commit ordering", () => {
 
     expect(await session.compactContext(command())).toMatchObject({
       ok: false,
-      error: { code: "AGENT_CONTEXT_COMPACTION_MODEL_RESULT_INVALID" }
+      error: { code: "AGENT_COMPACTION_SUMMARY_INVALID" }
     });
     expect(order).toEqual(["manifest"]);
   });
@@ -466,14 +513,9 @@ describe("compactContext — cross-repository commit ordering", () => {
     const events: CompactionEvent[] = [];
     let summarized = false;
     const modelAssistant: CompactionModelAssistantPort = {
-      async summarizeEvictable() {
+      async summarizeEvictable(input) {
         summarized = true;
-        return ok({
-          summaryChecksum: "d".repeat(64),
-          inputTokens: 500,
-          outputTokens: 120,
-          precision: "estimated"
-        });
+        return ok(validModelSummary(input));
       }
     };
     const session = makeSession(
@@ -491,7 +533,7 @@ describe("compactContext — cross-repository commit ordering", () => {
     if (!result.ok) return;
     expect(summarized).toBe(true);
     expect(result.value.revision.strategy).toBe("model_assisted");
-    expect(result.value.revision.outputTokens).toBe(120);
+    expect(result.value.revision.outputTokens).toBeGreaterThan(0);
   });
 
   test("does not commit and emits failed when building artifacts fails", async () => {

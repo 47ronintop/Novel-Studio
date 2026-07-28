@@ -137,7 +137,10 @@ export type {
   AgentTokenCount,
   AgentTokenEstimator,
   CalculateContextBudgetInput,
+  ContextBudgetAuditProof,
   ContextBudgetSnapshot,
+  ContextBudgetSnapshotV10,
+  ContextBudgetSnapshotV11,
   PreviewContextBudgetCommand
 } from "./context-budget.js";
 export {

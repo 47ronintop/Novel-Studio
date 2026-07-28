@@ -51,22 +51,19 @@ async function triggerFileMenuItem(
 
 test("creates a project, creates a chapter, edits it, and saves through Electron", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-e2e-"));
-  const defaultProjectRoot = join(tempRoot, "Default Project");
   const projectRoot = join(tempRoot, "Project Smoke");
   const electronApp = await electron.launch({
     args: [electronMain],
     env: {
       ...process.env,
-      NOVEL_STUDIO_PROJECT_ROOT: defaultProjectRoot,
       NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
     }
   });
 
   try {
     const page = await electronApp.firstWindow();
+    await expect(page.getByLabel("编辑区")).toBeVisible();
     await queueDirectorySelections(electronApp, [tempRoot]);
-
-    await expect(page.getByLabel("工作区导航")).toBeVisible();
 
     // Open the create-project dialog via the native File menu.
     await triggerFileMenuItem(electronApp, "createCreativeProject");
@@ -75,7 +72,7 @@ test("creates a project, creates a chapter, edits it, and saves through Electron
     await page.getByLabel("项目标题").fill("Project Smoke");
     await page.getByLabel("项目文件夹名称").fill("Project Smoke");
     await page.getByRole("button", { name: "选择项目父文件夹" }).click();
-    await page.getByRole("button", { name: "创建项目" }).click();
+    await page.getByRole("button", { name: "创建项目", exact: true }).click();
 
     await expect(page.getByText("Project Smoke")).toBeVisible();
 
@@ -124,9 +121,8 @@ test("starts public install users in a ready default project without quick start
     const page = await electronApp.firstWindow();
 
     await expect(page.getByRole("region", { name: "快速开始" })).toHaveCount(0);
-    // Project lifecycle commands are now in the native File menu, not the Navigator.
-    await expect(page.getByRole("navigation", { name: "项目导航" })).toHaveCount(0);
-    await expect(page.getByText("未命名长篇项目")).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "项目导航" })).toBeVisible();
+    await expect(page.locator(".ns-project-title")).toHaveText("未命名长篇项目");
     await expect(page.getByRole("tab", { name: "第一章.md" })).toBeVisible();
     await expect(chapterBody(page)).toContainText(/这是第一章的正文/);
 
@@ -187,19 +183,18 @@ test("keeps quick start hidden after relaunch when a default project is ready", 
 
 test("reviews and applies an autosave recovery draft from disk", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-recovery-e2e-"));
-  const defaultProjectRoot = join(tempRoot, "Default Project");
   const projectRoot = join(tempRoot, "Recovery Smoke");
   const firstApp = await electron.launch({
     args: [electronMain],
     env: {
       ...process.env,
-      NOVEL_STUDIO_PROJECT_ROOT: defaultProjectRoot,
       NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
     }
   });
 
   try {
     const page = await firstApp.firstWindow();
+    await expect(page.getByLabel("编辑区")).toBeVisible();
     await queueDirectorySelections(firstApp, [tempRoot]);
 
     await triggerFileMenuItem(firstApp, "createCreativeProject");
@@ -208,7 +203,7 @@ test("reviews and applies an autosave recovery draft from disk", async () => {
     await page.getByLabel("项目标题").fill("Recovery Smoke");
     await page.getByLabel("项目文件夹名称").fill("Recovery Smoke");
     await page.getByRole("button", { name: "选择项目父文件夹" }).click();
-    await page.getByRole("button", { name: "创建项目" }).click();
+    await page.getByRole("button", { name: "创建项目", exact: true }).click();
     await expect(page.getByText("Recovery Smoke")).toBeVisible();
     await page.getByRole("button", { name: "新建章节" }).click();
     await expect(page.getByRole("tab", { name: "Untitled Chapter 1.md" })).toBeVisible();
@@ -268,21 +263,23 @@ test("reviews and applies an autosave recovery draft from disk", async () => {
     args: [electronMain],
     env: {
       ...process.env,
-      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Second Default Project"),
       NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "Second User Data")
     }
   });
 
   try {
     const page = await secondApp.firstWindow();
+    await expect(page.getByLabel("编辑区")).toBeVisible();
     await queueDirectorySelections(secondApp, [projectRoot]);
 
     await triggerFileMenuItem(secondApp, "openCreativeProject");
 
-    await expect(page.getByLabel("Autosave recovery")).toBeVisible();
-    await page.getByRole("button", { name: /预览恢复草稿/ }).click();
+    await expect(page.locator(".ns-project-title")).toHaveText("Recovery Smoke");
+    const recoveryReview = page.getByLabel("章节恢复审阅");
+    await expect(recoveryReview).toBeVisible();
+    await recoveryReview.getByRole("button", { name: /预览恢复草稿/ }).click();
     await expect(page.getByLabel("恢复草稿预览")).toContainText("Recovered draft from autosave.");
-    await page.getByRole("button", { name: /应用恢复草稿/ }).click();
+    await recoveryReview.getByRole("button", { name: /应用恢复草稿/ }).click();
     await expect(chapterBody(page)).toContainText(recoveredBody.trim());
     const saveButton = page.getByRole("button", { name: "保存当前文档" });
     await expect(saveButton).toBeEnabled();

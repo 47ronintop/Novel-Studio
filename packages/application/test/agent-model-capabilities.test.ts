@@ -60,7 +60,7 @@ describe("agent model capability preflight", () => {
     });
   });
 
-  test("lets missing compatible metadata proceed with the conservative Agent budget", () => {
+  test("fails closed when compatible metadata omits the context window", () => {
     const preflight = applicationExports.preflightAgentModelCapabilities({
       profileId: "model_unknown_context",
       provider: "openai-compatible",
@@ -70,13 +70,13 @@ describe("agent model capability preflight", () => {
     });
 
     expect(preflight).toMatchObject({
-      ok: true,
-      value: {
-        streaming: true,
-        toolCalling: true,
-        structuredArguments: true,
-        contextWindow: 16_384,
-        requiredContextTokens: 8_000
+      ok: false,
+      error: {
+        code: "AGENT_MODEL_CAPABILITY_UNSUPPORTED",
+        redactedDetail: {
+          missingCapabilities: ["contextWindow"],
+          contextWindowStatus: "unverified"
+        }
       }
     });
     expect(

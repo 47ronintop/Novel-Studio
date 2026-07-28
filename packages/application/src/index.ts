@@ -419,6 +419,8 @@ export type {
 } from "./agent-context-profile.js";
 export {
   createAgentPromptMaterializationArtifact,
+  materializeAgentConversationContext,
+  materializeAgentRunHistory,
   materializeAgentPrompt,
   materializeProjectDataSource,
   parseAgentPromptMaterializationArtifact,
@@ -517,6 +519,33 @@ export type {
   UpdateContextDraftCommand
 } from "./agent-run-draft-session.js";
 export { createLlmAgentRunModelDriver } from "./agent-run-model-driver.js";
+export {
+  AGENT_CONTEXT_BUDGET_CONTRACT_VERSION,
+  AGENT_MAX_TOOL_RESULT_SUMMARY_UTF8_BYTES,
+  calculateResolvedContextBudget,
+  readResolvedContextBudgetUsageLimits,
+  resolveBudgetInputs
+} from "./agent-context-budget.js";
+export type {
+  AgentBudgetArtifactPointer,
+  AgentBudgetToolCatalogInput,
+  ResolveBudgetInputsInput,
+  ResolvedAgentContextBudgetInputs,
+  ResolvedContextBudgetUsageLimits
+} from "./agent-context-budget.js";
+export {
+  AGENT_COMPACTION_SUMMARY_TEMPLATE_VERSION,
+  buildCompactionSummaryPrompt,
+  createCompactionSummaryArtifact,
+  parseCompactionSummaryArtifact,
+  validateCompactionSummaryResult
+} from "./agent-compaction-summary.js";
+export type {
+  AgentCompactionSummaryArtifact,
+  CompactionSummaryPrompt,
+  CompactionSummaryProvenance,
+  CompactionSummaryResult
+} from "./agent-compaction-summary.js";
 export type {
   AgentConversationLifecyclePort,
   AgentModelMessage,

@@ -1,5 +1,6 @@
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
+import type { AgentContextScope } from "./agent-context-scope.js";
 import type { AgentContextPrecision } from "./context-snapshot.js";
 
 /** The lower/upper clamp for the fallback output reserve when a profile lacks a valid maximum output. */
@@ -12,7 +13,7 @@ export const CONTEXT_BUDGET_OUTPUT_RESERVE_MAX = 16384;
  * schemas, and the system guidance: `contextWindow - outputReserve - toolReserve - systemReserve`.
  * Every field is a finite, non-negative token count.
  */
-export interface ContextBudgetSnapshot {
+export interface ContextBudgetSnapshotV10 {
   readonly schemaVersion: "1.0";
   readonly contextBudgetSnapshotId: string;
   readonly contextWindow: number;
@@ -31,12 +32,37 @@ export interface ContextBudgetSnapshot {
   readonly calculatedAt: string;
 }
 
+export interface ContextBudgetAuditProof {
+  readonly budgetContractVersion: string;
+  readonly modelProfileId: string;
+  readonly requestedMaxOutputTokens: number | null;
+  readonly operandsChecksum: string;
+  readonly systemMaterializationChecksum: string;
+  readonly usedMaterializationChecksum: string;
+  readonly toolCatalog: {
+    readonly facadeVersion: "v1" | "v2";
+    readonly catalogRevision: string;
+    readonly descriptorChecksum: string;
+    readonly descriptorCount: number;
+  };
+}
+
+/** C4 snapshots add the immutable proof for every resolved operand. */
+export interface ContextBudgetSnapshotV11 extends Omit<ContextBudgetSnapshotV10, "schemaVersion"> {
+  readonly schemaVersion: "1.1";
+  readonly audit: ContextBudgetAuditProof;
+}
+
+export type ContextBudgetSnapshot = ContextBudgetSnapshotV10 | ContextBudgetSnapshotV11;
+
 /**
  * The renderer's preview reference for a budget. It carries only a draft reference; the model facts,
  * reserves, and token counts are resolved server-side (never trusted from the renderer).
  */
 export interface PreviewContextBudgetCommand {
-  readonly projectId: string;
+  /** Legacy workspace-only identity; standalone commands omit it. */
+  readonly projectId?: string;
+  readonly scope?: AgentContextScope;
   readonly conversationId: string;
   readonly commandId: string;
   readonly runDraftId: string;
@@ -69,7 +95,7 @@ export interface CalculateContextBudgetInput {
  */
 export function calculateContextBudget(
   input: CalculateContextBudgetInput
-): Result<ContextBudgetSnapshot, UnifiedError> {
+): Result<ContextBudgetSnapshotV10, UnifiedError> {
   if (!isPositiveTokenCount(input.contextWindow)) {
     return err(invalidBudget(input, "contextWindow"));
   }

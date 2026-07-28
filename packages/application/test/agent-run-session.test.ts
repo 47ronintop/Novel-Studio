@@ -2,6 +2,8 @@ import { describe, expect, test, vi } from "vitest";
 import { createHash } from "node:crypto";
 import {
   computeAgentToolDescriptorDigest,
+  createAgentContextSnapshot,
+  createDeterministicTokenEstimator,
   createEffectiveCapabilityState,
   revokeCapability,
   type AgentToolCapabilitySnapshot,
@@ -528,7 +530,7 @@ describe("AgentRunSession", () => {
     expect(publishedTypes).not.toContain("run_completed");
   });
 
-  test("binds the preflight-resolved context budget id onto the started run", async () => {
+  test("binds a session-resolved context budget id onto every started run", async () => {
     const createSession = (applicationExports as unknown as Record<string, unknown>)[
       "createAgentRunSession"
     ];
@@ -552,7 +554,10 @@ describe("AgentRunSession", () => {
     const started = await withBudget.startAgentRun(startCommand());
     expect(started).toMatchObject({
       ok: true,
-      value: { runId: "run_budget", contextBudgetSnapshotId: "budget_start_01" }
+      value: {
+        runId: "run_budget",
+        contextBudgetSnapshotId: expect.stringMatching(/^budget_start_[a-f0-9]{32}$/u)
+      }
     });
 
     const withoutBudget = create({
@@ -569,7 +574,10 @@ describe("AgentRunSession", () => {
     const plain = await withoutBudget.startAgentRun({ ...startCommand(), commandId: "start-02" });
     expect(plain).toMatchObject({
       ok: true,
-      value: { runId: "run_no_budget", contextBudgetSnapshotId: null }
+      value: {
+        runId: "run_no_budget",
+        contextBudgetSnapshotId: expect.stringMatching(/^budget_start_[a-f0-9]{32}$/u)
+      }
     });
   });
 
@@ -1148,6 +1156,282 @@ describe("AgentRunSession", () => {
     expect(JSON.stringify(resumedMessages)).not.toContain(evictedBody);
   });
 
+  test("hydrates the persisted summary artifact and fails closed when it is missing or altered", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+    const create = createSession as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      answerUserInput(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    const repository = durableMemoryRepository();
+    const runId = "run_summary_hydrate";
+    const first = create({
+      coordinatorOptions: { createRunId: () => runId },
+      createContextSnapshotId: () => "context_summary_source",
+      repository,
+      newRunToolFacadeVersion: "v2",
+      modelDriver: {
+        async *streamRound() {
+          yield toolCall("summary_question", "request_user_input", {
+            questionId: "summary_continue",
+            prompt: "Continue?",
+            reason: "Keep the run resumable.",
+            options: [
+              { id: "yes", label: "Yes" },
+              { id: "no", label: "No" }
+            ]
+          });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      }
+    });
+    expect(await first.startAgentRun(startCommand())).toMatchObject({ ok: true });
+    await vi.waitFor(async () => {
+      const current = await first.readAgentRun(runId);
+      expect(current, JSON.stringify(current)).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "awaiting_user_input" } }
+      });
+    });
+
+    const storedRun = await repository.readSnapshot(runId);
+    if (!storedRun.ok || storedRun.value === undefined) throw new Error("Expected stored run");
+    const sourceSnapshotId = String(storedRun.value["contextSnapshotId"]);
+    const storedContext = await repository.readContextSnapshot(runId, sourceSnapshotId);
+    if (!storedContext.ok || storedContext.value === undefined) {
+      throw new Error("Expected stored context");
+    }
+    const sourceArtifactId = String(
+      ((storedContext.value["sources"] as Record<string, unknown>[])[0] ?? {})["artifactId"]
+    );
+    const storedPrompt = await repository.readPromptMaterialization(runId, sourceArtifactId);
+    if (!storedPrompt.ok || storedPrompt.value === undefined) {
+      throw new Error("Expected stored prompt");
+    }
+    const priorPrompt = applicationExports.parseAgentPromptMaterializationArtifact(
+      storedPrompt.value as never
+    );
+    const body = JSON.stringify({
+      plotFacts: ["The bridge collapsed"],
+      characterStates: ["Mara is injured"],
+      foreshadowing: ["The brass key remains unexplained"],
+      userDecisions: ["Keep Mara alive"]
+    });
+    const count = createDeterministicTokenEstimator().count(body, "profile-01");
+    const result = {
+      body,
+      provenance: {
+        kind: "model_assisted" as const,
+        provider: "demo",
+        model: "scripted-agent",
+        modelProfileId: "profile-01",
+        templateVersion: "1.0" as const,
+        inputChecksum: "a".repeat(64)
+      },
+      tokenCount: count.tokens,
+      checksum: createHash("sha256").update(body, "utf8").digest("hex"),
+      precision: count.precision
+    };
+    const summaryArtifact = applicationExports.createCompactionSummaryArtifact({
+      artifactId: "summary_compaction_hydrate",
+      runId,
+      compactionId: "compaction_hydrate",
+      contextProfileId: "writing",
+      sourceSnapshotId,
+      throughSequence: Number(storedRun.value["lastSequence"]),
+      inputManifestChecksum: "b".repeat(64),
+      result,
+      createdAt: "2026-07-28T00:00:00.000Z"
+    });
+    const summarySource = {
+      refId: "compaction_summary",
+      sourceKind: "compaction_summary" as const,
+      assetId: summaryArtifact.artifactId,
+      content: body,
+      dirty: false,
+      sourceRevision: summaryArtifact.throughSequence
+    };
+    const resultSnapshotId = "context_summary_result";
+    const nextPrompt = applicationExports.rematerializeAgentPromptArtifact(priorPrompt, {
+      contextSnapshotId: resultSnapshotId,
+      contextSources: [...priorPrompt.contextSources, summarySource]
+    });
+    const nextContext = createAgentContextSnapshot({
+      contextSnapshotId: resultSnapshotId,
+      runId,
+      scope: storedRun.value["scope"] as never,
+      contextProfileId: "writing",
+      materialization: {
+        schemaVersion: "1.0",
+        profileVersion: priorPrompt.profileVersion,
+        guidanceTemplateChecksum: priorPrompt.guidanceTemplateChecksum,
+        stablePrefixChecksum: nextPrompt.stablePrefixChecksum,
+        messageOrderVersion: "1.0"
+      },
+      createdAt: "2026-07-28T00:00:00.000Z",
+      sources: [
+        {
+          refId: priorPrompt.systemGuidanceRefId,
+          sourceKind: "system_guidance",
+          content: priorPrompt.systemPrompt,
+          dirty: false
+        },
+        summarySource
+      ],
+      materializationArtifactId: nextPrompt.artifactId
+    });
+    expect(
+      await repository.writeCompactionSummaryArtifact(runId, summaryArtifact as never)
+    ).toMatchObject({ ok: true });
+    expect(await repository.writePromptMaterialization(runId, nextPrompt as never)).toMatchObject({
+      ok: true
+    });
+    expect(
+      await repository.writeContextSnapshot({
+        ...(nextContext as unknown as Record<string, unknown>),
+        compactionRevision: 1
+      })
+    ).toMatchObject({ ok: true });
+    expect(
+      await repository.writeSnapshot({
+        ...storedRun.value,
+        activeCompactionId: "compaction_hydrate",
+        contextSnapshotId: resultSnapshotId,
+        cachePrefixChecksum: nextPrompt.stablePrefixChecksum
+      })
+    ).toMatchObject({ ok: true });
+    expect({
+      runId: nextPrompt.runId === runId,
+      contextSnapshotId: nextPrompt.contextSnapshotId === resultSnapshotId,
+      profileId: nextPrompt.profileId === storedRun.value["contextProfileId"],
+      profileVersion: nextPrompt.profileVersion === storedRun.value["profileVersion"],
+      stablePrefix:
+        nextPrompt.stablePrefixChecksum === nextContext.materialization.stablePrefixChecksum,
+      guidance:
+        createHash("sha256").update(nextPrompt.systemPrompt, "utf8").digest("hex") ===
+        storedRun.value["guidanceTemplateChecksum"],
+      sources: nextContext.sources.every((source) => {
+        const content =
+          source.refId === nextPrompt.systemGuidanceRefId
+            ? nextPrompt.systemPrompt
+            : nextPrompt.contextSources.find((candidate) => candidate.refId === source.refId)
+                ?.content;
+        return (
+          source.artifactId === nextPrompt.artifactId &&
+          typeof content === "string" &&
+          createHash("sha256").update(content, "utf8").digest("hex") === source.checksum
+        );
+      })
+    }).toEqual({
+      runId: true,
+      contextSnapshotId: true,
+      profileId: true,
+      profileVersion: true,
+      stablePrefix: true,
+      guidance: true,
+      sources: true
+    });
+
+    const baseOptions = {
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      }
+    };
+    const missing = create({
+      ...baseOptions,
+      repository: {
+        ...repository,
+        async readCompactionSummaryArtifact() {
+          return { ok: true, value: undefined };
+        }
+      },
+      modelDriver: { streamRound: blockedModelRound }
+    });
+    expect(await missing.readAgentRun(runId)).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_COMPACTION_SUMMARY_ARTIFACT_MISSING" }
+    });
+
+    const altered = create({
+      ...baseOptions,
+      repository: {
+        ...repository,
+        async readCompactionSummaryArtifact() {
+          return {
+            ok: true,
+            value: { ...summaryArtifact, body: `${summaryArtifact.body} ` }
+          };
+        }
+      },
+      modelDriver: { streamRound: blockedModelRound }
+    });
+    expect(await altered.readAgentRun(runId)).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_COMPACTION_SUMMARY_ARTIFACT_INVALID" }
+    });
+
+    let resumedMessages: readonly Record<string, unknown>[] = [];
+    const restored = create({
+      ...baseOptions,
+      repository,
+      modelDriver: {
+        async *streamRound(input: { readonly messages: readonly Record<string, unknown>[] }) {
+          resumedMessages = input.messages;
+          yield { type: "assistant_text_delta", delta: "Done." };
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      }
+    });
+    const hydrated = await restored.readAgentRun(runId);
+    expect(hydrated, JSON.stringify(hydrated)).toMatchObject({
+      ok: true,
+      value: { snapshot: { contextSnapshotId: resultSnapshotId } }
+    });
+    const revision = (hydrated as { value: { snapshot: { runRevision: number } } }).value.snapshot
+      .runRevision;
+    await restored.answerUserInput({
+      projectId: "project-01",
+      runId,
+      commandId: "answer-summary-hydrate",
+      expectedRunRevision: revision,
+      questionId: "summary_continue",
+      answer: "Yes"
+    });
+    await vi.waitFor(async () => {
+      expect(await restored.readAgentRun(runId)).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+    const summaryMessage = resumedMessages.find(
+      (message) =>
+        typeof message["content"] === "string" &&
+        message["content"].includes('"sourceKind":"compaction_summary"')
+    );
+    expect(summaryMessage).toBeDefined();
+    expect(JSON.parse(String(summaryMessage?.["content"]))).toMatchObject({
+      kind: "untrusted_project_data",
+      source: {
+        sourceKind: "compaction_summary",
+        assetId: summaryArtifact.artifactId
+      },
+      data: body
+    });
+  });
+
   test("returns the persisted stop receipt after application reload", async () => {
     const createSession = (applicationExports as unknown as Record<string, unknown>)[
       "createAgentRunSession"
@@ -1586,6 +1870,61 @@ describe("AgentRunSession", () => {
     expect(published.filter((type) => type === "run_started")).toHaveLength(1);
     expect(modelStarts).toBe(1);
     release();
+  });
+
+  test("isolates identical command ids across runs in the same scope", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ];
+    expect(typeof createSession).toBe("function");
+    if (typeof createSession !== "function") return;
+    const runIds = ["run_receipt_a", "run_receipt_b"];
+    const session = (
+      createSession as (options: Record<string, unknown>) => {
+        startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+        stopAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+        readAgentRun(runId: string): Promise<Record<string, unknown>>;
+      }
+    )({
+      coordinatorOptions: { createRunId: () => runIds.shift() ?? "unexpected_run" },
+      repository: durableMemoryRepository(),
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      }
+    });
+
+    const first = await session.startAgentRun({ ...startCommand(), commandId: "start-receipt-a" });
+    expect(first).toMatchObject({ ok: true, value: { runId: "run_receipt_a" } });
+    const firstLive = await session.readAgentRun("run_receipt_a");
+    const firstRevision = (firstLive as { value: { snapshot: { runRevision: number } } }).value
+      .snapshot.runRevision;
+    const firstStopped = await session.stopAgentRun({
+      projectId: "project-01",
+      runId: "run_receipt_a",
+      commandId: "shared-stop-command",
+      expectedRunRevision: firstRevision
+    });
+    expect(firstStopped).toMatchObject({ ok: true, value: { runId: "run_receipt_a" } });
+
+    const second = await session.startAgentRun({
+      ...startCommand(),
+      commandId: "start-receipt-b"
+    });
+    expect(second).toMatchObject({ ok: true, value: { runId: "run_receipt_b" } });
+    const secondLive = await session.readAgentRun("run_receipt_b");
+    const secondRevision = (secondLive as { value: { snapshot: { runRevision: number } } }).value
+      .snapshot.runRevision;
+    const secondStopped = await session.stopAgentRun({
+      projectId: "project-01",
+      runId: "run_receipt_b",
+      commandId: "shared-stop-command",
+      expectedRunRevision: secondRevision
+    });
+    expect(secondStopped).toMatchObject({ ok: true, value: { runId: "run_receipt_b" } });
   });
 
   test("returns the persisted start receipt after reload without creating a second run", async () => {
@@ -2158,7 +2497,7 @@ describe("AgentRunSession", () => {
     expect(executions).toBe(2);
   });
 
-  test("resumes a persisted active run after application reload", async () => {
+  test("fails closed when a persisted active run lacks frozen budget operands", async () => {
     const createSession = (applicationExports as unknown as Record<string, unknown>)[
       "createAgentRunSession"
     ];
@@ -2233,7 +2572,15 @@ describe("AgentRunSession", () => {
     await vi.waitFor(async () => {
       expect(await session.readAgentRun(snapshot.runId)).toMatchObject({
         ok: true,
-        value: { snapshot: { status: "completed" } }
+        value: {
+          snapshot: { status: "failed" },
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "run_failed",
+              detail: expect.objectContaining({ code: "AGENT_CONTEXT_BUDGET_INPUTS_INVALID" })
+            })
+          ])
+        }
       });
     });
   });
@@ -5665,6 +6012,11 @@ describe("AgentRunSession v2 tool facade", () => {
         order.push("context");
         return result;
       },
+      async writeBudgetSnapshot(runId: string, snapshot: Record<string, unknown>) {
+        const result = await durable.writeBudgetSnapshot(runId, snapshot);
+        order.push("budget");
+        return result;
+      },
       async appendEvent(event: Record<string, unknown>) {
         const result = await durable.appendEvent(event);
         order.push(`event:${String(event["type"])}`);
@@ -5687,9 +6039,10 @@ describe("AgentRunSession v2 tool facade", () => {
     });
 
     expect(await session.startAgentRun(startCommand())).toMatchObject({ ok: true });
-    expect(order.slice(0, 5)).toEqual([
+    expect(order.slice(0, 6)).toEqual([
       "prompt",
       "context",
+      "budget",
       "event:run_started",
       "event:context_refreshed",
       "snapshot"
@@ -5936,7 +6289,7 @@ describe("AgentRunSession v2 tool facade", () => {
     expect(executionToolNames).not.toContain("read_chapter");
   });
 
-  test("restores a historical v1 run without exposing v2 aliases", async () => {
+  test("fails closed when a historical v1 run lacks a reproducible frozen catalog", async () => {
     const repository = durableMemoryRepository();
     let originalNames: string[] = [];
     const original = createSession({
@@ -5954,7 +6307,11 @@ describe("AgentRunSession v2 tool facade", () => {
     const started = await original.startAgentRun(startCommand());
     expect(started).toMatchObject({
       ok: true,
-      value: { toolFacadeVersion: "v1", toolCatalogSnapshotId: null }
+      value: {
+        toolFacadeVersion: "v1",
+        toolCatalogSnapshotId: null,
+        toolCatalogRevision: expect.stringMatching(/^[a-f0-9]{64}$/u)
+      }
     });
     await vi.waitFor(() => expect(originalNames.length).toBeGreaterThan(0));
 
@@ -5986,10 +6343,21 @@ describe("AgentRunSession v2 tool facade", () => {
         expectedRunRevision: hydratedSnapshot.runRevision
       })
     ).toMatchObject({ ok: true });
-    await vi.waitFor(() => expect(restoredNames.length).toBeGreaterThan(0));
-    expect(restoredNames).toContain("read_chapter");
-    expect(restoredNames).not.toContain("read_resource");
-    expect(restoredNames).not.toContain("edit_text");
+    await vi.waitFor(async () => {
+      expect(await restored.readAgentRun("run_legacy_v1")).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: { status: "failed" },
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "run_failed",
+              detail: expect.objectContaining({ code: "AGENT_CONTEXT_BUDGET_INPUTS_INVALID" })
+            })
+          ])
+        }
+      });
+    });
+    expect(restoredNames).toEqual([]);
   });
 
   test("fails closed when a persisted v2 run has no tool catalog", async () => {
@@ -6615,6 +6983,8 @@ function durableMemoryRepository() {
   const contextSnapshots = new Map<string, Record<string, unknown>>();
   const promptMaterializations = new Map<string, Record<string, unknown>>();
   const contextSourceMaterializations = new Map<string, Record<string, unknown>>();
+  const budgetSnapshots = new Map<string, Record<string, unknown>>();
+  const compactionSummaryArtifacts = new Map<string, Record<string, unknown>>();
   return {
     async writeSnapshot(snapshot: Record<string, unknown>) {
       snapshots.set(String(snapshot["runId"]), structuredClone(snapshot));
@@ -6660,6 +7030,26 @@ function durableMemoryRepository() {
     },
     async readContextSnapshot(runId: string, contextSnapshotId: string) {
       return { ok: true, value: contextSnapshots.get(`${runId}:${contextSnapshotId}`) };
+    },
+    async writeBudgetSnapshot(runId: string, snapshot: Record<string, unknown>) {
+      budgetSnapshots.set(
+        `${runId}:${String(snapshot["contextBudgetSnapshotId"])}`,
+        structuredClone(snapshot)
+      );
+      return { ok: true, value: snapshot };
+    },
+    async readBudgetSnapshot(runId: string, contextBudgetSnapshotId: string) {
+      return { ok: true, value: budgetSnapshots.get(`${runId}:${contextBudgetSnapshotId}`) };
+    },
+    async writeCompactionSummaryArtifact(runId: string, artifact: Record<string, unknown>) {
+      compactionSummaryArtifacts.set(
+        `${runId}:${String(artifact["artifactId"])}`,
+        structuredClone(artifact)
+      );
+      return { ok: true, value: artifact };
+    },
+    async readCompactionSummaryArtifact(runId: string, artifactId: string) {
+      return { ok: true, value: compactionSummaryArtifacts.get(`${runId}:${artifactId}`) };
     },
     async writePromptMaterialization(runId: string, artifact: Record<string, unknown>) {
       promptMaterializations.set(

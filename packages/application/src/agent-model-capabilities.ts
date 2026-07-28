@@ -110,9 +110,10 @@ export function preflightAgentModelCapabilities(
     configuredContextWindow > 0
       ? configuredContextWindow
       : undefined;
-  // Most OpenAI-compatible /models responses omit capability metadata. Keep enough total capacity
-  // for the required input plus output/system reserves, then let the provider verify the real limit.
-  const contextWindow = declaredContextWindow ?? Math.max(16_384, input.requiredContextTokens * 2);
+  const contextWindow = declaredContextWindow ?? 0;
+  if (declaredContextWindow === undefined) {
+    missingCapabilities.push("contextWindow");
+  }
   const contextWindowInsufficient =
     declaredContextWindow !== undefined && declaredContextWindow < input.requiredContextTokens;
   if (contextWindowInsufficient) {
@@ -137,7 +138,7 @@ export function preflightAgentModelCapabilities(
           missingCapabilities,
           contextWindowStatus:
             declaredContextWindow === undefined
-              ? "assumed_required_floor"
+              ? "unverified"
               : contextWindowInsufficient
                 ? "insufficient"
                 : "verified",

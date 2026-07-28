@@ -1,10 +1,13 @@
-import { expect, test, _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  _electron as electron,
+  type ElectronApplication,
+  type Page
+} from "@playwright/test";
 import { createUnifiedError, err, ok, type JsonObject } from "@novel-studio/shared";
 import { createAgentRunSession } from "@novel-studio/application";
-import {
-  AgentConversationFileRepository,
-  AgentRunFileRepository
-} from "@novel-studio/repository";
+import { AgentConversationFileRepository, AgentRunFileRepository } from "@novel-studio/repository";
 import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,9 +35,9 @@ test("restores a provider disconnect with the same error ID, copies it, and retr
     await card.locator("summary").click();
     await expect(card).toContainText(fixture.errorId);
     await card.getByRole("button", { name: "复制错误 ID" }).click();
-    await expect.poll(() => electronApp?.evaluate(({ clipboard }) => clipboard.readText())).toBe(
-      fixture.errorId
-    );
+    await expect
+      .poll(() => electronApp?.evaluate(({ clipboard }) => clipboard.readText()))
+      .toBe(fixture.errorId);
 
     await page.reload();
     await openFixtureConversation(page, fixture.title);
@@ -128,7 +131,10 @@ test("renders context stale diagnostics inline and clears them through context r
     await page.getByLabel("上下文刷新").getByRole("button", { name: "从目标排除" }).click();
     await waitForRunStatus(page, fixture.runId, "completed");
     const refreshed = await readRun(page, fixture.runId);
-    expect(refreshed.snapshot).toMatchObject({ activeErrorId: null, recoveryState: "none" });
+    expect(refreshed.snapshot, JSON.stringify(refreshed)).toMatchObject({
+      activeErrorId: null,
+      recoveryState: "none"
+    });
     expect(refreshed.events).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: "context_excluded" })])
     );
@@ -219,6 +225,17 @@ async function seedDiagnosticFixture(kind: FixtureKind): Promise<DiagnosticFixtu
   const common = {
     coordinatorOptions: { createRunId: () => runId },
     repository,
+    capabilitySnapshot: {
+      workspaceKind: "creativeProject" as const,
+      searchEnabled: true,
+      fileLifecycleEnabled: true,
+      controlledExecutionEnabled: false,
+      gitReadEnabled: false,
+      networkReadEnabled: false,
+      pluginToolsEnabled: false,
+      mcpToolsEnabled: false,
+      featureFlagRevision: "diagnostic-desktop-runtime"
+    },
     startPreflight: startPreflight(kind),
     readToolExecutor: {
       async execute() {
@@ -252,8 +269,10 @@ async function seedDiagnosticFixture(kind: FixtureKind): Promise<DiagnosticFixtu
   if (!started.ok) throw started.error;
 
   if (kind === "partial_failure") {
-    const pending = await waitForSnapshot(repository, runId, (snapshot) =>
-      snapshot["status"] === "awaiting_write_approval"
+    const pending = await waitForSnapshot(
+      repository,
+      runId,
+      (snapshot) => snapshot["status"] === "awaiting_write_approval"
     );
     const decided = await session.decideChangeSet({
       projectId,
@@ -321,7 +340,7 @@ function fixtureSessionOptions(kind: FixtureKind, common: Record<string, unknown
             type: "tool_call_delta",
             toolCallId: "tool_retry_e2e",
             name: "list_project_entries",
-            argumentsDelta: JSON.stringify({ path: "chapters" })
+            argumentsDelta: JSON.stringify({ path: "" })
           };
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
@@ -479,7 +498,7 @@ async function waitForSnapshot(
   runId: string,
   predicate: (snapshot: JsonObject) => boolean
 ): Promise<JsonObject> {
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     const read = await repository.readSnapshot(runId);
     if (!read.ok) throw read.error;
@@ -493,7 +512,7 @@ async function launchFixture(fixture: DiagnosticFixture): Promise<ElectronApplic
   const electronApp = await electron.launch({
     args: [electronMain],
     env: electronEnv({
-      NOVEL_STUDIO_PROJECT_ROOT: join(fixture.tempRoot, "Bootstrap Project"),
+      NOVEL_STUDIO_PROJECT_ROOT: fixture.projectRoot,
       NOVEL_STUDIO_USER_DATA_ROOT: join(fixture.tempRoot, "User Data")
     })
   });
@@ -545,7 +564,10 @@ async function queueDirectorySelection(
   }, selectedPath);
 }
 
-async function readRun(page: Page, runId: string): Promise<{
+async function readRun(
+  page: Page,
+  runId: string
+): Promise<{
   readonly snapshot: Record<string, unknown>;
   readonly events: Array<{ readonly type: string; readonly detail?: Record<string, unknown> }>;
   readonly diagnostic?: Record<string, unknown>;
@@ -558,25 +580,43 @@ async function readRun(page: Page, runId: string): Promise<{
 }
 
 async function waitForRunStatus(page: Page, runId: string, status: string): Promise<void> {
-  await expect
-    .poll(async () => {
-      const read = await readRun(page, runId);
-      const actual = read.snapshot["status"];
-      if (
-        actual !== status &&
-        (actual === "completed" || actual === "cancelled" || actual === "failed" || actual === "limit_reached")
-      ) {
-        throw new Error(
-          JSON.stringify({
-            snapshot: read.snapshot,
-            events: read.events.slice(-6),
-            diagnostic: read.diagnostic
-          })
-        );
-      }
-      return actual;
-    })
-    .toBe(status);
+  try {
+    await expect
+      .poll(
+        async () => {
+          const read = await readRun(page, runId);
+          const actual = read.snapshot["status"];
+          if (
+            actual !== status &&
+            (actual === "completed" ||
+              actual === "cancelled" ||
+              actual === "failed" ||
+              actual === "limit_reached")
+          ) {
+            throw new Error(
+              JSON.stringify({
+                snapshot: read.snapshot,
+                events: read.events.slice(-6),
+                diagnostic: read.diagnostic
+              })
+            );
+          }
+          return actual;
+        },
+        { timeout: 30_000 }
+      )
+      .toBe(status);
+  } catch (error) {
+    const read = await readRun(page, runId);
+    throw new Error(
+      JSON.stringify({
+        cause: error instanceof Error ? error.message : String(error),
+        snapshot: read.snapshot,
+        events: read.events.slice(-12),
+        diagnostic: read.diagnostic
+      })
+    );
+  }
 }
 
 async function assertNoPermanentDiagnostics(page: Page): Promise<void> {

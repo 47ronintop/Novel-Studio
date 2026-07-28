@@ -186,9 +186,9 @@ async function launchScenario(): Promise<{
     if (round === 1) {
       sendToolCall(response, {
         id: "autonomy-first",
-        name: "propose_chapter_write",
+        name: "edit_text",
         arguments: {
-          chapterId: firstChapterId,
+          ref: `chapter:${firstChapterId}`,
           baseHash: sha256(firstBody),
           range: { unit: "character", start: 0, end: 8 },
           replacement: "Autonomous first"
@@ -199,9 +199,9 @@ async function launchScenario(): Promise<{
     if (round === 2) {
       sendToolCall(response, {
         id: "autonomy-second",
-        name: "propose_chapter_write",
+        name: "edit_text",
         arguments: {
-          chapterId: secondChapterId,
+          ref: `chapter:${secondChapterId}`,
           baseHash: sha256(secondBody),
           range: { unit: "character", start: 0, end: 6 },
           replacement: "Autonomous second"

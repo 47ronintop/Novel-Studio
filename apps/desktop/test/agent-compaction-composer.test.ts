@@ -7,6 +7,8 @@ import { afterEach, describe, expect, test } from "vitest";
 import {
   createAgentContextSession,
   createAgentPricingRegistry,
+  createCompactionSummaryArtifact,
+  buildCompactionSummaryPrompt,
   createAgentPromptMaterializationArtifact,
   checksumProjectContext,
   contextSourceMaterializationArtifactId,
@@ -18,12 +20,16 @@ import {
 import type { AgentContextBudgetInputsPort, AgentRunDraftSession } from "@novel-studio/application";
 import {
   createAgentContextSnapshot,
+  createAgentRunToolCatalogSnapshot,
+  buildCompactionInputManifest,
+  createDeterministicTokenEstimator,
   type AgentContextSourceInput
 } from "@novel-studio/agent-engine";
 import { AgentRunFileRepository, AgentUsageFileRepository } from "@novel-studio/repository";
 import { ok, type JsonObject } from "@novel-studio/shared";
 
 import { createDesktopCompactionSources } from "../src/main/agent-compaction-composer.js";
+import { createDesktopCompactionModelAssistant } from "../src/main/agent-run-runtime.js";
 
 const roots: string[] = [];
 
@@ -44,6 +50,8 @@ describe("desktop compaction composer", () => {
       runRepository: {
         writeCompactionManifest: (manifest) => repository.writeCompactionManifest(manifest),
         writeCompactionRevision: (revision) => repository.writeCompactionRevision(revision),
+        writePromptMaterialization: (runId, artifact) =>
+          repository.writePromptMaterialization(runId, artifact),
         writeContextSnapshot: (snapshot) => repository.writeContextSnapshot(snapshot),
         writeBudgetSnapshot: (runId, snapshot) => repository.writeBudgetSnapshot(runId, snapshot),
         commitCompaction: (snapshot) => repository.commitCompaction(snapshot)
@@ -89,7 +97,7 @@ describe("desktop compaction composer", () => {
     expect(usage.ok).toBe(true);
     if (!usage.ok) return;
     expect(usage.value?.["terminationReason"]).toBe("context_compaction");
-    expect(usage.value?.["compactionAfterTokens"]).toBe(4000);
+    expect(usage.value?.["compactionAfterTokens"]).toBe(4078);
   });
 
   test("protects conventions and evicts workspace outlines to a manifest pointer", async () => {
@@ -211,8 +219,9 @@ describe("desktop compaction composer", () => {
 
   test("prices model-assisted compaction and captures the production local-time bucket", async () => {
     const { repository, usageRepository } = await seedRun({
-      chapterTokens: 20_000,
-      noteTokens: 1_000
+      chapterTokens: 100,
+      noteTokens: 100,
+      historyTokens: 22_000
     });
     const session = createAgentContextSession({
       draftSession: stubDraftSession(),
@@ -242,19 +251,44 @@ describe("desktop compaction composer", () => {
         now: () => "2026-11-01T06:30:00.000Z"
       }),
       modelAssistant: {
-        summarizeEvictable: () =>
-          Promise.resolve(
+        summarizeEvictable: (input) => {
+          const body = JSON.stringify({
+            plotFacts: ["The bridge collapsed"],
+            characterStates: ["Mara is injured"],
+            foreshadowing: ["The key remains unexplained"],
+            userDecisions: ["Keep Mara alive"]
+          });
+          const count = createDeterministicTokenEstimator().count(body, "profile_01");
+          return Promise.resolve(
             ok({
-              summaryChecksum: "e".repeat(64),
               inputTokens: 100,
-              outputTokens: 25,
-              precision: "reported" as const
+              summary: {
+                body,
+                provenance: {
+                  kind: "model_assisted" as const,
+                  provider: "demo",
+                  model: "demo-model",
+                  modelProfileId: "profile_01",
+                  templateVersion: "1.0" as const,
+                  inputChecksum: input.evidenceChecksum
+                },
+                tokenCount: count.tokens,
+                checksum: createHash("sha256").update(body, "utf8").digest("hex"),
+                precision: count.precision
+              }
             })
-          )
+          );
+        }
       },
       runRepository: {
         writeCompactionManifest: (manifest) => repository.writeCompactionManifest(manifest),
         writeCompactionRevision: (revision) => repository.writeCompactionRevision(revision),
+        writeCompactionSummaryArtifact: (runId, artifact) =>
+          repository.writeCompactionSummaryArtifact(runId, artifact),
+        readCompactionSummaryArtifact: (runId, artifactId) =>
+          repository.readCompactionSummaryArtifact(runId, artifactId),
+        writePromptMaterialization: (runId, artifact) =>
+          repository.writePromptMaterialization(runId, artifact),
         writeContextSnapshot: (snapshot) => repository.writeContextSnapshot(snapshot),
         writeBudgetSnapshot: (runId, snapshot) => repository.writeBudgetSnapshot(runId, snapshot),
         commitCompaction: (snapshot) => repository.commitCompaction(snapshot)
@@ -264,32 +298,217 @@ describe("desktop compaction composer", () => {
       now: () => "2026-11-01T06:30:00.000Z"
     });
 
-    expect(
-      await session.compactContext({
-        projectId: "project_01",
-        runId: "run_01",
-        commandId: "cmd_model_compaction",
-        expectedRunRevision: 3,
-        contextBudgetSnapshotId: "budget_target_02",
-        trigger: "manual"
-      })
-    ).toMatchObject({ ok: true, value: { revision: { strategy: "model_assisted" } } });
+    const compacted = await session.compactContext({
+      projectId: "project_01",
+      runId: "run_01",
+      commandId: "cmd_model_compaction",
+      expectedRunRevision: 3,
+      contextBudgetSnapshotId: "budget_target_02",
+      trigger: "manual"
+    });
+    expect(compacted, compacted.ok ? undefined : JSON.stringify(compacted.error)).toMatchObject({
+      ok: true,
+      value: { revision: { strategy: "model_assisted" } }
+    });
 
     const usage = await usageRepository.readById("run_01:compaction_02:7");
     expect(usage).toMatchObject({
       ok: true,
       value: {
         usageStatus: "estimated",
-        precision: "reported",
+        precision: "estimated",
         pricingVersion: "pricing-2026-11",
         unitPrices: { inputPerMillion: 2, outputPerMillion: 8, currency: "USD" },
-        cost: { amount: 0.0004, currency: "USD", status: "estimated" },
+        cost: { amount: 0.00052, currency: "USD", status: "estimated" },
         timestamp: "2026-11-01T06:30:00.000Z",
         localDate: "2026-11-01",
         timezone: "America/New_York",
         utcOffsetMinutes: -300
       }
     });
+  });
+
+  test.each(["profile", "throughSequence"])(
+    "rejects a checksum-valid summary artifact bound to the wrong %s",
+    async (mismatch) => {
+      const { repository } = await seedRun({
+        chapterTokens: 100,
+        noteTokens: 100,
+        historyTokens: 22_000
+      });
+      const sources = createDesktopCompactionSources({
+        repository,
+        now: () => "2026-11-01T06:30:00.000Z"
+      });
+      const command = {
+        projectId: "project_01",
+        runId: "run_01",
+        commandId: `cmd_wrong_${mismatch}`,
+        expectedRunRevision: 3,
+        contextBudgetSnapshotId: "budget_target_wrong",
+        trigger: "manual" as const
+      };
+      const loaded = await sources.loadInputs(command);
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) return;
+      const manifestResult = buildCompactionInputManifest({
+        compactionId: `compaction_wrong_${mismatch}`,
+        runId: command.runId,
+        sourceSnapshotId: loaded.value.sourceSnapshotId,
+        throughSequence: loaded.value.throughSequence,
+        protectedFacts: loaded.value.protectedFacts,
+        evictableSources: loaded.value.evictableSources,
+        createdAt: "2026-11-01T06:30:00.000Z"
+      });
+      expect(manifestResult.ok).toBe(true);
+      if (!manifestResult.ok) return;
+      const manifest = manifestResult.value;
+      const profileId = mismatch === "profile" ? "engineering" : "writing";
+      const body =
+        profileId === "engineering"
+          ? JSON.stringify({
+              modifiedFiles: ["src/index.ts"],
+              changeIntent: ["Fix parsing"],
+              todos: [],
+              errorHighlights: [],
+              nextSteps: ["Run tests"]
+            })
+          : JSON.stringify({
+              plotFacts: ["The bridge collapsed"],
+              characterStates: ["Mara is injured"],
+              foreshadowing: [],
+              userDecisions: ["Keep Mara alive"]
+            });
+      const count = createDeterministicTokenEstimator().count(body, "profile_01");
+      const result = {
+        body,
+        provenance: {
+          kind: "model_assisted" as const,
+          provider: "demo",
+          model: "demo-model",
+          modelProfileId: "profile_01",
+          templateVersion: "1.0" as const,
+          inputChecksum: loaded.value.modelSummary?.evidenceChecksum ?? "a".repeat(64)
+        },
+        tokenCount: count.tokens,
+        checksum: createHash("sha256").update(body, "utf8").digest("hex"),
+        precision: count.precision
+      };
+      const summaryArtifact = createCompactionSummaryArtifact({
+        artifactId: `summary_wrong_${mismatch}`,
+        runId: command.runId,
+        compactionId: manifest.compactionId,
+        contextProfileId: profileId,
+        sourceSnapshotId: loaded.value.sourceSnapshotId,
+        throughSequence: loaded.value.throughSequence + (mismatch === "throughSequence" ? 1 : 0),
+        inputManifestChecksum: manifest.checksum,
+        result,
+        createdAt: "2026-11-01T06:30:00.000Z"
+      });
+      expect(
+        await sources.buildArtifacts({
+          command,
+          manifest,
+          strategy: "model_assisted",
+          evictedSourceIds: loaded.value.evictableSources.map((source) => source.sourceId),
+          targetTokens: loaded.value.targetTokens,
+          inputTokens: 100,
+          outputTokens: summaryArtifact.tokenCount,
+          precision: summaryArtifact.precision,
+          summaryChecksum: summaryArtifact.checksum,
+          summaryArtifact
+        })
+      ).toMatchObject({
+        ok: false,
+        error: { code: "AGENT_CONTEXT_COMPACTION_SUMMARY_INVALID" }
+      });
+    }
+  );
+
+  test("uses a no-tools model round for a verifiable summary", async () => {
+    const { repository } = await seedRun();
+    const body = JSON.stringify({
+      plotFacts: ["The bridge collapsed"],
+      characterStates: ["Mara is injured"],
+      foreshadowing: [],
+      userDecisions: ["Keep Mara alive"]
+    });
+    let tools: readonly unknown[] | undefined;
+    const assistant = createDesktopCompactionModelAssistant({
+      repository,
+      modelDriver: {
+        async *streamRound(input) {
+          tools = input.tools;
+          yield { type: "assistant_text_delta", delta: body };
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      }
+    });
+    const prompt = buildCompactionSummaryPrompt("writing");
+    const evidence = "Conversation evidence";
+    const summarized = await assistant.summarizeEvictable({
+      runId: "run_01",
+      evictableSources: [],
+      profileId: "writing",
+      templateVersion: prompt.templateVersion,
+      systemPrompt: prompt.systemPrompt,
+      evidence,
+      evidenceChecksum: createHash("sha256").update(evidence, "utf8").digest("hex"),
+      maxSummaryTokens: 1_000
+    });
+    expect(tools).toEqual([]);
+    expect(summarized).toMatchObject({
+      ok: true,
+      value: {
+        summary: {
+          body,
+          provenance: { provider: "demo", model: "demo-model", modelProfileId: "profile_01" }
+        }
+      }
+    });
+  });
+
+  test.each([
+    ["tool call", "AGENT_COMPACTION_SUMMARY_TOOL_CALL_FORBIDDEN"],
+    ["non-stop", "AGENT_COMPACTION_SUMMARY_MODEL_FAILED"],
+    ["empty", "AGENT_COMPACTION_SUMMARY_MODEL_FAILED"],
+    ["exception", "AGENT_COMPACTION_SUMMARY_MODEL_FAILED"]
+  ])("fails closed on a compaction model %s", async (behavior, code) => {
+    const { repository } = await seedRun();
+    const assistant = createDesktopCompactionModelAssistant({
+      repository,
+      modelDriver: {
+        async *streamRound(input) {
+          expect(input.tools).toEqual([]);
+          if (behavior === "exception") throw new Error("model failed");
+          if (behavior === "tool call") {
+            yield { type: "tool_call_delta", toolCallId: "forbidden", name: "read_resource" };
+            return;
+          }
+          if (behavior !== "empty") {
+            yield { type: "assistant_text_delta", delta: "{}" };
+          }
+          yield {
+            type: "round_completed",
+            finishReason: behavior === "non-stop" ? "length" : "stop"
+          };
+        }
+      }
+    });
+    const prompt = buildCompactionSummaryPrompt("writing");
+    const evidence = "Conversation evidence";
+    expect(
+      await assistant.summarizeEvictable({
+        runId: "run_01",
+        evictableSources: [],
+        profileId: "writing",
+        templateVersion: prompt.templateVersion,
+        systemPrompt: prompt.systemPrompt,
+        evidence,
+        evidenceChecksum: createHash("sha256").update(evidence, "utf8").digest("hex"),
+        maxSummaryTokens: 1_000
+      })
+    ).toMatchObject({ ok: false, error: { code } });
   });
 
   test("returns the unavailable guard when compaction ports are absent", async () => {
@@ -369,7 +588,11 @@ describe("desktop compaction composer", () => {
 });
 
 async function seedRun(
-  options: { readonly chapterTokens?: number; readonly noteTokens?: number } = {}
+  options: {
+    readonly chapterTokens?: number;
+    readonly noteTokens?: number;
+    readonly historyTokens?: number;
+  } = {}
 ): Promise<{
   repository: AgentRunFileRepository;
   usageRepository: AgentUsageFileRepository;
@@ -380,49 +603,93 @@ async function seedRun(
   roots.push(projectRoot, userDataRoot);
   const repository = new AgentRunFileRepository({ projectRoot, traceId: "test" });
   const usageRepository = new AgentUsageFileRepository({ userDataRoot, traceId: "test" });
-
-  const source = (
-    refId: string,
-    layer: string,
-    tokenCount: number,
-    extra: JsonObject = {}
-  ): JsonObject => ({
-    refId,
-    sourceKind: "disk_file",
-    checksum: checksumText(`${refId}-body`),
-    dirty: false,
-    capturedAt: "2026-07-15T00:00:00.000Z",
-    layer,
-    sourceRevision: 1,
-    tokenCount,
-    precision: "estimated",
-    state: "active",
-    ...extra
+  const createdAt = "2026-07-15T00:00:00.000Z";
+  const scope = {
+    kind: "workspace" as const,
+    workspaceKind: "creativeProject" as const,
+    workspaceId: "project_01"
+  };
+  const profile = resolveAgentContextProfile(scope, "planning", "writing");
+  const chapterTokens = options.chapterTokens ?? 4000;
+  const noteTokens = options.noteTokens ?? 20000;
+  const contextSources: AgentContextSourceInput[] = [
+    {
+      refId: "chapter:ch-01",
+      sourceKind: "disk_file",
+      relativePath: "chapters/ch-01.md",
+      content: "c".repeat(chapterTokens * 4),
+      dirty: false,
+      sourceRevision: 1
+    },
+    {
+      refId: "file:draft-notes.md",
+      sourceKind: "disk_file",
+      relativePath: "draft-notes.md",
+      content: "n".repeat(noteTokens * 4),
+      dirty: false,
+      sourceRevision: 1
+    }
+  ];
+  const catalog = createAgentRunToolCatalogSnapshot({
+    runId: "run_01",
+    facadeVersion: "v2",
+    descriptors: [],
+    createdAt
   });
-
-  const snapshot: JsonObject = {
-    schemaVersion: "1.1",
+  expect(
+    await repository.writeToolCatalog("run_01", catalog as unknown as JsonObject)
+  ).toMatchObject({ ok: true });
+  const systemPrompt = "app-authored writing guidance";
+  const prompt = createAgentPromptMaterializationArtifact({
+    runId: "run_01",
+    contextSnapshotId: "context_run_01",
+    profile,
+    systemPrompt,
+    toolCatalogRevision: catalog.catalogRevision,
+    userRequest: "Review the chapter",
+    contextSources
+  });
+  expect(
+    await repository.writePromptMaterialization("run_01", prompt as unknown as JsonObject)
+  ).toMatchObject({ ok: true });
+  const guidanceSource: AgentContextSourceInput = {
+    refId: prompt.systemGuidanceRefId,
+    sourceKind: "system_guidance",
+    content: systemPrompt,
+    dirty: false
+  };
+  const baseSnapshot = createAgentContextSnapshot({
     contextSnapshotId: "context_run_01",
     runId: "run_01",
-    createdAt: "2026-07-15T00:00:00.000Z",
-    compactionRevision: 0,
-    sources: [
-      source("chapter:ch-01", "explicit_ref", options.chapterTokens ?? 4000, {
-        relativePath: "chapters/ch-01.md"
-      }),
-      source("file:draft-notes.md", "tool_result", options.noteTokens ?? 20000, {
-        relativePath: "draft-notes.md"
-      })
-    ],
-    excludedSources: []
+    scope,
+    contextProfileId: profile.profileId,
+    materialization: {
+      schemaVersion: "1.0",
+      profileVersion: profile.profileVersion,
+      guidanceTemplateChecksum: prompt.guidanceTemplateChecksum,
+      stablePrefixChecksum: prompt.stablePrefixChecksum,
+      messageOrderVersion: "1.0"
+    },
+    createdAt,
+    sources: [guidanceSource, ...contextSources],
+    materializationArtifactId: prompt.artifactId
+  });
+  const snapshot: JsonObject = {
+    ...(baseSnapshot as unknown as JsonObject),
+    sources: baseSnapshot.sources.map((source) =>
+      source.refId === "chapter:ch-01"
+        ? { ...source, layer: "explicit_ref", tokenCount: chapterTokens, precision: "estimated" }
+        : source.refId === "file:draft-notes.md"
+          ? { ...source, layer: "tool_result", tokenCount: noteTokens, precision: "estimated" }
+          : source
+    ) as unknown as JsonObject["sources"]
   };
-  const written = await repository.writeContextSnapshot(snapshot);
-  expect(written.ok).toBe(true);
+  expect(await repository.writeContextSnapshot(snapshot)).toMatchObject({ ok: true });
 
   const run: JsonObject = {
-    schemaVersion: "1.1",
+    schemaVersion: "1.2",
     runId: "run_01",
-    projectId: "project_01",
+    scope,
     conversationId: "conv_01",
     operationMode: "planning",
     contextMode: "writing",
@@ -461,10 +728,23 @@ async function seedRun(
       outputTokens: 0,
       totalTokens: 24000,
       usageStatus: "estimated"
-    }
+    },
+    toolFacadeVersion: "v2",
+    toolCatalogSnapshotId: catalog.toolCatalogSnapshotId,
+    toolCatalogRevision: catalog.catalogRevision,
+    pendingToolApproval: null,
+    contextProfileId: profile.profileId,
+    profileVersion: profile.profileVersion,
+    guidanceTemplateChecksum: prompt.guidanceTemplateChecksum,
+    conventionsArtifactId: null,
+    promptCachePolicyVersion: "none@1.0",
+    cachePrefixChecksum: prompt.stablePrefixChecksum
   };
   const runWritten = await repository.writeSnapshot(run);
   expect(runWritten.ok).toBe(true);
+  if ((options.historyTokens ?? 0) > 0) {
+    await appendAssistantHistory(repository, options.historyTokens ?? 0, scope);
+  }
   return { repository, usageRepository, projectRoot };
 }
 
@@ -489,7 +769,7 @@ async function seedC3OutlineRun(): Promise<{
   const conventionsRefId = "project:conventions";
   const outlineRefId = "project:workspace-outline";
   const conventionsBody = "project conventions body";
-  const outlineBody = "workspace outline body";
+  const outlineBody = "o".repeat(1_500 * 4);
   const outlineRereadHint =
     "Use list_project_entries or search_project_text to reread this outline.";
   const dependencyManifest: WorkspaceOutlineDependencyManifest = {
@@ -560,7 +840,7 @@ async function seedC3OutlineRun(): Promise<{
     dependencyManifestChecksum: outlineManifestChecksum,
     dependencyRevisionChecksum: outlineDependencyRevisionChecksum,
     materializedChecksum: outlineMaterializedChecksum,
-    tokenCount: 5,
+    tokenCount: 1_500,
     truncationRange: null
   });
   const outline: AgentContextSourceInput = {
@@ -577,7 +857,7 @@ async function seedC3OutlineRun(): Promise<{
       sourceIdentity,
       instructionPolicy: "content_is_data_not_authority",
       workspaceTrust: "trusted",
-      tokenCount: 5,
+      tokenCount: 1_500,
       truncationRange: null,
       dependencyManifest,
       dependencyManifestChecksum: outlineManifestChecksum,
@@ -587,12 +867,19 @@ async function seedC3OutlineRun(): Promise<{
     }
   };
   const contextSnapshotId = "context_run_01";
+  const catalogRevision = createAgentRunToolCatalogSnapshot({
+    runId: "run_01",
+    facadeVersion: "v2",
+    descriptors: [],
+    createdAt: "2026-07-15T00:00:00.000Z"
+  }).catalogRevision;
+  const systemPrompt = "app-authored system guidance";
   const prompt = createAgentPromptMaterializationArtifact({
     runId: "run_01",
     contextSnapshotId,
     profile,
-    systemPrompt: "app-authored system guidance",
-    toolCatalogRevision: "catalog_01",
+    systemPrompt,
+    toolCatalogRevision: catalogRevision,
     userRequest: "Review the project",
     contextSources: [conventions, outline]
   });
@@ -609,7 +896,16 @@ async function seedC3OutlineRun(): Promise<{
       messageOrderVersion: "1.0"
     },
     createdAt: "2026-07-15T00:00:00.000Z",
-    sources: [conventions, outline],
+    sources: [
+      {
+        refId: prompt.systemGuidanceRefId,
+        sourceKind: "system_guidance",
+        content: systemPrompt,
+        dirty: false
+      },
+      conventions,
+      outline
+    ],
     materializationArtifactId: prompt.artifactId
   });
 
@@ -624,6 +920,12 @@ async function seedC3OutlineRun(): Promise<{
   expect(
     await seeded.repository.writeSnapshot({
       ...run.value,
+      scope,
+      operationMode: "planning",
+      contextMode: "general_file",
+      contextProfileId: profile.profileId,
+      profileVersion: profile.profileVersion,
+      guidanceTemplateChecksum: prompt.guidanceTemplateChecksum,
       cachePrefixChecksum: prompt.stablePrefixChecksum,
       usageSummary: {
         inputTokens: 24000,
@@ -633,6 +935,7 @@ async function seedC3OutlineRun(): Promise<{
       }
     })
   ).toMatchObject({ ok: true });
+  await appendAssistantHistory(seeded.repository, 19_000, scope);
 
   return {
     ...seeded,
@@ -642,6 +945,29 @@ async function seedC3OutlineRun(): Promise<{
     outlineManifestChecksum,
     outlineRereadHint
   };
+}
+
+async function appendAssistantHistory(
+  repository: AgentRunFileRepository,
+  tokenCount: number,
+  scope: {
+    readonly kind: "workspace";
+    readonly workspaceKind: "creativeProject" | "engineeringWorkspace";
+    readonly workspaceId: string;
+  }
+): Promise<void> {
+  expect(
+    await repository.appendEvent({
+      schemaVersion: "1.3",
+      runId: "run_01",
+      scope,
+      sequence: 7,
+      runRevision: 3,
+      type: "assistant_text_completed",
+      createdAt: "2026-07-15T00:00:00.000Z",
+      detail: { text: "h".repeat(tokenCount * 4) }
+    })
+  ).toMatchObject({ ok: true });
 }
 
 function stubDraftSession(): Pick<AgentRunDraftSession, "resolveStartDraft"> {

@@ -682,8 +682,24 @@ function messageText(body: Record<string, unknown> | undefined): string {
 function lastUserRequest(body: Record<string, unknown>): string {
   const messages = Array.isArray(body["messages"]) ? body["messages"] : [];
   const users = messages.filter(isRecord).filter((message) => message["role"] === "user");
-  const content = users.at(-1)?.["content"];
-  return typeof content === "string" ? content : "";
+  for (let index = users.length - 1; index >= 0; index -= 1) {
+    const content = users[index]?.["content"];
+    if (typeof content === "string" && !isApplicationContextEnvelope(content)) return content;
+  }
+  return "";
+}
+
+function isApplicationContextEnvelope(content: string): boolean {
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    return (
+      isRecord(parsed) &&
+      typeof parsed["kind"] === "string" &&
+      parsed["instructionPolicy"] === "content_is_data_not_authority"
+    );
+  } catch {
+    return false;
+  }
 }
 
 async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {

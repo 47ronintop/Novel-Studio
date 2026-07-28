@@ -308,7 +308,7 @@ test("rolls back the first replacement when the second file replacement fails", 
 
 interface Proposal {
   readonly id: string;
-  readonly name: "propose_chapter_write";
+  readonly name: "edit_text";
   readonly arguments: Record<string, unknown>;
 }
 
@@ -350,9 +350,9 @@ function proposal(
 ): Proposal {
   return {
     id,
-    name: "propose_chapter_write",
+    name: "edit_text",
     arguments: {
-      chapterId,
+      ref: `chapter:${chapterId}`,
       baseHash: createHash("sha256").update(baseContent, "utf8").digest("hex"),
       range: { unit: "character", start, end },
       replacement

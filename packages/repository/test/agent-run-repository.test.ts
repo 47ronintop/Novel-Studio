@@ -1,17 +1,106 @@
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createDeterministicTokenEstimator } from "@novel-studio/agent-engine";
 import { afterEach, describe, expect, test } from "vitest";
 
 import * as repositoryExports from "../src/index.js";
 
 const roots: string[] = [];
 
+function compactionSummaryArtifact(overrides: Record<string, unknown> = {}) {
+  const body =
+    typeof overrides["body"] === "string"
+      ? overrides["body"]
+      : '{"plotFacts":[],"characterStates":[],"foreshadowing":[],"userDecisions":[]}';
+  const provenance = {
+    kind: "model_assisted",
+    provider: "anthropic",
+    model: "claude-test",
+    modelProfileId: "profile-c4",
+    templateVersion: "1.0",
+    inputChecksum: "a".repeat(64)
+  };
+  const count = createDeterministicTokenEstimator().count(body, provenance.modelProfileId);
+  const unsigned = {
+    schemaVersion: "1.0",
+    artifactId: "summary_compaction_01",
+    runId: "run_01",
+    compactionId: "compaction_01",
+    contextProfileId: "writing",
+    sourceSnapshotId: "context_01",
+    throughSequence: 7,
+    inputManifestChecksum: "b".repeat(64),
+    body,
+    provenance,
+    tokenCount: count.tokens,
+    checksum: checksumText(body),
+    precision: count.precision,
+    createdAt: "2026-07-28T00:00:00.000Z",
+    ...overrides
+  };
+  return {
+    ...unsigned,
+    artifactChecksum: checksumText(stableSerialize(unsigned))
+  };
+}
+
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 describe("AgentRunFileRepository", () => {
+  test("persists immutable compaction summary artifacts", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-summary-store-"));
+    roots.push(projectRoot);
+    const repository = new repositoryExports.AgentRunFileRepository({ projectRoot });
+    const artifact = compactionSummaryArtifact();
+
+    expect(await repository.writeCompactionSummaryArtifact("run_01", artifact)).toMatchObject({
+      ok: true
+    });
+    expect(await repository.writeCompactionSummaryArtifact("run_01", artifact)).toMatchObject({
+      ok: true
+    });
+    expect(await repository.readCompactionSummaryArtifact("run_01", artifact.artifactId)).toEqual({
+      ok: true,
+      value: artifact
+    });
+    expect(
+      await repository.writeCompactionSummaryArtifact("run_01", {
+        ...compactionSummaryArtifact({
+          body: '{"plotFacts":["changed"],"characterStates":[],"foreshadowing":[],"userDecisions":[]}'
+        })
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_COMPACTION_SUMMARY_ARTIFACT_CONFLICT" }
+    });
+    expect(await repository.readCompactionSummaryArtifact("run_01", "../summary")).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_COMPACTION_SUMMARY_ARTIFACT_INVALID" }
+    });
+    await writeFile(
+      join(
+        projectRoot,
+        "history",
+        "agent-runs",
+        "run_01",
+        "compaction-summaries",
+        `${String(artifact["artifactId"])}.json`
+      ),
+      JSON.stringify({ ...artifact, precision: "reported" }),
+      "utf8"
+    );
+    expect(
+      await repository.readCompactionSummaryArtifact("run_01", String(artifact["artifactId"]))
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_COMPACTION_SUMMARY_ARTIFACT_INVALID" }
+    });
+  });
+
   test("persists immutable context source materializations and rejects divergent rewrites", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-context-source-store-"));
     roots.push(projectRoot);
@@ -593,6 +682,107 @@ describe("AgentRunFileRepository — compaction persistence + commit marker", ()
     });
   });
 
+  test("requires the immutable summary and prompt before honoring model-assisted compaction", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-compaction-summary-honor-"));
+    roots.push(projectRoot);
+    const repository = makeRepository(projectRoot);
+    const body =
+      '{"modifiedFiles":["src/index.ts"],"changeIntent":["Fix parsing"],"todos":[],"errorHighlights":[],"nextSteps":["Run tests"]}';
+    const summary = compactionSummaryArtifact({
+      artifactId: "summary_compaction_model",
+      runId: "run_c1",
+      compactionId: "compaction_model",
+      contextProfileId: "engineering",
+      sourceSnapshotId: "context_before_model",
+      throughSequence: 9,
+      inputManifestChecksum: "c".repeat(64),
+      body
+    });
+    const promptArtifactId = "prompt_context_after_model";
+    const resultSnapshotId = "context_after_model";
+    await repository["writeCompactionRevision"]?.({
+      schemaVersion: "1.0",
+      compactionId: "compaction_model",
+      runId: "run_c1",
+      sourceSnapshotId: "context_before_model",
+      resultSnapshotId,
+      budgetSnapshotId: "budget_after_model",
+      inputManifestChecksum: "c".repeat(64),
+      throughSequence: 9,
+      strategy: "model_assisted",
+      summaryChecksum: summary["checksum"],
+      status: "completed",
+      revision: 1
+    });
+    await repository["writePromptMaterialization"]?.("run_c1", {
+      schemaVersion: "1.1",
+      artifactId: promptArtifactId,
+      runId: "run_c1",
+      contextSnapshotId: resultSnapshotId,
+      contextSources: [
+        {
+          refId: "compaction_summary",
+          sourceKind: "compaction_summary",
+          assetId: summary["artifactId"],
+          sourceRevision: 9,
+          content: body
+        }
+      ]
+    });
+    await repository["writeContextSnapshot"]?.({
+      schemaVersion: "1.3",
+      runId: "run_c1",
+      contextSnapshotId: resultSnapshotId,
+      contextProfileId: "engineering",
+      sources: [
+        {
+          refId: "compaction_summary",
+          sourceKind: "compaction_summary",
+          assetId: summary["artifactId"],
+          artifactId: promptArtifactId,
+          checksum: summary["checksum"],
+          sourceRevision: 9,
+          state: "active"
+        }
+      ]
+    });
+    await repository["writeBudgetSnapshot"]?.("run_c1", {
+      schemaVersion: "1.1",
+      contextBudgetSnapshotId: "budget_after_model"
+    });
+    const committed = v11Snapshot({
+      activeCompactionId: "compaction_model",
+      contextSnapshotId: resultSnapshotId,
+      contextBudgetSnapshotId: "budget_after_model"
+    });
+    expect(await repository["commitCompaction"]?.(committed)).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_COMPACTION_COMMIT_INVALID" }
+    });
+
+    await repository["writeCompactionSummaryArtifact"]?.("run_c1", summary);
+    expect(await repository["commitCompaction"]?.(committed)).toMatchObject({ ok: true });
+    expect(await repository["readSnapshot"]?.("run_c1")).toMatchObject({
+      ok: true,
+      value: { activeCompactionId: "compaction_model" }
+    });
+
+    await rm(
+      join(
+        projectRoot,
+        "history",
+        "agent-runs",
+        "run_c1",
+        "compaction-summaries",
+        `${String(summary["artifactId"])}.json`
+      )
+    );
+    expect(await repository["readSnapshot"]?.("run_c1")).toMatchObject({
+      ok: true,
+      value: { activeCompactionId: null }
+    });
+  });
+
   test("commitCompaction is idempotent when the pointer already matches", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-compaction-commit-"));
     roots.push(projectRoot);
@@ -746,6 +936,21 @@ describe("AgentRunFileRepository — compaction persistence + commit marker", ()
     });
   });
 });
+
+function checksumText(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function stableSerialize(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => `${JSON.stringify(key)}:${stableSerialize(child)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
 
 function changeSetRecord(revision: number, checksum: string): Record<string, unknown> {
   return {

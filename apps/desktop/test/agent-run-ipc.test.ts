@@ -148,6 +148,11 @@ describe("Agent Run IPC", () => {
       expectedRunRevision: 4
     });
     await handlers["application:agent-run:retry-target"]({
+      scope: {
+        kind: "workspace",
+        workspaceKind: "creativeProject",
+        workspaceId: "project-01"
+      },
       projectId: "project-01",
       runId: "run-ipc",
       commandId: "retry-target-01",
@@ -203,6 +208,11 @@ describe("Agent Run IPC", () => {
       decision: "refresh"
     });
     const decideCommand = {
+      scope: {
+        kind: "workspace",
+        workspaceKind: "creativeProject",
+        workspaceId: "project-01"
+      },
       projectId: "project-01",
       runId: "run-ipc",
       commandId: "change-set-01",
@@ -222,6 +232,11 @@ describe("Agent Run IPC", () => {
     expect(duplicateDecision).toEqual(firstDecision);
     await handlers["application:agent-run:undo"]({
       action: "request",
+      scope: {
+        kind: "workspace",
+        workspaceKind: "creativeProject",
+        workspaceId: "project-01"
+      },
       projectId: "project-01",
       runId: "run-ipc",
       commandId: "undo-01",
@@ -499,6 +514,11 @@ describe("Agent Run IPC", () => {
       permissionSummaryId: "permission-summary-01"
     });
     const decision = {
+      scope: {
+        kind: "workspace",
+        workspaceKind: "creativeProject",
+        workspaceId: "project-01"
+      },
       projectId: "project-01",
       runId: "run-01",
       commandId: "plan-revision-decision-01",
@@ -625,6 +645,11 @@ describe("Agent Run IPC", () => {
 
     const resolved = await handlers["application:agent-run:undo"]?.({
       action: "resolve",
+      scope: {
+        kind: "workspace",
+        workspaceKind: "creativeProject",
+        workspaceId: "project-01"
+      },
       projectId: "project-01",
       runId: "run-ipc",
       commandId: "undo-resolve-01",
@@ -648,6 +673,11 @@ describe("Agent Run IPC", () => {
     expect(received).toEqual([
       {
         action: "resolve",
+        scope: {
+          kind: "workspace",
+          workspaceKind: "creativeProject",
+          workspaceId: "project-01"
+        },
         projectId: "project-01",
         runId: "run-ipc",
         commandId: "undo-resolve-01",
@@ -966,6 +996,22 @@ describe("Agent Run IPC", () => {
       contextBudgetSnapshotId: "budget-01",
       trigger: "manual"
     });
+    await handlers["application:agent-run:preview-context-budget"]?.({
+      scope: { kind: "standalone", scopeId: "standalone" },
+      conversationId: "conversation-standalone",
+      commandId: "cmd-standalone-preview",
+      runDraftId: "draft-standalone",
+      expectedDraftRevision: 1,
+      runDraftChecksum: "checksum-standalone"
+    });
+    await handlers["application:agent-run:compact-context"]?.({
+      scope: { kind: "standalone", scopeId: "standalone" },
+      runId: "run-standalone",
+      commandId: "cmd-standalone-compact",
+      expectedRunRevision: 2,
+      contextBudgetSnapshotId: "budget-standalone",
+      trigger: "recovery"
+    });
 
     const before = calls.length;
     const rejected = await Promise.all([
@@ -991,6 +1037,15 @@ describe("Agent Run IPC", () => {
         expectedRunRevision: 4,
         contextBudgetSnapshotId: "budget-01",
         trigger: "sideways"
+      }),
+      handlers["application:agent-run:compact-context"]?.({
+        scope: { kind: "standalone", scopeId: "standalone" },
+        projectId: "forged-project",
+        runId: "run-standalone",
+        commandId: "cmd-forged-identity",
+        expectedRunRevision: 2,
+        contextBudgetSnapshotId: "budget-standalone",
+        trigger: "manual"
       })
     ]);
     expect(rejected.every((result) => (result as { ok?: boolean }).ok === false)).toBe(true);
@@ -1001,7 +1056,9 @@ describe("Agent Run IPC", () => {
       "update-context-draft:remove_ref",
       "refresh-context-draft:context-01",
       "preview-budget:cmd-04",
-      "compact:manual"
+      "compact:manual",
+      "preview-budget:cmd-standalone-preview",
+      "compact:recovery"
     ]);
   });
 

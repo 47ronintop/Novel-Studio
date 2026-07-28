@@ -62,7 +62,9 @@ export interface AgentUsageSink {
 
 /** The public command to compact a run's context. Draft/renderer never authors the budget facts. */
 export interface CompactContextCommand {
-  readonly projectId: string;
+  /** Legacy workspace-only identity; standalone commands omit it. */
+  readonly projectId?: string;
+  readonly scope?: AgentContextScope;
   readonly runId: string;
   readonly commandId: string;
   readonly expectedRunRevision: number;

@@ -11,7 +11,7 @@ import {
   type AgentRunDraftSession,
   type SyncStartDraftCommand
 } from "../src/agent-run-draft-session.js";
-import type { AgentTokenEstimator, PreviewContextBudgetCommand } from "@novel-studio/agent-engine";
+import type { PreviewContextBudgetCommand } from "@novel-studio/agent-engine";
 
 function createMemoryRepository() {
   const runDrafts = new Map<string, Map<number, JsonObject>>();
@@ -85,8 +85,46 @@ const facts128k: AgentContextBudgetInputs = {
     systemReserve: 1000,
     requiredContextTokens: 8000
   },
-  contents: []
+  contents: [],
+  resolved: resolvedBudget({
+    provider: "demo",
+    model: "large",
+    contextWindow: 128000,
+    maxOutputTokens: 8000,
+    toolReserve: 2000,
+    systemReserve: 1000,
+    requiredContextTokens: 8000
+  })
 };
+
+function resolvedBudget(
+  model: AgentContextBudgetInputs["model"],
+  usedTokens = 32,
+  precision: AgentContextBudgetInputs["resolved"]["precision"] = "estimated"
+): AgentContextBudgetInputs["resolved"] {
+  return {
+    schemaVersion: "1.0",
+    provider: model.provider,
+    model: model.model,
+    modelProfileId: "profile_01",
+    contextWindow: model.contextWindow,
+    ...(model.maxOutputTokens === undefined ? {} : { maxOutputTokens: model.maxOutputTokens }),
+    requiredContextTokens: model.requiredContextTokens,
+    toolReserve: model.toolReserve,
+    systemReserve: model.systemReserve,
+    usedTokens,
+    precision,
+    toolCatalog: {
+      facadeVersion: "v2",
+      catalogRevision: "a".repeat(64),
+      descriptorChecksum: "b".repeat(64),
+      descriptorCount: 1
+    },
+    systemMaterializationChecksum: "c".repeat(64),
+    usedMaterializationChecksum: "d".repeat(64),
+    operandsChecksum: "e".repeat(64)
+  };
+}
 
 async function seedDraft(draftSession: AgentRunDraftSession) {
   const synced = await draftSession.syncStartDraft(syncCommand);
@@ -140,14 +178,15 @@ describe("Agent Context session — previewContextBudget", () => {
     expect(result.value.precision).toBe("estimated");
   });
 
-  test("sums used tokens across the request and resolved content", async () => {
+  test("uses the single canonical used-token operand", async () => {
     const draft = await seedDraft(draftSession);
     const inputs: AgentContextBudgetInputs = {
       model: facts128k.model,
       contents: [
         { refId: "chapter:ch_01", content: "x".repeat(400) },
         { refId: "story_bible:asset_01", content: "y".repeat(400) }
-      ]
+      ],
+      resolved: resolvedBudget(facts128k.model, 237)
     };
     const session = createAgentContextSession({
       draftSession,
@@ -157,20 +196,18 @@ describe("Agent Context session — previewContextBudget", () => {
     const result = await session.previewContextBudget(previewCommand(draft));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    // 800 content bytes / 4 = 200 tokens, plus the request estimate.
-    expect(result.value.usedTokens).toBeGreaterThanOrEqual(200);
+    expect(result.value.usedTokens).toBe(237);
     expect(result.value.remainingTokens).toBe(result.value.safeInputBudget - result.value.usedTokens);
   });
 
-  test("marks precision reported only when a provider tokenizer reports it", async () => {
+  test("preserves the canonical tokenizer precision", async () => {
     const draft = await seedDraft(draftSession);
-    const reportedEstimator: AgentTokenEstimator = {
-      count: () => ({ tokens: 10, precision: "reported" })
-    };
     const session = createAgentContextSession({
       draftSession,
-      budgetInputs: budgetInputsPort(facts128k),
-      estimator: reportedEstimator,
+      budgetInputs: budgetInputsPort({
+        ...facts128k,
+        resolved: resolvedBudget(facts128k.model, 10, "reported")
+      }),
       now: () => "2026-07-16T00:00:00.000Z"
     });
     const result = await session.previewContextBudget(previewCommand(draft));
@@ -222,7 +259,16 @@ describe("Agent Context session — previewContextBudget", () => {
         systemReserve: 500,
         requiredContextTokens: 8000
       },
-      contents: []
+      contents: [],
+      resolved: resolvedBudget({
+        provider: "demo",
+        model: "tiny",
+        contextWindow: 12000,
+        maxOutputTokens: 4000,
+        toolReserve: 500,
+        systemReserve: 500,
+        requiredContextTokens: 8000
+      })
     };
     const session = createAgentContextSession({
       draftSession,
@@ -254,5 +300,46 @@ describe("Agent Context session — previewContextBudget", () => {
     if (!first.ok || !second.ok) return;
     expect(first.value.contextBudgetSnapshotId).toBe(second.value.contextBudgetSnapshotId);
     expect(calls).toBe(1);
+  });
+
+  test("normalizes legacy and explicit workspace identities before preview cache lookup", async () => {
+    const draft = await seedDraft(draftSession);
+    let calls = 0;
+    const session = createAgentContextSession({
+      draftSession,
+      budgetInputs: budgetInputsPort(facts128k, () => {
+        calls += 1;
+      }),
+      createBudgetSnapshotId: () => "budget_identity"
+    });
+    const legacy = await session.previewContextBudget(previewCommand(draft));
+    const scoped = await session.previewContextBudget(
+      previewCommand(draft, {
+        scope: {
+          kind: "workspace",
+          workspaceKind: "creativeProject",
+          workspaceId: "project_01"
+        }
+      })
+    );
+
+    expect(legacy).toEqual(scoped);
+    expect(calls).toBe(1);
+  });
+
+  test("fails closed when the budget port omits canonical operands", async () => {
+    const draft = await seedDraft(draftSession);
+    const session = createAgentContextSession({
+      draftSession,
+      budgetInputs: budgetInputsPort({
+        model: facts128k.model,
+        contents: []
+      } as unknown as AgentContextBudgetInputs)
+    });
+
+    await expect(session.previewContextBudget(previewCommand(draft))).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONTEXT_BUDGET_INPUTS_INVALID" }
+    });
   });
 });

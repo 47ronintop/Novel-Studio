@@ -404,39 +404,25 @@ describe("AgentRunSession Stage 2 integration", () => {
   test("downgrades a persisted automatic policy before a restored run can write", async () => {
     const createSession = requireCreateSession();
     const repository = memoryRepository();
-    const createdAt = "2026-07-13T00:00:00.000Z";
-    await repository.writeSnapshot({
-      schemaVersion: "1.0",
-      runId: "run_forged_auto",
-      projectId: "project-01",
-      operationMode: "execution",
-      contextMode: "general_file",
-      writePolicy: "user_preapproved_run",
-      userRequest: "Update the outline.",
-      status: "executing_model",
-      runRevision: 1,
-      lastSequence: 1,
-      startedAt: createdAt,
-      updatedAt: createdAt,
-      limits: {
-        maxModelRounds: 20,
-        maxToolCalls: 50,
-        maxConsecutiveToolFailures: 3
+    const seededSession = createSession({
+      repository,
+      coordinatorOptions: { createRunId: () => "run_forged_auto" },
+      modelDriver: {
+        async *streamRound() {
+          await new Promise<void>(() => undefined);
+          yield { type: "round_completed" as const, finishReason: "stop" as const };
+        }
       },
-      providerCapabilitySnapshot: startCommand()["providerCapabilitySnapshot"],
-      pendingUserInputId: null,
-      contextSnapshotId: null,
-      sourcePlanId: null,
-      sourcePlanRevision: null
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: unusedReadExecutor()
     });
-    await repository.appendEvent({
-      schemaVersion: "1.0",
-      runId: "run_forged_auto",
-      projectId: "project-01",
-      sequence: 1,
-      runRevision: 1,
-      type: "run_started",
-      createdAt
+    expect(await seededSession.startAgentRun(startCommand())).toMatchObject({ ok: true });
+    const persisted = await repository.readSnapshot("run_forged_auto");
+    expect(persisted.value).toBeDefined();
+    if (persisted.value === undefined) return;
+    await repository.writeSnapshot({
+      ...persisted.value,
+      writePolicy: "user_preapproved_run"
     });
     let applyCount = 0;
     const session = createSession({
@@ -480,7 +466,7 @@ describe("AgentRunSession Stage 2 integration", () => {
       runId: "run_forged_auto",
       projectId: "project-01",
       commandId: "resume-forged-auto",
-      expectedRunRevision: 1
+      expectedRunRevision: Number(persisted.value["runRevision"])
     });
     await waitForStatus(session, "run_forged_auto", "awaiting_write_approval");
 
@@ -2063,6 +2049,8 @@ function memoryRepository() {
   const events = new Map<string, Record<string, unknown>[]>();
   const receipts = new Map<string, Record<string, unknown>>();
   const contextSnapshots = new Map<string, Record<string, unknown>>();
+  const promptMaterializations = new Map<string, Record<string, unknown>>();
+  const budgetSnapshots = new Map<string, Record<string, unknown>>();
   return {
     async writeSnapshot(snapshot: Record<string, unknown>) {
       snapshots.set(String(snapshot["runId"]), snapshot);
@@ -2093,6 +2081,26 @@ function memoryRepository() {
     },
     async readContextSnapshot(runId: string, contextSnapshotId: string) {
       return { ok: true, value: contextSnapshots.get(`${runId}:${contextSnapshotId}`) };
+    },
+    async writePromptMaterialization(runId: string, artifact: Record<string, unknown>) {
+      promptMaterializations.set(
+        `${runId}:${String(artifact["artifactId"])}`,
+        structuredClone(artifact)
+      );
+      return { ok: true, value: artifact };
+    },
+    async readPromptMaterialization(runId: string, artifactId: string) {
+      return { ok: true, value: promptMaterializations.get(`${runId}:${artifactId}`) };
+    },
+    async writeBudgetSnapshot(runId: string, snapshot: Record<string, unknown>) {
+      budgetSnapshots.set(
+        `${runId}:${String(snapshot["contextBudgetSnapshotId"])}`,
+        structuredClone(snapshot)
+      );
+      return { ok: true, value: snapshot };
+    },
+    async readBudgetSnapshot(runId: string, contextBudgetSnapshotId: string) {
+      return { ok: true, value: budgetSnapshots.get(`${runId}:${contextBudgetSnapshotId}`) };
     }
   };
 }

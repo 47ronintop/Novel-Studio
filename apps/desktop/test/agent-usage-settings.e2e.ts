@@ -259,11 +259,15 @@ function sha256(value: string): string {
 function usageRecord(localDate: string, overrides: Record<string, unknown> = {}) {
   const timestamp = `${localDate}T08:00:00.000Z`;
   const base = {
-    schemaVersion: "1.0",
+    schemaVersion: "1.1",
+    scope: {
+      kind: "workspace",
+      workspaceKind: "creativeProject",
+      workspaceId: "project_01"
+    },
     usageId: "",
     runId: "run_base",
     conversationId: "conversation_01",
-    projectId: "project_01",
     roundId: "round_01",
     finalSequence: 1,
     provider: "openai",

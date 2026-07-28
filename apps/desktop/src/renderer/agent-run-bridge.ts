@@ -232,7 +232,9 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       assistantText:
         event.type === "assistant_text_delta"
           ? `${state.assistantText}${stringDetail(event.detail, "delta") ?? ""}`
-          : state.assistantText,
+          : event.type === "run_completed" && state.assistantText.length === 0
+            ? (stringDetail(event.detail, "summary") ?? state.assistantText)
+            : state.assistantText,
       pendingUserInput:
         event.type === "user_input_requested"
           ? pendingInputFromDetail(event.detail)
@@ -811,10 +813,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           ? "write_before_confirmation"
           : read.snapshot.writePolicy,
       events: [...read.events],
-      assistantText: read.events
-        .filter((event) => event.type === "assistant_text_delta")
-        .map((event) => stringDetail(event.detail, "delta") ?? "")
-        .join(""),
+      assistantText: assistantTextFromEvents(read.events),
       pendingUserInput: read.pendingUserInput,
       diagnostic: read.diagnostic,
       errorMessage: read.diagnostic === undefined ? state.errorMessage : undefined,
@@ -2708,6 +2707,16 @@ function appendEvent(events: readonly AgentRunEvent[], event: AgentRunEvent): Ag
   return events.some((entry) => entry.sequence === event.sequence)
     ? [...events]
     : [...events, event].sort((left, right) => left.sequence - right.sequence);
+}
+
+function assistantTextFromEvents(events: readonly AgentRunEvent[]): string {
+  const streamed = events
+    .filter((event) => event.type === "assistant_text_delta")
+    .map((event) => stringDetail(event.detail, "delta") ?? "")
+    .join("");
+  if (streamed.length > 0) return streamed;
+  const completed = [...events].reverse().find((event) => event.type === "run_completed");
+  return stringDetail(completed?.detail, "summary") ?? "";
 }
 
 function eventStatus(eventType: AgentRunEvent["type"]): AgentRunSnapshot["status"] | undefined {

@@ -4,8 +4,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  createBootstrappedDefaultDesktopApplicationWithSnapshot,
   createProjectLockOwnerId,
-  createUnboundDesktopApplication
+  createUnboundDesktopApplication,
+  DEFAULT_FIXTURE_CHAPTER_ID
 } from "./application-composition.js";
 import { createDesktopAgentRuntime } from "./agent-run-runtime.js";
 import { createDesktopStandaloneAgentRuntime } from "./standalone-agent-runtime.js";
@@ -71,6 +73,7 @@ let shutdownInProgress = false;
 
 export async function registerApplicationIpcHandlers(): Promise<void> {
   const userDataRoot = process.env["NOVEL_STUDIO_USER_DATA_ROOT"] ?? app.getPath("userData");
+  const fixtureProjectRoot = process.env["NOVEL_STUDIO_PROJECT_ROOT"];
   const modelSecretStore = createEncryptedFileModelSecretStore({
     userDataRoot,
     cipher: safeStorage
@@ -112,13 +115,26 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         modelSecretStore
       })
   });
-  const application = await createUnboundDesktopApplication({
-    userDataRoot,
-    projectLockOwnerId,
-    modelConnectionTester: modelRuntime.modelConnectionTester,
-    modelDiscoveryPort: modelRuntime.modelDiscoveryPort,
-    createAiProvider: modelRuntime.createAiProvider
-  });
+  const bootstrapped =
+    fixtureProjectRoot === undefined
+      ? undefined
+      : await createBootstrappedDefaultDesktopApplicationWithSnapshot({
+          projectRoot: fixtureProjectRoot,
+          userDataRoot,
+          projectLockOwnerId,
+          modelConnectionTester: modelRuntime.modelConnectionTester,
+          modelDiscoveryPort: modelRuntime.modelDiscoveryPort,
+          createAiProvider: modelRuntime.createAiProvider
+        });
+  const application =
+    bootstrapped?.application ??
+    (await createUnboundDesktopApplication({
+      userDataRoot,
+      projectLockOwnerId,
+      modelConnectionTester: modelRuntime.modelConnectionTester,
+      modelDiscoveryPort: modelRuntime.modelDiscoveryPort,
+      createAiProvider: modelRuntime.createAiProvider
+    }));
   activeDesktopApplication = application;
   const failAgentWriteAt = readPositiveInteger(
     process.env["NOVEL_STUDIO_TEST_AGENT_WRITE_FAIL_AT"]
@@ -248,19 +264,51 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
       return created.value;
     }
   });
-  const standalonePrepared = await agentRuntimeManager.prepareStandalone();
-  if (!standalonePrepared.ok) {
-    process.emitWarning(standalonePrepared.error.message, {
-      code: standalonePrepared.error.code,
-      detail: "Standalone Agent is disabled; workspace open/create remains available."
+  if (bootstrapped !== undefined) {
+    const workspaceId = bootstrapped.workspace.project.projectId;
+    const fileSession = await creativeProjectFileSession.activate({
+      projectId: workspaceId,
+      workspaceId,
+      projectRoot: bootstrapped.workspace.projectRoot
     });
+    if (!fileSession.ok) {
+      agentRuntimeManager.dispose();
+      await application.shutdown();
+      activeDesktopApplication = undefined;
+      throw new Error(fileSession.error.message);
+    }
+    const initialBinding = await agentRuntimeManager.bindWorkspace({
+      kind: "creativeProject",
+      workspaceId,
+      contentRoot: bootstrapped.workspace.projectRoot,
+      stateRoot: bootstrapped.workspace.projectRoot,
+      activeChapterId:
+        bootstrapped.workspace.activeChapterId ??
+        bootstrapped.workspace.chapters[0]?.id ??
+        DEFAULT_FIXTURE_CHAPTER_ID
+    });
+    if (!initialBinding.ok) {
+      creativeProjectFileSession.deactivate();
+      agentRuntimeManager.dispose();
+      await application.shutdown();
+      activeDesktopApplication = undefined;
+      throw new Error(initialBinding.error.message);
+    }
   } else {
-    const standaloneActivated = await agentRuntimeManager.activateStandalone();
-    if (!standaloneActivated.ok) {
-      process.emitWarning(standaloneActivated.error.message, {
-        code: standaloneActivated.error.code,
+    const standalonePrepared = await agentRuntimeManager.prepareStandalone();
+    if (!standalonePrepared.ok) {
+      process.emitWarning(standalonePrepared.error.message, {
+        code: standalonePrepared.error.code,
         detail: "Standalone Agent is disabled; workspace open/create remains available."
       });
+    } else {
+      const standaloneActivated = await agentRuntimeManager.activateStandalone();
+      if (!standaloneActivated.ok) {
+        process.emitWarning(standaloneActivated.error.message, {
+          code: standaloneActivated.error.code,
+          detail: "Standalone Agent is disabled; workspace open/create remains available."
+        });
+      }
     }
   }
   activeAgentRuntimeManager = agentRuntimeManager;

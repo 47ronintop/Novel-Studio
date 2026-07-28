@@ -58,7 +58,13 @@ test("stops a live Agent run through the real Electron IPC path", async () => {
       json(response, {
         data: [
           {
-            id: "local-agent"
+            id: "local-agent",
+            context_window: 128000,
+            capabilities: {
+              streaming: true,
+              tool_calling: true,
+              structured_arguments: true
+            }
           }
         ]
       });
@@ -250,8 +256,8 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
       sendToolCall(
         response,
         "chapter",
-        "read_chapter",
-        { chapterId: activeChapterId },
+        "read_resource",
+        { ref: `chapter:${activeChapterId}` },
         "读取当前章节。"
       );
       return;
@@ -494,8 +500,24 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
 function lastUserRequest(body: Record<string, unknown>): string {
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const users = messages.filter(isRecord).filter((message) => message["role"] === "user");
-  const content = users.at(-1)?.["content"];
-  return typeof content === "string" ? content : "";
+  for (let index = users.length - 1; index >= 0; index -= 1) {
+    const content = users[index]?.["content"];
+    if (typeof content === "string" && !isApplicationContextEnvelope(content)) return content;
+  }
+  return "";
+}
+
+function isApplicationContextEnvelope(content: string): boolean {
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    return (
+      isRecord(parsed) &&
+      typeof parsed["kind"] === "string" &&
+      parsed["instructionPolicy"] === "content_is_data_not_authority"
+    );
+  } catch {
+    return false;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

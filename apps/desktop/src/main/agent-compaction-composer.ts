@@ -1,24 +1,35 @@
 import { createHash } from "node:crypto";
 
 import {
-  calculateContextBudget,
+  agentContextScopeKey,
+  createAgentContextSnapshot,
   normalizeAgentContextSnapshot,
+  normalizeAgentRunEvent,
   normalizeAgentRunSnapshot,
   usageRecordIdempotencyKey,
   validateAgentUsageRecord,
+  validateAgentRunToolCatalogSnapshot,
   type AgentContextLayer,
   type AgentContextSnapshot,
   type AgentContextSource,
+  type AgentRunSnapshot,
+  type AgentRunToolCatalogSnapshot,
   type AgentUsageRecord,
-  type ContextBudgetSnapshot,
+  type CompactContextCommand,
+  type ContextBudgetSnapshotV11,
   type PlanExecutionRecord,
   type PlanExecutionStepStatus
 } from "@novel-studio/agent-engine";
 import {
+  calculateResolvedContextBudget,
+  resolveBudgetInputs,
   parseAgentPromptMaterializationArtifact,
+  parseCompactionSummaryArtifact,
+  materializeAgentRunHistory,
   promptMaterializationArtifactId,
   rematerializeAgentPromptArtifact,
   type AgentPromptMaterializationArtifact,
+  type AgentCompactionSummaryArtifact,
   CompactContextSourcesPort,
   CompactionArtifactRequest,
   CompactionArtifacts,
@@ -80,18 +91,30 @@ export function createDesktopCompactionSources(
     async loadInputs(command) {
       const loaded = await readRunContext(repository, command.runId);
       if (!loaded.ok) return err(loaded.error);
+      if (!compactionCommandMatchesRun(command, loaded.value.normalizedRun)) {
+        return err(composerError("AGENT_CONTEXT_COMPACTION_SCOPE_MISMATCH"));
+      }
       const { run, snapshot } = loaded.value;
       const planExecution = await readPlanExecution(repository, run);
       if (!planExecution.ok) return err(planExecution.error);
       const classified = classifySources(snapshot.sources);
-      const budget = recomputeBudget(
-        run,
-        command.contextBudgetSnapshotId,
-        currentTokens(run, snapshot),
-        now()
-      );
+      const material = await loadFrozenBudgetMaterial(repository, loaded.value);
+      if (!material.ok) return err(material.error);
+      const budget = calculateCompactionBudget({
+        context: loaded.value,
+        material: material.value,
+        contextBudgetSnapshotId: command.contextBudgetSnapshotId,
+        calculatedAt: now(),
+        artifactPointers: budgetArtifactPointers(snapshot.sources)
+      });
       if (!budget.ok) return err(budget.error);
       const nextRevision = snapshot.compactionRevision + 1;
+      const targetTokens = Math.floor(budget.value.safeInputBudget * COMPACTION_TARGET_RATIO);
+      const evidence = stableSerialize({
+        schemaVersion: "1.0",
+        profileId: material.value.prompt.profileId,
+        messages: [...material.value.prompt.messages, ...material.value.historyMessages]
+      });
       const inputs: CompactionInputs = {
         sourceSnapshotId: snapshot.contextSnapshotId,
         throughSequence: readNonNegative(run["lastSequence"]),
@@ -99,8 +122,17 @@ export function createDesktopCompactionSources(
         protectedFacts: classified.protectedFacts,
         ...(planExecution.value === undefined ? {} : { planExecutionRecord: planExecution.value }),
         evictableSources: classified.evictableSources,
-        currentTokens: currentTokens(run, snapshot),
-        targetTokens: Math.floor(budget.value.safeInputBudget * COMPACTION_TARGET_RATIO)
+        currentTokens: budget.value.usedTokens,
+        targetTokens,
+        modelSummary: {
+          profileId: material.value.prompt.profileId,
+          evidence,
+          evidenceChecksum: checksumSha256(evidence),
+          maxSummaryTokens: targetTokens,
+          provider: loaded.value.normalizedRun.providerCapabilitySnapshot.provider,
+          model: loaded.value.normalizedRun.providerCapabilitySnapshot.modelName,
+          modelProfileId: loaded.value.normalizedRun.providerCapabilitySnapshot.profileId
+        }
       };
       const prior = await readPriorProtected(repository, run);
       return ok(prior === undefined ? inputs : { ...inputs, prior });
@@ -109,6 +141,9 @@ export function createDesktopCompactionSources(
     async buildArtifacts(request) {
       const loaded = await readRunContext(repository, request.command.runId);
       if (!loaded.ok) return err(loaded.error);
+      if (!compactionCommandMatchesRun(request.command, loaded.value.normalizedRun)) {
+        return err(composerError("AGENT_CONTEXT_COMPACTION_SCOPE_MISMATCH"));
+      }
       const createdAt = request.manifest.createdAt;
       return buildArtifacts(
         loaded.value,
@@ -122,8 +157,29 @@ export function createDesktopCompactionSources(
   };
 }
 
+function compactionCommandMatchesRun(
+  command: CompactContextCommand,
+  run: AgentRunSnapshot
+): boolean {
+  if (command.scope !== undefined) {
+    if (
+      command.projectId !== undefined &&
+      (command.scope.kind !== "workspace" || command.scope.workspaceId !== command.projectId)
+    ) {
+      return false;
+    }
+    return agentContextScopeKey(command.scope) === agentContextScopeKey(run.scope);
+  }
+  return (
+    command.projectId !== undefined &&
+    run.scope.kind === "workspace" &&
+    run.scope.workspaceId === command.projectId
+  );
+}
+
 interface RunContext {
   readonly run: JsonObject;
+  readonly normalizedRun: AgentRunSnapshot;
   readonly snapshot: AgentContextSnapshot;
 }
 
@@ -148,6 +204,7 @@ async function readRunContext(
     const normalizedRun = normalizeAgentRunSnapshot(run.value);
     return ok({
       run: run.value,
+      normalizedRun,
       snapshot: normalizeAgentContextSnapshot(stored.value, {
         scope: normalizedRun.scope,
         contextProfileId: normalizedRun.contextProfileId,
@@ -198,6 +255,9 @@ function classifySources(sources: readonly AgentContextSource[]): ClassifiedSour
   const evictableSources: EvictableContextSource[] = [];
   for (const source of sources) {
     if (source.state === "excluded") continue;
+    // App-authored system guidance is accounted for by the frozen prompt and system reserve.
+    // It is neither user data nor a body compaction is allowed to evict.
+    if (source.sourceKind === "system_guidance") continue;
     // Project conventions are a durable user-data fact even if an old snapshot happened to
     // persist an incorrect layer. The source kind is the C2 authority boundary here.
     let protectedKind = PROTECTED_FACT_KIND[source.layer];
@@ -235,35 +295,121 @@ function classifySources(sources: readonly AgentContextSource[]): ClassifiedSour
   return { protectedFacts, evictableSources };
 }
 
-/** The run's current input token count: the authoritative usage summary, else the per-source sum. */
-function currentTokens(run: JsonObject, snapshot: AgentContextSnapshot): number {
-  const summary = run["usageSummary"];
-  if (isRecord(summary) && isTokenCount(summary["inputTokens"])) {
-    return summary["inputTokens"];
-  }
-  return snapshot.sources.reduce((total, source) => total + (source.tokenCount ?? 0), 0);
+interface FrozenBudgetMaterial {
+  readonly prompt: AgentPromptMaterializationArtifact;
+  readonly historyMessages: ReturnType<typeof materializeAgentRunHistory>;
+  readonly toolCatalog: AgentRunToolCatalogSnapshot;
 }
 
-/** Recompute the budget from the run's provider capability snapshot (renderer previews never trusted). */
-function recomputeBudget(
-  run: JsonObject,
-  contextBudgetSnapshotId: string,
-  usedTokens: number,
-  calculatedAt: string
-): Result<ContextBudgetSnapshot, UnifiedError> {
-  const capability = run["providerCapabilitySnapshot"];
-  if (!isRecord(capability)) return err(composerError("AGENT_CONTEXT_COMPACTION_NO_CAPABILITY"));
-  return calculateContextBudget({
-    contextBudgetSnapshotId,
-    provider: String(capability["provider"] ?? ""),
-    model: String(capability["modelName"] ?? ""),
-    contextWindow: readNonNegative(capability["contextWindow"]),
-    toolReserve: 0,
-    systemReserve: 0,
-    requiredContextTokens: readNonNegative(capability["requiredContextTokens"]),
-    usedTokens,
-    precision: "estimated",
-    calculatedAt
+async function loadFrozenBudgetMaterial(
+  repository: AgentRunFileRepository,
+  context: RunContext
+): Promise<Result<FrozenBudgetMaterial, UnifiedError>> {
+  const prompt = await readPromptMaterialization(repository, context.snapshot);
+  if (!prompt.ok) return err(prompt.error);
+  const catalogId = context.normalizedRun.toolCatalogSnapshotId;
+  if (catalogId === null || catalogId === undefined) {
+    return err(composerError("AGENT_CONTEXT_COMPACTION_TOOL_CATALOG_MISSING"));
+  }
+  const storedCatalog = await repository.readToolCatalog(context.normalizedRun.runId, catalogId);
+  if (!storedCatalog.ok) return err(storedCatalog.error);
+  if (storedCatalog.value === undefined) {
+    return err(composerError("AGENT_CONTEXT_COMPACTION_TOOL_CATALOG_MISSING"));
+  }
+  const catalog = validateAgentRunToolCatalogSnapshot(storedCatalog.value);
+  if (
+    !catalog.ok ||
+    catalog.value.runId !== context.normalizedRun.runId ||
+    catalog.value.toolCatalogSnapshotId !== catalogId ||
+    catalog.value.facadeVersion !== context.normalizedRun.toolFacadeVersion ||
+    catalog.value.catalogRevision !== context.normalizedRun.toolCatalogRevision ||
+    catalog.value.catalogRevision !== prompt.value.toolCatalogRevision
+  ) {
+    return err(composerError("AGENT_CONTEXT_COMPACTION_TOOL_CATALOG_INVALID"));
+  }
+  const storedEvents = await repository.readEvents(context.normalizedRun.runId);
+  if (!storedEvents.ok) return err(storedEvents.error);
+  let events;
+  try {
+    const legacyWorkspaceKind =
+      context.normalizedRun.scope.kind === "workspace"
+        ? context.normalizedRun.scope.workspaceKind
+        : undefined;
+    events = storedEvents.value.map((event) => normalizeAgentRunEvent(event, legacyWorkspaceKind));
+  } catch {
+    return err(composerError("AGENT_CONTEXT_COMPACTION_EVENTS_INVALID"));
+  }
+  const historyThroughSequence = prompt.value.contextSources
+    .filter((source) => source.sourceKind === "compaction_summary")
+    .reduce((latest, source) => Math.max(latest, source.sourceRevision ?? 0), 0);
+  return ok({
+    prompt: prompt.value,
+    historyMessages: materializeAgentRunHistory(events, historyThroughSequence),
+    toolCatalog: catalog.value
+  });
+}
+
+function calculateCompactionBudget(input: {
+  readonly context: RunContext;
+  readonly material: FrozenBudgetMaterial;
+  readonly contextBudgetSnapshotId: string;
+  readonly calculatedAt: string;
+  readonly prompt?: AgentPromptMaterializationArtifact;
+  readonly historyMessages?: FrozenBudgetMaterial["historyMessages"];
+  readonly artifactPointers: readonly {
+    readonly artifactId: string;
+    readonly kind: string;
+    readonly checksum: string;
+  }[];
+}): Result<ContextBudgetSnapshotV11, UnifiedError> {
+  const prompt = input.prompt ?? input.material.prompt;
+  const capability = input.context.normalizedRun.providerCapabilitySnapshot;
+  const resolved = resolveBudgetInputs({
+    provider: capability.provider,
+    model: capability.modelName,
+    modelProfileId: capability.profileId,
+    contextWindow: capability.contextWindow,
+    requiredContextTokens: capability.requiredContextTokens,
+    profile: prompt.profile,
+    prompt,
+    contextSources: prompt.contextSources,
+    historyMessages: input.historyMessages ?? input.material.historyMessages,
+    ...(input.artifactPointers.length === 0 ? {} : { artifactPointers: input.artifactPointers }),
+    toolCatalog: {
+      facadeVersion: input.material.toolCatalog.facadeVersion,
+      catalogRevision: input.material.toolCatalog.catalogRevision,
+      descriptors: input.material.toolCatalog.descriptors
+    }
+  });
+  if (!resolved.ok) return err(resolved.error);
+  return calculateResolvedContextBudget({
+    contextBudgetSnapshotId: input.contextBudgetSnapshotId,
+    resolved: resolved.value,
+    calculatedAt: input.calculatedAt
+  });
+}
+
+function budgetArtifactPointers(sources: readonly AgentContextSource[]) {
+  return sources.flatMap((source) => {
+    if (source.evictionPointer !== null) {
+      return [
+        {
+          artifactId: source.evictionPointer.artifactId,
+          kind: `${source.sourceKind}_eviction`,
+          checksum: source.evictionPointer.dependencyManifestChecksum
+        }
+      ];
+    }
+    if (source.sourceKind === "compaction_summary" && source.assetId !== undefined) {
+      return [
+        {
+          artifactId: source.assetId,
+          kind: "compaction_summary",
+          checksum: source.checksum
+        }
+      ];
+    }
+    return [];
   });
 }
 
@@ -298,29 +444,37 @@ async function buildArtifacts(
   repository: AgentRunFileRepository
 ): Promise<Result<CompactionArtifacts, UnifiedError>> {
   const { run, snapshot } = context;
+  const material = await loadFrozenBudgetMaterial(repository, context);
+  if (!material.ok) return err(material.error);
   const evicted = new Set(request.evictedSourceIds);
   const nextRevision = snapshot.compactionRevision + 1;
   const resultSnapshotId = `${snapshot.contextSnapshotId}_c${nextRevision}`;
   const budgetSnapshotId = `budget_${String(run["runId"])}_c${nextRevision}`;
+  const boundSummaryArtifact = bindCompactionSummaryArtifact(snapshot, request);
+  if (!boundSummaryArtifact.ok) return err(boundSummaryArtifact.error);
+  const summaryArtifact = boundSummaryArtifact.value;
 
-  const promptMaterialization = await buildCompactedPromptMaterialization(
-    repository,
+  const promptMaterialization = buildCompactedPromptMaterialization(
+    material.value.prompt,
     snapshot,
     resultSnapshotId,
-    evicted
+    evicted,
+    summaryArtifact
   );
   if (!promptMaterialization.ok) return promptMaterialization;
   const nextPrompt = promptMaterialization.value;
-  const promptBoundRefs = new Set(
-    nextPrompt === undefined
-      ? []
-      : [nextPrompt.systemGuidanceRefId, ...nextPrompt.contextSources.map((source) => source.refId)]
-  );
+  const promptBoundRefs = new Set([
+    nextPrompt.systemGuidanceRefId,
+    ...nextPrompt.contextSources.map((source) => source.refId)
+  ]);
 
   // The result snapshot keeps every source but marks evicted ones excluded — the pointer stays,
   // the raw body is dropped. Protected facts and non-evicted sources pass through unchanged.
   const resultSources: AgentContextSource[] = [];
   for (const source of snapshot.sources) {
+    if (summaryArtifact !== undefined && source.sourceKind === "compaction_summary") {
+      continue;
+    }
     if (evicted.has(source.refId)) {
       const evictionPointer = workspaceOutlineEvictionPointer(source);
       if (source.sourceKind === "workspace_outline" && evictionPointer === undefined) {
@@ -337,10 +491,39 @@ async function buildArtifacts(
       continue;
     }
     resultSources.push(
-      nextPrompt !== undefined && promptBoundRefs.has(source.refId)
-        ? { ...source, artifactId: nextPrompt.artifactId }
-        : source
+      promptBoundRefs.has(source.refId) ? { ...source, artifactId: nextPrompt.artifactId } : source
     );
+  }
+  if (summaryArtifact !== undefined) {
+    const summarySource = nextPrompt.contextSources.find(
+      (source) => source.sourceKind === "compaction_summary"
+    );
+    if (summarySource === undefined) {
+      return err(composerError("AGENT_CONTEXT_COMPACTION_SUMMARY_INVALID"));
+    }
+    const generated = createAgentContextSnapshot({
+      contextSnapshotId: resultSnapshotId,
+      runId: snapshot.runId,
+      scope: snapshot.scope,
+      contextProfileId: snapshot.contextProfileId,
+      materialization: {
+        ...snapshot.materialization,
+        stablePrefixChecksum: nextPrompt.stablePrefixChecksum
+      },
+      createdAt,
+      sources: [summarySource],
+      materializationArtifactId: nextPrompt.artifactId,
+      materializationArtifactSourceRefs: [summarySource.refId]
+    }).sources[0];
+    if (generated === undefined) {
+      return err(composerError("AGENT_CONTEXT_COMPACTION_SUMMARY_INVALID"));
+    }
+    resultSources.push({
+      ...generated,
+      tokenCount: summaryArtifact.tokenCount,
+      precision: summaryArtifact.precision,
+      materializationOrder: resultSources.length
+    });
   }
   const resultSnapshot: JsonObject = {
     ...(snapshot as unknown as JsonObject),
@@ -349,8 +532,7 @@ async function buildArtifacts(
     createdAt,
     materialization: {
       ...snapshot.materialization,
-      stablePrefixChecksum:
-        nextPrompt?.stablePrefixChecksum ?? snapshot.materialization.stablePrefixChecksum
+      stablePrefixChecksum: nextPrompt.stablePrefixChecksum
     },
     sources: resultSources as unknown as JsonObject["sources"],
     excludedSources: [
@@ -358,13 +540,29 @@ async function buildArtifacts(
     ]
   };
 
-  const afterTokens = resultSources.reduce(
-    (total, source) => (source.state === "excluded" ? total : total + (source.tokenCount ?? 0)),
-    0
-  );
-  const budget = recomputeBudget(run, budgetSnapshotId, afterTokens, createdAt);
+  const beforeBudget = calculateCompactionBudget({
+    context,
+    material: material.value,
+    contextBudgetSnapshotId: request.command.contextBudgetSnapshotId,
+    calculatedAt: createdAt,
+    artifactPointers: budgetArtifactPointers(snapshot.sources)
+  });
+  if (!beforeBudget.ok) return err(beforeBudget.error);
+  const budget = calculateCompactionBudget({
+    context,
+    material: material.value,
+    contextBudgetSnapshotId: budgetSnapshotId,
+    calculatedAt: createdAt,
+    prompt: nextPrompt,
+    historyMessages: summaryArtifact === undefined ? material.value.historyMessages : [],
+    artifactPointers: budgetArtifactPointers(resultSources)
+  });
   if (!budget.ok) return err(budget.error);
-  const beforeTokens = currentTokens(run, snapshot);
+  if (budget.value.usedTokens > request.targetTokens) {
+    return err(composerError("AGENT_CONTEXT_COMPACTION_TARGET_UNREACHED"));
+  }
+  const beforeTokens = beforeBudget.value.usedTokens;
+  const afterTokens = budget.value.usedTokens;
 
   const usageRecord = buildUsageRecord({
     run,
@@ -382,20 +580,55 @@ async function buildArtifacts(
     activeCompactionId: request.manifest.compactionId,
     contextSnapshotId: resultSnapshotId,
     contextBudgetSnapshotId: budgetSnapshotId,
-    cachePrefixChecksum:
-      nextPrompt?.stablePrefixChecksum ?? String(run["cachePrefixChecksum"] ?? "legacy"),
+    cachePrefixChecksum: nextPrompt.stablePrefixChecksum,
     updatedAt: createdAt
   };
 
   return ok({
     resultSnapshot,
-    ...(nextPrompt === undefined
-      ? {}
-      : { promptMaterialization: nextPrompt as unknown as JsonObject }),
+    promptMaterialization: nextPrompt as unknown as JsonObject,
     budgetSnapshot: budget.value as unknown as JsonObject,
     usageRecord: usageRecord.value as unknown as JsonObject,
     runSnapshot
   });
+}
+
+function bindCompactionSummaryArtifact(
+  snapshot: AgentContextSnapshot,
+  request: CompactionArtifactRequest
+): Result<AgentCompactionSummaryArtifact | undefined, UnifiedError> {
+  if (request.summaryArtifact === undefined) {
+    return request.strategy === "model_assisted"
+      ? err(composerError("AGENT_CONTEXT_COMPACTION_SUMMARY_INVALID"))
+      : ok(undefined);
+  }
+  if (request.strategy !== "model_assisted") {
+    return err(composerError("AGENT_CONTEXT_COMPACTION_SUMMARY_INVALID"));
+  }
+  try {
+    const artifact = parseCompactionSummaryArtifact(
+      request.summaryArtifact as unknown as JsonObject
+    );
+    if (
+      request.command.runId !== snapshot.runId ||
+      request.manifest.runId !== snapshot.runId ||
+      request.manifest.sourceSnapshotId !== snapshot.contextSnapshotId ||
+      artifact.runId !== snapshot.runId ||
+      artifact.compactionId !== request.manifest.compactionId ||
+      artifact.contextProfileId !== snapshot.contextProfileId ||
+      artifact.sourceSnapshotId !== snapshot.contextSnapshotId ||
+      artifact.throughSequence !== request.manifest.throughSequence ||
+      artifact.inputManifestChecksum !== request.manifest.checksum ||
+      artifact.checksum !== request.summaryChecksum ||
+      artifact.tokenCount !== request.outputTokens ||
+      artifact.precision !== request.precision
+    ) {
+      throw new Error("AGENT_CONTEXT_COMPACTION_SUMMARY_INVALID");
+    }
+    return ok(artifact);
+  } catch {
+    return err(composerError("AGENT_CONTEXT_COMPACTION_SUMMARY_INVALID"));
+  }
 }
 
 /** Build the only persisted form of an evicted directed block; it never carries its old body. */
@@ -421,18 +654,58 @@ function workspaceOutlineEvictionPointer(source: AgentContextSource):
   };
 }
 
-async function buildCompactedPromptMaterialization(
-  repository: AgentRunFileRepository,
+function buildCompactedPromptMaterialization(
+  prior: AgentPromptMaterializationArtifact,
   snapshot: AgentContextSnapshot,
   resultSnapshotId: string,
-  evicted: ReadonlySet<string>
-): Promise<Result<AgentPromptMaterializationArtifact | undefined, UnifiedError>> {
+  evicted: ReadonlySet<string>,
+  summaryArtifact: AgentCompactionSummaryArtifact | undefined
+): Result<AgentPromptMaterializationArtifact, UnifiedError> {
+  if (
+    prior.runId !== snapshot.runId ||
+    prior.contextSnapshotId !== snapshot.contextSnapshotId ||
+    (summaryArtifact !== undefined &&
+      (summaryArtifact.runId !== snapshot.runId ||
+        summaryArtifact.sourceSnapshotId !== snapshot.contextSnapshotId))
+  ) {
+    return err(composerError("AGENT_PROMPT_MATERIALIZATION_INVALID"));
+  }
+  const contextSources = prior.contextSources.filter(
+    (source) =>
+      !evicted.has(source.refId) &&
+      (summaryArtifact === undefined || source.sourceKind !== "compaction_summary")
+  );
+  if (summaryArtifact !== undefined) {
+    contextSources.push({
+      refId: "compaction_summary",
+      sourceKind: "compaction_summary",
+      assetId: summaryArtifact.artifactId,
+      content: summaryArtifact.body,
+      dirty: false,
+      sourceRevision: summaryArtifact.throughSequence
+    });
+  }
+  try {
+    return ok(
+      rematerializeAgentPromptArtifact(prior, {
+        contextSnapshotId: resultSnapshotId,
+        contextSources
+      })
+    );
+  } catch {
+    return err(composerError("AGENT_PROMPT_MATERIALIZATION_INVALID"));
+  }
+}
+
+async function readPromptMaterialization(
+  repository: AgentRunFileRepository,
+  snapshot: AgentContextSnapshot
+): Promise<Result<AgentPromptMaterializationArtifact, UnifiedError>> {
   const artifactIds = [
     ...new Set(
       snapshot.sources.flatMap((source) => (source.artifactId === null ? [] : [source.artifactId]))
     )
   ];
-  if (artifactIds.length === 0) return ok(undefined);
   const expectedArtifactId = promptMaterializationArtifactId(snapshot.contextSnapshotId);
   if (artifactIds.length !== 1 || artifactIds[0] !== expectedArtifactId) {
     return err(composerError("AGENT_PROMPT_MATERIALIZATION_INVALID"));
@@ -447,12 +720,7 @@ async function buildCompactedPromptMaterialization(
     if (prior.runId !== snapshot.runId || prior.contextSnapshotId !== snapshot.contextSnapshotId) {
       return err(composerError("AGENT_PROMPT_MATERIALIZATION_INVALID"));
     }
-    return ok(
-      rematerializeAgentPromptArtifact(prior, {
-        contextSnapshotId: resultSnapshotId,
-        contextSources: prior.contextSources.filter((source) => !evicted.has(source.refId))
-      })
-    );
+    return ok(prior);
   } catch {
     return err(composerError("AGENT_PROMPT_MATERIALIZATION_INVALID"));
   }
@@ -462,7 +730,7 @@ async function buildCompactedPromptMaterialization(
 function buildUsageRecord(input: {
   readonly run: JsonObject;
   readonly request: CompactionArtifactRequest;
-  readonly budget: ContextBudgetSnapshot;
+  readonly budget: ContextBudgetSnapshotV11;
   readonly beforeTokens: number;
   readonly afterTokens: number;
   readonly pricingRegistry?: AgentPricingRegistry;
@@ -547,12 +815,24 @@ function checksumHex(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex").slice(0, 32);
 }
 
-function readNonNegative(value: unknown): number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+function checksumSha256(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-function isTokenCount(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+function stableSerialize(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, child]) => child !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => `${JSON.stringify(key)}:${stableSerialize(child)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function readNonNegative(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }
 
 function isRecord(value: unknown): value is JsonObject {

@@ -136,7 +136,9 @@ export function createAgentRunCoordinator(
         usageSummary: EMPTY_AGENT_RUN_USAGE_SUMMARY,
         toolFacadeVersion: command.toolFacadeVersion ?? "v1",
         toolCatalogSnapshotId:
-          command.toolCatalogRevision === undefined ? null : agentRunToolCatalogSnapshotId(runId),
+          command.toolFacadeVersion === "v2" && command.toolCatalogRevision !== undefined
+            ? agentRunToolCatalogSnapshotId(runId)
+            : null,
         toolCatalogRevision: command.toolCatalogRevision ?? null,
         pendingToolApproval: null,
         contextProfileId:
@@ -166,7 +168,10 @@ export function createAgentRunCoordinator(
       if (scope === undefined) {
         return failure("AGENT_CONTEXT_SCOPE_INVALID", "The Agent run scope is invalid.");
       }
-      const receiptKey = commandReceiptKey(agentContextScopeKey(scope), command.commandId);
+      const receiptKey = commandReceiptKey(
+        `${command.runId}:${agentContextScopeKey(scope)}`,
+        command.commandId
+      );
       const receipt = commandReceipts.get(receiptKey);
       if (receipt !== undefined) {
         return receipt;

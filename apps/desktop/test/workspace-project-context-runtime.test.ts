@@ -83,7 +83,7 @@ describe("desktop workspace project context runtime", () => {
     expect(JSON.stringify(creativeInput.messages)).not.toContain("chapters/managed.md");
   });
 
-  test("preview resolves conventions without rebuilding the creative outline", async () => {
+  test("preview, start, and first round share the same convention/outline budget operands", async () => {
     const roots = await createRoots("preview-boundary");
     await mkdir(join(roots.contentRoot, "conventions"), { recursive: true });
     await writeFile(
@@ -92,16 +92,42 @@ describe("desktop workspace project context runtime", () => {
       "utf8"
     );
     const getTree = vi.fn(() => creativeTree("workspace-preview"));
+    const modelInputs: AgentModelRoundInput[] = [];
+    let notifyRoundStarted: (() => void) | undefined;
+    const roundStarted = new Promise<void>((resolve) => {
+      notifyRoundStarted = resolve;
+    });
+    const userDataRoot = await createRoot("preview-user-data");
     const runtime = createDesktopAgentRuntime({
       workspaceKind: "creativeProject",
       projectId: "workspace-preview",
       ...roots,
+      userDataRoot,
       getCreativeProjectFileTreeSnapshot: getTree,
-      resolveModelStartFacts: async () => modelFacts("profile-preview")
+      createRunId: () => "run-preview-boundary",
+      resolveModelStartFacts: async () => modelFacts("profile-preview"),
+      modelDriver: {
+        async *streamRound(input) {
+          modelInputs.push(input);
+          notifyRoundStarted?.();
+          await new Promise<void>((resolve) => {
+            if (input.signal.aborted) resolve();
+            else input.signal.addEventListener("abort", () => resolve(), { once: true });
+          });
+          if (!input.signal.aborted) {
+            yield { type: "round_completed", finishReason: "stop" };
+          }
+        }
+      }
     });
+    const conversation = await runtime.agentConversationSession.createConversation({
+      projectId: "workspace-preview",
+      commandId: "create-preview-conversation"
+    });
+    if (!conversation.ok) throw conversation.error;
     const prepared = await runtime.agentRunDraftSession.syncStartDraft({
       projectId: "workspace-preview",
-      conversationId: "conversation-preview",
+      conversationId: conversation.value.conversationId,
       commandId: "prepare-preview",
       userRequest: "Preview context.",
       operationMode: "execution",
@@ -115,7 +141,7 @@ describe("desktop workspace project context runtime", () => {
 
     const budget = await runtime.agentContextSession.previewContextBudget({
       projectId: "workspace-preview",
-      conversationId: "conversation-preview",
+      conversationId: conversation.value.conversationId,
       commandId: "preview-context",
       runDraftId: prepared.value.runDraft.runDraftId,
       expectedDraftRevision: prepared.value.runDraft.revision,
@@ -123,23 +149,77 @@ describe("desktop workspace project context runtime", () => {
     });
 
     expect(budget).toMatchObject({ ok: true, value: { systemReserve: expect.any(Number) } });
-    expect(getTree).not.toHaveBeenCalled();
+    if (!budget.ok) throw budget.error;
+    expect(getTree).toHaveBeenCalledTimes(1);
 
-    const modelInputs: AgentModelRoundInput[] = [];
-    const startStateRoot = await createRoot("preview-start-state");
-    const session = createDesktopAgentRunSession({
-      workspaceKind: "creativeProject",
+    const started = await runtime.agentRunSession.startAgentRun({
       projectId: "workspace-preview",
-      contentRoot: roots.contentRoot,
-      stateRoot: startStateRoot,
-      getCreativeProjectFileTreeSnapshot: getTree,
-      createRunId: () => "run-preview-boundary",
-      modelDriver: finishingDriver(modelInputs)
+      conversationId: conversation.value.conversationId,
+      commandId: "start-preview-context",
+      expectedRunRevision: 0,
+      runDraftId: prepared.value.runDraft.runDraftId,
+      runDraftRevision: prepared.value.runDraft.revision,
+      runDraftChecksum: prepared.value.runDraft.checksum
     });
-    await session.startAgentRun(startCommand("workspace-preview", "general_file"));
-    await waitForStatus(session, "run-preview-boundary", "completed");
-    expect(getTree).toHaveBeenCalled();
+    if (!started.ok) throw started.error;
+    await roundStarted;
+    expect(getTree).toHaveBeenCalledTimes(3);
     expect(JSON.stringify(modelInputs[0]?.messages)).toContain("PREVIEW_CONVENTION");
+    const roundBudget = modelInputs[0]?.contextBudget;
+    expect(roundBudget).toBeDefined();
+    const repository = new AgentRunFileRepository({ projectRoot: roots.stateRoot });
+    const run = await repository.readSnapshot("run-preview-boundary");
+    if (!run.ok || run.value === undefined) throw new Error("Expected persisted run");
+    const startBudgetId = String(run.value["contextBudgetSnapshotId"]);
+    const startBudget = await repository.readBudgetSnapshot("run-preview-boundary", startBudgetId);
+    if (!startBudget.ok || startBudget.value === undefined || roundBudget === undefined) {
+      throw new Error("Expected persisted C4 budgets");
+    }
+    const comparable = (value: Record<string, unknown>) => ({
+      contextWindow: value["contextWindow"],
+      safeInputBudget: value["safeInputBudget"],
+      toolReserve: value["toolReserve"],
+      systemReserve: value["systemReserve"],
+      usedTokens: value["usedTokens"],
+      audit: value["audit"]
+    });
+    expect(comparable(startBudget.value)).toEqual(
+      comparable(budget.value as unknown as Record<string, unknown>)
+    );
+    expect(comparable(roundBudget as unknown as Record<string, unknown>)).toEqual(
+      comparable(startBudget.value)
+    );
+
+    const live = await runtime.agentRunSession.readAgentRun("run-preview-boundary");
+    if (!live.ok) throw live.error;
+    const compacted = await runtime.agentRunSession.compactContext({
+      projectId: "workspace-preview",
+      runId: "run-preview-boundary",
+      commandId: "compact-preview-context",
+      expectedRunRevision: live.value.snapshot.runRevision,
+      contextBudgetSnapshotId: startBudgetId,
+      trigger: "manual"
+    });
+    if (!compacted.ok) throw compacted.error;
+    const compactedBudgetId = compacted.value.contextBudgetSnapshotId;
+    if (compactedBudgetId === null) throw new Error("Expected compacted budget id");
+    const compactedBudget = await repository.readBudgetSnapshot(
+      "run-preview-boundary",
+      compactedBudgetId
+    );
+    if (!compactedBudget.ok || compactedBudget.value === undefined) {
+      throw new Error("Expected compacted C4 budget");
+    }
+    expect(comparable(compactedBudget.value)).toEqual(comparable(roundBudget));
+
+    const afterCompaction = await runtime.agentRunSession.readAgentRun("run-preview-boundary");
+    if (!afterCompaction.ok) throw afterCompaction.error;
+    await runtime.agentRunSession.stopAgentRun({
+      projectId: "workspace-preview",
+      runId: "run-preview-boundary",
+      commandId: "stop-preview-context",
+      expectedRunRevision: afterCompaction.value.snapshot.runRevision
+    });
   });
 
   test("detects a convention change outside the injected truncation range, refreshes, and hydrates", async () => {

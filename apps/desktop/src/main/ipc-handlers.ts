@@ -1375,8 +1375,11 @@ function toRefreshContextDraftCommand(value: unknown): RefreshContextDraftComman
 }
 
 function toPreviewContextBudgetCommand(value: unknown): PreviewContextBudgetCommand | undefined {
-  return isRecord(value) &&
+  if (!isRecord(value)) return undefined;
+  const identity = parseAgentScopeIdentity(value);
+  return (
     hasOnlyKeys(value, [
+      "scope",
       "projectId",
       "conversationId",
       "commandId",
@@ -1384,19 +1387,23 @@ function toPreviewContextBudgetCommand(value: unknown): PreviewContextBudgetComm
       "expectedDraftRevision",
       "runDraftChecksum"
     ]) &&
-    isSafeId(value["projectId"]) &&
+    identity !== undefined &&
     isSafeId(value["conversationId"]) &&
     isSafeId(value["commandId"]) &&
     isSafeId(value["runDraftId"]) &&
     isPositiveInteger(value["expectedDraftRevision"]) &&
     isNonEmptyString(value["runDraftChecksum"])
-    ? (value as unknown as PreviewContextBudgetCommand)
-    : undefined;
+      ? ({ ...value, ...identity } as unknown as PreviewContextBudgetCommand)
+      : undefined
+  );
 }
 
 function toCompactContextCommand(value: unknown): CompactContextCommand | undefined {
-  return isRecord(value) &&
+  if (!isRecord(value)) return undefined;
+  const identity = parseAgentScopeIdentity(value);
+  return (
     hasOnlyKeys(value, [
+      "scope",
       "projectId",
       "runId",
       "commandId",
@@ -1404,7 +1411,7 @@ function toCompactContextCommand(value: unknown): CompactContextCommand | undefi
       "contextBudgetSnapshotId",
       "trigger"
     ]) &&
-    isSafeId(value["projectId"]) &&
+    identity !== undefined &&
     isNonEmptyString(value["runId"]) &&
     isSafeId(value["commandId"]) &&
     isNonNegativeInteger(value["expectedRunRevision"]) &&
@@ -1412,8 +1419,9 @@ function toCompactContextCommand(value: unknown): CompactContextCommand | undefi
     (value["trigger"] === "manual" ||
       value["trigger"] === "automatic" ||
       value["trigger"] === "recovery")
-    ? (value as unknown as CompactContextCommand)
-    : undefined;
+      ? ({ ...value, ...identity } as unknown as CompactContextCommand)
+      : undefined
+  );
 }
 
 function isAgentRunDraftMutation(value: unknown): boolean {
@@ -1648,10 +1656,13 @@ function toRetryAgentRunStepCommand(value: unknown): RetryAgentRunStepCommand | 
 }
 
 function toRetryRunTargetCommand(value: unknown): RetryRunTargetCommand | undefined {
+  if (!isRecord(value)) return undefined;
+  const identity = parseAgentScopeIdentity(value);
   if (
-    !isRecord(value) ||
+    identity?.projectId === undefined ||
     !hasOnlyKeys(value, [
       "runId",
+      "scope",
       "projectId",
       "commandId",
       "expectedRunRevision",
@@ -1674,7 +1685,7 @@ function toRetryRunTargetCommand(value: unknown): RetryRunTargetCommand | undefi
   ) {
     return undefined;
   }
-  return value as unknown as RetryRunTargetCommand;
+  return { ...value, ...identity } as unknown as RetryRunTargetCommand;
 }
 
 function toDecideAgentPlanCommand(value: unknown): DecideAgentPlanCommand | undefined {
@@ -1684,10 +1695,16 @@ function toDecideAgentPlanCommand(value: unknown): DecideAgentPlanCommand | unde
 function toReadAgentPermissionSummaryQuery(
   value: unknown
 ): ReadAgentPermissionSummaryQuery | undefined {
-  if (!isRecord(value) || !isSafeId(value["projectId"])) return undefined;
+  if (!isRecord(value)) return undefined;
+  const identity = parseAgentScopeIdentity(value);
+  const projectId =
+    identity?.projectId ??
+    (identity?.scope?.kind === "workspace" ? identity.scope.workspaceId : undefined);
+  if (identity === undefined || projectId === undefined) return undefined;
   if (value["kind"] === "draft") {
     return hasOnlyKeys(value, [
       "kind",
+      "scope",
       "projectId",
       "conversationId",
       "runDraftId",
@@ -1698,23 +1715,26 @@ function toReadAgentPermissionSummaryQuery(
       isSafeId(value["runDraftId"]) &&
       isPositiveInteger(value["runDraftRevision"]) &&
       isNonEmptyString(value["runDraftChecksum"])
-      ? (value as unknown as ReadAgentPermissionSummaryQuery)
+      ? ({ ...value, ...identity, projectId } as unknown as ReadAgentPermissionSummaryQuery)
       : undefined;
   }
   if (value["kind"] === "run") {
-    return hasOnlyKeys(value, ["kind", "projectId", "runId", "permissionSummaryId"]) &&
+    return hasOnlyKeys(value, ["kind", "scope", "projectId", "runId", "permissionSummaryId"]) &&
       isSafeId(value["runId"]) &&
       isSafeId(value["permissionSummaryId"])
-      ? (value as unknown as ReadAgentPermissionSummaryQuery)
+      ? ({ ...value, ...identity, projectId } as unknown as ReadAgentPermissionSummaryQuery)
       : undefined;
   }
   return undefined;
 }
 
 function toDecidePlanRevisionCommand(value: unknown): DecidePlanRevisionCommand | undefined {
-  return isRecord(value) &&
+  if (!isRecord(value)) return undefined;
+  const identity = parseAgentScopeIdentity(value);
+  return identity?.projectId !== undefined &&
     hasOnlyKeys(value, [
       "runId",
+      "scope",
       "projectId",
       "commandId",
       "expectedRunRevision",
@@ -1724,14 +1744,13 @@ function toDecidePlanRevisionCommand(value: unknown): DecidePlanRevisionCommand 
       "decision"
     ]) &&
     isSafeId(value["runId"]) &&
-    isSafeId(value["projectId"]) &&
     isSafeId(value["commandId"]) &&
     isNonNegativeInteger(value["expectedRunRevision"]) &&
     isSafeId(value["requestId"]) &&
     isSafeId(value["planId"]) &&
     isPositiveInteger(value["planRevision"]) &&
     (value["decision"] === "approve" || value["decision"] === "reject")
-    ? (value as unknown as DecidePlanRevisionCommand)
+    ? ({ ...value, ...identity } as unknown as DecidePlanRevisionCommand)
     : undefined;
 }
 
@@ -1741,9 +1760,12 @@ function toRefreshAgentContextCommand(value: unknown): RefreshAgentContextComman
 
 function toDecideChangeSetCommand(value: unknown): DecideChangeSetCommand | undefined {
   if (!isRecord(value)) return undefined;
+  const identity = parseAgentScopeIdentity(value);
+  if (identity?.projectId === undefined) return undefined;
   const decision = value["decision"];
   const allowedKeys = new Set([
     "runId",
+    "scope",
     "projectId",
     "commandId",
     "expectedRunRevision",
@@ -1757,7 +1779,6 @@ function toDecideChangeSetCommand(value: unknown): DecideChangeSetCommand | unde
   if (Object.keys(value).some((key) => !allowedKeys.has(key))) return undefined;
   if (
     !isNonEmptyString(value["runId"]) ||
-    !isNonEmptyString(value["projectId"]) ||
     !isNonEmptyString(value["commandId"]) ||
     !isNonNegativeInteger(value["expectedRunRevision"]) ||
     !isNonEmptyString(value["changeSetId"]) ||
@@ -1781,8 +1802,9 @@ function toDecideChangeSetCommand(value: unknown): DecideChangeSetCommand | unde
       : undefined;
   if (decision === "update_selection" && files === undefined) return undefined;
   const base = {
+    ...identity,
     runId: value["runId"],
-    projectId: value["projectId"],
+    projectId: identity.projectId,
     commandId: value["commandId"],
     expectedRunRevision: value["expectedRunRevision"],
     changeSetId: value["changeSetId"],
@@ -1816,9 +1838,12 @@ function toChangeSetOperationSelections(value: unknown) {
 }
 
 function toDecideToolApprovalCommand(value: unknown): DecideToolApprovalCommand | undefined {
-  return isRecord(value) &&
+  if (!isRecord(value)) return undefined;
+  const identity = parseAgentScopeIdentity(value);
+  return identity?.projectId !== undefined &&
     hasOnlyKeys(value, [
       "runId",
+      "scope",
       "projectId",
       "commandId",
       "expectedRunRevision",
@@ -1826,12 +1851,11 @@ function toDecideToolApprovalCommand(value: unknown): DecideToolApprovalCommand 
       "decision"
     ]) &&
     isSafeId(value["runId"]) &&
-    isSafeId(value["projectId"]) &&
     isSafeId(value["commandId"]) &&
     isSafeId(value["bindingId"]) &&
     isNonNegativeInteger(value["expectedRunRevision"]) &&
     (value["decision"] === "approve" || value["decision"] === "reject")
-    ? (value as unknown as DecideToolApprovalCommand)
+    ? ({ ...value, ...identity } as unknown as DecideToolApprovalCommand)
     : undefined;
 }
 
@@ -1871,9 +1895,10 @@ function toChangeSetFileSelections(value: unknown) {
 
 function toUndoAgentRunCommand(value: unknown): UndoRunCommand | undefined {
   if (!isRecord(value)) return undefined;
+  const identity = parseAgentScopeIdentity(value);
   if (
+    identity?.projectId === undefined ||
     !isNonEmptyString(value["runId"]) ||
-    !isNonEmptyString(value["projectId"]) ||
     !isNonEmptyString(value["commandId"]) ||
     !isNonNegativeInteger(value["expectedRunRevision"]) ||
     (value["action"] !== "request" && value["action"] !== "resolve")
@@ -1881,14 +1906,18 @@ function toUndoAgentRunCommand(value: unknown): UndoRunCommand | undefined {
     return undefined;
   }
   const base = {
+    ...identity,
     runId: value["runId"],
-    projectId: value["projectId"],
+    projectId: identity.projectId,
     commandId: value["commandId"],
     expectedRunRevision: value["expectedRunRevision"]
   };
   if (value["action"] === "request") {
     return Object.keys(value).some(
-      (key) => !["action", "runId", "projectId", "commandId", "expectedRunRevision"].includes(key)
+      (key) =>
+        !["action", "runId", "scope", "projectId", "commandId", "expectedRunRevision"].includes(
+          key
+        )
     )
       ? undefined
       : { ...base, action: "request" };
@@ -1899,6 +1928,7 @@ function toUndoAgentRunCommand(value: unknown): UndoRunCommand | undefined {
         ![
           "action",
           "runId",
+          "scope",
           "projectId",
           "commandId",
           "expectedRunRevision",

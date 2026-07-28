@@ -9,7 +9,11 @@ import {
   createAgentRunDraftSession,
   createAgentRunSession,
   createAgentUsageSession,
-  estimateAgentSystemReserveTokens,
+  buildAgentSystemPrompt,
+  materializeAgentConversationContext,
+  materializeAgentPrompt,
+  readResolvedContextBudgetUsageLimits,
+  resolveBudgetInputs as resolveCanonicalBudgetInputs,
   resolveAgentContextProfile,
   type AgentContextBudgetInputs,
   type AgentContextBudgetInputsPort,
@@ -25,7 +29,6 @@ import {
 import {
   STANDALONE_AGENT_CONTEXT_SCOPE,
   agentContextScopeKey,
-  calculateContextBudget,
   computeAgentRunToolCatalogRevision,
   createEffectiveCapabilityState,
   freezeAgentToolCapabilitySnapshot,
@@ -49,6 +52,8 @@ import {
   type UnifiedError
 } from "@novel-studio/shared";
 import type { DesktopStandaloneAgentRuntime } from "./agent-runtime-manager.js";
+import { createDesktopCompactionSources } from "./agent-compaction-composer.js";
+import { createDesktopCompactionModelAssistant } from "./agent-run-runtime.js";
 
 /**
  * Application-owned storage segment for conversations that are intentionally not attached to a
@@ -231,6 +236,8 @@ function composeDesktopStandaloneAgentRuntime(
   });
   const now = options.now ?? (() => new Date().toISOString());
   const usageTime = () => standaloneUsageTime(now);
+  const pricingRegistry = createAgentPricingRegistry({ version: "stage-5-default", entries: [] });
+  const modelDriver = createStandaloneModelDriver(options);
   const conversationPersistence = createStandaloneConversationPersistence(conversationRepository);
 
   const conversationSession = createAgentConversationSession({
@@ -292,7 +299,43 @@ function composeDesktopStandaloneAgentRuntime(
   });
   const contextSession = createAgentContextSession({
     draftSession,
-    budgetInputs: createStandaloneBudgetInputs(options),
+    budgetInputs: createStandaloneBudgetInputs(options, (conversationId) =>
+      conversationSession.loadContext({ scope, conversationId })
+    ),
+    compactionSources: createDesktopCompactionSources({
+      repository: runRepository,
+      pricingRegistry,
+      usageTime,
+      now
+    }),
+    runRepository: {
+      writeCompactionManifest: (manifest) => runRepository.writeCompactionManifest(manifest),
+      writeCompactionRevision: (revision) => runRepository.writeCompactionRevision(revision),
+      writeCompactionSummaryArtifact: (runId, artifact) =>
+        runRepository.writeCompactionSummaryArtifact(runId, artifact),
+      readCompactionSummaryArtifact: (runId, artifactId) =>
+        runRepository.readCompactionSummaryArtifact(runId, artifactId),
+      writePromptMaterialization: (runId, artifact) =>
+        runRepository.writePromptMaterialization(runId, artifact),
+      writeContextSnapshot: (snapshot) => runRepository.writeContextSnapshot(snapshot),
+      writeBudgetSnapshot: (runId, snapshot) =>
+        runRepository.writeBudgetSnapshot(runId, snapshot),
+      commitCompaction: (snapshot) => runRepository.commitCompaction(snapshot),
+      writeCommandReceipt: (runId, commandId, receipt) =>
+        runRepository.writeCommandReceipt(runId, `compaction_${commandId}`, receipt),
+      readCommandReceipt: (runId, commandId) =>
+        runRepository.readCommandReceipt(runId, `compaction_${commandId}`),
+      readSnapshot: (runId) => runRepository.readSnapshot(runId),
+      readCompactionRevision: (runId, compactionId) =>
+        runRepository.readCompactionRevision(runId, compactionId)
+    },
+    usageSink: {
+      writeFinal: (record) => usageRepository.writeFinal(record)
+    },
+    modelAssistant: createDesktopCompactionModelAssistant({
+      repository: runRepository,
+      modelDriver
+    }),
     now
   });
   const planExecutionSession = createAgentPlanExecutionSession({ repository: runRepository, now });
@@ -332,7 +375,6 @@ function composeDesktopStandaloneAgentRuntime(
     draftSession,
     modelPorts: options
   });
-  const modelDriver = createStandaloneModelDriver(options);
   const session = createAgentRunSession({
     scope,
     repository: runRepository,
@@ -352,11 +394,12 @@ function composeDesktopStandaloneAgentRuntime(
         return written.ok ? ok(written.value as unknown as AgentUsageRecord) : err(written.error);
       }
     },
-    pricingRegistry: createAgentPricingRegistry({ version: "stage-5-default", entries: [] }),
+    pricingRegistry,
     usageTime,
     usageBudgetResolver: (snapshot: AgentRunSnapshot) =>
-      resolveStandaloneUsageBudget(runRepository, snapshot, now),
+      resolveStandaloneUsageBudget(runRepository, snapshot),
     conversationLifecycle,
+    contextCompactor: contextSession,
     contextSourceReader: {
       async readCurrentSources() {
         return ok([]);
@@ -482,11 +525,16 @@ function createStandaloneStartPreflight(input: {
 }
 
 function createStandaloneBudgetInputs(
-  modelPorts: StandaloneAgentModelPorts
+  modelPorts: StandaloneAgentModelPorts,
+  loadConversationContext: (
+    conversationId: string
+  ) => Promise<Result<readonly { readonly role: "system" | "user" | "assistant" | "tool"; readonly content: string }[], UnifiedError>>
 ): AgentContextBudgetInputsPort {
   return {
     async resolveBudgetInputs(input) {
       if (
+        !sameStandaloneScope(input.scope) ||
+        input.projectId !== undefined ||
         !sameStandaloneScope(input.draft.scope) ||
         !sameStandaloneScope(input.contextDraft.scope) ||
         input.draft.operationMode !== "conversation" ||
@@ -510,17 +558,42 @@ function createStandaloneBudgetInputs(
         "conversation",
         "standalone_chat"
       );
+      const catalogRevision = STANDALONE_EMPTY_TOOL_CATALOG.catalogRevision;
+      const systemPrompt = buildAgentSystemPrompt(profile);
+      const conversation = await loadConversationContext(input.conversationId);
+      if (!conversation.ok) return err(conversation.error);
+      const prompt = materializeAgentPrompt({
+        profile,
+        systemPrompt,
+        toolCatalogRevision: catalogRevision,
+        userRequest: input.draft.userRequest,
+        conversationSummaryMessages: materializeAgentConversationContext(conversation.value)
+      });
+      const resolved = resolveCanonicalBudgetInputs({
+        provider: model.provider,
+        model: model.modelName,
+        modelProfileId: input.draft.modelProfileId,
+        ...(model.capabilities.contextWindow === undefined
+          ? {}
+          : { contextWindow: model.capabilities.contextWindow }),
+        requiredContextTokens: model.requiredContextTokens,
+        profile,
+        prompt,
+        contextSources: [],
+        toolCatalog: STANDALONE_EMPTY_TOOL_CATALOG
+      });
+      if (!resolved.ok) return err(resolved.error);
       const budget: AgentContextBudgetInputs = {
         model: {
           provider: model.provider,
           model: model.modelName,
-          contextWindow:
-            model.capabilities.contextWindow ?? Math.max(16_384, model.requiredContextTokens * 2),
-          toolReserve: 0,
-          systemReserve: estimateAgentSystemReserveTokens(profile),
+          contextWindow: resolved.value.contextWindow,
+          toolReserve: resolved.value.toolReserve,
+          systemReserve: resolved.value.systemReserve,
           requiredContextTokens: model.requiredContextTokens
         },
-        contents: []
+        contents: [],
+        resolved: resolved.value
       };
       return ok(budget);
     }
@@ -529,47 +602,33 @@ function createStandaloneBudgetInputs(
 
 async function resolveStandaloneUsageBudget(
   repository: AgentRunFileRepository,
-  snapshot: AgentRunSnapshot,
-  now: () => string
+  snapshot: AgentRunSnapshot
 ) {
-  if (snapshot.contextBudgetSnapshotId !== null) {
-    const stored = await repository.readBudgetSnapshot(
-      snapshot.runId,
-      snapshot.contextBudgetSnapshotId
-    );
-    if (!stored.ok) return err(stored.error);
-    if (stored.value !== undefined) {
-      const contextWindow = readUsageTokenCount(stored.value["contextWindow"]);
-      const safeInputBudget = readUsageTokenCount(stored.value["safeInputBudget"]);
-      if (contextWindow !== undefined && safeInputBudget !== undefined) {
-        return ok({ contextWindow, safeInputBudget });
-      }
-    }
+  const budgetId = snapshot.contextBudgetSnapshotId;
+  const catalogRevision = snapshot.toolCatalogRevision;
+  const facadeVersion = snapshot.toolFacadeVersion;
+  if (
+    budgetId === null ||
+    catalogRevision === null ||
+    catalogRevision === undefined ||
+    (facadeVersion !== "v1" && facadeVersion !== "v2")
+  ) {
+    return err(standaloneRuntimeError("AGENT_CONTEXT_BUDGET_SNAPSHOT_INVALID"));
   }
-
-  const capability = snapshot.providerCapabilitySnapshot;
-  const calculated = calculateContextBudget({
-    contextBudgetSnapshotId: `usage_budget_${snapshot.runId}_${snapshot.lastSequence}`,
-    provider: capability.provider,
-    model: capability.modelName,
-    contextWindow: capability.contextWindow,
-    toolReserve: 0,
-    systemReserve: estimateAgentSystemReserveTokens(snapshot.contextProfileId),
-    requiredContextTokens: capability.requiredContextTokens,
-    usedTokens: 0,
-    precision: "unknown",
-    calculatedAt: now()
+  const stored = await repository.readBudgetSnapshot(snapshot.runId, budgetId);
+  if (!stored.ok) return err(stored.error);
+  if (stored.value === undefined) {
+    return err(standaloneRuntimeError("AGENT_CONTEXT_BUDGET_SNAPSHOT_INVALID"));
+  }
+  return readResolvedContextBudgetUsageLimits(stored.value, {
+    contextBudgetSnapshotId: budgetId,
+    provider: snapshot.providerCapabilitySnapshot.provider,
+    model: snapshot.providerCapabilitySnapshot.modelName,
+    modelProfileId: snapshot.providerCapabilitySnapshot.profileId,
+    contextWindow: snapshot.providerCapabilitySnapshot.contextWindow,
+    facadeVersion,
+    catalogRevision
   });
-  return calculated.ok
-    ? ok({
-        contextWindow: calculated.value.contextWindow,
-        safeInputBudget: calculated.value.safeInputBudget
-      })
-    : err(calculated.error);
-}
-
-function readUsageTokenCount(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 function createStandaloneModelDriver(options: StandaloneAgentModelPorts): AgentRunModelDriver {

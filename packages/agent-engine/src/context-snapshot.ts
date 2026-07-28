@@ -13,6 +13,7 @@ export type AgentContextSourceKind =
   | "story_bible_asset"
   | "project_conventions"
   | "workspace_outline"
+  | "compaction_summary"
   | "system_guidance";
 
 /** The context layer a source occupies. Stage 5 uses this for budget accounting and eviction order. */
@@ -604,6 +605,7 @@ function isSourceKind(value: unknown): value is AgentContextSourceKind {
     value === "story_bible_asset" ||
     value === "project_conventions" ||
     value === "workspace_outline" ||
+    value === "compaction_summary" ||
     value === "system_guidance"
   );
 }
@@ -688,6 +690,8 @@ function defaultLayerForSource(kind: AgentContextSourceKind): AgentContextLayer 
       return "explicit_ref";
     case "workspace_outline":
       return "tool_result";
+    case "compaction_summary":
+      return "conversation_summary";
     case "system_guidance":
       return "system";
     default:

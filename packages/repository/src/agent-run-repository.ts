@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
+import { createDeterministicTokenEstimator } from "@novel-studio/agent-engine";
 import { err, ok, type JsonObject, type Result, type UnifiedError } from "@novel-studio/shared";
 
 import { writeTextAtomically } from "./atomic-write.js";
@@ -592,6 +594,46 @@ export class AgentRunFileRepository {
     return this.readJson(this.compactionPath(runId, compactionId, "revision.json"));
   }
 
+  public writeCompactionSummaryArtifact(
+    runId: string,
+    artifact: JsonObject
+  ): Promise<Result<JsonObject, UnifiedError>> {
+    const artifactId = readSafeString(artifact, "artifactId");
+    const compactionId = readSafeString(artifact, "compactionId");
+    if (
+      !isSafeId(runId) ||
+      artifactId === undefined ||
+      compactionId === undefined ||
+      artifact["runId"] !== runId ||
+      !isCompactionSummaryArtifact(artifact)
+    ) {
+      return Promise.resolve(this.invalidRecord("AGENT_COMPACTION_SUMMARY_ARTIFACT_INVALID"));
+    }
+    return this.writeImmutableJson(
+      this.runPath(runId, join("compaction-summaries", `${artifactId}.json`)),
+      artifact,
+      "AGENT_COMPACTION_SUMMARY_ARTIFACT_CONFLICT"
+    );
+  }
+
+  public async readCompactionSummaryArtifact(
+    runId: string,
+    artifactId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    if (!isSafeId(runId) || !isSafeId(artifactId)) {
+      return this.invalidRecord("AGENT_COMPACTION_SUMMARY_ARTIFACT_INVALID");
+    }
+    const read = await this.readJson(
+      this.runPath(runId, join("compaction-summaries", `${artifactId}.json`))
+    );
+    if (!read.ok || read.value === undefined) return read;
+    return read.value["runId"] === runId &&
+      read.value["artifactId"] === artifactId &&
+      isCompactionSummaryArtifact(read.value)
+      ? read
+      : this.invalidRecord("AGENT_COMPACTION_SUMMARY_ARTIFACT_INVALID");
+  }
+
   public writeBudgetSnapshot(
     runId: string,
     snapshot: JsonObject
@@ -654,6 +696,9 @@ export class AgentRunFileRepository {
     if (runId === undefined || activeCompactionId === undefined) {
       return this.invalidRecord("AGENT_COMPACTION_COMMIT_INVALID");
     }
+    const complete = await this.compactionArtifactsExist(runId, activeCompactionId);
+    if (!complete.ok) return complete as Result<JsonObject, UnifiedError>;
+    if (!complete.value) return this.invalidRecord("AGENT_COMPACTION_COMMIT_INVALID");
     const existing = await this.readJson(this.runPath(runId, "run.json"));
     if (!existing.ok) return existing as Result<JsonObject, UnifiedError>;
     if (
@@ -673,16 +718,59 @@ export class AgentRunFileRepository {
     if (!revision.ok) return revision as Result<boolean, UnifiedError>;
     if (revision.value === undefined || revision.value["status"] !== "completed") return ok(false);
     const resultSnapshotId = revision.value["resultSnapshotId"];
+    let resultSnapshot: JsonObject | undefined;
     if (typeof resultSnapshotId === "string" && resultSnapshotId.length > 0) {
       const result = await this.readContextSnapshot(runId, resultSnapshotId);
       if (!result.ok) return result as Result<boolean, UnifiedError>;
       if (result.value === undefined) return ok(false);
+      resultSnapshot = result.value;
     }
     const budgetSnapshotId = revision.value["budgetSnapshotId"];
     if (typeof budgetSnapshotId === "string" && budgetSnapshotId.length > 0) {
       const budget = await this.readBudgetSnapshot(runId, budgetSnapshotId);
       if (!budget.ok) return budget as Result<boolean, UnifiedError>;
       if (budget.value === undefined) return ok(false);
+    }
+    if (revision.value["strategy"] === "model_assisted") {
+      if (resultSnapshot === undefined) return ok(false);
+      const sources = resultSnapshot["sources"];
+      if (!Array.isArray(sources)) return ok(false);
+      const summaries = sources.filter(
+        (source): source is JsonObject =>
+          isJsonObject(source) &&
+          source["sourceKind"] === "compaction_summary" &&
+          source["state"] !== "excluded"
+      );
+      if (summaries.length !== 1) return ok(false);
+      const summarySource = summaries[0];
+      if (summarySource === undefined) return ok(false);
+      const summaryArtifactId = readSafeString(summarySource, "assetId");
+      const promptArtifactId = readSafeString(summarySource, "artifactId");
+      if (summaryArtifactId === undefined || promptArtifactId === undefined) return ok(false);
+      const summary = await this.readCompactionSummaryArtifact(runId, summaryArtifactId);
+      if (!summary.ok) return summary as Result<boolean, UnifiedError>;
+      if (summary.value === undefined) return ok(false);
+      if (
+        summary.value["compactionId"] !== compactionId ||
+        summary.value["sourceSnapshotId"] !== revision.value["sourceSnapshotId"] ||
+        summary.value["throughSequence"] !== revision.value["throughSequence"] ||
+        summary.value["inputManifestChecksum"] !== revision.value["inputManifestChecksum"] ||
+        summary.value["contextProfileId"] !== resultSnapshot["contextProfileId"] ||
+        summary.value["checksum"] !== revision.value["summaryChecksum"] ||
+        summarySource["checksum"] !== summary.value["checksum"] ||
+        summarySource["sourceRevision"] !== summary.value["throughSequence"]
+      ) {
+        return ok(false);
+      }
+      const prompt = await this.readPromptMaterialization(runId, promptArtifactId);
+      if (!prompt.ok) return prompt as Result<boolean, UnifiedError>;
+      if (
+        prompt.value === undefined ||
+        prompt.value["contextSnapshotId"] !== resultSnapshotId ||
+        !promptContainsSummary(prompt.value, summary.value)
+      ) {
+        return ok(false);
+      }
     }
     return ok(true);
   }
@@ -997,6 +1085,132 @@ function isSupportedAgentSchemaVersion(value: JsonObject): boolean {
     version === "1.2" ||
     version === "1.3"
   );
+}
+
+const COMPACTION_SUMMARY_FIELDS = {
+  standalone: ["userGoal", "decisions", "constraints", "openQuestions", "nextSteps"],
+  writing: ["plotFacts", "characterStates", "foreshadowing", "userDecisions"],
+  creative_general: ["currentFiles", "userDecisions", "unfinishedItems", "nextSteps"],
+  engineering: ["modifiedFiles", "changeIntent", "todos", "errorHighlights", "nextSteps"]
+} as const;
+
+function isCompactionSummaryArtifact(value: JsonObject): boolean {
+  const profileId = value["contextProfileId"];
+  const fields =
+    typeof profileId === "string" && profileId in COMPACTION_SUMMARY_FIELDS
+      ? COMPACTION_SUMMARY_FIELDS[profileId as keyof typeof COMPACTION_SUMMARY_FIELDS]
+      : undefined;
+  const provenance = value["provenance"];
+  const body = value["body"];
+  const precision = value["precision"];
+  if (
+    value["schemaVersion"] !== "1.0" ||
+    readSafeString(value, "artifactId") === undefined ||
+    readSafeString(value, "runId") === undefined ||
+    readSafeString(value, "compactionId") === undefined ||
+    fields === undefined ||
+    readSafeString(value, "sourceSnapshotId") === undefined ||
+    !isNonNegativeInteger(value["throughSequence"]) ||
+    !isChecksum(value["inputManifestChecksum"]) ||
+    typeof body !== "string" ||
+    body.length === 0 ||
+    !isJsonObject(provenance) ||
+    provenance["kind"] !== "model_assisted" ||
+    !isNonEmptyString(provenance["provider"]) ||
+    !isNonEmptyString(provenance["model"]) ||
+    !isNonEmptyString(provenance["modelProfileId"]) ||
+    provenance["templateVersion"] !== "1.0" ||
+    !isChecksum(provenance["inputChecksum"]) ||
+    !isNonNegativeInteger(value["tokenCount"]) ||
+    !isChecksum(value["checksum"]) ||
+    (precision !== "reported" && precision !== "estimated") ||
+    !isNonEmptyString(value["createdAt"]) ||
+    !isChecksum(value["artifactChecksum"])
+  ) {
+    return false;
+  }
+  let parsed: JsonObject;
+  try {
+    const candidate = JSON.parse(body) as unknown;
+    if (!isJsonObject(candidate)) return false;
+    parsed = candidate;
+  } catch {
+    return false;
+  }
+  if (
+    Object.keys(parsed).length !== fields.length ||
+    !fields.every((field) => Object.prototype.hasOwnProperty.call(parsed, field)) ||
+    !Object.entries(parsed).every(([field, fieldValue]) =>
+      profileId === "standalone" && field === "userGoal"
+        ? typeof fieldValue === "string"
+        : Array.isArray(fieldValue) && fieldValue.every((item) => typeof item === "string")
+    ) ||
+    JSON.stringify(Object.fromEntries(fields.map((field) => [field, parsed[field]]))) !== body ||
+    checksumText(body) !== value["checksum"]
+  ) {
+    return false;
+  }
+  const count = createDeterministicTokenEstimator().count(body, provenance["modelProfileId"]);
+  if (count.tokens !== value["tokenCount"] || count.precision !== precision) return false;
+  const unsigned = {
+    schemaVersion: "1.0",
+    artifactId: value["artifactId"],
+    runId: value["runId"],
+    compactionId: value["compactionId"],
+    contextProfileId: profileId,
+    sourceSnapshotId: value["sourceSnapshotId"],
+    throughSequence: value["throughSequence"],
+    inputManifestChecksum: value["inputManifestChecksum"],
+    body,
+    provenance,
+    tokenCount: value["tokenCount"],
+    checksum: value["checksum"],
+    precision,
+    createdAt: value["createdAt"]
+  };
+  return checksumText(stableSerialize(unsigned)) === value["artifactChecksum"];
+}
+
+function promptContainsSummary(prompt: JsonObject, summary: JsonObject): boolean {
+  const sources = prompt["contextSources"];
+  return (
+    Array.isArray(sources) &&
+    sources.some(
+      (source) =>
+        isJsonObject(source) &&
+        source["sourceKind"] === "compaction_summary" &&
+        source["assetId"] === summary["artifactId"] &&
+        source["sourceRevision"] === summary["throughSequence"] &&
+        source["content"] === summary["body"]
+    )
+  );
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isChecksum(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+}
+
+function checksumText(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function stableSerialize(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => `${JSON.stringify(key)}:${stableSerialize(child)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function readSafeString(value: JsonObject, key: string): string | undefined {

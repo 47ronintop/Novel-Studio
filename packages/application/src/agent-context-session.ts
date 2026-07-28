@@ -1,13 +1,15 @@
 import {
-  aggregateContextPrecision,
+  agentContextScopeKey,
   buildCompactionInputManifest,
-  calculateContextBudget,
   createContextCompactionRevision,
   createDeterministicTokenEstimator,
   createPlanExecutionProtectedFact,
   planDeterministicEviction,
+  isAgentContextScope,
   validateCompactionResultProgress,
   type AgentContextPrecision,
+  type AgentContextProfileId,
+  type AgentContextScope,
   type AgentRunDraft,
   type AgentTokenEstimator,
   type CompactContextCommand,
@@ -30,6 +32,18 @@ import {
 } from "@novel-studio/shared";
 
 import type { AgentRunDraftSession, AgentRunDraftView } from "./agent-run-draft-session.js";
+import {
+  calculateResolvedContextBudget,
+  type ResolvedAgentContextBudgetInputs
+} from "./agent-context-budget.js";
+import {
+  buildCompactionSummaryPrompt,
+  createCompactionSummaryArtifact,
+  parseCompactionSummaryArtifact,
+  validateCompactionSummaryResult,
+  type AgentCompactionSummaryArtifact,
+  type CompactionSummaryResult
+} from "./agent-compaction-summary.js";
 
 /**
  * The provider-aware facts a budget is calculated from. Resolved server-side from the draft's
@@ -55,6 +69,8 @@ export interface AgentContextBudgetContent {
 export interface AgentContextBudgetInputs {
   readonly model: AgentContextBudgetModelFacts;
   readonly contents: readonly AgentContextBudgetContent[];
+  /** C4 canonical operands. Preview fails closed unless this complete proof is present. */
+  readonly resolved: ResolvedAgentContextBudgetInputs;
 }
 
 /**
@@ -64,7 +80,8 @@ export interface AgentContextBudgetInputs {
  */
 export interface AgentContextBudgetInputsPort {
   resolveBudgetInputs(input: {
-    readonly projectId: string;
+    readonly projectId?: string;
+    readonly scope?: AgentContextScope;
     readonly conversationId: string;
     readonly draft: AgentRunDraft;
     readonly contextDraft: ContextDraft;
@@ -81,6 +98,15 @@ export interface CompactionInputs {
   readonly evictableSources: readonly EvictableContextSource[];
   readonly currentTokens: number;
   readonly targetTokens: number;
+  readonly modelSummary?: {
+    readonly profileId: AgentContextProfileId;
+    readonly evidence: string;
+    readonly evidenceChecksum: string;
+    readonly maxSummaryTokens: number;
+    readonly provider: string;
+    readonly model: string;
+    readonly modelProfileId: string;
+  };
   readonly prior?: {
     readonly throughSequence: number;
     readonly protectedFacts: readonly ProtectedContextFact[];
@@ -111,10 +137,12 @@ export interface CompactionArtifactRequest {
   readonly manifest: CompactionInputManifest;
   readonly strategy: "deterministic" | "model_assisted";
   readonly evictedSourceIds: readonly string[];
+  readonly targetTokens: number;
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly precision: AgentContextPrecision;
   readonly summaryChecksum: string;
+  readonly summaryArtifact?: AgentCompactionSummaryArtifact;
 }
 
 /** Server-authoritative source of compaction material and artifacts (desktop provides the content). */
@@ -129,6 +157,14 @@ export interface CompactContextSourcesPort {
 export interface CompactionRunRepositoryPort {
   writeCompactionManifest(manifest: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
   writeCompactionRevision(revision: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
+  writeCompactionSummaryArtifact?(
+    runId: string,
+    artifact: JsonObject
+  ): Promise<Result<JsonObject, UnifiedError>>;
+  readCompactionSummaryArtifact?(
+    runId: string,
+    artifactId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>>;
   writePromptMaterialization?(
     runId: string,
     artifact: JsonObject
@@ -164,13 +200,17 @@ export interface CompactionModelAssistantPort {
   summarizeEvictable(input: {
     readonly runId: string;
     readonly evictableSources: readonly EvictableContextSource[];
+    readonly profileId: AgentContextProfileId;
+    readonly templateVersion: string;
+    readonly systemPrompt: string;
+    readonly evidence: string;
+    readonly evidenceChecksum: string;
+    readonly maxSummaryTokens: number;
   }): Promise<
     Result<
       {
-        readonly summaryChecksum: string;
         readonly inputTokens: number;
-        readonly outputTokens: number;
-        readonly precision: AgentContextPrecision;
+        readonly summary: CompactionSummaryResult;
       },
       UnifiedError
     >
@@ -227,7 +267,8 @@ interface PendingCompactionReceipt {
   readonly schemaVersion: "1.0";
   readonly kind: "context_compaction";
   readonly status: "pending";
-  readonly projectId: string;
+  readonly projectId?: string;
+  readonly scope?: AgentContextScope;
   readonly runId: string;
   readonly commandId: string;
   readonly expectedRunRevision: number;
@@ -238,6 +279,7 @@ interface PendingCompactionReceipt {
 }
 
 interface CompactionModelResult {
+  readonly summaryArtifactId: string;
   readonly summaryChecksum: string;
   readonly inputTokens: number;
   readonly outputTokens: number;
@@ -275,10 +317,12 @@ export function createAgentContextSession(
 
   return {
     async previewContextBudget(command) {
-      const key = `${command.projectId}:${command.conversationId}:${command.commandId}`;
+      const resolved = await resolvePreviewDraft(command);
+      if (!resolved.ok) return err(resolved.error);
+      const key = `${agentContextScopeKey(resolved.value.runDraft.scope)}:${command.conversationId}:${command.commandId}`;
       const cached = receipts.get(key);
       if (cached !== undefined) return cached;
-      const result = await preview(command);
+      const result = await preview(command, resolved.value);
       receipts.set(key, result);
       return result;
     },
@@ -390,20 +434,80 @@ export function createAgentContextSession(
     let outputTokens = 0;
     let precision: AgentContextPrecision = "estimated";
     let summaryChecksum = "";
+    let summaryArtifact: AgentCompactionSummaryArtifact | undefined;
     if (!plan.reachedTarget && inProgress.status === "model_completed") {
+      const restoredSummary = await readPersistedSummaryArtifact(
+        runRepository,
+        command.runId,
+        inProgress.modelResult,
+        inputs,
+        manifest
+      );
+      if (!restoredSummary.ok) return failed(restoredSummary.error);
+      summaryArtifact = restoredSummary.value;
       strategy = "model_assisted";
       inputTokens = inProgress.modelResult.inputTokens;
-      outputTokens = inProgress.modelResult.outputTokens;
-      precision = inProgress.modelResult.precision;
-      summaryChecksum = inProgress.modelResult.summaryChecksum;
-    } else if (!plan.reachedTarget && options.modelAssistant !== undefined) {
+      outputTokens = summaryArtifact.tokenCount;
+      precision = summaryArtifact.precision;
+      summaryChecksum = summaryArtifact.checksum;
+    } else if (!plan.reachedTarget) {
+      const modelSummary = inputs.modelSummary;
+      if (
+        options.modelAssistant === undefined ||
+        modelSummary === undefined ||
+        runRepository.writeCompactionSummaryArtifact === undefined
+      ) {
+        return failed(compactionTargetUnreached());
+      }
+      const summaryPrompt = buildCompactionSummaryPrompt(modelSummary.profileId);
       const summarized = await options.modelAssistant.summarizeEvictable({
         runId: command.runId,
-        evictableSources: inputs.evictableSources
+        evictableSources: inputs.evictableSources,
+        profileId: modelSummary.profileId,
+        templateVersion: summaryPrompt.templateVersion,
+        systemPrompt: summaryPrompt.systemPrompt,
+        evidence: modelSummary.evidence,
+        evidenceChecksum: modelSummary.evidenceChecksum,
+        maxSummaryTokens: modelSummary.maxSummaryTokens
       });
       if (!summarized.ok) return failed(summarized.error);
-      const modelResult = parseCompactionModelResult(summarized.value);
-      if (modelResult === undefined) return failed(compactionModelResultInvalid());
+      if (!isNonNegativeInteger(summarized.value.inputTokens)) {
+        return failed(compactionModelResultInvalid());
+      }
+      const validatedSummary = validateCompactionSummaryResult({
+        profileId: modelSummary.profileId,
+        result: summarized.value.summary,
+        maxSummaryTokens: modelSummary.maxSummaryTokens,
+        expectedInputChecksum: modelSummary.evidenceChecksum,
+        expectedProvider: modelSummary.provider,
+        expectedModel: modelSummary.model,
+        expectedModelProfileId: modelSummary.modelProfileId,
+        estimator
+      });
+      if (!validatedSummary.ok) return failed(validatedSummary.error);
+      summaryArtifact = createCompactionSummaryArtifact({
+        artifactId: `summary_${compactionId}`,
+        runId: command.runId,
+        compactionId,
+        contextProfileId: modelSummary.profileId,
+        sourceSnapshotId: inputs.sourceSnapshotId,
+        throughSequence: inputs.throughSequence,
+        inputManifestChecksum: manifest.checksum,
+        result: validatedSummary.value,
+        createdAt: inProgress.startedAt
+      });
+      const artifactWritten = await runRepository.writeCompactionSummaryArtifact(
+        command.runId,
+        summaryArtifact as unknown as JsonObject
+      );
+      if (!artifactWritten.ok) return failed(artifactWritten.error);
+      const modelResult: CompactionModelResult = {
+        summaryArtifactId: summaryArtifact.artifactId,
+        summaryChecksum: summaryArtifact.checksum,
+        inputTokens: summarized.value.inputTokens,
+        outputTokens: summaryArtifact.tokenCount,
+        precision: summaryArtifact.precision
+      };
       const modelCompleted: ModelCompletedCompactionReceipt = {
         ...inProgress,
         status: "model_completed",
@@ -433,10 +537,12 @@ export function createAgentContextSession(
       manifest,
       strategy,
       evictedSourceIds: plan.evictedSourceIds,
+      targetTokens: inputs.targetTokens,
       inputTokens,
       outputTokens,
       precision,
-      summaryChecksum
+      summaryChecksum,
+      ...(summaryArtifact === undefined ? {} : { summaryArtifact })
     });
     if (!artifacts.ok) return failed(artifacts.error);
 
@@ -546,50 +652,36 @@ export function createAgentContextSession(
   }
 
   async function preview(
-    command: PreviewContextBudgetCommand
+    command: PreviewContextBudgetCommand,
+    view: AgentRunDraftView
   ): Promise<Result<ContextBudgetSnapshot, UnifiedError>> {
-    // Read-only: verify the referenced draft revision + checksum before trusting anything on it.
-    const resolved = await options.draftSession.resolveStartDraft({
-      projectId: command.projectId,
-      conversationId: command.conversationId,
-      runDraftId: command.runDraftId,
-      runDraftRevision: command.expectedDraftRevision,
-      runDraftChecksum: command.runDraftChecksum
-    });
-    if (!resolved.ok) return err(resolved.error);
-    const view: AgentRunDraftView = resolved.value;
     const inputs = await options.budgetInputs.resolveBudgetInputs({
-      projectId: command.projectId,
+      ...(command.scope === undefined ? {} : { scope: command.scope }),
+      ...(command.projectId === undefined ? {} : { projectId: command.projectId }),
       conversationId: command.conversationId,
       draft: view.runDraft,
       contextDraft: view.contextDraft
     });
     if (!inputs.ok) return err(inputs.error);
-
-    const profileId = view.runDraft.modelProfileId;
-    const counts = [
-      estimator.count(view.runDraft.userRequest, profileId),
-      ...inputs.value.contents.map((content) => estimator.count(content.content, profileId))
-    ];
-    const usedTokens = counts.reduce((total, count) => total + count.tokens, 0);
-    const precision: AgentContextPrecision = aggregateContextPrecision(
-      counts.map((count) => count.precision)
-    );
-
-    return calculateContextBudget({
+    if (inputs.value.resolved === undefined) return err(contextBudgetInputsIncomplete());
+    return calculateResolvedContextBudget({
       contextBudgetSnapshotId: createBudgetSnapshotId(),
-      provider: inputs.value.model.provider,
-      model: inputs.value.model.model,
-      contextWindow: inputs.value.model.contextWindow,
-      ...(inputs.value.model.maxOutputTokens === undefined
-        ? {}
-        : { maxOutputTokens: inputs.value.model.maxOutputTokens }),
-      toolReserve: inputs.value.model.toolReserve,
-      systemReserve: inputs.value.model.systemReserve,
-      requiredContextTokens: inputs.value.model.requiredContextTokens,
-      usedTokens,
-      precision,
+      resolved: inputs.value.resolved,
       calculatedAt: now()
+    });
+  }
+
+  function resolvePreviewDraft(
+    command: PreviewContextBudgetCommand
+  ): Promise<Result<AgentRunDraftView, UnifiedError>> {
+    // Read-only: verify the referenced identity, draft revision, and checksum before cache lookup.
+    return options.draftSession.resolveStartDraft({
+      ...(command.scope === undefined ? {} : { scope: command.scope }),
+      ...(command.projectId === undefined ? {} : { projectId: command.projectId }),
+      conversationId: command.conversationId,
+      runDraftId: command.runDraftId,
+      runDraftRevision: command.expectedDraftRevision,
+      runDraftChecksum: command.runDraftChecksum
     });
   }
 }
@@ -607,7 +699,8 @@ function createPendingCompactionReceipt(
     schemaVersion: "1.0",
     kind: "context_compaction",
     status: "pending",
-    projectId: command.projectId,
+    ...(command.scope === undefined ? {} : { scope: command.scope }),
+    ...(command.projectId === undefined ? {} : { projectId: command.projectId }),
     runId: command.runId,
     commandId: command.commandId,
     expectedRunRevision: command.expectedRunRevision,
@@ -623,7 +716,7 @@ function receiptMatchesCommand(
   command: CompactContextCommand
 ): boolean {
   return (
-    receipt.projectId === command.projectId &&
+    scopeIdentitiesMatch(receipt, command) &&
     receipt.runId === command.runId &&
     receipt.commandId === command.commandId &&
     receipt.expectedRunRevision === command.expectedRunRevision &&
@@ -633,13 +726,14 @@ function receiptMatchesCommand(
 }
 
 function parseCompactionReceipt(value: JsonObject): CompactionCommandReceipt | undefined {
+  const identity = parseScopeIdentity(value);
   if (
     value["schemaVersion"] !== "1.0" ||
     value["kind"] !== "context_compaction" ||
     (value["status"] !== "pending" &&
       value["status"] !== "model_completed" &&
       value["status"] !== "completed") ||
-    typeof value["projectId"] !== "string" ||
+    identity === undefined ||
     typeof value["runId"] !== "string" ||
     typeof value["commandId"] !== "string" ||
     !Number.isSafeInteger(value["expectedRunRevision"]) ||
@@ -656,7 +750,7 @@ function parseCompactionReceipt(value: JsonObject): CompactionCommandReceipt | u
     schemaVersion: "1.0",
     kind: "context_compaction",
     status: "pending",
-    projectId: value["projectId"],
+    ...identity,
     runId: value["runId"],
     commandId: value["commandId"],
     expectedRunRevision: Number(value["expectedRunRevision"]),
@@ -684,10 +778,58 @@ function parseCompactionReceipt(value: JsonObject): CompactionCommandReceipt | u
   };
 }
 
+interface ScopeIdentity {
+  readonly scope?: AgentContextScope;
+  readonly projectId?: string;
+}
+
+function parseScopeIdentity(value: JsonObject): ScopeIdentity | undefined {
+  const scope = value["scope"];
+  const projectId = value["projectId"];
+  if (scope !== undefined && !isAgentContextScope(scope)) return undefined;
+  if (projectId !== undefined && typeof projectId !== "string") return undefined;
+  const identity: ScopeIdentity = {
+    ...(scope === undefined ? {} : { scope }),
+    ...(projectId === undefined ? {} : { projectId })
+  };
+  return scopeIdentityKey(identity) === undefined ? undefined : identity;
+}
+
+function scopeIdentityKey(identity: ScopeIdentity): string | undefined {
+  if (identity.scope !== undefined) {
+    if (
+      identity.projectId !== undefined &&
+      (identity.scope.kind !== "workspace" || identity.scope.workspaceId !== identity.projectId)
+    ) {
+      return undefined;
+    }
+    return agentContextScopeKey(identity.scope);
+  }
+  return identity.projectId === undefined ? undefined : `workspace:legacy:${identity.projectId}`;
+}
+
+function scopeIdentitiesMatch(left: ScopeIdentity, right: ScopeIdentity): boolean {
+  const leftKey = scopeIdentityKey(left);
+  const rightKey = scopeIdentityKey(right);
+  if (leftKey === undefined || rightKey === undefined) return false;
+  if (leftKey === rightKey) return true;
+  const leftProjectId = left.scope?.kind === "workspace" ? left.scope.workspaceId : left.projectId;
+  const rightProjectId = right.scope?.kind === "workspace" ? right.scope.workspaceId : right.projectId;
+  return (
+    leftProjectId !== undefined &&
+    rightProjectId !== undefined &&
+    leftProjectId === rightProjectId &&
+    left.scope?.kind !== "standalone" &&
+    right.scope?.kind !== "standalone"
+  );
+}
+
 function parseCompactionModelResult(value: unknown): CompactionModelResult | undefined {
   if (!isJsonObject(value)) return undefined;
   const precision = value["precision"];
   if (
+    typeof value["summaryArtifactId"] !== "string" ||
+    value["summaryArtifactId"].length === 0 ||
     typeof value["summaryChecksum"] !== "string" ||
     !/^[a-f0-9]{64}$/u.test(value["summaryChecksum"]) ||
     !isNonNegativeInteger(value["inputTokens"]) ||
@@ -697,11 +839,61 @@ function parseCompactionModelResult(value: unknown): CompactionModelResult | und
     return undefined;
   }
   return {
+    summaryArtifactId: value["summaryArtifactId"],
     summaryChecksum: value["summaryChecksum"],
     inputTokens: value["inputTokens"],
     outputTokens: value["outputTokens"],
     precision
   };
+}
+
+async function readPersistedSummaryArtifact(
+  repository: CompactionRunRepositoryPort,
+  runId: string,
+  modelResult: CompactionModelResult,
+  inputs: CompactionInputs,
+  manifest: CompactionInputManifest
+): Promise<Result<AgentCompactionSummaryArtifact, UnifiedError>> {
+  const modelSummary = inputs.modelSummary;
+  if (repository.readCompactionSummaryArtifact === undefined || modelSummary === undefined) {
+    return err(compactionModelResultInvalid());
+  }
+  const stored = await repository.readCompactionSummaryArtifact(
+    runId,
+    modelResult.summaryArtifactId
+  );
+  if (!stored.ok) return err(stored.error);
+  if (stored.value === undefined) return err(compactionModelResultInvalid());
+  try {
+    const artifact = parseCompactionSummaryArtifact(stored.value);
+    const validated = validateCompactionSummaryResult({
+      profileId: modelSummary.profileId,
+      result: artifact,
+      maxSummaryTokens: modelSummary.maxSummaryTokens,
+      expectedInputChecksum: modelSummary.evidenceChecksum,
+      expectedProvider: modelSummary.provider,
+      expectedModel: modelSummary.model,
+      expectedModelProfileId: modelSummary.modelProfileId
+    });
+    if (
+      !validated.ok ||
+      artifact.artifactId !== modelResult.summaryArtifactId ||
+      artifact.runId !== runId ||
+      artifact.compactionId !== manifest.compactionId ||
+      artifact.contextProfileId !== modelSummary.profileId ||
+      artifact.sourceSnapshotId !== inputs.sourceSnapshotId ||
+      artifact.throughSequence !== inputs.throughSequence ||
+      artifact.inputManifestChecksum !== manifest.checksum ||
+      artifact.checksum !== modelResult.summaryChecksum ||
+      artifact.tokenCount !== modelResult.outputTokens ||
+      artifact.precision !== modelResult.precision
+    ) {
+      return err(compactionModelResultInvalid());
+    }
+    return ok(artifact);
+  } catch {
+    return err(compactionModelResultInvalid());
+  }
 }
 
 function parseCompactContextResult(
@@ -774,6 +966,17 @@ function compactionUnavailable(): UnifiedError {
   });
 }
 
+function contextBudgetInputsIncomplete(): UnifiedError {
+  return createUnifiedError({
+    code: "AGENT_CONTEXT_BUDGET_INPUTS_INVALID",
+    category: "ValidationError",
+    message: "The server-authoritative context budget inputs are incomplete or invalid.",
+    recoverability: "user-action",
+    suggestedAction: "Choose a model with verified budget capabilities and retry.",
+    traceId: "agent-context-session"
+  });
+}
+
 function compactionPromptMaterializationUnavailable(): UnifiedError {
   return createUnifiedError({
     code: "AGENT_PROMPT_MATERIALIZATION_UNAVAILABLE",
@@ -825,6 +1028,17 @@ function compactionModelResultInvalid(): UnifiedError {
     message: "The model-assisted compaction result is invalid.",
     recoverability: "user-action",
     suggestedAction: "Retry context compaction with a valid model result.",
+    traceId: "agent-context-session"
+  });
+}
+
+function compactionTargetUnreached(): UnifiedError {
+  return createUnifiedError({
+    code: "AGENT_CONTEXT_COMPACTION_TARGET_UNREACHED",
+    category: "AgentError",
+    message: "Context compaction could not reach its verified token target.",
+    recoverability: "user-action",
+    suggestedAction: "Refresh or exclude context before retrying compaction.",
     traceId: "agent-context-session"
   });
 }

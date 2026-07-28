@@ -24,10 +24,12 @@ test("surfaces draft-backed context controls and round-trips a reference through
       json(response, {
         data: [
           {
-            id: "gpt-5.6-luna"
+            id: "gpt-5.6-luna",
+            context_window: 128000
           },
           {
-            id: "gpt-5.6-sol"
+            id: "gpt-5.6-sol",
+            context_window: 128000
           }
         ]
       });
@@ -127,9 +129,9 @@ test("surfaces draft-backed context controls and round-trips a reference through
     const contextDraftId = draft.contextDraft.contextDraftId;
     const modelProfileId = draft.runDraft.modelProfileId;
 
-    // Bare OpenAI-compatible model metadata uses the conservative Agent floor instead of blocking.
+    // The explicit window leaves room for C4's provider-specific tool and system reserves.
     const budget = await previewBudget(page, conversationId, draft.runDraft);
-    expect(budget.contextWindow).toBe(16384);
+    expect(budget.contextWindow).toBe(128000);
     expect(budget.contextWindowSemantics).toBe("shared_input_output_window");
 
     // Adding a context reference round-trips through updateContextDraft and persists a new revision.
