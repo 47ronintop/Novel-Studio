@@ -122,7 +122,9 @@ export type {
 export {
   createAgentContextSnapshot,
   findStaleContextSources,
-  normalizeAgentContextSnapshot
+  normalizeAgentContextSnapshot,
+  validateAgentContextSourceMaterialization,
+  validateAgentContextSnapshot
 } from "./context-snapshot.js";
 export {
   CONTEXT_BUDGET_OUTPUT_RESERVE_MAX,
@@ -188,19 +190,30 @@ export type {
 } from "./context-compaction.js";
 export type {
   AgentContextLayer,
+  AgentCurrentContextSource,
+  AgentContextEvictionPointer,
+  AgentContextInstructionPolicy,
   AgentContextPrecision,
   AgentContextSnapshot,
   AgentContextSnapshotV10,
   AgentContextSnapshotV11,
   AgentContextSnapshotV12,
+  AgentContextSnapshotV13,
   AgentContextMaterializationProvenance,
   AgentContextSource,
+  AgentContextSourceIdentity,
   AgentContextSourceInput,
   AgentContextSourceKind,
+  AgentContextSourceMaterialization,
   AgentContextSourceState,
   AgentContextSourceV10,
   AgentContextSourceV11,
   AgentContextSourceV12,
+  AgentContextSourceV13,
+  AgentContextTruncationRange,
+  AgentContextWorkspaceTrust,
+  ProjectConventionsSourceMaterialization,
+  WorkspaceOutlineSourceMaterialization,
   CreateAgentContextSnapshotInput
 } from "./context-snapshot.js";
 export {

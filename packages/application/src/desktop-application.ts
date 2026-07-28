@@ -958,28 +958,28 @@ export function createDesktopApplication(
       return ok(activeChapterEditorSession.previewSuggestionDiff(nextBody));
     },
     async listModelProfiles() {
-      if (modelSettingsSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
+      if (modelSettingsSession === undefined) {
         return modelSettingsUnavailable();
       }
 
       return modelSettingsSession.listModelProfiles();
     },
     async discoverModelOptions(profileId) {
-      if (modelSettingsSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
+      if (modelSettingsSession === undefined) {
         return modelSettingsUnavailable();
       }
 
       return modelSettingsSession.discoverModelOptions(profileId);
     },
     async saveModelProfile(profile, saveOptions) {
-      if (modelSettingsSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
+      if (modelSettingsSession === undefined) {
         return modelSettingsUnavailable();
       }
 
       return modelSettingsSession.saveModelProfile(profile, saveOptions);
     },
     async testModelProfileConnection(profileId) {
-      if (modelSettingsSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
+      if (modelSettingsSession === undefined) {
         return modelSettingsUnavailable();
       }
 

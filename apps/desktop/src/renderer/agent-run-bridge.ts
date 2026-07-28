@@ -33,6 +33,7 @@ import type {
 import { reasoningStrengthForModel } from "@novel-studio/application";
 import type {
   AgentComposerContextStatusControl,
+  AgentComposerContextSourceRow,
   AgentComposerModelControl,
   AgentComposerPermissionControl,
   AgentComposerReasoningControl,
@@ -1642,11 +1643,16 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       draftApi.compactContext !== undefined &&
       snapshot !== undefined &&
       snapshot.contextBudgetSnapshotId !== null;
+    const automaticSources = automaticContextSourceRows(state.events);
+    const automaticRefIds = new Set(automaticSources.map((source) => source.refId));
     return {
       state: contextStatusState(),
       usageLabel: budgetUsageLabel(budget),
       precision: (budget?.precision ?? "unknown") as AgentContextPrecision,
-      sources: contextDraft.refs.map(refToSource),
+      sources: [
+        ...automaticSources,
+        ...contextDraft.refs.map(refToSource).filter((source) => !automaticRefIds.has(source.refId))
+      ],
       ...(canCompact ? { onCompact: () => compactActiveContext() } : {}),
       ...(draftApi.refreshContextDraft === undefined
         ? {}
@@ -2596,6 +2602,33 @@ function refToChip(ref: ContextDraftRef): AgentComposerReferenceChip {
 
 function refToSource(ref: ContextDraftRef): { refId: string; label: string; detail: string } {
   return { refId: ref.refId, label: ref.label, detail: REFERENCE_KIND_LABEL[ref.kind] };
+}
+
+function automaticContextSourceRows(
+  events: readonly AgentRunEvent[]
+): readonly AgentComposerContextSourceRow[] {
+  const sourceEvent = [...events]
+    .reverse()
+    .find((event) => event.type === "context_refreshed" || event.type === "context_excluded");
+  const descriptors = sourceEvent?.detail?.["sourceDescriptors"];
+  if (!Array.isArray(descriptors)) return [];
+  const rows: AgentComposerContextSourceRow[] = [];
+  for (const descriptor of descriptors) {
+    if (typeof descriptor !== "object" || descriptor === null || Array.isArray(descriptor))
+      continue;
+    const value = descriptor as Record<string, unknown>;
+    if (
+      (value["sourceKind"] !== "project_conventions" &&
+        value["sourceKind"] !== "workspace_outline") ||
+      typeof value["refId"] !== "string" ||
+      typeof value["label"] !== "string" ||
+      typeof value["detail"] !== "string"
+    ) {
+      continue;
+    }
+    rows.push({ refId: value["refId"], label: value["label"], detail: value["detail"] });
+  }
+  return rows;
 }
 
 /**

@@ -52,6 +52,10 @@ describe("AgentProjectReadRepository", () => {
       ok: true,
       value: { relativePath: "src/index.ts", content: "export {};\n" }
     });
+    expect(await repository.readText("notes/missing.md")).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_PROJECT_FILE_NOT_FOUND" }
+    });
     for (const path of [
       "../outside.md",
       "C:/outside.md",

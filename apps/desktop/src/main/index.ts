@@ -156,6 +156,8 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         projectId: binding.workspaceId,
         contentRoot: binding.contentRoot,
         stateRoot: binding.stateRoot,
+        workspaceTrust: "trusted",
+        projectConventionsEnabled: true,
         ...(binding.activeChapterId === undefined
           ? {}
           : { activeChapterId: binding.activeChapterId }),
@@ -181,6 +183,14 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         ...(binding.kind !== "creativeProject"
           ? {}
           : {
+              getCreativeProjectFileTreeSnapshot: () => {
+                const identity = creativeProjectFileSession.getActiveIdentity();
+                const snapshot = creativeProjectFileSession.getSnapshot();
+                return identity?.workspaceId === binding.workspaceId &&
+                  snapshot?.workspaceId === binding.workspaceId
+                  ? snapshot
+                  : undefined;
+              },
               readCreativeProjectFile: async (relativePath: string) => {
                 const identity = creativeProjectFileSession.getActiveIdentity();
                 if (identity === undefined || identity.workspaceId !== binding.workspaceId) {

@@ -5,8 +5,8 @@ import {
   type ElectronApplication,
   type Page
 } from "@playwright/test";
-import { cp, mkdtemp, rm } from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import { cp, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -160,6 +160,209 @@ test("surfaces draft-backed context controls and round-trips a reference through
   }
 });
 
+test("sends profile-specific conventions and outlines in real workspace provider payloads", async () => {
+  test.setTimeout(180_000);
+  const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-workspace-context-e2e-"));
+  const canonicalTempRoot = await realpath(tempRoot);
+  const engineeringRoot = join(tempRoot, "Engineering Workspace");
+  const creativeRoot = join(tempRoot, "Creative Project");
+  const modelRequests: Record<string, unknown>[] = [];
+
+  await mkdir(join(engineeringRoot, "src"), { recursive: true });
+  await writeFile(join(engineeringRoot, "AGENTS.md"), "ENGINEERING_E2E_CONVENTION", "utf8");
+  await writeFile(join(engineeringRoot, "src", "main.ts"), "export {};\n", "utf8");
+
+  await cp(fixtureRoot, creativeRoot, { recursive: true });
+  await mkdir(join(creativeRoot, "conventions"), { recursive: true });
+  await mkdir(join(creativeRoot, "notes"), { recursive: true });
+  await mkdir(join(creativeRoot, "characters"), { recursive: true });
+  await writeFile(
+    join(creativeRoot, "conventions", "writing.md"),
+    "CREATIVE_E2E_CONVENTION",
+    "utf8"
+  );
+  await writeFile(join(creativeRoot, "notes", "brief.md"), "Creative user file body.\n", "utf8");
+  await writeFile(
+    join(creativeRoot, ".novel-studio", "internal-e2e.md"),
+    "INTERNAL_FILE_SHOULD_NOT_APPEAR_IN_CREATIVE_OUTLINE\n",
+    "utf8"
+  );
+  await writeFile(
+    join(creativeRoot, "chapters", "ch_outline_e2e.md"),
+    [
+      "---",
+      'schemaVersion: "1.0"',
+      "id: ch_outline_e2e",
+      "type: chapter",
+      "title: Outline Chapter",
+      "order: 1",
+      "status: draft",
+      "wordCount: 321",
+      'createdAt: "2026-01-01T00:00:00.000Z"',
+      'updatedAt: "2026-01-01T00:00:00.000Z"',
+      "---",
+      "WRITING_CHAPTER_BODY_SECRET"
+    ].join("\n"),
+    "utf8"
+  );
+  await writeFile(
+    join(creativeRoot, "characters", "asset-outline-e2e.json"),
+    JSON.stringify({
+      schemaVersion: "1.0",
+      id: "asset-outline-e2e",
+      type: "character",
+      title: "Outline Character",
+      status: "active",
+      summary: "WRITING_STORY_BIBLE_BODY_SECRET",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    }),
+    "utf8"
+  );
+
+  const server = createServer(async (request, response) => {
+    if (request.method === "GET" && request.url === "/v1/models") {
+      json(response, {
+        data: [
+          {
+            id: "gpt-5.6-luna",
+            context_window: 128_000,
+            capabilities: {
+              streaming: true,
+              tool_calling: true,
+              structured_arguments: true
+            }
+          }
+        ]
+      });
+      return;
+    }
+
+    const body = await readJsonBody(request);
+    if (request.method !== "POST" || body["stream"] !== true) {
+      json(response, { choices: [{ message: { role: "assistant", content: "ok" } }] });
+      return;
+    }
+
+    modelRequests.push(body);
+    const userRequest = lastUserRequest(body);
+    if (userRequest === "CREATIVE_GENERAL_CONTEXT_E2E_REQUEST") {
+      sendTextCompletion(response, `Completed ${userRequest}`);
+      return;
+    }
+    sendToolCall(response, `finish-${String(modelRequests.length)}`, "finish", {
+      summary: `Completed ${userRequest}`
+    });
+  });
+  await listen(server);
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("Expected a TCP address");
+  const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+
+  let engineeringApp: ElectronApplication | undefined;
+  let creativeApp: ElectronApplication | undefined;
+  try {
+    engineeringApp = await electron.launch({
+      args: [electronMain],
+      env: unboundElectronEnv({
+        NOVEL_STUDIO_USER_DATA_ROOT: join(canonicalTempRoot, "Engineering User Data")
+      })
+    });
+    let page = await engineeringApp.firstWindow();
+    await queueDirectorySelection(engineeringApp, engineeringRoot);
+    await openQueuedEngineeringWorkspace(page);
+    await ensureAgentConversation(page);
+    await configureLocalModel(page, baseUrl);
+    const engineeringRequest = "ENGINEERING_CONTEXT_E2E_REQUEST";
+    await selectOperationMode(page, page.getByLabel("会话输入区"), "execution");
+    await sendProviderRequest(page, engineeringRequest);
+    await expect
+      .poll(() => matchingProviderRequests(modelRequests, engineeringRequest).length)
+      .toBe(1);
+    await expect(page.getByText(`Completed ${engineeringRequest}`, { exact: true })).toBeVisible();
+
+    const engineeringPayload = providerRequestFor(modelRequests, engineeringRequest);
+    const engineeringPrefix = expectWorkspaceProjectPrefix(engineeringPayload, {
+      conventionMarker: "ENGINEERING_E2E_CONVENTION",
+      outlineMarker: 'file "src/main.ts"',
+      userRequest: engineeringRequest
+    });
+    expect(engineeringPrefix.outline.data).toContain("Workspace outline (engineering).");
+    await expectWorkspaceSourcePanel(page, {
+      conventionsLabel: "AGENTS.md",
+      outlineLabel: "Workspace outline (engineering)"
+    });
+
+    await engineeringApp.close();
+    engineeringApp = undefined;
+
+    creativeApp = await electron.launch({
+      args: [electronMain],
+      env: unboundElectronEnv({
+        NOVEL_STUDIO_USER_DATA_ROOT: join(canonicalTempRoot, "Creative User Data")
+      })
+    });
+    page = await creativeApp.firstWindow();
+    await queueDirectorySelection(creativeApp, creativeRoot);
+    await openAgentPanel(page);
+    await configureLocalModel(page, baseUrl);
+
+    const writingRequest = "WRITING_CONTEXT_E2E_REQUEST";
+    await selectOperationMode(page, page.getByLabel("会话输入区"), "execution");
+    await sendProviderRequest(page, writingRequest);
+    await expect.poll(() => matchingProviderRequests(modelRequests, writingRequest).length).toBe(1);
+    await expect(page.getByText(`Completed ${writingRequest}`, { exact: true })).toBeVisible();
+
+    const writingPayload = providerRequestFor(modelRequests, writingRequest);
+    const writingPrefix = expectWorkspaceProjectPrefix(writingPayload, {
+      conventionMarker: "CREATIVE_E2E_CONVENTION",
+      outlineMarker: 'chapter id="ch_outline_e2e"',
+      userRequest: writingRequest
+    });
+    expect(writingPrefix.outline.data).toContain('title="Outline Chapter"');
+    expect(writingPrefix.outline.data).toContain("wordCount=321");
+    expect(writingPrefix.outline.data).toContain('story_bible_asset id="asset-outline-e2e"');
+    expect(writingPrefix.outline.data).toContain('title="Outline Character"');
+    expect(writingPrefix.outline.data).toContain('type="character"');
+    expect(writingPrefix.outline.data).not.toContain("WRITING_CHAPTER_BODY_SECRET");
+    expect(writingPrefix.outline.data).not.toContain("WRITING_STORY_BIBLE_BODY_SECRET");
+
+    const navigator = page.getByRole("navigation", { name: "项目导航" });
+    const modeTabs = page.getByRole("tablist", { name: "创作导航模式" });
+    await modeTabs.getByRole("tab", { name: "项目文件" }).click();
+    const notesToggle = navigator.getByRole("button", { name: "展开目录：notes" });
+    await expect(notesToggle).toBeVisible();
+    if ((await notesToggle.getAttribute("aria-expanded")) !== "true") await notesToggle.click();
+    await navigator.getByRole("button", { name: "打开文件：brief.md" }).click();
+    await expect(page.getByRole("region", { name: "普通文件编辑器" })).toBeVisible();
+    await page.getByRole("button", { name: "新建会话" }).first().click();
+    await expect(page.getByLabel("会话输入区")).toBeVisible();
+
+    const creativeRequest = "CREATIVE_GENERAL_CONTEXT_E2E_REQUEST";
+    await selectOperationMode(page, page.getByLabel("会话输入区"), "execution");
+    await sendProviderRequest(page, creativeRequest);
+    await expect
+      .poll(() => matchingProviderRequests(modelRequests, creativeRequest).length)
+      .toBe(1);
+    await expect(page.getByText(`Completed ${creativeRequest}`, { exact: true })).toBeVisible();
+
+    const creativePayload = providerRequestFor(modelRequests, creativeRequest);
+    const creativePrefix = expectWorkspaceProjectPrefix(creativePayload, {
+      conventionMarker: "CREATIVE_E2E_CONVENTION",
+      outlineMarker: 'file "notes/brief.md"',
+      userRequest: creativeRequest
+    });
+    expect(creativePrefix.outline.data).toContain("Workspace outline (creative_general).");
+    expect(creativePrefix.outline.data).not.toContain("chapters/ch_outline_e2e.md");
+    expect(creativePrefix.outline.data).not.toContain(".novel-studio/internal-e2e.md");
+  } finally {
+    await engineeringApp?.close();
+    await creativeApp?.close();
+    await closeServer(server);
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 interface RunDraftView {
   readonly runDraft: {
     readonly runDraftId: string;
@@ -278,7 +481,10 @@ async function openAgentPanel(page: Page): Promise<void> {
   await expect
     .poll(async () => (await unbound.isVisible()) || (await view.isVisible()), { timeout: 15_000 })
     .toBe(true);
-  if (await unbound.isVisible()) {
+  const workspaceKind = await page.evaluate(
+    async () => (await window.novelStudio?.getShellState())?.workspaceContext.kind
+  );
+  if (workspaceKind === "none") {
     const opened = await page.evaluate(async () => {
       const selected = await window.novelStudio?.project.chooseOpenCreativeDirectory();
       if (selected?.ok !== true || selected.value.selectionId === undefined) return selected;
@@ -289,7 +495,26 @@ async function openAgentPanel(page: Page): Promise<void> {
     }
     await page.reload();
   }
-  await expect(view).toBeVisible({ timeout: 15_000 });
+  await ensureAgentConversation(page);
+}
+
+async function openQueuedEngineeringWorkspace(page: Page): Promise<void> {
+  const opened = await page.evaluate(async () => {
+    const selected = await window.novelStudio?.workspace.chooseEngineeringDirectory();
+    if (selected?.ok !== true || selected.value.selectionId === undefined) return selected;
+    return window.novelStudio?.workspace.openEngineeringWorkspace(selected.value.selectionId);
+  });
+  if (opened?.ok !== true) {
+    throw new Error(`Engineering workspace activation failed: ${JSON.stringify(opened)}`);
+  }
+  await page.reload();
+  await expect(page.getByRole("button", { name: "当前工作台：工程工作台" })).toBeVisible({
+    timeout: 15_000
+  });
+}
+
+async function ensureAgentConversation(page: Page): Promise<void> {
+  await expect(page.getByLabel("Agent 会话主视图")).toBeVisible({ timeout: 15_000 });
   const createConversation = page.getByRole("button", { name: "新建会话" }).first();
   if (await createConversation.isVisible()) await createConversation.click();
   await expect(page.getByLabel("会话输入区")).toBeVisible();
@@ -331,6 +556,149 @@ async function selectOperationMode(
   await page.getByLabel("计划或执行模式").getByRole("button", { name: expected }).click();
 }
 
+async function sendProviderRequest(page: Page, request: string): Promise<void> {
+  const composer = page.getByLabel("会话输入区");
+  await composer.getByLabel("Agent 请求").fill(request);
+  await composer.getByRole("button", { name: "启动 Agent 运行" }).click();
+  await expect(
+    page
+      .getByLabel("Agent 会话主视图")
+      .locator('.ns-agent-conversation-user-message[data-speaker="user"]')
+      .filter({ hasText: request })
+  ).toBeVisible();
+}
+
+interface ProviderMessage {
+  readonly index: number;
+  readonly role: string;
+  readonly content: string;
+}
+
+interface ProviderProjectDataSource {
+  readonly index: number;
+  readonly message: ProviderMessage;
+  readonly data: string;
+}
+
+function matchingProviderRequests(
+  requests: readonly Record<string, unknown>[],
+  userRequest: string
+): readonly Record<string, unknown>[] {
+  return requests.filter((request) => lastUserRequest(request) === userRequest);
+}
+
+function providerRequestFor(
+  requests: readonly Record<string, unknown>[],
+  userRequest: string
+): Record<string, unknown> {
+  const matching = matchingProviderRequests(requests, userRequest);
+  if (matching.length !== 1) {
+    throw new Error(
+      `Expected exactly one provider request for ${userRequest}, received ${matching.length}.`
+    );
+  }
+  return matching[0];
+}
+
+function expectWorkspaceProjectPrefix(
+  request: Record<string, unknown>,
+  input: {
+    readonly conventionMarker: string;
+    readonly outlineMarker: string;
+    readonly userRequest: string;
+  }
+): {
+  readonly conventions: ProviderProjectDataSource;
+  readonly outline: ProviderProjectDataSource;
+} {
+  const messages = providerMessages(request);
+  const conventions = projectDataSource(messages, "project_conventions");
+  const outline = projectDataSource(messages, "workspace_outline");
+  const requestMessage = messages.find((message) => message.content === input.userRequest);
+  if (requestMessage === undefined) {
+    throw new Error(`The provider payload did not contain user request ${input.userRequest}.`);
+  }
+
+  for (const source of [conventions, outline]) {
+    expect(source.message.role).toBe("user");
+    expect(source.index).toBeLessThan(requestMessage.index);
+  }
+  expect(conventions.index).toBeLessThan(outline.index);
+  expect(conventions.data).toContain(input.conventionMarker);
+  expect(outline.data).toContain(input.outlineMarker);
+
+  const systemMessages = messages
+    .filter((message) => message.role === "system")
+    .map((message) => message.content)
+    .join("\n");
+  expect(systemMessages).not.toContain(input.conventionMarker);
+  expect(systemMessages).not.toContain(input.outlineMarker);
+
+  return { conventions, outline };
+}
+
+function providerMessages(request: Record<string, unknown>): readonly ProviderMessage[] {
+  const rawMessages = request["messages"];
+  if (!Array.isArray(rawMessages)) throw new Error("Expected provider payload messages.");
+  return rawMessages.map((value, index) => {
+    if (
+      !isRecord(value) ||
+      typeof value["role"] !== "string" ||
+      typeof value["content"] !== "string"
+    ) {
+      throw new Error(`Expected a string provider message at index ${index}.`);
+    }
+    return { index, role: value["role"], content: value["content"] };
+  });
+}
+
+function projectDataSource(
+  messages: readonly ProviderMessage[],
+  expectedSourceKind: "project_conventions" | "workspace_outline"
+): ProviderProjectDataSource {
+  const matching = messages.flatMap((message) => {
+    const payload = parseJsonObject(message.content);
+    const source = payload === undefined ? undefined : payload["source"];
+    if (
+      payload?.["kind"] !== "untrusted_project_data" ||
+      !isRecord(source) ||
+      source["sourceKind"] !== expectedSourceKind ||
+      typeof payload["data"] !== "string"
+    ) {
+      return [];
+    }
+    return [{ index: message.index, message, data: payload["data"] }];
+  });
+  if (matching.length !== 1) {
+    throw new Error(
+      `Expected one ${expectedSourceKind} data message, received ${matching.length}.`
+    );
+  }
+  return matching[0];
+}
+
+async function expectWorkspaceSourcePanel(
+  page: Page,
+  input: { readonly conventionsLabel: string; readonly outlineLabel: string }
+): Promise<void> {
+  const trigger = page.getByLabel("会话输入区").getByTitle("查看来源");
+  await expect(trigger).toBeVisible();
+  await trigger.click();
+  const panel = page.getByRole("dialog", { name: "上下文用量" });
+  const sources = panel.getByLabel("上下文来源");
+  await expect(sources).toContainText(input.conventionsLabel);
+  await expect(sources).toContainText(input.outlineLabel);
+  await expect(sources).toContainText("project_conventions");
+  await expect(sources).toContainText("workspace_outline");
+  await panel.press("Escape");
+}
+
+function unboundElectronEnv(overrides: Record<string, string>): NodeJS.ProcessEnv {
+  const env = electronEnv(overrides);
+  delete env["NOVEL_STUDIO_PROJECT_ROOT"];
+  return env;
+}
+
 function electronEnv(overrides: Record<string, string>): NodeJS.ProcessEnv {
   const env = { ...process.env };
   delete env["ELECTRON_RUN_AS_NODE"];
@@ -341,7 +709,77 @@ async function listen(server: ReturnType<typeof createServer>): Promise<void> {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 }
 
+async function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => (error === undefined ? resolve() : reject(error)))
+  );
+}
+
+async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const raw = Buffer.concat(chunks).toString("utf8");
+  const parsed = raw.length === 0 ? {} : (JSON.parse(raw) as unknown);
+  return isRecord(parsed) ? parsed : {};
+}
+
+function lastUserRequest(request: Record<string, unknown>): string {
+  const messages = providerMessages(request);
+  return (
+    messages
+      .filter((message) => message.role === "user")
+      .findLast(
+        (message) => parseJsonObject(message.content)?.["kind"] !== "untrusted_project_data"
+      )?.content ?? ""
+  );
+}
+
+function parseJsonObject(value: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function json(response: ServerResponse, payload: Record<string, unknown>): void {
   response.writeHead(200, { "content-type": "application/json" });
   response.end(JSON.stringify(payload));
+}
+
+function sendToolCall(
+  response: ServerResponse,
+  id: string,
+  name: string,
+  args: Record<string, unknown>
+): void {
+  response.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-cache",
+    connection: "keep-alive"
+  });
+  response.write(
+    `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: `call_${id}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] })}\n\n`
+  );
+  response.write(
+    `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n\n`
+  );
+  response.end("data: [DONE]\n\n");
+}
+
+function sendTextCompletion(response: ServerResponse, text: string): void {
+  response.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-cache",
+    connection: "keep-alive"
+  });
+  response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
+  response.end("data: [DONE]\n\n");
 }

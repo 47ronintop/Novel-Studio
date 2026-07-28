@@ -11,10 +11,14 @@ import {
   createAgentRunSession,
   createAgentUsageSession,
   createChangeSetSession,
+  createWorkspaceOutlineSource,
   createVersionGroupSession,
+  DEFAULT_PROJECT_CONVENTIONS_TOKEN_LIMIT,
+  DEFAULT_WORKSPACE_OUTLINE_LIMITS,
   estimateAgentSystemReserveTokens,
   preflightAgentModelCapabilities,
   resolveAgentContextProfile,
+  workspaceOutlineDependencyRevisionChecksum,
   type AgentContextBudgetInputs,
   type AgentContextBudgetInputsPort,
   type AgentContextSession,
@@ -40,16 +44,26 @@ import {
   type AgentUsageTimeFacts,
   type AgentUsageSession,
   type AgentVersionGroupExecutor,
+  type ProjectConventionsReader,
+  type WorkspaceOutlineDependencyManifest,
+  type WorkspaceOutlineReader,
+  type WorkspaceProjectContextIdentity,
+  type WorkspaceProjectContextProfileId,
+  type WorkspaceProjectContextResolution,
   type VersionGroupSessionTransactionPort,
   type VersionGroupTransactionApplyInput
 } from "@novel-studio/application";
 import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { createDesktopCompactionSources } from "./agent-compaction-composer.js";
+import { createDesktopProjectConventionsReader } from "./project-conventions-reader.js";
+import { createDesktopWorkspaceOutlineReader } from "./workspace-outline-reader.js";
 import { DEFAULT_AGENT_FEATURE_FLAGS, type AgentFeatureFlags } from "./agent-feature-flags.js";
 import type { LlmModelProfile, LlmParameters } from "@novel-studio/llm-adapter";
 import type {
+  AgentContextSourceIdentity,
   AgentContextSourceInput,
+  AgentContextMode,
   ContextDraftRef,
   AgentRunSnapshot,
   AgentUsageRecord,
@@ -81,6 +95,7 @@ import {
   AgentConversationFileRepository,
   AgentWriteTransaction,
   CreativeProjectFileRepository,
+  DEFAULT_CREATIVE_PROJECT_FILE_POLICY,
   createTrustedCreativeFileOperationsPort,
   normalizeCreativeProjectFilePath,
   type AgentWriteLifecycleOperationPort,
@@ -94,11 +109,15 @@ import {
   ProjectLockFileRepository,
   RecoveryRepository,
   StoryBibleFileRepository,
+  WorkspaceOutlineIndexRepository,
+  WorkspaceOutlineProjectEntryRepository,
+  WorkspaceOutlineProjectMetadataRepository,
   validateWithSchema,
   type AgentTransactionJournal,
   type AgentConversationRecord,
   type AgentWriteTransactionInput,
   type CreativeProjectFileDocument,
+  type CreativeProjectFileTreeSnapshot,
   type UpdateAgentConversationRecordInput
 } from "@novel-studio/repository";
 
@@ -108,6 +127,15 @@ export interface DesktopAgentRunSessionOptions {
   readonly contentRoot: string;
   readonly stateRoot: string;
   readonly activeChapterId?: string;
+  /** Main-owned trust gate for project-authored convention data. */
+  readonly workspaceTrust?: "trusted" | "untrusted";
+  /** Main-owned explicit convention switch. Defaults to enabled for trusted workspace runtimes. */
+  readonly projectConventionsEnabled?: boolean;
+  /**
+   * Returns the already-materialized C1C creative file tree. The outline reader must never refresh
+   * or rescan the creative project on its own.
+   */
+  readonly getCreativeProjectFileTreeSnapshot?: () => CreativeProjectFileTreeSnapshot | undefined;
   /**
    * The Electron user-data root the redacted usage sink writes under. It is app-global (not per
    * project), so it arrives via the `createRuntime` closure in `main/index.ts`, mirroring how the
@@ -220,6 +248,141 @@ export function createDesktopAgentRuntime(
   options: DesktopAgentRunSessionOptions
 ): DesktopAgentRuntimeServices {
   return createDesktopAgentRuntimeServices(options, true);
+}
+
+interface DesktopWorkspaceProjectContextServices {
+  readonly conventionsReader: ProjectConventionsReader;
+  readonly outlineReader: WorkspaceOutlineReader;
+  readonly readIdentity: () => Promise<Result<WorkspaceProjectContextIdentity, UnifiedError>>;
+  readonly resolveConventions: (input: {
+    readonly contextMode: AgentContextMode;
+    readonly modelProfileId: string;
+  }) => Promise<Result<WorkspaceProjectContextResolution, UnifiedError>>;
+  readonly resolve: (input: {
+    readonly contextMode: AgentContextMode;
+    readonly modelProfileId: string;
+  }) => Promise<Result<WorkspaceProjectContextResolution, UnifiedError>>;
+}
+
+function createDesktopWorkspaceProjectContextServices(
+  options: DesktopAgentRunSessionOptions,
+  projectReads: AgentProjectReadRepository
+): DesktopWorkspaceProjectContextServices {
+  const conventionsReader = createDesktopProjectConventionsReader({ projectReads });
+  const index = new WorkspaceOutlineIndexRepository({
+    ...(options.workspaceKind === "engineeringWorkspace"
+      ? {
+          engineeringEntries: new WorkspaceOutlineProjectEntryRepository({
+            projectRoot: options.contentRoot,
+            traceId: "desktop-agent-workspace-outline-entries"
+          })
+        }
+      : {
+          writingMetadata: new WorkspaceOutlineProjectMetadataRepository({
+            projectRoot: options.contentRoot,
+            traceId: "desktop-agent-workspace-outline-writing-metadata"
+          })
+        })
+  });
+  const outlineReader = createDesktopWorkspaceOutlineReader({
+    ...(options.workspaceKind === "engineeringWorkspace"
+      ? { engineeringIndex: index }
+      : {
+          writingIndex: index,
+          creativeProjectFiles: {
+            getTreeSnapshot: async () => ok(options.getCreativeProjectFileTreeSnapshot?.()),
+            policy: DEFAULT_CREATIVE_PROJECT_FILE_POLICY
+          }
+        })
+  });
+  const identity = (async (): Promise<Result<WorkspaceProjectContextIdentity, UnifiedError>> => {
+    try {
+      const canonicalRoot = await realpath(options.contentRoot);
+      return ok({
+        workspaceKind: options.workspaceKind,
+        workspaceId: options.projectId,
+        canonicalRootIdentity: createHash("sha256").update(canonicalRoot, "utf8").digest("hex")
+      });
+    } catch {
+      return err(
+        runtimeError("AGENT_PROJECT_CONTEXT_ROOT_UNAVAILABLE", {
+          workspaceKind: options.workspaceKind
+        })
+      );
+    }
+  })();
+
+  const resolveConventions = async (input: {
+    readonly contextMode: AgentContextMode;
+    readonly modelProfileId: string;
+  }): Promise<Result<WorkspaceProjectContextResolution, UnifiedError>> => {
+    const profileId = resolveWorkspaceProjectContextProfile(
+      options.workspaceKind,
+      input.contextMode
+    );
+    if (!profileId.ok) return profileId;
+    const workspace = await identity;
+    if (!workspace.ok) return workspace;
+    const conventions = await conventionsReader.read({
+      workspace: workspace.value,
+      profileId: profileId.value,
+      workspaceTrust: options.workspaceTrust ?? "trusted",
+      enabled: options.projectConventionsEnabled ?? true,
+      maxTokens: DEFAULT_PROJECT_CONVENTIONS_TOKEN_LIMIT,
+      modelProfileId: input.modelProfileId
+    });
+    if (!conventions.ok) return conventions;
+    return conventions.value.status === "available"
+      ? ok({ sources: [conventions.value.source], artifacts: [conventions.value.artifact] })
+      : ok({ sources: [], artifacts: [] });
+  };
+
+  return {
+    conventionsReader,
+    outlineReader,
+    readIdentity: () => identity,
+    resolveConventions,
+    async resolve(input) {
+      const profileId = resolveWorkspaceProjectContextProfile(
+        options.workspaceKind,
+        input.contextMode
+      );
+      if (!profileId.ok) return profileId;
+      const workspace = await identity;
+      if (!workspace.ok) return workspace;
+      const conventions = await resolveConventions(input);
+      if (!conventions.ok) return conventions;
+      const outline = await outlineReader.read({
+        workspace: workspace.value,
+        profileId: profileId.value,
+        modelProfileId: input.modelProfileId,
+        limits: DEFAULT_WORKSPACE_OUTLINE_LIMITS
+      });
+      if (!outline.ok) return outline;
+      const outlineSource = createWorkspaceOutlineSource({
+        workspaceTrust: options.workspaceTrust ?? "trusted",
+        result: outline.value
+      });
+      return ok({
+        sources: [...conventions.value.sources, outlineSource.source],
+        artifacts: [...conventions.value.artifacts, outlineSource.artifact]
+      });
+    }
+  };
+}
+
+function resolveWorkspaceProjectContextProfile(
+  workspaceKind: DesktopAgentRunSessionOptions["workspaceKind"],
+  contextMode: AgentContextMode
+): Result<WorkspaceProjectContextProfileId, UnifiedError> {
+  if (workspaceKind === "engineeringWorkspace" && contextMode === "general_file") {
+    return ok("engineering");
+  }
+  if (workspaceKind === "creativeProject" && contextMode === "writing") return ok("writing");
+  if (workspaceKind === "creativeProject" && contextMode === "general_file") {
+    return ok("creative_general");
+  }
+  return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
 }
 
 function requestedCapabilitySnapshot(
@@ -348,6 +511,10 @@ function createDesktopAgentRuntimeServices(
     projectRoot: options.contentRoot,
     traceId: "desktop-agent-project-read"
   });
+  const workspaceProjectContext = createDesktopWorkspaceProjectContextServices(
+    options,
+    projectReads
+  );
   const creativeProjectFiles =
     options.workspaceKind === "creativeProject"
       ? new CreativeProjectFileRepository({
@@ -625,6 +792,7 @@ function createDesktopAgentRuntimeServices(
     draftSession,
     ...(chapterRepository === undefined ? {} : { chapterRepository }),
     projectReads,
+    resolveWorkspaceProjectContext: workspaceProjectContext.resolve,
     ...(storyBible === undefined ? {} : { storyBible }),
     ...(options.readEditorBuffer === undefined
       ? {}
@@ -671,6 +839,7 @@ function createDesktopAgentRuntimeServices(
     ...(usageRepository === undefined ? {} : { usageRepository }),
     ...(chapterRepository === undefined ? {} : { chapterRepository }),
     projectReads,
+    resolveProjectConventions: workspaceProjectContext.resolveConventions,
     ...(storyBible === undefined ? {} : { storyBible }),
     ...(options.pricingRegistry === undefined ? {} : { pricingRegistry: options.pricingRegistry }),
     ...(options.usageTime === undefined ? {} : { usageTime: options.usageTime }),
@@ -764,8 +933,93 @@ function createDesktopAgentRuntimeServices(
       : { versionGroupExecutor: versionGroupServices.executor }),
     contextSourceReader: {
       async readCurrentSources(input) {
-        const current: { refId: string; content: string }[] = [];
+        const current: {
+          refId: string;
+          status?: "available" | "missing";
+          content?: string;
+          comparisonChecksum?: string;
+          sourceIdentity?: AgentContextSourceIdentity;
+          source?: AgentContextSourceInput;
+        }[] = [];
+        const refreshModelProfileId =
+          input.purpose === "refresh"
+            ? await readRunModelProfileId(repository, input.runId)
+            : undefined;
+        if (refreshModelProfileId?.ok === false) return refreshModelProfileId;
+        const currentIdentity = await workspaceProjectContext.readIdentity();
+        if (!currentIdentity.ok) return currentIdentity;
         for (const source of input.sources) {
+          const materialization = source.materialization;
+          if (materialization?.kind === "project_conventions") {
+            const reread = await workspaceProjectContext.conventionsReader.read({
+              workspace: currentIdentity.value,
+              profileId: materialization.sourceIdentity.contextProfileId,
+              workspaceTrust: materialization.workspaceTrust,
+              enabled: options.projectConventionsEnabled ?? true,
+              maxTokens: DEFAULT_PROJECT_CONVENTIONS_TOKEN_LIMIT,
+              modelProfileId: refreshModelProfileId?.value ?? "agent-context-staleness"
+            });
+            if (!reread.ok) return reread;
+            if (reread.value.status !== "available") {
+              current.push({ refId: source.refId, status: "missing" });
+              continue;
+            }
+            const rereadMaterialization = reread.value.source.materialization;
+            if (rereadMaterialization?.kind !== "project_conventions") {
+              return err(runtimeError("AGENT_CONTEXT_SOURCE_MATERIALIZATION_INVALID"));
+            }
+            current.push({
+              refId: source.refId,
+              status: "available",
+              comparisonChecksum: rereadMaterialization.originalChecksum,
+              sourceIdentity: rereadMaterialization.sourceIdentity,
+              ...(input.purpose === "refresh"
+                ? { source: { ...reread.value.source, refId: source.refId } }
+                : {})
+            });
+            continue;
+          }
+          if (materialization?.kind === "workspace_outline") {
+            const previousManifest =
+              materialization.dependencyManifest as unknown as WorkspaceOutlineDependencyManifest;
+            const workspace = currentIdentity.value;
+            if (input.purpose === "staleness") {
+              const manifest = await workspaceProjectContext.outlineReader.readDependencyManifest({
+                workspace,
+                profileId: materialization.sourceIdentity.contextProfileId,
+                limits: previousManifest.limits
+              });
+              if (!manifest.ok) return manifest;
+              current.push({
+                refId: source.refId,
+                status: "available",
+                comparisonChecksum: workspaceOutlineDependencyRevisionChecksum(manifest.value)
+              });
+              continue;
+            }
+            const reread = await workspaceProjectContext.outlineReader.read({
+              workspace,
+              profileId: materialization.sourceIdentity.contextProfileId,
+              limits: previousManifest.limits,
+              modelProfileId: refreshModelProfileId?.value ?? "agent-context-refresh"
+            });
+            if (!reread.ok) return reread;
+            const refreshed = createWorkspaceOutlineSource({
+              workspaceTrust: materialization.workspaceTrust,
+              result: reread.value
+            });
+            const refreshedMaterialization = refreshed.source.materialization;
+            if (refreshedMaterialization?.kind !== "workspace_outline") {
+              return err(runtimeError("AGENT_CONTEXT_SOURCE_MATERIALIZATION_INVALID"));
+            }
+            current.push({
+              refId: source.refId,
+              status: "available",
+              comparisonChecksum: refreshedMaterialization.dependencyRevisionChecksum,
+              source: { ...refreshed.source, refId: source.refId }
+            });
+            continue;
+          }
           if (source.sourceKind === "editor_buffer") {
             const editorContent = await options.readEditorBuffer?.(source.refId);
             current.push({
@@ -894,6 +1148,19 @@ function readUsageTokenCount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
+async function readRunModelProfileId(
+  repository: AgentRunFileRepository,
+  runId: string
+): Promise<Result<string, UnifiedError>> {
+  const read = await repository.readSnapshot(runId);
+  if (!read.ok) return read;
+  const provider = read.value?.["providerCapabilitySnapshot"];
+  const profileId = isRecord(provider) ? provider["profileId"] : undefined;
+  return typeof profileId === "string" && profileId.length > 0
+    ? ok(profileId)
+    : err(runtimeError("AGENT_MODEL_CAPABILITY_UNSUPPORTED", { runId }));
+}
+
 function permissionRootError(code: string): UnifiedError {
   return createUnifiedError({
     code,
@@ -908,8 +1175,9 @@ function permissionRootError(code: string): UnifiedError {
 /**
  * Build the read-only context session for the desktop. `previewContextBudget` resolves model facts +
  * ref content server-side (renderer previews are never trusted), so the session stays pure arithmetic
- * over already-resolved material. `toolReserve`/`systemReserve` are 0 until Task 1.7 counts the
- * system-guidance/tool-schema tokens. Compaction is wired only when a usage sink exists (i.e.
+ * over already-resolved material. `systemReserve` includes the C1 guidance and C2 convention text;
+ * the complete wrapper and frozen tool-catalog accounting remain C4 scope. Compaction is wired only
+ * when a usage sink exists (i.e.
  * `userDataRoot` was threaded in): the run repository owns the revision/result/budget artifacts and the
  * pointer-last commit marker, the usage repository owns the redacted final record. Without a usage sink
  * `compactContext` returns its `AGENT_CONTEXT_COMPACTION_UNAVAILABLE` guard.
@@ -922,6 +1190,7 @@ function createDesktopAgentContextSession(input: {
   readonly usageRepository?: AgentUsageFileRepository;
   readonly chapterRepository?: ChapterFileRepository;
   readonly projectReads: AgentProjectReadRepository;
+  readonly resolveProjectConventions: DesktopWorkspaceProjectContextServices["resolveConventions"];
   readonly storyBible?: StoryBibleFileRepository;
   readonly pricingRegistry?: AgentPricingRegistry;
   readonly usageTime?: () => AgentUsageTimeFacts;
@@ -964,32 +1233,49 @@ function createDesktopAgentContextSession(input: {
         activeResourceRef: contextDraft.activeResourceRef
       });
       if (!sources.ok) return err(sources.error);
+      const projectContext = await input.resolveProjectConventions({
+        contextMode: contextDraft.contextMode,
+        modelProfileId: draft.modelProfileId
+      });
+      if (!projectContext.ok) return err(projectContext.error);
+      const conventionsTokens = projectContext.value.sources.reduce(
+        (total, source) =>
+          source.sourceKind === "project_conventions"
+            ? total + (source.materialization?.tokenCount ?? 0)
+            : total,
+        0
+      );
       const inputs: AgentContextBudgetInputs = {
         model: {
           provider: model.provider,
           model: model.modelName,
           contextWindow: capability.value.contextWindow,
           toolReserve: 0,
-          // Count the mode-specific system guidance the run will inject (Task 1.7) so the safe input
-          // budget reserves room for it. The estimator here mirrors the deterministic fallback the
-          // session uses; a provider tokenizer would refine it without changing the accounting shape.
-          systemReserve: estimateAgentSystemReserveTokens(
-            resolveAgentContextProfile(
-              {
-                kind: "workspace",
-                workspaceKind: input.workspaceKind,
-                workspaceId: input.projectId
-              },
-              draft.operationMode,
-              draft.contextMode
-            )
-          ),
+          // C2 adds the frozen convention text to the existing guidance reserve. Complete wrapper
+          // and frozen tool-catalog accounting remains the C4 budget unification task.
+          systemReserve:
+            estimateAgentSystemReserveTokens(
+              resolveAgentContextProfile(
+                {
+                  kind: "workspace",
+                  workspaceKind: input.workspaceKind,
+                  workspaceId: input.projectId
+                },
+                draft.operationMode,
+                draft.contextMode
+              )
+            ) + conventionsTokens,
           requiredContextTokens: model.requiredContextTokens
         },
-        contents: sources.value.map((source) => ({
-          refId: source.refId,
-          content: source.content
-        }))
+        contents: [
+          ...projectContext.value.sources
+            .filter((source) => source.sourceKind !== "project_conventions")
+            .map((source) => ({ refId: source.refId, content: source.content })),
+          ...sources.value.map((source) => ({
+            refId: source.refId,
+            content: source.content
+          }))
+        ]
       };
       return ok(inputs);
     }
@@ -1699,6 +1985,7 @@ function createDesktopStartPreflight(input: {
   readonly draftSession: AgentRunDraftSession;
   readonly chapterRepository?: ChapterFileRepository;
   readonly projectReads: AgentProjectReadRepository;
+  readonly resolveWorkspaceProjectContext: DesktopWorkspaceProjectContextServices["resolve"];
   readonly storyBible?: StoryBibleFileRepository;
   readonly readEditorBuffer?: NonNullable<DesktopAgentRunSessionOptions["readEditorBuffer"]>;
   readonly readCreativeProjectFile?: NonNullable<
@@ -1713,9 +2000,22 @@ function createDesktopStartPreflight(input: {
     async resolveStart(command) {
       const intent = readResolvedIntent(command as StartAgentRunCommand & Record<string, unknown>);
       if (intent !== undefined) {
-        return input.workspaceKind === "engineeringWorkspace" && intent.contextMode === "writing"
-          ? err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"))
-          : ok(intent);
+        if (input.workspaceKind === "engineeringWorkspace" && intent.contextMode === "writing") {
+          return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
+        }
+        const projectContext = await input.resolveWorkspaceProjectContext({
+          contextMode: intent.contextMode,
+          modelProfileId: intent.model.profileId
+        });
+        return projectContext.ok
+          ? ok({
+              ...intent,
+              initialContextSources: mergeWorkspaceProjectContextSources(
+                projectContext.value.sources,
+                intent.initialContextSources
+              )
+            })
+          : projectContext;
       }
       return resolveStartFromDraft(command, input);
     }
@@ -1771,6 +2071,7 @@ async function resolveStartFromDraft(
     readonly draftSession: AgentRunDraftSession;
     readonly chapterRepository?: ChapterFileRepository;
     readonly projectReads: AgentProjectReadRepository;
+    readonly resolveWorkspaceProjectContext: DesktopWorkspaceProjectContextServices["resolve"];
     readonly storyBible?: StoryBibleFileRepository;
     readonly readEditorBuffer?: NonNullable<DesktopAgentRunSessionOptions["readEditorBuffer"]>;
     readonly readCreativeProjectFile?: NonNullable<
@@ -1835,6 +2136,11 @@ async function resolveStartFromDraft(
     activeResourceRef: contextDraft.activeResourceRef
   });
   if (!sources.ok) return err(sources.error);
+  const projectContext = await input.resolveWorkspaceProjectContext({
+    contextMode: runDraft.contextMode,
+    modelProfileId: runDraft.modelProfileId
+  });
+  if (!projectContext.ok) return err(projectContext.error);
   return ok({
     scope: {
       kind: "workspace",
@@ -1850,8 +2156,24 @@ async function resolveStartFromDraft(
       ? {}
       : { requestedReasoningEffort: runDraft.reasoningEffort }),
     model,
-    initialContextSources: sources.value
+    initialContextSources: mergeWorkspaceProjectContextSources(
+      projectContext.value.sources,
+      sources.value
+    )
   });
+}
+
+function mergeWorkspaceProjectContextSources(
+  projectSources: readonly AgentContextSourceInput[],
+  dynamicSources: readonly AgentContextSourceInput[]
+): readonly AgentContextSourceInput[] {
+  return [
+    ...projectSources,
+    ...dynamicSources.filter(
+      (source) =>
+        source.sourceKind !== "project_conventions" && source.sourceKind !== "workspace_outline"
+    )
+  ];
 }
 
 /** Read manual refs followed by the active file, freezing each body from Main-owned storage. */

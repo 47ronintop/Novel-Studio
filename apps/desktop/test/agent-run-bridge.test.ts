@@ -2772,6 +2772,69 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     );
   });
 
+  test("accepts only server-described automatic project context sources", async () => {
+    const activeRun = { ...snapshot, status: "planning_model" as const };
+    const { api, emitEvent } = createDraftApi({ activeRun });
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+    await bridge.load("project-01");
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.contextStatus).toBeDefined());
+
+    emitEvent({
+      schemaVersion: "1.0",
+      runId: activeRun.runId,
+      projectId: "project-01",
+      sequence: 2,
+      runRevision: 2,
+      type: "context_refreshed",
+      createdAt: "2026-07-16T00:00:01.000Z",
+      detail: {
+        sourceDescriptors: [
+          {
+            sourceKind: "project_conventions",
+            refId: "project_conventions:AGENTS.md",
+            label: "AGENTS.md",
+            detail: "project_conventions"
+          },
+          {
+            sourceKind: "workspace_outline",
+            refId: "workspace_outline:engineering",
+            label: "Workspace outline (engineering)",
+            detail: "workspace_outline"
+          },
+          {
+            sourceKind: "disk_file",
+            refId: "file:secrets.txt",
+            label: "secrets.txt",
+            detail: "disk_file"
+          }
+        ]
+      }
+    });
+
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()?.contextStatus?.sources).toEqual([
+        {
+          refId: "project_conventions:AGENTS.md",
+          label: "AGENTS.md",
+          detail: "project_conventions"
+        },
+        {
+          refId: "workspace_outline:engineering",
+          label: "Workspace outline (engineering)",
+          detail: "workspace_outline"
+        },
+        { refId: "chapter:chapter-01", label: "第一章", detail: "章节" }
+      ])
+    );
+  });
+
   test("surfaces a heavy context and compacts the live run", async () => {
     const activeRun: AgentRunSnapshot = {
       ...snapshot,
@@ -2820,6 +2883,7 @@ function createDraftApi(
   budgetCalls: unknown[];
   compactCalls: Record<string, unknown>[];
   permissionCalls: Record<string, unknown>[];
+  emitEvent: (event: AgentRunEvent) => void;
 } {
   const runDrafts = new Map<string, JsonObject>();
   const contextDrafts = new Map<string, JsonObject>();
@@ -2855,6 +2919,9 @@ function createDraftApi(
     budgetCalls,
     compactCalls,
     permissionCalls,
+    emitEvent: (event) => {
+      for (const listener of eventListeners) listener(event);
+    },
     api: {
       agentRuns: {
         onEvent: (listener: (event: AgentRunEvent) => void) => {

@@ -5,6 +5,8 @@ import { isErr, isOk, ok } from "@novel-studio/shared";
 import {
   createDesktopApplication,
   type ConfigStudioSession,
+  type EngineeringWorkspaceSession,
+  type ModelProfile,
   type ModelSettingsSession
 } from "../src/index.js";
 
@@ -98,5 +100,69 @@ describe("desktop application M8 boundary", () => {
     }
     expect(models.error.code).toBe("MODEL_SETTINGS_UNAVAILABLE");
     expect(config.error.code).toBe("CONFIG_STUDIO_UNAVAILABLE");
+  });
+
+  test("keeps application model settings available in an engineering workspace", async () => {
+    const calls: string[] = [];
+    const profile: ModelProfile = {
+      id: "model_engineering",
+      provider: "mock",
+      displayName: "Engineering model",
+      apiKeyRef: "secret:model_engineering",
+      modelName: "mock-model",
+      temperature: 0.2,
+      maxTokens: 4096,
+      timeoutMs: 30_000
+    };
+    const modelSettingsSession: ModelSettingsSession = {
+      async listModelProfiles() {
+        calls.push("list");
+        return ok({ defaultProfileId: profile.id, profiles: [profile] });
+      },
+      async discoverModelOptions(profileId) {
+        calls.push(`discover:${profileId}`);
+        return ok({
+          profileId,
+          provider: "mock",
+          status: "fallback",
+          models: [],
+          fallbackReason: "Discovery is not configured.",
+          reasoningStrength: {
+            status: "hidden",
+            reason: "The mock provider does not expose reasoning controls."
+          }
+        });
+      },
+      async saveModelProfile(savedProfile) {
+        calls.push(`save:${savedProfile.id}`);
+        return ok({ defaultProfileId: savedProfile.id, profiles: [savedProfile] });
+      },
+      async testModelProfileConnection(profileId) {
+        calls.push(`test:${profileId}`);
+        return ok({
+          ok: true,
+          provider: profile.provider,
+          modelName: profile.modelName,
+          detail: "Connection succeeded"
+        });
+      }
+    };
+    const application = createDesktopApplication({
+      modelSettingsSession,
+      engineeringWorkspaceSession: {} as EngineeringWorkspaceSession
+    });
+
+    await expect(application.listModelProfiles()).resolves.toMatchObject({ ok: true });
+    await expect(application.discoverModelOptions(profile.id)).resolves.toMatchObject({ ok: true });
+    await expect(application.saveModelProfile(profile)).resolves.toMatchObject({ ok: true });
+    await expect(application.testModelProfileConnection(profile.id)).resolves.toMatchObject({
+      ok: true
+    });
+    expect(calls).toEqual([
+      "list",
+      `discover:${profile.id}`,
+      `save:${profile.id}`,
+      `test:${profile.id}`
+    ]);
   });
 });

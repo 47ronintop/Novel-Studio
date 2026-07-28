@@ -178,7 +178,7 @@ export class AgentRunFileRepository {
       artifactId === undefined ||
       contextSnapshotId === undefined ||
       artifact["runId"] !== runId ||
-      artifact["schemaVersion"] !== "1.0"
+      (artifact["schemaVersion"] !== "1.0" && artifact["schemaVersion"] !== "1.1")
     ) {
       return Promise.resolve(this.invalidRecord("AGENT_PROMPT_MATERIALIZATION_INVALID"));
     }
@@ -202,6 +202,43 @@ export class AgentRunFileRepository {
     return read.value["runId"] === runId && read.value["artifactId"] === artifactId
       ? read
       : this.invalidRecord("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  }
+
+  public writeContextSourceMaterialization(
+    runId: string,
+    artifact: JsonObject
+  ): Promise<Result<JsonObject, UnifiedError>> {
+    const artifactId = readSafeString(artifact, "artifactId");
+    if (
+      !isSafeId(runId) ||
+      artifactId === undefined ||
+      artifact["schemaVersion"] !== "1.0" ||
+      (artifact["sourceKind"] !== "project_conventions" &&
+        artifact["sourceKind"] !== "workspace_outline")
+    ) {
+      return Promise.resolve(this.invalidRecord("AGENT_CONTEXT_SOURCE_MATERIALIZATION_INVALID"));
+    }
+    return this.writeImmutableJson(
+      this.runPath(runId, join("context-source-materializations", `${artifactId}.json`)),
+      artifact,
+      "AGENT_CONTEXT_SOURCE_MATERIALIZATION_CONFLICT"
+    );
+  }
+
+  public async readContextSourceMaterialization(
+    runId: string,
+    artifactId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    if (!isSafeId(runId) || !isSafeId(artifactId)) {
+      return this.invalidRecord("AGENT_CONTEXT_SOURCE_MATERIALIZATION_INVALID");
+    }
+    const read = await this.readJson(
+      this.runPath(runId, join("context-source-materializations", `${artifactId}.json`))
+    );
+    if (!read.ok || read.value === undefined) return read;
+    return read.value["schemaVersion"] === "1.0" && read.value["artifactId"] === artifactId
+      ? read
+      : this.invalidRecord("AGENT_CONTEXT_SOURCE_MATERIALIZATION_INVALID");
   }
 
   public writePlanArtifact(plan: JsonObject): Promise<Result<JsonObject, UnifiedError>> {

@@ -289,6 +289,29 @@ function assertStandaloneProviderPayload(
   for (const root of Object.values(forbiddenRoots)) {
     expect(payload).not.toContain(root.replaceAll("\\", "/"));
   }
+
+  const projectContextKinds = projectContextSourceKinds(request);
+  expect(projectContextKinds).not.toContain("project_conventions");
+  expect(projectContextKinds).not.toContain("workspace_outline");
+  expect(payload).not.toContain("project_conventions");
+  expect(payload).not.toContain("workspace_outline");
+}
+
+function projectContextSourceKinds(request: Record<string, unknown>): readonly string[] {
+  const messages = Array.isArray(request["messages"]) ? request["messages"] : [];
+  return messages.flatMap((message) => {
+    if (!isRecord(message) || typeof message["content"] !== "string") return [];
+    try {
+      const payload = JSON.parse(message["content"]) as unknown;
+      if (!isRecord(payload) || payload["kind"] !== "untrusted_project_data") return [];
+      const source = payload["source"];
+      return isRecord(source) && typeof source["sourceKind"] === "string"
+        ? [source["sourceKind"]]
+        : [];
+    } catch {
+      return [];
+    }
+  });
 }
 
 function hasKey(value: unknown, expectedKey: string): boolean {

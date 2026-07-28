@@ -353,6 +353,7 @@ export interface AgentRunSnapshotPatch {
   readonly toolFacadeVersion?: AgentToolFacadeVersion;
   readonly toolCatalogSnapshotId?: string | null;
   readonly toolCatalogRevision?: string | null;
+  readonly conventionsArtifactId?: string | null;
   readonly cachePrefixChecksum?: string;
 }
 

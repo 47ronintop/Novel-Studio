@@ -71,7 +71,8 @@ export class AgentProjectReadRepository {
         checksum: createHash("sha256").update(bytes).digest("hex"),
         byteLength: bytes.byteLength
       });
-    } catch {
+    } catch (cause) {
+      if (isFileNotFound(cause)) return this.notFound(validated.value);
       return this.rejected(validated.value);
     }
   }
@@ -141,6 +142,20 @@ export class AgentProjectReadRepository {
       })
     );
   }
+
+  private notFound(relativePath: string): Result<never, UnifiedError> {
+    return err(
+      createUnifiedError({
+        code: "AGENT_PROJECT_FILE_NOT_FOUND",
+        category: "StorageError",
+        message: "The requested Agent project text file does not exist.",
+        recoverability: "user-action",
+        suggestedAction: "Create the project-relative text file before reading it.",
+        traceId: this.traceId,
+        redactedDetail: { relativePath: redact(relativePath) }
+      })
+    );
+  }
 }
 
 function validateRelativePath(
@@ -177,4 +192,12 @@ function validateRelativePath(
 
 function redact(value: string): string {
   return value.split(/[\\/]/).filter(Boolean).slice(-2).join("/");
+}
+
+function isFileNotFound(value: unknown): value is NodeJS.ErrnoException {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as NodeJS.ErrnoException).code === "ENOENT"
+  );
 }

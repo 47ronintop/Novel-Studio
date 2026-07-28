@@ -524,6 +524,7 @@ export type {
   AgentModelRoundInput,
   AgentModelStreamEvent,
   AgentContextSourceReader,
+  AgentContextSourceReadResult,
   AgentReadToolExecutor,
   AgentReadToolResult,
   AgentTaskApprovalResolver,
@@ -586,6 +587,40 @@ export type {
   CreativeProjectFileTreeNode,
   CreativeProjectFileTreeSnapshot
 } from "./creative-project-file-session.js";
+export {
+  CONTEXT_SOURCE_MATERIALIZATION_ARTIFACT_VERSION,
+  DEFAULT_PROJECT_CONVENTIONS_TOKEN_LIMIT,
+  DEFAULT_WORKSPACE_OUTLINE_LIMITS,
+  PROJECT_CONVENTIONS_READER_VERSION,
+  WORKSPACE_OUTLINE_READER_VERSION,
+  checksumProjectContext,
+  contextSourceMaterializationArtifactId,
+  createAgentContextSourceMaterializationArtifact,
+  createWorkspaceOutlineSource,
+  createWorkspaceProjectContextResolver,
+  parseAgentContextSourceMaterializationArtifact,
+  truncateContextText,
+  workspaceOutlineDependencyRevisionChecksum
+} from "./workspace-project-context.js";
+export type {
+  AgentContextSourceMaterializationArtifact,
+  ProjectConventionsReadInput,
+  ProjectConventionsReader,
+  ProjectConventionsReadResult,
+  WorkspaceOutlineDependency,
+  WorkspaceOutlineDependencyManifest,
+  WorkspaceOutlineEntry,
+  WorkspaceOutlineLimits,
+  WorkspaceOutlineReadInput,
+  WorkspaceOutlineReader,
+  WorkspaceOutlineReadResult,
+  WorkspaceOutlineTruncationReason,
+  WorkspaceProjectContextIdentity,
+  WorkspaceProjectContextProfileId,
+  WorkspaceProjectContextResolution,
+  WorkspaceProjectContextResolveInput,
+  WorkspaceProjectContextResolver
+} from "./workspace-project-context.js";
 export type {
   AgentRunEvent,
   AgentRunErrorRecord,

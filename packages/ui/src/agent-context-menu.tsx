@@ -43,7 +43,9 @@ export function AgentContextMenu(props: AgentContextMenuProps): ReactNode {
       panelLabel="上下文用量"
       rootClassName="ns-agent-context-popover-root"
       triggerClassName={
-        attention ? "ns-agent-context-trigger ns-agent-context-trigger-attention" : "ns-agent-context-trigger"
+        attention
+          ? "ns-agent-context-trigger ns-agent-context-trigger-attention"
+          : "ns-agent-context-trigger"
       }
       triggerContent={
         <>
@@ -55,7 +57,7 @@ export function AgentContextMenu(props: AgentContextMenuProps): ReactNode {
         </>
       }
       triggerLabel={`${stateLabel} · ${control.usageLabel}`}
-      triggerTitle="查看上下文用量"
+      triggerTitle="查看来源"
     >
       {({ close }) => (
         <div className="ns-agent-context-panel">

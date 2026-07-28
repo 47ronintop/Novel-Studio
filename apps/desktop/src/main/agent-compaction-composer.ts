@@ -192,13 +192,20 @@ interface ClassifiedSources {
   readonly evictableSources: readonly EvictableContextSource[];
 }
 
-/** Split snapshot sources into protected facts (kept verbatim) and evictable tool results. */
+/** Split snapshot sources into protected facts and re-readable/replaceable bodies. */
 function classifySources(sources: readonly AgentContextSource[]): ClassifiedSources {
   const protectedFacts: ProtectedContextFact[] = [];
   const evictableSources: EvictableContextSource[] = [];
   for (const source of sources) {
     if (source.state === "excluded") continue;
-    const protectedKind = PROTECTED_FACT_KIND[source.layer];
+    // Project conventions are a durable user-data fact even if an old snapshot happened to
+    // persist an incorrect layer. The source kind is the C2 authority boundary here.
+    let protectedKind = PROTECTED_FACT_KIND[source.layer];
+    if (source.sourceKind === "project_conventions") {
+      protectedKind = "explicit_ref";
+    } else if (source.sourceKind === "workspace_outline") {
+      protectedKind = undefined;
+    }
     if (protectedKind !== undefined) {
       protectedFacts.push({
         kind: protectedKind,
@@ -217,7 +224,9 @@ function classifySources(sources: readonly AgentContextSource[]): ClassifiedSour
       checksum: source.checksum,
       tokenCount,
       evictionReason:
-        source.relativePath !== undefined || source.assetId !== undefined
+        source.sourceKind === "workspace_outline" ||
+        source.relativePath !== undefined ||
+        source.assetId !== undefined
           ? "rereadable_body"
           : "raw_result",
       pointerTokenCount: Math.min(POINTER_TOKENS, tokenCount)
@@ -310,14 +319,29 @@ async function buildArtifacts(
 
   // The result snapshot keeps every source but marks evicted ones excluded — the pointer stays,
   // the raw body is dropped. Protected facts and non-evicted sources pass through unchanged.
-  const resultSources = snapshot.sources.map((source) => {
+  const resultSources: AgentContextSource[] = [];
+  for (const source of snapshot.sources) {
     if (evicted.has(source.refId)) {
-      return { ...source, state: "excluded" as const, artifactId: null };
+      const evictionPointer = workspaceOutlineEvictionPointer(source);
+      if (source.sourceKind === "workspace_outline" && evictionPointer === undefined) {
+        // Losing a directed block without its dependency manifest would make a later hydrate
+        // neither reproducible nor safely re-readable.
+        return err(composerError("AGENT_CONTEXT_COMPACTION_OUTLINE_POINTER_INVALID"));
+      }
+      resultSources.push({
+        ...source,
+        state: "excluded",
+        artifactId: null,
+        evictionPointer: evictionPointer ?? null
+      });
+      continue;
     }
-    return nextPrompt !== undefined && promptBoundRefs.has(source.refId)
-      ? { ...source, artifactId: nextPrompt.artifactId }
-      : source;
-  });
+    resultSources.push(
+      nextPrompt !== undefined && promptBoundRefs.has(source.refId)
+        ? { ...source, artifactId: nextPrompt.artifactId }
+        : source
+    );
+  }
   const resultSnapshot: JsonObject = {
     ...(snapshot as unknown as JsonObject),
     contextSnapshotId: resultSnapshotId,
@@ -372,6 +396,29 @@ async function buildArtifacts(
     usageRecord: usageRecord.value as unknown as JsonObject,
     runSnapshot
   });
+}
+
+/** Build the only persisted form of an evicted directed block; it never carries its old body. */
+function workspaceOutlineEvictionPointer(source: AgentContextSource):
+  | {
+      readonly schemaVersion: "1.0";
+      readonly artifactId: string;
+      readonly dependencyManifestChecksum: string;
+      readonly rereadHint: string;
+    }
+  | undefined {
+  if (
+    source.sourceKind !== "workspace_outline" ||
+    source.sourceMaterialization?.kind !== "workspace_outline"
+  ) {
+    return undefined;
+  }
+  return {
+    schemaVersion: "1.0",
+    artifactId: source.sourceMaterialization.artifactId,
+    dependencyManifestChecksum: source.sourceMaterialization.dependencyManifestChecksum,
+    rereadHint: source.sourceMaterialization.rereadHint
+  };
 }
 
 async function buildCompactedPromptMaterialization(

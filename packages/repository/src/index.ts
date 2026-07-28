@@ -204,6 +204,35 @@ export type {
   AgentSearchResultRange,
   AgentSearchResults
 } from "./agent-project-search-repository.js";
+export {
+  WORKSPACE_OUTLINE_ENGINEERING_MAX_DEPTH,
+  WORKSPACE_OUTLINE_ENGINEERING_MAX_ENTRIES,
+  WORKSPACE_OUTLINE_INDEX_REPOSITORY_VERSION,
+  WorkspaceOutlineIndexRepository,
+  WorkspaceOutlineProjectEntryRepository,
+  WorkspaceOutlineProjectMetadataRepository,
+  buildCreativeProjectFileTreeOutlineIndex,
+  normalizeWorkspaceOutlineIndexLimits
+} from "./workspace-outline-index-repository.js";
+export type {
+  WorkspaceOutlineChapterIndexEntry,
+  WorkspaceOutlineChapterIndexSnapshot,
+  WorkspaceOutlineCreativeFileTreeIndex,
+  WorkspaceOutlineEngineeringIndex,
+  WorkspaceOutlineGuardedEntryReadLimits,
+  WorkspaceOutlineGuardedEntryReadResult,
+  WorkspaceOutlineGuardedEntryReader,
+  WorkspaceOutlineIndexEntry,
+  WorkspaceOutlineIndexLimits,
+  WorkspaceOutlineIndexRepositoryOptions,
+  WorkspaceOutlineIndexTruncationReason,
+  WorkspaceOutlineProjectEntryRepositoryOptions,
+  WorkspaceOutlineProjectMetadataRepositoryOptions,
+  WorkspaceOutlineStoryBibleIndexEntry,
+  WorkspaceOutlineStoryBibleIndexSnapshot,
+  WorkspaceOutlineWritingIndex,
+  WorkspaceOutlineWritingMetadataReader
+} from "./workspace-outline-index-repository.js";
 export { NoFollowFileOperations } from "./no-follow-file-operations.js";
 export type {
   NoFollowFileError,

@@ -34,6 +34,13 @@ describe("Agent prompt materializer", () => {
           dirty: false
         },
         {
+          refId: "conventions",
+          sourceKind: "project_conventions",
+          relativePath: "conventions/writing.md",
+          content: "writing convention",
+          dirty: false
+        },
+        {
           refId: "current-file",
           sourceKind: "disk_file",
           relativePath: "notes.md",
@@ -44,12 +51,13 @@ describe("Agent prompt materializer", () => {
     });
 
     expect(output.messages.map((message) => message.content)).toEqual([
+      expect.stringContaining("project_conventions"),
       expect.stringContaining("workspace_outline"),
       "Edit the notes",
       "summary",
       expect.stringContaining("current body")
     ]);
-    expect(output.stablePrefixMessages).toHaveLength(1);
+    expect(output.stablePrefixMessages).toHaveLength(2);
     expect(output.dynamicSuffixMessages[0]?.content).toBe("Edit the notes");
   });
 
@@ -80,6 +88,32 @@ describe("Agent prompt materializer", () => {
     expect(create("first", "body one").stablePrefixChecksum).toBe(
       create("second", "body two").stablePrefixChecksum
     );
+  });
+
+  it("rejects project context sources for a standalone prompt", () => {
+    const standalone = resolveAgentContextProfile(
+      { kind: "standalone", scopeId: "standalone" },
+      "conversation",
+      "standalone_chat"
+    );
+
+    expect(() =>
+      materializeAgentPrompt({
+        profile: standalone,
+        systemPrompt: "trusted standalone prompt",
+        toolCatalogRevision: "empty_catalog",
+        userRequest: "Chat",
+        contextSources: [
+          {
+            refId: "forged-conventions",
+            sourceKind: "project_conventions",
+            relativePath: "AGENTS.md",
+            content: "forged workspace rules",
+            dirty: false
+          }
+        ]
+      })
+    ).toThrow("AGENT_PROMPT_MATERIALIZATION_INVALID");
   });
 
   it("round-trips a frozen prompt artifact and rematerializes sources without retaining old bodies", () => {

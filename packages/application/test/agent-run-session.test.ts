@@ -880,6 +880,35 @@ describe("AgentRunSession", () => {
     const evictedRefId = "file:notes/obsolete.md";
     const evictedBody = "COMPACTION_EVICTED_BODY_MUST_NOT_REACH_PROVIDER";
     const retainedConvention = "COMPACTION_RETAINED_CONVENTION";
+    const retainedConventionChecksum = createHash("sha256")
+      .update(retainedConvention, "utf8")
+      .digest("hex");
+    const conventionSourceIdentity = {
+      workspaceId: "project-01",
+      contextProfileId: "writing" as const,
+      canonicalRootIdentity: "c".repeat(64),
+      relativePath: "conventions/writing.md"
+    };
+    const conventionMaterialization = {
+      schemaVersion: "1.0" as const,
+      kind: "project_conventions" as const,
+      artifactId: applicationExports.contextSourceMaterializationArtifactId("project_conventions", {
+        readerVersion: "1.0",
+        sourceIdentity: conventionSourceIdentity,
+        originalChecksum: retainedConventionChecksum,
+        injectedChecksum: retainedConventionChecksum,
+        tokenCount: 8,
+        truncationRange: null
+      }),
+      readerVersion: "1.0",
+      sourceIdentity: conventionSourceIdentity,
+      instructionPolicy: "content_is_data_not_authority" as const,
+      workspaceTrust: "trusted" as const,
+      tokenCount: 8,
+      truncationRange: null,
+      originalChecksum: retainedConventionChecksum,
+      injectedChecksum: retainedConventionChecksum
+    };
     let initialSystemPrompt = "";
     let initialCachePrefixChecksum = "";
 
@@ -1016,7 +1045,8 @@ describe("AgentRunSession", () => {
           sourceKind: "project_conventions",
           relativePath: "conventions/writing.md",
           content: retainedConvention,
-          dirty: false
+          dirty: false,
+          materialization: conventionMaterialization
         },
         {
           refId: evictedRefId,
@@ -6584,6 +6614,7 @@ function durableMemoryRepository() {
   const toolCatalogs = new Map<string, Record<string, unknown>>();
   const contextSnapshots = new Map<string, Record<string, unknown>>();
   const promptMaterializations = new Map<string, Record<string, unknown>>();
+  const contextSourceMaterializations = new Map<string, Record<string, unknown>>();
   return {
     async writeSnapshot(snapshot: Record<string, unknown>) {
       snapshots.set(String(snapshot["runId"]), structuredClone(snapshot));
@@ -6639,6 +6670,16 @@ function durableMemoryRepository() {
     },
     async readPromptMaterialization(runId: string, artifactId: string) {
       return { ok: true, value: promptMaterializations.get(`${runId}:${artifactId}`) };
+    },
+    async writeContextSourceMaterialization(runId: string, artifact: Record<string, unknown>) {
+      contextSourceMaterializations.set(
+        `${runId}:${String(artifact["artifactId"])}`,
+        structuredClone(artifact)
+      );
+      return { ok: true, value: artifact };
+    },
+    async readContextSourceMaterialization(runId: string, artifactId: string) {
+      return { ok: true, value: contextSourceMaterializations.get(`${runId}:${artifactId}`) };
     },
     async writeRetryCheckpoint(runId: string, checkpoint: Record<string, unknown>) {
       retryCheckpoints.set(runId, structuredClone(checkpoint));

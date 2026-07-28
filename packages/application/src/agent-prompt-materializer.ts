@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import {
   isAgentContextScope,
+  validateAgentContextSourceMaterialization,
   type AgentContextScope,
   type AgentContextSourceInput
 } from "@novel-studio/agent-engine";
@@ -13,6 +14,7 @@ import {
   type AgentContextProfileId
 } from "./agent-context-profile.js";
 import { AGENT_SYSTEM_GUIDANCE_VERSION } from "./agent-system-prompt.js";
+import { createAgentContextSourceMaterializationArtifact } from "./workspace-project-context.js";
 
 export type MaterializedAgentMessageRole = "system" | "user" | "assistant" | "tool";
 
@@ -44,7 +46,11 @@ export interface AgentPromptMaterialization {
  * conversation/tool history remains event-sourced; this artifact freezes everything that precedes
  * that history, including the exact app-authored system prompt and current source bodies.
  */
-export interface AgentPromptMaterializationArtifact extends AgentPromptMaterialization {
+export interface AgentPromptMaterializationArtifact extends Omit<
+  AgentPromptMaterialization,
+  "schemaVersion"
+> {
+  readonly schemaVersion: "1.1";
   readonly artifactId: string;
   readonly runId: string;
   readonly contextSnapshotId: string;
@@ -83,8 +89,10 @@ export function materializeAgentPrompt(
   input: MaterializeAgentPromptInput
 ): AgentPromptMaterialization {
   const sources = input.contextSources ?? [];
+  assertProjectSourceProfile(sources, input.profile);
   const stablePrefixMessages = sources
     .filter((source) => stableProjectSourceKinds.has(source.sourceKind))
+    .sort(compareStableProjectSources)
     .map(materializeProjectDataSource);
   const currentAndExplicitSources = sources
     .filter(
@@ -124,9 +132,11 @@ export function materializeAgentPrompt(
 export function createAgentPromptMaterializationArtifact(
   input: CreateAgentPromptMaterializationArtifactInput
 ): AgentPromptMaterializationArtifact {
+  assertPersistableContextSources(input.contextSources ?? []);
   const materialization = materializeAgentPrompt(input);
   const unsigned = {
     ...materialization,
+    schemaVersion: "1.1" as const,
     artifactId: promptMaterializationArtifactId(input.contextSnapshotId),
     runId: input.runId,
     contextSnapshotId: input.contextSnapshotId,
@@ -169,7 +179,8 @@ export function rematerializeAgentPromptArtifact(
 export function parseAgentPromptMaterializationArtifact(
   value: JsonObject
 ): AgentPromptMaterializationArtifact {
-  if (value["schemaVersion"] !== "1.0") {
+  const persistedSchemaVersion = value["schemaVersion"];
+  if (persistedSchemaVersion !== "1.0" && persistedSchemaVersion !== "1.1") {
     throw new Error("AGENT_PROMPT_MATERIALIZATION_VERSION_UNSUPPORTED");
   }
   const profile = parseProfile(value["profile"]);
@@ -209,13 +220,17 @@ export function parseAgentPromptMaterializationArtifact(
     systemGuidanceRefId
   });
   const expectedGuidanceRefPrefix = `system_guidance:${profile.profileId}@`;
+  const persistedChecksumMatches =
+    persistedSchemaVersion === "1.1"
+      ? value["checksum"] === recreated.checksum
+      : value["checksum"] === legacyArtifactChecksum(recreated);
   if (
     !isGuidanceRefForProfile(systemGuidanceRefId, expectedGuidanceRefPrefix) ||
     value["profileId"] !== recreated.profileId ||
     value["profileVersion"] !== recreated.profileVersion ||
     guidanceTemplateChecksum !== recreated.guidanceTemplateChecksum ||
     value["stablePrefixChecksum"] !== recreated.stablePrefixChecksum ||
-    value["checksum"] !== recreated.checksum ||
+    !persistedChecksumMatches ||
     stableSerialize(value["stablePrefixMessages"]) !==
       stableSerialize(recreated.stablePrefixMessages) ||
     stableSerialize(value["dynamicSuffixMessages"]) !==
@@ -244,7 +259,16 @@ export function materializeProjectDataSource(
         sourceKind: source.sourceKind,
         dirty: source.dirty,
         ...(source.relativePath === undefined ? {} : { relativePath: source.relativePath }),
-        ...(source.assetId === undefined ? {} : { assetId: source.assetId })
+        ...(source.assetId === undefined ? {} : { assetId: source.assetId }),
+        ...(source.materialization === undefined
+          ? {}
+          : {
+              artifactId: source.materialization.artifactId,
+              readerVersion: source.materialization.readerVersion,
+              workspaceTrust: source.materialization.workspaceTrust,
+              sourceIdentity: source.materialization.sourceIdentity,
+              materialization: source.materialization
+            })
       },
       data: source.content
     })
@@ -386,9 +410,65 @@ function parseContextSources(value: unknown): readonly AgentContextSourceInput[]
     ) {
       return undefined;
     }
-    sources.push(source as unknown as AgentContextSourceInput);
+    const materialization = source["materialization"];
+    if (
+      materialization !== undefined &&
+      !validateAgentContextSourceMaterialization(materialization)
+    ) {
+      return undefined;
+    }
+    const parsed = source as unknown as AgentContextSourceInput;
+    try {
+      assertPersistableContextSources([parsed]);
+    } catch {
+      return undefined;
+    }
+    sources.push(parsed);
   }
   return sources;
+}
+
+function assertPersistableContextSources(sources: readonly AgentContextSourceInput[]): void {
+  for (const source of sources) {
+    if (stableProjectSourceKinds.has(source.sourceKind)) {
+      createAgentContextSourceMaterializationArtifact(source);
+      continue;
+    }
+    if (source.materialization !== undefined) {
+      throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+    }
+  }
+}
+
+function assertProjectSourceProfile(
+  sources: readonly AgentContextSourceInput[],
+  profile: AgentContextProfile
+): void {
+  for (const source of sources) {
+    if (!stableProjectSourceKinds.has(source.sourceKind)) continue;
+    if (profile.scope.kind !== "workspace" || profile.profileId === "standalone") {
+      throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+    }
+    const materialization = source.materialization;
+    if (materialization === undefined) continue;
+    if (
+      materialization.sourceIdentity.workspaceId !== profile.scope.workspaceId ||
+      materialization.sourceIdentity.contextProfileId !== profile.profileId ||
+      (materialization.kind === "project_conventions" &&
+        materialization.workspaceTrust !== "trusted")
+    ) {
+      throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+    }
+  }
+}
+
+function compareStableProjectSources(
+  left: AgentContextSourceInput,
+  right: AgentContextSourceInput
+): number {
+  const order = (source: AgentContextSourceInput): number =>
+    source.sourceKind === "project_conventions" ? 0 : 1;
+  return order(left) - order(right) || left.refId.localeCompare(right.refId);
 }
 
 function parseMessages(value: unknown): readonly MaterializedAgentMessage[] | undefined {
@@ -433,6 +513,13 @@ function stringValue(value: unknown): string | undefined {
 
 function checksumValue(value: unknown): string | undefined {
   return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value) ? value : undefined;
+}
+
+function legacyArtifactChecksum(artifact: AgentPromptMaterializationArtifact): string {
+  const unsigned = Object.fromEntries(
+    Object.entries(artifact).filter(([key]) => key !== "checksum")
+  );
+  return checksum(stableSerialize({ ...unsigned, schemaVersion: "1.0" }));
 }
 
 function isRecord(value: unknown): value is JsonObject {

@@ -12,6 +12,49 @@ afterEach(async () => {
 });
 
 describe("AgentRunFileRepository", () => {
+  test("persists immutable context source materializations and rejects divergent rewrites", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-context-source-store-"));
+    roots.push(projectRoot);
+    const repository = new repositoryExports.AgentRunFileRepository({ projectRoot });
+    const artifact = {
+      schemaVersion: "1.0",
+      artifactId: "context_source_project_conventions_01",
+      refId: "project_conventions_01",
+      sourceKind: "project_conventions",
+      content: "Project rules",
+      materialization: { kind: "project_conventions" },
+      checksum: "a".repeat(64)
+    };
+
+    expect(await repository.writeContextSourceMaterialization("run_01", artifact)).toMatchObject({
+      ok: true
+    });
+    expect(await repository.writeContextSourceMaterialization("run_01", artifact)).toMatchObject({
+      ok: true
+    });
+    expect(
+      await repository.readContextSourceMaterialization(
+        "run_01",
+        "context_source_project_conventions_01"
+      )
+    ).toEqual({ ok: true, value: artifact });
+    expect(
+      await repository.writeContextSourceMaterialization("run_01", {
+        ...artifact,
+        content: "Different rules"
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONTEXT_SOURCE_MATERIALIZATION_CONFLICT" }
+    });
+    expect(
+      await repository.readContextSourceMaterialization("run_01", "../artifact")
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONTEXT_SOURCE_MATERIALIZATION_INVALID" }
+    });
+  });
+
   test("persists immutable tool catalogs and rejects invalid or conflicting catalog identities", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-tool-catalog-store-"));
     roots.push(projectRoot);

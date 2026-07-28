@@ -4,8 +4,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
-import { createAgentContextSession, createAgentPricingRegistry } from "@novel-studio/application";
+import {
+  createAgentContextSession,
+  createAgentPricingRegistry,
+  createAgentPromptMaterializationArtifact,
+  checksumProjectContext,
+  contextSourceMaterializationArtifactId,
+  promptMaterializationArtifactId,
+  resolveAgentContextProfile,
+  workspaceOutlineDependencyRevisionChecksum,
+  type WorkspaceOutlineDependencyManifest
+} from "@novel-studio/application";
 import type { AgentContextBudgetInputsPort, AgentRunDraftSession } from "@novel-studio/application";
+import {
+  createAgentContextSnapshot,
+  type AgentContextSourceInput
+} from "@novel-studio/agent-engine";
 import { AgentRunFileRepository, AgentUsageFileRepository } from "@novel-studio/repository";
 import { ok, type JsonObject } from "@novel-studio/shared";
 
@@ -76,6 +90,123 @@ describe("desktop compaction composer", () => {
     if (!usage.ok) return;
     expect(usage.value?.["terminationReason"]).toBe("context_compaction");
     expect(usage.value?.["compactionAfterTokens"]).toBe(4000);
+  });
+
+  test("protects conventions and evicts workspace outlines to a manifest pointer", async () => {
+    const {
+      repository,
+      usageRepository,
+      projectRoot,
+      conventionsRefId,
+      outlineRefId,
+      outlineArtifactId,
+      outlineManifestChecksum,
+      outlineRereadHint
+    } = await seedC3OutlineRun();
+    const compactionSources = createDesktopCompactionSources({
+      repository,
+      now: () => "2026-07-17T00:00:00.000Z"
+    });
+
+    const loaded = await compactionSources.loadInputs({
+      projectId: "project_01",
+      runId: "run_01",
+      commandId: "cmd_c3_inputs",
+      expectedRunRevision: 3,
+      contextBudgetSnapshotId: "budget_target_c3",
+      trigger: "manual"
+    });
+    expect(loaded).toMatchObject({
+      ok: true,
+      value: {
+        protectedFacts: [
+          expect.objectContaining({ sourceId: conventionsRefId, kind: "explicit_ref" })
+        ],
+        evictableSources: [
+          expect.objectContaining({
+            sourceId: outlineRefId,
+            evictionReason: "rereadable_body"
+          })
+        ]
+      }
+    });
+
+    const session = createAgentContextSession({
+      draftSession: stubDraftSession(),
+      budgetInputs: stubBudgetInputs(),
+      compactionSources,
+      runRepository: {
+        writeCompactionManifest: (manifest) => repository.writeCompactionManifest(manifest),
+        writeCompactionRevision: (revision) => repository.writeCompactionRevision(revision),
+        writePromptMaterialization: (runId, artifact) =>
+          repository.writePromptMaterialization(runId, artifact),
+        writeContextSnapshot: (snapshot) => repository.writeContextSnapshot(snapshot),
+        writeBudgetSnapshot: (runId, snapshot) => repository.writeBudgetSnapshot(runId, snapshot),
+        commitCompaction: (snapshot) => repository.commitCompaction(snapshot)
+      },
+      usageSink: { writeFinal: (record) => usageRepository.writeFinal(record) },
+      createCompactionId: () => "compaction_c3",
+      now: () => "2026-07-17T00:00:00.000Z"
+    });
+
+    const result = await session.compactContext({
+      projectId: "project_01",
+      runId: "run_01",
+      commandId: "cmd_c3_compact",
+      expectedRunRevision: 3,
+      contextBudgetSnapshotId: "budget_target_c3",
+      trigger: "manual"
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      value: { revision: { evictedSourceIds: [outlineRefId] } }
+    });
+
+    const compacted = await repository.readContextSnapshot("run_01", "context_run_01_c1");
+    expect(compacted).toMatchObject({ ok: true });
+    if (!compacted.ok || compacted.value === undefined) return;
+    const sources = compacted.value["sources"] as JsonObject[];
+    expect(sources.find((source) => source["refId"] === conventionsRefId)).toMatchObject({
+      state: "active"
+    });
+    const outline = sources.find((source) => source["refId"] === outlineRefId);
+    expect(outline).toMatchObject({
+      state: "excluded",
+      artifactId: null,
+      evictionPointer: {
+        schemaVersion: "1.0",
+        artifactId: outlineArtifactId,
+        dependencyManifestChecksum: outlineManifestChecksum,
+        rereadHint: outlineRereadHint
+      }
+    });
+    expect(JSON.stringify(outline)).not.toContain("workspace outline body");
+
+    // The re-materialized prompt has no old outline body to revive during a later hydrate.
+    const prompt = await repository.readPromptMaterialization(
+      "run_01",
+      promptMaterializationArtifactId("context_run_01_c1")
+    );
+    expect(prompt).toMatchObject({ ok: true });
+    if (!prompt.ok || prompt.value === undefined) return;
+    expect(JSON.stringify(prompt.value)).not.toContain("workspace outline body");
+    expect(prompt.value["contextSources"]).toEqual([
+      expect.objectContaining({ refId: conventionsRefId, sourceKind: "project_conventions" })
+    ]);
+
+    expect(
+      await readFile(
+        join(
+          projectRoot,
+          "history",
+          "agent-runs",
+          "run_01",
+          "prompt-materializations",
+          `${promptMaterializationArtifactId("context_run_01_c1")}.json`
+        ),
+        "utf8"
+      )
+    ).not.toContain("workspace outline body");
   });
 
   test("prices model-assisted compaction and captures the production local-time bucket", async () => {
@@ -335,6 +466,182 @@ async function seedRun(
   const runWritten = await repository.writeSnapshot(run);
   expect(runWritten.ok).toBe(true);
   return { repository, usageRepository, projectRoot };
+}
+
+async function seedC3OutlineRun(): Promise<{
+  repository: AgentRunFileRepository;
+  usageRepository: AgentUsageFileRepository;
+  projectRoot: string;
+  conventionsRefId: string;
+  outlineRefId: string;
+  outlineArtifactId: string;
+  outlineManifestChecksum: string;
+  outlineRereadHint: string;
+}> {
+  const seeded = await seedRun();
+  const scope = {
+    kind: "workspace" as const,
+    workspaceKind: "engineeringWorkspace" as const,
+    workspaceId: "project_01"
+  };
+  const profile = resolveAgentContextProfile(scope, "planning", "general_file");
+  const canonicalRootIdentity = "a".repeat(64);
+  const conventionsRefId = "project:conventions";
+  const outlineRefId = "project:workspace-outline";
+  const conventionsBody = "project conventions body";
+  const outlineBody = "workspace outline body";
+  const outlineRereadHint =
+    "Use list_project_entries or search_project_text to reread this outline.";
+  const dependencyManifest: WorkspaceOutlineDependencyManifest = {
+    schemaVersion: "1.0",
+    readerVersion: "1.0",
+    profileId: "engineering",
+    workspace: {
+      workspaceKind: "engineeringWorkspace",
+      workspaceId: "project_01",
+      canonicalRootIdentity
+    },
+    limits: {
+      maxDepth: 2,
+      maxEntries: 200,
+      maxScannedEntries: 1_000,
+      maxBytes: 65_536,
+      maxDurationMs: 200,
+      maxTokens: 1_500
+    },
+    truncated: false,
+    truncationReasons: [],
+    dependency: {
+      kind: "engineering_entries",
+      entrySetRevision: "engineering_entries:test",
+      entrySetChecksum: checksumText("engineering-tree@1")
+    }
+  };
+  const outlineManifestChecksum = checksumProjectContext(dependencyManifest);
+  const sourceIdentity = {
+    workspaceId: "project_01",
+    contextProfileId: "engineering" as const,
+    canonicalRootIdentity
+  };
+  const conventions: AgentContextSourceInput = {
+    refId: conventionsRefId,
+    sourceKind: "project_conventions",
+    relativePath: "AGENTS.md",
+    content: conventionsBody,
+    dirty: false,
+    sourceRevision: 1,
+    materialization: {
+      schemaVersion: "1.0",
+      kind: "project_conventions",
+      artifactId: contextSourceMaterializationArtifactId("project_conventions", {
+        readerVersion: "1.0",
+        sourceIdentity: { ...sourceIdentity, relativePath: "AGENTS.md" },
+        originalChecksum: checksumText(conventionsBody),
+        injectedChecksum: checksumText(conventionsBody),
+        tokenCount: 5,
+        truncationRange: null
+      }),
+      readerVersion: "1.0",
+      sourceIdentity: { ...sourceIdentity, relativePath: "AGENTS.md" },
+      instructionPolicy: "content_is_data_not_authority",
+      workspaceTrust: "trusted",
+      tokenCount: 5,
+      truncationRange: null,
+      originalChecksum: checksumText(conventionsBody),
+      injectedChecksum: checksumText(conventionsBody)
+    }
+  };
+  const outlineDependencyRevisionChecksum =
+    workspaceOutlineDependencyRevisionChecksum(dependencyManifest);
+  const outlineMaterializedChecksum = checksumText(outlineBody);
+  const outlineArtifactId = contextSourceMaterializationArtifactId("workspace_outline", {
+    readerVersion: "1.0",
+    sourceIdentity,
+    dependencyManifestChecksum: outlineManifestChecksum,
+    dependencyRevisionChecksum: outlineDependencyRevisionChecksum,
+    materializedChecksum: outlineMaterializedChecksum,
+    tokenCount: 5,
+    truncationRange: null
+  });
+  const outline: AgentContextSourceInput = {
+    refId: outlineRefId,
+    sourceKind: "workspace_outline",
+    content: outlineBody,
+    dirty: false,
+    sourceRevision: 1,
+    materialization: {
+      schemaVersion: "1.0",
+      kind: "workspace_outline",
+      artifactId: outlineArtifactId,
+      readerVersion: "1.0",
+      sourceIdentity,
+      instructionPolicy: "content_is_data_not_authority",
+      workspaceTrust: "trusted",
+      tokenCount: 5,
+      truncationRange: null,
+      dependencyManifest,
+      dependencyManifestChecksum: outlineManifestChecksum,
+      dependencyRevisionChecksum: outlineDependencyRevisionChecksum,
+      materializedChecksum: outlineMaterializedChecksum,
+      rereadHint: outlineRereadHint
+    }
+  };
+  const contextSnapshotId = "context_run_01";
+  const prompt = createAgentPromptMaterializationArtifact({
+    runId: "run_01",
+    contextSnapshotId,
+    profile,
+    systemPrompt: "app-authored system guidance",
+    toolCatalogRevision: "catalog_01",
+    userRequest: "Review the project",
+    contextSources: [conventions, outline]
+  });
+  const snapshot = createAgentContextSnapshot({
+    contextSnapshotId,
+    runId: "run_01",
+    scope,
+    contextProfileId: profile.profileId,
+    materialization: {
+      schemaVersion: "1.0",
+      profileVersion: profile.profileVersion,
+      guidanceTemplateChecksum: prompt.guidanceTemplateChecksum,
+      stablePrefixChecksum: prompt.stablePrefixChecksum,
+      messageOrderVersion: "1.0"
+    },
+    createdAt: "2026-07-15T00:00:00.000Z",
+    sources: [conventions, outline],
+    materializationArtifactId: prompt.artifactId
+  });
+
+  expect(
+    await seeded.repository.writePromptMaterialization("run_01", prompt as unknown as JsonObject)
+  ).toMatchObject({ ok: true });
+  expect(
+    await seeded.repository.writeContextSnapshot(snapshot as unknown as JsonObject)
+  ).toMatchObject({ ok: true });
+  const run = await seeded.repository.readSnapshot("run_01");
+  if (!run.ok || run.value === undefined) throw new Error("seed run missing");
+  expect(
+    await seeded.repository.writeSnapshot({
+      ...run.value,
+      cachePrefixChecksum: prompt.stablePrefixChecksum,
+      usageSummary: {
+        inputTokens: 24000,
+        outputTokens: 0,
+        totalTokens: 24000,
+        usageStatus: "estimated"
+      }
+    })
+  ).toMatchObject({ ok: true });
+
+  return {
+    ...seeded,
+    conventionsRefId,
+    outlineRefId,
+    outlineArtifactId,
+    outlineManifestChecksum,
+    outlineRereadHint
+  };
 }
 
 function stubDraftSession(): Pick<AgentRunDraftSession, "resolveStartDraft"> {

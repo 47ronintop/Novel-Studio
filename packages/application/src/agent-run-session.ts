@@ -40,6 +40,7 @@ import {
   type AgentUsageRecord,
   type AgentUsageSink,
   type AgentContextSnapshot,
+  type AgentContextSourceIdentity,
   type AgentContextSourceInput,
   type AgentToolDescriptor,
   type AgentToolFacadeVersion,
@@ -107,6 +108,10 @@ import {
   rematerializeAgentPromptArtifact,
   type AgentPromptMaterializationArtifact
 } from "./agent-prompt-materializer.js";
+import {
+  createAgentContextSourceMaterializationArtifact,
+  parseAgentContextSourceMaterializationArtifact
+} from "./workspace-project-context.js";
 import type { ModelReasoningStrengthControl } from "./model-discovery-session.js";
 import type { AgentNetworkPolicy } from "./agent-network-policy.js";
 import type { AgentPermissionSession } from "./agent-permission-session.js";
@@ -216,9 +221,18 @@ export interface AgentContextSourceReader {
   readCurrentSources(input: {
     readonly runId: string;
     readonly sources: readonly AgentContextSourceInput[];
-  }): Promise<
-    Result<readonly { readonly refId: string; readonly content: string }[], UnifiedError>
-  >;
+    readonly purpose: "staleness" | "refresh";
+  }): Promise<Result<readonly AgentContextSourceReadResult[], UnifiedError>>;
+}
+
+export interface AgentContextSourceReadResult {
+  readonly refId: string;
+  readonly status?: "available" | "missing";
+  readonly content?: string;
+  readonly comparisonChecksum?: string;
+  readonly sourceIdentity?: AgentContextSourceIdentity;
+  /** Present only for a confirmed refresh; staleness checks never replace frozen sources. */
+  readonly source?: AgentContextSourceInput;
 }
 
 export interface AgentReadToolExecutor {
@@ -442,6 +456,14 @@ export interface AgentRunPersistencePort {
     artifact: JsonObject
   ): Promise<Result<JsonObject, UnifiedError>>;
   readPromptMaterialization?(
+    runId: string,
+    artifactId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>>;
+  writeContextSourceMaterialization?(
+    runId: string,
+    artifact: JsonObject
+  ): Promise<Result<JsonObject, UnifiedError>>;
+  readContextSourceMaterialization?(
     runId: string,
     artifactId: string
   ): Promise<Result<JsonObject | undefined, UnifiedError>>;
@@ -1502,6 +1524,88 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     return ok(validated.value);
   }
 
+  async function persistContextSourceMaterializations(
+    runId: string,
+    sources: readonly AgentContextSourceInput[]
+  ): Promise<Result<void, UnifiedError>> {
+    const materializedSources = sources.filter((source) => source.materialization !== undefined);
+    if (materializedSources.length === 0) return ok(undefined);
+    if (options.repository.writeContextSourceMaterialization === undefined) {
+      return err(
+        applicationError(
+          "AGENT_CONTEXT_SOURCE_MATERIALIZATION_UNAVAILABLE",
+          "The context source materialization repository is unavailable."
+        )
+      );
+    }
+    const artifacts = new Map(
+      materializedSources.map((source) => {
+        const artifact = createAgentContextSourceMaterializationArtifact(source);
+        return [artifact.artifactId, artifact] as const;
+      })
+    );
+    for (const artifact of artifacts.values()) {
+      const written = await options.repository.writeContextSourceMaterialization(
+        runId,
+        asJsonObject(artifact)
+      );
+      if (!written.ok) return err(written.error);
+    }
+    return ok(undefined);
+  }
+
+  async function hydrateContextSourceMaterializations(
+    snapshot: AgentContextSnapshot | undefined
+  ): Promise<Result<void, UnifiedError>> {
+    const materializedSources =
+      snapshot?.sources.filter((source) => source.sourceMaterialization !== null) ?? [];
+    if (materializedSources.length === 0) return ok(undefined);
+    if (options.repository.readContextSourceMaterialization === undefined) {
+      return err(
+        applicationError(
+          "AGENT_CONTEXT_SOURCE_MATERIALIZATION_UNAVAILABLE",
+          "The frozen context source materialization repository is unavailable."
+        )
+      );
+    }
+    for (const source of materializedSources) {
+      const metadata = source.sourceMaterialization;
+      if (metadata === null) continue;
+      const read = await options.repository.readContextSourceMaterialization(
+        snapshot?.runId ?? "",
+        metadata.artifactId
+      );
+      if (!read.ok) return err(read.error);
+      if (read.value === undefined) {
+        return err(
+          applicationError(
+            "AGENT_CONTEXT_SOURCE_MATERIALIZATION_MISSING",
+            "A frozen context source materialization could not be found."
+          )
+        );
+      }
+      try {
+        const artifact = parseAgentContextSourceMaterializationArtifact(read.value);
+        if (
+          artifact.artifactId !== metadata.artifactId ||
+          artifact.refId !== source.refId ||
+          artifact.sourceKind !== source.sourceKind ||
+          JSON.stringify(artifact.materialization) !== JSON.stringify(metadata)
+        ) {
+          throw new Error("AGENT_CONTEXT_SOURCE_MATERIALIZATION_INVALID");
+        }
+      } catch {
+        return err(
+          applicationError(
+            "AGENT_CONTEXT_SOURCE_MATERIALIZATION_INVALID",
+            "A frozen context source materialization is invalid."
+          )
+        );
+      }
+    }
+    return ok(undefined);
+  }
+
   async function hydratePromptMaterialization(
     snapshot: AgentRunSnapshot,
     contextSnapshot: AgentContextSnapshot | undefined
@@ -1645,6 +1749,11 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         "AGENT_CONTEXT_SNAPSHOT_MISSING",
         "The frozen context snapshot could not be found or is invalid."
       );
+    }
+    const restoredSourceMaterializations =
+      await hydrateContextSourceMaterializations(restoredContextSnapshot);
+    if (!restoredSourceMaterializations.ok) {
+      return { ok: false, error: restoredSourceMaterializations.error };
     }
     const restoredPromptArtifactResult = await hydratePromptMaterialization(
       persistedSnapshot,
@@ -1855,7 +1964,11 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
                 (artifactSource) => artifactSource.refId === source.refId
               )?.content ?? "",
             dirty: source.dirty,
-            ...(source.range === undefined ? {} : { range: source.range })
+            sourceRevision: source.sourceRevision,
+            ...(source.range === undefined ? {} : { range: source.range }),
+            ...(source.sourceMaterialization === null
+              ? {}
+              : { materialization: source.sourceMaterialization })
           })) ?? [],
       systemGuidanceSource: agentGuidanceSource(
         snapshot.contextProfileId,
@@ -2297,7 +2410,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     if (runtime.contextSnapshot !== undefined && options.contextSourceReader !== undefined) {
       const current = await options.contextSourceReader.readCurrentSources({
         runId,
-        sources: runtime.contextSources
+        sources: runtime.contextSources,
+        purpose: "staleness"
       });
       if (!current.ok) {
         await recordEvent(runId, {
@@ -4672,6 +4786,13 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           ? {}
           : promptArtifactBinding(runtime))
       });
+      const sourceMaterializationsPersisted = await persistContextSourceMaterializations(
+        result.value.runId,
+        initialContextSources
+      );
+      if (!sourceMaterializationsPersisted.ok) {
+        return rejectUnpersistedStart(sourceMaterializationsPersisted.error);
+      }
       if (options.repository.writePromptMaterialization !== undefined) {
         const materializationPersisted = await options.repository.writePromptMaterialization(
           result.value.runId,
@@ -4694,6 +4815,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         snapshotPatch: { contextSnapshotId },
         detail: {
           sourceRefs: initialContextSources.map((source) => source.refId),
+          sourceDescriptors: contextSourceDescriptors(initialContextSources),
           dirtySourceRefs: initialContextSources
             .filter((source) => source.dirty)
             .map((source) => source.refId)
@@ -5590,6 +5712,13 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           ? {}
           : promptArtifactBinding(executionRuntime))
       });
+      const executionSourceMaterializationsPersisted = await persistContextSourceMaterializations(
+        executionStarted.value.runId,
+        executionRuntime.contextSources
+      );
+      if (!executionSourceMaterializationsPersisted.ok) {
+        return rejectUnpersistedExecution(executionSourceMaterializationsPersisted.error);
+      }
       if (options.repository.writePromptMaterialization !== undefined) {
         const materializationPersisted = await options.repository.writePromptMaterialization(
           executionStarted.value.runId,
@@ -5629,6 +5758,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           snapshotPatch: { contextSnapshotId: executionContextSnapshotId },
           detail: {
             sourceRefs: executionRuntime.contextSources.map((source) => source.refId),
+            sourceDescriptors: contextSourceDescriptors(executionRuntime.contextSources),
             dirtySourceRefs: executionRuntime.contextSources
               .filter((source) => source.dirty)
               .map((source) => source.refId)
@@ -5912,15 +6042,35 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         }
         const current = await options.contextSourceReader.readCurrentSources({
           runId: command.runId,
-          sources: refreshSources
+          sources: refreshSources.filter((source) => selectedRefs.has(source.refId)),
+          purpose: "refresh"
         });
         if (!current.ok) return { ok: false, error: current.error };
-        const contentByRef = new Map(current.value.map((source) => [source.refId, source.content]));
+        const currentByRef = new Map(current.value.map((source) => [source.refId, source]));
+        const contentByRef = new Map<string, string>();
+        nextSources = refreshSources.flatMap((source) => {
+          if (!selectedRefs.has(source.refId)) return [source];
+          const refreshedSource = currentByRef.get(source.refId);
+          if (refreshedSource?.status === "missing") return [];
+          const sourceRevision = (source.sourceRevision ?? 0) + 1;
+          if (refreshedSource?.source !== undefined) {
+            contentByRef.set(source.refId, refreshedSource.source.content);
+            return [{ ...refreshedSource.source, sourceRevision }];
+          }
+          if (refreshedSource?.content !== undefined) {
+            contentByRef.set(source.refId, refreshedSource.content);
+            return [{ ...source, content: refreshedSource.content, sourceRevision }];
+          }
+          return [source];
+        });
         refreshedContentByRef = contentByRef;
-        nextSources = refreshSources.map((source) => ({
-          ...source,
-          content: contentByRef.get(source.refId) ?? source.content
-        }));
+      }
+      const sourceMaterializationsPersisted = await persistContextSourceMaterializations(
+        command.runId,
+        nextSources
+      );
+      if (!sourceMaterializationsPersisted.ok) {
+        return { ok: false, error: sourceMaterializationsPersisted.error };
       }
       runtime.contextSources.splice(0, runtime.contextSources.length, ...nextSources);
       const baseContextId =
@@ -5990,12 +6140,18 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         type: eventType,
         snapshotPatch: {
           contextSnapshotId,
+          conventionsArtifactId:
+            nextSources.find((source) => source.materialization?.kind === "project_conventions")
+              ?.materialization?.artifactId ?? null,
           cachePrefixChecksum:
             runtime.promptArtifact?.stablePrefixChecksum ?? snapshot.cachePrefixChecksum,
           activeErrorId: null,
           recoveryState: "none"
         },
-        detail: { sourceRefs: [...selectedRefs] }
+        detail: {
+          sourceRefs: [...selectedRefs],
+          sourceDescriptors: contextSourceDescriptors(nextSources)
+        }
       });
       const refreshedReceipt = await persistCommandReceipt(
         command.runId,
@@ -6070,7 +6226,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         ) {
           const current = await options.contextSourceReader.readCurrentSources({
             runId: command.runId,
-            sources: runtime.contextSources
+            sources: runtime.contextSources,
+            purpose: "staleness"
           });
           if (!current.ok) {
             const result = { ok: false as const, error: current.error, latestSnapshot: snapshot };
@@ -7251,7 +7408,8 @@ function parseContextSnapshot(
     value === undefined ||
     (value["schemaVersion"] !== "1.0" &&
       value["schemaVersion"] !== "1.1" &&
-      value["schemaVersion"] !== "1.2") ||
+      value["schemaVersion"] !== "1.2" &&
+      value["schemaVersion"] !== "1.3") ||
     value["runId"] !== run.runId ||
     value["contextSnapshotId"] !== run.contextSnapshotId ||
     typeof value["createdAt"] !== "string" ||
@@ -7272,6 +7430,42 @@ function parseContextSnapshot(
 
 function asJsonObject(value: object): JsonObject {
   return value as unknown as JsonObject;
+}
+
+function contextSourceDescriptors(sources: readonly AgentContextSourceInput[]): JsonObject[] {
+  return sources.map((source) => {
+    const materialization = source.materialization;
+    const truncated = materialization?.truncationRange !== null;
+    const label =
+      source.sourceKind === "project_conventions"
+        ? (source.relativePath ?? "Project conventions")
+        : source.sourceKind === "workspace_outline"
+          ? `Workspace outline (${materialization?.sourceIdentity.contextProfileId ?? "workspace"})`
+          : (source.relativePath ?? source.assetId ?? source.refId);
+    const detail =
+      materialization === undefined
+        ? source.sourceKind
+        : `${source.sourceKind} · ${materialization.tokenCount} tokens${truncated ? " · truncated" : ""}`;
+    return asJsonObject({
+      refId: source.refId,
+      sourceKind: source.sourceKind,
+      label,
+      detail,
+      sourceRevision: source.sourceRevision ?? 0,
+      ...(source.relativePath === undefined ? {} : { relativePath: source.relativePath }),
+      ...(materialization === undefined
+        ? {}
+        : {
+            artifactId: materialization.artifactId,
+            readerVersion: materialization.readerVersion,
+            instructionPolicy: materialization.instructionPolicy,
+            workspaceTrust: materialization.workspaceTrust,
+            sourceIdentity: materialization.sourceIdentity,
+            tokenCount: materialization.tokenCount,
+            truncationRange: materialization.truncationRange
+          })
+    });
+  });
 }
 
 function diagnosticsForRepository(
@@ -7684,6 +7878,12 @@ function resolveStartInput(
       : { requestedEffort: facts.requestedReasoningEffort })
   });
   if (!reasoning.ok) return err(reasoning.error);
+  const conventionsArtifactId =
+    facts.initialContextSources.find(
+      (source) =>
+        source.sourceKind === "project_conventions" &&
+        source.materialization?.kind === "project_conventions"
+    )?.materialization?.artifactId ?? null;
   return ok({
     ...(scope.kind === "workspace" ? { projectId: scope.workspaceId } : {}),
     scope,
@@ -7701,7 +7901,7 @@ function resolveStartInput(
     contextProfileId: contextProfile.value.profileId,
     profileVersion: contextProfile.value.profileVersion,
     guidanceTemplateChecksum: createHash("sha256").update(systemPrompt, "utf8").digest("hex"),
-    conventionsArtifactId: null,
+    conventionsArtifactId,
     promptCachePolicyVersion: "none@1.0",
     cachePrefixChecksum: "pending",
     ...(reasoning.value.reasoningEffort === undefined
