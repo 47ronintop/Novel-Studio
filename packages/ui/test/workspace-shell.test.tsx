@@ -1720,7 +1720,67 @@ describe("WorkspaceShell", () => {
     expect(html).not.toContain("可进入上下文");
   });
 
-  test("renders the M21 Story Bible editor view", () => {
+  test("renders a focused Story Bible list without duplicate category tabs or entry aside", () => {
+    const application = createDesktopApplication();
+    const openedEntries: string[] = [];
+    const createdKinds: string[] = [];
+    const tree = WorkspaceShell({
+      shellState: { ...application.getShellState(), activeActivity: "storyBible" },
+      commands: application.listCommands(),
+      commandPaletteOpen: false,
+      storyBibleEditor: createStoryBibleEditorProps({
+        entries: [
+          {
+            id: "chr_hero",
+            kind: "character",
+            assetType: "character",
+            title: "Hero",
+            status: "active",
+            summary: "A procedural protagonist with a hidden oath.",
+            aliases: ["Oath bearer"],
+            relatedEntityIds: [],
+            details: {},
+            createdAt: "2026-07-05T00:00:00.000Z",
+            updatedAt: "2026-07-06T00:00:00.000Z"
+          },
+          {
+            id: "world_capital",
+            kind: "world",
+            assetType: "world.location",
+            title: "Capital",
+            status: "active",
+            summary: "The old capital.",
+            aliases: [],
+            relatedEntityIds: [],
+            details: {},
+            createdAt: "2026-07-05T00:00:00.000Z",
+            updatedAt: "2026-07-05T00:00:00.000Z"
+          }
+        ],
+        onEntrySelect: (entryId) => openedEntries.push(entryId),
+        onNewDraft: () => createdKinds.push("character")
+      })
+    });
+    const openHero = findElementByAriaLabel(tree, "打开人物：Hero");
+    const createCharacter = findElementByAriaLabel(tree, "新建人物");
+
+    openHero?.props.onClick?.();
+    createCharacter?.props.onClick?.();
+    const html = renderToStaticMarkup(tree);
+
+    expect(openedEntries).toEqual(["chr_hero"]);
+    expect(createdKinds).toEqual(["character"]);
+    expect(html).toContain('aria-label="人物列表"');
+    expect(html).toContain('aria-label="搜索人物"');
+    expect(html).toContain('aria-label="筛选资料状态"');
+    expect(html.match(/aria-label="新建人物"/gu)).toHaveLength(1);
+    expect(html).toContain("Hero");
+    expect(html).not.toContain("Capital");
+    expect(html).not.toContain('aria-label="故事圣经分类"');
+    expect(html).not.toContain('aria-label="故事圣经编辑器"');
+  });
+
+  test("renders the common Story Bible detail form", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
@@ -1745,14 +1805,17 @@ describe("WorkspaceShell", () => {
             }
           ],
           draft: {
+            id: "chr_hero",
             kind: "character",
             assetType: "character",
             title: "Hero",
             summary: "A procedural protagonist with a hidden oath.",
             status: "active",
-            aliases: [],
-            relatedEntityIds: [],
-            details: {}
+            aliases: ["Oath bearer"],
+            relatedEntityIds: ["world_capital"],
+            details: {},
+            createdAt: "2026-07-05T00:00:00.000Z",
+            updatedAt: "2026-07-06T00:00:00.000Z"
           }
         })}
       />
@@ -1761,15 +1824,87 @@ describe("WorkspaceShell", () => {
     expect(html).toContain('aria-label="故事圣经"');
     expect(html).toContain('aria-label="故事圣经编辑器"');
     expect(html).toContain("人物");
-    expect(html).toContain("世界观");
-    expect(html).toContain("大纲");
-    expect(html).toContain("伏笔");
-    expect(html).toContain("时间线");
+    expect(html).not.toContain('aria-label="故事圣经分类"');
     expect(html).not.toContain("记忆");
+    expect(html).toContain('aria-label="返回人物列表"');
     expect(html).toContain('aria-label="设定标题"');
     expect(html).toContain('aria-label="设定正文"');
+    expect(html).toContain('aria-label="资料状态"');
+    expect(html).toContain('aria-label="资料别名"');
+    expect(html).toContain('aria-label="关联资料 ID"');
     expect(html).toContain("保存设定");
     expect(html).toContain("Hero");
+  });
+
+  test("filters the Story Bible list and offers one clear action when nothing matches", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        storyBibleEditor={createStoryBibleEditorProps({
+          filters: {
+            query: "missing",
+            status: "active",
+            worldAssetType: "all",
+            foreshadowTrackingStatus: "all"
+          },
+          entries: [
+            {
+              id: "chr_hero",
+              kind: "character",
+              assetType: "character",
+              title: "Hero",
+              status: "active",
+              summary: "A procedural protagonist.",
+              aliases: [],
+              relatedEntityIds: [],
+              details: {},
+              createdAt: "2026-07-05T00:00:00.000Z",
+              updatedAt: "2026-07-05T00:00:00.000Z"
+            }
+          ]
+        })}
+      />
+    );
+
+    expect(html).toContain("未找到匹配资料");
+    expect(html).toContain("清除筛选");
+    expect(html).not.toContain('data-story-entry-id="chr_hero"');
+    expect(html.match(/清除筛选/gu)).toHaveLength(1);
+  });
+
+  test("routes Story Bible back and discard commands through separate callbacks", () => {
+    const application = createDesktopApplication();
+    const calls: string[] = [];
+    const tree = WorkspaceShell({
+      shellState: { ...application.getShellState(), activeActivity: "storyBible" },
+      commands: application.listCommands(),
+      commandPaletteOpen: false,
+      storyBibleEditor: createStoryBibleEditorProps({
+        viewMode: "detail",
+        dirty: true,
+        draft: {
+          id: "chr_hero",
+          kind: "character",
+          assetType: "character",
+          title: "Hero",
+          summary: "Changed summary.",
+          status: "active",
+          aliases: [],
+          relatedEntityIds: [],
+          details: {}
+        },
+        onKindSelect: (kind) => calls.push(`back:${kind}`),
+        onCancelDraft: () => calls.push("discard")
+      })
+    });
+
+    findElementByAriaLabel(tree, "返回人物列表")?.props.onClick?.();
+    findElementByAriaLabel(tree, "放弃修改")?.props.onClick?.();
+
+    expect(calls).toEqual(["back:character", "discard"]);
   });
 
   test("renders Story Bible consistency warnings with jump actions", () => {
@@ -1869,7 +2004,7 @@ describe("WorkspaceShell", () => {
       commandPaletteOpen: false,
       storyBibleEditor: createStoryBibleEditorProps({
         activeKind: "timeline",
-        viewMode: "detail",
+        viewMode: "list",
         entries: [
           {
             id: "timeline_main",
@@ -1922,7 +2057,7 @@ describe("WorkspaceShell", () => {
         commandPaletteOpen={false}
         storyBibleEditor={createStoryBibleEditorProps({
           activeKind: "timeline",
-          viewMode: "detail",
+          viewMode: "list",
           entries: [
             {
               id: "timeline_main",
@@ -1985,6 +2120,40 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("ch_01");
     expect(html).toContain("ch_02");
     expect(html).toContain('aria-label="Edit timeline: Main Timeline"');
+  });
+
+  test("renders timeline detail inside the timeline activity and returns to its list", () => {
+    const application = createDesktopApplication();
+    const calls: string[] = [];
+    const tree = WorkspaceShell({
+      shellState: { ...application.getShellState(), activeActivity: "timeline" },
+      commands: application.listCommands(),
+      commandPaletteOpen: false,
+      storyBibleEditor: createStoryBibleEditorProps({
+        activeKind: "timeline",
+        viewMode: "detail",
+        draft: {
+          id: "timeline_main",
+          kind: "timeline",
+          assetType: "timeline.events",
+          title: "Main Timeline",
+          summary: "Ordered events.",
+          status: "active",
+          aliases: [],
+          relatedEntityIds: [],
+          details: {}
+        },
+        onKindSelect: (kind) => calls.push(kind)
+      })
+    });
+
+    findElementByAriaLabel(tree, "返回时间线列表")?.props.onClick?.();
+    const html = renderToStaticMarkup(tree);
+
+    expect(calls).toEqual(["timeline"]);
+    expect(html).toContain('aria-label="故事圣经编辑器"');
+    expect(html).toContain('aria-label="返回时间线列表"');
+    expect(html).not.toContain('aria-label="时间线主视图"');
   });
 
   test("renders the M23 Studio editor view", () => {

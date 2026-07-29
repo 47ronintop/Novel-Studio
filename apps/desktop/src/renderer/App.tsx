@@ -400,7 +400,8 @@ export function App() {
     handleDiscardRecoveryDraft,
     handleStoryBibleDraftChange,
     handleStoryBibleFiltersChange,
-    handleSaveStoryBibleDraft
+    handleSaveStoryBibleDraft,
+    guardStoryBibleDraft
   } = useProjectWorkflowActions({
     api,
     chapterBridge,
@@ -576,6 +577,7 @@ export function App() {
     creativePlainFileBridge: creativePlainFileBridgeRef.current,
     creativeProjectFilesBridge,
     canLeaveCreativeFile: guardWorkspaceFileEditors,
+    canLeaveStoryBibleDraft: guardStoryBibleDraft,
     setShellState,
     setProjectWorkflow,
     setChapterEditor,
@@ -616,6 +618,10 @@ export function App() {
   });
   const handleActivitySelect = useCallback(
     (activityId: ActivityId) => {
+      if (activityId === "timeline" && shellState.workspaceContext.kind === "creativeProject") {
+        workspaceNavigation.navigateToTimeline();
+        return;
+      }
       if (activityId === "workspace") {
         workspaceNavigation.selectWorkbench(
           shellState.workspaceContext.kind === "engineeringWorkspace"

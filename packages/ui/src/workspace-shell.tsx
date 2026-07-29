@@ -819,6 +819,9 @@ function ActivityEmptyState({
   }
 
   if (activityId === "timeline") {
+    if (storyBibleEditor?.activeKind === "timeline" && storyBibleEditor.viewMode === "detail") {
+      return <StoryBibleEditorView editor={storyBibleEditor} />;
+    }
     return <TimelineMainView editor={storyBibleEditor} onTimelineEntryOpen={onTimelineEntryOpen} />;
   }
 

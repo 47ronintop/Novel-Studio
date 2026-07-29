@@ -31,6 +31,9 @@ export interface WorkspaceNavigation {
   navigateToStoryKind(kind: StoryBibleEditorKind): void;
   navigateToStoryEntry(entryId: string): void;
   createStoryEntry(kind: StoryBibleEditorKind): void;
+  navigateToTimeline(): void;
+  navigateToTimelineEntry(entryId: string): void;
+  cancelStoryDraft(): void;
   navigateToFile(path: string): Promise<void>;
   navigateToCreativeFile(path: string): Promise<void>;
   openMainReview(review: AgentConversationMainReview): void;
@@ -41,12 +44,14 @@ export interface WorkspaceNavigationDependencies {
   readonly projectWorkflowBridge?: Pick<ProjectWorkflowBridge, "selectChapterAndLoad"> | undefined;
   readonly chapterEditorBridge?: Pick<ChapterEditorBridge, "adopt"> | undefined;
   readonly storyBibleBridge?:
-    Pick<StoryBibleBridge, "selectKind" | "selectEntry" | "beginCreate"> | undefined;
+    | Pick<StoryBibleBridge, "selectKind" | "selectEntry" | "beginCreate" | "cancelDraft">
+    | undefined;
   readonly plainFileBridge?: Pick<PlainFileEditorBridge, "openFile"> | undefined;
   readonly creativePlainFileBridge?: Pick<PlainFileEditorBridge, "openFile" | "clear"> | undefined;
   readonly creativeProjectFilesBridge?:
     Pick<CreativeProjectFilesBridge, "requestOpenFile" | "clearActiveFile"> | undefined;
   readonly canLeaveCreativeFile?: (() => Promise<boolean>) | undefined;
+  readonly canLeaveStoryBibleDraft?: (() => Promise<boolean>) | undefined;
   readonly setShellState: StateSetter<DesktopShellState>;
   readonly setProjectWorkflow: (next: ProjectWorkflowProps | undefined) => void;
   readonly setChapterEditor: (next: ChapterEditorProps | undefined) => void;
@@ -121,6 +126,26 @@ export function createWorkspaceNavigation(
         if (bridge === undefined) return;
         dependencies.setStoryBibleEditor(bridge.beginCreate(kind));
       });
+    },
+    navigateToTimeline() {
+      navigateToStory(() => {
+        const bridge = dependencies.storyBibleBridge;
+        if (bridge === undefined) return;
+        dependencies.setStoryBibleEditor(bridge.selectKind("timeline"));
+      }, "timeline");
+    },
+    navigateToTimelineEntry(entryId) {
+      navigateToStory(() => {
+        const bridge = dependencies.storyBibleBridge;
+        if (bridge === undefined) return;
+        dependencies.setStoryBibleEditor(bridge.selectEntry(entryId));
+      }, "timeline");
+    },
+    cancelStoryDraft() {
+      if (!hasCreativeContext(dependencies.getWorkspaceContext())) return;
+      const bridge = dependencies.storyBibleBridge;
+      if (bridge === undefined) return;
+      dependencies.setStoryBibleEditor(bridge.cancelDraft());
     },
     async navigateToFile(path) {
       if (!(await canLeaveCreativeFile())) return;
@@ -202,22 +227,31 @@ export function createWorkspaceNavigation(
     (dependencies.setCreativeFileEditor ?? dependencies.setFileEditor)(undefined);
   }
 
-  function navigateToStory(select: () => void): void {
+  function navigateToStory(select: () => void, activityId: ActivityId = "storyBible"): void {
     if (!hasCreativeContext(dependencies.getWorkspaceContext())) return;
-    if (dependencies.canLeaveCreativeFile !== undefined) {
-      void dependencies.canLeaveCreativeFile().then((allowed) => {
-        if (allowed) commitStorySelection(select);
+    if (
+      dependencies.canLeaveCreativeFile !== undefined ||
+      dependencies.canLeaveStoryBibleDraft !== undefined
+    ) {
+      void guardStoryNavigation().then((allowed) => {
+        if (allowed) commitStorySelection(select, activityId);
       });
       return;
     }
-    commitStorySelection(select);
+    commitStorySelection(select, activityId);
   }
 
-  function commitStorySelection(select: () => void): void {
+  async function guardStoryNavigation(): Promise<boolean> {
+    return (
+      (await canLeaveCreativeFile()) && (await dependencies.canLeaveStoryBibleDraft?.()) !== false
+    );
+  }
+
+  function commitStorySelection(select: () => void, activityId: ActivityId): void {
     select();
     clearCreativeFile();
     dependencies.setFileEditor(undefined);
-    commitCreativeSurface(dependencies.setShellState, "story", "storyBible");
+    commitCreativeSurface(dependencies.setShellState, "story", activityId);
   }
 }
 

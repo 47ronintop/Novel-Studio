@@ -5,7 +5,7 @@ import type {
   StoryBibleConsistencyReport,
   StoryBibleSnapshot
 } from "@novel-studio/application";
-import { ok } from "@novel-studio/shared";
+import { createUnifiedError, err, ok } from "@novel-studio/shared";
 
 import { createStoryBibleBridge } from "../src/renderer/story-bible-bridge.js";
 
@@ -241,6 +241,37 @@ describe("Story Bible bridge", () => {
       }
     });
     expect(editor).toMatchObject({ viewMode: "detail", dirty: false });
+  });
+
+  test("retains the dirty detail draft when Story Bible saving fails", async () => {
+    const api = createApi([]);
+    vi.spyOn(api.storyBible, "saveAsset").mockResolvedValue(
+      err(
+        createUnifiedError({
+          code: "STORY_BIBLE_SAVE_FAILED",
+          category: "StorageError",
+          message: "Story Bible storage is unavailable.",
+          recoverability: "retryable",
+          suggestedAction: "Retry after storage is available.",
+          traceId: "story-bible-test"
+        })
+      )
+    );
+    const bridge = createStoryBibleBridge(api);
+    await bridge.load("workspace-01");
+    bridge.selectEntry("chr_hero");
+    bridge.updateDraft("character", { title: "Unsaved Hero" });
+
+    const editor = await bridge.saveDraft();
+
+    expect(editor).toMatchObject({
+      viewMode: "detail",
+      status: "error",
+      dirty: true,
+      draft: { id: "chr_hero", title: "Unsaved Hero" },
+      feedback: { kind: "error", message: "Story Bible storage is unavailable." }
+    });
+    expect(bridge.getSnapshot().characters[0]?.title).toBe("Hero");
   });
 
   test("moves between list and detail, tracks dirty drafts, and rejects cross-kind patches", async () => {

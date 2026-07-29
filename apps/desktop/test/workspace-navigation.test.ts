@@ -84,6 +84,7 @@ describe("workspace navigation", () => {
       storyBibleBridge: {
         selectKind: () => nextStory,
         beginCreate: () => nextStory,
+        cancelDraft: () => nextStory,
         selectEntry(entryId) {
           log.push(`story.selectEntry:${entryId}`);
           return nextStory;
@@ -115,6 +116,7 @@ describe("workspace navigation", () => {
       storyBibleBridge: {
         selectKind: () => nextStory,
         selectEntry: () => nextStory,
+        cancelDraft: () => nextStory,
         beginCreate(kind) {
           log.push(`story.beginCreate:${kind}`);
           return nextStory;
@@ -131,6 +133,105 @@ describe("workspace navigation", () => {
       "state.activity:storyBible"
     ]);
     expect(state.storyBibleEditor).toBe(nextStory);
+  });
+
+  test("opens the timeline activity in list mode before committing its surface", () => {
+    const log: string[] = [];
+    const state = createState({
+      workbenchMode: "engineering",
+      creativeNavigatorMode: "writing",
+      activeActivity: "search"
+    });
+    const timelineList = storyEditor("", "timeline");
+    const navigation = createWorkspaceNavigation({
+      ...state.dependencies(log),
+      storyBibleBridge: {
+        selectKind(kind) {
+          log.push(`story.selectKind:${kind}`);
+          return timelineList;
+        },
+        selectEntry: () => timelineList,
+        beginCreate: () => timelineList,
+        cancelDraft: () => timelineList
+      }
+    });
+
+    navigation.navigateToTimeline();
+
+    expect(log).toEqual([
+      "story.selectKind:timeline",
+      "state.workbench:creative",
+      "state.navigator:story",
+      "state.activity:timeline"
+    ]);
+    expect(state.storyBibleEditor).toBe(timelineList);
+    expect(state.storyBibleEditor?.viewMode).toBe("list");
+  });
+
+  test("opens a timeline entry in detail without switching to the Story Bible activity", () => {
+    const log: string[] = [];
+    const state = createState({ creativeNavigatorMode: "story", activeActivity: "timeline" });
+    const timelineDetail = storyEditor("timeline_main", "timeline");
+    const navigation = createWorkspaceNavigation({
+      ...state.dependencies(log),
+      storyBibleBridge: {
+        selectKind: () => timelineDetail,
+        selectEntry(entryId) {
+          log.push(`story.selectEntry:${entryId}`);
+          return timelineDetail;
+        },
+        beginCreate: () => timelineDetail,
+        cancelDraft: () => timelineDetail
+      }
+    });
+
+    navigation.navigateToTimelineEntry("timeline_main");
+
+    expect(log).toEqual(["story.selectEntry:timeline_main"]);
+    expect(state.shellState.activeActivity).toBe("timeline");
+    expect(state.storyBibleEditor).toBe(timelineDetail);
+  });
+
+  test("keeps the current story detail when its dirty guard cancels navigation", async () => {
+    const state = createState({ creativeNavigatorMode: "story", activeActivity: "storyBible" });
+    const previousEditor = state.storyBibleEditor;
+    const selectKind = vi.fn(() => storyEditor("", "world"));
+    const navigation = createWorkspaceNavigation({
+      ...state.dependencies([]),
+      canLeaveStoryBibleDraft: vi.fn(async () => false),
+      storyBibleBridge: {
+        selectKind,
+        selectEntry: () => storyEditor("", "character"),
+        beginCreate: () => storyEditor("", "character"),
+        cancelDraft: () => storyEditor("", "character")
+      }
+    });
+
+    navigation.navigateToStoryKind("world");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(selectKind).not.toHaveBeenCalled();
+    expect(state.storyBibleEditor).toBe(previousEditor);
+    expect(state.shellState.activeActivity).toBe("storyBible");
+  });
+
+  test("cancels a draft without changing the active Story Bible surface", () => {
+    const state = createState({ creativeNavigatorMode: "story", activeActivity: "timeline" });
+    const timelineList = storyEditor("", "timeline");
+    const navigation = createWorkspaceNavigation({
+      ...state.dependencies([]),
+      storyBibleBridge: {
+        selectKind: () => timelineList,
+        selectEntry: () => timelineList,
+        beginCreate: () => timelineList,
+        cancelDraft: () => timelineList
+      }
+    });
+
+    navigation.cancelStoryDraft();
+
+    expect(state.storyBibleEditor).toBe(timelineList);
+    expect(state.shellState.activeActivity).toBe("timeline");
   });
 
   test("keeps the engineering editor and shell unchanged when file preparation fails", async () => {

@@ -15,6 +15,7 @@ import type { ChapterEditorBridge } from "./chapter-editor-bridge.js";
 import type { ProjectWorkflowBridge } from "./project-workflow-bridge.js";
 import type { SettingsBridge } from "./settings-bridge.js";
 import type { StoryBibleBridge } from "./story-bible-bridge.js";
+import { guardDirtyStoryBibleDraft } from "./story-bible-draft-guard.js";
 import type { StudioBridge } from "./studio-bridge.js";
 
 export interface ProjectWorkflowActionInputs {
@@ -302,6 +303,15 @@ export function useProjectWorkflowActions({
     });
   }, [setStoryBible, setStoryBibleEditor, storyBibleBridge]);
 
+  const guardStoryBibleDraft = useCallback(
+    () =>
+      guardDirtyStoryBibleDraft(storyBibleBridge, (bridge, editor) => {
+        setStoryBibleEditor(editor);
+        setStoryBible(bridge.getProps());
+      }),
+    [setStoryBible, setStoryBibleEditor, storyBibleBridge]
+  );
+
   return {
     refreshProjectWorkflow,
     handleProjectTitleChange,
@@ -320,6 +330,7 @@ export function useProjectWorkflowActions({
     handleDiscardRecoveryDraft,
     handleStoryBibleDraftChange,
     handleStoryBibleFiltersChange,
-    handleSaveStoryBibleDraft
+    handleSaveStoryBibleDraft,
+    guardStoryBibleDraft
   };
 }

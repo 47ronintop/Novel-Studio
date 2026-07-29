@@ -172,13 +172,18 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
       ? undefined
       : ({
           ...sourceStoryBibleEditor,
-          onKindSelect: props.navigation.navigateToStoryKind,
+          onKindSelect: (kind) => {
+            if (props.shellState.activeActivity === "timeline" && kind === "timeline") {
+              props.navigation.navigateToTimeline();
+              return;
+            }
+            props.navigation.navigateToStoryKind(kind);
+          },
           onEntrySelect: props.navigation.navigateToStoryEntry,
           onDraftChange: props.onStoryBibleDraftChange,
           onFiltersChange: props.onStoryBibleFiltersChange,
           onNewDraft: () => props.navigation.createStoryEntry(sourceStoryBibleEditor.activeKind),
-          onCancelDraft: () =>
-            props.navigation.navigateToStoryKind(sourceStoryBibleEditor.activeKind),
+          onCancelDraft: props.navigation.cancelStoryDraft,
           chapterOptions: (projectWorkflow?.chapters ?? [])
             .map(({ id, title, order, status }) => ({ id, title, order, status }))
             .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id)),
@@ -329,7 +334,7 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
       onCommandPaletteQueryChange={props.onCommandPaletteQueryChange}
       onBottomPanelTabSelect={props.onBottomPanelTabSelect}
       onSearchResultOpen={props.onSearchResultOpen}
-      onTimelineEntryOpen={props.navigation.navigateToStoryEntry}
+      onTimelineEntryOpen={props.navigation.navigateToTimelineEntry}
       onActivitySelect={props.onActivitySelect}
       onWorkbenchSelect={props.onWorkbenchSelect}
       onOpenEngineeringWorkspace={props.onOpenEngineeringWorkspace}
