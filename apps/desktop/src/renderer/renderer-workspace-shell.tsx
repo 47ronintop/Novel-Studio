@@ -214,9 +214,7 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
           onChapterRename: props.onRenameChapter,
           onChapterDuplicate: props.onDuplicateChapter,
           onChapterDelete: props.onDeleteChapter,
-          onStoryKindOpen: props.navigation.navigateToStoryKind,
-          onStoryEntryOpen: props.navigation.navigateToStoryEntry,
-          onStoryEntryCreate: props.navigation.createStoryEntry
+          onStoryKindOpen: props.navigation.navigateToStoryKind
         } satisfies CreativeWorkspaceNavigatorProps)
       : undefined;
   const engineeringNavigator =

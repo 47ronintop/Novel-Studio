@@ -32,8 +32,6 @@ const STORY_KINDS: readonly StoryBibleEditorKind[] = [
   "timeline"
 ];
 
-const SINGLETON_KINDS = new Set<StoryBibleEditorKind>(["outline", "timeline"]);
-
 const CREATIVE_PROJECT_FILE_EXTENSIONS = new Set([
   ".md",
   ".txt",
@@ -300,104 +298,30 @@ function WritingProjection(props: CreativeWorkspaceNavigatorProps) {
 
 function StoryProjection(props: CreativeWorkspaceNavigatorProps) {
   const activeKind = props.storyBible.activeKind;
-  const normalizedQuery = normalizeQuery(props.searchQuery);
-  const activeEntries = props.storyBible.entries
-    .filter((entry) => entry.kind === activeKind)
-    .filter((entry) =>
-      [entry.title, entry.status, entry.summary].some((value) =>
-        value.toLocaleLowerCase().includes(normalizedQuery)
-      )
-    );
-  const activeKindHasEntry = props.storyBible.entries.some((entry) => entry.kind === activeKind);
-  const canCreate = !SINGLETON_KINDS.has(activeKind) || !activeKindHasEntry;
 
   return (
-    <>
-      <NavigatorSearch
-        ariaLabel="筛选故事资料"
-        onChange={props.onSearchQueryChange}
-        placeholder={`筛选${storyKindLabels[activeKind]}`}
-        value={props.searchQuery}
-      />
-      <div aria-label="故事资料分类" className="ns-story-kind-list">
-        {STORY_KINDS.map((kind) => {
-          const KindIcon = storyKindIcons[kind];
-          const count = props.storyBible.entries.filter((entry) => entry.kind === kind).length;
-          return (
-            <button
-              aria-pressed={kind === activeKind}
-              className="ns-story-kind-button"
-              data-story-kind={kind}
-              key={kind}
-              onClick={() => props.onStoryKindOpen(kind)}
-              type="button"
-            >
-              <span className="ns-creative-row-label">
-                <KindIcon aria-hidden="true" size={14} />
-                <span>{storyKindLabels[kind]}</span>
-              </span>
-              <span className="ns-creative-row-count">{count}</span>
-            </button>
-          );
-        })}
-      </div>
-      <div className="ns-creative-section-header">
-        <span>{storyKindLabels[activeKind]}</span>
-        {canCreate ? (
+    <div aria-label="故事资料分类" className="ns-story-kind-list">
+      {STORY_KINDS.map((kind) => {
+        const KindIcon = storyKindIcons[kind];
+        const count = props.storyBible.entries.filter((entry) => entry.kind === kind).length;
+        return (
           <button
-            aria-label={`新建${storyKindLabels[activeKind]}`}
-            className="ns-icon-button"
-            onClick={() => props.onStoryEntryCreate(activeKind)}
-            title={`新建${storyKindLabels[activeKind]}`}
+            aria-pressed={kind === activeKind}
+            className="ns-story-kind-button"
+            data-story-kind={kind}
+            key={kind}
+            onClick={() => props.onStoryKindOpen(kind)}
             type="button"
           >
-            <Plus aria-hidden="true" size={14} />
+            <span className="ns-creative-row-label">
+              <KindIcon aria-hidden="true" size={14} />
+              <span>{storyKindLabels[kind]}</span>
+            </span>
+            <span className="ns-creative-row-count">{count}</span>
           </button>
-        ) : null}
-      </div>
-      {activeEntries.length === 0 ? (
-        <div className="ns-creative-empty">
-          <span>
-            {normalizedQuery.length === 0
-              ? `还没有${storyKindLabels[activeKind]}`
-              : "未找到匹配资料"}
-          </span>
-          {normalizedQuery.length > 0 ? (
-            <button
-              aria-label="清除故事资料筛选"
-              className="ns-icon-text-button"
-              onClick={() => props.onSearchQueryChange("")}
-              type="button"
-            >
-              清除筛选
-            </button>
-          ) : null}
-        </div>
-      ) : (
-        <ul className="ns-creative-list" aria-label={`${storyKindLabels[activeKind]}列表`}>
-          {activeEntries.map((entry) => {
-            const EntryIcon = storyKindIcons[entry.kind];
-            return (
-              <li key={entry.id}>
-                <button
-                  aria-current={props.storyBible.draft.id === entry.id ? "page" : undefined}
-                  className="ns-story-entry-button"
-                  data-story-entry-id={entry.id}
-                  onClick={() => props.onStoryEntryOpen(entry.id)}
-                  type="button"
-                >
-                  <span className="ns-creative-row-label">
-                    <EntryIcon aria-hidden="true" size={14} />
-                    <span>{highlightText(entry.title, normalizedQuery)}</span>
-                  </span>
-                  <span className="ns-creative-row-count">{entry.status}</span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </>
+        );
+      })}
+    </div>
   );
 }
 

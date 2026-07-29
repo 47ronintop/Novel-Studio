@@ -124,7 +124,7 @@ describe("CreativeWorkspaceNavigator", () => {
     ]);
   });
 
-  test("shows story kinds in the required order with real counts and singleton create rules", () => {
+  test("shows only the five story kinds in the required order with real counts", () => {
     const storyBible = createStoryBible({ activeKind: "outline" });
     render(<CreativeWorkspaceNavigator {...createCreativeProps({ mode: "story", storyBible })} />);
 
@@ -142,23 +142,13 @@ describe("CreativeWorkspaceNavigator", () => {
     expect(
       kindButtons.map((button) => button.querySelector(".ns-creative-row-count")?.textContent)
     ).toEqual(["1", "1", "1", "1", "1"]);
+    expect(host.querySelector('[aria-label="筛选故事资料"]')).toBeNull();
+    expect(host.querySelector("[data-story-entry-id]")).toBeNull();
     expect(host.querySelector('button[aria-label="新建大纲"]')).toBeNull();
-
-    const calls: string[] = [];
-    render(
-      <CreativeWorkspaceNavigator
-        {...createCreativeProps({
-          mode: "story",
-          storyBible: createStoryBible({ activeKind: "character" }),
-          onStoryEntryCreate: (kind) => calls.push(kind)
-        })}
-      />
-    );
-    click(requiredElement(host, 'button[aria-label="新建人物"]'));
-    expect(calls).toEqual(["character"]);
+    expect(host.querySelector('button[aria-label="新建人物"]')).toBeNull();
   });
 
-  test("filters only the active story kind and opens timeline_main as a story entry", () => {
+  test("opens story categories without rendering the active category entry list", () => {
     const calls: string[] = [];
     render(
       <CreativeWorkspaceNavigator
@@ -166,15 +156,15 @@ describe("CreativeWorkspaceNavigator", () => {
           mode: "story",
           searchQuery: "雨夜",
           storyBible: createStoryBible({ activeKind: "timeline" }),
-          onStoryEntryOpen: (id) => calls.push(id)
+          onStoryKindOpen: (kind) => calls.push(kind)
         })}
       />
     );
 
-    expect(host.textContent).toContain("主时间线");
+    expect(host.textContent).not.toContain("主时间线");
     expect(host.textContent).not.toContain("林照月");
-    click(requiredElement(host, 'button[data-story-entry-id="timeline_main"]'));
-    expect(calls).toEqual(["timeline_main"]);
+    click(requiredElement(host, 'button[data-story-kind="character"]'));
+    expect(calls).toEqual(["character"]);
   });
 
   test("supports ArrowLeft ArrowRight Home End and unique tabpanel ids", () => {
@@ -499,8 +489,6 @@ function createCreativeProps(
     onChapterDuplicate: () => undefined,
     onChapterDelete: () => undefined,
     onStoryKindOpen: () => undefined,
-    onStoryEntryOpen: () => undefined,
-    onStoryEntryCreate: () => undefined,
     ...overrides
   };
 }

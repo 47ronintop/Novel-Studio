@@ -103,8 +103,6 @@ export interface CreativeWorkspaceNavigatorProps {
   readonly onChapterDuplicate: (chapterId: string) => void;
   readonly onChapterDelete: (chapterId: string) => void;
   readonly onStoryKindOpen: (kind: StoryBibleEditorKind) => void;
-  readonly onStoryEntryOpen: (entryId: string) => void;
-  readonly onStoryEntryCreate: (kind: StoryBibleEditorKind) => void;
 }
 
 export interface CreativeProjectFilesNavigatorProps {

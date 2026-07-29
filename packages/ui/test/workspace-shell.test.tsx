@@ -1031,9 +1031,7 @@ describe("WorkspaceShell", () => {
           onChapterRename: () => undefined,
           onChapterDuplicate: () => undefined,
           onChapterDelete: () => undefined,
-          onStoryKindOpen: () => undefined,
-          onStoryEntryOpen: () => undefined,
-          onStoryEntryCreate: () => undefined
+          onStoryKindOpen: () => undefined
         }}
         projectWorkflow={{
           chapters: [
