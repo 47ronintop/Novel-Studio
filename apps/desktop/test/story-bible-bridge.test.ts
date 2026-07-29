@@ -5,7 +5,7 @@ import type {
   StoryBibleConsistencyReport,
   StoryBibleSnapshot
 } from "@novel-studio/application";
-import { createUnifiedError, err, ok } from "@novel-studio/shared";
+import { createUnifiedError, err, hashForeshadowEvidence, ok } from "@novel-studio/shared";
 
 import { createStoryBibleBridge } from "../src/renderer/story-bible-bridge.js";
 
@@ -467,6 +467,179 @@ describe("Story Bible bridge", () => {
     expect(saved.feedback?.message).toContain("ch_01");
     expect(saved.feedback?.message).toContain("ch_missing");
     expect(calls.some((call) => call.startsWith("storyBible.saveAsset:"))).toBe(false);
+  });
+
+  test("normalizes foreshadow evidence, recomputes its hash, and preserves unknown fields", async () => {
+    const rawExcerpt = "  Cafe\u0301\r\n线索  ";
+    const baseForeshadow = snapshot.foreshadows[0];
+    if (baseForeshadow === undefined) throw new Error("Expected the fixture foreshadow.");
+    const api = createApi([], {
+      ...snapshot,
+      foreshadows: [
+        {
+          ...baseForeshadow,
+          details: {
+            trackingStatus: "planted",
+            plannedPayoffChapterId: "ch_02",
+            sourceRefs: [
+              {
+                chapterId: "ch_01",
+                excerpt: "旧片段",
+                excerptHash: "1".repeat(64),
+                futureSourceField: { kept: true }
+              }
+            ],
+            futureDetailField: ["kept"]
+          }
+        }
+      ]
+    });
+    const saveAsset = vi.spyOn(api.storyBible, "saveAsset");
+    const bridge = createStoryBibleBridge(api);
+    await bridge.load("workspace-01");
+    bridge.selectEntry("fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    bridge.updateDraft("foreshadow", {
+      details: {
+        trackingStatus: "planted",
+        plannedPayoffChapterId: "",
+        sourceRefs: [
+          {
+            chapterId: "ch_01",
+            excerpt: rawExcerpt,
+            excerptHash: "0".repeat(64),
+            futureSourceField: { kept: true }
+          }
+        ]
+      }
+    });
+
+    const saved = await bridge.saveDraft({ chapterIds: ["ch_01", "ch_02"] });
+
+    expect(saved).toMatchObject({ status: "saved", dirty: false });
+    expect(saveAsset).toHaveBeenCalledOnce();
+    expect(bridge.getSnapshot().foreshadows[0]?.details).toMatchObject({
+      trackingStatus: "planted",
+      futureDetailField: ["kept"],
+      sourceRefs: [
+        {
+          chapterId: "ch_01",
+          excerpt: "Caf\u00e9\n线索",
+          excerptHash: await hashForeshadowEvidence(rawExcerpt),
+          futureSourceField: { kept: true }
+        }
+      ]
+    });
+    expect(bridge.getSnapshot().foreshadows[0]?.details).not.toHaveProperty(
+      "plannedPayoffChapterId"
+    );
+  });
+
+  test("blocks paid-off foreshadows without an actual payoff chapter before calling preload", async () => {
+    const calls: string[] = [];
+    const bridge = createStoryBibleBridge(createApi(calls));
+    await bridge.load("workspace-01");
+    bridge.selectEntry("fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    bridge.updateDraft("foreshadow", {
+      details: { trackingStatus: "paid-off", actualPayoffChapterId: "" }
+    });
+
+    const saved = await bridge.saveDraft({ chapterIds: ["ch_01", "ch_05"] });
+
+    expect(saved).toMatchObject({ status: "error", dirty: true });
+    expect(saved.feedback?.message).toContain("必须选择实际回收章节");
+    expect(calls.some((call) => call.startsWith("storyBible.saveAsset:"))).toBe(false);
+  });
+
+  test("blocks duplicate foreshadow evidence across non-deleted assets before calling preload", async () => {
+    const calls: string[] = [];
+    const duplicateExcerpt = "他把钥匙收进袖口。";
+    const baseForeshadow = snapshot.foreshadows[0];
+    if (baseForeshadow === undefined) throw new Error("Expected the fixture foreshadow.");
+    const bridge = createStoryBibleBridge(
+      createApi(calls, {
+        ...snapshot,
+        foreshadows: [
+          {
+            ...baseForeshadow,
+            title: "生锈的钥匙",
+            details: {
+              trackingStatus: "planted",
+              sourceRefs: [
+                {
+                  chapterId: "ch_01",
+                  excerpt: duplicateExcerpt,
+                  excerptHash: "1".repeat(64)
+                }
+              ]
+            }
+          },
+          {
+            ...baseForeshadow,
+            id: "fsh_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            title: "门后的人",
+            details: {
+              trackingStatus: "progressing",
+              sourceRefs: [
+                {
+                  chapterId: "ch_01",
+                  excerpt: `  ${duplicateExcerpt}  `,
+                  excerptHash: "2".repeat(64)
+                }
+              ]
+            }
+          }
+        ]
+      })
+    );
+    await bridge.load("workspace-01");
+    bridge.selectEntry("fsh_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    bridge.updateDraft("foreshadow", { summary: "尝试保存重复来源。" });
+
+    const saved = await bridge.saveDraft({ chapterIds: ["ch_01"] });
+
+    expect(saved).toMatchObject({ status: "error", dirty: true });
+    expect(saved.feedback?.message).toContain("已存在于伏笔“生锈的钥匙”");
+    expect(calls.some((call) => call.startsWith("storyBible.saveAsset:"))).toBe(false);
+  });
+
+  test("does not save a foreshadow after the active workspace changes while evidence is hashed", async () => {
+    const calls: string[] = [];
+    const bridge = createStoryBibleBridge(createApi(calls));
+    await bridge.load("workspace-01");
+    bridge.selectEntry("fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    bridge.updateDraft("foreshadow", {
+      details: {
+        trackingStatus: "planted",
+        sourceRefs: [
+          {
+            chapterId: "ch_01",
+            excerpt: "他把钥匙收进袖口。",
+            excerptHash: "0".repeat(64)
+          }
+        ]
+      }
+    });
+
+    let resolveDigest: ((value: ArrayBuffer) => void) | undefined;
+    const digest = vi.spyOn(globalThis.crypto.subtle, "digest").mockImplementation(
+      () =>
+        new Promise<ArrayBuffer>((resolve) => {
+          resolveDigest = resolve;
+        })
+    );
+    try {
+      const saving = bridge.saveDraft({ chapterIds: ["ch_01"] });
+      await vi.waitFor(() => expect(digest).toHaveBeenCalledOnce());
+      bridge.clear();
+      resolveDigest?.(new Uint8Array(32).buffer);
+      const saved = await saving;
+
+      expect(saved).toBe(bridge.getEditorProps());
+      expect(saved).toMatchObject({ viewMode: "list", status: "idle", dirty: false });
+      expect(calls.some((call) => call.startsWith("storyBible.saveAsset:"))).toBe(false);
+    } finally {
+      digest.mockRestore();
+    }
   });
 
   test("maps structured timeline events for the timeline workspace", async () => {

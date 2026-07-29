@@ -1,5 +1,5 @@
 ﻿import type { ProjectSearchResultItem } from "@novel-studio/application";
-import type { JsonObject } from "@novel-studio/shared";
+import type { ForeshadowTrackingStatus, JsonObject } from "@novel-studio/shared";
 import { ArrowLeft, Check, Clock3, FilePlus, RotateCcw, Search, X } from "lucide-react";
 
 import type {
@@ -10,6 +10,14 @@ import type {
   StoryBibleEditorProps,
   StoryBibleWorldAssetType
 } from "./workspace-shell-types.js";
+import { StoryBibleForeshadowEditor } from "./story-bible-foreshadow-editor.js";
+import {
+  STORY_BIBLE_FORESHADOW_STATUS_OPTIONS,
+  isStoryBibleForeshadowOverdue,
+  storyBibleForeshadowStatusLabel,
+  storyBibleForeshadowValidationMessage,
+  validateStoryBibleForeshadow
+} from "./story-bible-foreshadow.js";
 import { StoryBibleOutlineEditor } from "./story-bible-outline-editor.js";
 import {
   storyBibleOutlineValidationMessage,
@@ -204,6 +212,28 @@ export function StoryBibleEditorView({ editor }: { readonly editor: StoryBibleEd
                 </select>
               </label>
             ) : null}
+            {editor.activeKind === "foreshadow" ? (
+              <label className="ns-story-filter-control">
+                <span>跟踪</span>
+                <select
+                  aria-label="筛选伏笔跟踪状态"
+                  onChange={(event) =>
+                    editor.onFiltersChange({
+                      foreshadowTrackingStatus: event.currentTarget.value as
+                        ForeshadowTrackingStatus | "all"
+                    })
+                  }
+                  value={editor.filters.foreshadowTrackingStatus}
+                >
+                  <option value="all">全部</option>
+                  {STORY_BIBLE_FORESHADOW_STATUS_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             {canCreate ? <StoryBibleCreateControl editor={editor} kindLabel={kindLabel} /> : null}
           </div>
         ) : null}
@@ -298,7 +328,8 @@ function StoryBibleList({
   const filtersActive =
     editor.filters.query.trim().length > 0 ||
     editor.filters.status !== "all" ||
-    (editor.activeKind === "world" && editor.filters.worldAssetType !== "all");
+    (editor.activeKind === "world" && editor.filters.worldAssetType !== "all") ||
+    (editor.activeKind === "foreshadow" && editor.filters.foreshadowTrackingStatus !== "all");
   const columns = storyBibleListColumns(editor.activeKind);
 
   return (
@@ -314,7 +345,12 @@ function StoryBibleList({
             <button
               className="ns-icon-text-button"
               onClick={() =>
-                editor.onFiltersChange({ query: "", status: "all", worldAssetType: "all" })
+                editor.onFiltersChange({
+                  query: "",
+                  status: "all",
+                  worldAssetType: "all",
+                  foreshadowTrackingStatus: "all"
+                })
               }
               type="button"
             >
@@ -340,7 +376,7 @@ function StoryBibleList({
                   onClick={() => editor.onEntrySelect(entry.id)}
                   type="button"
                 >
-                  <StoryBibleListRowContent entry={entry} />
+                  <StoryBibleListRowContent editor={editor} entry={entry} />
                 </button>
               </li>
             ))}
@@ -351,7 +387,13 @@ function StoryBibleList({
   );
 }
 
-function StoryBibleListRowContent({ entry }: { readonly entry: StoryBibleEditorEntry }) {
+function StoryBibleListRowContent({
+  editor,
+  entry
+}: {
+  readonly editor: StoryBibleEditorProps;
+  readonly entry: StoryBibleEditorEntry;
+}) {
   const title = (
     <span className="ns-story-list-title">
       <strong>{entry.title}</strong>
@@ -387,6 +429,49 @@ function StoryBibleListRowContent({ entry }: { readonly entry: StoryBibleEditorE
       </>
     );
   }
+  if (entry.kind === "foreshadow") {
+    const overdue = isStoryBibleForeshadowOverdue(
+      entry.details,
+      editor.chapterOptions,
+      editor.currentChapterId
+    );
+    const actualPayoff = storyBibleChapterLabel(
+      entry.details.actualPayoffChapterId,
+      editor.chapterOptions
+    );
+    return (
+      <>
+        {title}
+        <span
+          className="ns-foreshadow-tracking-status"
+          data-tracking-status={entry.details.trackingStatus}
+        >
+          {storyBibleForeshadowStatusLabel(entry.details.trackingStatus)}
+          {overdue ? <small className="ns-foreshadow-overdue">逾期</small> : null}
+        </span>
+        <span className="ns-foreshadow-chapter" data-foreshadow-column="planted">
+          <small>埋设</small>
+          <span>
+            {storyBibleChapterLabel(entry.details.plantedChapterId, editor.chapterOptions)}
+          </span>
+        </span>
+        <span className="ns-foreshadow-chapter" data-foreshadow-column="planned-payoff">
+          <small>计划回收</small>
+          <span>
+            {storyBibleChapterLabel(entry.details.plannedPayoffChapterId, editor.chapterOptions)}
+          </span>
+        </span>
+        <span className="ns-foreshadow-chapter" data-foreshadow-column="actual-payoff">
+          <small>实际回收</small>
+          <span>{actualPayoff}</span>
+        </span>
+        <time dateTime={entry.updatedAt}>{formatStoryDate(entry.updatedAt)}</time>
+        <span className="ns-foreshadow-row-secondary">
+          实际回收：{actualPayoff} · 更新：{formatStoryDate(entry.updatedAt)}
+        </span>
+      </>
+    );
+  }
 
   return (
     <>
@@ -404,8 +489,9 @@ function storyBibleListColumns(kind: StoryBibleEditorKind): readonly string[] {
       return ["姓名", "身份定位", "状态", "摘要"];
     case "world":
       return ["类型", "标题", "状态", "摘要"];
-    case "outline":
     case "foreshadow":
+      return ["标题", "跟踪状态", "埋设章", "计划回收章", "实际回收章", "更新"];
+    case "outline":
     case "timeline":
       return ["标题", "摘要", "状态", "更新"];
   }
@@ -418,13 +504,19 @@ function StoryBibleDetailForm({
   readonly editor: StoryBibleEditorProps;
   readonly kindLabel: string;
 }) {
-  const outlineValidationIssues =
+  const validationMessages =
     editor.draft.kind === "outline"
       ? validateStoryBibleOutline(
           editor.draft.details,
           editor.chapterOptions.map((chapter) => chapter.id)
-        )
-      : [];
+        ).map(storyBibleOutlineValidationMessage)
+      : editor.draft.kind === "foreshadow"
+        ? validateStoryBibleForeshadow(
+            editor.draft,
+            editor.entries.filter((entry) => entry.kind === "foreshadow")
+          ).map(storyBibleForeshadowValidationMessage)
+        : [];
+  const validationKindLabel = editor.draft.kind === "outline" ? "大纲" : "伏笔";
 
   return (
     <form
@@ -432,20 +524,22 @@ function StoryBibleDetailForm({
       className="ns-story-editor-form"
       onSubmit={(event) => {
         event.preventDefault();
-        if (outlineValidationIssues.length > 0) return;
+        if (validationMessages.length > 0) return;
         editor.onSave();
       }}
     >
       <StoryBibleDetailFields editor={editor} />
 
-      {outlineValidationIssues.length === 0 ? null : (
-        <section aria-label="大纲保存校验" className="ns-story-validation" role="alert">
-          <strong>无法保存大纲</strong>
+      {validationMessages.length === 0 ? null : (
+        <section
+          aria-label={`${validationKindLabel}保存校验`}
+          className="ns-story-validation"
+          role="alert"
+        >
+          <strong>无法保存{validationKindLabel}</strong>
           <ul>
-            {outlineValidationIssues.map((issue) => (
-              <li key={`${issue.code}:${issue.chapterId}`}>
-                {storyBibleOutlineValidationMessage(issue)}
-              </li>
+            {validationMessages.map((message, index) => (
+              <li key={`${index}:${message}`}>{message}</li>
             ))}
           </ul>
         </section>
@@ -489,7 +583,7 @@ function StoryBibleDetailForm({
             disabled={
               editor.status === "saving" ||
               editor.draft.title.trim().length === 0 ||
-              outlineValidationIssues.length > 0
+              validationMessages.length > 0
             }
             type="submit"
           >
@@ -516,6 +610,7 @@ function StoryBibleDetailFields({ editor }: { readonly editor: StoryBibleEditorP
     case "outline":
       return <StoryBibleOutlineEditor editor={editor} />;
     case "foreshadow":
+      return <StoryBibleForeshadowEditor editor={editor} />;
     case "timeline":
       return <GenericStoryDetailFields editor={editor} />;
   }
@@ -934,6 +1029,13 @@ function filterStoryBibleEntries(
     ) {
       return false;
     }
+    if (
+      entry.kind === "foreshadow" &&
+      editor.filters.foreshadowTrackingStatus !== "all" &&
+      entry.details.trackingStatus !== editor.filters.foreshadowTrackingStatus
+    ) {
+      return false;
+    }
     if (query.length === 0) return true;
     return [
       entry.title,
@@ -945,6 +1047,15 @@ function filterStoryBibleEntries(
       ...collectJsonStrings(entry.details)
     ].some((value) => value.toLocaleLowerCase("zh-CN").includes(query));
   });
+}
+
+function storyBibleChapterLabel(
+  chapterId: string | undefined,
+  chapters: StoryBibleEditorProps["chapterOptions"]
+): string {
+  if (chapterId === undefined || chapterId.length === 0) return "未设置";
+  const chapter = chapters.find((candidate) => candidate.id === chapterId);
+  return chapter === undefined ? `${chapterId}（已不存在）` : `${chapter.order}. ${chapter.title}`;
 }
 
 function detailString(details: JsonObject, key: string): string {

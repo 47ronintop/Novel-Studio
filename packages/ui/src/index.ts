@@ -71,6 +71,18 @@ export type {
   StoryBibleOutlineValidationIssue,
   StoryBibleOutlineVolume
 } from "./story-bible-outline.js";
+export {
+  STORY_BIBLE_FORESHADOW_STATUS_OPTIONS,
+  isStoryBibleForeshadowOverdue,
+  storyBibleForeshadowStatusLabel,
+  storyBibleForeshadowValidationMessage,
+  validateStoryBibleForeshadow
+} from "./story-bible-foreshadow.js";
+export type {
+  StoryBibleForeshadowChapterOrder,
+  StoryBibleForeshadowRecord,
+  StoryBibleForeshadowValidationIssue
+} from "./story-bible-foreshadow.js";
 export { AgentRunPanel } from "./agent-run-panel.js";
 export { AgentErrorCard } from "./agent-error-card.js";
 export type { AgentErrorCardProps } from "./agent-error-card.js";

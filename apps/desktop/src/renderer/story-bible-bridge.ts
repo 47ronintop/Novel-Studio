@@ -9,7 +9,13 @@ import type {
   StoryBibleSnapshot
 } from "@novel-studio/application";
 import type { JsonObject, Result, UnifiedError } from "@novel-studio/shared";
-import { storyBibleOutlineValidationMessage, validateStoryBibleOutline } from "@novel-studio/ui";
+import { createForeshadowEvidence } from "@novel-studio/shared";
+import {
+  storyBibleForeshadowValidationMessage,
+  storyBibleOutlineValidationMessage,
+  validateStoryBibleForeshadow,
+  validateStoryBibleOutline
+} from "@novel-studio/ui";
 import type {
   StoryBibleEditorDraft,
   StoryBibleEditorDraftFor,
@@ -232,8 +238,8 @@ export function createStoryBibleBridge(
       const generation = loadGeneration;
       const workspaceId = snapshotBinding?.workspaceId;
       const draft = normalizeDraft(editorState.draft);
-      const outlineValidationError = validateOutlineDraft(draft, saveOptions);
-      if (outlineValidationError !== undefined) {
+      const validationError = validateStoryBibleDraft(draft, snapshot, saveOptions);
+      if (validationError !== undefined) {
         editorState = {
           ...editorState,
           status: "error",
@@ -241,13 +247,15 @@ export function createStoryBibleBridge(
           draft,
           feedback: {
             kind: "error",
-            message: outlineValidationError
+            message: validationError
           }
         };
         return publishEditor();
       }
+      const normalizedDraft = await normalizeForeshadowDraft(draft);
+      if (generation !== loadGeneration) return editorProps;
       const saved = await api.storyBible.saveAsset(
-        toStoryAsset(draft, now(), snapshot, createAssetIdentity)
+        toStoryAsset(normalizedDraft, now(), snapshot, createAssetIdentity)
       );
 
       if (!saved.ok) {
@@ -255,7 +263,7 @@ export function createStoryBibleBridge(
           ...editorState,
           status: "error",
           dirty: true,
-          draft,
+          draft: normalizedDraft,
           feedback: {
             kind: "error",
             message: saved.error.message
@@ -275,7 +283,7 @@ export function createStoryBibleBridge(
       snapshotBinding = workspaceId === undefined ? undefined : { workspaceId, snapshot };
       consistency = nextConsistency;
       props = toProps(snapshot);
-      baselineDraft = draftFromSnapshot(snapshot, { ...draft, id: saved.value.id });
+      baselineDraft = draftFromSnapshot(snapshot, { ...normalizedDraft, id: saved.value.id });
       editorState = {
         ...editorState,
         activeKind: baselineDraft.kind,
@@ -623,18 +631,49 @@ function normalizeDraft(draft: StoryBibleEditorDraft): StoryBibleEditorDraft {
   } as StoryBibleEditorDraft;
 }
 
-function validateOutlineDraft(
+function validateStoryBibleDraft(
   draft: StoryBibleEditorDraft,
+  snapshot: StoryBibleSnapshot,
   saveOptions: StoryBibleSaveOptions | undefined
 ): string | undefined {
-  if (draft.kind !== "outline") return undefined;
-  if (saveOptions?.chapterIds === undefined) {
-    return "无法保存大纲：当前章节目录不可用。";
+  if (draft.kind === "outline") {
+    if (saveOptions?.chapterIds === undefined) {
+      return "无法保存大纲：当前章节目录不可用。";
+    }
+    const issues = validateStoryBibleOutline(draft.details, saveOptions.chapterIds);
+    return issues.length === 0
+      ? undefined
+      : `无法保存大纲：${issues.map(storyBibleOutlineValidationMessage).join(" ")}`;
   }
-  const issues = validateStoryBibleOutline(draft.details, saveOptions.chapterIds);
-  return issues.length === 0
-    ? undefined
-    : `无法保存大纲：${issues.map(storyBibleOutlineValidationMessage).join(" ")}`;
+  if (draft.kind === "foreshadow") {
+    const issues = validateStoryBibleForeshadow(draft, snapshot.foreshadows);
+    return issues.length === 0
+      ? undefined
+      : `无法保存伏笔：${issues.map(storyBibleForeshadowValidationMessage).join(" ")}`;
+  }
+  return undefined;
+}
+
+async function normalizeForeshadowDraft(
+  draft: StoryBibleEditorDraft
+): Promise<StoryBibleEditorDraft> {
+  if (draft.kind !== "foreshadow" || draft.details.sourceRefs === undefined) {
+    return draft;
+  }
+
+  const sourceRefs = await Promise.all(
+    draft.details.sourceRefs.map(async (sourceRef) => ({
+      ...sourceRef,
+      ...(await createForeshadowEvidence(sourceRef.chapterId.trim(), sourceRef.excerpt))
+    }))
+  );
+  return {
+    ...draft,
+    details: {
+      ...draft.details,
+      sourceRefs
+    }
+  };
 }
 
 function draftFromSnapshot(
@@ -678,13 +717,19 @@ function toStoryAsset(
     updatedAt: now
   };
   if (draft.kind === "foreshadow") {
+    const { plantedChapterId, plannedPayoffChapterId, actualPayoffChapterId, ...otherDetails } =
+      details;
+    const foreshadowDetails: JsonObject = {
+      ...otherDetails,
+      trackingStatus: draft.details.trackingStatus,
+      ...optionalTrimmedString("plantedChapterId", plantedChapterId),
+      ...optionalTrimmedString("plannedPayoffChapterId", plannedPayoffChapterId),
+      ...optionalTrimmedString("actualPayoffChapterId", actualPayoffChapterId)
+    };
     return {
       ...common,
       type: "foreshadow",
-      details: {
-        ...details,
-        trackingStatus: draft.details.trackingStatus
-      }
+      details: foreshadowDetails
     } as ForeshadowAsset;
   }
   return {
@@ -692,6 +737,10 @@ function toStoryAsset(
     type: draft.assetType,
     details
   } as StoryBibleRegularAsset;
+}
+
+function optionalTrimmedString(key: string, value: unknown): JsonObject {
+  return typeof value === "string" && value.trim().length > 0 ? { [key]: value.trim() } : {};
 }
 
 function findExistingAsset(

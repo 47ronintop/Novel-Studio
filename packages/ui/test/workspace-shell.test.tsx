@@ -2241,6 +2241,180 @@ describe("WorkspaceShell", () => {
     host.remove();
   });
 
+  test("renders the foreshadow tracker with chapter titles, status filtering, and overdue state", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        storyBibleEditor={createStoryBibleEditorProps({
+          activeKind: "foreshadow",
+          currentChapterId: "ch_03",
+          chapterOptions: [
+            { id: "ch_03", title: "真相迫近", order: 3, status: "draft" },
+            { id: "ch_01", title: "雨夜入城", order: 1, status: "draft" },
+            { id: "ch_02", title: "无名档案", order: 2, status: "draft" }
+          ],
+          filters: {
+            query: "",
+            status: "all",
+            worldAssetType: "all",
+            foreshadowTrackingStatus: "progressing"
+          },
+          entries: [
+            {
+              id: "fsh_key",
+              kind: "foreshadow",
+              assetType: "foreshadow",
+              title: "生锈的钥匙",
+              status: "active",
+              summary: "钥匙会打开旧档案室。",
+              aliases: [],
+              relatedEntityIds: [],
+              details: {
+                trackingStatus: "progressing",
+                plantedChapterId: "ch_01",
+                plannedPayoffChapterId: "ch_02"
+              },
+              createdAt: "2026-07-05T00:00:00.000Z",
+              updatedAt: "2026-07-06T00:00:00.000Z"
+            },
+            {
+              id: "fsh_paid",
+              kind: "foreshadow",
+              assetType: "foreshadow",
+              title: "已经回收的暗号",
+              status: "active",
+              summary: "",
+              aliases: [],
+              relatedEntityIds: [],
+              details: {
+                trackingStatus: "paid-off",
+                actualPayoffChapterId: "ch_03"
+              },
+              createdAt: "2026-07-05T00:00:00.000Z",
+              updatedAt: "2026-07-07T00:00:00.000Z"
+            }
+          ],
+          draft: {
+            kind: "foreshadow",
+            assetType: "foreshadow",
+            title: "",
+            status: "active",
+            summary: "",
+            aliases: [],
+            relatedEntityIds: [],
+            details: { trackingStatus: "planned", origin: "manual" }
+          }
+        })}
+      />
+    );
+
+    expect(html).toContain('aria-label="筛选伏笔跟踪状态"');
+    for (const heading of ["跟踪状态", "埋设章", "计划回收章", "实际回收章", "更新"]) {
+      expect(html).toContain(heading);
+    }
+    expect(html).toContain('data-story-entry-id="fsh_key"');
+    expect(html).not.toContain('data-story-entry-id="fsh_paid"');
+    expect(html).toContain("推进中");
+    expect(html).toContain("逾期");
+    expect(html).toContain("1. 雨夜入城");
+    expect(html).toContain("2. 无名档案");
+    expect(html).toContain("2026-07-06");
+  });
+
+  test("renders the focused foreshadow editor and blocks invalid or duplicate evidence", () => {
+    const application = createDesktopApplication();
+    const tree = (
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        storyBibleEditor={createStoryBibleEditorProps({
+          activeKind: "foreshadow",
+          viewMode: "detail",
+          currentChapterId: "ch_02",
+          chapterOptions: [
+            { id: "ch_02", title: "无名档案", order: 2, status: "draft" },
+            { id: "ch_01", title: "雨夜入城", order: 1, status: "draft" }
+          ],
+          entries: [
+            {
+              id: "fsh_other",
+              kind: "foreshadow",
+              assetType: "foreshadow",
+              title: "门后的人",
+              status: "active",
+              summary: "",
+              aliases: [],
+              relatedEntityIds: [],
+              details: {
+                trackingStatus: "planted",
+                sourceRefs: [
+                  {
+                    chapterId: "ch_01",
+                    excerpt: "他把钥匙收进袖口。",
+                    excerptHash: "1".repeat(64)
+                  }
+                ]
+              },
+              createdAt: "2026-07-05T00:00:00.000Z",
+              updatedAt: "2026-07-05T00:00:00.000Z"
+            }
+          ],
+          draft: {
+            id: "fsh_key",
+            kind: "foreshadow",
+            assetType: "foreshadow",
+            title: "生锈的钥匙",
+            status: "active",
+            summary: "钥匙会打开旧档案室。",
+            aliases: [],
+            relatedEntityIds: ["loc_archive"],
+            details: {
+              trackingStatus: "paid-off",
+              actualPayoffChapterId: "",
+              sourceRefs: [
+                {
+                  chapterId: "ch_01",
+                  excerpt: "  他把钥匙收进袖口。  ",
+                  excerptHash: "2".repeat(64)
+                }
+              ],
+              notes: "等待确认回收场景。"
+            }
+          }
+        })}
+      />
+    );
+    const html = renderToStaticMarkup(tree);
+    const save = findElementByAriaLabel(tree, "保存设定");
+
+    for (const label of [
+      "伏笔标题",
+      "伏笔跟踪状态",
+      "伏笔摘要",
+      "埋设章节",
+      "计划回收章节",
+      "实际回收章节",
+      "伏笔备注",
+      "伏笔关联资料 ID",
+      "证据 1 章节",
+      "证据 1 原文片段"
+    ]) {
+      expect(html).toContain(`aria-label="${label}"`);
+    }
+    for (const status of ["待埋", "已埋", "推进中", "待回收", "已回收", "已放弃"]) {
+      expect(html).toContain(status);
+    }
+    expect(html.indexOf("1. 雨夜入城")).toBeLessThan(html.indexOf("2. 无名档案"));
+    expect(html).toContain("无法保存伏笔");
+    expect(html).toContain("必须选择实际回收章节");
+    expect(html).toContain("已存在于伏笔“门后的人”");
+    expect(save?.props.disabled).toBe(true);
+  });
+
   test("renders the common Story Bible detail form", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
