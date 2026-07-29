@@ -7,6 +7,7 @@ import {
   AgentUsageFileRepository,
   ProjectLockFileRepository,
   RecoveryRepository,
+  StoryBibleFileRepository,
   type AgentTransactionJournal,
   type AgentOperationPathSnapshot,
   type AgentWriteLifecycleOperationPort
@@ -830,6 +831,193 @@ describe("desktop Agent Run runtime", () => {
         value: { snapshot: { status: "awaiting_write_approval" } }
       });
     });
+  });
+
+  test("rejects memory IDs as Story Bible edit targets without touching the timeline", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-agent-memory-edit-"));
+    roots.push(projectRoot);
+    const repository = new StoryBibleFileRepository({ projectRoot });
+    const timestamp = "2026-07-29T00:00:00.000Z";
+    expect(
+      await repository.saveMemory({
+        schemaVersion: "1.0",
+        id: "mem_hidden_oath",
+        type: "memory.long-term",
+        title: "Hidden oath",
+        status: "active",
+        origin: "user",
+        confidence: "confirmed",
+        content: "The hero made a hidden oath.",
+        createdAt: timestamp,
+        updatedAt: timestamp
+      })
+    ).toMatchObject({ ok: true });
+    expect(
+      await repository.saveStoryAsset({
+        schemaVersion: "1.0",
+        id: "timeline_main",
+        type: "timeline.events",
+        title: "Timeline",
+        status: "active",
+        summary: "Canonical timeline.",
+        createdAt: timestamp,
+        updatedAt: timestamp
+      })
+    ).toMatchObject({ ok: true });
+    const timelinePath = join(projectRoot, "timeline", "events.json");
+    const timeline = await readFile(timelinePath, "utf8");
+    const titleStart = timeline.indexOf("Timeline");
+    expect(titleStart).toBeGreaterThanOrEqual(0);
+    let round = 0;
+    const session = createDesktopRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      activeChapterId: "chapter-unused",
+      createRunId: () => "run-desktop-memory-story-bible-edit",
+      modelDriver: {
+        async *streamRound() {
+          round += 1;
+          if (round === 1) {
+            yield runtimeToolCall("edit-memory-as-story-bible", "edit_text", {
+              ref: "story_bible:mem_hidden_oath",
+              baseHash: sha256(timeline),
+              range: { unit: "character", start: titleStart, end: titleStart + "Timeline".length },
+              replacement: "Hijacked timeline"
+            });
+          } else {
+            yield runtimeToolCall("finish-memory-rejection", "finish", { summary: "Rejected." });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+
+    await session.startAgentRun(executionCommand());
+
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run-desktop-memory-story-bible-edit")).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: { status: "completed" },
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_failed",
+              detail: expect.objectContaining({
+                toolCallId: "edit-memory-as-story-bible",
+                code: "AGENT_STORY_BIBLE_ASSET_NOT_FOUND"
+              })
+            })
+          ])
+        }
+      });
+    });
+    const rejected = await session.readAgentRun("run-desktop-memory-story-bible-edit");
+    expect(rejected).not.toMatchObject({ value: { changeSet: expect.anything() } });
+    expect(await readFile(timelinePath, "utf8")).toBe(timeline);
+  });
+
+  test("rejects unknown Story Bible asset types without defaulting to the timeline", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-agent-unknown-edit-"));
+    roots.push(projectRoot);
+    const repository = new StoryBibleFileRepository({ projectRoot });
+    const timestamp = "2026-07-29T00:00:00.000Z";
+    expect(
+      await repository.saveStoryAsset({
+        schemaVersion: "1.0",
+        id: "timeline_main",
+        type: "timeline.events",
+        title: "Timeline",
+        status: "active",
+        summary: "Canonical timeline.",
+        createdAt: timestamp,
+        updatedAt: timestamp
+      })
+    ).toMatchObject({ ok: true });
+    const timelinePath = join(projectRoot, "timeline", "events.json");
+    const timeline = await readFile(timelinePath, "utf8");
+    const titleStart = timeline.indexOf("Timeline");
+    expect(titleStart).toBeGreaterThanOrEqual(0);
+    const readStoryBible = vi
+      .spyOn(StoryBibleFileRepository.prototype, "readStoryBible")
+      .mockResolvedValue(
+        ok({
+          characters: [
+            {
+              schemaVersion: "1.0",
+              id: "asset_unknown",
+              type: "story.unknown",
+              title: "Unknown asset",
+              status: "active",
+              summary: "Invalid type injected at the runtime boundary.",
+              createdAt: timestamp,
+              updatedAt: timestamp
+            } as never
+          ],
+          worldAssets: [],
+          foreshadows: [],
+          memories: []
+        })
+      );
+    let round = 0;
+    try {
+      const session = createDesktopRuntime({
+        workspaceKind: "creativeProject",
+        projectId: "project-01",
+        contentRoot: projectRoot,
+        stateRoot: projectRoot,
+        activeChapterId: "chapter-unused",
+        createRunId: () => "run-desktop-unknown-story-bible-edit",
+        modelDriver: {
+          async *streamRound() {
+            round += 1;
+            if (round === 1) {
+              yield runtimeToolCall("edit-unknown-story-bible", "edit_text", {
+                ref: "story_bible:asset_unknown",
+                baseHash: sha256(timeline),
+                range: {
+                  unit: "character",
+                  start: titleStart,
+                  end: titleStart + "Timeline".length
+                },
+                replacement: "Hijacked timeline"
+              });
+            } else {
+              yield runtimeToolCall("finish-unknown-rejection", "finish", {
+                summary: "Rejected."
+              });
+            }
+            yield { type: "round_completed", finishReason: "tool_calls" };
+          }
+        }
+      });
+
+      await session.startAgentRun(executionCommand());
+
+      await vi.waitFor(async () => {
+        expect(await session.readAgentRun("run-desktop-unknown-story-bible-edit")).toMatchObject({
+          ok: true,
+          value: {
+            snapshot: { status: "completed" },
+            events: expect.arrayContaining([
+              expect.objectContaining({
+                type: "tool_failed",
+                detail: expect.objectContaining({
+                  toolCallId: "edit-unknown-story-bible",
+                  code: "AGENT_STORY_BIBLE_ASSET_TYPE_INVALID"
+                })
+              })
+            ])
+          }
+        });
+      });
+      const rejected = await session.readAgentRun("run-desktop-unknown-story-bible-edit");
+      expect(rejected).not.toMatchObject({ value: { changeSet: expect.anything() } });
+      expect(await readFile(timelinePath, "utf8")).toBe(timeline);
+    } finally {
+      readStoryBible.mockRestore();
+    }
   });
 
   test("uses project-root-bound real reads and finishes a read-only planning run", async () => {
@@ -1753,7 +1941,9 @@ describe("desktop Agent Run runtime", () => {
               .join("\n");
             expect(toolPayload).toContain("CREATIVE_PROJECT_FILE_PATH_REJECTED");
             expect(toolPayload).not.toContain("managed writing secret");
-            yield runtimeToolCall("finish-writing-managed-read", "finish", { summary: "Rejected." });
+            yield runtimeToolCall("finish-writing-managed-read", "finish", {
+              summary: "Rejected."
+            });
           }
           yield { type: "round_completed", finishReason: "tool_calls" };
         }

@@ -184,6 +184,7 @@ export type {
   MemoryOrigin,
   MemoryRecord,
   MemoryRecordType,
+  ForeshadowAsset,
   StoryBibleConsistencyIssue,
   StoryBibleConsistencyRef,
   StoryBibleConsistencyRefKind,
@@ -198,6 +199,8 @@ export type {
   StoryBibleMentionScanInput,
   StoryBibleMentionSuggestion,
   StoryBibleRepositoryPort,
+  StoryBibleRegularAsset,
+  StoryBibleRegularAssetType,
   StoryBibleSession,
   StoryBibleSessionOptions,
   StoryBibleSnapshot

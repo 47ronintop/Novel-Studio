@@ -10,7 +10,7 @@ import { validateWithSchema } from "./schema-validation.js";
 import {
   StoryBibleFileRepository,
   type MemoryRecord,
-  type StoryBibleAsset
+  type StoryBibleRegularAsset
 } from "./story-bible-repository.js";
 
 export type SearchIndexEntryType =
@@ -291,7 +291,7 @@ async function validateSearchIndex(
   return ok(value as SearchIndexSnapshot);
 }
 
-function storyAssetEntry(asset: StoryBibleAsset): SearchIndexEntry {
+function storyAssetEntry(asset: StoryBibleRegularAsset): SearchIndexEntry {
   return {
     id: `${searchTypeForStoryAsset(asset)}:${asset.id}`,
     type: searchTypeForStoryAsset(asset),
@@ -321,7 +321,7 @@ function memoryEntry(memory: MemoryRecord): SearchIndexEntry {
   };
 }
 
-function searchTypeForStoryAsset(asset: StoryBibleAsset): SearchIndexEntryType {
+function searchTypeForStoryAsset(asset: StoryBibleRegularAsset): SearchIndexEntryType {
   switch (asset.type) {
     case "character":
       return "story.character";
@@ -337,7 +337,7 @@ function searchTypeForStoryAsset(asset: StoryBibleAsset): SearchIndexEntryType {
   }
 }
 
-function storyAssetRelativePath(asset: StoryBibleAsset): string {
+function storyAssetRelativePath(asset: StoryBibleRegularAsset): string {
   switch (asset.type) {
     case "character":
       return toProjectRelativePath(join("characters", `${asset.id}.json`));
@@ -364,7 +364,7 @@ function memoryRelativePath(memory: MemoryRecord): string {
   }
 }
 
-function stringifyDetails(asset: StoryBibleAsset): string {
+function stringifyDetails(asset: StoryBibleRegularAsset): string {
   return asset.details === undefined ? "" : JSON.stringify(asset.details);
 }
 

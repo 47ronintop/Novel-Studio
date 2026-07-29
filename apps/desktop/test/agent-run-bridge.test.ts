@@ -2791,6 +2791,7 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
         }
       ],
       worldAssets: [],
+      foreshadows: [],
       memories: []
     };
     bridge.syncContext({
@@ -2856,6 +2857,7 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
             }
           ],
           worldAssets: [],
+          foreshadows: [],
           memories: []
         }
       },

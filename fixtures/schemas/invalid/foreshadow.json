@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "1.0",
+  "id": "fsh_018f12a7b91c4a2f9437c3d764e9a120",
+  "type": "foreshadow",
+  "title": "无效伏笔",
+  "status": "active",
+  "summary": "原文证据不能为空。",
+  "details": {
+    "trackingStatus": "planted",
+    "sourceRefs": [
+      {
+        "chapterId": "ch_01",
+        "excerpt": "",
+        "excerptHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ]
+  },
+  "createdAt": "2026-07-29T00:00:00.000Z",
+  "updatedAt": "2026-07-29T00:00:00.000Z"
+}

@@ -8,6 +8,17 @@ export type {
 } from "./errors.js";
 export { createUnifiedError } from "./errors.js";
 export type {
+  ForeshadowDetails,
+  ForeshadowOrigin,
+  ForeshadowSourceRef,
+  ForeshadowTrackingStatus
+} from "./foreshadow.js";
+export {
+  createForeshadowEvidence,
+  hashForeshadowEvidence,
+  normalizeForeshadowEvidence
+} from "./foreshadow.js";
+export type {
   ChapterHistoryRepositoryPort,
   ChapterCatalogRepositoryPort,
   ChapterDocument,

@@ -2,7 +2,9 @@ import type {
   MemoryRecord,
   NovelStudioApi,
   StoryBibleAsset,
+  StoryBibleConsistencyRef,
   StoryBibleConsistencyReport,
+  StoryBibleRegularAsset,
   StoryBibleSnapshot
 } from "@novel-studio/application";
 import type { Result, UnifiedError } from "@novel-studio/shared";
@@ -178,8 +180,7 @@ export function createStoryBibleBridge(api: NovelStudioApi): StoryBibleBridge {
       );
       if (generation !== loadGeneration) return editorProps;
       snapshot = nextSnapshot;
-      snapshotBinding =
-        workspaceId === undefined ? undefined : { workspaceId, snapshot };
+      snapshotBinding = workspaceId === undefined ? undefined : { workspaceId, snapshot };
       consistency = nextConsistency;
       props = toProps(snapshot);
       editorProps = createEditorProps(
@@ -217,6 +218,7 @@ function emptySnapshot(): StoryBibleSnapshot {
   return {
     characters: [],
     worldAssets: [],
+    foreshadows: [],
     memories: []
   };
 }
@@ -261,6 +263,14 @@ function toProps(snapshot: StoryBibleSnapshot): StoryBibleSummaryProps {
               contextEligible: snapshot.outline.status === "active"
             }
           ]),
+      ...snapshot.foreshadows.map((asset) => ({
+        id: asset.id,
+        title: asset.title,
+        type: asset.type,
+        status: asset.status,
+        summary: asset.summary,
+        contextEligible: asset.status === "active"
+      })),
       ...(snapshot.timeline === undefined
         ? []
         : [
@@ -305,16 +315,43 @@ function toConsistencyProps(report: StoryBibleConsistencyReport): StoryBibleCons
   return {
     status: report.status,
     checkedAt: report.checkedAt,
-    issues: report.issues.map((issue) => ({
-      id: issue.id,
-      severity: issue.severity,
-      title: issue.title,
-      message: issue.message,
-      sourceRef: issue.sourceRef,
-      targetRef: issue.targetRef,
-      suggestedAction: issue.suggestedAction
-    }))
+    issues: report.issues.flatMap((issue) => {
+      if (
+        !isNavigableConsistencyRef(issue.sourceRef) ||
+        !isNavigableConsistencyRef(issue.targetRef)
+      ) {
+        return [];
+      }
+
+      return [
+        {
+          id: issue.id,
+          severity: issue.severity,
+          title: issue.title,
+          message: issue.message,
+          sourceRef: issue.sourceRef,
+          targetRef: issue.targetRef,
+          suggestedAction: issue.suggestedAction
+        }
+      ];
+    })
   };
+}
+
+function isNavigableConsistencyRef(
+  ref: StoryBibleConsistencyRef
+): ref is StoryBibleConsistencyRef & { readonly kind: StoryBibleEditorKind } {
+  switch (ref.kind) {
+    case "character":
+    case "world":
+    case "outline":
+    case "timeline":
+    case "memory":
+      return true;
+    case "foreshadow":
+    case "chapter":
+      return false;
+  }
 }
 
 function createEditorEntries(snapshot: StoryBibleSnapshot): readonly StoryBibleEditorEntry[] {
@@ -440,24 +477,20 @@ function toStoryAsset(
   draft: StoryBibleEditorDraft,
   now: string,
   snapshot: StoryBibleSnapshot
-): StoryBibleAsset {
+): StoryBibleRegularAsset {
   if (draft.kind === "memory") {
     throw new Error("Memory drafts must be saved with saveMemory.");
   }
   const existing = findExistingAsset(snapshot, draft.id);
   const id = draft.id ?? defaultAssetId(draft);
   return {
+    ...(existing ?? {}),
     schemaVersion: "1.0",
     id,
     type: existing?.type ?? storyAssetType(draft.kind),
     title: draft.title,
     status: "active",
     summary: draft.body,
-    ...(existing?.aliases === undefined ? {} : { aliases: existing.aliases }),
-    ...(existing?.details === undefined ? {} : { details: existing.details }),
-    ...(existing?.relatedEntityIds === undefined
-      ? {}
-      : { relatedEntityIds: existing.relatedEntityIds }),
     createdAt: existing?.createdAt ?? now,
     updatedAt: now
   };
@@ -487,7 +520,7 @@ function toMemoryRecord(
 function findExistingAsset(
   snapshot: StoryBibleSnapshot,
   id: string | undefined
-): StoryBibleAsset | undefined {
+): StoryBibleRegularAsset | undefined {
   if (id === undefined) {
     return undefined;
   }
@@ -500,7 +533,9 @@ function findExistingAsset(
   ].find((asset) => asset.id === id);
 }
 
-function storyAssetType(kind: Exclude<StoryBibleEditorKind, "memory">): StoryBibleAsset["type"] {
+function storyAssetType(
+  kind: Exclude<StoryBibleEditorKind, "memory">
+): StoryBibleRegularAsset["type"] {
   switch (kind) {
     case "character":
       return "character";

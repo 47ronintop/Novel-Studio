@@ -1,12 +1,22 @@
 import { describe, expect, test } from "vitest";
 
-import { err, ok, type UnifiedError, createUnifiedError } from "@novel-studio/shared";
+import {
+  err,
+  ok,
+  type ChapterCatalogRepositoryPort,
+  type ChapterSummary,
+  createUnifiedError,
+  type ForeshadowDetails,
+  type UnifiedError
+} from "@novel-studio/shared";
 
 import {
   createStoryBibleSession,
   findStoryBibleMentionSuggestions,
+  type ForeshadowAsset,
   type MemoryRecord,
   type StoryBibleAsset,
+  type StoryBibleRegularAsset,
   type StoryBibleRepositoryPort,
   type StoryBibleSnapshot
 } from "../src/index.js";
@@ -60,6 +70,7 @@ describe("StoryBibleSession", () => {
       repository: createStaticStoryBibleRepository({
         characters: [{ ...characterAsset(), status: "archived" }],
         worldAssets: [worldAsset()],
+        foreshadows: [],
         memories: []
       })
     });
@@ -98,6 +109,7 @@ describe("StoryBibleSession", () => {
           type: "outline",
           title: "Northern Passage"
         },
+        foreshadows: [],
         memories: []
       },
       currentChapterBody: "CAPTAIN MIRA reaches the gate.",
@@ -132,6 +144,7 @@ describe("StoryBibleSession", () => {
         snapshot: {
           characters: [characterAsset()],
           worldAssets: [worldAsset()],
+          foreshadows: [],
           memories: []
         },
         currentChapterBody: "An unnamed traveler waits.",
@@ -159,6 +172,7 @@ describe("StoryBibleSession", () => {
             summary: "Conflict: Captain Mira has a younger brother in the capital."
           }
         ],
+        foreshadows: [],
         memories: [
           {
             ...unconfirmedMemory(),
@@ -222,6 +236,187 @@ describe("StoryBibleSession", () => {
     });
   });
 
+  test("reports every missing chapter referenced by a foreshadow", async () => {
+    const session = createStoryBibleSession({
+      repository: createStaticStoryBibleRepository({
+        characters: [],
+        worldAssets: [],
+        foreshadows: [
+          foreshadowAsset({
+            details: {
+              trackingStatus: "paid-off",
+              plantedChapterId: "ch_missing_planted",
+              plannedPayoffChapterId: "ch_missing_planned",
+              actualPayoffChapterId: "ch_missing_actual",
+              sourceRefs: [
+                {
+                  chapterId: "ch_missing_source",
+                  excerpt: "A repeated bell rings.",
+                  excerptHash: "a".repeat(64)
+                }
+              ]
+            }
+          })
+        ],
+        memories: []
+      }),
+      chapterCatalog: createChapterCatalog([chapterSummary("ch_existing")])
+    });
+
+    const report = await session.buildConsistencyReport();
+
+    expect(report.ok).toBe(true);
+    if (!report.ok) {
+      return;
+    }
+    expect(report.value.issues.map((issue) => issue.id)).toEqual([
+      "story-consistency.foreshadow.fsh_old_key.missing-chapter.ch_missing_actual",
+      "story-consistency.foreshadow.fsh_old_key.missing-chapter.ch_missing_planned",
+      "story-consistency.foreshadow.fsh_old_key.missing-chapter.ch_missing_planted",
+      "story-consistency.foreshadow.fsh_old_key.missing-chapter.ch_missing_source"
+    ]);
+    expect(report.value.issues.every((issue) => issue.targetRef.kind === "chapter")).toBe(true);
+  });
+
+  test("reports duplicate non-deleted foreshadow evidence once with a stable issue id", async () => {
+    const duplicateHash = "b".repeat(64);
+    const duplicateSource = {
+      chapterId: "ch_01",
+      excerpt: "The key catches the firelight.",
+      excerptHash: duplicateHash
+    };
+    const firstSnapshot: StoryBibleSnapshot = {
+      characters: [],
+      worldAssets: [],
+      foreshadows: [
+        foreshadowAsset({
+          id: "fsh_beta",
+          title: "Beta",
+          details: { sourceRefs: [duplicateSource] }
+        }),
+        foreshadowAsset({
+          id: "fsh_alpha",
+          title: "Alpha",
+          details: { sourceRefs: [duplicateSource] }
+        }),
+        foreshadowAsset({
+          id: "fsh_deleted",
+          title: "Deleted",
+          status: "deleted",
+          details: { sourceRefs: [duplicateSource] }
+        })
+      ],
+      memories: []
+    };
+    const secondSnapshot: StoryBibleSnapshot = {
+      ...firstSnapshot,
+      foreshadows: [...firstSnapshot.foreshadows].reverse()
+    };
+
+    const firstReport = await createStoryBibleSession({
+      repository: createStaticStoryBibleRepository(firstSnapshot)
+    }).buildConsistencyReport();
+    const secondReport = await createStoryBibleSession({
+      repository: createStaticStoryBibleRepository(secondSnapshot)
+    }).buildConsistencyReport();
+
+    expect(firstReport.ok).toBe(true);
+    expect(secondReport.ok).toBe(true);
+    if (!firstReport.ok || !secondReport.ok) {
+      return;
+    }
+    expect(firstReport.value.issues).toHaveLength(1);
+    expect(firstReport.value.issues[0]).toMatchObject({
+      id: `story-consistency.foreshadow.duplicate-source.ch_01.${duplicateHash}`,
+      sourceRef: { kind: "foreshadow", id: "fsh_alpha" },
+      targetRef: { kind: "foreshadow", id: "fsh_beta" }
+    });
+    expect(secondReport.value.issues.map((issue) => issue.id)).toEqual(
+      firstReport.value.issues.map((issue) => issue.id)
+    );
+  });
+
+  test("defensively reports paid-off foreshadows without an actual payoff chapter", async () => {
+    const session = createStoryBibleSession({
+      repository: createStaticStoryBibleRepository({
+        characters: [],
+        worldAssets: [],
+        foreshadows: [
+          foreshadowAsset({
+            details: {
+              trackingStatus: "paid-off"
+            }
+          })
+        ],
+        memories: []
+      })
+    });
+
+    const report = await session.buildConsistencyReport();
+
+    expect(report.ok).toBe(true);
+    if (!report.ok) {
+      return;
+    }
+    expect(report.value.issues).toContainEqual(
+      expect.objectContaining({
+        id: "story-consistency.foreshadow.fsh_old_key.paid-off-missing-actual-payoff-chapter",
+        sourceRef: expect.objectContaining({ kind: "foreshadow", id: "fsh_old_key" })
+      })
+    );
+  });
+
+  test("passes chapter catalog errors through unchanged", async () => {
+    const catalogError = createUnifiedError({
+      code: "CHAPTER_CATALOG_READ_FAILED",
+      category: "StorageError",
+      message: "Could not read chapter catalog.",
+      recoverability: "retryable",
+      suggestedAction: "Retry.",
+      traceId: "story-bible-session-test"
+    });
+    const session = createStoryBibleSession({
+      repository: createStaticStoryBibleRepository({
+        characters: [],
+        worldAssets: [],
+        foreshadows: [],
+        memories: []
+      }),
+      chapterCatalog: {
+        async listChapters() {
+          return err(catalogError);
+        }
+      }
+    });
+
+    const report = await session.buildConsistencyReport();
+
+    expect(report).toEqual(err(catalogError));
+  });
+
+  test("uses the latest foreshadow update as the consistency check timestamp", async () => {
+    const session = createStoryBibleSession({
+      repository: createStaticStoryBibleRepository({
+        characters: [characterAsset()],
+        worldAssets: [],
+        foreshadows: [
+          foreshadowAsset({
+            updatedAt: "2026-07-06T01:02:03.000Z"
+          })
+        ],
+        memories: []
+      })
+    });
+
+    const report = await session.buildConsistencyReport();
+
+    expect(report.ok).toBe(true);
+    if (!report.ok) {
+      return;
+    }
+    expect(report.value.checkedAt).toBe("2026-07-06T01:02:03.000Z");
+  });
+
   test("returns a stable unavailable error without a repository", async () => {
     const session = createStoryBibleSession();
 
@@ -241,13 +436,24 @@ function createMemoryStoryBibleRepository(
 ): StoryBibleRepositoryPort {
   return {
     async readStoryBible() {
-      const outline = assets.find((asset) => asset.type === "outline");
-      const timeline = assets.find((asset) => asset.type === "timeline.events");
+      const outline = assets.find(
+        (asset): asset is StoryBibleRegularAsset => asset.type === "outline"
+      );
+      const timeline = assets.find(
+        (asset): asset is StoryBibleRegularAsset => asset.type === "timeline.events"
+      );
       return ok({
-        characters: assets.filter((asset) => asset.type === "character"),
-        worldAssets: assets.filter((asset) => asset.type.startsWith("world.")),
+        characters: assets.filter(
+          (asset): asset is StoryBibleRegularAsset => asset.type === "character"
+        ),
+        worldAssets: assets.filter((asset): asset is StoryBibleRegularAsset =>
+          asset.type.startsWith("world.")
+        ),
         ...(outline === undefined ? {} : { outline }),
         ...(timeline === undefined ? {} : { timeline }),
+        foreshadows: assets.filter(
+          (asset): asset is ForeshadowAsset => asset.type === "foreshadow"
+        ),
         memories
       });
     },
@@ -287,7 +493,7 @@ function unexpectedWrite(): UnifiedError {
   });
 }
 
-function characterAsset(): StoryBibleAsset {
+function characterAsset(): StoryBibleRegularAsset {
   return {
     schemaVersion: "1.0",
     id: "chr_hero",
@@ -300,7 +506,7 @@ function characterAsset(): StoryBibleAsset {
   };
 }
 
-function worldAsset(): StoryBibleAsset {
+function worldAsset(): StoryBibleRegularAsset {
   return {
     schemaVersion: "1.0",
     id: "loc_capital",
@@ -313,7 +519,7 @@ function worldAsset(): StoryBibleAsset {
   };
 }
 
-function timelineAsset(): StoryBibleAsset {
+function timelineAsset(): StoryBibleRegularAsset {
   return {
     schemaVersion: "1.0",
     id: "timeline_main",
@@ -322,6 +528,52 @@ function timelineAsset(): StoryBibleAsset {
     status: "active",
     summary: "Arrival happens before the council summons.",
     createdAt: now,
+    updatedAt: now
+  };
+}
+
+interface ForeshadowAssetOverrides {
+  readonly id?: string;
+  readonly title?: string;
+  readonly status?: ForeshadowAsset["status"];
+  readonly updatedAt?: string;
+  readonly details?: Partial<ForeshadowDetails>;
+}
+
+function foreshadowAsset(overrides: ForeshadowAssetOverrides = {}): ForeshadowAsset {
+  return {
+    schemaVersion: "1.0",
+    id: overrides.id ?? "fsh_old_key",
+    type: "foreshadow",
+    title: overrides.title ?? "Old Key",
+    status: overrides.status ?? "active",
+    summary: "The old key will reveal its origin later.",
+    details: {
+      trackingStatus: "planted",
+      sourceRefs: [],
+      ...overrides.details
+    },
+    createdAt: now,
+    updatedAt: overrides.updatedAt ?? now
+  };
+}
+
+function createChapterCatalog(
+  chapters: readonly ChapterSummary[]
+): Pick<ChapterCatalogRepositoryPort, "listChapters"> {
+  return {
+    async listChapters() {
+      return ok(chapters);
+    }
+  };
+}
+
+function chapterSummary(id: string): ChapterSummary {
+  return {
+    id,
+    title: id,
+    order: 1,
+    status: "draft",
     updatedAt: now
   };
 }

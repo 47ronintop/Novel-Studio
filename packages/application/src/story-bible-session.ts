@@ -2,6 +2,8 @@ import type { ContextCandidate } from "@novel-studio/context-engine";
 import {
   createUnifiedError,
   err,
+  type ChapterCatalogRepositoryPort,
+  type ForeshadowDetails,
   type JsonObject,
   type Result,
   type UnifiedError
@@ -14,26 +16,38 @@ export type StoryBibleAssetType =
   | "world.rule"
   | "world.glossary"
   | "outline"
-  | "timeline.events";
+  | "timeline.events"
+  | "foreshadow";
+export type StoryBibleRegularAssetType = Exclude<StoryBibleAssetType, "foreshadow">;
 export type StoryBibleEntityStatus = "active" | "draft" | "archived" | "deleted";
 export type MemoryRecordType = "memory.long-term" | "memory.style" | "memory.summary";
 export type MemoryOrigin = "user" | "user-confirmed-ai" | "ai-unconfirmed";
 export type MemoryConfidence = "confirmed" | "needs-review" | "deprecated";
 export type StoryBibleContextCandidate = ContextCandidate;
 
-export interface StoryBibleAsset extends JsonObject {
+interface StoryBibleAssetBase extends JsonObject {
   readonly schemaVersion: "1.0";
   readonly id: string;
-  readonly type: StoryBibleAssetType;
   readonly title: string;
   readonly status: StoryBibleEntityStatus;
   readonly summary: string;
   readonly aliases?: string[];
-  readonly details?: JsonObject;
   readonly relatedEntityIds?: string[];
   readonly createdAt: string;
   readonly updatedAt: string;
 }
+
+export interface StoryBibleRegularAsset extends StoryBibleAssetBase {
+  readonly type: StoryBibleRegularAssetType;
+  readonly details?: JsonObject;
+}
+
+export interface ForeshadowAsset extends StoryBibleAssetBase {
+  readonly type: "foreshadow";
+  readonly details: ForeshadowDetails;
+}
+
+export type StoryBibleAsset = StoryBibleRegularAsset | ForeshadowAsset;
 
 export interface MemoryRecord extends JsonObject {
   readonly schemaVersion: "1.0";
@@ -50,17 +64,18 @@ export interface MemoryRecord extends JsonObject {
 }
 
 export interface StoryBibleSnapshot {
-  readonly characters: readonly StoryBibleAsset[];
-  readonly worldAssets: readonly StoryBibleAsset[];
-  readonly outline?: StoryBibleAsset;
-  readonly timeline?: StoryBibleAsset;
+  readonly characters: readonly StoryBibleRegularAsset[];
+  readonly worldAssets: readonly StoryBibleRegularAsset[];
+  readonly outline?: StoryBibleRegularAsset;
+  readonly timeline?: StoryBibleRegularAsset;
+  readonly foreshadows: readonly ForeshadowAsset[];
   readonly memories: readonly MemoryRecord[];
 }
 
 export type StoryBibleConsistencyStatus = "healthy" | "attention";
 export type StoryBibleConsistencySeverity = "warning";
 export type StoryBibleConsistencyRefKind =
-  "character" | "world" | "outline" | "timeline" | "memory";
+  "character" | "world" | "outline" | "timeline" | "foreshadow" | "chapter" | "memory";
 
 export interface StoryBibleConsistencyRef extends JsonObject {
   readonly kind: StoryBibleConsistencyRefKind;
@@ -92,6 +107,7 @@ export interface StoryBibleRepositoryPort {
 
 export interface StoryBibleSessionOptions {
   readonly repository?: StoryBibleRepositoryPort;
+  readonly chapterCatalog?: Pick<ChapterCatalogRepositoryPort, "listChapters">;
 }
 
 export interface StoryBibleContextCandidateOptions {
@@ -183,9 +199,18 @@ export function createStoryBibleSession(options: StoryBibleSessionOptions = {}):
         return snapshot;
       }
 
+      let chapterIds: ReadonlySet<string> | undefined;
+      if (options.chapterCatalog !== undefined) {
+        const chapters = await options.chapterCatalog.listChapters();
+        if (!chapters.ok) {
+          return chapters;
+        }
+        chapterIds = new Set(chapters.value.map((chapter) => chapter.id));
+      }
+
       return {
         ok: true,
-        value: createConsistencyReport(snapshot.value)
+        value: createConsistencyReport(snapshot.value, chapterIds)
       };
     },
     async buildContextCandidates(candidateOptions = {}) {
@@ -246,7 +271,10 @@ export function findStoryBibleMentionSuggestions(
   return suggestions;
 }
 
-function createConsistencyReport(snapshot: StoryBibleSnapshot): StoryBibleConsistencyReport {
+function createConsistencyReport(
+  snapshot: StoryBibleSnapshot,
+  chapterIds: ReadonlySet<string> | undefined
+): StoryBibleConsistencyReport {
   const issues: StoryBibleConsistencyIssue[] = [];
   const targets = [
     ...snapshot.worldAssets.map((asset) => ({ ref: assetRef(asset), text: asset.summary })),
@@ -286,6 +314,8 @@ function createConsistencyReport(snapshot: StoryBibleSnapshot): StoryBibleConsis
     }
   }
 
+  issues.push(...createForeshadowConsistencyIssues(snapshot.foreshadows, chapterIds));
+
   return {
     status: issues.length > 0 ? "attention" : "healthy",
     checkedAt: latestUpdatedAt(snapshot),
@@ -309,7 +339,18 @@ function memoryRef(memory: MemoryRecord): StoryBibleConsistencyRef {
   };
 }
 
+function chapterRef(chapterId: string): StoryBibleConsistencyRef {
+  return {
+    kind: "chapter",
+    id: chapterId,
+    title: chapterId
+  };
+}
+
 function consistencyKindForAsset(asset: StoryBibleAsset): StoryBibleConsistencyRefKind {
+  if (asset.type === "foreshadow") {
+    return "foreshadow";
+  }
   if (asset.type === "character") {
     return "character";
   }
@@ -321,6 +362,134 @@ function consistencyKindForAsset(asset: StoryBibleAsset): StoryBibleConsistencyR
   }
 
   return "world";
+}
+
+function createForeshadowConsistencyIssues(
+  foreshadows: readonly ForeshadowAsset[],
+  chapterIds: ReadonlySet<string> | undefined
+): readonly StoryBibleConsistencyIssue[] {
+  const issues: StoryBibleConsistencyIssue[] = [];
+  const orderedForeshadows = [...foreshadows].sort((left, right) =>
+    compareStableText(left.id, right.id)
+  );
+
+  if (chapterIds !== undefined) {
+    for (const foreshadow of orderedForeshadows) {
+      const missingChapterIds = new Set(
+        referencedChapterIds(foreshadow).filter((chapterId) => !chapterIds.has(chapterId))
+      );
+      for (const chapterId of [...missingChapterIds].sort(compareStableText)) {
+        issues.push({
+          id: `story-consistency.foreshadow.${foreshadow.id}.missing-chapter.${chapterId}`,
+          severity: "warning",
+          title: "Foreshadow references a missing chapter",
+          message: `${foreshadow.title} references chapter ${chapterId}, but that chapter is not in the project catalog.`,
+          sourceRef: assetRef(foreshadow),
+          targetRef: chapterRef(chapterId),
+          suggestedAction:
+            "Open the foreshadow and replace or remove the missing chapter reference."
+        });
+      }
+    }
+  }
+
+  issues.push(...duplicateForeshadowSourceIssues(orderedForeshadows));
+
+  for (const foreshadow of orderedForeshadows) {
+    if (
+      foreshadow.details.trackingStatus !== "paid-off" ||
+      hasNonEmptyText(foreshadow.details.actualPayoffChapterId)
+    ) {
+      continue;
+    }
+
+    const ref = assetRef(foreshadow);
+    issues.push({
+      id: `story-consistency.foreshadow.${foreshadow.id}.paid-off-missing-actual-payoff-chapter`,
+      severity: "warning",
+      title: "Paid-off foreshadow has no payoff chapter",
+      message: `${foreshadow.title} is marked paid off without an actual payoff chapter.`,
+      sourceRef: ref,
+      targetRef: ref,
+      suggestedAction: "Open the foreshadow and select its actual payoff chapter."
+    });
+  }
+
+  return issues.sort((left, right) => compareStableText(left.id, right.id));
+}
+
+function referencedChapterIds(foreshadow: ForeshadowAsset): readonly string[] {
+  const details = foreshadow.details;
+  return [
+    details.plantedChapterId,
+    details.plannedPayoffChapterId,
+    details.actualPayoffChapterId,
+    ...(details.sourceRefs ?? []).map((sourceRef) => sourceRef.chapterId)
+  ].filter(hasNonEmptyText);
+}
+
+function duplicateForeshadowSourceIssues(
+  foreshadows: readonly ForeshadowAsset[]
+): readonly StoryBibleConsistencyIssue[] {
+  const sourcesByChapter = new Map<string, Map<string, ForeshadowAsset[]>>();
+
+  for (const foreshadow of foreshadows) {
+    if (foreshadow.status === "deleted") {
+      continue;
+    }
+
+    for (const sourceRef of foreshadow.details.sourceRefs ?? []) {
+      if (!hasNonEmptyText(sourceRef.chapterId) || !hasNonEmptyText(sourceRef.excerptHash)) {
+        continue;
+      }
+      const sourcesByHash = sourcesByChapter.get(sourceRef.chapterId) ?? new Map();
+      const matchingForeshadows = sourcesByHash.get(sourceRef.excerptHash) ?? [];
+      matchingForeshadows.push(foreshadow);
+      sourcesByHash.set(sourceRef.excerptHash, matchingForeshadows);
+      sourcesByChapter.set(sourceRef.chapterId, sourcesByHash);
+    }
+  }
+
+  const issues: StoryBibleConsistencyIssue[] = [];
+  for (const chapterId of [...sourcesByChapter.keys()].sort(compareStableText)) {
+    const sourcesByHash = sourcesByChapter.get(chapterId);
+    if (sourcesByHash === undefined) {
+      continue;
+    }
+    for (const excerptHash of [...sourcesByHash.keys()].sort(compareStableText)) {
+      const matchingForeshadows = sourcesByHash.get(excerptHash) ?? [];
+      if (matchingForeshadows.length < 2) {
+        continue;
+      }
+      const source = matchingForeshadows[0];
+      const target = matchingForeshadows[1];
+      if (source === undefined || target === undefined) {
+        continue;
+      }
+
+      issues.push({
+        id: `story-consistency.foreshadow.duplicate-source.${chapterId}.${excerptHash}`,
+        severity: "warning",
+        title: "Foreshadow source evidence is duplicated",
+        message: `${source.title} and ${target.title} use the same evidence from chapter ${chapterId}.`,
+        sourceRef: assetRef(source),
+        targetRef: assetRef(target),
+        suggestedAction: "Open the referenced foreshadows and keep the evidence on only one entry."
+      });
+    }
+  }
+
+  return issues;
+}
+
+function hasNonEmptyText(value: string | undefined): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function compareStableText(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
 function hasExplicitConflictMarker(text: string): boolean {
@@ -344,6 +513,7 @@ function latestUpdatedAt(snapshot: StoryBibleSnapshot): string {
     ...snapshot.worldAssets,
     ...(snapshot.outline === undefined ? [] : [snapshot.outline]),
     ...(snapshot.timeline === undefined ? [] : [snapshot.timeline]),
+    ...snapshot.foreshadows,
     ...snapshot.memories
   ].map((entry) => entry.updatedAt);
 

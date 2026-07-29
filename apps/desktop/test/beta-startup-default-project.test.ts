@@ -3,13 +3,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
-import { HistoryRepository, type WorkflowRunRecord } from "@novel-studio/repository";
+import {
+  HistoryRepository,
+  WorkspaceOutlineProjectMetadataRepository,
+  type WorkflowRunRecord
+} from "@novel-studio/repository";
 
 import {
   createBootstrappedDefaultDesktopApplication,
   createBootstrappedDefaultDesktopApplicationWithSnapshot,
   DEFAULT_FIXTURE_CHAPTER_ID
 } from "../src/main/application-composition.js";
+import { createApplicationIpcHandlers } from "../src/main/ipc-handlers.js";
 
 const tempRoots: string[] = [];
 
@@ -86,6 +91,81 @@ describe("beta startup default project", () => {
         }
       ]
     });
+  });
+
+  test("wires Story Bible consistency checks to the active project chapter catalog", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-story-bible-catalog-"));
+    tempRoots.push(projectRoot);
+    const application = await createBootstrappedDefaultDesktopApplication({
+      projectRoot,
+      now: () => "2026-07-05T00:00:00.000Z"
+    });
+    const handlers = createApplicationIpcHandlers(application);
+    const foreshadowId = "fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const futurePayload = "x".repeat(70 * 1_024);
+
+    await expect(
+      handlers["application:story-bible:save-asset"]({
+        futureRootField: { payload: futurePayload },
+        schemaVersion: "1.0",
+        id: foreshadowId,
+        type: "foreshadow",
+        title: "Missing payoff chapter",
+        status: "active",
+        summary: "This clue points to a removed chapter.",
+        details: {
+          trackingStatus: "planned",
+          plantedChapterId: DEFAULT_FIXTURE_CHAPTER_ID,
+          plannedPayoffChapterId: "ch_missing",
+          origin: "manual",
+          futureDetailField: { enabled: true }
+        },
+        createdAt: "2026-07-05T00:00:00.000Z",
+        updatedAt: "2026-07-05T00:00:00.000Z"
+      })
+    ).resolves.toMatchObject({ ok: true });
+
+    const persisted = JSON.parse(
+      await readFile(join(projectRoot, "foreshadows", `${foreshadowId}.json`), "utf8")
+    ) as {
+      readonly futureRootField: { readonly payload: string };
+      readonly details: { readonly futureDetailField: { readonly enabled: boolean } };
+    };
+    expect(Object.keys(persisted).slice(0, 4)).toEqual(["schemaVersion", "id", "type", "title"]);
+    expect(persisted.futureRootField.payload).toBe(futurePayload);
+    expect(persisted.details.futureDetailField).toEqual({ enabled: true });
+
+    const storyBibleIndex = await new WorkspaceOutlineProjectMetadataRepository({
+      projectRoot
+    }).readStoryBibleIndex();
+    expect(storyBibleIndex).toMatchObject({
+      ok: true,
+      value: {
+        entries: [
+          {
+            assetId: foreshadowId,
+            title: "Missing payoff chapter",
+            assetType: "foreshadow",
+            relativePath: `foreshadows/${foreshadowId}.json`
+          }
+        ]
+      }
+    });
+
+    await expect(application.buildStoryBibleConsistencyReport()).resolves.toMatchObject({
+      ok: true,
+      value: {
+        status: "attention",
+        issues: [
+          {
+            sourceRef: { kind: "foreshadow", id: foreshadowId },
+            targetRef: { kind: "chapter", id: "ch_missing" }
+          }
+        ]
+      }
+    });
+
+    await application.shutdown();
   });
 
   test("releases the bootstrapped project lock during shutdown", async () => {

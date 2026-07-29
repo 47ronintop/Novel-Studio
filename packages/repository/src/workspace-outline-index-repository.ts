@@ -378,7 +378,7 @@ export class WorkspaceOutlineProjectMetadataRepository implements WorkspaceOutli
     const entries: WorkspaceOutlineStoryBibleIndexEntry[] = [];
     let hasStoryBibleSource = false;
 
-    for (const directory of ["characters", "world"] as const) {
+    for (const directory of ["characters", "world", "foreshadows"] as const) {
       if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
       const files = await this.listDirectoryFiles(directory, ".json", deadline);
       if (!files.ok) return files;

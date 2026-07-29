@@ -218,7 +218,7 @@ describe("WorkspaceOutlineIndexRepository", () => {
     expect(JSON.stringify(result.value)).not.toContain("chapter body");
   });
 
-  test("reads only writing metadata headers from a guarded project root", async () => {
+  test("reads only writing metadata headers from a guarded legacy project without foreshadows", async () => {
     const root = await mkdtemp(join(tmpdir(), "novel-studio-outline-writing-index-"));
     roots.push(root);
     await mkdir(join(root, "chapters"), { recursive: true });
@@ -247,6 +247,55 @@ describe("WorkspaceOutlineIndexRepository", () => {
       value: { entries: [{ assetId: "character-alex", title: "Alex", assetType: "character" }] }
     });
     expect(JSON.stringify({ chapters, storyBible })).not.toContain("BODY_MUST_NOT_APPEAR");
+  });
+
+  test("indexes direct foreshadows and includes them in revisions and checksums", async () => {
+    const root = await mkdtemp(join(tmpdir(), "novel-studio-outline-foreshadows-"));
+    roots.push(root);
+    await mkdir(join(root, "foreshadows", "nested"), { recursive: true });
+    await writeFile(
+      join(root, "foreshadows", "nested", "ignored.json"),
+      '{"id":"foreshadow-nested","title":"Nested","type":"foreshadow"}',
+      "utf8"
+    );
+
+    const metadata = new WorkspaceOutlineProjectMetadataRepository({ projectRoot: root });
+    const repository = new WorkspaceOutlineIndexRepository({ writingMetadata: metadata });
+    const before = await repository.readWritingIndexes(defaultLimits);
+    if (!before.ok) throw before.error;
+
+    await writeFile(
+      join(root, "foreshadows", "foreshadow-sealed-letter.json"),
+      '{"id":"foreshadow-sealed-letter","title":"Sealed Letter","type":"foreshadow","notes":"BODY_MUST_NOT_APPEAR"}',
+      "utf8"
+    );
+
+    const storyBible = await metadata.readStoryBibleIndex();
+    const after = await repository.readWritingIndexes(defaultLimits);
+    if (!storyBible.ok) throw storyBible.error;
+    if (!after.ok) throw after.error;
+
+    expect(storyBible.value).toMatchObject({
+      entries: [
+        {
+          assetId: "foreshadow-sealed-letter",
+          title: "Sealed Letter",
+          assetType: "foreshadow",
+          relativePath: "foreshadows/foreshadow-sealed-letter.json"
+        }
+      ]
+    });
+    expect(JSON.stringify(storyBible.value)).not.toContain("BODY_MUST_NOT_APPEAR");
+    expect(after.value.entries).toEqual([
+      {
+        kind: "story_bible_asset",
+        id: "foreshadow-sealed-letter",
+        label: "Sealed Letter",
+        assetType: "foreshadow"
+      }
+    ]);
+    expect(after.value.storyBibleIndexRevision).not.toBe(before.value.storyBibleIndexRevision);
+    expect(after.value.storyBibleIndexChecksum).not.toBe(before.value.storyBibleIndexChecksum);
   });
 
   test("keeps a metadata header bound to its opened file after a leaf symlink swap", async () => {

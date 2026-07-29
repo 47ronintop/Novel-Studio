@@ -14,6 +14,7 @@ const schemaNames = [
   "chapter-frontmatter",
   "unified-error",
   "story-asset",
+  "foreshadow",
   "prompt-template",
   "agent-config",
   "workflow-definition",
@@ -109,6 +110,77 @@ describe("schema contract coverage", () => {
 
     expect(result.valid).toBe(true);
     expect(fixture.experimentalUserField).toBe("must stay");
+  });
+
+  test.each([
+    ["missing tracking status", { sourceRefs: [] }],
+    [
+      "invalid chapter id",
+      {
+        trackingStatus: "planted",
+        plantedChapterId: "chapter-01"
+      }
+    ],
+    [
+      "invalid evidence hash",
+      {
+        trackingStatus: "planted",
+        sourceRefs: [
+          {
+            chapterId: "ch_01",
+            excerpt: "旧钥匙再次出现。",
+            excerptHash: "not-a-sha256-hash"
+          }
+        ]
+      }
+    ],
+    [
+      "empty evidence excerpt",
+      {
+        trackingStatus: "planted",
+        sourceRefs: [
+          {
+            chapterId: "ch_01",
+            excerpt: "",
+            excerptHash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ]
+      }
+    ],
+    ["paid-off without actual chapter", { trackingStatus: "paid-off" }]
+  ])("rejects foreshadow details with %s", (_caseName, details) => {
+    const fixture = {
+      ...(readFixture("valid", "foreshadow") as Record<string, unknown>),
+      details
+    };
+    const validate = createSchemaValidator(readSchema("foreshadow"));
+
+    expect(validate(fixture).valid).toBe(false);
+  });
+
+  test("accepts foreshadow unknown fields without removing them", () => {
+    const fixture = {
+      ...(readFixture("valid", "foreshadow") as Record<string, unknown>),
+      futureRootField: "preserve root",
+      details: {
+        trackingStatus: "planted",
+        futureDetailsField: "preserve details",
+        sourceRefs: [
+          {
+            chapterId: "ch_01",
+            excerpt: "旧钥匙再次出现。",
+            excerptHash: "32d8d8ac4a08a7f8db7a10c1d21e71a5ab31277b9c88d09a5b91665687565690",
+            futureSourceField: "preserve source"
+          }
+        ]
+      }
+    };
+    const validate = createSchemaValidator(readSchema("foreshadow"));
+
+    expect(validate(fixture)).toEqual({ valid: true, issues: [] });
+    expect(fixture.futureRootField).toBe("preserve root");
+    expect(fixture.details.futureDetailsField).toBe("preserve details");
+    expect(fixture.details.sourceRefs[0]?.futureSourceField).toBe("preserve source");
   });
 
   test("settings model profiles reject plaintext keys and unsupported providers", () => {

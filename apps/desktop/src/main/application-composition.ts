@@ -285,6 +285,9 @@ export function createProjectDesktopApplication(
         readStoryBible: () => createStoryBibleRepository().readStoryBible(),
         saveStoryAsset: (asset) => createStoryBibleRepository().saveStoryAsset(asset),
         saveMemory: (memory) => createStoryBibleRepository().saveMemory(memory)
+      },
+      chapterCatalog: {
+        listChapters: () => createStoryBibleChapterCatalogRepository().listChapters()
       }
     }),
     createProjectSearchSession: (projectRoot) =>
@@ -357,6 +360,14 @@ export function createProjectDesktopApplication(
     return new StoryBibleFileRepository({
       projectRoot: requireActiveProjectRoot(),
       traceId: "trace_desktop_story_bible_repository"
+    });
+  }
+
+  function createStoryBibleChapterCatalogRepository(): ChapterFileRepository {
+    return new ChapterFileRepository({
+      projectRoot: requireActiveProjectRoot(),
+      traceId: "trace_desktop_story_bible_chapter_catalog_repository",
+      ...(options.now === undefined ? {} : { now: options.now })
     });
   }
 

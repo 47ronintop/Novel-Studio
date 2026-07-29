@@ -20,7 +20,7 @@ import {
 import type { ChapterEditorSession } from "../src/chapter-editor-session.js";
 import type { EngineeringWorkspaceSession } from "../src/engineering-workspace-session.js";
 import { createProjectWorkspaceSession } from "../src/project-workspace-session.js";
-import type { StoryBibleSession } from "../src/story-bible-session.js";
+import type { StoryBibleSession, StoryBibleSnapshot } from "../src/story-bible-session.js";
 import type {
   ProjectCreationRepositoryPort,
   ProjectWorkspaceSession,
@@ -36,6 +36,51 @@ afterEach(async () => {
 });
 
 describe("M12 desktop project workflow", () => {
+  test("counts foreshadows in an injected navigator summary section", () => {
+    const storyBibleSnapshot: StoryBibleSnapshot = {
+      characters: [],
+      worldAssets: [],
+      foreshadows: [
+        {
+          schemaVersion: "1.0",
+          id: "fsh_11111111111111111111111111111111",
+          type: "foreshadow",
+          title: "Old key",
+          status: "active",
+          summary: "The old key will matter later.",
+          details: { trackingStatus: "planned" },
+          createdAt: "2026-07-29T00:00:00.000Z",
+          updatedAt: "2026-07-29T00:00:00.000Z"
+        },
+        {
+          schemaVersion: "1.0",
+          id: "fsh_22222222222222222222222222222222",
+          type: "foreshadow",
+          title: "Missing letter",
+          status: "active",
+          summary: "The missing letter will expose the envoy.",
+          details: { trackingStatus: "planted" },
+          createdAt: "2026-07-29T00:00:00.000Z",
+          updatedAt: "2026-07-29T00:00:00.000Z"
+        }
+      ],
+      memories: []
+    };
+    const application = createDesktopApplication({
+      projectWorkspaceSession: fakeProjectSession(
+        projectSnapshot("D:/Novel/Old", "prj_old", "Old Project")
+      ),
+      storyBibleSession: {
+        getSnapshot: () => storyBibleSnapshot
+      } as unknown as StoryBibleSession,
+      navigatorSections: [{ id: "foreshadows", title: "伏笔", itemCount: 0 }]
+    });
+
+    expect(application.getShellState().navigatorSections).toEqual([
+      { id: "foreshadows", title: "伏笔", itemCount: 2 }
+    ]);
+  });
+
   test("prepares a creative workspace without changing the active application until commit", async () => {
     const oldSnapshot = projectSnapshot("D:/Novel/Old", "prj_old", "Old Project");
     const candidateSnapshot = projectSnapshot("D:/Novel/New", "prj_new", "New Project");

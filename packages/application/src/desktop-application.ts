@@ -1313,6 +1313,11 @@ function withProjectWorkspaceState(
             ...section,
             itemCount: storyBibleSnapshot?.timeline === undefined ? 0 : 1
           };
+        case "foreshadows":
+          return {
+            ...section,
+            itemCount: storyBibleSnapshot?.foreshadows.length ?? 0
+          };
         case "memories":
           return {
             ...section,

@@ -18,6 +18,11 @@ const snapshot: StoryBibleSnapshot = {
       title: "Hero",
       status: "active",
       summary: "A procedural protagonist with a hidden oath.",
+      details: {
+        role: "lead",
+        futureDetailField: ["kept"]
+      },
+      futureRootField: { enabled: true },
       createdAt: "2026-07-05T00:00:00.000Z",
       updatedAt: "2026-07-05T00:00:00.000Z"
     }
@@ -30,6 +35,23 @@ const snapshot: StoryBibleSnapshot = {
       title: "Capital",
       status: "active",
       summary: "The capital bans open flame after midnight.",
+      createdAt: "2026-07-05T00:00:00.000Z",
+      updatedAt: "2026-07-05T00:00:00.000Z"
+    }
+  ],
+  foreshadows: [
+    {
+      schemaVersion: "1.0",
+      id: "fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      type: "foreshadow",
+      title: "Old key",
+      status: "active",
+      summary: "The key will reveal who sealed the archive.",
+      details: {
+        trackingStatus: "planned",
+        plannedPayoffChapterId: "ch_05",
+        origin: "manual"
+      },
       createdAt: "2026-07-05T00:00:00.000Z",
       updatedAt: "2026-07-05T00:00:00.000Z"
     }
@@ -58,8 +80,21 @@ describe("Story Bible bridge", () => {
     const props = await bridge.load("workspace-01");
 
     expect(calls).toEqual(["storyBible.load", "storyBible.buildConsistencyReport"]);
-    expect(props.assets.map((asset) => asset.title)).toEqual(["Hero", "Capital", "Oath"]);
+    expect(props.assets.map((asset) => asset.title)).toEqual([
+      "Hero",
+      "Capital",
+      "Old key",
+      "Oath"
+    ]);
+    expect(bridge.getEditorProps().entries.some((entry) => entry.id.startsWith("fsh_"))).toBe(
+      false
+    );
     expect(props.assets[2]).toMatchObject({
+      id: "fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      type: "foreshadow",
+      contextEligible: true
+    });
+    expect(props.assets[3]).toMatchObject({
       id: "mem_oath",
       type: "memory.long-term",
       contextEligible: true
@@ -113,6 +148,41 @@ describe("Story Bible bridge", () => {
     });
   });
 
+  test("filters consistency issues whose references are not navigable before the UI redesign", async () => {
+    const bridge = createStoryBibleBridge(
+      createApi([], snapshot, {
+        status: "attention",
+        checkedAt: "2026-07-05T00:00:00.000Z",
+        issues: [
+          {
+            id: "story-consistency.foreshadow.missing-chapter.fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.ch_missing",
+            severity: "warning",
+            title: "Foreshadow references a missing chapter",
+            message: "Old key references a chapter that no longer exists.",
+            sourceRef: {
+              kind: "foreshadow",
+              id: "fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              title: "Old key"
+            },
+            targetRef: {
+              kind: "chapter",
+              id: "ch_missing",
+              title: "ch_missing"
+            },
+            suggestedAction: "Update or remove the missing chapter reference."
+          }
+        ]
+      })
+    );
+
+    await bridge.load("workspace-01");
+
+    expect(bridge.getEditorProps().consistency).toMatchObject({
+      status: "attention",
+      issues: []
+    });
+  });
+
   test("edits and saves Story Bible asset drafts through the preload API", async () => {
     const calls: string[] = [];
     const bridge = createStoryBibleBridge(createApi(calls));
@@ -128,6 +198,13 @@ describe("Story Bible bridge", () => {
       message: "故事圣经已保存。"
     });
     expect(bridge.getProps().assets[0]?.title).toBe("Hero Revised");
+    expect(bridge.getSnapshot().characters[0]).toMatchObject({
+      futureRootField: { enabled: true },
+      details: {
+        role: "lead",
+        futureDetailField: ["kept"]
+      }
+    });
   });
 
   test("creates confirmed memory drafts through the preload API", async () => {
@@ -219,7 +296,12 @@ describe("Story Bible bridge", () => {
 
     await vi.waitFor(() => expect(resolveNextLoad).toBeDefined());
     expect(bridge.getSnapshotBinding("workspace-a")).toBeUndefined();
-    expect(bridge.getSnapshot()).toEqual({ characters: [], worldAssets: [], memories: [] });
+    expect(bridge.getSnapshot()).toEqual({
+      characters: [],
+      worldAssets: [],
+      foreshadows: [],
+      memories: []
+    });
 
     resolveNextLoad?.(ok({ ...snapshot, characters: [] }));
     await loadingWorkspaceB;

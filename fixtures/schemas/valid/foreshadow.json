@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "1.0",
+  "id": "fsh_018f12a7b91c4a2f9437c3d764e9a120",
+  "type": "foreshadow",
+  "title": "旧钥匙的来源",
+  "status": "active",
+  "summary": "第一章出现的旧钥匙将在第五章揭示来源。",
+  "details": {
+    "trackingStatus": "planted",
+    "plantedChapterId": "ch_01",
+    "plannedPayoffChapterId": "ch_05",
+    "sourceRefs": [
+      {
+        "chapterId": "ch_01",
+        "excerpt": "他把那把生锈的钥匙收进袖口。",
+        "excerptHash": "56374e8b304affcc245b8066dead2589da2d2ca3da274d3134024df81733b5b8"
+      }
+    ],
+    "origin": "ai-confirmed",
+    "notes": ""
+  },
+  "relatedEntityIds": ["chr_hero"],
+  "createdAt": "2026-07-29T00:00:00.000Z",
+  "updatedAt": "2026-07-29T00:00:00.000Z"
+}

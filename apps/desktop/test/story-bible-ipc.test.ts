@@ -1,10 +1,11 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { ok, type Result, type UnifiedError } from "@novel-studio/shared";
 import type {
   ApplicationCommand,
   DesktopApplication,
   DesktopShellState,
+  ForeshadowAsset,
   MemoryRecord,
   StoryBibleAsset,
   StoryBibleConsistencyReport,
@@ -32,6 +33,7 @@ const shellState: DesktopShellState = {
 const snapshot: StoryBibleSnapshot = {
   characters: [characterAsset()],
   worldAssets: [worldAsset()],
+  foreshadows: [foreshadowAsset()],
   memories: [memoryRecord()]
 };
 
@@ -88,6 +90,77 @@ describe("M16 Story Bible IPC", () => {
     await expect(
       handlers["application:story-bible:build-context-candidates"]({ includeStatuses: ["active"] })
     ).resolves.toEqual(ok(contextCandidates()));
+  });
+
+  test("preserves unknown foreshadow fields and emits canonical field order through IPC", async () => {
+    const asset: ForeshadowAsset = {
+      futureRootField: { enabled: true },
+      ...foreshadowAsset(),
+      details: {
+        ...foreshadowAsset().details,
+        futureDetailField: ["kept"]
+      }
+    };
+    const saveStoryBibleAsset = vi.fn(async (input: StoryBibleAsset) => ok(input));
+    const handlers = createApplicationIpcHandlers({
+      ...createFakeApplication(),
+      saveStoryBibleAsset
+    });
+
+    await expect(handlers["application:story-bible:save-asset"](asset)).resolves.toEqual(ok(asset));
+    expect(saveStoryBibleAsset).toHaveBeenCalledWith(asset);
+    expect(Object.keys(saveStoryBibleAsset.mock.calls[0]?.[0] ?? {})).toEqual([
+      "schemaVersion",
+      "id",
+      "type",
+      "title",
+      "status",
+      "summary",
+      "details",
+      "createdAt",
+      "updatedAt",
+      "futureRootField"
+    ]);
+  });
+
+  test("rejects unsupported Story Bible schema versions at the IPC boundary", async () => {
+    const saveStoryBibleAsset = vi.fn(async (input: StoryBibleAsset) => ok(input));
+    const handlers = createApplicationIpcHandlers({
+      ...createFakeApplication(),
+      saveStoryBibleAsset
+    });
+
+    await handlers["application:story-bible:save-asset"]({
+      ...characterAsset(),
+      schemaVersion: "2.0"
+    });
+
+    expect(saveStoryBibleAsset).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "", type: "character" })
+    );
+    expect(saveStoryBibleAsset).not.toHaveBeenCalledWith(
+      expect.objectContaining({ id: "chr_hero" })
+    );
+  });
+
+  test("does not pass structurally invalid foreshadow details through IPC", async () => {
+    const saveStoryBibleAsset = vi.fn(async (input: StoryBibleAsset) => ok(input));
+    const handlers = createApplicationIpcHandlers({
+      ...createFakeApplication(),
+      saveStoryBibleAsset
+    });
+
+    await handlers["application:story-bible:save-asset"]({
+      ...foreshadowAsset(),
+      details: {}
+    });
+
+    expect(saveStoryBibleAsset).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "", type: "character" })
+    );
+    expect(saveStoryBibleAsset).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "foreshadow" })
+    );
   });
 });
 
@@ -165,6 +238,24 @@ function worldAsset(): StoryBibleAsset {
     title: "Capital",
     status: "active",
     summary: "The capital bans open flame after midnight.",
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function foreshadowAsset(): ForeshadowAsset {
+  return {
+    schemaVersion: "1.0",
+    id: "fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    type: "foreshadow",
+    title: "Old key",
+    status: "active",
+    summary: "The key will reveal who sealed the archive.",
+    details: {
+      trackingStatus: "planned",
+      plannedPayoffChapterId: "ch_05",
+      origin: "manual"
+    },
     createdAt: now,
     updatedAt: now
   };

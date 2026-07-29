@@ -57,6 +57,7 @@ import type {
   AiWritingSuggestionStreamPushEvent,
   AiWritingSuggestionStreamStartRequest,
   ModelProfile,
+  ForeshadowAsset,
   MemoryRecord,
   ListAgentConversationsQuery,
   ReadAgentConversationQuery,
@@ -2486,12 +2487,26 @@ function readThrownStreamErrorDetail(error: unknown): JsonObject {
   return detail;
 }
 
+const STORY_BIBLE_ASSET_CANONICAL_FIELDS = new Set([
+  "schemaVersion",
+  "id",
+  "type",
+  "title",
+  "status",
+  "summary",
+  "aliases",
+  "details",
+  "relatedEntityIds",
+  "createdAt",
+  "updatedAt"
+]);
+
 function toStoryBibleAsset(value: unknown): StoryBibleAsset | undefined {
-  if (!isRecord(value)) {
+  if (!isJsonObject(value)) {
     return undefined;
   }
   if (
-    typeof value.schemaVersion !== "string" ||
+    value.schemaVersion !== "1.0" ||
     typeof value.id !== "string" ||
     !isStoryBibleAssetType(value.type) ||
     typeof value.title !== "string" ||
@@ -2506,6 +2521,29 @@ function toStoryBibleAsset(value: unknown): StoryBibleAsset | undefined {
     return undefined;
   }
 
+  const additionalFields = storyBibleAssetAdditionalFields(value);
+
+  if (value.type === "foreshadow") {
+    if (!isForeshadowDetails(value.details)) {
+      return undefined;
+    }
+
+    return {
+      schemaVersion: "1.0",
+      id: value.id,
+      type: "foreshadow",
+      title: value.title,
+      status: value.status,
+      summary: value.summary,
+      ...(value.aliases === undefined ? {} : { aliases: value.aliases }),
+      details: value.details,
+      ...(value.relatedEntityIds === undefined ? {} : { relatedEntityIds: value.relatedEntityIds }),
+      createdAt: value.createdAt,
+      updatedAt: value.updatedAt,
+      ...additionalFields
+    };
+  }
+
   return {
     schemaVersion: "1.0",
     id: value.id,
@@ -2517,8 +2555,15 @@ function toStoryBibleAsset(value: unknown): StoryBibleAsset | undefined {
     ...(value.details === undefined ? {} : { details: value.details }),
     ...(value.relatedEntityIds === undefined ? {} : { relatedEntityIds: value.relatedEntityIds }),
     createdAt: value.createdAt,
-    updatedAt: value.updatedAt
+    updatedAt: value.updatedAt,
+    ...additionalFields
   };
+}
+
+function storyBibleAssetAdditionalFields(value: JsonObject): JsonObject {
+  return Object.fromEntries(
+    Object.entries(value).filter(([key]) => !STORY_BIBLE_ASSET_CANONICAL_FIELDS.has(key))
+  );
 }
 
 function toMemoryRecord(value: unknown): MemoryRecord | undefined {
@@ -3263,7 +3308,44 @@ function isStoryBibleAssetType(value: unknown): value is StoryBibleAsset["type"]
     value === "world.rule" ||
     value === "world.glossary" ||
     value === "outline" ||
+    value === "foreshadow" ||
     value === "timeline.events"
+  );
+}
+
+function isForeshadowDetails(value: unknown): value is ForeshadowAsset["details"] {
+  return (
+    isJsonObject(value) &&
+    isForeshadowTrackingStatus(value.trackingStatus) &&
+    isOptionalString(value.plantedChapterId) &&
+    isOptionalString(value.plannedPayoffChapterId) &&
+    isOptionalString(value.actualPayoffChapterId) &&
+    (value.sourceRefs === undefined ||
+      (Array.isArray(value.sourceRefs) && value.sourceRefs.every(isForeshadowSourceRef))) &&
+    (value.origin === undefined || value.origin === "manual" || value.origin === "ai-confirmed") &&
+    isOptionalString(value.notes)
+  );
+}
+
+function isForeshadowTrackingStatus(
+  value: unknown
+): value is ForeshadowAsset["details"]["trackingStatus"] {
+  return (
+    value === "planned" ||
+    value === "planted" ||
+    value === "progressing" ||
+    value === "ready-to-payoff" ||
+    value === "paid-off" ||
+    value === "abandoned"
+  );
+}
+
+function isForeshadowSourceRef(value: unknown): boolean {
+  return (
+    isJsonObject(value) &&
+    typeof value.chapterId === "string" &&
+    typeof value.excerpt === "string" &&
+    typeof value.excerptHash === "string"
   );
 }
 

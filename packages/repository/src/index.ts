@@ -159,6 +159,7 @@ export { RecoveryRepository } from "./recovery-repository.js";
 export { ProjectSettingsRepository } from "./settings-repository.js";
 export { StoryBibleFileRepository } from "./story-bible-repository.js";
 export type {
+  ForeshadowAsset,
   MemoryConfidence,
   MemoryOrigin,
   MemoryRecord,
@@ -167,6 +168,8 @@ export type {
   StoryBibleAssetType,
   StoryBibleEntityStatus,
   StoryBibleFileRepositoryOptions,
+  StoryBibleRegularAsset,
+  StoryBibleRegularAssetType,
   StoryBibleRepositoryPort,
   StoryBibleSnapshot
 } from "./story-bible-repository.js";

@@ -1287,7 +1287,10 @@ function createDesktopAgentContextSession(input: {
         requiredContextTokens: model.requiredContextTokens
       });
       if (!capability.ok) return err(capability.error);
-      if (input.workspaceKind === "creativeProject" && contextDraft.contextMode === "general_file") {
+      if (
+        input.workspaceKind === "creativeProject" &&
+        contextDraft.contextMode === "general_file"
+      ) {
         if (input.verifyCreativeGeneralActiveResource === undefined) {
           return err(runtimeError("AGENT_CREATIVE_GENERAL_ACTIVE_RESOURCE_UNVERIFIED"));
         }
@@ -1479,12 +1482,13 @@ function createDesktopChangeSetSession(input: {
         }
         const asset = await findStoryBibleAsset(input.storyBible, assetId);
         if (!asset.ok) return asset;
-        const relativePath = storyBibleAssetRelativePath(asset.value);
-        const read = await input.projectReads.readText(relativePath);
+        const relativePath = resolveStoryBibleAssetRelativePath(asset.value);
+        if (!relativePath.ok) return relativePath;
+        const read = await input.projectReads.readText(relativePath.value);
         if (!read.ok) return read;
-        const editor = await input.readEditorState?.(relativePath);
+        const editor = await input.readEditorState?.(relativePath.value);
         return ok({
-          relativePath,
+          relativePath: relativePath.value,
           assetType: "text" as const,
           assetId,
           content: read.value.content,
@@ -2229,7 +2233,9 @@ async function resolveStartFromDraft(
     if (input.verifyCreativeGeneralActiveResource === undefined) {
       return err(runtimeError("AGENT_CREATIVE_GENERAL_ACTIVE_RESOURCE_UNVERIFIED"));
     }
-    const verified = await input.verifyCreativeGeneralActiveResource(contextDraft.activeResourceRef);
+    const verified = await input.verifyCreativeGeneralActiveResource(
+      contextDraft.activeResourceRef
+    );
     if (!verified.ok) return verified;
   }
   if (input.resolveModelStartFacts === undefined) {
@@ -2654,8 +2660,9 @@ function createDesktopReadToolExecutor(
         if (assetId === undefined) return invalidToolArguments(input.name);
         const asset = await findStoryBibleAsset(storyBible, assetId);
         if (!asset.ok) return asset;
-        const relativePath = storyBibleAssetRelativePath(asset.value);
-        const read = await projectReads.readText(relativePath);
+        const relativePath = resolveStoryBibleAssetRelativePath(asset.value);
+        if (!relativePath.ok) return relativePath;
+        const read = await projectReads.readText(relativePath.value);
         if (!read.ok) return read;
         return ok({
           summary: `已读取 Story Bible 资产 ${assetId}`,
@@ -2668,7 +2675,7 @@ function createDesktopReadToolExecutor(
             refId: `story_bible:${assetId}`,
             sourceKind: "story_bible_asset",
             assetId,
-            relativePath,
+            relativePath: relativePath.value,
             content: read.value.content,
             dirty: false
           }
@@ -2717,7 +2724,9 @@ function findCreativeProjectFileNode(
   return undefined;
 }
 
-function routeCreativeSearch(generalFileExecutor: AgentSearchToolExecutor): AgentSearchToolExecutor {
+function routeCreativeSearch(
+  generalFileExecutor: AgentSearchToolExecutor
+): AgentSearchToolExecutor {
   return {
     async searchText(input) {
       return filterCreativeSearchResult(await generalFileExecutor.searchText(input));
@@ -2825,8 +2834,7 @@ async function findStoryBibleAsset(repository: StoryBibleFileRepository, assetId
     ...snapshot.value.characters,
     ...snapshot.value.worldAssets,
     ...(snapshot.value.outline === undefined ? [] : [snapshot.value.outline]),
-    ...(snapshot.value.timeline === undefined ? [] : [snapshot.value.timeline]),
-    ...snapshot.value.memories
+    ...(snapshot.value.timeline === undefined ? [] : [snapshot.value.timeline])
   ];
   const asset = assets.find((candidate) => candidate.id === assetId);
   return asset === undefined
@@ -2843,14 +2851,34 @@ async function findStoryBibleAsset(repository: StoryBibleFileRepository, assetId
     : ok(asset);
 }
 
-function storyBibleAssetRelativePath(asset: {
+function resolveStoryBibleAssetRelativePath(asset: {
   readonly id: string;
   readonly type: string;
-}): string {
-  if (asset.type === "character") return `characters/${asset.id}.json`;
-  if (asset.type.startsWith("world.")) return `world/${asset.id}.json`;
-  if (asset.type === "outline") return "outline/outline.json";
-  return "timeline/events.json";
+}): Result<string, UnifiedError> {
+  switch (asset.type) {
+    case "character":
+      return ok(`characters/${asset.id}.json`);
+    case "world.location":
+    case "world.faction":
+    case "world.rule":
+    case "world.glossary":
+      return ok(`world/${asset.id}.json`);
+    case "outline":
+      return ok("outline/outline.json");
+    case "timeline.events":
+      return ok("timeline/events.json");
+    default:
+      return err(
+        createUnifiedError({
+          code: "AGENT_STORY_BIBLE_ASSET_TYPE_INVALID",
+          category: "ValidationError",
+          message: "The Story Bible asset type is not editable.",
+          recoverability: "user-action",
+          suggestedAction: "Refresh the Story Bible and choose a supported asset.",
+          traceId: "desktop-agent-run-runtime"
+        })
+      );
+  }
 }
 
 function invalidToolArguments(name: string) {

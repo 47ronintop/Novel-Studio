@@ -1,0 +1,74 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "schema.foreshadow.v1",
+  "title": "Foreshadow",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "id",
+    "type",
+    "title",
+    "status",
+    "summary",
+    "details",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "id": { "type": "string", "pattern": "^fsh_[a-f0-9]{32}$" },
+    "type": { "const": "foreshadow" },
+    "title": { "type": "string", "minLength": 1 },
+    "status": { "type": "string", "enum": ["active", "draft", "archived", "deleted"] },
+    "summary": { "type": "string" },
+    "aliases": { "type": "array", "items": { "type": "string" } },
+    "details": {
+      "type": "object",
+      "required": ["trackingStatus"],
+      "properties": {
+        "trackingStatus": {
+          "type": "string",
+          "enum": ["planned", "planted", "progressing", "ready-to-payoff", "paid-off", "abandoned"]
+        },
+        "plantedChapterId": { "type": "string", "pattern": "^ch_[A-Za-z0-9_-]+$" },
+        "plannedPayoffChapterId": {
+          "type": "string",
+          "pattern": "^ch_[A-Za-z0-9_-]+$"
+        },
+        "actualPayoffChapterId": {
+          "type": "string",
+          "pattern": "^ch_[A-Za-z0-9_-]+$"
+        },
+        "sourceRefs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["chapterId", "excerpt", "excerptHash"],
+            "properties": {
+              "chapterId": { "type": "string", "pattern": "^ch_[A-Za-z0-9_-]+$" },
+              "excerpt": { "type": "string", "minLength": 1 },
+              "excerptHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+            },
+            "additionalProperties": true
+          }
+        },
+        "origin": { "type": "string", "enum": ["manual", "ai-confirmed"] },
+        "notes": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "trackingStatus": { "const": "paid-off" } },
+            "required": ["trackingStatus"]
+          },
+          "then": { "required": ["actualPayoffChapterId"] }
+        }
+      ],
+      "additionalProperties": true
+    },
+    "relatedEntityIds": { "type": "array", "items": { "type": "string" } },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}
