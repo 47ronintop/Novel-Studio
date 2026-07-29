@@ -99,7 +99,8 @@ export function validateCompactionSummaryResult(input: {
     !isProvenance(result.provenance) ||
     (input.expectedInputChecksum !== undefined &&
       result.provenance.inputChecksum !== input.expectedInputChecksum) ||
-    (input.expectedProvider !== undefined && result.provenance.provider !== input.expectedProvider) ||
+    (input.expectedProvider !== undefined &&
+      result.provenance.provider !== input.expectedProvider) ||
     (input.expectedModel !== undefined && result.provenance.model !== input.expectedModel) ||
     (input.expectedModelProfileId !== undefined &&
       result.provenance.modelProfileId !== input.expectedModelProfileId)

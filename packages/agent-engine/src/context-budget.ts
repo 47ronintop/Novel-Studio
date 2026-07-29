@@ -111,7 +111,8 @@ export function calculateContextBudget(
   }
 
   const outputReserve = resolveOutputReserve(input.contextWindow, input.maxOutputTokens);
-  const safeInputBudget = input.contextWindow - outputReserve - input.toolReserve - input.systemReserve;
+  const safeInputBudget =
+    input.contextWindow - outputReserve - input.toolReserve - input.systemReserve;
   if (safeInputBudget <= 0 || safeInputBudget < input.requiredContextTokens) {
     return err(insufficientBudget(input, outputReserve, safeInputBudget));
   }

@@ -74,17 +74,19 @@ function descriptors(
   });
 }
 
-function resolve(overrides: {
-  provider?: string;
-  facadeVersion?: AgentToolFacadeVersion;
-  descriptors?: readonly AgentToolDescriptor[];
-  contextWindow?: number;
-  omitContextWindow?: boolean;
-  requiredContextTokens?: number;
-  catalogRevision?: string;
-  omitToolCatalog?: boolean;
-  omitOutlineFromPrompt?: boolean;
-} = {}) {
+function resolve(
+  overrides: {
+    provider?: string;
+    facadeVersion?: AgentToolFacadeVersion;
+    descriptors?: readonly AgentToolDescriptor[];
+    contextWindow?: number;
+    omitContextWindow?: boolean;
+    requiredContextTokens?: number;
+    catalogRevision?: string;
+    omitToolCatalog?: boolean;
+    omitOutlineFromPrompt?: boolean;
+  } = {}
+) {
   const profile = resolveAgentContextProfile(
     {
       kind: "workspace",
@@ -167,8 +169,10 @@ describe("C4 shared budget inputs", () => {
     const gemini = resolve({ provider: "google-gemini" });
     expect(openai.ok && anthropic.ok && gemini.ok).toBe(true);
     if (!openai.ok || !anthropic.ok || !gemini.ok) return;
-    expect(new Set([openai.value.toolReserve, anthropic.value.toolReserve, gemini.value.toolReserve]).size)
-      .toBeGreaterThan(1);
+    expect(
+      new Set([openai.value.toolReserve, anthropic.value.toolReserve, gemini.value.toolReserve])
+        .size
+    ).toBeGreaterThan(1);
     expect(resolve({ provider: "anthropic" })).toEqual(anthropic);
   });
 
@@ -303,7 +307,8 @@ describe("C4 shared budget inputs", () => {
         refId: "compaction_summary",
         sourceKind: "compaction_summary" as const,
         assetId: "summary_compaction_missing_pointer",
-        content: '{"userGoal":"Continue","decisions":[],"constraints":[],"openQuestions":[],"nextSteps":[]}',
+        content:
+          '{"userGoal":"Continue","decisions":[],"constraints":[],"openQuestions":[],"nextSteps":[]}',
         dirty: false
       }
     ];

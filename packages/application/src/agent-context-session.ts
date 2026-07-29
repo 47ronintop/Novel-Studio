@@ -814,7 +814,8 @@ function scopeIdentitiesMatch(left: ScopeIdentity, right: ScopeIdentity): boolea
   if (leftKey === undefined || rightKey === undefined) return false;
   if (leftKey === rightKey) return true;
   const leftProjectId = left.scope?.kind === "workspace" ? left.scope.workspaceId : left.projectId;
-  const rightProjectId = right.scope?.kind === "workspace" ? right.scope.workspaceId : right.projectId;
+  const rightProjectId =
+    right.scope?.kind === "workspace" ? right.scope.workspaceId : right.projectId;
   return (
     leftProjectId !== undefined &&
     rightProjectId !== undefined &&

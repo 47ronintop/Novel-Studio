@@ -69,9 +69,7 @@ test("generates an AI writing suggestion and applies it only after confirmation"
     await review.getByRole("button", { name: "Accept selection AI preview" }).click();
     await expect(review).toHaveCount(0);
 
-    await expect
-      .poll(() => readCodeMirrorText(page.getByLabel("章节正文")))
-      .toBe(proposedText);
+    await expect.poll(() => readCodeMirrorText(page.getByLabel("章节正文"))).toBe(proposedText);
     await expect(page.getByText("未保存").first()).toBeVisible();
   } finally {
     await electronApp.close();
@@ -115,9 +113,7 @@ test("completes the core writing journey across save, close, reopen, and continu
 
     await review.getByRole("button", { name: "Accept selection AI preview" }).click();
     await expect(review).toHaveCount(0);
-    await expect
-      .poll(() => readCodeMirrorText(page.getByLabel("章节正文")))
-      .toBe(appliedBody);
+    await expect.poll(() => readCodeMirrorText(page.getByLabel("章节正文"))).toBe(appliedBody);
     await expect(page.getByText("未保存").first()).toBeVisible();
 
     await page.getByRole("button", { name: "保存当前文档" }).click();
@@ -308,9 +304,9 @@ test("routes a real Electron selection preview to a local OpenAI-compatible serv
     await expect(page.getByText("当前是演示模式，未配置真实Key。")).toHaveCount(0);
     await review.getByRole("button", { name: "Accept selection AI preview" }).click();
     await expect(review).toHaveCount(0);
-    await expect.poll(() => readCodeMirrorText(page.getByLabel("章节正文"))).toBe(
-      "Real provider opening, refined."
-    );
+    await expect
+      .poll(() => readCodeMirrorText(page.getByLabel("章节正文")))
+      .toBe("Real provider opening, refined.");
     await expect
       .poll(
         () =>
@@ -390,10 +386,7 @@ async function queueDirectorySelection(
   }, selectedPath);
 }
 
-async function requestSelectionReview(
-  page: Page,
-  editor: Locator
-): Promise<Locator> {
+async function requestSelectionReview(page: Page, editor: Locator): Promise<Locator> {
   await selectAllCodeMirrorText(page, editor);
   const action = page.getByRole("button", { name: "Preview selection rewrite" });
   await expect(action).toBeEnabled();

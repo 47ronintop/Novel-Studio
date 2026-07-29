@@ -111,9 +111,7 @@ export function readResolvedContextBudgetUsageLimits(
   const remainingTokens = value["remainingTokens"];
   const requiredContextTokens = value["requiredContextTokens"];
   const precision = value["precision"];
-  const requestedMaxOutputTokens = isRecord(audit)
-    ? audit["requestedMaxOutputTokens"]
-    : undefined;
+  const requestedMaxOutputTokens = isRecord(audit) ? audit["requestedMaxOutputTokens"] : undefined;
   if (
     value["schemaVersion"] !== "1.1" ||
     value["contextBudgetSnapshotId"] !== expected.contextBudgetSnapshotId ||
@@ -153,9 +151,7 @@ export function readResolvedContextBudgetUsageLimits(
     model: expected.model,
     modelProfileId: expected.modelProfileId,
     contextWindow,
-    ...(requestedMaxOutputTokens === null
-      ? {}
-      : { maxOutputTokens: requestedMaxOutputTokens }),
+    ...(requestedMaxOutputTokens === null ? {} : { maxOutputTokens: requestedMaxOutputTokens }),
     requiredContextTokens,
     toolReserve,
     systemReserve,

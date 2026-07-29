@@ -64,7 +64,8 @@ describe("C4 profile compaction summaries", () => {
   test.each(Object.entries(bodies))("freezes required %s fields", (profileId, body) => {
     const prompt = buildCompactionSummaryPrompt(profileId as keyof typeof bodies);
     expect(prompt.templateVersion).toBe(AGENT_COMPACTION_SUMMARY_TEMPLATE_VERSION);
-    for (const key of Object.keys(JSON.parse(body) as object)) expect(prompt.systemPrompt).toContain(key);
+    for (const key of Object.keys(JSON.parse(body) as object))
+      expect(prompt.systemPrompt).toContain(key);
 
     const candidate = result(body);
     const validated = validateCompactionSummaryResult({

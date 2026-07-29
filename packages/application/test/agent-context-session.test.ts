@@ -197,7 +197,9 @@ describe("Agent Context session — previewContextBudget", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.usedTokens).toBe(237);
-    expect(result.value.remainingTokens).toBe(result.value.safeInputBudget - result.value.usedTokens);
+    expect(result.value.remainingTokens).toBe(
+      result.value.safeInputBudget - result.value.usedTokens
+    );
   });
 
   test("preserves the canonical tokenizer precision", async () => {
@@ -226,9 +228,15 @@ describe("Agent Context session — previewContextBudget", () => {
       })
     });
     const result = await session.previewContextBudget(
-      previewCommand(draft, { expectedDraftRevision: draft.revision + 1, commandId: "preview_stale" })
+      previewCommand(draft, {
+        expectedDraftRevision: draft.revision + 1,
+        commandId: "preview_stale"
+      })
     );
-    expect(result).toMatchObject({ ok: false, error: { code: "AGENT_RUN_DRAFT_REVISION_CONFLICT" } });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUN_DRAFT_REVISION_CONFLICT" }
+    });
     expect(called).toBe(false);
   });
 

@@ -1377,40 +1377,37 @@ function toRefreshContextDraftCommand(value: unknown): RefreshContextDraftComman
 function toPreviewContextBudgetCommand(value: unknown): PreviewContextBudgetCommand | undefined {
   if (!isRecord(value)) return undefined;
   const identity = parseAgentScopeIdentity(value);
-  return (
-    hasOnlyKeys(value, [
-      "scope",
-      "projectId",
-      "conversationId",
-      "commandId",
-      "runDraftId",
-      "expectedDraftRevision",
-      "runDraftChecksum"
-    ]) &&
+  return hasOnlyKeys(value, [
+    "scope",
+    "projectId",
+    "conversationId",
+    "commandId",
+    "runDraftId",
+    "expectedDraftRevision",
+    "runDraftChecksum"
+  ]) &&
     identity !== undefined &&
     isSafeId(value["conversationId"]) &&
     isSafeId(value["commandId"]) &&
     isSafeId(value["runDraftId"]) &&
     isPositiveInteger(value["expectedDraftRevision"]) &&
     isNonEmptyString(value["runDraftChecksum"])
-      ? ({ ...value, ...identity } as unknown as PreviewContextBudgetCommand)
-      : undefined
-  );
+    ? ({ ...value, ...identity } as unknown as PreviewContextBudgetCommand)
+    : undefined;
 }
 
 function toCompactContextCommand(value: unknown): CompactContextCommand | undefined {
   if (!isRecord(value)) return undefined;
   const identity = parseAgentScopeIdentity(value);
-  return (
-    hasOnlyKeys(value, [
-      "scope",
-      "projectId",
-      "runId",
-      "commandId",
-      "expectedRunRevision",
-      "contextBudgetSnapshotId",
-      "trigger"
-    ]) &&
+  return hasOnlyKeys(value, [
+    "scope",
+    "projectId",
+    "runId",
+    "commandId",
+    "expectedRunRevision",
+    "contextBudgetSnapshotId",
+    "trigger"
+  ]) &&
     identity !== undefined &&
     isNonEmptyString(value["runId"]) &&
     isSafeId(value["commandId"]) &&
@@ -1419,9 +1416,8 @@ function toCompactContextCommand(value: unknown): CompactContextCommand | undefi
     (value["trigger"] === "manual" ||
       value["trigger"] === "automatic" ||
       value["trigger"] === "recovery")
-      ? ({ ...value, ...identity } as unknown as CompactContextCommand)
-      : undefined
-  );
+    ? ({ ...value, ...identity } as unknown as CompactContextCommand)
+    : undefined;
 }
 
 function isAgentRunDraftMutation(value: unknown): boolean {
@@ -1915,9 +1911,7 @@ function toUndoAgentRunCommand(value: unknown): UndoRunCommand | undefined {
   if (value["action"] === "request") {
     return Object.keys(value).some(
       (key) =>
-        !["action", "runId", "scope", "projectId", "commandId", "expectedRunRevision"].includes(
-          key
-        )
+        !["action", "runId", "scope", "projectId", "commandId", "expectedRunRevision"].includes(key)
     )
       ? undefined
       : { ...base, action: "request" };
