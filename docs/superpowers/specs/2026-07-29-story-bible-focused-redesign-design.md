@@ -4,7 +4,7 @@
 
 **状态：** Ready for implementation
 
-**实现基线：** `fb48f8c`
+**实现基线：** `64da637`
 
 **实施计划：** `docs/superpowers/plans/2026-07-29-story-bible-focused-redesign.md`
 
@@ -43,7 +43,7 @@
 
 - 保留创作导航中的“写作 / 故事资料 / 项目文件”三个标签。
 - 右侧 Agent 会话框保持原位置和交互，不增加“资料 / Agent”切换。
-- Activity Bar 的 Story Bible 和时间线跳转继续复用现有导航行为。
+- Activity Bar 的 Story Bible 和时间线继续复用同一个 Story Bible bridge 状态；Story Bible 入口恢复当前资料视图，时间线入口明确切到 `timeline/list`，点击事件后进入 `timeline/detail`，返回时回到时间线列表。
 
 ### 2.3 主区采用“列表到详情”
 
@@ -67,6 +67,8 @@
 资产状态继续使用 `active | draft | archived | deleted`。业务状态（例如伏笔是否已回收）不得复用资产状态字段。
 
 UI 新建集合资产使用类型前缀加 32 位小写十六进制随机 ID，不再从中文标题生成 slug；前缀固定为人物 `chr_`、地点 `loc_`、势力 `fac_`、规则 `rule_`、术语 `term_`、伏笔 `fsh_`。旧 ID 原样保留，大纲和时间线继续使用固定单例 ID。
+
+集合列表使用固定中文排序器并以 ID 作为同名兜底，避免裸 `localeCompare` 受运行环境默认 locale 影响。结构化 Draft 使用以 kind 为判别字段的联合类型；更新 patch 必须绑定当前 kind，Bridge 在运行时拒绝改变 kind 或混入其他分类字段。
 
 ### 3.2 人物
 
@@ -174,11 +176,13 @@ UI 新建集合资产使用类型前缀加 32 位小写十六进制随机 ID，�
 ### 4.2 Snapshot、搜索与 Context
 
 - `StoryBibleSnapshot` 增加 `foreshadows` 集合，保留 `memories` 集合。
-- 搜索索引增加 `story.foreshadow`；旧索引视为可重建缓存。任何手动或 Agent Story Bible 写入成功后都标记索引失效，下一次查询前自动重建。
+- 搜索索引保持 `schemaVersion=1.0`，只在 entry type enum 中增加 `story.foreshadow`；不得仅因新增枚举值升级缓存版本，旧 v1.0 缓存继续可读。
+- Main/Application 为当前项目持有唯一的 `ProjectSearchSession`。Session 拥有 `clean | dirty` 状态和共享的 in-flight rebuild，并把 invalidation 串行排在正在执行的 rebuild 之后，防止旧重建结果在失效后重新发布。Repository 的 `invalidate` 同时清空内存 snapshot 并移除可重建的 `cache/indexes/search.json`，避免重启后重新读取旧缓存，但不得触碰任何源文件。手动保存、AI 候选确认写入以及 Agent Change Set 对受管 Story Bible 路径的 apply 或 undo 成功后调用 invalidation，失败或 reject 不改变索引状态。下一次查询必须等待唯一一次重建完成后再搜索；缓存清理失败只产生可诊断警告并保持 Session dirty，不得把已经提交的资料写入误报为失败。Renderer 不持有搜索缓存脏标记。
 - 伏笔搜索文本由标题、摘要、证据、备注和关联标题组成。
 - Context Engine 不增加新的 `ContextRefType`。处于 `active` 且未放弃的伏笔映射为 `goal` candidate，`sourceRefs.entityType` 使用 `foreshadow`，仍由现有预算和显式选择策略决定是否注入。
 - “记忆”仍可作为 AI candidate，但不回到作者资料 UI。
-- `StoryBibleSession` 通过只读 Chapter Catalog port 获得稳定章节 ID 和顺序，用于引用校验与逾期判断；不得由 Story Bible Repository 直接读取章节文件。
+- UI 的 `StoryBibleEditorKind` 与搜索、Context 类型刻意分离：UI kind 只有五类且不含 memory；搜索和 Context 保留 memory 并增加 foreshadow。Story Bible UI 不得把 memory 搜索标签或一致性引用重新强转为可打开的 UI kind。
+- `StoryBibleSession` 通过 `Pick<ChapterCatalogRepositoryPort, "listChapters">` 等价的只读窄接口获得稳定章节 ID 和顺序，用于引用校验与逾期判断；不得获得 `createChapter` 权限，也不得由 Story Bible Repository 直接读取章节文件。
 
 ## 5. AI 辅助识别
 
@@ -187,13 +191,13 @@ UI 新建集合资产使用类型前缀加 32 位小写十六进制随机 ID，�
 1. 用户选择当前章节或最多五个指定章节。
 2. Main/Application 从 Chapter Repository 读取已保存正文；只有被选中的章节正处于未保存编辑状态时，才要求先保存或取消扫描。
 3. 分析请求同时携带现有未删除伏笔的 ID、标题、摘要和来源哈希，供模型判断重复、推进或回收。
-4. 请求提示模型只返回 JSON，并在 Provider 支持时附带 `responseFormat=json_object`；Application 始终对实际响应执行 foreshadow candidate schema 校验，不能信任 Provider 声明。解析或校验失败时不产生任何写入。
+4. 请求提示模型只返回 JSON，并与现有 AI 写作请求一致，无条件携带 `responseFormat={"type":"json_object"}` 请求元数据。当前 Provider 不提供 JSON mode capability 协商，本期不新增能力分支，也不得把该字段视为交付保证；Application 始终对实际响应执行 foreshadow candidate schema 校验，解析或校验失败时不产生任何写入。
 5. 候选分为 `new | progress | payoff`，展示原文证据、判断理由、建议状态和目标伏笔。
 6. 用户逐项勾选并确认；未勾选候选直接丢弃。
 7. 新候选保存为 `planted`，自动写入埋设章节和 `origin=ai-confirmed`；推进和回收候选显示字段差异，确认后才更新目标伏笔。
 8. 同一次分析中指向同一伏笔的已选推进/回收候选按章节 order 合并为一次更新：追加去重后的来源证据，以最后的回收候选决定 `paid-off` 和实际回收章节，再展示一份最终 diff。
 
-模型不得自动创建、自动改变状态或后台持续扫描。扫描上下文超过当前模型预算时返回可诊断错误，提示减少章节选择，不静默截断正文。
+模型不得自动创建、自动改变状态或后台持续扫描。Application 在调用 Provider 前，使用已解析模型的 context window、输出预留和现有确定性 token estimator 对完整请求执行预算预检；超限时返回稳定的 `FORESHADOW_SCAN_CONTEXT_TOO_LARGE`，提示减少章节选择，不发送请求，也不静默截断正文。
 
 ## 6. 现有 Agent 集成
 
@@ -202,12 +206,14 @@ UI 新建集合资产使用类型前缀加 32 位小写十六进制随机 ID，�
 - planning 模式只能读取和提出方案。
 - execution 模式可读取、创建和修改五类 Story Bible 资产。
 - 默认 `write_before_confirmation` 仍等待作者审批；用户明确预授权的 run 继续遵守现有策略。
-- Agent 的 Story Bible 创建 allowlist 和路径解析增加 `foreshadow -> foreshadows/<id>.json`。
+- Agent 的 Story Bible 创建 allowlist 增加 `foreshadow`。create 与 edit 两条路径都使用同一份穷举类型到路径映射，明确解析 `foreshadow -> foreshadows/<id>.json`、`timeline.events -> timeline/events.json`；未知类型返回错误，任何路径都不得默认兜底到时间线单例。
+- 编辑目标查找只返回人物、世界观、大纲、时间线和伏笔资产，不把 `MemoryRecord` 混入可编辑 Story Bible asset。memory 继续通过既有 Context/memory 路径参与读取，但不能以 `story_bible:<memoryId>` 进入五类资料写入解析。
+- `DEFAULT_MANAGED_PATH_SEGMENTS` 增加 `foreshadows`，项目文件视图、general-file 工具和 workspace outline 都必须把它视为受管目录，禁止按普通文本写入。该 policy 不是项目持久化格式，不做数据迁移；内部调用方和测试统一使用新默认值，外部注入且缺少 `foreshadows` 的弱 policy 继续显式拒绝。
 - Agent 新建或修改伏笔必须通过 foreshadow v1.0 schema；其他 Story Bible 类型继续通过原 story asset v1.0 schema，不能绕过 Repository/Change Set 验证。
 
 进入某个资料详情时，该 `story_bible:<assetId>` 作为下一次 Agent run 的活动资料引用，当前章节引用仍保留；返回分类列表时移除活动资料引用。若当前详情存在未保存修改，启动任何会读取该资料的 Agent run 前统一要求“保存 / 放弃 / 取消”，不得让 Agent 静默读取旧磁盘版本。
 
-Agent Change Set 应用后，Renderer 根据受影响的 Story Bible 路径使搜索索引失效并重新加载 snapshot。若资料编辑器没有未保存修改，则刷新并定位到唯一的新建或修改条目；若存在未保存修改，则保持当前草稿并显示“资料已在外部更新”，由用户选择重新加载或继续编辑，禁止静默覆盖。
+Agent Change Set apply 或 undo 成功后，Main/Application 根据受影响的 Story Bible 路径使项目搜索 Session 失效，并把受影响路径和 version group ID 返回给 Renderer；Renderer 只负责去重并重新加载 snapshot。若资料编辑器没有未保存修改，则刷新并定位到唯一的新建或修改条目；若存在未保存修改，则保持当前草稿并显示“资料已在外部更新”，由用户选择重新加载或继续编辑，禁止静默覆盖。reject、失败 apply 和失败 undo 均不触发虚假刷新或索引失效。
 
 ## 7. 空态、错误与响应式
 
@@ -215,7 +221,7 @@ Agent Change Set 应用后，Renderer 根据受影响的 Story Bible 路径使�
 - 搜索无结果提供清除筛选操作。
 - 章节引用失效时显示“章节已不存在”，但仍允许编辑和清理引用。
 - 保存失败保留表单内容；AI 扫描失败保留已选择章节；Agent 外部更新不得丢失本地草稿。
-- 1440×900 使用完整列；1024×900 隐藏次要列；720×640 使用堆叠行和单列详情。
+- 1440×900 使用完整列；1024×900 隐藏次要列；720×640 使用堆叠行和单列详情。实现优先复用现有 1279/900/760 等断点和设计变量；这些尺寸是验收视口，不要求新增同值 media query，只有实际验收失败时才增加新断点。
 - 覆盖浅色、深色和 ink-gold 主题；不增加卡片墙、嵌套卡片或横向溢出。
 
 ## 8. 非目标
@@ -234,7 +240,7 @@ Agent Change Set 应用后，Renderer 根据受影响的 Story Bible 路径使�
 4. 大纲按卷章树展示真实章节，未归卷和失效引用可辨识。
 5. 伏笔可从待埋流转到已回收，逾期状态正确派生。
 6. AI 扫描只生成候选，作者确认前项目文件零变化，重复来源不重复创建。
-7. 右侧 Agent 可以通过审批链新增或修改伏笔，应用后主区安全刷新。
+7. 右侧 Agent 可以通过审批链新增或修改伏笔，apply 和 undo 后主区安全刷新，reject 不触发刷新。
 8. v1.0 项目无损打开，memory 数据继续参与既有 AI 上下文但不显示在故事资料 UI。
-9. 搜索、Context candidate、IPC 安全白名单和 Agent general-file 隔离保持有效。
+9. 搜索、Context candidate、IPC 安全白名单和 Agent general-file 隔离保持有效；项目文件不能直接编辑 foreshadows，memory 或未知 Story Bible 类型不能兜底改写时间线。
 10. 三种主题与三个目标窗口尺寸下无文本截断、控件重叠或不可访问操作。

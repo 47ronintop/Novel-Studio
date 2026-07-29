@@ -6,7 +6,7 @@
 
 **设计依据：** `docs/superpowers/specs/2026-07-29-story-bible-focused-redesign-design.md`
 
-**实现基线：** `fb48f8c`
+**实现基线：** `64da637`
 
 ## 1. 交付原则
 
@@ -21,8 +21,8 @@
 
 | 批次 | 结果                     | 主要边界                                         |
 | ---- | ------------------------ | ------------------------------------------------ |
-| A    | 伏笔数据合同与持久化     | schemas、repository、application、search/context |
-| B    | 五类 UI 信息架构         | UI DTO、导航、主区列表到详情、结构化草稿         |
+| A    | 伏笔数据合同与持久化     | schema、repository、search/context、缓存生命周期 |
+| B    | 五类 UI 信息架构         | UI DTO、导航、列表到详情、结构化草稿、样式       |
 | C    | 分类专属视图             | 世界观筛选、大纲树、伏笔追踪、时间线详情         |
 | D    | AI 伏笔候选识别          | 分析 session、IPC/preload、候选确认 UI           |
 | E    | Agent 伏笔写入与安全刷新 | tool allowlist、Change Set、dirty guard、定位    |
@@ -50,10 +50,10 @@
 
 ### A2. Repository 与 Snapshot
 
-- [ ] `StoryBibleFileRepository` 读取 `foreshadows/**/*.json`，按标题稳定排序。
+- [ ] `StoryBibleFileRepository` 只读取直接子文件 `foreshadows/<id>.json`；集合使用固定 `zh-CN` 排序器并以 ID 作为同名兜底，不接受嵌套路径作为伏笔资产。
 - [ ] `saveStoryAsset` 将 `foreshadow` 仅写入 `foreshadows/<id>.json`，继续使用原子写。
 - [ ] `StoryBibleSnapshot` 增加 `foreshadows`，保留 `memories`。
-- [ ] 为 `StoryBibleSessionOptions` 增加只读 Chapter Catalog port；生产组合注入项目章节 catalog，测试使用 in-memory port。
+- [ ] 为 `StoryBibleSessionOptions` 增加 `Pick<ChapterCatalogRepositoryPort, "listChapters">` 等价的只读窄接口；不得注入 `createChapter`，生产组合注入项目章节 catalog，测试使用 in-memory port。
 - [ ] 一致性检查通过 catalog 识别失效章节引用、重复 `chapterId + excerptHash` 和已回收缺失实际章节；重复问题只报一次。
 - [ ] `latestUpdatedAt`、摘要计数和项目 outline index 纳入伏笔，memory 行为不变。
 
@@ -67,16 +67,25 @@
 ### A3. 搜索与 Context
 
 - [ ] 搜索类型增加 `story.foreshadow`，索引标题、摘要、证据和备注。
-- [ ] 搜索缓存 schema 升级；旧缓存触发安全重建，不影响源文件。
-- [ ] 为搜索 session/repository 增加显式 invalidation；手动 Story Bible 保存和 Agent 应用受管资料变更后标记失效，下一次查询前自动重建。
+- [ ] `search-index.schema.json` 和 `ProjectSearchIndex` 保持 `schemaVersion=1.0`，只扩展 entry type enum；不得为新增枚举值迁移或批量改写旧缓存。
 - [ ] 搜索结果点击打开伏笔详情。
 - [ ] active 且未放弃的伏笔映射为 `goal` candidate，source entity type 为 `foreshadow`；不扩展 Context Engine 公共 ref 枚举。
-- [ ] memories 继续构建 candidate，但不进入新的故事资料 UI DTO。
+- [ ] memories 继续构建 candidate 并保留 `memory` 搜索类型；搜索/Context 类型不得与不含 memory 的 UI kind 合并。
+
+### A4. 搜索索引失效所有权
+
+- [ ] DesktopApplication 在项目激活时创建并持有唯一的项目级 `ProjectSearchSession`，切换或关闭项目时释放；不再由每次 search/rebuild 调用临时创建 session。
+- [ ] Session 增加 `invalidate(reason)`、`clean | dirty` 状态和共享的 in-flight rebuild promise；dirty 状态下的并发查询只触发一次重建。invalidation 必须串行排在正在执行的 rebuild 之后，并在后续查询前完成，旧 rebuild 不得在失效后重新发布缓存。
+- [ ] `ProjectSearchRepositoryPort.invalidate()` 清空内存 snapshot，并仅移除可重建的 `cache/indexes/search.json`；文件不存在时幂等成功，失败时 Session 保持 dirty 并返回可诊断警告，不得删除或改写任何源文件，也不得把已经成功的 Story Bible 写入反报为失败。
+- [ ] 手动 Story Bible 保存和 AI 候选确认写入成功后由 Application 置 dirty；失败写入不得置 dirty。
+- [ ] Agent Change Set apply 或 undo 成功后，只有受影响路径属于受管 Story Bible 时置 dirty；reject、失败 apply 和失败 undo 不得触发失效。
+- [ ] Renderer 只消费刷新结果，不保存搜索 dirty flag，也不直接删除或改写索引文件。
+- [ ] 测试覆盖持久 session 生命周期、并发查询只重建一次、rebuild 期间发生 invalidation、invalidate 后缓存文件消失、重启不读取旧缓存，以及失败/reject 不触发失效。
 
 定向验证：
 
 ```powershell
-npm exec vitest -- packages/schemas/test/schema-contract.test.ts packages/repository/test/story-bible-repository.test.ts packages/repository/test/search-index-repository.test.ts packages/application/test/story-bible-session.test.ts
+npm exec vitest -- packages/schemas/test/schema-contract.test.ts packages/repository/test/story-bible-repository.test.ts packages/repository/test/search-index-repository.test.ts packages/application/test/story-bible-session.test.ts packages/application/test/project-search-session.test.ts packages/application/test/desktop-project-search.test.ts
 ```
 
 ## 4. 批次 B：五类导航与主区骨架
@@ -87,12 +96,15 @@ npm exec vitest -- packages/schemas/test/schema-contract.test.ts packages/reposi
 
 - [ ] `StoryBibleEditorKind` 固定为 `character | world | outline | foreshadow | timeline`。
 - [ ] 从作者 UI DTO 移除 memory entry；不得删除 Application snapshot 中的 memories。
+- [ ] 明确类型分叉：`StoryBibleEditorKind` 不含 memory；`ProjectSearchEntryType` 保留 memory 并增加 `story.foreshadow`；`searchResultTypeLabel("memory")` 和 memory Context 映射不得被顺手删除。
+- [ ] Application consistency ref 可继续包含 memory，但 Renderer 的 Story Bible consistency DTO 不得把它强转为 UI kind；memory-backed issue 不进入故事资料的可导航问题列表。
 - [ ] Entry DTO 增加底层 asset type、结构化 details、别名、关联 ID 和时间戳。
 - [ ] Editor DTO 接收只含 ID、标题、order、状态的章节选项和当前章节 ID，不向 UI Story Bible 层传递章节正文。
-- [ ] Draft 使用可辨识联合类型，分类字段由类型约束；Bridge 保存时合并原始资产，保留所有未知字段。
+- [ ] Draft 使用可辨识联合类型，分类字段由类型约束；`onDraftChange`/Bridge patch 与当前 kind 绑定，运行时拒绝修改 kind 或混入其他分类字段；保存时合并原始资产并保留所有未知字段。
 - [ ] Bridge 增加 `viewMode: list | detail`、`dirty`、分类筛选和外部更新状态。
 - [ ] 新建集合资产使用可注入身份工厂生成 32 位小写十六进制 ID；前缀固定为 `chr_ | loc_ | fac_ | rule_ | term_ | fsh_`，移除标题 slug 作为 ID 的逻辑，旧 ID 不变。
 - [ ] `selectKind` 打开列表，`selectEntry` 打开详情，保存后保持当前详情，新建取消后回列表。
+- [ ] 同步清理 `story-bible-bridge.ts`、`CreativeWorkspaceNavigator` 和 `StoryBibleEditorView` 中的 memory 分支、选项和文案；搜索结果中的 memory 分支保持不变。
 
 ### B2. 精简左侧导航
 
@@ -108,11 +120,19 @@ npm exec vitest -- packages/schemas/test/schema-contract.test.ts packages/reposi
 - [ ] 移除主区现有五类 tabs 和重复条目 aside。
 - [ ] 保存失败保留 draft；有未保存修改时返回列表需要“保存 / 放弃 / 取消”守门。
 - [ ] 采用现有图标库和表单组件；不创建卡片墙或嵌套卡片。
+- [ ] Activity Bar 的 Story Bible 入口恢复当前资料视图；时间线入口设置 `kind=timeline, viewMode=list`，事件点击进入 `timeline/detail`，返回时回到时间线列表，不沿用人物等旧状态。
+
+### B4. 样式与响应式实现
+
+- [ ] 在 `packages/ui/src/styles.css` 重构现有 `ns-story-*` 规则，并补齐紧凑列表、伏笔列、大纲卷章树、详情表单和外部更新提示；移除被新结构替代的旧 tabs/aside 规则。
+- [ ] 复用现有颜色、间距、焦点和三主题变量，不复制一套 Story Bible 专用主题值。
+- [ ] 优先复用现有 1279/900/760 等断点：宽屏完整列，中等宽度隐藏次要列，窄屏使用堆叠行和单列详情；1440×900、1024×900、720×640 是验收视口而不是必须新增的 media query。
+- [ ] 为表格列、列表行、图标按钮和详情布局提供稳定尺寸约束，动态状态和长中文标题不得引发布局跳动或横向溢出。
 
 定向验证：
 
 ```powershell
-npm exec vitest -- packages/ui/test/workspace-navigator.test.tsx packages/ui/test/workspace-shell.test.tsx apps/desktop/test/story-bible-bridge.test.ts
+npm exec vitest -- packages/ui/test/workspace-navigator.test.tsx packages/ui/test/workspace-shell.test.tsx apps/desktop/test/story-bible-bridge.test.ts apps/desktop/test/workspace-navigation.test.ts
 ```
 
 ## 5. 批次 C：分类专属视图
@@ -159,9 +179,10 @@ npm exec vitest -- packages/ui/test/workspace-shell.test.tsx packages/ui/test/wo
 - [ ] 新建只读 `ForeshadowAnalysisSession`，依赖 Chapter Repository、Story Bible Repository、模型 profile resolver 和 LLM adapter。
 - [ ] 输入为 1–5 个已保存章节 ID；输出包含 analysis ID、候选数组、使用量和可诊断错误。
 - [ ] 候选联合类型固定为 `new | progress | payoff`；均包含证据、理由、章节 ID、建议字段和稳定 candidate ID。
-- [ ] 请求中指示只返回 JSON，并在 Provider 支持时设置 `responseFormat=json_object`；无论能力声明如何都对实际响应执行 candidate schema 校验，失败时返回 `FORESHADOW_SCAN_OUTPUT_INVALID`，不得保存半结构化结果。
-- [ ] 将现有未删除伏笔的标题、摘要和来源哈希作为有界去重上下文；正文超过模型预算时整体失败并提示减少选择，不截断。
+- [ ] 请求中指示只返回 JSON，并与现有 AI 写作请求一致，无条件携带 `responseFormat={ type: "json_object" }` 元数据；当前 Provider 不消费该字段，本期不新增 JSON capability 分支，无论如何都对实际响应执行 candidate schema 校验，失败时返回 `FORESHADOW_SCAN_OUTPUT_INVALID`，不得保存半结构化结果。
+- [ ] 将现有未删除伏笔的标题、摘要和来源哈希作为有界去重上下文；发送前使用已解析的 model context window、输出预留和现有确定性 token estimator 预检完整请求，超限返回 `FORESHADOW_SCAN_CONTEXT_TOO_LARGE`，不调用 Provider、不截断。
 - [ ] 测试只使用 mock provider，CI 不调用真实模型。
+- [ ] 测试断言预算超限时 provider 调用次数为零，非法 JSON/不合 schema 的响应不产生候选或写入。
 
 ### D2. API、IPC 与 preload
 
@@ -191,26 +212,29 @@ npm exec vitest -- packages/application/test/foreshadow-analysis-session.test.ts
 ### E1. 工具与路径
 
 - [ ] `propose_story_bible_write` / v2 `create_resource` 接受 `assetType=foreshadow`。
-- [ ] 创建路径严格解析为 `foreshadows/<id>.json`；未知类型必须显式拒绝，禁止兜底到时间线文件。
-- [ ] Agent managed-resource 路径识别、schema 分类、搜索引用和 workspace outline 索引纳入 foreshadows。
+- [ ] 抽取 create/edit 共用的穷举 asset type/path resolver；`foreshadow` 严格解析为 `foreshadows/<id>.json`，`timeline.events` 才能解析为 `timeline/events.json`，未知类型显式拒绝且没有 default fallback。
+- [ ] 修正 `apps/desktop/src/main/agent-run-runtime.ts` 的 `findStoryBibleAsset` 和 `storyBibleAssetRelativePath`：编辑候选加入 foreshadows、排除 memories，并让无法解析的路径返回校验错误，不能把 memory/foreshadow/未知类型落到时间线。
+- [ ] `schemaNameForProjectText`、Agent managed-resource 路径识别、搜索引用和 workspace outline 索引纳入 `foreshadows/<id>.json`，并选择 foreshadow v1.0 schema。
+- [ ] `DEFAULT_MANAGED_PATH_SEGMENTS` 增加 `foreshadows`，项目文件和 general-file 路径拒绝直接写入；policy 不做项目数据迁移，内部调用方/测试更新到新默认值，缺少该 segment 的注入 policy 继续 fail closed。
 - [ ] writing profile 可读写伏笔；general_file 和 standalone 继续拒绝所有 Story Bible 专用操作。
 - [ ] 新建和编辑继续生成 Change Set；伏笔通过 foreshadow v1.0 schema，其他类型通过原 story asset v1.0 schema。
 - [ ] 更新 writing guidance 和工具说明，明确伏笔 ID/字段合同以及“先读后改、确认前只提案”；不把字段规则复制成第二套运行时 validator。
+- [ ] 回归测试覆盖：编辑 foreshadow 命中 `foreshadows/<id>.json`；`story_bible:<memoryId>` 和未知类型被拒绝且 `timeline/events.json` 不变；项目文件/general-file 无法把 foreshadows 当普通文本写入。
 
-### E2. Renderer 刷新与冲突
+### E2. Application 失效、Renderer 刷新与冲突
 
 - [ ] 资料详情打开时把 `story_bible:<assetId>` 同步为下一次 writing Agent run 的活动资料引用，同时保留当前章节引用；返回列表后移除。
 - [ ] 当前资料 dirty 时，Agent run 启动前复用“保存 / 放弃 / 取消”守门，禁止模型读取旧磁盘资产。
-- [ ] 监听已应用 Change Set 的受影响路径并以 version group ID 去重刷新。
-- [ ] 受管 Story Bible 路径应用成功后使搜索索引失效；无 dirty 草稿时重新加载 snapshot，若只有一个资产受影响则定位到该详情。
+- [ ] apply 和 undo 成功后都返回受影响路径与 version group ID；Main/Application 对受管 Story Bible 路径调用 A4 的 `invalidate`，Renderer 以 version group ID 去重刷新。
+- [ ] 无 dirty 草稿时重新加载 snapshot；若 apply 只创建或修改一个资产则定位到该详情，undo 后定位仍存在的当前资产，否则回到所属分类列表。
 - [ ] 有 dirty 草稿时不覆盖，显示外部更新提示以及“重新加载 / 继续编辑”。
 - [ ] 继续编辑后保存使用最新基线校验；基线已变化时显示冲突，不覆盖 Agent 结果。
-- [ ] Agent 创建、修改、拒绝和撤销后，导航计数、索引失效状态和主区状态保持一致；拒绝不触发虚假刷新。
+- [ ] reject、失败 apply 和失败 undo 不触发索引失效或 snapshot 刷新；Agent 创建、修改和成功撤销后导航计数与主区状态保持一致。
 
 定向验证：
 
 ```powershell
-npm exec vitest -- packages/agent-engine/test/tool-registry.test.ts packages/application/test/agent-run-session.test.ts apps/desktop/test/desktop-agent-run-runtime.test.ts apps/desktop/test/agent-run-bridge.test.ts
+npm exec vitest -- packages/agent-engine/test/tool-registry.test.ts packages/application/test/agent-run-session.test.ts packages/repository/test/creative-project-file-repository.test.ts apps/desktop/test/desktop-agent-run-runtime.test.ts apps/desktop/test/agent-run-bridge.test.ts apps/desktop/test/electron-security.test.ts
 ```
 
 ## 8. 批次 F：兼容、视觉与完整门禁
@@ -219,12 +243,13 @@ npm exec vitest -- packages/agent-engine/test/tool-registry.test.ts packages/app
 
 - [ ] 无 Story Bible、只有 v1.0 资产、包含未知字段、缺少 foreshadows 目录的项目均可打开。
 - [ ] memories 文件仍可读写、可构建 Context candidate，且故事资料 UI 中完全不可见。
-- [ ] 旧搜索 cache 可重建；清理 cache 不影响任何 Story Bible 源数据。
+- [ ] 旧 v1.0 搜索 cache 继续可读；相关 Story Bible 写入成功后 cache 被安全失效并在下一次查询重建，手动清理 cache 不影响任何 Story Bible 源数据。
 - [ ] Agent planning、execution/default approval、preapproved、general_file 和 standalone 权限矩阵无回归。
 
 ### F2. 视觉与可访问性
 
 - [ ] Playwright 验收 1440×900、1024×900、720×640。
+- [ ] 验收视口不等同于 CSS 断点；记录最终复用或新增断点的理由，避免为测试尺寸堆叠重复 media query。
 - [ ] 每个尺寸覆盖人物列表、世界观筛选、大纲树、伏笔列表/详情和时间线。
 - [ ] 覆盖浅色、深色、ink-gold；检查无水平滚动、重叠、截断和布局跳动。
 - [ ] 键盘可完成类目切换、搜索、列表选择、返回、保存和候选确认。
