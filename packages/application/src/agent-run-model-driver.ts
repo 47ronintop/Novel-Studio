@@ -48,8 +48,9 @@ export function createLlmAgentRunModelDriver(
         }
       }));
       const requestId = `agent_${input.runId}_${input.snapshot.runRevision}`;
-      const promptCache =
-        input.promptCache ?? createAgentRoundPromptCacheRequest(input, messages, tools);
+      const promptCache = input.disablePromptCache
+        ? undefined
+        : (input.promptCache ?? createAgentRoundPromptCacheRequest(input, messages, tools));
       // The run snapshot's reasoning effort is server-authoritative (validated against the model at
       // start). It overrides any static reasoning in the driver's base parameters so the value the
       // preflight approved is exactly what reaches the provider.
@@ -138,6 +139,7 @@ export function createAgentRoundPromptCacheRequest(
   tools: readonly LlmToolDefinition[],
   estimator: AgentTokenEstimator = createDeterministicTokenEstimator()
 ): LlmPromptCacheRequest | undefined {
+  if (input.disablePromptCache) return undefined;
   const capability = input.snapshot.providerCapabilitySnapshot?.promptCache;
   const stablePrefixMessageCount = input.snapshot.promptCacheStablePrefixMessageCount;
   if (
@@ -167,6 +169,12 @@ export function createAgentRoundPromptCacheRequest(
     mode: capability.mode,
     policyVersion: capability.policyVersion,
     identityChecksum: input.snapshot.promptCacheIdentityChecksum,
+    ...(isChecksum(input.promptCacheConnectionIdentityChecksum)
+      ? { connectionIdentityChecksum: input.promptCacheConnectionIdentityChecksum }
+      : {}),
+    ...(isChecksum(input.promptCacheAccountIsolationChecksum)
+      ? { accountIsolationChecksum: input.promptCacheAccountIsolationChecksum }
+      : {}),
     logicalPrefixChecksum: input.snapshot.cachePrefixChecksum,
     stablePrefixMessageCount,
     minimumCacheableTokens: capability.minimumCacheableTokens,

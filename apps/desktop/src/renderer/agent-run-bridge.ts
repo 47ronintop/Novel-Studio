@@ -29,8 +29,7 @@ import type {
   ModelReasoningStrengthValue,
   NovelStudioApi,
   PlanArtifact,
-  ProjectConventionsCreateResult,
-  StoryBibleSnapshot
+  ProjectConventionsCreateResult
 } from "@novel-studio/application";
 import {
   findStoryBibleMentionSuggestions,
@@ -60,6 +59,8 @@ import type {
 } from "@novel-studio/ui";
 import type { UnifiedError } from "@novel-studio/shared";
 
+import type { StoryBibleSnapshotBinding } from "./story-bible-bridge.js";
+
 type AgentPlanExecutionOptions = NonNullable<Parameters<AgentPlanReviewProps["onDecision"]>[1]>;
 
 export interface AgentRunBridgeContext {
@@ -81,7 +82,7 @@ export interface AgentRunBridgeContext {
   readonly activeChapterId?: string;
   readonly chapterEditor?: ChapterEditorProps;
   readonly fileEditor?: PlainFileEditorProps;
-  readonly storyBibleSnapshot?: StoryBibleSnapshot;
+  readonly storyBibleSnapshotBinding?: StoryBibleSnapshotBinding;
   readonly settings?: ModelSettingsPanelProps;
 }
 
@@ -163,6 +164,9 @@ interface BridgeState {
   readonly conventionsCreatePending: boolean;
   readonly conventionsCreateResult: ProjectConventionsCreateResult | undefined;
   readonly conventionsCreateError: string | undefined;
+  readonly conventionsPolicyPending: boolean;
+  readonly conventionsPolicyError: string | undefined;
+  readonly conventionsDisabled: boolean;
 }
 
 export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
@@ -198,7 +202,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     planExecution: undefined,
     conventionsCreatePending: false,
     conventionsCreateResult: undefined,
-    conventionsCreateError: undefined
+    conventionsCreateError: undefined,
+    conventionsPolicyPending: false,
+    conventionsPolicyError: undefined,
+    conventionsDisabled: false
   };
   const listeners = new Set<() => void>();
   let approvalInFlight: Promise<AgentRunPanelProps> | undefined;
@@ -324,6 +331,11 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       permissionPending: false,
       permissionError: undefined,
       planExecution: undefined,
+      conventionsCreateResult: undefined,
+      conventionsCreateError: undefined,
+      conventionsPolicyPending: false,
+      conventionsPolicyError: undefined,
+      conventionsDisabled: false,
       startPending: true
     };
     notify();
@@ -1512,7 +1524,8 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     state = {
       ...state,
       conventionsCreatePending: true,
-      conventionsCreateError: undefined
+      conventionsCreateError: undefined,
+      conventionsPolicyError: undefined
     };
     notify();
     void create()
@@ -1523,7 +1536,8 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
               ...state,
               conventionsCreatePending: false,
               conventionsCreateResult: result.value,
-              conventionsCreateError: undefined
+              conventionsCreateError: undefined,
+              conventionsDisabled: false
             }
           : {
               ...state,
@@ -1538,6 +1552,55 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           ...state,
           conventionsCreatePending: false,
           conventionsCreateError: thrownErrorMessage(error)
+        };
+        notify();
+      });
+  }
+
+  function updateProjectConventionsPolicy(
+    action: "disable_conventions" | "revoke_workspace_trust"
+  ): void {
+    const update = api.workspace?.updateContextPolicy;
+    const scope = context?.scope;
+    if (
+      update === undefined ||
+      scope === undefined ||
+      isStandaloneScope(scope) ||
+      state.conventionsPolicyPending
+    ) {
+      return;
+    }
+    state = {
+      ...state,
+      conventionsPolicyPending: true,
+      conventionsPolicyError: undefined
+    };
+    notify();
+    void update(action)
+      .then((result) => {
+        if (context === undefined || !sameAgentScope(context.scope, scope)) return;
+        state = result.ok
+          ? {
+              ...state,
+              conventionsPolicyPending: false,
+              conventionsPolicyError: undefined,
+              conventionsDisabled: true,
+              conventionsCreateResult: undefined,
+              conventionsCreateError: undefined
+            }
+          : {
+              ...state,
+              conventionsPolicyPending: false,
+              conventionsPolicyError: result.error.message
+            };
+        notify();
+      })
+      .catch((error: unknown) => {
+        if (context === undefined || !sameAgentScope(context.scope, scope)) return;
+        state = {
+          ...state,
+          conventionsPolicyPending: false,
+          conventionsPolicyError: thrownErrorMessage(error)
         };
         notify();
       });
@@ -1714,10 +1777,14 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       context?.workspaceKind === "engineeringWorkspace"
         ? ("AGENTS.md" as const)
         : ("conventions/writing.md" as const);
+    const conventionsEnabled =
+      !state.conventionsDisabled &&
+      (conventionsSource !== undefined || state.conventionsCreateResult !== undefined);
     const conventionsStatus =
-      conventionsSource !== undefined
+      conventionsSource !== undefined && !state.conventionsDisabled
         ? ("available" as const)
         : (state.conventionsCreateResult?.status ?? "unknown");
+    const conventionsError = state.conventionsCreateError ?? state.conventionsPolicyError;
     return {
       state: contextStatusState(),
       usageLabel: budgetUsageLabel(budget),
@@ -1733,13 +1800,17 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
             ? conventionsSource.relativePath
             : (state.conventionsCreateResult?.relativePath ?? conventionsPath),
         status: conventionsStatus,
-        busy: state.conventionsCreatePending,
-        ...(state.conventionsCreateError === undefined
-          ? {}
-          : { errorMessage: state.conventionsCreateError }),
+        busy: state.conventionsCreatePending || state.conventionsPolicyPending,
+        ...(conventionsError === undefined ? {} : { errorMessage: conventionsError }),
         ...(conventionsStatus === "available" || state.conventionsCreateResult !== undefined
           ? {}
-          : { onCreate: () => createProjectConventions() })
+          : { onCreate: () => createProjectConventions() }),
+        ...(conventionsEnabled && api.workspace?.updateContextPolicy !== undefined
+          ? {
+              onDisable: () => updateProjectConventionsPolicy("disable_conventions"),
+              onRevokeTrust: () => updateProjectConventionsPolicy("revoke_workspace_trust")
+            }
+          : {})
       },
       ...(canCompact ? { onCompact: () => compactActiveContext() } : {}),
       ...(draftApi.refreshContextDraft === undefined
@@ -2196,7 +2267,10 @@ function resetRunState(state: BridgeState, scope?: AgentContextScope): BridgeSta
     planExecution: undefined,
     conventionsCreatePending: false,
     conventionsCreateResult: undefined,
-    conventionsCreateError: undefined
+    conventionsCreateError: undefined,
+    conventionsPolicyPending: false,
+    conventionsPolicyError: undefined,
+    conventionsDisabled: false
   };
 }
 
@@ -2800,14 +2874,16 @@ function suggestedStoryBibleReferenceRefs(
     context === undefined ||
     contextDraft === undefined ||
     contextDraft.contextMode !== "writing" ||
-    context.storyBibleSnapshot === undefined ||
-    (context.scope !== undefined && isStandaloneScope(context.scope))
+    context.scope?.kind !== "workspace" ||
+    context.scope.workspaceKind !== "creativeProject" ||
+    context.storyBibleSnapshotBinding === undefined ||
+    context.storyBibleSnapshotBinding.workspaceId !== context.scope.workspaceId
   ) {
     return [];
   }
   const present = new Set(contextDraft.refs.map((ref) => ref.refId));
   return findStoryBibleMentionSuggestions({
-    snapshot: context.storyBibleSnapshot,
+    snapshot: context.storyBibleSnapshotBinding.snapshot,
     userRequest,
     ...(context.chapterEditor === undefined
       ? {}

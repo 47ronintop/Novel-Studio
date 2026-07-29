@@ -355,6 +355,8 @@ describe("AgentRunModelDriver", () => {
     )(
       {
         snapshot: cacheSnapshot({ stablePrefixMessageCount: 3 }),
+        promptCacheConnectionIdentityChecksum: "c".repeat(64),
+        promptCacheAccountIsolationChecksum: "d".repeat(64),
         messages: [],
         tools: []
       },
@@ -382,7 +384,9 @@ describe("AgentRunModelDriver", () => {
     expect(request).toMatchObject({
       mode: "automatic_prefix",
       stablePrefixMessageCount: 3,
-      eligibleInputTokens: 123
+      eligibleInputTokens: 123,
+      connectionIdentityChecksum: "c".repeat(64),
+      accountIsolationChecksum: "d".repeat(64)
     });
     expect(estimatedPayload).toContain("frozen guidance");
     expect(estimatedPayload).toContain("frozen conventions");

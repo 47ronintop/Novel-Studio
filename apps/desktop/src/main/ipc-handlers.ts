@@ -87,6 +87,8 @@ import { createUnifiedError, err } from "@novel-studio/shared";
 import type { ModelSecretStore } from "./model-runtime.js";
 import type { DesktopAgentRuntimeManager } from "./agent-runtime-manager.js";
 import type { WorkspaceActivationCoordinator } from "./workspace-activation.js";
+import type { WorkspaceContextPolicyStore } from "./workspace-context-policy-store.js";
+import type { CreativeGeneralActiveResourceProof } from "./creative-general-active-resource-proof.js";
 import { normalizeCreativeProjectFilePath } from "@novel-studio/repository";
 import { createDesktopProjectConventionsFile } from "./project-conventions-file.js";
 
@@ -104,7 +106,10 @@ export interface ApplicationIpcHandlerOptions {
   readonly publishAiSuggestionStreamEvent?: (event: AiWritingSuggestionStreamPushEvent) => void;
   readonly agentRunSession?: AgentRunSession;
   readonly creativeProjectFileSession?: CreativeProjectFileSession;
+  /** Main-owned proof that a creative Files-surface resource was freshly read and verified. */
+  readonly creativeGeneralActiveResourceProof?: CreativeGeneralActiveResourceProof;
   readonly agentRuntimeManager?: DesktopAgentRuntimeManager;
+  readonly workspaceContextPolicyStore?: WorkspaceContextPolicyStore;
   readonly publishAgentRunEvent?: (event: AgentRunEvent) => void;
   readonly agentWriteSaveCoordinator?: AgentWriteSaveCoordinator;
   readonly agentNetworkSettingsSession?: AgentNetworkSettingsSession;
@@ -266,6 +271,71 @@ export function createApplicationIpcHandlers(
     activeAgentRuntime()?.agentContextSession;
   const currentAgentPermissionSession = (): AgentPermissionSession | undefined =>
     activeAgentRuntime()?.agentPermissionSession;
+
+  const verifyCreativeGeneralProof = async (
+    identity: AgentScopeIdentity,
+    reference?: {
+      readonly refId: string;
+      readonly relativePath: string;
+      readonly label: string;
+      readonly expectedChecksum?: string;
+      readonly range?: unknown;
+    } | null
+  ): Promise<Result<void, UnifiedError> | undefined> => {
+    const active = options.agentRuntimeManager?.active?.();
+    if (active?.scope !== "workspace" || active.binding.kind !== "creativeProject") {
+      return undefined;
+    }
+    const workspaceId =
+      identity.scope?.kind === "workspace" ? identity.scope.workspaceId : identity.projectId;
+    if (
+      workspaceId === undefined ||
+      workspaceId !== active.binding.workspaceId ||
+      (identity.scope?.kind === "workspace" && identity.scope.workspaceKind !== "creativeProject")
+    ) {
+      return err(creativeGeneralActiveResourceUnavailable("workspace_identity_mismatch"));
+    }
+    const proof = options.creativeGeneralActiveResourceProof;
+    const session = options.creativeProjectFileSession;
+    if (proof === undefined || session === undefined) {
+      return err(creativeGeneralActiveResourceUnavailable("proof_unavailable"));
+    }
+    const sessionIdentity = session.getActiveIdentity();
+    if (
+      sessionIdentity === undefined ||
+      sessionIdentity.workspaceId !== active.binding.workspaceId
+    ) {
+      return err(creativeGeneralActiveResourceUnavailable("active_session_workspace_mismatch"));
+    }
+    const proofInput = {
+      identity: sessionIdentity,
+      session
+    };
+    return reference === undefined
+      ? proof.verifyFilesSurface(proofInput)
+      : proof.verifyReference({ ...proofInput, reference });
+  };
+
+  const verifyCreativePlanApprovalContext = async (
+    command: DecideAgentPlanCommand,
+    session: AgentRunSession
+  ): Promise<Result<void, UnifiedError> | undefined> => {
+    const active = options.agentRuntimeManager?.active?.();
+    if (
+      command.decision !== "approve" ||
+      command.executionContextMode !== "general_file" ||
+      active?.scope !== "workspace" ||
+      active.binding.kind !== "creativeProject" ||
+      command.projectId !== active.binding.workspaceId
+    ) {
+      return undefined;
+    }
+    const source = await session.readAgentRun(command.runId);
+    if (!source.ok) return err(source.error);
+    return source.value.snapshot.contextMode === "writing"
+      ? err(agentContextRepreflightRequired())
+      : undefined;
+  };
 
   async function chooseDirectory(
     purpose: DirectorySelection["purpose"],
@@ -449,32 +519,91 @@ export function createApplicationIpcHandlers(
         ? Promise.resolve(invalidWorkspaceRequest())
         : application.saveEngineeringTextFile(request);
     },
-    "application:workspace:create-project-conventions": () => {
-      const active = options.agentRuntimeManager?.active();
-      return active?.scope === "workspace"
-        ? createDesktopProjectConventionsFile({
-            workspaceKind: active.binding.kind,
-            projectRoot: active.binding.contentRoot
-          })
-        : Promise.resolve(err(projectConventionsUnavailable()));
+    "application:workspace:create-project-conventions": async () => {
+      const manager = options.agentRuntimeManager;
+      const active = manager?.active();
+      if (manager === undefined || active?.scope !== "workspace") {
+        return err(projectConventionsUnavailable());
+      }
+      const created = await createDesktopProjectConventionsFile({
+        workspaceKind: active.binding.kind,
+        projectRoot: active.binding.contentRoot
+      });
+      if (!created.ok || options.workspaceContextPolicyStore === undefined) return created;
+
+      const enabled = await options.workspaceContextPolicyStore.enableTrustedConventions({
+        workspaceKind: active.binding.kind,
+        workspaceId: active.binding.workspaceId,
+        contentRoot: active.binding.contentRoot
+      });
+      if (!enabled.ok) return enabled;
+      const refreshed = await manager.refreshCurrentWorkspace();
+      if (!refreshed.ok) {
+        manager.revokeCurrentSettingsCapabilities();
+        return refreshed;
+      }
+      return created;
     },
-    "application:creative-project-files:refresh": (input: unknown) => {
+    "application:workspace:update-context-policy": async (input: unknown) => {
+      const action = toWorkspaceContextPolicyAction(input);
+      const manager = options.agentRuntimeManager;
+      const active = manager?.active();
+      const store = options.workspaceContextPolicyStore;
+      if (action === undefined) return invalidWorkspaceRequest();
+      if (manager === undefined || store === undefined || active?.scope !== "workspace") {
+        return err(workspaceContextPolicyUnavailable());
+      }
+      const binding = {
+        workspaceKind: active.binding.kind,
+        workspaceId: active.binding.workspaceId,
+        contentRoot: active.binding.contentRoot
+      } as const;
+      const changed =
+        action === "disable_conventions"
+          ? await store.disableConventions(binding)
+          : await store.revokeTrust(binding);
+      if (!changed.ok) return changed;
+      const refreshed = await manager.refreshCurrentWorkspace();
+      if (!refreshed.ok) {
+        manager.revokeCurrentSettingsCapabilities();
+        return refreshed;
+      }
+      return ok(undefined);
+    },
+    "application:creative-project-files:refresh": async (input: unknown) => {
       const identity = toCreativeProjectFileIdentity(input);
-      return identity === undefined || options.creativeProjectFileSession === undefined
-        ? Promise.resolve(invalidWorkspaceRequest())
-        : options.creativeProjectFileSession.refresh(identity);
+      const session = options.creativeProjectFileSession;
+      if (identity === undefined || session === undefined) return invalidWorkspaceRequest();
+      const proof = options.creativeGeneralActiveResourceProof;
+      return proof === undefined
+        ? session.refresh(identity)
+        : proof.attestFilesSurface({ identity, session });
     },
-    "application:creative-project-files:read-text-file": (input: unknown) => {
+    "application:creative-project-files:read-text-file": async (input: unknown) => {
       const request = toCreativeProjectFileReadRequest(input);
-      return request === undefined || options.creativeProjectFileSession === undefined
-        ? Promise.resolve(invalidWorkspaceRequest())
-        : options.creativeProjectFileSession.readTextFile(request);
+      const session = options.creativeProjectFileSession;
+      if (request === undefined || session === undefined) return invalidWorkspaceRequest();
+      const read = await session.readTextFile(request);
+      if (read.ok) {
+        options.creativeGeneralActiveResourceProof?.recordResource({
+          identity: { projectId: request.projectId, workspaceId: request.workspaceId },
+          document: read.value
+        });
+      }
+      return read;
     },
-    "application:creative-project-files:save-text-file": (input: unknown) => {
+    "application:creative-project-files:save-text-file": async (input: unknown) => {
       const request = toCreativeProjectFileSaveRequest(input);
-      return request === undefined || options.creativeProjectFileSession === undefined
-        ? Promise.resolve(invalidWorkspaceRequest())
-        : options.creativeProjectFileSession.saveTextFile(request);
+      const session = options.creativeProjectFileSession;
+      if (request === undefined || session === undefined) return invalidWorkspaceRequest();
+      const saved = await session.saveTextFile(request);
+      if (saved.ok && saved.value.kind === "saved") {
+        options.creativeGeneralActiveResourceProof?.recordResource({
+          identity: { projectId: request.projectId, workspaceId: request.workspaceId },
+          document: saved.value.document
+        });
+      }
+      return saved;
     },
     "application:creative-project-files:execute-lifecycle": (input: unknown) => {
       const command = toCreativeProjectFileLifecycleCommand(input);
@@ -692,14 +821,22 @@ export function createApplicationIpcHandlers(
 
       return application.readWorkflowRun(workflowRunId);
     },
-    "application:agent-run:prepare-start": (command: unknown) => {
+    "application:agent-run:prepare-start": async (command: unknown) => {
       // Persist the renderer's pre-run intent (user choices only) as the current draft, returning a
       // reference the draft-only start command can carry. Server resolves capabilities/content later.
       const parsed = toSyncStartDraftCommand(command);
       const draftSession = currentAgentRunDraftSession();
-      return parsed === undefined || draftSession === undefined
-        ? Promise.resolve(agentRunUnavailable())
-        : draftSession.syncStartDraft(parsed);
+      if (parsed === undefined || draftSession === undefined) return agentRunUnavailable();
+      if (parsed.contextMode === "general_file") {
+        const verified = await verifyCreativeGeneralProof(
+          parsed,
+          parsed.activeResourceRef === null || parsed.activeResourceRef === undefined
+            ? undefined
+            : parsed.activeResourceRef
+        );
+        if (verified !== undefined && !verified.ok) return verified;
+      }
+      return draftSession.syncStartDraft(parsed);
     },
     "application:agent-run:read-run-draft": (command: unknown) => {
       const parsed = toReadAgentRunDraftCommand(command);
@@ -708,19 +845,41 @@ export function createApplicationIpcHandlers(
         ? Promise.resolve(agentRunUnavailable())
         : draftSession.readAgentRunDraft(parsed);
     },
-    "application:agent-run:update-run-draft": (command: unknown) => {
+    "application:agent-run:update-run-draft": async (command: unknown) => {
       const parsed = toUpdateAgentRunDraftCommand(command);
       const draftSession = currentAgentRunDraftSession();
-      return parsed === undefined || draftSession === undefined
-        ? Promise.resolve(agentRunUnavailable())
-        : draftSession.updateAgentRunDraft(parsed);
+      if (parsed === undefined || draftSession === undefined) return agentRunUnavailable();
+      if (
+        parsed.mutation.kind === "set_context_mode" &&
+        parsed.mutation.contextMode === "general_file"
+      ) {
+        const verified = await verifyCreativeGeneralProof(parsed);
+        if (verified !== undefined && !verified.ok) return verified;
+      }
+      const updated = await draftSession.updateAgentRunDraft(parsed);
+      if (
+        updated.ok &&
+        parsed.mutation.kind === "set_context_mode" &&
+        parsed.mutation.contextMode !== "general_file"
+      ) {
+        options.creativeGeneralActiveResourceProof?.clear();
+      }
+      return updated;
     },
-    "application:agent-run:update-context-draft": (command: unknown) => {
+    "application:agent-run:update-context-draft": async (command: unknown) => {
       const parsed = toUpdateContextDraftCommand(command);
       const draftSession = currentAgentRunDraftSession();
-      return parsed === undefined || draftSession === undefined
-        ? Promise.resolve(agentRunUnavailable())
-        : draftSession.updateContextDraft(parsed);
+      if (parsed === undefined || draftSession === undefined) return agentRunUnavailable();
+      if (parsed.mutation.kind === "set_active_resource") {
+        const verified = await verifyCreativeGeneralProof(
+          parsed,
+          parsed.mutation.ref === null ? undefined : parsed.mutation.ref
+        );
+        if (verified !== undefined && !verified.ok) return verified;
+        if (parsed.mutation.ref === null)
+          options.creativeGeneralActiveResourceProof?.clearResource();
+      }
+      return draftSession.updateContextDraft(parsed);
     },
     "application:agent-run:refresh-context-draft": (command: unknown) => {
       const parsed = toRefreshContextDraftCommand(command);
@@ -796,12 +955,12 @@ export function createApplicationIpcHandlers(
         ? Promise.resolve(invalidAgentRunCommand())
         : session.retryRunTarget(parsed);
     },
-    "application:agent-run:decide-plan": (command: unknown) => {
+    "application:agent-run:decide-plan": async (command: unknown) => {
       const parsed = toDecideAgentPlanCommand(command);
       const session = currentAgentRunSession();
-      return parsed === undefined || session === undefined
-        ? Promise.resolve(agentRunUnavailable())
-        : session.decidePlan(parsed);
+      if (parsed === undefined || session === undefined) return agentRunUnavailable();
+      const verified = await verifyCreativePlanApprovalContext(parsed, session);
+      return verified === undefined || verified.ok ? session.decidePlan(parsed) : verified;
     },
     "application:agent-run:read-permission-summary": async (query: unknown) => {
       const parsed = toReadAgentPermissionSummaryQuery(query);
@@ -2117,6 +2276,17 @@ function invalidAgentRunCommand(): Result<never, UnifiedError> {
   );
 }
 
+function agentContextRepreflightRequired(): UnifiedError {
+  return createUnifiedError({
+    code: "AGENT_CONTEXT_REPREFLIGHT_REQUIRED",
+    category: "ValidationError",
+    message: "Changing the execution context mode requires a newly preflighted Agent run.",
+    recoverability: "user-action",
+    suggestedAction: "Start a new Agent run with the desired context mode.",
+    traceId: "desktop-agent-run-ipc"
+  });
+}
+
 function toUserPreferencesSaveInput(value: unknown): UserPreferencesSaveInput {
   if (!isRecord(value)) {
     return {};
@@ -2721,6 +2891,38 @@ function projectConventionsUnavailable(): UnifiedError {
     suggestedAction: "Open a creative project or engineering workspace and try again.",
     traceId: "desktop-project-conventions-file"
   });
+}
+
+function workspaceContextPolicyUnavailable(): UnifiedError {
+  return createUnifiedError({
+    code: "WORKSPACE_CONTEXT_POLICY_UNAVAILABLE",
+    category: "UserError",
+    message: "Workspace context policy requires an active workspace.",
+    recoverability: "user-action",
+    suggestedAction: "Open a creative project or engineering workspace and try again.",
+    traceId: "desktop-workspace-context-policy"
+  });
+}
+
+function creativeGeneralActiveResourceUnavailable(reason: string): UnifiedError {
+  return createUnifiedError({
+    code: "AGENT_CREATIVE_GENERAL_ACTIVE_RESOURCE_UNVERIFIED",
+    category: "ValidationError",
+    message: "A verified active creative project file is required for general file context.",
+    recoverability: "user-action",
+    suggestedAction: "Open the file from the project Files surface and retry.",
+    traceId: "desktop-creative-general-active-resource-ipc",
+    redactedDetail: { reason }
+  });
+}
+
+function toWorkspaceContextPolicyAction(
+  value: unknown
+): "disable_conventions" | "revoke_workspace_trust" | undefined {
+  if (!isRecord(value)) return undefined;
+  return value["action"] === "disable_conventions" || value["action"] === "revoke_workspace_trust"
+    ? value["action"]
+    : undefined;
 }
 
 function directorySelectionFailed(): UnifiedError {

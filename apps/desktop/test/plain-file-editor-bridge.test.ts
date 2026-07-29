@@ -118,6 +118,155 @@ describe("plain file editor bridge", () => {
     ]);
   });
 
+  test("uses the current creative tree revision when saving an already-open file", async () => {
+    const saves: CreativeSaveInput[] = [];
+    let treeRevision: string | undefined = "tree-open";
+    const api = createCreativeApi({
+      onSave: async (input) => {
+        saves.push(input);
+        return ok({
+          kind: "saved" as const,
+          treeRevision: "tree-saved",
+          document: {
+            path: input.path,
+            content: input.content,
+            checksum: "sha256:saved",
+            nodeRevision: "node-saved"
+          }
+        });
+      }
+    });
+    const bridge = createPlainFileEditorBridge(api, {
+      scope: "creativeProjectFile",
+      identity: { projectId: "project-01", workspaceId: "workspace-01" },
+      getTreeRevision: () => treeRevision
+    });
+
+    await bridge.openFile("notes/scene.md");
+    treeRevision = "tree-current";
+    bridge.updateContent("Scene two\n");
+    await bridge.save();
+
+    expect(saves).toEqual([
+      {
+        projectId: "project-01",
+        workspaceId: "workspace-01",
+        path: "notes/scene.md",
+        content: "Scene two\n",
+        expectedTreeRevision: "tree-current",
+        expectedNodeRevision: "node-open",
+        expectedChecksum: "sha256:open"
+      }
+    ]);
+  });
+
+  test("uses creative conflict revisions when keeping a draft before saving again", async () => {
+    const saves: CreativeSaveInput[] = [];
+    let treeRevision: string | undefined = "tree-open";
+    const api = createCreativeApi({
+      onSave: async (input) => {
+        saves.push(input);
+        return saves.length === 1
+          ? ok({
+              kind: "conflict" as const,
+              treeRevision: "tree-disk",
+              current: {
+                path: input.path,
+                content: "Changed elsewhere\n",
+                checksum: "sha256:disk",
+                nodeRevision: "node-disk"
+              }
+            })
+          : ok({
+              kind: "saved" as const,
+              treeRevision: "tree-after-save",
+              document: {
+                path: input.path,
+                content: input.content,
+                checksum: "sha256:after-save",
+                nodeRevision: "node-after-save"
+              }
+            });
+      }
+    });
+    const bridge = createPlainFileEditorBridge(api, {
+      scope: "creativeProjectFile",
+      identity: { projectId: "project-01", workspaceId: "workspace-01" },
+      getTreeRevision: () => treeRevision
+    });
+
+    await bridge.openFile("notes/scene.md");
+    bridge.updateContent("My draft\n");
+    const conflicted = await bridge.save();
+    treeRevision = undefined;
+    conflicted?.onKeepDraft?.();
+    await bridge.save();
+
+    expect(saves.at(-1)).toEqual({
+      projectId: "project-01",
+      workspaceId: "workspace-01",
+      path: "notes/scene.md",
+      content: "My draft\n",
+      expectedTreeRevision: "tree-disk",
+      expectedNodeRevision: "node-disk",
+      expectedChecksum: "sha256:disk"
+    });
+  });
+
+  test("uses creative conflict revisions when reloading disk before saving again", async () => {
+    const saves: CreativeSaveInput[] = [];
+    let treeRevision: string | undefined = "tree-open";
+    const api = createCreativeApi({
+      onSave: async (input) => {
+        saves.push(input);
+        return saves.length === 1
+          ? ok({
+              kind: "conflict" as const,
+              treeRevision: "tree-disk",
+              current: {
+                path: input.path,
+                content: "Changed elsewhere\n",
+                checksum: "sha256:disk",
+                nodeRevision: "node-disk"
+              }
+            })
+          : ok({
+              kind: "saved" as const,
+              treeRevision: "tree-after-save",
+              document: {
+                path: input.path,
+                content: input.content,
+                checksum: "sha256:after-save",
+                nodeRevision: "node-after-save"
+              }
+            });
+      }
+    });
+    const bridge = createPlainFileEditorBridge(api, {
+      scope: "creativeProjectFile",
+      identity: { projectId: "project-01", workspaceId: "workspace-01" },
+      getTreeRevision: () => treeRevision
+    });
+
+    await bridge.openFile("notes/scene.md");
+    bridge.updateContent("My draft\n");
+    const conflicted = await bridge.save();
+    treeRevision = undefined;
+    conflicted?.onReloadFromDisk?.();
+    bridge.updateContent("Resolved draft\n");
+    await bridge.save();
+
+    expect(saves.at(-1)).toEqual({
+      projectId: "project-01",
+      workspaceId: "workspace-01",
+      path: "notes/scene.md",
+      content: "Resolved draft\n",
+      expectedTreeRevision: "tree-disk",
+      expectedNodeRevision: "node-disk",
+      expectedChecksum: "sha256:disk"
+    });
+  });
+
   test("keeps the active file snapshot when preparing another file fails", async () => {
     const api = createApi([]);
     const readTextFile = api.workspace.readTextFile;
@@ -185,6 +334,36 @@ function createApi(calls: unknown[], conflict = false): NovelStudioApi {
             byteLength: input.content.length
           }
         });
+      }
+    }
+  } as unknown as NovelStudioApi;
+}
+
+interface CreativeSaveInput {
+  readonly projectId: string;
+  readonly workspaceId: string;
+  readonly path: string;
+  readonly content: string;
+  readonly expectedTreeRevision: string;
+  readonly expectedNodeRevision: string;
+  readonly expectedChecksum: string;
+}
+
+function createCreativeApi(input: {
+  readonly onSave: (request: CreativeSaveInput) => Promise<unknown>;
+}): NovelStudioApi {
+  return {
+    creativeProjectFiles: {
+      async readTextFile(request: { readonly path: string }) {
+        return ok({
+          path: request.path,
+          content: "Scene one\n",
+          checksum: "sha256:open",
+          nodeRevision: "node-open"
+        });
+      },
+      async saveTextFile(request: CreativeSaveInput) {
+        return input.onSave(request);
       }
     }
   } as unknown as NovelStudioApi;

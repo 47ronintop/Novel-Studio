@@ -38,9 +38,12 @@ export interface DesktopWorkspaceOutlineReaderOptions {
   readonly engineeringIndex?: Pick<WorkspaceOutlineIndexRepository, "readEngineeringIndex">;
   /** Main-owned metadata-only chapter and Story Bible index implementation. */
   readonly writingIndex?: Pick<WorkspaceOutlineIndexRepository, "readWritingIndexes">;
-  /** C1C snapshot provider. This reader never scans a creative project directory itself. */
+  /**
+   * Main-owned C1C snapshot re-attestation. The callback refreshes the session through the existing
+   * guarded tree repository; this reader never receives a root or scans a creative directory itself.
+   */
   readonly creativeProjectFiles?: {
-    readonly getTreeSnapshot: () => Promise<
+    readonly reattestTreeSnapshot: () => Promise<
       Result<CreativeProjectFileTreeSnapshot | undefined, UnifiedError>
     >;
     readonly policy: CreativeProjectFilePolicy;
@@ -198,7 +201,7 @@ export class DesktopWorkspaceOutlineReader implements WorkspaceOutlineReader {
       });
     }
 
-    const snapshot = await source.getTreeSnapshot();
+    const snapshot = await source.reattestTreeSnapshot();
     if (!snapshot.ok) return snapshot;
     if (snapshot.value === undefined) {
       const dependencyManifest = creativeManifest(workspace, limits, {

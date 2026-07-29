@@ -318,6 +318,15 @@ test("sends profile-specific conventions and outlines in real workspace provider
     await queueDirectorySelection(creativeApp, creativeRoot);
     await openAgentPanel(page);
     await configureLocalModel(page, baseUrl);
+    const creativeSourceTrigger = page.getByLabel("会话输入区").getByTitle("查看来源");
+    await creativeSourceTrigger.click();
+    const creativeSourcePanel = page.getByRole("dialog", { name: "上下文用量" });
+    await creativeSourcePanel.getByRole("button", { name: "创建约定文件" }).click();
+    await expect(creativeSourcePanel).toContainText("已存在");
+    expect(await readFile(join(creativeRoot, "conventions", "writing.md"), "utf8")).toBe(
+      "CREATIVE_E2E_CONVENTION"
+    );
+    await creativeSourcePanel.press("Escape");
 
     const writingComposer = page.getByLabel("会话输入区");
     await writingComposer

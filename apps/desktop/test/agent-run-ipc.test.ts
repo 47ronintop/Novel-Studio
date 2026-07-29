@@ -1,11 +1,380 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import type { DesktopApplication } from "@novel-studio/application";
+import { ok } from "@novel-studio/shared";
 
 import { createApplicationIpcHandlers } from "../src/main/ipc-handlers.js";
+import { createCreativeGeneralActiveResourceProof } from "../src/main/creative-general-active-resource-proof.js";
 import { createNovelStudioApi } from "../src/preload/api.js";
 
 describe("Agent Run IPC", () => {
+  test("updates workspace context policy through the active runtime binding", async () => {
+    const disableConventions = vi.fn(async () =>
+      ok({
+        workspaceTrust: "trusted" as const,
+        projectConventionsEnabled: false,
+        policyRevision: "policy-02"
+      })
+    );
+    const revokeTrust = vi.fn(async () =>
+      ok({
+        workspaceTrust: "untrusted" as const,
+        projectConventionsEnabled: false,
+        policyRevision: "policy-03"
+      })
+    );
+    const refreshCurrentWorkspace = vi.fn(async () => ok(undefined));
+    const revokeCurrentSettingsCapabilities = vi.fn();
+    const manager = {
+      active: () => ({
+        scope: "workspace" as const,
+        binding: {
+          kind: "engineeringWorkspace" as const,
+          workspaceId: "workspace-active",
+          contentRoot: "C:/workspace-active",
+          stateRoot: "C:/workspace-active-state"
+        },
+        runtime: {}
+      }),
+      current: () => undefined,
+      currentWorkspace: () => undefined,
+      subscribeAgentRunEvents: () => () => undefined,
+      refreshCurrentWorkspace,
+      revokeCurrentSettingsCapabilities
+    };
+    const handlers = createApplicationIpcHandlers(
+      {} as DesktopApplication,
+      {
+        agentRuntimeManager: manager,
+        workspaceContextPolicyStore: { disableConventions, revokeTrust }
+      } as never
+    ) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+    const update = handlers["application:workspace:update-context-policy"];
+    if (update === undefined) throw new Error("Missing workspace policy handler");
+
+    await expect(
+      update({ action: "disable_conventions", workspaceId: "renderer-controlled" })
+    ).resolves.toEqual({ ok: true, value: undefined });
+    expect(disableConventions).toHaveBeenCalledWith({
+      workspaceKind: "engineeringWorkspace",
+      workspaceId: "workspace-active",
+      contentRoot: "C:/workspace-active"
+    });
+    expect(refreshCurrentWorkspace).toHaveBeenCalledOnce();
+    expect(revokeCurrentSettingsCapabilities).not.toHaveBeenCalled();
+
+    await expect(update({ action: "revoke_workspace_trust" })).resolves.toEqual({
+      ok: true,
+      value: undefined
+    });
+    expect(revokeTrust).toHaveBeenCalledWith({
+      workspaceKind: "engineeringWorkspace",
+      workspaceId: "workspace-active",
+      contentRoot: "C:/workspace-active"
+    });
+  });
+
+  test("requires a Main-attested Files surface and exact active resource for creative general drafts", async () => {
+    const identity = { projectId: "project-record-01", workspaceId: "workspace-creative-01" };
+    const path = "notes/outline.md";
+    const initialChecksum = "a".repeat(64);
+    const savedChecksum = "b".repeat(64);
+    let diskChecksum = initialChecksum;
+    const document = () => ({
+      schemaVersion: "1.0" as const,
+      ...identity,
+      path,
+      content: "Outline",
+      checksum: diskChecksum,
+      byteLength: 7,
+      nodeRevision: `node-${diskChecksum.slice(0, 8)}`
+    });
+    const fileSession = {
+      getActiveIdentity: () => identity,
+      async refresh() {
+        return ok({
+          schemaVersion: "1.0" as const,
+          ...identity,
+          treeRevision: "tree-01",
+          nodes: [],
+          truncated: false,
+          truncationReasons: [],
+          dependencyManifestChecksum: "c".repeat(64)
+        });
+      },
+      async readTextFile() {
+        return ok(document());
+      },
+      async saveTextFile() {
+        diskChecksum = savedChecksum;
+        return ok({ kind: "saved" as const, document: document(), treeRevision: "tree-02" });
+      }
+    };
+    const draftCalls: string[] = [];
+    const runtime = {
+      workspaceId: identity.workspaceId,
+      projectId: identity.workspaceId,
+      projectRoot: "C:/creative-project",
+      agentRunDraftSession: {
+        async syncStartDraft() {
+          draftCalls.push("sync");
+          return ok({});
+        },
+        async updateAgentRunDraft(command: { readonly commandId: string }) {
+          draftCalls.push("mode");
+          if (command.commandId === "mode-writing-fails-01") {
+            return { ok: false, error: { code: "DRAFT_WRITE_FAILED" } } as never;
+          }
+          return ok({});
+        },
+        async updateContextDraft() {
+          draftCalls.push("resource");
+          return ok({});
+        }
+      }
+    };
+    const handlers = createApplicationIpcHandlers(
+      {} as DesktopApplication,
+      {
+        agentRuntimeManager: {
+          active: () => ({
+            scope: "workspace" as const,
+            binding: {
+              kind: "creativeProject" as const,
+              workspaceId: identity.workspaceId,
+              contentRoot: "C:/creative-project",
+              stateRoot: "C:/creative-project"
+            },
+            runtime
+          }),
+          current: () => runtime,
+          subscribeAgentRunEvents: () => () => undefined
+        },
+        creativeProjectFileSession: fileSession,
+        creativeGeneralActiveResourceProof: createCreativeGeneralActiveResourceProof()
+      } as never
+    ) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+    const updateRunDraft = handlers["application:agent-run:update-run-draft"];
+    const updateContextDraft = handlers["application:agent-run:update-context-draft"];
+    const syncStartDraft = handlers["application:agent-run:prepare-start"];
+    const refreshFiles = handlers["application:creative-project-files:refresh"];
+    const readFile = handlers["application:creative-project-files:read-text-file"];
+    const saveFile = handlers["application:creative-project-files:save-text-file"];
+    if (
+      updateRunDraft === undefined ||
+      updateContextDraft === undefined ||
+      syncStartDraft === undefined ||
+      refreshFiles === undefined ||
+      readFile === undefined ||
+      saveFile === undefined
+    ) {
+      throw new Error("Missing creative general IPC handlers");
+    }
+
+    const modeCommand = {
+      projectId: identity.workspaceId,
+      conversationId: "conversation-01",
+      commandId: "mode-general-01",
+      expectedDraftRevision: 1,
+      mutation: { kind: "set_context_mode" as const, contextMode: "general_file" as const }
+    };
+    const emptyGeneralStart = {
+      projectId: identity.workspaceId,
+      conversationId: "conversation-01",
+      commandId: "sync-general-01",
+      userRequest: "Inspect files",
+      operationMode: "planning" as const,
+      contextMode: "general_file" as const,
+      writePolicy: "write_before_confirmation" as const,
+      writePolicyAcknowledged: false,
+      modelProfileId: "profile-01",
+      contextRefs: [],
+      activeResourceRef: null
+    };
+    const activeResource = (checksum: string) => ({
+      kind: "project_file" as const,
+      refId: `file:${path}`,
+      relativePath: path,
+      label: "outline.md",
+      expectedChecksum: checksum
+    });
+
+    await expect(updateRunDraft(modeCommand)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CREATIVE_GENERAL_ACTIVE_RESOURCE_UNVERIFIED" }
+    });
+    await expect(syncStartDraft(emptyGeneralStart)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CREATIVE_GENERAL_ACTIVE_RESOURCE_UNVERIFIED" }
+    });
+    expect(draftCalls).toEqual([]);
+
+    await expect(refreshFiles(identity)).resolves.toMatchObject({ ok: true });
+    await expect(updateRunDraft(modeCommand)).resolves.toMatchObject({ ok: true });
+    await expect(syncStartDraft(emptyGeneralStart)).resolves.toMatchObject({ ok: true });
+    await expect(
+      updateContextDraft({
+        projectId: identity.workspaceId,
+        conversationId: "conversation-01",
+        commandId: "resource-unread-01",
+        contextDraftId: "context-01",
+        expectedDraftRevision: 1,
+        mutation: { kind: "set_active_resource", ref: activeResource(initialChecksum) }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CREATIVE_GENERAL_ACTIVE_RESOURCE_UNVERIFIED" }
+    });
+
+    await expect(readFile({ ...identity, path })).resolves.toMatchObject({ ok: true });
+    await expect(
+      updateContextDraft({
+        projectId: identity.workspaceId,
+        conversationId: "conversation-01",
+        commandId: "resource-verified-01",
+        contextDraftId: "context-01",
+        expectedDraftRevision: 1,
+        mutation: { kind: "set_active_resource", ref: activeResource(initialChecksum) }
+      })
+    ).resolves.toMatchObject({ ok: true });
+
+    diskChecksum = savedChecksum;
+    await expect(
+      updateContextDraft({
+        projectId: identity.workspaceId,
+        conversationId: "conversation-01",
+        commandId: "resource-stale-01",
+        contextDraftId: "context-01",
+        expectedDraftRevision: 2,
+        mutation: { kind: "set_active_resource", ref: activeResource(initialChecksum) }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CREATIVE_GENERAL_ACTIVE_RESOURCE_UNVERIFIED" }
+    });
+
+    diskChecksum = initialChecksum;
+    await expect(
+      saveFile({
+        ...identity,
+        path,
+        content: "Updated outline",
+        expectedTreeRevision: "tree-01",
+        expectedNodeRevision: "node-aaaaaaaa",
+        expectedChecksum: initialChecksum
+      })
+    ).resolves.toMatchObject({ ok: true, value: { kind: "saved" } });
+    await expect(
+      updateContextDraft({
+        projectId: identity.workspaceId,
+        conversationId: "conversation-01",
+        commandId: "resource-saved-01",
+        contextDraftId: "context-01",
+        expectedDraftRevision: 3,
+        mutation: { kind: "set_active_resource", ref: activeResource(savedChecksum) }
+      })
+    ).resolves.toMatchObject({ ok: true });
+
+    await expect(
+      updateRunDraft({
+        ...modeCommand,
+        commandId: "mode-writing-fails-01",
+        mutation: { kind: "set_context_mode", contextMode: "writing" }
+      })
+    ).resolves.toMatchObject({ ok: false });
+    await expect(
+      updateRunDraft({ ...modeCommand, commandId: "mode-general-after-failed-writing-01" })
+    ).resolves.toMatchObject({ ok: true });
+
+    await expect(
+      updateRunDraft({
+        ...modeCommand,
+        commandId: "mode-writing-01",
+        mutation: { kind: "set_context_mode", contextMode: "writing" }
+      })
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      updateRunDraft({ ...modeCommand, commandId: "mode-general-after-writing-01" })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CREATIVE_GENERAL_ACTIVE_RESOURCE_UNVERIFIED" }
+    });
+    await expect(refreshFiles(identity)).resolves.toMatchObject({ ok: true });
+    await expect(
+      updateRunDraft({ ...modeCommand, commandId: "mode-general-after-refresh-01" })
+    ).resolves.toMatchObject({ ok: true });
+    expect(draftCalls).toEqual([
+      "mode",
+      "sync",
+      "resource",
+      "resource",
+      "mode",
+      "mode",
+      "mode",
+      "mode"
+    ]);
+  });
+
+  test("rejects a creative writing-plan approval that switches to general file context", async () => {
+    let sourceContextMode: "writing" | "general_file" = "writing";
+    const decidePlan = vi.fn(async () => ok({ forwarded: true }));
+    const session = {
+      async readAgentRun() {
+        return ok({
+          snapshot: { ...snapshot("plan_ready", 5, 5), contextMode: sourceContextMode },
+          events: []
+        });
+      },
+      decidePlan,
+      subscribe: () => () => undefined
+    };
+    const runtime = { agentRunSession: session };
+    const handlers = createApplicationIpcHandlers(
+      {} as DesktopApplication,
+      {
+        agentRuntimeManager: {
+          active: () => ({
+            scope: "workspace" as const,
+            binding: {
+              kind: "creativeProject" as const,
+              workspaceId: "project-01",
+              contentRoot: "C:/creative-project",
+              stateRoot: "C:/creative-project"
+            },
+            runtime
+          }),
+          current: () => runtime,
+          subscribeAgentRunEvents: () => () => undefined
+        }
+      } as never
+    ) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+    const decide = handlers["application:agent-run:decide-plan"];
+    if (decide === undefined) throw new Error("Missing decide plan handler");
+    const command = {
+      projectId: "project-01",
+      runId: "run-ipc",
+      commandId: "plan-general-01",
+      expectedRunRevision: 5,
+      planId: "plan-01",
+      planRevision: 1,
+      decision: "approve" as const,
+      executionContextMode: "general_file" as const
+    };
+
+    await expect(decide(command)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONTEXT_REPREFLIGHT_REQUIRED" }
+    });
+    expect(decidePlan).not.toHaveBeenCalled();
+
+    sourceContextMode = "general_file";
+    await expect(decide({ ...command, commandId: "plan-general-02" })).resolves.toEqual({
+      ok: true,
+      value: { forwarded: true }
+    });
+    expect(decidePlan).toHaveBeenCalledOnce();
+  });
+
   test("forwards clone-safe commands and publishes the persisted AgentRunEvent stream", async () => {
     const calls: string[] = [];
     let subscriber: ((event: Record<string, unknown>) => void) | undefined;

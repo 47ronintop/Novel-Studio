@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -53,6 +53,28 @@ describe("project conventions file", () => {
       ok: false,
       error: { code: "PROJECT_CONVENTIONS_PATH_REJECTED" }
     });
+  });
+
+  test("rejects a conventions parent replaced by a junction before creation", async () => {
+    const root = await createRoot();
+    const outside = await createRoot();
+    await mkdir(join(root, "conventions"));
+    await writeFile(join(outside, "writing.md"), "outside content\n", "utf8");
+
+    const result = await createDesktopProjectConventionsFile({
+      workspaceKind: "creativeProject",
+      projectRoot: root,
+      beforeFinalPathValidation: async () => {
+        await rename(join(root, "conventions"), join(root, ".raced-conventions"));
+        await symlink(outside, join(root, "conventions"), "junction");
+      }
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "PROJECT_CONVENTIONS_PATH_REJECTED" }
+    });
+    await expect(readFile(join(outside, "writing.md"), "utf8")).resolves.toBe("outside content\n");
   });
 });
 

@@ -211,6 +211,9 @@ export interface NovelStudioApi {
       readonly expectedChecksum: string;
     }): Promise<Result<EngineeringTextFileSaveResult, UnifiedError>>;
     createProjectConventions(): Promise<Result<ProjectConventionsCreateResult, UnifiedError>>;
+    updateContextPolicy(
+      action: "disable_conventions" | "revoke_workspace_trust"
+    ): Promise<Result<void, UnifiedError>>;
   };
   creativeProjectFiles: {
     refresh(

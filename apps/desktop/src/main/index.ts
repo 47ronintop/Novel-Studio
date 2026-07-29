@@ -22,6 +22,9 @@ import {
   createDesktopAgentNetworkSettingsPort,
   createDesktopMcpSettingsPort
 } from "./agent-tool-settings-store.js";
+import { createDesktopCreativeProjectFileReceiptStore } from "./creative-project-file-receipt-store.js";
+import { createDesktopWorkspaceContextPolicyStore } from "./workspace-context-policy-store.js";
+import { createCreativeGeneralActiveResourceProof } from "./creative-general-active-resource-proof.js";
 import { connectRemoteMcp, createRemoteMcpDispatch } from "./remote-mcp-runtime.js";
 import { createAgentWriteSaveCoordinator, createApplicationIpcHandlers } from "./ipc-handlers.js";
 import { createWorkspaceActivationCoordinator } from "./workspace-activation.js";
@@ -89,12 +92,19 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
   activeDesktopModelRuntime = modelRuntime;
   const projectLockOwnerId = createProjectLockOwnerId();
   const agentWriteSaveCoordinator = createAgentWriteSaveCoordinator();
+  const workspaceContextPolicyStore = createDesktopWorkspaceContextPolicyStore({ userDataRoot });
+  const creativeGeneralActiveResourceProof = createCreativeGeneralActiveResourceProof();
   const creativeProjectFileSession = createCreativeProjectFileSession({
     createRepository: (activation) =>
       new CreativeProjectFileRepository({
         projectRoot: activation.projectRoot,
         projectId: activation.projectId,
-        workspaceId: activation.workspaceId
+        workspaceId: activation.workspaceId,
+        receiptStore: createDesktopCreativeProjectFileReceiptStore({
+          stateRoot: activation.stateRoot ?? activation.projectRoot,
+          projectId: activation.projectId,
+          workspaceId: activation.workspaceId
+        })
       })
   });
   const agentPricingRegistry = createAgentPricingRegistry({
@@ -155,6 +165,11 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     );
   const agentRuntimeManager = createDesktopAgentRuntimeManager({
     createRuntime: async (binding) => {
+      const workspaceContextPolicy = await workspaceContextPolicyStore.read({
+        workspaceKind: binding.kind,
+        workspaceId: binding.workspaceId,
+        contentRoot: binding.contentRoot
+      });
       const networkRuntime = await resolveDesktopNetworkRuntime({
         settingsSession: agentNetworkSettingsSession,
         settingsPort: agentNetworkSettingsPort,
@@ -170,15 +185,15 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         phaseB_fileLifecycleEnabled: true,
         phaseD_networkReadEnabled: networkRuntime.executor !== undefined,
         phaseE_remoteMcpEnabled: mcpRuntime.executor !== undefined,
-        revision: `desktop-main:${networkRuntime.policyRevision}:${mcpRuntime.settingsRevision}:write-standard-trusted-creative-v2`
+        revision: `desktop-main:${networkRuntime.policyRevision}:${mcpRuntime.settingsRevision}:workspace-context-${workspaceContextPolicy.policyRevision}`
       });
       return createDesktopAgentRuntime({
         workspaceKind: binding.kind,
         projectId: binding.workspaceId,
         contentRoot: binding.contentRoot,
         stateRoot: binding.stateRoot,
-        workspaceTrust: "trusted",
-        projectConventionsEnabled: true,
+        workspaceTrust: workspaceContextPolicy.workspaceTrust,
+        projectConventionsEnabled: workspaceContextPolicy.projectConventionsEnabled,
         ...(binding.activeChapterId === undefined
           ? {}
           : { activeChapterId: binding.activeChapterId }),
@@ -220,6 +235,26 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
                   ? snapshot
                   : undefined;
               },
+              reattestCreativeProjectFileTreeSnapshot: async () => {
+                const identity = creativeProjectFileSession.getActiveIdentity();
+                if (
+                  identity === undefined ||
+                  identity.projectId !== binding.workspaceId ||
+                  identity.workspaceId !== binding.workspaceId
+                ) {
+                  return err(
+                    createUnifiedError({
+                      code: "CREATIVE_PROJECT_FILE_SESSION_IDENTITY_REJECTED",
+                      category: "ValidationError",
+                      message: "The active creative project file session does not match this run.",
+                      recoverability: "user-action",
+                      suggestedAction: "Reopen the creative project and retry.",
+                      traceId: "desktop-agent-creative-project-file-reattest"
+                    })
+                  );
+                }
+                return creativeProjectFileSession.refresh(identity);
+              },
               readCreativeProjectFile: async (relativePath: string) => {
                 const identity = creativeProjectFileSession.getActiveIdentity();
                 if (identity === undefined || identity.workspaceId !== binding.workspaceId) {
@@ -235,6 +270,28 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
                   );
                 }
                 return creativeProjectFileSession.readTextFile({ ...identity, path: relativePath });
+              },
+              verifyCreativeGeneralActiveResource: async (reference) => {
+                const identity = creativeProjectFileSession.getActiveIdentity();
+                if (identity === undefined || identity.workspaceId !== binding.workspaceId) {
+                  return err(
+                    createUnifiedError({
+                      code: "CREATIVE_PROJECT_FILE_SESSION_IDENTITY_REJECTED",
+                      category: "ValidationError",
+                      message: "The active creative project file session does not match this run.",
+                      recoverability: "user-action",
+                      suggestedAction: "Reopen the creative project and retry.",
+                      traceId: "desktop-agent-creative-project-file-proof"
+                    })
+                  );
+                }
+                const proofInput = { identity, session: creativeProjectFileSession };
+                return reference === null
+                  ? creativeGeneralActiveResourceProof.verifyFilesSurface(proofInput)
+                  : creativeGeneralActiveResourceProof.verifyReference({
+                      ...proofInput,
+                      reference
+                    });
               }
             }),
         readEditorBuffer: async (refId) => {
@@ -337,6 +394,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     application,
     runtimeManager: agentRuntimeManager,
     creativeProjectFileSession,
+    clearCreativeGeneralActiveResourceProof: () => creativeGeneralActiveResourceProof.clear(),
     reportCleanupFailure: (error) => {
       process.emitWarning(error.message, {
         code: error.code,
@@ -359,7 +417,9 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
       }
     },
     agentRuntimeManager,
+    workspaceContextPolicyStore,
     creativeProjectFileSession,
+    creativeGeneralActiveResourceProof,
     agentWriteSaveCoordinator,
     agentNetworkSettingsSession,
     agentMcpSettingsSession,

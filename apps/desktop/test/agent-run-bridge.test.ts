@@ -2794,11 +2794,16 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
       memories: []
     };
     bridge.syncContext({
+      scope: workspaceScope("project-01"),
       projectId: "project-01",
+      workspaceKind: "creativeProject",
       conversationId: "conversation-01",
       activeChapterId: "chapter-01",
       chapterEditor: editor,
-      storyBibleSnapshot,
+      storyBibleSnapshotBinding: {
+        workspaceId: "project-01",
+        snapshot: storyBibleSnapshot
+      },
       settings: draftSettings
     });
     await vi.waitFor(() => expect(bridge.getComposerProps()?.references).toBeDefined());
@@ -2822,6 +2827,44 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
         "story_bible:chr_mira"
       ])
     );
+    expect(bridge.getComposerProps()?.references?.suggested).toEqual([]);
+  });
+
+  test("does not suggest Story Bible refs from a different workspace binding", async () => {
+    const { api } = createDraftApi();
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      scope: workspaceScope("project-01"),
+      projectId: "project-01",
+      workspaceKind: "creativeProject",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      storyBibleSnapshotBinding: {
+        workspaceId: "project-02",
+        snapshot: {
+          characters: [
+            {
+              schemaVersion: "1.0",
+              id: "chr_mira",
+              type: "character",
+              title: "Mira",
+              status: "active",
+              summary: "Captain of the city watch.",
+              createdAt: "2026-07-16T00:00:00.000Z",
+              updatedAt: "2026-07-16T00:00:00.000Z"
+            }
+          ],
+          worldAssets: [],
+          memories: []
+        }
+      },
+      settings: draftSettings
+    });
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.references).toBeDefined());
+
+    bridge.getComposerProps()?.onRequestChange("Ask Mira about the gate.");
+
     expect(bridge.getComposerProps()?.references?.suggested).toEqual([]);
   });
 
@@ -2916,7 +2959,8 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     const createProjectConventions = vi.fn(async () =>
       ok({ relativePath: "AGENTS.md" as const, status: "created" as const })
     );
-    api.workspace = { createProjectConventions } as never;
+    const updateContextPolicy = vi.fn(async () => ok(undefined));
+    api.workspace = { createProjectConventions, updateContextPolicy } as never;
     const bridge = createAgentRunBridge(api);
     bridge.syncContext({
       scope: engineeringScope("project-01"),
@@ -2942,6 +2986,46 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     );
     expect(createProjectConventions).toHaveBeenCalledWith();
     expect(bridge.getComposerProps()?.contextStatus?.conventions?.onCreate).toBeUndefined();
+
+    await bridge.send("Start a fresh run after the conventions file was deleted.");
+
+    expect(bridge.getComposerProps()?.contextStatus?.conventions).toMatchObject({
+      relativePath: "AGENTS.md",
+      status: "unknown"
+    });
+    expect(bridge.getComposerProps()?.contextStatus?.conventions?.onCreate).toEqual(
+      expect.any(Function)
+    );
+
+    bridge.getComposerProps()?.contextStatus?.conventions?.onCreate?.();
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()?.contextStatus?.conventions?.onDisable).toEqual(
+        expect.any(Function)
+      )
+    );
+    bridge.getComposerProps()?.contextStatus?.conventions?.onDisable?.();
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()?.contextStatus?.conventions).toMatchObject({
+        status: "unknown",
+        onCreate: expect.any(Function)
+      })
+    );
+    expect(updateContextPolicy).toHaveBeenCalledWith("disable_conventions");
+
+    bridge.getComposerProps()?.contextStatus?.conventions?.onCreate?.();
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()?.contextStatus?.conventions?.onRevokeTrust).toEqual(
+        expect.any(Function)
+      )
+    );
+    bridge.getComposerProps()?.contextStatus?.conventions?.onRevokeTrust?.();
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()?.contextStatus?.conventions).toMatchObject({
+        status: "unknown",
+        onCreate: expect.any(Function)
+      })
+    );
+    expect(updateContextPolicy).toHaveBeenCalledWith("revoke_workspace_trust");
   });
 
   test("surfaces a heavy context and compacts the live run", async () => {

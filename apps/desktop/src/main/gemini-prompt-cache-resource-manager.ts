@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import {
@@ -57,6 +57,8 @@ export interface CreateGeminiPromptCacheResourceManagerOptions {
   readonly userDataRoot: string;
   readonly fetch: typeof fetch;
   readonly now?: () => string;
+  /** Test seam for simulating a journal write failure without changing filesystem permissions. */
+  readonly journalWriter?: (path: string, contents: string) => Promise<void>;
 }
 
 export function createGeminiPromptCacheResourceManager(
@@ -85,7 +87,12 @@ export function createGeminiPromptCacheResourceManager(
 
   const saveJournal = async (journal: GeminiPromptCacheResourceJournal): Promise<void> => {
     await mkdir(dirname(journalPath), { recursive: true });
-    await writeFile(journalPath, `${JSON.stringify(journal, null, 2)}\n`, "utf8");
+    const contents = `${JSON.stringify(journal, null, 2)}\n`;
+    if (options.journalWriter !== undefined) {
+      await options.journalWriter(journalPath, contents);
+    } else {
+      await replaceJournalAtomically(journalPath, contents);
+    }
     journalPromise = Promise.resolve(journal);
   };
 
@@ -144,6 +151,17 @@ export function createGeminiPromptCacheResourceManager(
       status: confirmed ? "delete_confirmed" : "delete_uncertain",
       deleteAttemptedAt: attemptedAt
     });
+  };
+
+  const deleteKnownResource = async (baseUrl: string, apiKey: string, resourceRef: string) => {
+    try {
+      await options.fetch(`${baseUrl.replace(/\/+$/u, "")}/${resourceRef}`, {
+        method: "DELETE",
+        headers: { "x-goog-api-key": apiKey }
+      });
+    } catch {
+      // The persisted create intent remains the durable audit record when cleanup cannot be confirmed.
+    }
   };
 
   const manager: GeminiPromptCacheResourceManager = {
@@ -215,6 +233,15 @@ export function createGeminiPromptCacheResourceManager(
           createdAt,
           expiresAt: localExpiresAt
         } as const;
+        const createIntent: GeminiPromptCacheResourceRecord = {
+          ...baseRecord,
+          status: "create_uncertain"
+        };
+        try {
+          journal = await appendRecord(journal, createIntent, saveJournal);
+        } catch {
+          return withoutResource(config, "cache_error");
+        }
         let response: Response;
         try {
           response = await options.fetch(`${baseUrl.replace(/\/+$/u, "")}/cachedContents`, {
@@ -229,21 +256,19 @@ export function createGeminiPromptCacheResourceManager(
               : { signal: input.request.abortSignal })
           });
         } catch {
-          await appendRecord(journal, { ...baseRecord, status: "create_uncertain" }, saveJournal);
           return withoutResource(config, "resource_create_failed");
         }
         if (!response.ok) {
-          await appendRecord(
-            journal,
-            {
-              ...baseRecord,
+          try {
+            journal = await updateRecord(journal, createIntent.recordId, {
               status:
                 response.status >= 400 && response.status < 500
                   ? "create_failed"
                   : "create_uncertain"
-            },
-            saveJournal
-          );
+            });
+          } catch {
+            return withoutResource(config, "cache_error");
+          }
           return withoutResource(config, "resource_create_failed");
         }
 
@@ -251,22 +276,24 @@ export function createGeminiPromptCacheResourceManager(
         try {
           payload = await response.json();
         } catch {
-          await appendRecord(journal, { ...baseRecord, status: "create_uncertain" }, saveJournal);
           return withoutResource(config, "resource_create_failed");
         }
         const resourceRef = readResourceRef(payload);
         if (resourceRef === undefined) {
-          await appendRecord(journal, { ...baseRecord, status: "create_uncertain" }, saveJournal);
           return withoutResource(config, "resource_create_failed");
         }
-        const record: GeminiPromptCacheResourceRecord = {
-          ...baseRecord,
-          resourceRef,
-          status: "active",
-          expiresAt: boundedExpiry(payload, localExpiresAt)
-        };
-        journal = await appendRecord(journal, record, saveJournal);
-        cleanupCredentials.set(record.recordId, { baseUrl, apiKey: input.apiKey });
+        const expiresAt = boundedExpiry(payload, localExpiresAt);
+        try {
+          journal = await updateRecord(journal, createIntent.recordId, {
+            resourceRef,
+            status: "active",
+            expiresAt
+          });
+        } catch {
+          await deleteKnownResource(baseUrl, input.apiKey, resourceRef);
+          return withoutResource(config, "cache_error");
+        }
+        cleanupCredentials.set(createIntent.recordId, { baseUrl, apiKey: input.apiKey });
         const resourceWriteTokens = readCreateTokenCount(payload);
         return {
           ...withoutResource(config),
@@ -319,6 +346,12 @@ async function appendRecord(
   } satisfies GeminiPromptCacheResourceJournal;
   await save(next);
   return next;
+}
+
+async function replaceJournalAtomically(path: string, contents: string): Promise<void> {
+  const temporaryPath = `${path}.${randomUUID()}.tmp`;
+  await writeFile(temporaryPath, contents, "utf8");
+  await rename(temporaryPath, path);
 }
 
 function withoutResource(

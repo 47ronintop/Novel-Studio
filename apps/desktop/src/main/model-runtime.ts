@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
@@ -431,6 +432,9 @@ export function createDesktopModelRuntime(
           if (!verified.ok || !verified.value) {
             return promptCacheBypass(config, "resource_unavailable");
           }
+          if (!matchesPromptCacheIdentity(config, request.modelProfile, secret.value)) {
+            return promptCacheBypass(config, "identity_unverified");
+          }
           return promptCacheResources.resolve({
             scopeKey: input.promptCacheScopeKey,
             request: withRuntimeBaseUrl(request),
@@ -461,6 +465,42 @@ function promptCacheBypass(
   void physicalPrefixChecksum;
   void resourceWriteTokens;
   return { ...base, bypassReason };
+}
+
+function matchesPromptCacheIdentity(
+  config: LlmPromptCacheRequest,
+  profile: LlmModelProfile,
+  secret: string
+): boolean {
+  if (
+    !isChecksum(config.connectionIdentityChecksum) ||
+    !isChecksum(config.accountIsolationChecksum)
+  ) {
+    return false;
+  }
+  const connectionIdentityChecksum = createHash("sha256")
+    .update(
+      JSON.stringify({
+        profileId: profile.id,
+        provider: profile.provider.trim().toLowerCase(),
+        modelName: profile.modelName,
+        baseUrl: (profile.baseUrl ?? "").trim().replace(/\/+$/u, ""),
+        apiKeyRef: profile.apiKeyRef ?? ""
+      }),
+      "utf8"
+    )
+    .digest("hex");
+  const accountIsolationChecksum = createHash("sha256")
+    .update(`provider-account\u0000${profile.provider}\u0000${secret}`, "utf8")
+    .digest("hex");
+  return (
+    config.connectionIdentityChecksum === connectionIdentityChecksum &&
+    config.accountIsolationChecksum === accountIsolationChecksum
+  );
+}
+
+function isChecksum(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
 }
 
 function connectionProbeRequest(profile: ModelProfile): LlmRequest {

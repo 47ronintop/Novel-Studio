@@ -1,4 +1,12 @@
-import { AlertTriangle, FilePlus2, Layers, RefreshCw, Scissors } from "lucide-react";
+import {
+  AlertTriangle,
+  FileMinus2,
+  FilePlus2,
+  Layers,
+  RefreshCw,
+  Scissors,
+  ShieldOff
+} from "lucide-react";
 import type { ReactNode } from "react";
 
 import { AgentPopover } from "./agent-popover.js";
@@ -122,6 +130,26 @@ export function AgentContextMenu(props: AgentContextMenuProps): ReactNode {
                 >
                   <FilePlus2 aria-hidden="true" size={13} />
                   创建约定文件
+                </button>
+              )}
+              {control.conventions.onDisable === undefined ? null : (
+                <button
+                  disabled={control.conventions.busy === true}
+                  onClick={() => control.conventions?.onDisable?.()}
+                  type="button"
+                >
+                  <FileMinus2 aria-hidden="true" size={13} />
+                  停止使用约定
+                </button>
+              )}
+              {control.conventions.onRevokeTrust === undefined ? null : (
+                <button
+                  disabled={control.conventions.busy === true}
+                  onClick={() => control.conventions?.onRevokeTrust?.()}
+                  type="button"
+                >
+                  <ShieldOff aria-hidden="true" size={13} />
+                  撤销工作区信任
                 </button>
               )}
             </div>

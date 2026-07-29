@@ -165,15 +165,15 @@ export interface AgentTokenEstimator {
 }
 
 /**
- * One deterministic UTF-8 estimator used when no provider tokenizer is injected. It approximates a
- * token as four UTF-8 bytes — coarse, but stable and provider-independent — and always marks its
- * output `estimated` so downstream accounting never mistakes it for reported usage.
+ * One deterministic UTF-8 estimator used when no provider tokenizer is injected. It charges one
+ * token per UTF-8 byte: intentionally conservative, but an upper bound for byte-based tokenizer
+ * inputs, so CJK and emoji cannot make a context budget look smaller than its serialized text. It
+ * always marks its output `estimated` so downstream accounting never mistakes it for reported usage.
  */
 export function createDeterministicTokenEstimator(): AgentTokenEstimator {
   return {
     count(text: string): AgentTokenCount {
-      const bytes = utf8ByteLength(text);
-      return { tokens: Math.ceil(bytes / 4), precision: "estimated" };
+      return { tokens: utf8ByteLength(text), precision: "estimated" };
     }
   };
 }

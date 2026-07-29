@@ -1,11 +1,30 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readFile, readdir, realpath, rename, rmdir, unlink } from "node:fs/promises";
+import { constants, type Stats } from "node:fs";
+import {
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  realpath,
+  rename,
+  rmdir,
+  unlink,
+  type FileHandle
+} from "node:fs/promises";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
 import { createProjectPathGuard, writeTextAtomically } from "./atomic-write.js";
 import { storageError, validationError } from "./errors.js";
+import {
+  noFollowMkdir,
+  noFollowRename,
+  noFollowRmdir,
+  noFollowUnlink,
+  noFollowWriteFile,
+  type NoFollowNativeFileOperationPort
+} from "./no-follow-file-operations.js";
 
 export const CREATIVE_PROJECT_FILE_POLICY_VERSION = "1.0" as const;
 export const CREATIVE_PROJECT_FILE_TREE_SNAPSHOT_VERSION = "1.0" as const;
@@ -208,10 +227,23 @@ export interface CreativeProjectFileRepositoryOptions {
   readonly atomicWriter?: typeof writeTextAtomically;
   readonly receiptStore?: CreativeProjectFileReceiptStore;
   /**
+   * Optional hardened mutation provider. When absent, lifecycle mutations retain
+   * the standard-trusted app-managed workspace semantics described below.
+   */
+  readonly noFollowNativeOperations?: NoFollowNativeFileOperationPort;
+  /**
    * Deterministic race seam for lifecycle tests. Production composition must omit it.
    * It runs immediately before the repository repeats its final path validation.
    */
   readonly beforeFinalLifecycleValidation?: (input: {
+    readonly kind: CreativeProjectFileLifecycleCommand["kind"];
+    readonly paths: readonly string[];
+  }) => Promise<void>;
+  /**
+   * Deterministic race seam for lifecycle tests. It runs after repository-level
+   * validation and before the final no-follow/native or standard-trusted action.
+   */
+  readonly beforeLifecycleMutation?: (input: {
     readonly kind: CreativeProjectFileLifecycleCommand["kind"];
     readonly paths: readonly string[];
   }) => Promise<void>;
@@ -236,6 +268,12 @@ interface TraversalBudget {
   readonly reasons: Set<CreativeProjectFileTreeTruncationReason>;
 }
 
+/**
+ * Standard-trusted creative workspace repository. Without noFollowNativeOperations,
+ * lifecycle mutations use Node pathname APIs plus repeated identity/containment checks.
+ * That preserves app-managed workspace behavior but cannot close a hostile same-user
+ * reparse-point race; hardened hosts must supply the native handle-based provider.
+ */
 export class CreativeProjectFileRepository {
   private readonly policy: CreativeProjectFilePolicy;
   private readonly traceId: string;
@@ -507,18 +545,36 @@ export class CreativeProjectFileRepository {
     if (!target.ok) return target;
     const binding = await this.assertRootBinding();
     if (!binding.ok) return binding;
+
+    const finalValidation = await this.beforeFinalLifecycleValidation(command, [path.value]);
+    if (!finalValidation.ok) return finalValidation;
+    const latestTarget = await this.resolveMissingTarget(path.value);
+    if (!latestTarget.ok) return latestTarget;
+    const beforeMutation = await this.beforeLifecycleMutation(command, [path.value]);
+    if (!beforeMutation.ok) return beforeMutation;
+
+    if (this.options.noFollowNativeOperations !== undefined) {
+      const write = await noFollowWriteFile(
+        binding.value.rootPath,
+        path.value,
+        command.content,
+        { createOnly: true },
+        this.options.noFollowNativeOperations
+      );
+      if (!write.ok) return write;
+      const created = await this.resolveExistingNode(path.value, "file");
+      return created.ok
+        ? ok([path.value])
+        : this.storageFailure("CREATIVE_PROJECT_FILE_CREATE_FAILED", path.value);
+    }
+
     let finalFailure: UnifiedError | undefined;
     const write = await this.atomicWriter({
-      targetPath: target.value,
+      targetPath: latestTarget.value,
       content: command.content,
       traceId: this.traceId,
       pathGuard: this.createPathGuard(binding.value),
       beforeReplace: async () => {
-        const finalValidation = await this.beforeFinalLifecycleValidation(command, [path.value]);
-        if (!finalValidation.ok) {
-          finalFailure = finalValidation.error;
-          return err(this.atomicConflictError());
-        }
         const latest = await this.resolveMissingTarget(path.value);
         if (!latest.ok) {
           finalFailure = latest.error;
@@ -532,7 +588,10 @@ export class CreativeProjectFileRepository {
         ? this.storageFailure("CREATIVE_PROJECT_FILE_CREATE_FAILED", path.value)
         : err(finalFailure);
     }
-    return ok([path.value]);
+    const created = await this.resolveExistingNode(path.value, "file");
+    return created.ok
+      ? ok([path.value])
+      : this.storageFailure("CREATIVE_PROJECT_FILE_CREATE_FAILED", path.value);
   }
 
   private async createDirectory(
@@ -542,14 +601,29 @@ export class CreativeProjectFileRepository {
     if (!path.ok) return path;
     const target = await this.resolveMissingTarget(path.value);
     if (!target.ok) return target;
+    const binding = await this.assertRootBinding();
+    if (!binding.ok) return binding;
     const finalValidation = await this.beforeFinalLifecycleValidation(command, [path.value]);
     if (!finalValidation.ok) return finalValidation;
     const latestTarget = await this.resolveMissingTarget(path.value);
     if (!latestTarget.ok) return latestTarget;
-    try {
-      await mkdir(latestTarget.value);
-    } catch {
-      return this.storageFailure("CREATIVE_PROJECT_FILE_CREATE_DIRECTORY_FAILED", path.value);
+    const beforeMutation = await this.beforeLifecycleMutation(command, [path.value]);
+    if (!beforeMutation.ok) return beforeMutation;
+    if (this.options.noFollowNativeOperations !== undefined) {
+      const created = await noFollowMkdir(
+        binding.value.rootPath,
+        path.value,
+        this.options.noFollowNativeOperations
+      );
+      if (!created.ok) return created;
+    } else {
+      const finalTarget = await this.resolveMissingTarget(path.value);
+      if (!finalTarget.ok) return finalTarget;
+      try {
+        await mkdir(finalTarget.value);
+      } catch {
+        return this.storageFailure("CREATIVE_PROJECT_FILE_CREATE_DIRECTORY_FAILED", path.value);
+      }
     }
     const created = await this.resolveExistingNode(path.value, "directory");
     return created.ok
@@ -590,6 +664,8 @@ export class CreativeProjectFileRepository {
     }
     const target = await this.resolveMissingTarget(targetPath.value);
     if (!target.ok) return target;
+    const binding = await this.assertRootBinding();
+    if (!binding.ok) return binding;
     const finalValidation = await this.beforeFinalLifecycleValidation(command, [
       allowedSourcePath.value,
       targetPath.value
@@ -609,10 +685,38 @@ export class CreativeProjectFileRepository {
     }
     const latestTarget = await this.resolveMissingTarget(targetPath.value);
     if (!latestTarget.ok) return latestTarget;
-    try {
-      await rename(latestSource.value.absolutePath, latestTarget.value);
-    } catch {
-      return this.storageFailure("CREATIVE_PROJECT_FILE_RENAME_FAILED", allowedSourcePath.value);
+    const beforeMutation = await this.beforeLifecycleMutation(command, [
+      allowedSourcePath.value,
+      targetPath.value
+    ]);
+    if (!beforeMutation.ok) return beforeMutation;
+    if (this.options.noFollowNativeOperations !== undefined) {
+      const renamed = await noFollowRename(
+        binding.value.rootPath,
+        allowedSourcePath.value,
+        targetPath.value,
+        this.options.noFollowNativeOperations
+      );
+      if (!renamed.ok) return renamed;
+    } else {
+      const finalSource = await this.resolveExistingNode(
+        allowedSourcePath.value,
+        source.value.kind
+      );
+      if (!finalSource.ok) return finalSource;
+      if (finalSource.value.nodeRevision !== command.expectedSourceRevision) {
+        return this.validationFailure(
+          "CREATIVE_PROJECT_FILE_NODE_REVISION_CONFLICT",
+          allowedSourcePath.value
+        );
+      }
+      const finalTarget = await this.resolveMissingTarget(targetPath.value);
+      if (!finalTarget.ok) return finalTarget;
+      try {
+        await rename(finalSource.value.absolutePath, finalTarget.value);
+      } catch {
+        return this.storageFailure("CREATIVE_PROJECT_FILE_RENAME_FAILED", allowedSourcePath.value);
+      }
     }
     const moved = await this.resolveExistingNode(targetPath.value, source.value.kind);
     return moved.ok
@@ -636,6 +740,8 @@ export class CreativeProjectFileRepository {
     if (source.value.nodeRevision !== command.expectedSourceRevision) {
       return this.validationFailure("CREATIVE_PROJECT_FILE_NODE_REVISION_CONFLICT", path.value);
     }
+    const binding = await this.assertRootBinding();
+    if (!binding.ok) return binding;
     const finalValidation = await this.beforeFinalLifecycleValidation(command, [path.value]);
     if (!finalValidation.ok) return finalValidation;
     const latest = await this.resolveExistingNode(path.value, "file");
@@ -643,11 +749,29 @@ export class CreativeProjectFileRepository {
     if (latest.value.nodeRevision !== command.expectedSourceRevision) {
       return this.validationFailure("CREATIVE_PROJECT_FILE_NODE_REVISION_CONFLICT", path.value);
     }
-    try {
-      await unlink(latest.value.absolutePath);
-    } catch {
-      return this.storageFailure("CREATIVE_PROJECT_FILE_DELETE_FAILED", path.value);
+    const beforeMutation = await this.beforeLifecycleMutation(command, [path.value]);
+    if (!beforeMutation.ok) return beforeMutation;
+    if (this.options.noFollowNativeOperations !== undefined) {
+      const deleted = await noFollowUnlink(
+        binding.value.rootPath,
+        path.value,
+        this.options.noFollowNativeOperations
+      );
+      if (!deleted.ok) return deleted;
+    } else {
+      const finalNode = await this.resolveExistingNode(path.value, "file");
+      if (!finalNode.ok) return finalNode;
+      if (finalNode.value.nodeRevision !== command.expectedSourceRevision) {
+        return this.validationFailure("CREATIVE_PROJECT_FILE_NODE_REVISION_CONFLICT", path.value);
+      }
+      try {
+        await unlink(finalNode.value.absolutePath);
+      } catch {
+        return this.storageFailure("CREATIVE_PROJECT_FILE_DELETE_FAILED", path.value);
+      }
     }
+    const removed = await this.resolveMissingTarget(path.value);
+    if (!removed.ok) return removed;
     return ok([path.value]);
   }
 
@@ -667,6 +791,8 @@ export class CreativeProjectFileRepository {
     if (source.value.nodeRevision !== command.expectedSourceRevision) {
       return this.validationFailure("CREATIVE_PROJECT_FILE_NODE_REVISION_CONFLICT", path.value);
     }
+    const binding = await this.assertRootBinding();
+    if (!binding.ok) return binding;
     let entries: readonly string[];
     try {
       entries = await readdir(source.value.absolutePath);
@@ -697,11 +823,38 @@ export class CreativeProjectFileRepository {
     if (finalSource.value.nodeRevision !== command.expectedSourceRevision) {
       return this.validationFailure("CREATIVE_PROJECT_FILE_NODE_REVISION_CONFLICT", path.value);
     }
-    try {
-      await rmdir(finalSource.value.absolutePath);
-    } catch {
-      return this.storageFailure("CREATIVE_PROJECT_FILE_DELETE_DIRECTORY_FAILED", path.value);
+    const beforeMutation = await this.beforeLifecycleMutation(command, [path.value]);
+    if (!beforeMutation.ok) return beforeMutation;
+    if (this.options.noFollowNativeOperations !== undefined) {
+      const deleted = await noFollowRmdir(
+        binding.value.rootPath,
+        path.value,
+        this.options.noFollowNativeOperations
+      );
+      if (!deleted.ok) return deleted;
+    } else {
+      const current = await this.resolveExistingNode(path.value, "directory");
+      if (!current.ok) return current;
+      if (current.value.nodeRevision !== command.expectedSourceRevision) {
+        return this.validationFailure("CREATIVE_PROJECT_FILE_NODE_REVISION_CONFLICT", path.value);
+      }
+      let currentEntries: readonly string[];
+      try {
+        currentEntries = await readdir(current.value.absolutePath);
+      } catch {
+        return this.storageFailure("CREATIVE_PROJECT_FILE_DELETE_DIRECTORY_FAILED", path.value);
+      }
+      if (currentEntries.length > 0) {
+        return this.validationFailure("CREATIVE_PROJECT_FILE_DIRECTORY_NOT_EMPTY", path.value);
+      }
+      try {
+        await rmdir(current.value.absolutePath);
+      } catch {
+        return this.storageFailure("CREATIVE_PROJECT_FILE_DELETE_DIRECTORY_FAILED", path.value);
+      }
     }
+    const removed = await this.resolveMissingTarget(path.value);
+    if (!removed.ok) return removed;
     return ok([path.value]);
   }
 
@@ -935,14 +1088,32 @@ export class CreativeProjectFileRepository {
   ): Promise<Result<CreativeProjectFileDocument, UnifiedError>> {
     if (node.kind !== "file")
       return this.validationFailure("CREATIVE_PROJECT_FILE_PATH_REJECTED", node.path);
+    let handle: FileHandle | undefined;
     try {
-      const before = await lstat(node.absolutePath);
-      if (!before.isFile() || before.isSymbolicLink()) {
+      const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+      handle = await open(node.absolutePath, constants.O_RDONLY | noFollow);
+      const opened = await handle.stat();
+      if (!hasVerifiedFileIdentity(opened)) {
         return this.validationFailure("CREATIVE_PROJECT_FILE_PATH_REJECTED", node.path);
       }
-      if (before.size > this.policy.maxTextBytes) return this.tooLarge(node.path);
-      const bytes = await readFile(node.absolutePath);
-      if (bytes.byteLength > this.policy.maxTextBytes) return this.tooLarge(node.path);
+      if (opened.size > this.policy.maxTextBytes) return this.tooLarge(node.path);
+      const binding = await this.assertRootBinding();
+      if (!binding.ok) return binding;
+      const [pathStats, canonicalPath] = await Promise.all([
+        lstat(node.absolutePath),
+        realpath(node.absolutePath)
+      ]);
+      if (
+        !hasSameFileIdentity(opened, pathStats) ||
+        !isContained(relative(binding.value.canonicalRoot, canonicalPath))
+      ) {
+        return this.validationFailure("CREATIVE_PROJECT_FILE_PATH_REJECTED", node.path);
+      }
+
+      const bytes = await readBoundedFile(handle, opened.size, this.policy.maxTextBytes);
+      if (bytes === undefined) {
+        return this.validationFailure("CREATIVE_PROJECT_FILE_NODE_REVISION_CONFLICT", node.path);
+      }
       let content: string;
       try {
         content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -951,8 +1122,8 @@ export class CreativeProjectFileRepository {
       }
       if (content.includes("\0"))
         return this.storageFailure("CREATIVE_PROJECT_FILE_TEXT_READ_FAILED", node.path);
-      const after = await lstat(node.absolutePath);
-      if (!sameNode(before, after) || after.isSymbolicLink() || !after.isFile()) {
+      const after = await handle.stat();
+      if (!sameNode(opened, after) || !hasSameFileIdentity(opened, after)) {
         return this.validationFailure("CREATIVE_PROJECT_FILE_NODE_REVISION_CONFLICT", node.path);
       }
       return ok(
@@ -969,6 +1140,8 @@ export class CreativeProjectFileRepository {
       );
     } catch {
       return this.storageFailure("CREATIVE_PROJECT_FILE_TEXT_READ_FAILED", node.path);
+    } finally {
+      await handle?.close().catch(() => undefined);
     }
   }
 
@@ -1051,6 +1224,25 @@ export class CreativeProjectFileRepository {
     if (this.options.beforeFinalLifecycleValidation === undefined) return ok(undefined);
     try {
       await this.options.beforeFinalLifecycleValidation({
+        kind: command.kind,
+        paths: Object.freeze([...paths])
+      });
+      return ok(undefined);
+    } catch {
+      return this.storageFailure(
+        "CREATIVE_PROJECT_FILE_LIFECYCLE_FINAL_VALIDATION_FAILED",
+        command.commandId
+      );
+    }
+  }
+
+  private async beforeLifecycleMutation(
+    command: CreativeProjectFileLifecycleCommand,
+    paths: readonly string[]
+  ): Promise<Result<void, UnifiedError>> {
+    if (this.options.beforeLifecycleMutation === undefined) return ok(undefined);
+    try {
+      await this.options.beforeLifecycleMutation({
         kind: command.kind,
         paths: Object.freeze([...paths])
       });
@@ -1513,6 +1705,35 @@ function sameNode(
     left.mtimeMs === right.mtimeMs &&
     left.ctimeMs === right.ctimeMs
   );
+}
+
+function hasVerifiedFileIdentity(stats: Stats): boolean {
+  return stats.dev !== 0 && stats.ino !== 0 && stats.isFile();
+}
+
+function hasSameFileIdentity(left: Stats, right: Stats): boolean {
+  return (
+    hasVerifiedFileIdentity(left) &&
+    hasVerifiedFileIdentity(right) &&
+    left.dev === right.dev &&
+    left.ino === right.ino
+  );
+}
+
+async function readBoundedFile(
+  handle: FileHandle,
+  expectedSize: number,
+  maxReadBytes: number
+): Promise<Uint8Array | undefined> {
+  if (expectedSize < 0 || expectedSize > maxReadBytes) return undefined;
+  const bytes = Buffer.allocUnsafe(expectedSize);
+  let bytesRead = 0;
+  while (bytesRead < bytes.length) {
+    const result = await handle.read(bytes, bytesRead, bytes.length - bytesRead, bytesRead);
+    if (result.bytesRead === 0) return undefined;
+    bytesRead += result.bytesRead;
+  }
+  return bytes;
 }
 
 function checksum(value: string | Uint8Array): string {

@@ -194,8 +194,21 @@ export function materializeAgentRunHistory(
 ): readonly MaterializedAgentMessage[] {
   const messages: MaterializedAgentMessage[] = [];
   const restoredAssistantToolCallIds = new Set<string>();
+  const hasPlanExecutionHandoff = events.some(
+    (event) =>
+      event.type === "plan_execution_started" &&
+      typeof event.detail?.["approvedPlanMessage"] === "string"
+  );
   for (const event of events) {
     if (event.sequence <= afterSequence) continue;
+    const approvedPlanMessage = event.detail?.["approvedPlanMessage"];
+    if (
+      (event.type === "plan_execution_started" ||
+        (!hasPlanExecutionHandoff && event.type === "context_refreshed")) &&
+      typeof approvedPlanMessage === "string"
+    ) {
+      messages.push({ role: "user", content: approvedPlanMessage });
+    }
     if (event.type === "assistant_text_completed") {
       const text = typeof event.detail?.["text"] === "string" ? event.detail["text"] : "";
       const rawCalls = event.detail?.["toolCalls"];

@@ -28,6 +28,8 @@ export interface CreateWorkspaceActivationCoordinatorOptions {
   readonly application: DesktopApplication;
   readonly runtimeManager: DesktopAgentRuntimeManager;
   readonly creativeProjectFileSession?: CreativeProjectFileSession;
+  /** Clears the Main-owned creative Files-surface proof before a workspace transition commits. */
+  readonly clearCreativeGeneralActiveResourceProof?: () => void;
   readonly reportCleanupFailure?: ((error: UnifiedError) => void) | undefined;
 }
 
@@ -61,6 +63,7 @@ export function createWorkspaceActivationCoordinator(
       return closed;
     }
     options.creativeProjectFileSession?.deactivate();
+    options.clearCreativeGeneralActiveResourceProof?.();
     return closed;
   }
 
@@ -69,6 +72,7 @@ export function createWorkspaceActivationCoordinator(
   ): Promise<Result<WorkspaceActivationDto, UnifiedError>> {
     const candidate = await prepareApplication();
     if (!candidate.ok) return candidate;
+    options.clearCreativeGeneralActiveResourceProof?.();
 
     const preparedRuntime = await options.runtimeManager.prepareWorkspace(
       toDesktopAgentWorkspaceBinding(candidate.value)
@@ -82,7 +86,8 @@ export function createWorkspaceActivationCoordinator(
       const preparedFiles = await options.creativeProjectFileSession.activate({
         projectId: candidate.value.creativeProject.project.projectId,
         workspaceId: candidate.value.context.workspaceId,
-        projectRoot: candidate.value.context.contentRoot
+        projectRoot: candidate.value.context.contentRoot,
+        stateRoot: candidate.value.context.stateRoot
       });
       if (!preparedFiles.ok) {
         options.runtimeManager.discardPreparedWorkspace(preparedRuntime.value);

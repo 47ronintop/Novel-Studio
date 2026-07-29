@@ -229,6 +229,12 @@ export interface AgentModelRoundInput {
   readonly systemPrompt?: string;
   /** Main-owned provider cache request. Renderer/model input can never author this value. */
   readonly promptCache?: LlmPromptCacheRequest;
+  /** Frozen Main-owned endpoint identity from the run cache artifact. */
+  readonly promptCacheConnectionIdentityChecksum?: string;
+  /** Frozen Main-owned account identity from the run cache artifact. */
+  readonly promptCacheAccountIsolationChecksum?: string;
+  /** Prevent cache derivation for requests that do not share the run's stable prompt prefix. */
+  readonly disablePromptCache?: boolean;
 }
 
 export interface AgentRunModelDriver {
@@ -801,6 +807,10 @@ interface RunRuntime {
   rollbackReview?: JsonObject;
   stopRequested: boolean;
   modelRounds: number;
+  /** True once a completed round has durably contributed to the usage summary. */
+  hasRecordedFinalUsage: boolean;
+  /** Prevent duplicate continuation timers while a required context compaction settles. */
+  budgetPressureResumeScheduled: boolean;
   currentCheckpointId?: string;
   toolCalls: number;
   consecutiveToolFailures: number;
@@ -2257,6 +2267,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         ? {}
         : { contextSnapshot: restoredContextSnapshot }),
       modelRounds: 0,
+      hasRecordedFinalUsage: hasPersistedFinalUsage(events),
+      budgetPressureResumeScheduled: false,
       toolCalls: 0,
       consecutiveToolFailures: 0,
       stopRequested: false,
@@ -2666,6 +2678,33 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     });
   }
 
+  function scheduleBudgetPressureResume(runId: string, runtime: RunRuntime): void {
+    if (runtime.budgetPressureResumeScheduled) return;
+    runtime.budgetPressureResumeScheduled = true;
+    const generation = runtime.generation;
+    const resumeWhenIdle = () => {
+      const latest = runtimes.get(runId);
+      const snapshot = coordinator.readSnapshot(runId);
+      if (
+        latest === undefined ||
+        latest !== runtime ||
+        latest.generation !== generation ||
+        snapshot === undefined ||
+        isTerminal(snapshot.status)
+      ) {
+        if (latest === runtime) latest.budgetPressureResumeScheduled = false;
+        return;
+      }
+      if (latest.driving) {
+        setTimeout(resumeWhenIdle, 0);
+        return;
+      }
+      latest.budgetPressureResumeScheduled = false;
+      scheduleDrive(runId);
+    };
+    setTimeout(resumeWhenIdle, 0);
+  }
+
   async function drive(runId: string, generation: number): Promise<void> {
     const runtime = runtimes.get(runId);
     let snapshot = coordinator.readSnapshot(runId);
@@ -2736,7 +2775,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     let assistantText = "";
     let pendingUsage: LlmUsage | undefined;
     try {
-      const roundSnapshot = snapshot;
+      let roundSnapshot = snapshot;
       const roundBudget = calculateRuntimeBudget(
         roundSnapshot,
         runtime,
@@ -2778,7 +2817,45 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         });
         return;
       }
+      const budgetPressure = evaluateContextBudgetPressure(roundBudget.value);
+      if (budgetPressure === "warn") {
+        const warned = await recordEvent(runId, {
+          runId,
+          status: modelStatusFor(roundSnapshot),
+          type: "error_recorded",
+          detail: {
+            code: "AGENT_CONTEXT_BUDGET_WARNING",
+            severity: "warning",
+            usedTokens: roundBudget.value.usedTokens,
+            safeInputBudget: roundBudget.value.safeInputBudget,
+            pressure: budgetPressure
+          }
+        });
+        if (!warned.ok) return;
+        snapshot = warned.value;
+        roundSnapshot = warned.value;
+      }
       const availableTools = toolsFor(roundSnapshot);
+      const budgetExceeded = roundBudget.value.usedTokens > roundBudget.value.safeInputBudget;
+      // This guard is deliberately adjacent to the provider boundary: a full context is never sent.
+      if (budgetExceeded || budgetPressure === "compact") {
+        await recordEvent(runId, {
+          runId,
+          status: modelStatusFor(roundSnapshot),
+          type: "context_compaction_failed",
+          detail: {
+            code: "AGENT_CONTEXT_COMPACTION_REQUIRED",
+            message: "Context must be compacted before another provider request.",
+            usedTokens: roundBudget.value.usedTokens,
+            safeInputBudget: roundBudget.value.safeInputBudget,
+            pressure: budgetPressure,
+            budgetExceeded
+          }
+        });
+        // This round never reached a provider, so it must not consume the model-round limit.
+        runtime.modelRounds -= 1;
+        return;
+      }
       for await (const modelEvent of options.modelDriver.streamRound({
         runId,
         snapshot: roundSnapshot,
@@ -2798,6 +2875,14 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         // Mode-specific guidance is trusted system authority computed from the run's context mode; it
         // rides the systemPrompt seam, never the untrusted-data envelope.
         systemPrompt: runtime.systemPrompt,
+        ...(runtime.promptCacheArtifact === undefined
+          ? {}
+          : {
+              promptCacheConnectionIdentityChecksum:
+                runtime.promptCacheArtifact.connectionIdentityChecksum,
+              promptCacheAccountIsolationChecksum:
+                runtime.promptCacheArtifact.accountIsolationChecksum
+            }),
         contextBudget: roundBudget.value,
         signal: runtime.controller.signal
       })) {
@@ -2864,10 +2949,17 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           runId,
           status: modelStatusFor(snapshot),
           type: "usage_updated",
-          snapshotPatch: { usageSummary: addRoundUsage(usageSummaryBeforeRound, finalUsage) },
-          detail: usageUpdatedDetail(roundId, finalUsage)
+          snapshotPatch: {
+            usageSummary: addRoundUsage(
+              usageSummaryBeforeRound,
+              finalUsage,
+              runtime.hasRecordedFinalUsage
+            )
+          },
+          detail: usageUpdatedDetail(roundId, finalUsage, true)
         });
         if (!finalized.ok) return;
+        runtime.hasRecordedFinalUsage = true;
         snapshot = finalized.value;
       } else if (pendingUsage !== undefined) {
         const partial = await recordEvent(runId, {
@@ -5203,6 +5295,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           initialMaterialization.systemPrompt
         ),
         modelRounds: 0,
+        hasRecordedFinalUsage: false,
+        budgetPressureResumeScheduled: false,
         toolCalls: 0,
         consecutiveToolFailures: 0,
         stopRequested: false,
@@ -5383,6 +5477,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           "Context compaction is not available for this run."
         );
       }
+      const resumeAfterBudgetPressure = hasPendingBudgetPressureCompaction(
+        coordinator.readEvents(command.runId)
+      );
       const compacted = await options.contextCompactor.compactContext(command);
       if (!compacted.ok) {
         const latest = coordinator.readSnapshot(command.runId) ?? snapshot;
@@ -5496,7 +5593,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       rewriteBoundContextHistory(runtime, evictedRefs);
       runtime.contextSnapshot = nextContextSnapshot;
 
-      return persistCommandReceipt(command.runId, scopeKey, command.commandId, completed);
+      const receipt = await persistCommandReceipt(command.runId, scopeKey, command.commandId, completed);
+      if (resumeAfterBudgetPressure) scheduleBudgetPressureResume(command.runId, runtime);
+      return receipt;
     },
     async answerUserInput(command) {
       const prior = await priorCommandReceipt(command.runId, command.projectId, command.commandId);
@@ -5883,7 +5982,23 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         );
       }
       const executionContextMode = command.executionContextMode ?? snapshot.contextMode;
+      if (command.decision === "approve" && executionContextMode !== snapshot.contextMode) {
+        return failure(
+          "AGENT_CONTEXT_REPREFLIGHT_REQUIRED",
+          "Changing the execution context mode requires a newly preflighted Agent run."
+        );
+      }
       const executionWritePolicy = command.executionWritePolicy ?? "write_before_confirmation";
+      let approvedExecutionProfile: AgentContextProfile | undefined;
+      if (command.decision === "approve") {
+        const resolvedProfile = tryResolveAgentContextProfile(
+          snapshot.scope,
+          "execution",
+          executionContextMode
+        );
+        if (!resolvedProfile.ok) return { ok: false, error: resolvedProfile.error };
+        approvedExecutionProfile = resolvedProfile.value;
+      }
       const executionDescriptors = listAgentTools({
         facadeVersion: newRunToolFacadeVersion,
         operationMode: "execution",
@@ -6035,11 +6150,14 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       // handoff, and the capability snapshot, reasoning, and context sources are reused from the
       // parent planning run (already server-resolved at its own start).
       const planExecutionId = createPlanExecutionId(command.commandId);
-      const executionProfile = resolveAgentContextProfile(
-        snapshot.scope,
-        "execution",
-        executionContextMode
-      );
+      if (approvedExecutionProfile === undefined) {
+        await cancelExecutionStart();
+        return failure(
+          "AGENT_CONTEXT_PROFILE_INVALID",
+          "The execution context profile is not available."
+        );
+      }
+      const executionProfile = approvedExecutionProfile;
       const executionSystemPrompt = buildAgentSystemPrompt(executionProfile);
       const executionUserRequest = `Execute approved plan ${plan.planId} revision ${plan.revision}: ${plan.goal}`;
       const executionConversationSummary = materializeAgentConversationContext(
@@ -6236,6 +6354,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         ),
         planArtifact: Object.freeze({ ...plan, status: "executing" }),
         modelRounds: 0,
+        hasRecordedFinalUsage: false,
+        budgetPressureResumeScheduled: false,
         toolCalls: 0,
         consecutiveToolFailures: 0,
         stopRequested: false,
@@ -6324,7 +6444,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
             sourceDescriptors: contextSourceDescriptors(executionRuntime.contextSources),
             dirtySourceRefs: executionRuntime.contextSources
               .filter((source) => source.dirty)
-              .map((source) => source.refId)
+              .map((source) => source.refId),
+            approvedPlanMessage: approvedPlanMessage.content
           }
         }
       );
@@ -6377,7 +6498,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           sourcePlanId: plan.planId,
           sourcePlanRevision: plan.revision,
           planExecutionId,
-          planExecutionRevision: 1
+          planExecutionRevision: 1,
+          approvedPlanMessage: approvedPlanMessage.content
         }
       });
       const linkedReceipt = await persistCommandReceipt(
@@ -8231,8 +8353,13 @@ function readRecoverability(source: unknown): UnifiedError["recoverability"] | u
     : undefined;
 }
 
-function addRoundUsage(base: AgentRunUsageSummary, usage: LlmUsage): AgentRunUsageSummary {
-  const hasPriorUsage = base.inputTokens > 0 || base.outputTokens > 0 || base.totalTokens > 0;
+function addRoundUsage(
+  base: AgentRunUsageSummary,
+  usage: LlmUsage,
+  hasRecordedFinalUsage: boolean
+): AgentRunUsageSummary {
+  const hasPriorUsage =
+    hasRecordedFinalUsage || base.inputTokens > 0 || base.outputTokens > 0 || base.totalTokens > 0;
   const nextCacheReadTokens = usage.cacheReadTokens ?? usage.cachedTokens;
   const cacheReadTokens =
     (base.cacheReadTokens ?? base.cachedTokens ?? 0) + (nextCacheReadTokens ?? 0);
@@ -8282,7 +8409,7 @@ function addRoundUsage(base: AgentRunUsageSummary, usage: LlmUsage): AgentRunUsa
   };
 }
 
-function usageUpdatedDetail(roundId: string, usage: LlmUsage): JsonObject {
+function usageUpdatedDetail(roundId: string, usage: LlmUsage, final = false): JsonObject {
   const cacheReadTokens = usage.cacheReadTokens ?? usage.cachedTokens;
   return {
     roundId,
@@ -8290,6 +8417,7 @@ function usageUpdatedDetail(roundId: string, usage: LlmUsage): JsonObject {
     outputTokens: usage.outputTokens,
     totalTokens: usage.totalTokens,
     usageStatus: usage.usageStatus,
+    ...(final ? { final: true } : {}),
     ...(cacheReadTokens === undefined ? {} : { cachedTokens: cacheReadTokens, cacheReadTokens }),
     ...(usage.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: usage.cacheWriteTokens }),
     ...(usage.cacheEligibleInputTokens === undefined
@@ -8302,6 +8430,30 @@ function usageUpdatedDetail(roundId: string, usage: LlmUsage): JsonObject {
     cacheUsageStatus: usage.cacheUsageStatus ?? "unavailable",
     ...(usage.reasoningTokens === undefined ? {} : { reasoningTokens: usage.reasoningTokens })
   };
+}
+
+function hasPersistedFinalUsage(events: readonly AgentRunEvent[]): boolean {
+  return events.some((event) => {
+    if (event.type !== "usage_updated") return false;
+    const detail = event.detail;
+    if (detail?.["final"] === true) return true;
+    return (
+      detail?.["usageStatus"] === "missing" &&
+      detail["inputTokens"] === 0 &&
+      detail["outputTokens"] === 0 &&
+      detail["totalTokens"] === 0
+    );
+  });
+}
+
+function hasPendingBudgetPressureCompaction(events: readonly AgentRunEvent[]): boolean {
+  for (const event of [...events].reverse()) {
+    if (event.type === "context_compaction_completed") return false;
+    if (event.type === "context_compaction_failed") {
+      return event.detail?.["code"] === "AGENT_CONTEXT_COMPACTION_REQUIRED";
+    }
+  }
+  return false;
 }
 
 function normalizeCacheUsage(snapshot: AgentRunSnapshot, usage: LlmUsage): LlmUsage {

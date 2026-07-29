@@ -280,7 +280,7 @@ export function App() {
     activeChapterId: projectWorkflow?.activeChapterId ?? chapterEditor?.chapter.frontmatter.id,
     chapterEditor,
     fileEditor,
-    storyBibleSnapshot: storyBibleBridge?.getSnapshot(),
+    storyBibleSnapshotBinding: storyBibleBridge?.getSnapshotBinding(activeCreativeWorkspaceId),
     settings,
     onAgentRunChange: setAgentRun
   });
@@ -290,6 +290,7 @@ export function App() {
     aiWritingWorkflowBridge,
     chapterBridge,
     storyBibleBridge,
+    storyBibleWorkspaceId: activeCreativeWorkspaceId,
     settingsBridge,
     studioBridge,
     shortcutState,

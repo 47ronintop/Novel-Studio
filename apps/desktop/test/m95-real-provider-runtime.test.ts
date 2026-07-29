@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -317,6 +318,17 @@ describe("M95 real provider runtime", () => {
       parameters: { maxTokens: 8 },
       promptCacheScopeKey: scopeKey
     });
+    const promptCache = {
+      mode: "explicit_resource" as const,
+      policyVersion: "gemini-resource@1.0",
+      identityChecksum: "a".repeat(64),
+      logicalPrefixChecksum: "b".repeat(64),
+      stablePrefixMessageCount: 2,
+      minimumCacheableTokens: 1,
+      eligibleInputTokens: 20,
+      ttlSeconds: 300,
+      ...frozenGeminiCacheIdentity(modelProfile, "gemini-cache-secret")
+    };
     const events: Record<string, unknown>[] = [];
 
     for await (const event of driver.streamRound({
@@ -333,16 +345,7 @@ describe("M95 real provider runtime", () => {
         { role: "user", content: "Dynamic request." }
       ],
       tools: [],
-      promptCache: {
-        mode: "explicit_resource",
-        policyVersion: "gemini-resource@1.0",
-        identityChecksum: "a".repeat(64),
-        logicalPrefixChecksum: "b".repeat(64),
-        stablePrefixMessageCount: 2,
-        minimumCacheableTokens: 1,
-        eligibleInputTokens: 20,
-        ttlSeconds: 300
-      },
+      promptCache,
       signal: new AbortController().signal
     })) {
       events.push(event as unknown as Record<string, unknown>);
@@ -374,6 +377,42 @@ describe("M95 real provider runtime", () => {
         cacheUsageStatus: "actual"
       })
     });
+
+    await secretStore.saveSecret(secretRef, "gemini-cache-secret-rotated");
+    for await (const event of driver.streamRound({
+      runId: "run_gemini_cache_after_secret_rotation",
+      snapshot: {
+        runRevision: 1,
+        operationMode: "execution",
+        contextMode: "writing",
+        userRequest: "Dynamic request."
+      } as never,
+      systemPrompt: "System guidance.",
+      messages: [
+        { role: "user", content: "Stable project context." },
+        { role: "user", content: "Dynamic request." }
+      ],
+      tools: [],
+      promptCache,
+      signal: new AbortController().signal
+    })) {
+      events.push(event as unknown as Record<string, unknown>);
+    }
+
+    expect(
+      calls.filter((call) => call.method === "POST" && call.url.endsWith("/cachedContents"))
+    ).toHaveLength(1);
+    const modelCalls = calls.filter((call) => call.url.includes(":streamGenerateContent"));
+    expect(modelCalls.at(-1)).toMatchObject({
+      body: {
+        contents: [
+          { role: "user", parts: [{ text: "Stable project context." }] },
+          { role: "user", parts: [{ text: "Dynamic request." }] }
+        ],
+        systemInstruction: { parts: [{ text: "System guidance." }] }
+      }
+    });
+    expect(modelCalls.at(-1)?.body).not.toHaveProperty("cachedContent");
 
     runtime.releasePromptCacheScope(scopeKey);
     await runtime.dispose();
@@ -927,6 +966,35 @@ function createFiniteStreamingFetch(calls: FetchCall[], chunks: readonly unknown
       { status: 200, headers: { "content-type": "text/event-stream" } }
     );
   }) as typeof fetch;
+}
+
+function frozenGeminiCacheIdentity(
+  profile: {
+    readonly id: string;
+    readonly provider: string;
+    readonly modelName: string;
+    readonly baseUrl?: string;
+    readonly apiKeyRef?: string;
+  },
+  secret: string
+) {
+  return {
+    connectionIdentityChecksum: createHash("sha256")
+      .update(
+        JSON.stringify({
+          profileId: profile.id,
+          provider: profile.provider.trim().toLowerCase(),
+          modelName: profile.modelName,
+          baseUrl: (profile.baseUrl ?? "").trim().replace(/\/+$/u, ""),
+          apiKeyRef: profile.apiKeyRef ?? ""
+        }),
+        "utf8"
+      )
+      .digest("hex"),
+    accountIsolationChecksum: createHash("sha256")
+      .update(`provider-account\u0000${profile.provider}\u0000${secret}`, "utf8")
+      .digest("hex")
+  };
 }
 
 function createGeminiCacheStreamingFetch(calls: FetchCall[]): typeof fetch {

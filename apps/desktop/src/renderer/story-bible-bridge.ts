@@ -21,7 +21,9 @@ export interface StoryBibleBridge {
   getProps(): StoryBibleSummaryProps;
   getEditorProps(): StoryBibleEditorProps;
   getSnapshot(): StoryBibleSnapshot;
-  load(): Promise<StoryBibleSummaryProps>;
+  getSnapshotBinding(workspaceId?: string): StoryBibleSnapshotBinding | undefined;
+  clear(): void;
+  load(workspaceId: string): Promise<StoryBibleSummaryProps>;
   selectKind(kind: StoryBibleEditorKind): StoryBibleEditorProps;
   selectEntry(entryId: string): StoryBibleEditorProps;
   updateDraft(draft: Partial<StoryBibleEditorDraft>): StoryBibleEditorProps;
@@ -29,13 +31,16 @@ export interface StoryBibleBridge {
   saveDraft(): Promise<StoryBibleEditorProps>;
 }
 
+export interface StoryBibleSnapshotBinding {
+  readonly workspaceId: string;
+  readonly snapshot: StoryBibleSnapshot;
+}
+
 export function createStoryBibleBridge(api: NovelStudioApi): StoryBibleBridge {
   let props: StoryBibleSummaryProps = { assets: [] };
-  let snapshot: StoryBibleSnapshot = {
-    characters: [],
-    worldAssets: [],
-    memories: []
-  };
+  let snapshot = emptySnapshot();
+  let snapshotBinding: StoryBibleSnapshotBinding | undefined;
+  let loadGeneration = 0;
   let consistency: StoryBibleConsistencyProps | undefined;
   let editorProps = createEditorProps(
     snapshot,
@@ -50,9 +55,27 @@ export function createStoryBibleBridge(api: NovelStudioApi): StoryBibleBridge {
     getProps: () => props,
     getEditorProps: () => editorProps,
     getSnapshot: () => snapshot,
-    async load() {
-      snapshot = await unwrap(api.storyBible.load());
-      consistency = toConsistencyProps(await unwrap(api.storyBible.buildConsistencyReport()));
+    getSnapshotBinding(workspaceId) {
+      return workspaceId === undefined || snapshotBinding?.workspaceId !== workspaceId
+        ? undefined
+        : snapshotBinding;
+    },
+    clear() {
+      loadGeneration += 1;
+      reset();
+    },
+    async load(workspaceId) {
+      const generation = ++loadGeneration;
+      reset();
+      const nextSnapshot = await unwrap(api.storyBible.load());
+      if (generation !== loadGeneration) return props;
+      const nextConsistency = toConsistencyProps(
+        await unwrap(api.storyBible.buildConsistencyReport())
+      );
+      if (generation !== loadGeneration) return props;
+      snapshot = nextSnapshot;
+      snapshotBinding = { workspaceId, snapshot };
+      consistency = nextConsistency;
       props = toProps(snapshot);
       editorProps = createEditorProps(
         snapshot,
@@ -123,6 +146,8 @@ export function createStoryBibleBridge(api: NovelStudioApi): StoryBibleBridge {
       return editorProps;
     },
     async saveDraft() {
+      const generation = loadGeneration;
+      const workspaceId = snapshotBinding?.workspaceId;
       const now = new Date().toISOString();
       const draft = normalizeDraft(editorProps.draft);
       const saved =
@@ -145,8 +170,17 @@ export function createStoryBibleBridge(api: NovelStudioApi): StoryBibleBridge {
         return editorProps;
       }
 
-      snapshot = await unwrap(api.storyBible.load());
-      consistency = toConsistencyProps(await unwrap(api.storyBible.buildConsistencyReport()));
+      if (generation !== loadGeneration) return editorProps;
+      const nextSnapshot = await unwrap(api.storyBible.load());
+      if (generation !== loadGeneration) return editorProps;
+      const nextConsistency = toConsistencyProps(
+        await unwrap(api.storyBible.buildConsistencyReport())
+      );
+      if (generation !== loadGeneration) return editorProps;
+      snapshot = nextSnapshot;
+      snapshotBinding =
+        workspaceId === undefined ? undefined : { workspaceId, snapshot };
+      consistency = nextConsistency;
       props = toProps(snapshot);
       editorProps = createEditorProps(
         snapshot,
@@ -161,6 +195,29 @@ export function createStoryBibleBridge(api: NovelStudioApi): StoryBibleBridge {
       );
       return editorProps;
     }
+  };
+
+  function reset(): void {
+    snapshot = emptySnapshot();
+    snapshotBinding = undefined;
+    consistency = undefined;
+    props = { assets: [] };
+    editorProps = createEditorProps(
+      snapshot,
+      editorProps.activeKind,
+      emptyDraft(editorProps.activeKind),
+      "idle",
+      undefined,
+      consistency
+    );
+  }
+}
+
+function emptySnapshot(): StoryBibleSnapshot {
+  return {
+    characters: [],
+    worldAssets: [],
+    memories: []
   };
 }
 

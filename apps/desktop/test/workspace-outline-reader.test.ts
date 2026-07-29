@@ -69,7 +69,7 @@ describe("DesktopWorkspaceOutlineReader", () => {
     const tree = vi.fn(async () => ok(creativeSnapshot()));
     const reader = createDesktopWorkspaceOutlineReader({
       creativeProjectFiles: {
-        getTreeSnapshot: tree,
+        reattestTreeSnapshot: tree,
         policy: DEFAULT_CREATIVE_PROJECT_FILE_POLICY
       }
     });
@@ -90,6 +90,59 @@ describe("DesktopWorkspaceOutlineReader", () => {
       treeRevision: "tree:creative",
       policyVersion: "1.0"
     });
+  });
+
+  test("re-attests the C1C tree before staleness comparisons so external tree changes are visible", async () => {
+    const initial = creativeSnapshot();
+    const refreshed: CreativeProjectFileTreeSnapshot = {
+      ...initial,
+      treeRevision: "tree:creative-external-change",
+      nodes: [
+        {
+          id: "node:notes",
+          name: "notes",
+          kind: "directory",
+          path: "notes",
+          nodeRevision: "node:notes:changed",
+          children: [
+            {
+              id: "node:renamed",
+              name: "renamed-brief.md",
+              kind: "file",
+              path: "notes/renamed-brief.md",
+              nodeRevision: "node:renamed"
+            }
+          ]
+        }
+      ]
+    };
+    const snapshots = [initial, refreshed];
+    const reattestTreeSnapshot = vi.fn(async () => ok(snapshots.shift()));
+    const reader = createDesktopWorkspaceOutlineReader({
+      creativeProjectFiles: {
+        reattestTreeSnapshot,
+        policy: DEFAULT_CREATIVE_PROJECT_FILE_POLICY
+      }
+    });
+    const input = readInput("creative_general");
+
+    const first = await reader.read(input);
+    if (!first.ok) throw new Error(first.error.message);
+    const current = await reader.readDependencyManifest({
+      workspace: input.workspace,
+      profileId: input.profileId,
+      limits: input.limits
+    });
+    if (!current.ok) throw new Error(current.error.message);
+
+    expect(reattestTreeSnapshot).toHaveBeenCalledTimes(2);
+    expect(current.value.dependency).toMatchObject({
+      kind: "creative_file_tree",
+      treeRevision: "tree:creative-external-change"
+    });
+    expect(
+      hasWorkspaceOutlineDependencyChanged(first.value.dependencyManifest, current.value)
+    ).toBe(true);
   });
 
   test("materializes chapter and Story Bible indexes without bodies", async () => {
@@ -137,6 +190,59 @@ describe("DesktopWorkspaceOutlineReader", () => {
       'story_bible_asset id="character-alex" title="Alex" type="character"'
     );
     expect(result.value.text).not.toContain("This body is not an outline field");
+  });
+
+  test("uses normalized writing source paths in the dependency manifest without rendering them", async () => {
+    let chapterPath = "chapters/chapter-01.md";
+    let storyBiblePath = "characters/alex.json";
+    const reader = createDesktopWorkspaceOutlineReader({
+      writingIndex: new WorkspaceOutlineIndexRepository({
+        writingMetadata: {
+          readChapterIndex: async () =>
+            ok({
+              revision: "chapters:metadata-stable",
+              entries: [
+                {
+                  id: "chapter-01",
+                  title: "Opening",
+                  wordCount: 456,
+                  relativePath: chapterPath
+                }
+              ]
+            }),
+          readStoryBibleIndex: async () =>
+            ok({
+              revision: "story_bible:metadata-stable",
+              entries: [
+                {
+                  assetId: "character-alex",
+                  title: "Alex",
+                  assetType: "character",
+                  relativePath: storyBiblePath
+                }
+              ]
+            })
+        }
+      })
+    });
+    const input = readInput("writing");
+
+    const first = await reader.read(input);
+    if (!first.ok) throw new Error(first.error.message);
+    chapterPath = "chapters/opening.md";
+    storyBiblePath = "characters/alex-renamed.json";
+    const current = await reader.readDependencyManifest({
+      workspace: input.workspace,
+      profileId: input.profileId,
+      limits: input.limits
+    });
+    if (!current.ok) throw new Error(current.error.message);
+
+    expect(
+      hasWorkspaceOutlineDependencyChanged(first.value.dependencyManifest, current.value)
+    ).toBe(true);
+    expect(first.value.text).not.toContain(chapterPath);
+    expect(first.value.text).not.toContain(storyBiblePath);
   });
 
   test("caps materialized text deterministically and keeps stale comparison dependency-only", async () => {

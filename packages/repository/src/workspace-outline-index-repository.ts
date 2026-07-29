@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { constants, type Stats } from "node:fs";
 import { lstat, open, opendir, readdir, realpath } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { isAbsolute, join, relative } from "node:path";
@@ -36,6 +37,7 @@ const ENGINEERING_BLOCKED_ROOTS = new Set([
 const DEVICE_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu;
 const DEFAULT_WRITING_METADATA_MAX_ENTRIES = 1_000;
 const DEFAULT_WRITING_METADATA_HEADER_BYTES = 64 * 1_024;
+const DEFAULT_WRITING_METADATA_MAX_DURATION_MS = 200;
 const require = createRequire(import.meta.url);
 const { load: loadYaml } = require("js-yaml") as { load(input: string): unknown };
 
@@ -44,6 +46,11 @@ export interface WorkspaceOutlineIndexLimits {
   readonly maxEntries: number;
   readonly maxScannedEntries: number;
   readonly maxBytes: number;
+  readonly maxDurationMs: number;
+}
+
+/** Remaining wall-clock budget supplied by the outline index for one metadata read. */
+export interface WorkspaceOutlineWritingMetadataReadLimits {
   readonly maxDurationMs: number;
 }
 
@@ -243,17 +250,21 @@ export interface WorkspaceOutlineChapterIndexEntry {
   readonly id: string;
   readonly title: string;
   readonly wordCount?: number;
+  /** Source identity only. It is retained for dependency checks and never rendered into the outline. */
+  readonly relativePath?: string;
 }
 
 export interface WorkspaceOutlineStoryBibleIndexEntry {
   readonly assetId: string;
   readonly title: string;
   readonly assetType: string;
+  /** Source identity only. It is retained for dependency checks and never rendered into the outline. */
+  readonly relativePath?: string;
 }
 
 /**
  * Metadata-only snapshots. Implementations must not expose chapter bodies or Story Bible bodies
- * through this port; the repository projects only these three index fields into the outline.
+ * through this port; source-relative paths are dependency identity only and never reach the outline.
  */
 export interface WorkspaceOutlineChapterIndexSnapshot {
   readonly revision: string;
@@ -265,13 +276,14 @@ export interface WorkspaceOutlineStoryBibleIndexSnapshot {
   readonly entries: readonly WorkspaceOutlineStoryBibleIndexEntry[];
 }
 
+/** Implementations must enforce the supplied deadline inside their own metadata read loops. */
 export interface WorkspaceOutlineWritingMetadataReader {
-  readChapterIndex(): Promise<
-    Result<WorkspaceOutlineChapterIndexSnapshot | undefined, UnifiedError>
-  >;
-  readStoryBibleIndex(): Promise<
-    Result<WorkspaceOutlineStoryBibleIndexSnapshot | undefined, UnifiedError>
-  >;
+  readChapterIndex(
+    limits?: WorkspaceOutlineWritingMetadataReadLimits
+  ): Promise<Result<WorkspaceOutlineChapterIndexSnapshot | undefined, UnifiedError>>;
+  readStoryBibleIndex(
+    limits?: WorkspaceOutlineWritingMetadataReadLimits
+  ): Promise<Result<WorkspaceOutlineStoryBibleIndexSnapshot | undefined, UnifiedError>>;
 }
 
 export interface WorkspaceOutlineProjectMetadataRepositoryOptions {
@@ -280,6 +292,13 @@ export interface WorkspaceOutlineProjectMetadataRepositoryOptions {
   readonly maxEntries?: number;
   readonly maxHeaderBytes?: number;
   readonly traceId?: string;
+  /** Injectable for deterministic deadline tests. */
+  readonly now?: () => number;
+}
+
+interface MetadataReadDeadline {
+  readonly startedAt: number;
+  readonly maxDurationMs: number;
 }
 
 /**
@@ -293,9 +312,11 @@ export class WorkspaceOutlineProjectMetadataRepository implements WorkspaceOutli
   private readonly maxEntries: number;
   private readonly maxHeaderBytes: number;
   private readonly traceId: string;
+  private readonly now: () => number;
 
   public constructor(private readonly options: WorkspaceOutlineProjectMetadataRepositoryOptions) {
     this.traceId = options.traceId ?? "workspace-outline-project-metadata-repository";
+    this.now = options.now ?? Date.now;
     this.maxEntries = positiveLimit(
       options.maxEntries,
       DEFAULT_WRITING_METADATA_MAX_ENTRIES,
@@ -309,118 +330,148 @@ export class WorkspaceOutlineProjectMetadataRepository implements WorkspaceOutli
     this.canonicalRoot = this.bindRoot();
   }
 
-  public async readChapterIndex(): Promise<
-    Result<WorkspaceOutlineChapterIndexSnapshot | undefined, UnifiedError>
-  > {
-    const files = await this.listDirectoryFiles("chapters", ".md");
+  /** Allows focused tests to replace a pathname after its opened handle is verified. */
+  protected async afterPathIdentityVerified(_fullPath: string): Promise<void> {
+    void _fullPath;
+  }
+
+  public async readChapterIndex(
+    limits?: WorkspaceOutlineWritingMetadataReadLimits
+  ): Promise<Result<WorkspaceOutlineChapterIndexSnapshot | undefined, UnifiedError>> {
+    const deadline = this.createDeadline(limits);
+    if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
+    const files = await this.listDirectoryFiles("chapters", ".md", deadline);
     if (!files.ok) return files;
     if (files.value === undefined) return ok(undefined);
 
     const entries: WorkspaceOutlineChapterIndexEntry[] = [];
     for (const file of files.value) {
-      const prefix = await this.readPrefix(file, hasCompleteChapterFrontmatter);
+      if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
+      const prefix = await this.readPrefix(file, hasCompleteChapterFrontmatter, deadline);
       if (!prefix.ok) return prefix;
       if (prefix.value === undefined) {
         return metadataError(this.traceId, "WORKSPACE_OUTLINE_CHAPTER_INDEX_INVALID");
       }
       const chapter = parseChapterFrontmatter(prefix.value);
+      if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
       if (chapter === undefined) {
         return metadataError(this.traceId, "WORKSPACE_OUTLINE_CHAPTER_INDEX_INVALID");
       }
-      entries.push(chapter);
+      entries.push({ ...chapter, relativePath: file });
     }
     const normalized = normalizeChapterIndex({
       revision: "pending",
       entries
     });
+    if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
     if (!normalized.ok) return normalized;
     const revision = `chapters:${checksum(normalized.value.entries)}`;
+    if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
     return ok({ revision, entries: normalized.value.entries });
   }
 
-  public async readStoryBibleIndex(): Promise<
-    Result<WorkspaceOutlineStoryBibleIndexSnapshot | undefined, UnifiedError>
-  > {
+  public async readStoryBibleIndex(
+    limits?: WorkspaceOutlineWritingMetadataReadLimits
+  ): Promise<Result<WorkspaceOutlineStoryBibleIndexSnapshot | undefined, UnifiedError>> {
+    const deadline = this.createDeadline(limits);
+    if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
     const entries: WorkspaceOutlineStoryBibleIndexEntry[] = [];
     let hasStoryBibleSource = false;
 
     for (const directory of ["characters", "world"] as const) {
-      const files = await this.listDirectoryFiles(directory, ".json");
+      if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
+      const files = await this.listDirectoryFiles(directory, ".json", deadline);
       if (!files.ok) return files;
       if (files.value === undefined) continue;
       hasStoryBibleSource = true;
       for (const file of files.value) {
-        const asset = await this.readStoryBibleAssetHeader(file);
+        if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
+        const asset = await this.readStoryBibleAssetHeader(file, deadline);
         if (!asset.ok) return asset;
         entries.push(asset.value);
       }
     }
 
     for (const file of ["outline/outline.json", "timeline/events.json"] as const) {
-      const prefix = await this.readPrefix(file, hasStoryBibleAssetHeader);
+      if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
+      const prefix = await this.readPrefix(file, hasStoryBibleAssetHeader, deadline);
       if (!prefix.ok) return prefix;
       if (prefix.value === undefined) continue;
       hasStoryBibleSource = true;
       const asset = parseStoryBibleAssetHeader(prefix.value);
+      if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
       if (asset === undefined) {
         return metadataError(this.traceId, "WORKSPACE_OUTLINE_STORY_BIBLE_INDEX_INVALID");
       }
-      entries.push(asset);
+      entries.push({ ...asset, relativePath: file });
     }
 
     if (!hasStoryBibleSource) return ok(undefined);
     const normalized = normalizeStoryBibleIndex({ revision: "pending", entries });
+    if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
     if (!normalized.ok) return normalized;
     const revision = `story_bible:${checksum(normalized.value.entries)}`;
+    if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
     return ok({ revision, entries: normalized.value.entries });
   }
 
   private async readStoryBibleAssetHeader(
-    relativePath: string
+    relativePath: string,
+    deadline: MetadataReadDeadline
   ): Promise<Result<WorkspaceOutlineStoryBibleIndexEntry, UnifiedError>> {
-    const prefix = await this.readPrefix(relativePath, hasStoryBibleAssetHeader);
+    const prefix = await this.readPrefix(relativePath, hasStoryBibleAssetHeader, deadline);
     if (!prefix.ok) return prefix;
     if (prefix.value === undefined) {
       return metadataError(this.traceId, "WORKSPACE_OUTLINE_STORY_BIBLE_INDEX_INVALID");
     }
     const asset = parseStoryBibleAssetHeader(prefix.value);
+    if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
     return asset === undefined
       ? metadataError(this.traceId, "WORKSPACE_OUTLINE_STORY_BIBLE_INDEX_INVALID")
-      : ok(asset);
+      : ok({ ...asset, relativePath });
   }
 
   private async listDirectoryFiles(
     relativeDirectory: string,
-    extension: string
+    extension: string,
+    deadline: MetadataReadDeadline
   ): Promise<Result<readonly string[] | undefined, UnifiedError>> {
-    const directory = await this.resolveExisting(relativeDirectory);
+    if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
+    const directory = await this.resolveExisting(relativeDirectory, deadline);
     if (!directory.ok) return directory;
     if (directory.value === undefined) return ok(undefined);
     try {
+      if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
       const stats = await lstat(directory.value);
+      if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
       if (!stats.isDirectory() || stats.isSymbolicLink()) {
         return metadataError(this.traceId, "WORKSPACE_OUTLINE_METADATA_PATH_REJECTED");
       }
       const directoryEntries = await readdir(directory.value, { withFileTypes: true });
+      if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
       if (directoryEntries.length > this.maxEntries) {
         return metadataError(this.traceId, "WORKSPACE_OUTLINE_METADATA_ENTRY_LIMIT");
       }
-      const files: string[] = [];
-      for (const entry of directoryEntries.sort((left, right) =>
+      const sortedDirectoryEntries = directoryEntries.sort((left, right) =>
         left.name.localeCompare(right.name)
-      )) {
+      );
+      if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
+      const files: string[] = [];
+      for (const entry of sortedDirectoryEntries) {
+        if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
         if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith(extension)) continue;
         if (!isSafePathSegment(entry.name)) {
           return metadataError(this.traceId, "WORKSPACE_OUTLINE_METADATA_PATH_REJECTED");
         }
         const relativePath = `${relativeDirectory}/${entry.name}`;
-        const resolved = await this.resolveExisting(relativePath);
+        const resolved = await this.resolveExisting(relativePath, deadline);
         if (!resolved.ok) return resolved;
         if (resolved.value === undefined) {
           return metadataError(this.traceId, "WORKSPACE_OUTLINE_METADATA_PATH_REJECTED");
         }
         files.push(relativePath);
       }
+      if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
       return ok(Object.freeze(files));
     } catch {
       return metadataError(this.traceId, "WORKSPACE_OUTLINE_METADATA_PATH_REJECTED");
@@ -429,38 +480,73 @@ export class WorkspaceOutlineProjectMetadataRepository implements WorkspaceOutli
 
   private async readPrefix(
     relativePath: string,
-    stopWhen: (text: string) => boolean
+    stopWhen: (text: string) => boolean,
+    deadline: MetadataReadDeadline
   ): Promise<Result<string | undefined, UnifiedError>> {
-    const target = await this.resolveExisting(relativePath);
+    if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
+    const target = await this.resolveExisting(relativePath, deadline);
     if (!target.ok) return target;
     if (target.value === undefined) return ok(undefined);
     let handle: Awaited<ReturnType<typeof open>> | undefined;
     try {
-      const stats = await lstat(target.value);
-      if (!stats.isFile() || stats.isSymbolicLink()) {
+      if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
+      const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+      handle = await open(target.value, constants.O_RDONLY | noFollow);
+      const openedStats = await handle.stat();
+      if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
+      if (!hasVerifiedFileIdentity(openedStats)) {
         return metadataError(this.traceId, "WORKSPACE_OUTLINE_METADATA_PATH_REJECTED");
       }
-      handle = await open(target.value, "r");
-      const revalidated = await this.resolveExisting(relativePath);
-      if (!revalidated.ok) return revalidated;
-      if (revalidated.value === undefined || !samePath(revalidated.value, target.value)) {
+      const root = await this.assertRoot(deadline);
+      if (!root.ok) return root;
+      const [pathStats, canonicalPath] = await Promise.all([
+        lstat(target.value),
+        realpath(target.value)
+      ]);
+      if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
+      if (!hasSameFileIdentity(openedStats, pathStats) || !isContained(root.value, canonicalPath)) {
         return metadataError(this.traceId, "WORKSPACE_OUTLINE_METADATA_PATH_REJECTED");
       }
+      await this.afterPathIdentityVerified(target.value);
       const byte = Buffer.allocUnsafe(1);
       const decoder = new TextDecoder("utf-8", { fatal: true });
       let text = "";
+      let complete = false;
       for (let position = 0; position < this.maxHeaderBytes; position += 1) {
+        if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
         const read = await handle.read(byte, 0, 1, position);
+        if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
         if (read.bytesRead === 0) break;
         text += decoder.decode(byte.subarray(0, read.bytesRead), { stream: true });
-        if (stopWhen(text)) return ok(text);
+        if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
+        const headerComplete = stopWhen(text);
+        if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
+        if (headerComplete) {
+          complete = true;
+          break;
+        }
       }
-      try {
-        text += decoder.decode();
-        return ok(text);
-      } catch {
-        return metadataError(this.traceId, "WORKSPACE_OUTLINE_METADATA_ENCODING_INVALID");
+      if (!complete) {
+        try {
+          if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
+          text += decoder.decode();
+          if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
+        } catch {
+          return metadataError(this.traceId, "WORKSPACE_OUTLINE_METADATA_ENCODING_INVALID");
+        }
       }
+      if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
+      const afterStats = await handle.stat();
+      if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
+      if (
+        !hasSameFileIdentity(openedStats, afterStats) ||
+        afterStats.size !== openedStats.size ||
+        afterStats.mtimeMs !== openedStats.mtimeMs ||
+        afterStats.ctimeMs !== openedStats.ctimeMs
+      ) {
+        return metadataError(this.traceId, "WORKSPACE_OUTLINE_METADATA_PATH_REJECTED");
+      }
+      return ok(text);
     } catch {
       return metadataError(this.traceId, "WORKSPACE_OUTLINE_METADATA_PATH_REJECTED");
     } finally {
@@ -469,9 +555,11 @@ export class WorkspaceOutlineProjectMetadataRepository implements WorkspaceOutli
   }
 
   private async resolveExisting(
-    relativePath: string
+    relativePath: string,
+    deadline: MetadataReadDeadline
   ): Promise<Result<string | undefined, UnifiedError>> {
-    const root = await this.assertRoot();
+    if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
+    const root = await this.assertRoot(deadline);
     if (!root.ok) return root;
     if (!isSafeRelativePath(relativePath)) {
       return metadataError(this.traceId, "WORKSPACE_OUTLINE_METADATA_PATH_REJECTED");
@@ -479,12 +567,15 @@ export class WorkspaceOutlineProjectMetadataRepository implements WorkspaceOutli
     let current = root.value;
     try {
       for (const segment of relativePath.split("/")) {
+        if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
         current = join(current, segment);
         const stats = await lstat(current);
+        if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
         if (stats.isSymbolicLink()) {
           return metadataError(this.traceId, "WORKSPACE_OUTLINE_METADATA_PATH_REJECTED");
         }
         const canonical = await realpath(current);
+        if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
         if (!isContained(root.value, canonical)) {
           return metadataError(this.traceId, "WORKSPACE_OUTLINE_METADATA_PATH_REJECTED");
         }
@@ -514,12 +605,24 @@ export class WorkspaceOutlineProjectMetadataRepository implements WorkspaceOutli
     }
   }
 
-  private async assertRoot(): Promise<Result<string, UnifiedError>> {
+  private async assertRoot(deadline?: MetadataReadDeadline): Promise<Result<string, UnifiedError>> {
+    if (deadline !== undefined && this.deadlineExceeded(deadline)) {
+      return metadataDurationExceeded(this.traceId);
+    }
     const bound = await this.canonicalRoot;
+    if (deadline !== undefined && this.deadlineExceeded(deadline)) {
+      return metadataDurationExceeded(this.traceId);
+    }
     if (!bound.ok) return bound;
     try {
       const stats = await lstat(this.options.projectRoot);
+      if (deadline !== undefined && this.deadlineExceeded(deadline)) {
+        return metadataDurationExceeded(this.traceId);
+      }
       const current = await realpath(this.options.projectRoot);
+      if (deadline !== undefined && this.deadlineExceeded(deadline)) {
+        return metadataDurationExceeded(this.traceId);
+      }
       if (!stats.isDirectory() || stats.isSymbolicLink() || !samePath(bound.value, current)) {
         return metadataError(this.traceId, "WORKSPACE_OUTLINE_METADATA_ROOT_REJECTED");
       }
@@ -527,6 +630,19 @@ export class WorkspaceOutlineProjectMetadataRepository implements WorkspaceOutli
     } catch {
       return metadataError(this.traceId, "WORKSPACE_OUTLINE_METADATA_ROOT_REJECTED");
     }
+  }
+
+  private createDeadline(
+    limits: WorkspaceOutlineWritingMetadataReadLimits | undefined
+  ): MetadataReadDeadline {
+    return {
+      startedAt: this.now(),
+      maxDurationMs: normalizeMetadataReadDuration(limits?.maxDurationMs)
+    };
+  }
+
+  private deadlineExceeded(deadline: MetadataReadDeadline): boolean {
+    return this.now() - deadline.startedAt >= deadline.maxDurationMs;
   }
 }
 
@@ -697,14 +813,34 @@ export class WorkspaceOutlineIndexRepository {
     let chapters: WorkspaceOutlineChapterIndexSnapshot | undefined;
     let storyBible: WorkspaceOutlineStoryBibleIndexSnapshot | undefined;
     if (this.options.writingMetadata !== undefined && !durationExceeded(budget, this.now)) {
-      const chapterResult = await this.options.writingMetadata.readChapterIndex();
-      if (!chapterResult.ok) return chapterResult;
-      chapters = chapterResult.value;
+      const chapterResult = await this.options.writingMetadata.readChapterIndex({
+        maxDurationMs: remainingDuration(budget, this.now)
+      });
+      if (!chapterResult.ok) {
+        if (isMetadataDurationExceeded(chapterResult.error)) {
+          budget.reasons.add("max_duration");
+          budget.stopped = true;
+        } else {
+          return chapterResult;
+        }
+      } else {
+        chapters = chapterResult.value;
+      }
 
-      if (!durationExceeded(budget, this.now)) {
-        const storyBibleResult = await this.options.writingMetadata.readStoryBibleIndex();
-        if (!storyBibleResult.ok) return storyBibleResult;
-        storyBible = storyBibleResult.value;
+      if (!budget.stopped && !durationExceeded(budget, this.now)) {
+        const storyBibleResult = await this.options.writingMetadata.readStoryBibleIndex({
+          maxDurationMs: remainingDuration(budget, this.now)
+        });
+        if (!storyBibleResult.ok) {
+          if (isMetadataDurationExceeded(storyBibleResult.error)) {
+            budget.reasons.add("max_duration");
+            budget.stopped = true;
+          } else {
+            return storyBibleResult;
+          }
+        } else {
+          storyBible = storyBibleResult.value;
+        }
       }
     }
     if (durationExceeded(budget, this.now)) budget.reasons.add("max_duration");
@@ -906,10 +1042,12 @@ function normalizeChapterIndex(snapshot: WorkspaceOutlineChapterIndexSnapshot): 
   const entries: WorkspaceOutlineChapterIndexEntry[] = [];
   const seen = new Set<string>();
   for (const entry of snapshot.entries) {
+    const relativePath = normalizeWritingMetadataRelativePath(entry.relativePath);
     if (
       !isSafeMetadataString(entry.id) ||
       !isSafeMetadataString(entry.title) ||
-      seen.has(entry.id)
+      seen.has(entry.id) ||
+      (entry.relativePath !== undefined && relativePath === undefined)
     ) {
       return invalidWritingMetadata();
     }
@@ -923,7 +1061,8 @@ function normalizeChapterIndex(snapshot: WorkspaceOutlineChapterIndexSnapshot): 
     entries.push({
       id: entry.id,
       title: entry.title,
-      ...(entry.wordCount === undefined ? {} : { wordCount: entry.wordCount })
+      ...(entry.wordCount === undefined ? {} : { wordCount: entry.wordCount }),
+      ...(relativePath === undefined ? {} : { relativePath })
     });
   }
   return ok({
@@ -943,16 +1082,23 @@ function normalizeStoryBibleIndex(snapshot: WorkspaceOutlineStoryBibleIndexSnaps
   const entries: WorkspaceOutlineStoryBibleIndexEntry[] = [];
   const seen = new Set<string>();
   for (const entry of snapshot.entries) {
+    const relativePath = normalizeWritingMetadataRelativePath(entry.relativePath);
     if (
       !isSafeMetadataString(entry.assetId) ||
       !isSafeMetadataString(entry.title) ||
       !isSafeMetadataString(entry.assetType) ||
-      seen.has(entry.assetId)
+      seen.has(entry.assetId) ||
+      (entry.relativePath !== undefined && relativePath === undefined)
     ) {
       return invalidWritingMetadata();
     }
     seen.add(entry.assetId);
-    entries.push({ assetId: entry.assetId, title: entry.title, assetType: entry.assetType });
+    entries.push({
+      assetId: entry.assetId,
+      title: entry.title,
+      assetType: entry.assetType,
+      ...(relativePath === undefined ? {} : { relativePath })
+    });
   }
   return ok({
     revision: snapshot.revision,
@@ -1023,6 +1169,10 @@ function durationExceeded(budget: TraversalBudget, now: () => number): boolean {
   return now() - budget.startedAt >= budget.limits.maxDurationMs;
 }
 
+function remainingDuration(budget: TraversalBudget, now: () => number): number {
+  return Math.max(0, budget.limits.maxDurationMs - Math.max(0, now() - budget.startedAt));
+}
+
 function normalizeGuardedEntry(
   entry: {
     readonly name: string;
@@ -1071,6 +1221,10 @@ function isSafeRelativePath(path: string): boolean {
     !path.includes(":") &&
     path.split("/").every(isSafePathSegment)
   );
+}
+
+function normalizeWritingMetadataRelativePath(value: unknown): string | undefined {
+  return typeof value === "string" && isSafeRelativePath(value) ? value : undefined;
 }
 
 function isSafePathSegment(segment: string): boolean {
@@ -1168,6 +1322,23 @@ function metadataError<T = never>(traceId: string, code: string): Result<T, Unif
   );
 }
 
+function metadataDurationExceeded<T = never>(traceId: string): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "WORKSPACE_OUTLINE_METADATA_DURATION_EXCEEDED",
+      category: "StorageError",
+      message: "Workspace writing metadata exceeded the outline time limit.",
+      recoverability: "user-action",
+      suggestedAction: "Refresh the workspace outline or reduce the metadata read scope.",
+      traceId
+    })
+  );
+}
+
+function isMetadataDurationExceeded(error: UnifiedError): boolean {
+  return error.code === "WORKSPACE_OUTLINE_METADATA_DURATION_EXCEEDED";
+}
+
 function entryMetadataError<T = never>(traceId: string): Result<T, UnifiedError> {
   return err(
     createUnifiedError({
@@ -1184,6 +1355,12 @@ function entryMetadataError<T = never>(traceId: string): Result<T, UnifiedError>
 function positiveLimit(value: number | undefined, fallback: number, maximum: number): number {
   if (!Number.isSafeInteger(value) || value === undefined || value <= 0) return fallback;
   return Math.min(value, maximum);
+}
+
+function normalizeMetadataReadDuration(value: number | undefined): number {
+  return Number.isSafeInteger(value) && value !== undefined && value >= 0
+    ? value
+    : DEFAULT_WRITING_METADATA_MAX_DURATION_MS;
 }
 
 function parseChapterFrontmatter(text: string): WorkspaceOutlineChapterIndexEntry | undefined {
@@ -1408,6 +1585,19 @@ function samePath(left: string, right: string): boolean {
   return process.platform === "win32"
     ? left.toLocaleLowerCase() === right.toLocaleLowerCase()
     : left === right;
+}
+
+function hasVerifiedFileIdentity(stats: Stats): boolean {
+  return stats.dev !== 0 && stats.ino !== 0 && stats.isFile();
+}
+
+function hasSameFileIdentity(left: Stats, right: Stats): boolean {
+  return (
+    hasVerifiedFileIdentity(left) &&
+    hasVerifiedFileIdentity(right) &&
+    left.dev === right.dev &&
+    left.ino === right.ino
+  );
 }
 
 function checksum(value: unknown): string {

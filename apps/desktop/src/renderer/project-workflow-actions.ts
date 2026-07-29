@@ -67,8 +67,14 @@ export function useProjectWorkflowActions({
         setChapterEditor(await chapterBridge.load());
       }
       if (storyBibleBridge !== undefined) {
-        setStoryBible(await storyBibleBridge.load());
-        setStoryBibleEditor(storyBibleBridge.getEditorProps());
+        if (nextWorkflow.projectId === undefined) {
+          storyBibleBridge.clear();
+          setStoryBible(undefined);
+          setStoryBibleEditor(undefined);
+        } else {
+          setStoryBible(await storyBibleBridge.load(nextWorkflow.projectId));
+          setStoryBibleEditor(storyBibleBridge.getEditorProps());
+        }
       }
       if (settingsBridge !== undefined) {
         setSettings(await settingsBridge.load());
@@ -114,9 +120,10 @@ export function useProjectWorkflowActions({
   }, [projectWorkflowBridge, setProjectWorkflow]);
 
   const clearProjectBoundStory = useCallback(() => {
+    storyBibleBridge?.clear();
     setStoryBible(undefined);
     setStoryBibleEditor(undefined);
-  }, [setStoryBible, setStoryBibleEditor]);
+  }, [setStoryBible, setStoryBibleEditor, storyBibleBridge]);
 
   const refreshWorkspaceTransition = useCallback(
     async (nextWorkflow: ProjectWorkflowProps) => {

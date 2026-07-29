@@ -90,7 +90,7 @@ export function useAgentRunWorkspaceEffects(input: {
   readonly activeChapterId: string | undefined;
   readonly chapterEditor: AgentRunBridgeContext["chapterEditor"];
   readonly fileEditor: AgentRunBridgeContext["fileEditor"];
-  readonly storyBibleSnapshot: AgentRunBridgeContext["storyBibleSnapshot"];
+  readonly storyBibleSnapshotBinding: AgentRunBridgeContext["storyBibleSnapshotBinding"];
   readonly settings: AgentRunBridgeContext["settings"];
   readonly onAgentRunChange: (agentRun: AgentRunPanelProps | undefined) => void;
 }): void {
@@ -106,7 +106,7 @@ export function useAgentRunWorkspaceEffects(input: {
     activeChapterId,
     chapterEditor,
     fileEditor,
-    storyBibleSnapshot,
+    storyBibleSnapshotBinding,
     settings,
     onAgentRunChange
   } = input;
@@ -132,9 +132,9 @@ export function useAgentRunWorkspaceEffects(input: {
       ...(scope.kind === "standalone" || activeChapterId === undefined ? {} : { activeChapterId }),
       ...(scope.kind === "standalone" || chapterEditor === undefined ? {} : { chapterEditor }),
       ...(scope.kind === "standalone" || fileEditor === undefined ? {} : { fileEditor }),
-      ...(scope.kind === "standalone" || storyBibleSnapshot === undefined
+      ...(scope.kind === "standalone" || storyBibleSnapshotBinding === undefined
         ? {}
-        : { storyBibleSnapshot }),
+        : { storyBibleSnapshotBinding }),
       ...(settings === undefined ? {} : { settings })
     });
     onAgentRunChange(next);
@@ -144,7 +144,7 @@ export function useAgentRunWorkspaceEffects(input: {
     chapterEditor,
     conversationId,
     fileEditor,
-    storyBibleSnapshot,
+    storyBibleSnapshotBinding,
     activeResourceRef,
     beforeStart,
     onAgentRunChange,

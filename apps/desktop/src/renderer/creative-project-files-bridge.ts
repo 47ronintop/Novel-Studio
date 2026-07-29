@@ -10,12 +10,18 @@ import type { CreativeProjectFilesNavigatorProps } from "@novel-studio/ui";
 export type CreativeProjectFileGuardReason =
   "open_file" | "rename_active_path" | "delete_active_path";
 
+export type CreativeProjectFileActivePathChangeReason =
+  "open_file" | "rename_active_path" | "delete_active_path" | "clear";
+
 export interface CreativeProjectFilesBridgeOptions {
   readonly createCommandId?: () => string;
   readonly beforeActiveFileChange?: (
     reason: CreativeProjectFileGuardReason
   ) => boolean | Promise<boolean>;
-  readonly onActiveFilePathChange?: (path: string | undefined) => void;
+  readonly onActiveFilePathChange?: (
+    path: string | undefined,
+    reason: CreativeProjectFileActivePathChangeReason
+  ) => void;
 }
 
 export interface CreativeProjectFilesBridge {
@@ -107,14 +113,14 @@ export function createCreativeProjectFilesBridge(
         if (allowed === false || !sameIdentity(state?.identity, current.identity)) return false;
       }
       state = { ...current, activeFilePath: path, errorMessage: undefined };
-      options.onActiveFilePathChange?.(path);
+      options.onActiveFilePathChange?.(path, "open_file");
       notify();
       return true;
     },
     clearActiveFile() {
       if (state === undefined || state.activeFilePath === undefined) return;
       state = { ...state, activeFilePath: undefined };
-      options.onActiveFilePathChange?.(undefined);
+      options.onActiveFilePathChange?.(undefined, "clear");
       notify();
     },
     setExpandedPathIds(pathIds) {
@@ -154,7 +160,7 @@ export function createCreativeProjectFilesBridge(
       if (!completed || !changesActivePath || state === undefined) return;
       const nextPath = remapPath(current.activeFilePath, sourcePath, targetPath);
       state = { ...state, ...(nextPath === undefined ? {} : { activeFilePath: nextPath }) };
-      options.onActiveFilePathChange?.(nextPath);
+      options.onActiveFilePathChange?.(nextPath, "rename_active_path");
       notify();
     },
     async deletePath(path) {
@@ -198,11 +204,13 @@ export function createCreativeProjectFilesBridge(
       const completed = await executeLifecycle(current, command);
       if (!completed || !changesActivePath || state === undefined) return;
       state = { ...state, activeFilePath: undefined };
-      options.onActiveFilePathChange?.(undefined);
+      options.onActiveFilePathChange?.(undefined, "delete_active_path");
       notify();
     },
     clear() {
-      if (state?.activeFilePath !== undefined) options.onActiveFilePathChange?.(undefined);
+      if (state?.activeFilePath !== undefined) {
+        options.onActiveFilePathChange?.(undefined, "clear");
+      }
       state = undefined;
       notify();
     },

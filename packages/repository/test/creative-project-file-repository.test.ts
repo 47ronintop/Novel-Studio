@@ -15,6 +15,7 @@ import {
   type CreativeProjectFileReceiptStore,
   type CreativeProjectFileTreeNode
 } from "../src/creative-project-file-repository.js";
+import type { NoFollowNativeFileOperationPort } from "../src/no-follow-file-operations.js";
 
 const roots: string[] = [];
 const identity = { projectId: "prj_01", workspaceId: "ws_01" } as const;
@@ -544,6 +545,102 @@ describe("CreativeProjectFileRepository", () => {
     expect(await pathExists(directoryOutside)).toBe(true);
   });
 
+  test("does not hand a post-validation junction replacement to a hardened lifecycle port", async () => {
+    const root = await createRoot();
+    const outside = await createRoot("novel-studio-creative-outside-");
+    await mkdir(join(root, "notes"));
+    await writeFile(join(outside, "new.md"), "outside\n", "utf8");
+    let nativeCalls = 0;
+    const nativeOperations = recordingNativeOperations(() => {
+      nativeCalls += 1;
+    });
+    let swapped = false;
+    const repository = new CreativeProjectFileRepository({
+      projectRoot: root,
+      ...identity,
+      noFollowNativeOperations: nativeOperations,
+      beforeLifecycleMutation: async ({ kind }) => {
+        if (kind !== "createTextFile" || swapped) return;
+        swapped = true;
+        await replaceDirectoryWithJunction(root, "notes", outside);
+      }
+    });
+    const tree = await repository.getTreeSnapshot();
+    if (!tree.ok) throw new Error(tree.error.message);
+
+    const result = await repository.executeLifecycleCommand(
+      lifecycle({
+        kind: "createTextFile",
+        commandId: "post-validation-junction",
+        expectedTreeRevision: tree.value.treeRevision,
+        path: "notes/new.md",
+        content: "created\n"
+      })
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "NO_FOLLOW_SYMLINK_REJECTED" }
+    });
+    expect(nativeCalls).toBe(0);
+    expect(await readFile(join(outside, "new.md"), "utf8")).toBe("outside\n");
+  });
+
+  test("does not hand a post-validation leaf symlink replacement to a hardened lifecycle port", async () => {
+    const root = await createRoot();
+    const outside = await createRoot("novel-studio-creative-outside-");
+    const targetPath = join(root, "delete.md");
+    const outsidePath = join(outside, "delete.md");
+    await writeFile(targetPath, "inside\n", "utf8");
+    await writeFile(outsidePath, "outside\n", "utf8");
+
+    try {
+      const probePath = join(root, "symlink-probe.md");
+      await symlink(outsidePath, probePath, "file");
+      await rm(probePath, { force: true });
+    } catch {
+      // File symlink creation can be unavailable in restricted Windows environments.
+      return;
+    }
+
+    let nativeCalls = 0;
+    let swapped = false;
+    const repository = new CreativeProjectFileRepository({
+      projectRoot: root,
+      ...identity,
+      noFollowNativeOperations: recordingNativeOperations(() => {
+        nativeCalls += 1;
+      }),
+      beforeLifecycleMutation: async ({ kind }) => {
+        if (kind !== "deleteFile" || swapped) return;
+        swapped = true;
+        await rm(targetPath, { force: true });
+        await symlink(outsidePath, targetPath, "file");
+      }
+    });
+    const tree = await repository.getTreeSnapshot();
+    if (!tree.ok) throw new Error(tree.error.message);
+    const target = node(tree.value.nodes, "delete.md");
+
+    const result = await repository.executeLifecycleCommand(
+      lifecycle({
+        kind: "deleteFile",
+        commandId: "post-validation-leaf-symlink",
+        expectedTreeRevision: tree.value.treeRevision,
+        path: "delete.md",
+        expectedSourceRevision: target.nodeRevision,
+        confirmed: true
+      })
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "NO_FOLLOW_SYMLINK_REJECTED" }
+    });
+    expect(nativeCalls).toBe(0);
+    expect(await readFile(outsidePath, "utf8")).toBe("outside\n");
+  });
+
   test("refuses nonempty directory deletion and unsafe directory renames after bounded policy traversal", async () => {
     const root = await createRoot();
     await mkdir(join(root, "safe"), { recursive: true });
@@ -606,6 +703,31 @@ function createRepository(root: string, limits: Partial<{ readonly maxTextBytes:
       ...limits
     }
   });
+}
+
+function recordingNativeOperations(onCall: () => void): NoFollowNativeFileOperationPort {
+  return {
+    async rename() {
+      onCall();
+      return ok(undefined);
+    },
+    async unlink() {
+      onCall();
+      return ok(undefined);
+    },
+    async mkdir() {
+      onCall();
+      return ok(undefined);
+    },
+    async rmdir() {
+      onCall();
+      return ok(undefined);
+    },
+    async writeFile() {
+      onCall();
+      return ok(undefined);
+    }
+  };
 }
 
 type LifecycleCommandInput = CreativeProjectFileLifecycleCommand extends infer Command

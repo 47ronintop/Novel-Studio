@@ -182,8 +182,9 @@ describe("deterministic token estimator", () => {
     expect(long.tokens).toBeGreaterThan(short.tokens);
   });
 
-  test("counts multibyte CJK text by its UTF-8 byte length", () => {
-    // Each CJK code point is 3 UTF-8 bytes; ceil(9 / 4) = 3.
-    expect(estimator.count("小说创", "profile-01").tokens).toBe(3);
+  test("uses a conservative UTF-8-byte upper bound for CJK and emoji", () => {
+    // The fallback reserves each serialized byte because no provider tokenizer is available.
+    expect(estimator.count("小说创", "profile-01").tokens).toBe(9);
+    expect(estimator.count("😀", "profile-01").tokens).toBe(4);
   });
 });

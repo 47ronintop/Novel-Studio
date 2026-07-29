@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -247,6 +247,115 @@ describe("WorkspaceOutlineIndexRepository", () => {
       value: { entries: [{ assetId: "character-alex", title: "Alex", assetType: "character" }] }
     });
     expect(JSON.stringify({ chapters, storyBible })).not.toContain("BODY_MUST_NOT_APPEAR");
+  });
+
+  test("keeps a metadata header bound to its opened file after a leaf symlink swap", async () => {
+    const root = await mkdtemp(join(tmpdir(), "novel-studio-outline-writing-race-"));
+    const outside = await mkdtemp(join(tmpdir(), "novel-studio-outline-writing-race-outside-"));
+    roots.push(root, outside);
+    await mkdir(join(root, "chapters"), { recursive: true });
+    const targetPath = join(root, "chapters", "chapter-01.md");
+    const outsidePath = join(outside, "chapter-01.md");
+    await writeFile(
+      targetPath,
+      '---\nschemaVersion: "1.0"\nid: chapter-inside\ntype: chapter\ntitle: Inside\norder: 1\nstatus: draft\nwordCount: 1\ncreatedAt: 2026-01-01T00:00:00.000Z\nupdatedAt: 2026-01-01T00:00:00.000Z\n---\ninside body\n',
+      "utf8"
+    );
+    await writeFile(
+      outsidePath,
+      '---\nschemaVersion: "1.0"\nid: chapter-outside\ntype: chapter\ntitle: Outside\norder: 1\nstatus: draft\nwordCount: 1\ncreatedAt: 2026-01-01T00:00:00.000Z\nupdatedAt: 2026-01-01T00:00:00.000Z\n---\noutside body\n',
+      "utf8"
+    );
+
+    try {
+      const probePath = join(root, "symlink-probe.md");
+      await symlink(outsidePath, probePath, "file");
+      await rm(probePath, { force: true });
+    } catch {
+      // File symlink creation can be unavailable in restricted Windows environments.
+      return;
+    }
+
+    class SwapAfterVerificationRepository extends WorkspaceOutlineProjectMetadataRepository {
+      protected override async afterPathIdentityVerified(fullPath: string): Promise<void> {
+        if (fullPath !== targetPath) return;
+        await rm(targetPath, { force: true });
+        await symlink(outsidePath, targetPath, "file");
+      }
+    }
+
+    const metadata = new SwapAfterVerificationRepository({ projectRoot: root });
+    expect(await metadata.readChapterIndex()).toMatchObject({
+      ok: true,
+      value: { entries: [{ id: "chapter-inside", title: "Inside" }] }
+    });
+  });
+
+  test("includes normalized writing source paths in revisions and checksums so metadata-preserving renames stale", async () => {
+    const root = await mkdtemp(join(tmpdir(), "novel-studio-outline-writing-rename-"));
+    roots.push(root);
+    await mkdir(join(root, "chapters"), { recursive: true });
+    await mkdir(join(root, "characters"), { recursive: true });
+    await writeFile(
+      join(root, "chapters", "chapter-01.md"),
+      "---\nid: chapter-01\ntitle: Opening\nwordCount: 123\n---\nunchanged body\n",
+      "utf8"
+    );
+    await writeFile(
+      join(root, "characters", "alex.json"),
+      '{"id":"character-alex","title":"Alex","type":"character","summary":"unchanged body"}',
+      "utf8"
+    );
+
+    const metadata = new WorkspaceOutlineProjectMetadataRepository({ projectRoot: root });
+    const repository = new WorkspaceOutlineIndexRepository({ writingMetadata: metadata });
+    const first = await repository.readWritingIndexes(defaultLimits);
+    if (!first.ok) throw first.error;
+
+    await rename(join(root, "chapters", "chapter-01.md"), join(root, "chapters", "opening.md"));
+    await rename(
+      join(root, "characters", "alex.json"),
+      join(root, "characters", "alex-renamed.json")
+    );
+    const second = await repository.readWritingIndexes(defaultLimits);
+    if (!second.ok) throw second.error;
+
+    expect(second.value.entries).toEqual(first.value.entries);
+    expect(second.value.chapterIndexRevision).not.toBe(first.value.chapterIndexRevision);
+    expect(second.value.chapterIndexChecksum).not.toBe(first.value.chapterIndexChecksum);
+    expect(second.value.storyBibleIndexRevision).not.toBe(first.value.storyBibleIndexRevision);
+    expect(second.value.storyBibleIndexChecksum).not.toBe(first.value.storyBibleIndexChecksum);
+  });
+
+  test("turns a metadata header deadline into an auditable writing-outline degradation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "novel-studio-outline-writing-deadline-"));
+    roots.push(root);
+    await mkdir(join(root, "chapters"), { recursive: true });
+    await writeFile(
+      join(root, "chapters", "chapter-01.md"),
+      `---\nid: chapter-01\ntitle: Opening\n${"x".repeat(2_000)}`,
+      "utf8"
+    );
+
+    let clock = 0;
+    const metadata = new WorkspaceOutlineProjectMetadataRepository({
+      projectRoot: root,
+      maxHeaderBytes: 2_048,
+      now: () => clock++
+    });
+    const repository = new WorkspaceOutlineIndexRepository({ writingMetadata: metadata });
+    const result = await repository.readWritingIndexes({ ...defaultLimits, maxDurationMs: 40 });
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        entries: [],
+        truncated: true,
+        truncationReasons: ["max_duration"],
+        degradedDependencies: ["chapters", "story_bible"]
+      }
+    });
+    expect(clock).toBeLessThan(100);
   });
 
   test("derives creative outlines only from the safe snapshot and excludes managed paths", () => {

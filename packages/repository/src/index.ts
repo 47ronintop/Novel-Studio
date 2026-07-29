@@ -231,6 +231,7 @@ export type {
   WorkspaceOutlineStoryBibleIndexEntry,
   WorkspaceOutlineStoryBibleIndexSnapshot,
   WorkspaceOutlineWritingIndex,
+  WorkspaceOutlineWritingMetadataReadLimits,
   WorkspaceOutlineWritingMetadataReader
 } from "./workspace-outline-index-repository.js";
 export { NoFollowFileOperations } from "./no-follow-file-operations.js";

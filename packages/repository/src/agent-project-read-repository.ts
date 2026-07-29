@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, readdir, realpath } from "node:fs/promises";
+import { constants, type Stats } from "node:fs";
+import { lstat, open, readdir, realpath, type FileHandle } from "node:fs/promises";
 import { extname, isAbsolute, join, relative } from "node:path";
 
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
@@ -53,11 +54,8 @@ export class AgentProjectReadRepository {
     if (!validated.ok) return validated;
     try {
       const targetPath = await this.resolveExistingPath(validated.value);
-      const stats = await lstat(targetPath);
-      if (!stats.isFile() || stats.size > this.maxReadBytes) {
-        return this.rejected(validated.value);
-      }
-      const bytes = await readFile(targetPath);
+      const bytes = await this.readVerifiedFile(targetPath);
+      if (bytes === undefined) return this.rejected(validated.value);
       let content: string;
       try {
         content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -75,6 +73,11 @@ export class AgentProjectReadRepository {
       if (isFileNotFound(cause)) return this.notFound(validated.value);
       return this.rejected(validated.value);
     }
+  }
+
+  /** Allows tests to replace the pathname after a descriptor has been verified. */
+  protected async afterPathIdentityVerified(_fullPath: string): Promise<void> {
+    void _fullPath;
   }
 
   public async listEntries(
@@ -127,6 +130,52 @@ export class AgentProjectReadRepository {
       throw new Error("Project root escape rejected.");
     }
     return canonicalTarget;
+  }
+
+  private async readVerifiedFile(targetPath: string): Promise<Uint8Array | undefined> {
+    let handle: FileHandle | undefined;
+    try {
+      const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+      handle = await open(targetPath, constants.O_RDONLY | noFollow);
+      const openedStats = await handle.stat();
+      if (
+        !openedStats.isFile() ||
+        openedStats.size > this.maxReadBytes ||
+        !hasVerifiedFileIdentity(openedStats)
+      ) {
+        return undefined;
+      }
+
+      const canonicalRoot = await this.canonicalRoot;
+      const [pathStats, canonicalPath] = await Promise.all([
+        lstat(targetPath),
+        realpath(targetPath)
+      ]);
+      if (
+        !hasSameFileIdentity(openedStats, pathStats) ||
+        !isWithinProjectRoot(canonicalRoot, canonicalPath)
+      ) {
+        return undefined;
+      }
+
+      // The descriptor remains bound to the verified file if the pathname changes now.
+      await this.afterPathIdentityVerified(targetPath);
+      const bytes = await readBoundedFile(handle, openedStats.size, this.maxReadBytes);
+      if (bytes === undefined) return undefined;
+
+      const afterStats = await handle.stat();
+      if (
+        !hasSameFileIdentity(openedStats, afterStats) ||
+        afterStats.size !== openedStats.size ||
+        afterStats.mtimeMs !== openedStats.mtimeMs ||
+        afterStats.ctimeMs !== openedStats.ctimeMs
+      ) {
+        return undefined;
+      }
+      return bytes;
+    } finally {
+      await handle?.close().catch(() => undefined);
+    }
   }
 
   private rejected(relativePath: string): Result<never, UnifiedError> {
@@ -192,6 +241,44 @@ function validateRelativePath(
 
 function redact(value: string): string {
   return value.split(/[\\/]/).filter(Boolean).slice(-2).join("/");
+}
+
+function hasVerifiedFileIdentity(stats: Stats): boolean {
+  return stats.dev !== 0 && stats.ino !== 0 && stats.isFile();
+}
+
+function hasSameFileIdentity(left: Stats, right: Stats): boolean {
+  return (
+    hasVerifiedFileIdentity(left) &&
+    hasVerifiedFileIdentity(right) &&
+    left.dev === right.dev &&
+    left.ino === right.ino
+  );
+}
+
+function isWithinProjectRoot(canonicalRoot: string, candidate: string): boolean {
+  const rootRelative = relative(canonicalRoot, candidate);
+  return (
+    rootRelative !== ".." &&
+    !rootRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) &&
+    !isAbsolute(rootRelative)
+  );
+}
+
+async function readBoundedFile(
+  handle: FileHandle,
+  expectedSize: number,
+  maxReadBytes: number
+): Promise<Uint8Array | undefined> {
+  if (expectedSize < 0 || expectedSize > maxReadBytes) return undefined;
+  const bytes = Buffer.allocUnsafe(expectedSize);
+  let bytesRead = 0;
+  while (bytesRead < bytes.length) {
+    const result = await handle.read(bytes, bytesRead, bytes.length - bytesRead, bytesRead);
+    if (result.bytesRead === 0) return undefined;
+    bytesRead += result.bytesRead;
+  }
+  return bytes;
 }
 
 function isFileNotFound(value: unknown): value is NodeJS.ErrnoException {

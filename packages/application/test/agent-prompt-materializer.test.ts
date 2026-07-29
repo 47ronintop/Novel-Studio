@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 import type { JsonObject } from "@novel-studio/shared";
+import type { AgentRunEvent } from "@novel-studio/agent-engine";
 
 import {
   resolveAgentContextProfile,
@@ -10,6 +11,7 @@ import {
 import {
   createAgentPromptMaterializationArtifact,
   materializeAgentPrompt,
+  materializeAgentRunHistory,
   parseAgentPromptMaterializationArtifact,
   rematerializeAgentPromptArtifact
 } from "../src/agent-prompt-materializer.js";
@@ -26,6 +28,31 @@ const profile = resolveAgentContextProfile(
 );
 
 describe("Agent prompt materializer", () => {
+  it("replays the approved plan handoff from an execution event", () => {
+    const approvedPlanMessage = JSON.stringify({
+      kind: "approved_plan",
+      instructionPolicy: "content_is_data_not_authority",
+      data: { planId: "plan_1", revision: 1 }
+    });
+    const events: readonly AgentRunEvent[] = [
+      {
+        schemaVersion: "1.3",
+        runId: "run_1",
+        projectId: "project_1",
+        scope: profile.scope,
+        sequence: 1,
+        runRevision: 1,
+        type: "plan_execution_started",
+        createdAt: "2026-07-29T00:00:00.000Z",
+        detail: { approvedPlanMessage }
+      }
+    ];
+
+    expect(materializeAgentRunHistory(events)).toEqual([
+      { role: "user", content: approvedPlanMessage }
+    ]);
+  });
+
   it("places stable project data before the request and current file in the dynamic suffix", () => {
     const output = materializeAgentPrompt({
       profile,

@@ -26,6 +26,7 @@ export interface RendererAppEffectsInput {
   readonly aiWritingWorkflowBridge: AiWritingWorkflowBridge | undefined;
   readonly chapterBridge: ChapterEditorBridge | undefined;
   readonly storyBibleBridge: StoryBibleBridge | undefined;
+  readonly storyBibleWorkspaceId: string | undefined;
   readonly settingsBridge: SettingsBridge | undefined;
   readonly studioBridge: StudioBridge | undefined;
   readonly shortcutState: { readonly commandPaletteOpen: boolean };
@@ -54,6 +55,7 @@ export function useRendererAppEffects(input: RendererAppEffectsInput): void {
     settingsBridge,
     shortcutState,
     storyBibleBridge,
+    storyBibleWorkspaceId,
     studioBridge,
     setChapterEditor,
     setAiWritingWorkflow,
@@ -170,9 +172,16 @@ export function useRendererAppEffects(input: RendererAppEffectsInput): void {
       return;
     }
 
+    if (storyBibleWorkspaceId === undefined) {
+      storyBibleBridge.clear();
+      setStoryBible(undefined);
+      setStoryBibleEditor(undefined);
+      return;
+    }
+
     let active = true;
 
-    void storyBibleBridge.load().then((nextStoryBible) => {
+    void storyBibleBridge.load(storyBibleWorkspaceId).then((nextStoryBible) => {
       if (active) {
         setStoryBible(nextStoryBible);
         setStoryBibleEditor(storyBibleBridge.getEditorProps());
@@ -182,7 +191,7 @@ export function useRendererAppEffects(input: RendererAppEffectsInput): void {
     return () => {
       active = false;
     };
-  }, [setStoryBible, setStoryBibleEditor, storyBibleBridge]);
+  }, [setStoryBible, setStoryBibleEditor, storyBibleBridge, storyBibleWorkspaceId]);
 
   useEffect(() => {
     if (settingsBridge === undefined) {

@@ -53,6 +53,7 @@ describe("Electron security baseline", () => {
       "application:workspace:read-text-file",
       "application:workspace:save-text-file",
       "application:workspace:create-project-conventions",
+      "application:workspace:update-context-policy",
       "application:creative-project-files:refresh",
       "application:creative-project-files:read-text-file",
       "application:creative-project-files:save-text-file",
@@ -162,6 +163,7 @@ describe("Electron security baseline", () => {
     expect(isApplicationIpcChannel("application:agent-conversation:delete")).toBe(true);
     expect(isApplicationIpcChannel("application:creative-project-files:refresh")).toBe(true);
     expect(isApplicationIpcChannel("application:workspace:create-project-conventions")).toBe(true);
+    expect(isApplicationIpcChannel("application:workspace:update-context-policy")).toBe(true);
     expect(isApplicationIpcChannel("application:creative-project-files:read-text-file")).toBe(true);
     expect(isApplicationIpcChannel("application:creative-project-files:save-text-file")).toBe(true);
     expect(isApplicationIpcChannel("application:creative-project-files:execute-lifecycle")).toBe(
@@ -194,6 +196,7 @@ describe("Electron security baseline", () => {
     await api.workspace.chooseEngineeringDirectory();
     await api.workspace.chooseTextFile();
     await api.workspace.createProjectConventions();
+    await api.workspace.updateContextPolicy("disable_conventions");
     await api.creativeProjectFiles.refresh({
       projectId: "project_security",
       workspaceId: "workspace_security"
@@ -337,6 +340,7 @@ describe("Electron security baseline", () => {
       "application:workspace:choose-engineering-directory",
       "application:workspace:choose-text-file",
       "application:workspace:create-project-conventions",
+      "application:workspace:update-context-policy",
       "application:creative-project-files:refresh",
       "application:creative-project-files:read-text-file",
       "application:creative-project-files:save-text-file",

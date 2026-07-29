@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,6 +14,65 @@ afterEach(async () => {
 });
 
 describe("Gemini prompt-cache resource manager", () => {
+  test("persists an uncertain create intent before posting a resource", async () => {
+    const root = await tempRoot();
+    const calls: FetchCall[] = [];
+    const manager = createGeminiPromptCacheResourceManager({
+      userDataRoot: root,
+      fetch: (async (input, init) => {
+        const call = fetchCall(input, init);
+        calls.push(call);
+        if (call.method === "POST") {
+          expect(await readJournal(root)).toContain('"status": "create_uncertain"');
+        }
+        return jsonResponse({ name: "cachedContents/cache_intent" });
+      }) as typeof fetch
+    });
+
+    const resolved = await manager.resolve({
+      scopeKey: "standalone",
+      request: cacheRequest(),
+      apiKey: "key"
+    });
+
+    expect(calls.map((call) => call.method)).toEqual(["POST"]);
+    expect(resolved).toMatchObject({ resourceRef: "cachedContents/cache_intent" });
+    expect(await readJournal(root)).toContain('"status": "active"');
+  });
+
+  test("deletes a created resource when its active journal record cannot be persisted", async () => {
+    const root = await tempRoot();
+    const calls: FetchCall[] = [];
+    let journalWrites = 0;
+    const manager = createGeminiPromptCacheResourceManager({
+      userDataRoot: root,
+      fetch: (async (input, init) => {
+        const call = fetchCall(input, init);
+        calls.push(call);
+        if (call.method === "DELETE") return new Response(null, { status: 204 });
+        return jsonResponse({ name: "cachedContents/cache_persist_failure" });
+      }) as typeof fetch,
+      journalWriter: async (path, contents) => {
+        journalWrites += 1;
+        if (journalWrites === 2) throw new Error("journal unavailable");
+        await writeFile(path, contents, "utf8");
+      }
+    });
+
+    const resolved = await manager.resolve({
+      scopeKey: "standalone",
+      request: cacheRequest(),
+      apiKey: "key"
+    });
+
+    expect(resolved).toMatchObject({ bypassReason: "cache_error" });
+    expect(resolved).not.toHaveProperty("resourceRef");
+    expect(calls.map((call) => call.method)).toEqual(["POST", "DELETE"]);
+    const journal = await readJournal(root);
+    expect(journal).toContain('"status": "create_uncertain"');
+    expect(journal).not.toContain("cachedContents/cache_persist_failure");
+  });
+
   test("creates once, reuses by identity, and deletes on scope release", async () => {
     const root = await tempRoot();
     const calls: FetchCall[] = [];

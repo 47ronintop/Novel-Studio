@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import type {
   NovelStudioApi,
@@ -55,7 +55,7 @@ describe("Story Bible bridge", () => {
     const calls: string[] = [];
     const bridge = createStoryBibleBridge(createApi(calls));
 
-    const props = await bridge.load();
+    const props = await bridge.load("workspace-01");
 
     expect(calls).toEqual(["storyBible.load", "storyBible.buildConsistencyReport"]);
     expect(props.assets.map((asset) => asset.title)).toEqual(["Hero", "Capital", "Oath"]);
@@ -65,6 +65,10 @@ describe("Story Bible bridge", () => {
       contextEligible: true
     });
     expect(bridge.getSnapshot()).toBe(snapshot);
+    expect(bridge.getSnapshotBinding("workspace-01")).toEqual({
+      workspaceId: "workspace-01",
+      snapshot
+    });
   });
 
   test("loads Story Bible consistency warnings into editor props", async () => {
@@ -94,7 +98,7 @@ describe("Story Bible bridge", () => {
       })
     );
 
-    await bridge.load();
+    await bridge.load("workspace-01");
 
     expect(bridge.getEditorProps().consistency).toMatchObject({
       status: "attention",
@@ -112,7 +116,7 @@ describe("Story Bible bridge", () => {
   test("edits and saves Story Bible asset drafts through the preload API", async () => {
     const calls: string[] = [];
     const bridge = createStoryBibleBridge(createApi(calls));
-    await bridge.load();
+    await bridge.load("workspace-01");
 
     bridge.selectEntry("chr_hero");
     bridge.updateDraft({ title: "Hero Revised", body: "A revised oath holder." });
@@ -174,7 +178,7 @@ describe("Story Bible bridge", () => {
       })
     );
 
-    await bridge.load();
+    await bridge.load("workspace-01");
     const timelineEntry = bridge
       .getEditorProps()
       .entries.find((entry) => entry.id === "timeline_main");
@@ -190,6 +194,65 @@ describe("Story Bible bridge", () => {
       sequence: 10,
       chapterIds: ["ch_01"]
     });
+  });
+
+  test("clears the previous workspace snapshot while the next one is loading", async () => {
+    let loadCount = 0;
+    let resolveNextLoad: ((value: ReturnType<typeof ok<StoryBibleSnapshot>>) => void) | undefined;
+    const api = createApi([]);
+    const bridge = createStoryBibleBridge({
+      ...api,
+      storyBible: {
+        ...api.storyBible,
+        load: () => {
+          loadCount += 1;
+          if (loadCount === 1) return Promise.resolve(ok(snapshot));
+          return new Promise<ReturnType<typeof ok<StoryBibleSnapshot>>>((resolve) => {
+            resolveNextLoad = resolve;
+          });
+        }
+      }
+    });
+
+    await bridge.load("workspace-a");
+    const loadingWorkspaceB = bridge.load("workspace-b");
+
+    await vi.waitFor(() => expect(resolveNextLoad).toBeDefined());
+    expect(bridge.getSnapshotBinding("workspace-a")).toBeUndefined();
+    expect(bridge.getSnapshot()).toEqual({ characters: [], worldAssets: [], memories: [] });
+
+    resolveNextLoad?.(ok({ ...snapshot, characters: [] }));
+    await loadingWorkspaceB;
+
+    expect(bridge.getSnapshotBinding("workspace-b")?.snapshot.characters).toEqual([]);
+  });
+
+  test("discards a late Story Bible load from the previous workspace", async () => {
+    const pendingLoads: Array<(value: ReturnType<typeof ok<StoryBibleSnapshot>>) => void> = [];
+    const api = createApi([]);
+    const bridge = createStoryBibleBridge({
+      ...api,
+      storyBible: {
+        ...api.storyBible,
+        load: () =>
+          new Promise<ReturnType<typeof ok<StoryBibleSnapshot>>>((resolve) => {
+            pendingLoads.push(resolve);
+          })
+      }
+    });
+
+    const loadingWorkspaceA = bridge.load("workspace-a");
+    await vi.waitFor(() => expect(pendingLoads).toHaveLength(1));
+    const loadingWorkspaceB = bridge.load("workspace-b");
+    await vi.waitFor(() => expect(pendingLoads).toHaveLength(2));
+
+    pendingLoads[1]?.(ok({ ...snapshot, characters: [] }));
+    await loadingWorkspaceB;
+    pendingLoads[0]?.(ok(snapshot));
+    await loadingWorkspaceA;
+
+    expect(bridge.getSnapshotBinding("workspace-a")).toBeUndefined();
+    expect(bridge.getSnapshotBinding("workspace-b")?.snapshot.characters).toEqual([]);
   });
 });
 

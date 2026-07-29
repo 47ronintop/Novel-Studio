@@ -125,6 +125,10 @@ function isValidConfig(config: LlmPromptCacheRequest, messageCount: number): boo
   return (
     config.policyVersion.trim().length > 0 &&
     isSha256Checksum(config.identityChecksum) &&
+    (config.connectionIdentityChecksum === undefined ||
+      isSha256Checksum(config.connectionIdentityChecksum)) &&
+    (config.accountIsolationChecksum === undefined ||
+      isSha256Checksum(config.accountIsolationChecksum)) &&
     isSha256Checksum(config.logicalPrefixChecksum) &&
     Number.isSafeInteger(config.stablePrefixMessageCount) &&
     config.stablePrefixMessageCount > 0 &&

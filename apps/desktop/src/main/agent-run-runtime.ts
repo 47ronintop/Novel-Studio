@@ -65,6 +65,7 @@ import { realpath } from "node:fs/promises";
 import { createDesktopCompactionSources } from "./agent-compaction-composer.js";
 import { createDesktopProjectConventionsReader } from "./project-conventions-reader.js";
 import { createDesktopWorkspaceOutlineReader } from "./workspace-outline-reader.js";
+import { createDesktopCreativeProjectFileReceiptStore } from "./creative-project-file-receipt-store.js";
 import { DEFAULT_AGENT_FEATURE_FLAGS, type AgentFeatureFlags } from "./agent-feature-flags.js";
 import type { LlmModelProfile, LlmParameters } from "@novel-studio/llm-adapter";
 import type {
@@ -139,13 +140,20 @@ export interface DesktopAgentRunSessionOptions {
   readonly activeChapterId?: string;
   /** Main-owned trust gate for project-authored convention data. */
   readonly workspaceTrust?: "trusted" | "untrusted";
-  /** Main-owned explicit convention switch. Defaults to enabled for trusted workspace runtimes. */
+  /** Main-owned explicit convention switch. Defaults to disabled until Main persists consent. */
   readonly projectConventionsEnabled?: boolean;
   /**
    * Returns the already-materialized C1C creative file tree. The outline reader must never refresh
    * or rescan the creative project on its own.
    */
   readonly getCreativeProjectFileTreeSnapshot?: () => CreativeProjectFileTreeSnapshot | undefined;
+  /**
+   * Main-owned C1C tree re-attestation used by every creative-general outline materialization.
+   * It may only refresh the active creative session; it must never scan an arbitrary root.
+   */
+  readonly reattestCreativeProjectFileTreeSnapshot?: () => Promise<
+    Result<CreativeProjectFileTreeSnapshot | undefined, UnifiedError>
+  >;
   /**
    * The Electron user-data root the redacted usage sink writes under. It is app-global (not per
    * project), so it arrives via the `createRuntime` closure in `main/index.ts`, mirroring how the
@@ -178,6 +186,10 @@ export interface DesktopAgentRunSessionOptions {
   readonly readCreativeProjectFile?: (
     relativePath: string
   ) => Promise<Result<CreativeProjectFileDocument, UnifiedError>>;
+  /** Main-owned proof gate for the active resource required by creative general-file context. */
+  readonly verifyCreativeGeneralActiveResource?: (
+    reference: Extract<ContextDraftRef, { readonly kind: "project_file" }> | null
+  ) => Promise<Result<void, UnifiedError>>;
   readonly readEditorState?: (relativePath: string) => Promise<
     | {
         readonly dirty: boolean;
@@ -304,7 +316,10 @@ function createDesktopWorkspaceProjectContextServices(
       : {
           writingIndex: index,
           creativeProjectFiles: {
-            getTreeSnapshot: async () => ok(options.getCreativeProjectFileTreeSnapshot?.()),
+            reattestTreeSnapshot: async () =>
+              options.reattestCreativeProjectFileTreeSnapshot === undefined
+                ? ok(undefined)
+                : options.reattestCreativeProjectFileTreeSnapshot(),
             policy: DEFAULT_CREATIVE_PROJECT_FILE_POLICY
           }
         })
@@ -340,8 +355,8 @@ function createDesktopWorkspaceProjectContextServices(
     const conventions = await conventionsReader.read({
       workspace: workspace.value,
       profileId: profileId.value,
-      workspaceTrust: options.workspaceTrust ?? "trusted",
-      enabled: options.projectConventionsEnabled ?? true,
+      workspaceTrust: options.workspaceTrust ?? "untrusted",
+      enabled: options.projectConventionsEnabled ?? false,
       maxTokens: DEFAULT_PROJECT_CONVENTIONS_TOKEN_LIMIT,
       modelProfileId: input.modelProfileId
     });
@@ -374,7 +389,7 @@ function createDesktopWorkspaceProjectContextServices(
       });
       if (!outline.ok) return outline;
       const outlineSource = createWorkspaceOutlineSource({
-        workspaceTrust: options.workspaceTrust ?? "trusted",
+        workspaceTrust: options.workspaceTrust ?? "untrusted",
         result: outline.value
       });
       return ok({
@@ -535,7 +550,12 @@ function createDesktopAgentRuntimeServices(
           projectRoot: options.contentRoot,
           projectId: options.projectId,
           workspaceId: options.projectId,
-          traceId: "desktop-agent-creative-project-files"
+          traceId: "desktop-agent-creative-project-files",
+          receiptStore: createDesktopCreativeProjectFileReceiptStore({
+            stateRoot: options.stateRoot,
+            projectId: options.projectId,
+            workspaceId: options.projectId
+          })
         })
       : undefined;
   const readCreativeProjectFile =
@@ -609,10 +629,7 @@ function createDesktopAgentRuntimeServices(
       ? undefined
       : creativeProjectFiles === undefined
         ? baseSearchToolExecutor
-        : routeCreativeSearch(
-            baseSearchToolExecutor,
-            creativeGeneralSearchToolExecutor ?? baseSearchToolExecutor
-          );
+        : routeCreativeSearch(creativeGeneralSearchToolExecutor ?? baseSearchToolExecutor);
   const readToolExecutor = createDesktopReadToolExecutor(
     projectReads,
     creativeProjectFiles,
@@ -812,6 +829,9 @@ function createDesktopAgentRuntimeServices(
       ? {}
       : { readEditorBuffer: options.readEditorBuffer }),
     ...(readCreativeProjectFile === undefined ? {} : { readCreativeProjectFile }),
+    ...(options.verifyCreativeGeneralActiveResource === undefined
+      ? {}
+      : { verifyCreativeGeneralActiveResource: options.verifyCreativeGeneralActiveResource }),
     ...(options.readEditorState === undefined ? {} : { readEditorState: options.readEditorState }),
     ...(options.resolveModelStartFacts === undefined
       ? {}
@@ -872,6 +892,9 @@ function createDesktopAgentRuntimeServices(
       ? {}
       : { readEditorBuffer: options.readEditorBuffer }),
     ...(readCreativeProjectFile === undefined ? {} : { readCreativeProjectFile }),
+    ...(options.verifyCreativeGeneralActiveResource === undefined
+      ? {}
+      : { verifyCreativeGeneralActiveResource: options.verifyCreativeGeneralActiveResource }),
     ...(options.readEditorState === undefined ? {} : { readEditorState: options.readEditorState }),
     ...(options.resolveModelStartFacts === undefined
       ? {}
@@ -981,7 +1004,7 @@ function createDesktopAgentRuntimeServices(
               workspace: currentIdentity.value,
               profileId: materialization.sourceIdentity.contextProfileId,
               workspaceTrust: materialization.workspaceTrust,
-              enabled: options.projectConventionsEnabled ?? true,
+              enabled: options.projectConventionsEnabled ?? false,
               maxTokens: DEFAULT_PROJECT_CONVENTIONS_TOKEN_LIMIT,
               modelProfileId: refreshModelProfileId?.value ?? "agent-context-staleness"
             });
@@ -1071,7 +1094,13 @@ function createDesktopAgentRuntimeServices(
           }
           if (source.assetId !== undefined && storyBible !== undefined) {
             const asset = await findStoryBibleAsset(storyBible, source.assetId);
-            if (!asset.ok) return asset;
+            if (!asset.ok) {
+              if (asset.error.code === "AGENT_STORY_BIBLE_ASSET_NOT_FOUND") {
+                current.push({ refId: source.refId, status: "missing" });
+                continue;
+              }
+              return asset;
+            }
             current.push({ refId: source.refId, content: JSON.stringify(asset.value) });
           }
         }
@@ -1226,6 +1255,9 @@ function createDesktopAgentContextSession(input: {
   readonly readCreativeProjectFile?: NonNullable<
     DesktopAgentRunSessionOptions["readCreativeProjectFile"]
   >;
+  readonly verifyCreativeGeneralActiveResource?: NonNullable<
+    DesktopAgentRunSessionOptions["verifyCreativeGeneralActiveResource"]
+  >;
   readonly readEditorState?: NonNullable<DesktopAgentRunSessionOptions["readEditorState"]>;
   readonly resolveModelStartFacts?: NonNullable<
     DesktopAgentRunSessionOptions["resolveModelStartFacts"]
@@ -1255,6 +1287,15 @@ function createDesktopAgentContextSession(input: {
         requiredContextTokens: model.requiredContextTokens
       });
       if (!capability.ok) return err(capability.error);
+      if (input.workspaceKind === "creativeProject" && contextDraft.contextMode === "general_file") {
+        if (input.verifyCreativeGeneralActiveResource === undefined) {
+          return err(runtimeError("AGENT_CREATIVE_GENERAL_ACTIVE_RESOURCE_UNVERIFIED"));
+        }
+        const verified = await input.verifyCreativeGeneralActiveResource(
+          contextDraft.activeResourceRef
+        );
+        if (!verified.ok) return verified;
+      }
       const sources = await resolveContextDraftSources(contextDraft.refs, {
         ...input,
         contextMode: contextDraft.contextMode,
@@ -2053,6 +2094,9 @@ function createDesktopStartPreflight(input: {
   readonly readCreativeProjectFile?: NonNullable<
     DesktopAgentRunSessionOptions["readCreativeProjectFile"]
   >;
+  readonly verifyCreativeGeneralActiveResource?: NonNullable<
+    DesktopAgentRunSessionOptions["verifyCreativeGeneralActiveResource"]
+  >;
   readonly readEditorState?: NonNullable<DesktopAgentRunSessionOptions["readEditorState"]>;
   readonly resolveModelStartFacts?: NonNullable<
     DesktopAgentRunSessionOptions["resolveModelStartFacts"]
@@ -2139,6 +2183,9 @@ async function resolveStartFromDraft(
     readonly readCreativeProjectFile?: NonNullable<
       DesktopAgentRunSessionOptions["readCreativeProjectFile"]
     >;
+    readonly verifyCreativeGeneralActiveResource?: NonNullable<
+      DesktopAgentRunSessionOptions["verifyCreativeGeneralActiveResource"]
+    >;
     readonly readEditorState?: NonNullable<DesktopAgentRunSessionOptions["readEditorState"]>;
     readonly resolveModelStartFacts?: NonNullable<
       DesktopAgentRunSessionOptions["resolveModelStartFacts"]
@@ -2177,6 +2224,13 @@ async function resolveStartFromDraft(
   }
   if (input.workspaceKind === "engineeringWorkspace" && runDraft.contextMode === "writing") {
     return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
+  }
+  if (input.workspaceKind === "creativeProject" && runDraft.contextMode === "general_file") {
+    if (input.verifyCreativeGeneralActiveResource === undefined) {
+      return err(runtimeError("AGENT_CREATIVE_GENERAL_ACTIVE_RESOURCE_UNVERIFIED"));
+    }
+    const verified = await input.verifyCreativeGeneralActiveResource(contextDraft.activeResourceRef);
+    if (!verified.ok) return verified;
   }
   if (input.resolveModelStartFacts === undefined) {
     return err(runtimeError("AGENT_MODEL_CAPABILITY_UNSUPPORTED"));
@@ -2296,7 +2350,7 @@ async function resolveContextDraftSources(
     }
     if (ref.kind === "project_file" && ref.relativePath !== undefined) {
       const read =
-        input.workspaceKind === "creativeProject" && input.contextMode === "general_file"
+        input.workspaceKind === "creativeProject"
           ? await input.readCreativeProjectFile?.(ref.relativePath)
           : await input.projectReads.readText(ref.relativePath);
       if (read === undefined) return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
@@ -2462,6 +2516,7 @@ export function createDesktopCompactionModelAssistant(input: {
           messages: [{ role: "user", content: evidenceMessage }],
           tools: [],
           systemPrompt: request.systemPrompt,
+          disablePromptCache: true,
           signal: new AbortController().signal
         })) {
           if (event.type === "assistant_text_delta") {
@@ -2522,7 +2577,7 @@ function createDesktopReadToolExecutor(
       if (input.name === "list_project_entries") {
         const relativeDirectory = readOptionalString(input.arguments, "path") ?? "";
         const listed =
-          input.contextMode === "general_file" && creativeProjectFiles !== undefined
+          creativeProjectFiles !== undefined
             ? await listCreativeProjectFileEntries(creativeProjectFiles, relativeDirectory)
             : await projectReads.listEntries(relativeDirectory);
         return listed.ok
@@ -2560,7 +2615,7 @@ function createDesktopReadToolExecutor(
       if (input.name === "read_project_text") {
         const relativePath = readOptionalString(input.arguments, "path");
         if (relativePath === undefined) return invalidToolArguments(input.name);
-        if (input.contextMode === "general_file" && readCreativeProjectFile !== undefined) {
+        if (readCreativeProjectFile !== undefined) {
           const read = await readCreativeProjectFile(relativePath);
           return read.ok
             ? ok({
@@ -2662,17 +2717,12 @@ function findCreativeProjectFileNode(
   return undefined;
 }
 
-function routeCreativeSearch(
-  writingExecutor: AgentSearchToolExecutor,
-  generalFileExecutor: AgentSearchToolExecutor
-): AgentSearchToolExecutor {
+function routeCreativeSearch(generalFileExecutor: AgentSearchToolExecutor): AgentSearchToolExecutor {
   return {
     async searchText(input) {
-      if (input.contextMode !== "general_file") return writingExecutor.searchText(input);
       return filterCreativeSearchResult(await generalFileExecutor.searchText(input));
     },
     async findReferences(input) {
-      if (input.contextMode !== "general_file") return writingExecutor.findReferences(input);
       const path = input.stableRef.startsWith("file:")
         ? input.stableRef.slice("file:".length)
         : input.stableRef;
@@ -2707,7 +2757,7 @@ function createDesktopScriptedAgentDriver(
       if (toolResultCount === 0) {
         yield { type: "assistant_text_delta", delta: "我会先读取项目结构和当前章节。" };
         yield toolCall("desktop_list_entries", "list_project_entries", {
-          path: input.snapshot.contextMode === "writing" ? "chapters" : ""
+          path: ""
         });
         yield { type: "round_completed", finishReason: "tool_calls" };
         return;

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
 import * as repositoryExports from "../src/index.js";
+import { AgentProjectReadRepository } from "../src/agent-project-read-repository.js";
 
 const roots: string[] = [];
 
@@ -78,5 +79,59 @@ describe("AgentProjectReadRepository", () => {
     expect(JSON.stringify(await repository.listEntries())).not.toContain("history");
     expect(JSON.stringify(await repository.listEntries())).not.toContain(".novel-studio");
     expect(JSON.stringify(await repository.listEntries("notes"))).not.toContain("linked");
+  });
+
+  test("keeps a read bound to the opened file when its pathname becomes a symlink", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-agent-read-race-root-"));
+    const outsideRoot = await mkdtemp(join(tmpdir(), "novel-studio-agent-read-race-outside-"));
+    roots.push(projectRoot, outsideRoot);
+    const targetPath = join(projectRoot, "target.md");
+    const outsidePath = join(outsideRoot, "secret.md");
+    await writeFile(targetPath, "inside handle content", "utf8");
+    await writeFile(outsidePath, "outside substituted content", "utf8");
+
+    try {
+      const probePath = join(projectRoot, "symlink-probe.md");
+      await symlink(outsidePath, probePath, "file");
+      await rm(probePath, { force: true });
+    } catch {
+      // File symlink creation can be unavailable in restricted Windows environments.
+      return;
+    }
+
+    class SwapAfterVerificationRepository extends AgentProjectReadRepository {
+      protected override async afterPathIdentityVerified(fullPath: string): Promise<void> {
+        if (fullPath !== targetPath) return;
+        await rm(targetPath, { force: true });
+        await symlink(outsidePath, targetPath, "file");
+      }
+    }
+
+    const repository = new SwapAfterVerificationRepository({ projectRoot });
+    expect(await repository.readText("target.md")).toMatchObject({
+      ok: true,
+      value: { content: "inside handle content" }
+    });
+  });
+
+  test("rejects a symlinked text file before opening it", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-agent-read-link-root-"));
+    const outsideRoot = await mkdtemp(join(tmpdir(), "novel-studio-agent-read-link-outside-"));
+    roots.push(projectRoot, outsideRoot);
+    const outsidePath = join(outsideRoot, "secret.md");
+    await writeFile(outsidePath, "outside secret", "utf8");
+
+    try {
+      await symlink(outsidePath, join(projectRoot, "linked.md"), "file");
+    } catch {
+      // File symlink creation can be unavailable in restricted Windows environments.
+      return;
+    }
+
+    const repository = new AgentProjectReadRepository({ projectRoot });
+    expect(await repository.readText("linked.md")).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_PROJECT_PATH_REJECTED" }
+    });
   });
 });

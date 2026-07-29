@@ -513,6 +513,7 @@ describe("desktop Agent Run runtime", () => {
       contentRoot: projectRoot,
       stateRoot: projectRoot,
       createRunId: () => "run-active-file-suffix",
+      verifyCreativeGeneralActiveResource: async () => ok(undefined),
       resolveModelStartFacts: async () => ({
         profileId: "profile-active-file",
         provider: "demo",
@@ -627,6 +628,7 @@ describe("desktop Agent Run runtime", () => {
       contentRoot: projectRoot,
       stateRoot: projectRoot,
       createRunId: () => "run-active-file-stale",
+      verifyCreativeGeneralActiveResource: async () => ok(undefined),
       resolveModelStartFacts: async () => ({
         profileId: "profile-active-file",
         provider: "demo",
@@ -840,6 +842,8 @@ describe("desktop Agent Run runtime", () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-agent-run-"));
     roots.push(projectRoot);
     await mkdir(join(projectRoot, "chapters"), { recursive: true });
+    await mkdir(join(projectRoot, "notes"), { recursive: true });
+    await writeFile(join(projectRoot, "notes", "brief.md"), "Planning context.\n", "utf8");
     const chapterId = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D3";
     const chapterPath = join(projectRoot, "chapters", `${chapterId}.md`);
     const original = `---\nschemaVersion: "1.0"\nid: ${chapterId}\ntype: chapter\ntitle: Opening\norder: 1\nstatus: draft\ncreatedAt: "2026-07-13T00:00:00.000Z"\nupdatedAt: "2026-07-13T00:00:00.000Z"\n---\n\nChapter body.\n`;
@@ -865,7 +869,7 @@ describe("desktop Agent Run runtime", () => {
           if (toolResultCount === 0) {
             yield { type: "assistant_text_delta" as const, delta: "先读取项目结构。" };
             yield runtimeToolCall("plan-list-entries", "list_project_entries", {
-              path: "chapters"
+              path: "notes"
             });
           } else if (toolResultCount === 1) {
             yield runtimeToolCall("plan-read-chapter", "read_resource", {
@@ -1714,6 +1718,60 @@ describe("desktop Agent Run runtime", () => {
               type: "tool_failed",
               detail: expect.objectContaining({
                 toolCallId: "list-managed-chapters",
+                code: "CREATIVE_PROJECT_FILE_PATH_REJECTED"
+              })
+            })
+          ])
+        }
+      });
+    });
+  });
+
+  test("rejects managed creative project reads in writing mode", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-writing-managed-read-"));
+    roots.push(projectRoot);
+    await writeFile(join(projectRoot, "settings.json"), "managed writing secret\n", "utf8");
+    let round = 0;
+    const session = createDesktopRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      activeChapterId: "chapter-unused",
+      createRunId: () => "run-desktop-writing-managed-read",
+      modelDriver: {
+        async *streamRound(input) {
+          round += 1;
+          if (round === 1) {
+            yield runtimeToolCall("read-writing-managed-settings", "read_resource", {
+              ref: "file:settings.json"
+            });
+          } else {
+            const toolPayload = input.messages
+              .filter((message) => message.role === "tool")
+              .map((message) => message.content)
+              .join("\n");
+            expect(toolPayload).toContain("CREATIVE_PROJECT_FILE_PATH_REJECTED");
+            expect(toolPayload).not.toContain("managed writing secret");
+            yield runtimeToolCall("finish-writing-managed-read", "finish", { summary: "Rejected." });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+
+    await session.startAgentRun(executionCommand("writing"));
+
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run-desktop-writing-managed-read")).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: { status: "completed", contextMode: "writing" },
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_failed",
+              detail: expect.objectContaining({
+                toolCallId: "read-writing-managed-settings",
                 code: "CREATIVE_PROJECT_FILE_PATH_REJECTED"
               })
             })

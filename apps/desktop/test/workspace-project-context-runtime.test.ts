@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,6 +7,7 @@ import {
   AgentRunFileRepository,
   type CreativeProjectFileTreeSnapshot
 } from "@novel-studio/repository";
+import { ok, type Result, type UnifiedError } from "@novel-studio/shared";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
@@ -76,7 +77,8 @@ describe("desktop workspace project context runtime", () => {
       workspaceKind: "creativeProject",
       projectId: "workspace-creative",
       contextMode: "general_file",
-      getCreativeProjectFileTreeSnapshot: () => creativeTree("workspace-creative"),
+      reattestCreativeProjectFileTreeSnapshot: async () =>
+        ok(creativeTree("workspace-creative")),
       ...creative
     });
     expectProjectPrefix(creativeInput, "CREATIVE_CONVENTION", "notes/brief.md");
@@ -91,7 +93,7 @@ describe("desktop workspace project context runtime", () => {
       "PREVIEW_CONVENTION",
       "utf8"
     );
-    const getTree = vi.fn(() => creativeTree("workspace-preview"));
+    const getTree = vi.fn(async () => ok(creativeTree("workspace-preview")));
     const modelInputs: AgentModelRoundInput[] = [];
     let notifyRoundStarted: (() => void) | undefined;
     const roundStarted = new Promise<void>((resolve) => {
@@ -103,7 +105,10 @@ describe("desktop workspace project context runtime", () => {
       projectId: "workspace-preview",
       ...roots,
       userDataRoot,
-      getCreativeProjectFileTreeSnapshot: getTree,
+      workspaceTrust: "trusted",
+      projectConventionsEnabled: true,
+      reattestCreativeProjectFileTreeSnapshot: getTree,
+      verifyCreativeGeneralActiveResource: async () => ok(undefined),
       createRunId: () => "run-preview-boundary",
       resolveModelStartFacts: async () => modelFacts("profile-preview"),
       modelDriver: {
@@ -222,6 +227,50 @@ describe("desktop workspace project context runtime", () => {
     });
   });
 
+  test("fails a persisted creative general-file start without a Main Files-surface proof", async () => {
+    const roots = await createRoots("creative-general-proof-required");
+    const runtime = createDesktopAgentRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "workspace-proof-required",
+      ...roots,
+      createRunId: () => "run-proof-required"
+    });
+    const conversation = await runtime.agentConversationSession.createConversation({
+      projectId: "workspace-proof-required",
+      commandId: "create-proof-required-conversation"
+    });
+    if (!conversation.ok) throw conversation.error;
+    const prepared = await runtime.agentRunDraftSession.syncStartDraft({
+      projectId: "workspace-proof-required",
+      conversationId: conversation.value.conversationId,
+      commandId: "prepare-proof-required",
+      userRequest: "Inspect the Files surface.",
+      operationMode: "planning",
+      contextMode: "general_file",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      modelProfileId: "profile-proof-required",
+      contextRefs: [],
+      activeResourceRef: null
+    });
+    if (!prepared.ok) throw prepared.error;
+
+    await expect(
+      runtime.agentRunSession.startAgentRun({
+        projectId: "workspace-proof-required",
+        conversationId: conversation.value.conversationId,
+        commandId: "start-proof-required",
+        expectedRunRevision: 0,
+        runDraftId: prepared.value.runDraft.runDraftId,
+        runDraftRevision: prepared.value.runDraft.revision,
+        runDraftChecksum: prepared.value.runDraft.checksum
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CREATIVE_GENERAL_ACTIVE_RESOURCE_UNVERIFIED" }
+    });
+  });
+
   test("detects a convention change outside the injected truncation range, refreshes, and hydrates", async () => {
     const roots = await createRoots("conventions-stale");
     await writeFile(join(roots.contentRoot, "README.md"), "read target\n", "utf8");
@@ -233,6 +282,8 @@ describe("desktop workspace project context runtime", () => {
       workspaceKind: "engineeringWorkspace",
       projectId: "workspace-conventions-stale",
       ...roots,
+      workspaceTrust: "trusted",
+      projectConventionsEnabled: true,
       createRunId: () => "run-conventions-stale",
       modelDriver: {
         async *streamRound() {
@@ -303,9 +354,9 @@ describe("desktop workspace project context runtime", () => {
     expect(artifact).toMatchObject({
       ok: true,
       value: {
-        content: "😀".repeat(4_000),
+        content: "😀".repeat(1_000),
         materialization: {
-          truncationRange: { start: 0, end: 4_000, originalEnd: 4_500 }
+          truncationRange: { start: 0, end: 1_000, originalEnd: 4_500 }
         }
       }
     });
@@ -314,6 +365,8 @@ describe("desktop workspace project context runtime", () => {
       workspaceKind: "engineeringWorkspace",
       projectId: "workspace-conventions-stale",
       ...roots,
+      workspaceTrust: "trusted",
+      projectConventionsEnabled: true,
       modelDriver: finishingDriver([])
     });
     await expect(hydrated.readAgentRun("run-conventions-stale")).resolves.toMatchObject({
@@ -410,6 +463,88 @@ describe("desktop workspace project context runtime", () => {
     );
     expect(JSON.stringify(artifact)).toContain("src/added.ts");
   });
+
+  test("treats a deleted selected Story Bible asset as stale context that can be excluded", async () => {
+    const roots = await createRoots("story-bible-missing");
+    await mkdir(join(roots.contentRoot, "characters"), { recursive: true });
+    await writeFile(join(roots.contentRoot, "README.md"), "read target\n", "utf8");
+    const assetPath = join(roots.contentRoot, "characters", "chr_mira.json");
+    const asset = JSON.stringify({
+      schemaVersion: "1.0",
+      id: "chr_mira",
+      type: "character",
+      title: "Mira",
+      status: "active",
+      summary: "Captain of the city watch.",
+      createdAt: "2026-07-29T00:00:00.000Z",
+      updatedAt: "2026-07-29T00:00:00.000Z"
+    });
+    await writeFile(assetPath, asset, "utf8");
+
+    let round = 0;
+    const session = createDesktopAgentRunSession({
+      workspaceKind: "creativeProject",
+      projectId: "workspace-story-bible-missing",
+      ...roots,
+      createRunId: () => "run-story-bible-missing",
+      modelDriver: {
+        async *streamRound() {
+          round += 1;
+          if (round === 1) {
+            await unlink(assetPath);
+            yield toolCall("read-before-story-bible-refresh", "read_resource", {
+              ref: "file:README.md"
+            });
+          } else {
+            yield toolCall("finish-after-story-bible-exclude", "finish", { summary: "Done." });
+          }
+          yield { type: "round_completed" as const, finishReason: "tool_calls" };
+        }
+      }
+    });
+
+    const started = await session.startAgentRun({
+      ...startCommand("workspace-story-bible-missing", "writing"),
+      initialContextSources: [
+        {
+          refId: "story_bible:chr_mira",
+          sourceKind: "story_bible_asset" as const,
+          assetId: "chr_mira",
+          content: asset,
+          dirty: false
+        }
+      ]
+    });
+    if (!started.ok) throw started.error;
+    await waitForStatus(session, "run-story-bible-missing", "awaiting_context_refresh");
+
+    const stale = await session.readAgentRun("run-story-bible-missing");
+    if (!stale.ok) throw stale.error;
+    expect(stale.value.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "context_stale",
+          detail: expect.objectContaining({
+            staleRefs: expect.arrayContaining(["story_bible:chr_mira"])
+          })
+        })
+      ])
+    );
+
+    const excluded = await session.refreshContext({
+      projectId: "workspace-story-bible-missing",
+      runId: "run-story-bible-missing",
+      commandId: "exclude-missing-story-bible",
+      expectedRunRevision: stale.value.snapshot.runRevision,
+      decision: "exclude"
+    });
+    if (!excluded.ok) throw excluded.error;
+    await waitForStatus(session, "run-story-bible-missing", "completed");
+
+    const completed = await session.readAgentRun("run-story-bible-missing");
+    if (!completed.ok) throw completed.error;
+    expect(completed.value.events.some((event) => event.type === "run_failed")).toBe(false);
+  });
 });
 
 async function firstRound(input: {
@@ -418,11 +553,15 @@ async function firstRound(input: {
   readonly contentRoot: string;
   readonly stateRoot: string;
   readonly contextMode: "writing" | "general_file";
-  readonly getCreativeProjectFileTreeSnapshot?: () => CreativeProjectFileTreeSnapshot | undefined;
+  readonly reattestCreativeProjectFileTreeSnapshot?: () => Promise<
+    Result<CreativeProjectFileTreeSnapshot | undefined, UnifiedError>
+  >;
 }): Promise<AgentModelRoundInput> {
   const inputs: AgentModelRoundInput[] = [];
   const session = createDesktopAgentRunSession({
     ...input,
+    workspaceTrust: "trusted",
+    projectConventionsEnabled: true,
     createRunId: () => `run-${input.projectId}`,
     modelDriver: finishingDriver(inputs)
   });

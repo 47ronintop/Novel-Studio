@@ -1,11 +1,11 @@
 # Novel Studio 双工作台上下文工程设计
 
 **日期：** 2026-07-26
-**更新：** 2026-07-27（补充 standalone 会话、创作项目文件模式与 Provider prompt cache 合同）
-**状态：** Ready（上位计划批次 1-5 已完成；下一步 C1A，上下文能力尚未实现）
-**实现基线：** `7626853`（Provider、v2 工具目录、网络/MCP 与审批前置合同已冻结）
+**更新：** 2026-07-29（C1-C6 实现完成并完成跨批次审查加固）
+**状态：** Complete（C1-C6 已实现；审查发现已修复并通过最终门禁）
+**实现基线：** `b5c5d3e`（C1）、`253c3a8`（C2-C3）、`9046a5a`/`2bc2c4c`（C4）、`909b00f`（C5）、`fb48f8c`（C6）；跨批次加固随完成提交交付
 **实施计划：** `docs/superpowers/plans/2026-07-26-context-engineering-two-workbenches.md`
-**范围：** 未打开项目时的应用级 standalone 会话、创作工作台的项目文件模式，以及 Agent 运行的系统提示装配、初始上下文、项目约定文件、工作区定向块、上下文预算、Provider prompt cache 与压缩模板；不改变工具安全边界与审批链路。本文定义目标合同，不表示 C1-C6 已实现。
+**范围：** 未打开项目时的应用级 standalone 会话、创作工作台的项目文件模式，以及 Agent 运行的系统提示装配、初始上下文、项目约定文件、工作区定向块、上下文预算、Provider prompt cache 与压缩模板；不改变工具安全边界与审批链路。本文记录 C1-C6 的已实现合同与验收边界。
 
 ---
 
@@ -269,12 +269,13 @@ Standalone 是应用级会话作用域，不是伪工作区。下列合同必须
 ## 7. 与既有计划的关系
 
 - 上位计划批次 1-5 已在 `7626853` 前完成；Anthropic/Gemini 原生 adapter、OpenAI-compatible 合同、v2 工具目录、网络/MCP descriptors 与数据外发审批现在是本设计的冻结前置基线。
-- 本次只把设计状态推进到 Ready，不把 Context Profile、约定文件、定向块、动态预算、prompt cache 或模型摘要标成已实现；下一实现批次是 C1。
+- C1-C6 已按本设计完成；跨批次审查进一步加固了 profile 证明、持久化策略/receipt、路径身份、预算压力续跑、缓存身份和恢复语义。
 - C1A 交付 scope/profile/schema 基础；C1B 交付 standalone 会话纵向闭环（应用级存储、空工具 runtime、IPC/UI、启动/关闭工作区与恢复）；C1C 交付创作项目文件纵向闭环（策略、文件会话、第三导航标签、编辑器、活动文件上下文与受限工具）。Standalone 不是第三个工作台，“项目文件”也只是创作工作台内的第三个导航视图；两者都不是可推迟到 C6 的 UI 收尾。
 - C2-C3 只作用于三个 workspace profile；standalone 不读取项目约定、不生成工作区定向块。
 - C4 直接消费 `7626853` 的 Provider/tool-schema/network/MCP 合同，不再保留“批次 4/5 未定”的占位数字。
 - C5 在 C1 的稳定前缀 seam 和 C2-C4 的 artifact/预算之上接入 Provider cache；C6 承载可裁剪的提及建议与 UI 收尾。
 - 实施时必须以当前 Stage 5A 代码重新建立差异基线，并遵守 §5 的显式 schema 升级。继续延期：向量/语义检索、自动注入、记忆自动写入和跨模型降级。
+- 保留风险：工程 outline 的 entry/byte/time 有界扫描只能证明实际观察到的 entry set；硬上限之外的未观察尾部变化无法由该 checksum 完整证明。不得借此扩大 C1-C6 的扫描范围或文件系统权限。
 
 ## 8. 测试与验收要点
 

@@ -1,9 +1,9 @@
 # Novel Studio 双工作台上下文工程实施计划
 
 - **日期：** 2026-07-26
-- **更新：** 2026-07-27（补充 standalone 会话、创作项目文件模式与 Provider prompt cache 批次）
-- **状态：** Ready（前置批次 1-5 已完成；下一步 C1A，C1-C6 尚未实现）
-- **实现基线：** `7626853`（Provider、v2 工具目录、网络/MCP 与审批合同已冻结）
+- **更新：** 2026-07-29（C1-C6 实现与跨批次审查加固完成）
+- **状态：** Complete（C1-C6 已实现并完成最终验收）
+- **实现基线：** `b5c5d3e`（C1）、`253c3a8`（C2-C3）、`9046a5a`/`2bc2c4c`（C4）、`909b00f`（C5）、`fb48f8c`（C6）；跨批次加固随完成提交交付
 - **设计依据：** `docs/superpowers/specs/2026-07-26-context-engineering-two-workbenches-design.md`
 - **上位计划：** `docs/superpowers/plans/2026-07-26-agent-tool-functional-priorities.md`（批次 1-5 Complete；代码提交 `7626853`）
 
@@ -19,7 +19,7 @@
 - 引入服务器构建的定向块（章节清单 + Story Bible 索引 / 有界目录骨架），作为初始上下文数据消息。
 - `toolReserve`/`systemReserve` 诚实化。
 - 建立稳定 `project_context_prefix` 和 Provider-capability-aware prompt cache；缓存读/写 token 分开记账，命中率只在 Provider 给出可验证分母时展示。
-- Provider、工具目录、网络/MCP 与审批前置已在 `7626853` 关闭；本文件现在允许从 C1 开始，但不把任何 C1-C6 能力标成已实现。向量/语义检索、自动注入、跨模型降级、记忆自动写入继续延期。
+- Provider、工具目录、网络/MCP 与审批前置已在 `7626853` 关闭；C1-C6 已完成。向量/语义检索、自动注入、跨模型降级、记忆自动写入继续延期。
 - 前置最终门禁：`typecheck`、`lint`、`build`、`git diff --check` 通过，全量 `189` 个测试文件、`1870/1870` 项测试通过；真实外部 Provider/MCP canary 仍需要凭据与网络。
 - 不新增模型可见工具、不改审批/Change Set/事务链路；所有项目文件仍走 data envelope，约定文件也不获得 system authority（见设计 §4.2/§6）。
 
@@ -41,6 +41,8 @@
 **完成条件：** 现有功能链路中不存在“snapshot 已排除但 prompt 仍有正文”“reload 丢失初始 refs”“预算为空仍可启动/压缩”的路径；不改变工具集合。
 
 ### 批次 C1：Scope/Profile 基础、Standalone 与创作项目文件纵向闭环、指导 v2（批次 4/5 后）
+
+**状态：** Complete（`b5c5d3e`；审查加固随完成提交交付）
 
 **目标：** 四个 profile 显式化，交付“未打开项目也能持久会话”和“创作工作台可处理用户项目文件”两条完整路径；复用冻结的 v2 模型工具名称，不增加工程执行能力或绕过既有审批。
 
@@ -79,6 +81,8 @@
 
 ### 批次 C2：项目约定文件（受信任的用户/数据层）
 
+**状态：** Complete（`253c3a8`；持久化信任策略与路径身份加固随完成提交交付）
+
 **目标：** 用户可写约定文件端到端注入 + 审计 + staleness。
 
 1. main 侧 start preflight 读取约定文件：路径固定（AGENTS.md / conventions/writing.md），只经 `AgentProjectReadRepository.readText`（守卫复用，`.md` 已在允许扩展名内）；缺失 → 静默无约定层；超 4000 token → 截断 + 结果里标记。
@@ -91,6 +95,8 @@
 **完成条件：** 用户在项目里写约定文件，新 run 的 user/data context 可见（审计源可证）、改文件触发 stale；无任何新文件系统权限面。
 
 ### 批次 C3：工作区定向块
+
+**状态：** Complete（`253c3a8`；依赖路径、硬时限与外部树重新证明随完成提交交付）
 
 **目标：** 三个 workspace profile 的初始上下文最小集成型；standalone 不读取项目定向块。
 
@@ -108,6 +114,8 @@
 
 ### 批次 C4：预算诚实化（排在上位计划批次 4/5 后）
 
+**状态：** Complete（`9046a5a`、`2bc2c4c`；预算压力续跑与恢复加固随完成提交交付）
+
 **目标：** 预算操作数与真实注入一致。
 
 1. `toolReserve`：对 run 冻结的 provider-specific 工具目录（含 v2、网络/MCP descriptors）及最大工具结果摘要做确定性估算，替换 `agent-run-runtime.ts` 两处写死的 0。
@@ -119,6 +127,8 @@
 **完成条件：** `safeInputBudget` 的每个操作数可解释、可审计；同一 run 的 preview/start/round/compaction 四处预算一致。
 
 ### 批次 C5：Provider Prompt Cache 与可观测性
+
+**状态：** Complete（`909b00f`；实时身份复核与资源 journal 原子性随完成提交交付）
 
 **目标：** 在不改变 prompt 语义与安全边界的前提下，使支持缓存的 Provider 可复用稳定前缀，并将 hit/miss/bypass、缓存读/写 token 与费用语义做到可验证。
 
@@ -133,6 +143,8 @@
 **完成条件：** 同一冻结前缀在同一 Provider connection/account/model/scope/policy 下可重用；任意身份或信任变化必然 miss/bypass；不支持缓存的 Provider 与旧 run 行为保持不变；缓存读/写与命中率可审计。
 
 ### 批次 C6：提及建议与 UI 收尾（P2，可裁剪）
+
+**状态：** Complete（`fb48f8c`；workspace 绑定、缺失来源与策略 UI 加固随完成提交交付）
 
 1. 确定性别名提及扫描（Story Bible 资产名/别名 × 当前章节与用户请求的字符串匹配）→ composer"建议引用"chips，用户点选才注入（复用 ContextDraft refs 管线）。
 2. 约定文件创建入口、定向块与约定层在"查看来源"面板的完整展示。
@@ -162,6 +174,7 @@
 | 缓存跨 scope 或信任边界复用 | cache identity 强绑定 Provider/account/model/scope/workspace/trust/policy 与 artifact checksum；任一变化必须 miss/bypass |
 | Provider 缓存语义不一致 | capability snapshot + provider-native adapter；无可验证分母不显示命中率，未知能力降级 `none` |
 | 显式远程 cache 资源泄漏或清理结果不明 | Main-owned opaque ref + TTL + lifecycle journal；不持久化 prompt/密钥，结果不可证时不自动重试 |
+| 工程 outline 硬上限外的尾部变化未被观察 | entry/byte/time 上限与 entry-set checksum 保持有界；明确记录该证明边界，不扩大扫描范围或文件系统权限 |
 
 ## 4. 执行与验证原则
 
@@ -180,4 +193,4 @@
 
 ## 5. 下一步
 
-从 C1A（Scope/Profile 与持久化合同）开始，再并行完成 C1B（Standalone 真实用户纵向闭环）与 C1C（创作项目文件真实用户纵向闭环）。C1 的 fresh-start/会话恢复/空工具请求/scope 往返，以及创作项目文件导航/生命周期/活动文件上下文/权限隔离 E2E 全绿后，才并行进入 C2 + C3，随后 C4、C5，最后 C6。本轮只更新设计与实施文档，不包含 C1-C6 代码。
+C1-C6 已完成。后续工作仅处理生产反馈与已明确延期项；任何新增检索、自动注入、记忆写入或扫描权限扩展都必须另立设计与验收边界。

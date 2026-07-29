@@ -146,6 +146,7 @@ export function useWorkspaceFileEditorRuntime(
   const creativeExpandedPathIdsRef = useRef<readonly string[]>([]);
   creativeExpandedPathIdsRef.current = creativeExpandedPathIds;
   const creativePlainFileBridgeRef = useRef<PlainFileEditorBridge | undefined>(undefined);
+  const creativeProjectFilesBridgeRef = useRef<CreativeProjectFilesBridge | undefined>(undefined);
   const decorateFileEditorRef = useRef<
     (
       bridge: PlainFileEditorBridge,
@@ -156,6 +157,11 @@ export function useWorkspaceFileEditorRuntime(
     if (fileEditorScopeRef.current !== bridge.scope) return;
     setFileEditor(decorateFileEditorRef.current(bridge, editor));
   }, []);
+  const clearFileEditor = useCallback(() => {
+    fileEditorScopeRef.current = undefined;
+    setFileEditor(undefined);
+    setFileEditorScope(undefined);
+  }, []);
   const [plainFileBridge] = useState(() =>
     api === undefined ? undefined : createPlainFileEditorBridge(api)
   );
@@ -164,17 +170,50 @@ export function useWorkspaceFileEditorRuntime(
       ? undefined
       : createCreativeProjectFilesBridge(api, {
           beforeActiveFileChange: () =>
-            guardDirtyPlainFile(creativePlainFileBridgeRef.current, updateVisibleFileEditor)
+            guardDirtyPlainFile(creativePlainFileBridgeRef.current, updateVisibleFileEditor),
+          onActiveFilePathChange: (path, reason) => {
+            if (reason === "open_file") return;
+
+            const editorBridge = creativePlainFileBridgeRef.current;
+            editorBridge?.clear();
+            if (fileEditorScopeRef.current === "creativeProjectFile") clearFileEditor();
+
+            if (
+              reason !== "rename_active_path" ||
+              path === undefined ||
+              editorBridge === undefined
+            ) {
+              return;
+            }
+
+            void editorBridge.openFile(path).then(
+              (next) => {
+                if (
+                  creativePlainFileBridgeRef.current !== editorBridge ||
+                  creativeProjectFilesBridgeRef.current?.getActiveFilePath() !== path
+                ) {
+                  return;
+                }
+                fileEditorScopeRef.current = "creativeProjectFile";
+                setFileEditorScope("creativeProjectFile");
+                setFileEditor(decorateFileEditorRef.current(editorBridge, next));
+              },
+              () => {
+                if (
+                  creativePlainFileBridgeRef.current === editorBridge &&
+                  creativeProjectFilesBridgeRef.current?.getActiveFilePath() === path
+                ) {
+                  creativeProjectFilesBridgeRef.current.clearActiveFile();
+                }
+              }
+            );
+          }
         })
   );
+  creativeProjectFilesBridgeRef.current = creativeProjectFilesBridge;
   const [creativeProjectFiles, setCreativeProjectFiles] = useState<
     CreativeProjectFilesNavigatorProps | undefined
   >();
-
-  const clearFileEditor = useCallback(() => {
-    setFileEditor(undefined);
-    setFileEditorScope(undefined);
-  }, []);
 
   const clearCreativeFile = useCallback(() => {
     creativePlainFileBridgeRef.current?.clear();
@@ -341,6 +380,7 @@ export function useWorkspaceFileEditorRuntime(
 
   const setEngineeringFileEditor = useCallback(
     (next: PlainFileEditorProps | undefined) => {
+      fileEditorScopeRef.current = next === undefined ? undefined : "engineeringWorkspaceFile";
       setFileEditorScope(next === undefined ? undefined : "engineeringWorkspaceFile");
       setFileEditor(
         plainFileBridge === undefined ? undefined : decorateFileEditor(plainFileBridge, next)
@@ -351,6 +391,7 @@ export function useWorkspaceFileEditorRuntime(
   const setCreativeFileEditor = useCallback(
     (next: PlainFileEditorProps | undefined) => {
       const bridge = creativePlainFileBridgeRef.current;
+      fileEditorScopeRef.current = next === undefined ? undefined : "creativeProjectFile";
       setFileEditorScope(next === undefined ? undefined : "creativeProjectFile");
       setFileEditor(bridge === undefined ? undefined : decorateFileEditor(bridge, next));
     },

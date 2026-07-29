@@ -277,6 +277,12 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
         invokeTyped<Result<ProjectConventionsCreateResult, UnifiedError>>(
           ipc,
           "application:workspace:create-project-conventions"
+        ),
+      updateContextPolicy: (action: "disable_conventions" | "revoke_workspace_trust") =>
+        invokeTyped<Result<void, UnifiedError>>(
+          ipc,
+          "application:workspace:update-context-policy",
+          { action }
         )
     },
     creativeProjectFiles: {

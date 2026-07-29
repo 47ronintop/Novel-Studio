@@ -5,7 +5,7 @@ import {
   type ElectronApplication,
   type Page
 } from "@playwright/test";
-import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -141,6 +141,8 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-agent-run-e2e-"));
   const projectRoot = join(tempRoot, "Project");
   await cp(fixtureRoot, projectRoot, { recursive: true });
+  await mkdir(join(projectRoot, "notes"), { recursive: true });
+  await writeFile(join(projectRoot, "notes", "context.md"), "E2E context.\n", "utf8");
   const savedChapterBaseline = await readFile(
     join(projectRoot, "chapters", `${activeChapterId}.md`),
     "utf8"
@@ -246,7 +248,7 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
         response,
         "entries",
         "list_project_entries",
-        { path: "chapters" },
+        { path: "notes" },
         "先读取项目结构。"
       );
       return;
@@ -272,7 +274,7 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
   const electronApp = await electron.launch({
     args: [electronMain],
     env: electronEnv({
-      NOVEL_STUDIO_PROJECT_ROOT: join(tempRoot, "Bootstrap Project"),
+      NOVEL_STUDIO_PROJECT_ROOT: projectRoot,
       NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
     })
   });
@@ -293,7 +295,7 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
     await expect(activitySummary).not.toHaveAttribute("open", "");
     await expect(activitySummary.locator(":scope > summary")).toContainText("已读取 1 项");
     await expect(
-      activitySummary.locator("ol").getByText(/已列出 chapters 的 1 个条目/)
+      activitySummary.locator("ol").getByText(/已列出 notes 的 1 个条目/)
     ).not.toBeVisible();
     await expect(
       activitySummary.locator("ol").getByText(`已读取章节 ${activeChapterId}`, { exact: true })
@@ -321,7 +323,7 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
     await restoredSummary.locator(":scope > summary").click();
     const persistedSteps = await restoredSummary.locator("ol > li").allTextContents();
     expect(persistedSteps).toHaveLength(2);
-    expect(persistedSteps[0]).toContain("已列出 chapters 的 1 个条目");
+    expect(persistedSteps[0]).toContain("已列出 notes 的 1 个条目");
     expect(persistedSteps[1]).toContain(`已读取章节 ${activeChapterId}`);
 
     await page.getByRole("button", { name: "按此方案执行" }).click();
@@ -342,7 +344,7 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
     await completedSummary.locator(":scope > summary").click();
     const completedSteps = await completedSummary.locator("ol > li").allTextContents();
     expect(completedSteps).toHaveLength(2);
-    expect(completedSteps[0]).toContain("已列出 chapters 的 1 个条目");
+    expect(completedSteps[0]).toContain("已列出 notes 的 1 个条目");
     expect(completedSteps[1]).toContain(`已读取章节 ${activeChapterId}`);
     await assertCompactConversationSurface(page);
 

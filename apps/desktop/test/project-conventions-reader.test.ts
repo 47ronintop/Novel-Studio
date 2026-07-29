@@ -105,7 +105,7 @@ describe("DesktopProjectConventionsReader", () => {
     expect(projectReads.readText).not.toHaveBeenCalled();
   });
 
-  test("truncates at Unicode code point boundaries for the shared 4000-token cap and lower input cap", async () => {
+  test("truncates conservatively at Unicode code point boundaries for the shared 4000-token cap", async () => {
     const root = await createRoot();
     const content = "😀".repeat(4_500);
     await writeFile(join(root, "AGENTS.md"), content, "utf8");
@@ -116,19 +116,19 @@ describe("DesktopProjectConventionsReader", () => {
     const capped = await reader.read(readInput("engineering"));
     expect(capped).toMatchObject({ ok: true, value: { status: "available" } });
     if (!capped.ok || capped.value.status !== "available") return;
-    expect(capped.value.source.content).toBe("😀".repeat(4_000));
+    expect(capped.value.source.content).toBe("😀".repeat(1_000));
     expect(capped.value.source.materialization?.tokenCount).toBe(4_000);
     expect(capped.value.source.materialization?.truncationRange).toEqual({
       unit: "unicode_code_point",
       start: 0,
-      end: 4_000,
+      end: 1_000,
       originalEnd: 4_500
     });
 
-    const inputCapped = await reader.read({ ...readInput("engineering"), maxTokens: 3 });
+    const inputCapped = await reader.read({ ...readInput("engineering"), maxTokens: 4 });
     expect(inputCapped).toMatchObject({
       ok: true,
-      value: { status: "available", source: { content: "😀😀😀" } }
+      value: { status: "available", source: { content: "😀" } }
     });
   });
 

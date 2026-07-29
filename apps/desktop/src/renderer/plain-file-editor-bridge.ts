@@ -41,6 +41,8 @@ interface PlainFileEditorState {
         readonly diskContent: string;
         readonly draftContent: string;
         readonly diskChecksum: string;
+        readonly diskNodeRevision?: string;
+        readonly diskTreeRevision?: string;
       }
     | undefined;
 }
@@ -169,7 +171,13 @@ export function createPlainFileEditorBridge(
           conflict: {
             diskContent: current.content,
             draftContent: savingState.content,
-            diskChecksum: current.checksum
+            diskChecksum: current.checksum,
+            ...(current.nodeRevision === undefined
+              ? {}
+              : { diskNodeRevision: current.nodeRevision }),
+            ...(current.treeRevision === undefined
+              ? {}
+              : { diskTreeRevision: current.treeRevision })
           }
         };
         return toProps();
@@ -177,23 +185,20 @@ export function createPlainFileEditorBridge(
 
       const savedDocument = written.outcome.document;
 
-      state = {
-        ...savingState,
-        path: savedDocument.path,
-        fileName: fileNameFromPath(savedDocument.path),
-        content: savedDocument.content,
-        persistedContent: savedDocument.content,
-        checksum: savedDocument.checksum,
-        ...(savedDocument.nodeRevision === undefined
-          ? {}
-          : { nodeRevision: savedDocument.nodeRevision }),
-        ...(savedDocument.treeRevision === undefined
-          ? {}
-          : { treeRevision: savedDocument.treeRevision }),
-        saveStatus: "Saved",
-        feedback: undefined,
-        conflict: undefined
-      };
+      state = replaceFileRevisions(
+        {
+          ...savingState,
+          path: savedDocument.path,
+          fileName: fileNameFromPath(savedDocument.path),
+          content: savedDocument.content,
+          persistedContent: savedDocument.content,
+          checksum: savedDocument.checksum,
+          saveStatus: "Saved",
+          feedback: undefined,
+          conflict: undefined
+        },
+        savedDocument
+      );
       return toProps();
     },
     discard() {
@@ -236,7 +241,11 @@ export function createPlainFileEditorBridge(
       ...(state.conflict === undefined
         ? {}
         : {
-            conflict: state.conflict,
+            conflict: {
+              diskContent: state.conflict.diskContent,
+              draftContent: state.conflict.draftContent,
+              diskChecksum: state.conflict.diskChecksum
+            },
             onReloadFromDisk: reloadFromDisk,
             onKeepDraft: keepDraft
           })
@@ -246,28 +255,40 @@ export function createPlainFileEditorBridge(
   function reloadFromDisk(): void {
     if (state?.conflict === undefined) return;
     const conflict = state.conflict;
-    state = {
-      ...state,
-      content: conflict.diskContent,
-      persistedContent: conflict.diskContent,
-      checksum: conflict.diskChecksum,
-      saveStatus: "Saved",
-      conflict: undefined,
-      feedback: undefined
-    };
+    state = replaceFileRevisions(
+      {
+        ...state,
+        content: conflict.diskContent,
+        persistedContent: conflict.diskContent,
+        checksum: conflict.diskChecksum,
+        saveStatus: "Saved",
+        conflict: undefined,
+        feedback: undefined
+      },
+      {
+        nodeRevision: conflict.diskNodeRevision,
+        treeRevision: conflict.diskTreeRevision
+      }
+    );
   }
 
   function keepDraft(): void {
     if (state?.conflict === undefined) return;
     const conflict = state.conflict;
-    state = {
-      ...state,
-      persistedContent: conflict.diskContent,
-      checksum: conflict.diskChecksum,
-      saveStatus: "Unsaved",
-      conflict: undefined,
-      feedback: undefined
-    };
+    state = replaceFileRevisions(
+      {
+        ...state,
+        persistedContent: conflict.diskContent,
+        checksum: conflict.diskChecksum,
+        saveStatus: "Unsaved",
+        conflict: undefined,
+        feedback: undefined
+      },
+      {
+        nodeRevision: conflict.diskNodeRevision,
+        treeRevision: conflict.diskTreeRevision
+      }
+    );
   }
 }
 
@@ -336,12 +357,13 @@ async function saveBoundTextFile(
   | undefined
 > {
   if (binding.scope === "creativeProjectFile") {
-    if (state.nodeRevision === undefined || state.treeRevision === undefined) return undefined;
+    const treeRevision = binding.getTreeRevision() ?? state.treeRevision;
+    if (state.nodeRevision === undefined || treeRevision === undefined) return undefined;
     const written = await api.creativeProjectFiles.saveTextFile({
       ...binding.identity,
       path: state.path,
       content: state.content,
-      expectedTreeRevision: state.treeRevision,
+      expectedTreeRevision: treeRevision,
       expectedNodeRevision: state.nodeRevision,
       expectedChecksum: state.checksum
     });
@@ -415,6 +437,23 @@ async function saveBoundTextFile(
           }
         }
       };
+}
+
+function replaceFileRevisions(
+  state: PlainFileEditorState,
+  revisions: {
+    readonly nodeRevision?: string | undefined;
+    readonly treeRevision?: string | undefined;
+  }
+): PlainFileEditorState {
+  const { nodeRevision: _nodeRevision, treeRevision: _treeRevision, ...withoutRevisions } = state;
+  void _nodeRevision;
+  void _treeRevision;
+  return {
+    ...withoutRevisions,
+    ...(revisions.nodeRevision === undefined ? {} : { nodeRevision: revisions.nodeRevision }),
+    ...(revisions.treeRevision === undefined ? {} : { treeRevision: revisions.treeRevision })
+  };
 }
 
 function fileNameFromPath(path: string): string {

@@ -10,6 +10,8 @@ export interface CreativeProjectFileSessionIdentity {
 /** Main-only activation input. Renderer commands never receive or submit projectRoot. */
 export interface CreativeProjectFileSessionActivation extends CreativeProjectFileSessionIdentity {
   readonly projectRoot: string;
+  /** Main-owned workspace state root for durable lifecycle receipts. */
+  readonly stateRoot?: string;
 }
 
 export interface CreativeProjectFileTreeNode {

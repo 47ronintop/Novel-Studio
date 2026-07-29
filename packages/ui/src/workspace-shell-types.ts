@@ -396,6 +396,8 @@ export interface AgentComposerConventionsControl {
   readonly busy?: boolean;
   readonly errorMessage?: string;
   readonly onCreate?: (() => void) | undefined;
+  readonly onDisable?: (() => void) | undefined;
+  readonly onRevokeTrust?: (() => void) | undefined;
 }
 
 export interface AgentComposerContextStatusControl {

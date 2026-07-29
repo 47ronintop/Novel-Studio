@@ -93,6 +93,10 @@ export interface LlmPromptCacheRequest {
   readonly mode: LlmPromptCacheMode;
   readonly policyVersion: string;
   readonly identityChecksum: string;
+  /** Main-only frozen endpoint identity used to verify a live explicit resource lookup. */
+  readonly connectionIdentityChecksum?: string;
+  /** Main-only frozen account identity used to verify a live explicit resource lookup. */
+  readonly accountIsolationChecksum?: string;
   readonly logicalPrefixChecksum: string;
   /** Number of leading `messages` entries in the stable prefix, including the system message. */
   readonly stablePrefixMessageCount: number;

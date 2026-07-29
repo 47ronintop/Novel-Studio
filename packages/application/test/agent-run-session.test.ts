@@ -290,6 +290,78 @@ describe("AgentRunSession", () => {
     ]);
   });
 
+  test("retains a prior zero-token missing usage status after a later actual round", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ] as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    const written: Record<string, unknown>[] = [];
+    let rounds = 0;
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_missing_then_actual_usage" },
+      repository: memoryRepository(),
+      modelDriver: {
+        async *streamRound() {
+          rounds += 1;
+          if (rounds === 1) {
+            yield toolCall("read_before_usage", "read_project_text", { path: "notes.md" });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          yield {
+            type: "usage",
+            usage: {
+              inputTokens: 12,
+              outputTokens: 3,
+              totalTokens: 15,
+              usageStatus: "actual",
+              cost: { amount: 0.001, currency: "USD", status: "actual" }
+            }
+          };
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "read", data: {} } };
+        }
+      },
+      usageSink: {
+        async writeFinal(record: Record<string, unknown>) {
+          written.push(record);
+          return { ok: true, value: record };
+        }
+      },
+      usageBudgetResolver: async () => ({
+        ok: true,
+        value: { contextWindow: 128000, safeInputBudget: 100000 }
+      })
+    });
+
+    await session.startAgentRun(startCommand());
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_missing_then_actual_usage")).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: {
+            status: "completed",
+            usageSummary: {
+              inputTokens: 12,
+              outputTokens: 3,
+              totalTokens: 15,
+              usageStatus: "missing"
+            }
+          }
+        }
+      });
+    });
+    expect(written).toHaveLength(2);
+    expect(written.at(-1)).toMatchObject({ usageStatus: "actual", totalTokens: 15 });
+  });
+
   test("streams three reads, pauses for user input, and resumes the same run to completion", async () => {
     const createSession = (applicationExports as unknown as Record<string, unknown>)[
       "createAgentRunSession"
@@ -720,6 +792,257 @@ describe("AgentRunSession", () => {
     expect(call({ usedTokens: 0, safeInputBudget: 0 })).toBe("compact");
   });
 
+  test("records 70% context-budget pressure and still permits the provider round", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ] as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    let providerCalls = 0;
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_budget_warn" },
+      repository: memoryRepository(),
+      contextBudgetEstimator: {
+        count() {
+          return { tokens: 5000, precision: "estimated" as const };
+        }
+      },
+      modelDriver: {
+        async *streamRound() {
+          providerCalls += 1;
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      }
+    });
+
+    await session.startAgentRun({
+      ...startCommand(),
+      providerCapabilitySnapshot: {
+        ...(startCommand()["providerCapabilitySnapshot"] as Record<string, unknown>),
+        contextWindow: 20000,
+        requiredContextTokens: 1000
+      }
+    });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_budget_warn")).toMatchObject({
+        value: {
+          snapshot: { status: "completed" },
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "error_recorded",
+              detail: expect.objectContaining({
+                code: "AGENT_CONTEXT_BUDGET_WARNING",
+                pressure: "warn"
+              })
+            })
+          ])
+        }
+      });
+    });
+    expect(providerCalls).toBe(1);
+  });
+
+  test.each([
+    { runId: "run_budget_compact", contextWindow: 19500, budgetExceeded: false },
+    { runId: "run_budget_exceeded", contextWindow: 18000, budgetExceeded: true }
+  ])(
+    "requires manual compaction before provider input for $runId",
+    async ({ runId, contextWindow, budgetExceeded }) => {
+      const createSession = (applicationExports as unknown as Record<string, unknown>)[
+        "createAgentRunSession"
+      ] as (options: Record<string, unknown>) => {
+        startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+        readAgentRun(runId: string): Promise<Record<string, unknown>>;
+      };
+      let providerCalls = 0;
+      const session = createSession({
+        coordinatorOptions: { createRunId: () => runId },
+        repository: memoryRepository(),
+        contextBudgetEstimator: {
+          count() {
+            return { tokens: 5000, precision: "estimated" as const };
+          }
+        },
+        modelDriver: {
+          async *streamRound() {
+            providerCalls += 1;
+            yield { type: "round_completed", finishReason: "stop" };
+          }
+        },
+        startPreflight: echoStartPreflight(),
+        readToolExecutor: {
+          async execute() {
+            return { ok: true, value: { summary: "unused", data: {} } };
+          }
+        }
+      });
+
+      await session.startAgentRun({
+        ...startCommand(),
+        providerCapabilitySnapshot: {
+          ...(startCommand()["providerCapabilitySnapshot"] as Record<string, unknown>),
+          contextWindow,
+          requiredContextTokens: 1000
+        }
+      });
+      await vi.waitFor(async () => {
+        expect(await session.readAgentRun(runId)).toMatchObject({
+          value: {
+            snapshot: {
+              status: "executing_model",
+              contextBudgetSnapshotId: expect.any(String)
+            },
+            events: expect.arrayContaining([
+              expect.objectContaining({
+                type: "context_compaction_failed",
+                detail: expect.objectContaining({
+                  code: "AGENT_CONTEXT_COMPACTION_REQUIRED",
+                  pressure: "compact",
+                  budgetExceeded
+                })
+              })
+            ])
+          }
+        });
+      });
+      expect(providerCalls).toBe(0);
+    }
+  );
+
+  test("resumes after required context compaction without consuming a model round", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ] as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      compactContext(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    const repository = durableMemoryRepository();
+    const runId = "run_budget_compaction_resume";
+    let compactedContext = false;
+    let providerCalls = 0;
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => runId },
+      repository,
+      contextBudgetEstimator: {
+        count() {
+          return { tokens: compactedContext ? 100 : 5000, precision: "estimated" as const };
+        }
+      },
+      modelDriver: {
+        async *streamRound() {
+          providerCalls += 1;
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      },
+      contextCompactor: {
+        async compactContext(command: { runId: string }) {
+          compactedContext = true;
+          const storedRun = await repository.readSnapshot(command.runId);
+          if (!storedRun.ok || storedRun.value === undefined) {
+            throw new Error("Expected the active run before context compaction.");
+          }
+          const run = storedRun.value;
+          const contextSnapshotId = String(run["contextSnapshotId"]);
+          const budgetSnapshotId = "budget_compaction_resume";
+          return {
+            ok: true,
+            value: {
+              compactionId: "compaction_budget_resume",
+              revision: {
+                schemaVersion: "1.0",
+                compactionId: "compaction_budget_resume",
+                runId: command.runId,
+                sourceSnapshotId: contextSnapshotId,
+                resultSnapshotId: contextSnapshotId,
+                budgetSnapshotId,
+                inputManifestId: "manifest_budget_resume",
+                inputManifestChecksum: "a".repeat(64),
+                revision: 1,
+                throughSequence: Number(run["lastSequence"]),
+                trigger: "manual",
+                strategy: "deterministic",
+                protectedFactIds: [],
+                evictedSourceIds: [],
+                inputTokens: 0,
+                outputTokens: 0,
+                usageRecordId: null,
+                precision: "unknown",
+                summaryChecksum: "b".repeat(64),
+                status: "completed",
+                createdAt: "2026-07-29T00:00:00.000Z"
+              },
+              runSnapshot: {
+                ...run,
+                activeCompactionId: "compaction_budget_resume",
+                contextSnapshotId,
+                contextBudgetSnapshotId: budgetSnapshotId
+              }
+            }
+          };
+        }
+      }
+    });
+
+    await session.startAgentRun({
+      ...startCommand(),
+      limits: { maxModelRounds: 1, maxToolCalls: 4, maxConsecutiveToolFailures: 2 },
+      providerCapabilitySnapshot: {
+        ...(startCommand()["providerCapabilitySnapshot"] as Record<string, unknown>),
+        contextWindow: 19500,
+        requiredContextTokens: 1000
+      }
+    });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun(runId)).toMatchObject({
+        value: {
+          snapshot: { status: "executing_model" },
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "context_compaction_failed",
+              detail: expect.objectContaining({ code: "AGENT_CONTEXT_COMPACTION_REQUIRED" })
+            })
+          ])
+        }
+      });
+    });
+    expect(providerCalls).toBe(0);
+
+    const paused = (await session.readAgentRun(runId)) as {
+      value: { snapshot: { runRevision: number; contextBudgetSnapshotId: string } };
+    };
+    expect(
+      await session.compactContext({
+        projectId: "project-01",
+        runId,
+        commandId: "compact-budget-resume",
+        expectedRunRevision: paused.value.snapshot.runRevision,
+        contextBudgetSnapshotId: paused.value.snapshot.contextBudgetSnapshotId,
+        trigger: "manual"
+      })
+    ).toMatchObject({ ok: true });
+
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun(runId)).toMatchObject({
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+    expect(providerCalls).toBe(1);
+  });
+
   test("compactContext delegates to the context compactor and is unavailable without one", async () => {
     const createSession = (applicationExports as unknown as Record<string, unknown>)[
       "createAgentRunSession"
@@ -925,6 +1248,7 @@ describe("AgentRunSession", () => {
     };
     let initialSystemPrompt = "";
     let initialCachePrefixChecksum = "";
+    let modelRounds = 0;
 
     const firstSession = create({
       coordinatorOptions: { createRunId: () => runId },
@@ -935,6 +1259,7 @@ describe("AgentRunSession", () => {
           readonly systemPrompt?: string;
           readonly snapshot: { readonly cachePrefixChecksum: string };
         }) {
+          modelRounds += 1;
           initialSystemPrompt = input.systemPrompt ?? "";
           initialCachePrefixChecksum = input.snapshot.cachePrefixChecksum;
           yield toolCall("compact_question", "request_user_input", {
@@ -1097,6 +1422,8 @@ describe("AgentRunSession", () => {
         cachePrefixChecksum: initialCachePrefixChecksum
       }
     });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(modelRounds).toBe(1);
 
     const compactedContext = await repository.readContextSnapshot(runId, `${contextSnapshotId}_c1`);
     expect(compactedContext.value).toMatchObject({
@@ -2770,6 +3097,20 @@ describe("AgentRunSession", () => {
       ok: false,
       error: { code: "AGENT_WRITE_POLICY_ACK_REQUIRED" }
     });
+    const rejectedProfileTransition = await session.decidePlan({
+      projectId: "project-01",
+      runId: planningRunId,
+      commandId: "plan-cross-profile-01",
+      expectedRunRevision: planning.value.snapshot["runRevision"],
+      planId: "plan-01",
+      planRevision: 1,
+      decision: "approve",
+      executionContextMode: "general_file"
+    });
+    expect(rejectedProfileTransition).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONTEXT_REPREFLIGHT_REQUIRED" }
+    });
     expect(await session.readAgentRun(planningRunId)).toMatchObject({
       value: { snapshot: { status: "plan_ready" } }
     });
@@ -2781,7 +3122,7 @@ describe("AgentRunSession", () => {
       planId: "plan-01",
       planRevision: 1,
       decision: "approve",
-      executionContextMode: "general_file",
+      executionContextMode: "writing",
       executionWritePolicy: "user_preapproved_run",
       executionWritePolicyAcknowledged: true
     });
@@ -2796,7 +3137,7 @@ describe("AgentRunSession", () => {
         permissionSummaryId: "permission-execution",
         permissionSummaryChecksum: "permission-execution".padEnd(64, "0").slice(0, 64),
         operationMode: "execution",
-        contextMode: "general_file",
+        contextMode: "writing",
         writePolicy: "user_preapproved_run"
       }
     });
@@ -2821,7 +3162,7 @@ describe("AgentRunSession", () => {
         runId: "run_plan_2",
         permissionSummaryId: "permission-execution",
         runDraftId: "draft_start-01",
-        contextMode: "general_file",
+        contextMode: "writing",
         writePolicy: "user_preapproved_run"
       })
     ]);
@@ -2831,6 +3172,108 @@ describe("AgentRunSession", () => {
         value: { snapshot: { status: "completed" } }
       });
     });
+  });
+
+  test("rejects a cross-profile execution mode before resolving the planning decision", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ] as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      decidePlan(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    const session = createSession({
+      scope: {
+        kind: "workspace",
+        workspaceKind: "engineeringWorkspace",
+        workspaceId: "project-01"
+      },
+      coordinatorOptions: {
+        createRunId: (() => {
+          let runSequence = 0;
+          return () => `run_engineering_plan_profile_${++runSequence}`;
+        })()
+      },
+      repository: memoryRepository(),
+      modelDriver: {
+        async *streamRound(input: { readonly snapshot: { readonly operationMode: string } }) {
+          if (input.snapshot.operationMode === "planning") {
+            yield toolCall("finish_engineering_plan", "finish_plan", {
+              planId: "engineering-plan",
+              goal: "Review the implementation",
+              successCriteria: ["Review completed"],
+              nonGoals: [],
+              facts: [],
+              assumptions: [],
+              openQuestions: [],
+              targetRefs: [],
+              steps: [{ stepId: "step-01", title: "Review", verification: "Check results" }],
+              risks: [],
+              verification: [],
+              sourceRefs: []
+            });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "unused", data: {} } };
+        }
+      }
+    });
+
+    await session.startAgentRun({
+      ...startCommand(),
+      operationMode: "planning",
+      contextMode: "general_file"
+    });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_engineering_plan_profile_1")).toMatchObject({
+        value: { snapshot: { status: "plan_ready" } }
+      });
+    });
+    const planning = (await session.readAgentRun("run_engineering_plan_profile_1")) as {
+      value: { snapshot: { runRevision: number } };
+    };
+
+    expect(
+      await session.decidePlan({
+        projectId: "project-01",
+        runId: "run_engineering_plan_profile_1",
+        commandId: "approve-invalid-engineering-profile",
+        expectedRunRevision: planning.value.snapshot.runRevision,
+        planId: "engineering-plan",
+        planRevision: 1,
+        decision: "approve",
+        executionContextMode: "writing"
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_CONTEXT_REPREFLIGHT_REQUIRED" } });
+
+    expect(await session.readAgentRun("run_engineering_plan_profile_1")).toMatchObject({
+      value: {
+        snapshot: { status: "plan_ready" },
+        events: expect.not.arrayContaining([
+          expect.objectContaining({ type: "plan_decision_resolved" }),
+          expect.objectContaining({ type: "run_completed" })
+        ])
+      }
+    });
+    expect(
+      await session.decidePlan({
+        projectId: "project-01",
+        runId: "run_engineering_plan_profile_1",
+        commandId: "approve-valid-engineering-profile",
+        expectedRunRevision: planning.value.snapshot.runRevision,
+        planId: "engineering-plan",
+        planRevision: 1,
+        decision: "approve",
+        executionContextMode: "general_file"
+      })
+    ).toMatchObject({ ok: true, value: { runId: "run_engineering_plan_profile_2" } });
   });
 
   test("pauses a material plan deviation, releases the provider, and resumes an approved revision idempotently", async () => {
@@ -6270,6 +6713,24 @@ describe("AgentRunSession v2 tool facade", () => {
         toolFacadeVersion: "v2",
         toolCatalogSnapshotId: "tool_catalog_run_v2_plan_2",
         toolCatalogRevision: expect.stringMatching(/^[a-f0-9]{64}$/u)
+      }
+    });
+    expect(await session.readAgentRun("run_v2_plan_2")).toMatchObject({
+      value: {
+        events: expect.arrayContaining([
+          expect.objectContaining({
+            type: "context_refreshed",
+            detail: expect.objectContaining({
+              approvedPlanMessage: expect.stringContaining('"kind":"approved_plan"')
+            })
+          }),
+          expect.objectContaining({
+            type: "plan_execution_started",
+            detail: expect.objectContaining({
+              approvedPlanMessage: expect.stringContaining('"kind":"approved_plan"')
+            })
+          })
+        ])
       }
     });
 

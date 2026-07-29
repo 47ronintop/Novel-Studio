@@ -242,7 +242,11 @@ const api: NovelStudioApi = {
     createProjectConventions: () =>
       invokeTyped<Result<ProjectConventionsCreateResult, UnifiedError>>(
         "application:workspace:create-project-conventions"
-      )
+      ),
+    updateContextPolicy: (action: "disable_conventions" | "revoke_workspace_trust") =>
+      invokeTyped<Result<void, UnifiedError>>("application:workspace:update-context-policy", {
+        action
+      })
   },
   creativeProjectFiles: {
     refresh: (identity: CreativeProjectFileSessionIdentity) =>

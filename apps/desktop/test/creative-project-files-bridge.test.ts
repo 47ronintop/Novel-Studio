@@ -46,6 +46,42 @@ describe("CreativeProjectFilesBridge", () => {
     ]);
     expect(bridge.getActiveFilePath()).toBe("notes/renamed.md");
   });
+
+  test("reports active path changes after active-file lifecycle operations complete", async () => {
+    const snapshots = [
+      treeSnapshot("tree-before", "node-before", "notes/draft.md"),
+      treeSnapshot("tree-before", "node-before", "notes/draft.md"),
+      treeSnapshot("tree-after-rename", "node-after-rename", "notes/renamed.md"),
+      treeSnapshot("tree-after-rename", "node-after-rename", "notes/renamed.md"),
+      emptyTreeSnapshot("tree-after-delete")
+    ];
+    let refreshIndex = 0;
+    const onActiveFilePathChange = vi.fn();
+    const api = {
+      creativeProjectFiles: {
+        refresh: async () => {
+          const snapshot = snapshots[Math.min(refreshIndex++, snapshots.length - 1)];
+          if (snapshot === undefined) throw new Error("Expected a project file tree snapshot");
+          return ok(snapshot);
+        },
+        executeLifecycle: async () => ok({})
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createCreativeProjectFilesBridge(api, { onActiveFilePathChange });
+
+    await bridge.activate({ projectId: "project-01", workspaceId: "workspace-01" });
+    await bridge.requestOpenFile("notes/draft.md");
+    await bridge.renamePath("notes/draft.md", "notes/renamed.md");
+    await bridge.deletePath("notes/renamed.md");
+
+    expect(onActiveFilePathChange).toHaveBeenNthCalledWith(1, "notes/draft.md", "open_file");
+    expect(onActiveFilePathChange).toHaveBeenNthCalledWith(
+      2,
+      "notes/renamed.md",
+      "rename_active_path"
+    );
+    expect(onActiveFilePathChange).toHaveBeenNthCalledWith(3, undefined, "delete_active_path");
+  });
 });
 
 function treeSnapshot(
@@ -70,5 +106,18 @@ function treeSnapshot(
         nodeRevision
       }
     ]
+  };
+}
+
+function emptyTreeSnapshot(treeRevision: string): CreativeProjectFileTreeSnapshot {
+  return {
+    schemaVersion: "1.0",
+    projectId: "project-01",
+    workspaceId: "workspace-01",
+    policyVersion: "1.0",
+    treeRevision,
+    visibleNodeChecksum: "b".repeat(64),
+    truncated: false,
+    nodes: []
   };
 }

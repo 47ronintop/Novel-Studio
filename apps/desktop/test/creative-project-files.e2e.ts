@@ -125,10 +125,22 @@ test("keeps creative project files inside the creative workbench through lifecyc
       .poll(() => readFile(renamedFile, "utf8"))
       .toBe("Unsaved content must not be renamed.\n");
 
-    await openProjectFile(page, navigator, "notes", "renamed.md");
+    await expect(editor).toBeVisible();
+    await expect(editor.getByLabel("普通文件正文")).toContainText(
+      "Unsaved content must not be renamed."
+    );
+    await replacePlainFileBody(page, "Renamed content must remain editable.\n");
+    await expect(saveButton).toBeEnabled();
+    await saveButton.click();
+    await expect(saveButton).toBeDisabled();
+    await expect
+      .poll(() => readFile(renamedFile, "utf8"))
+      .toBe("Renamed content must remain editable.\n");
+
     await confirmDelete(page, navigator, renamedPath);
     await expect.poll(() => pathExists(renamedFile)).toBe(false);
     await expect(navigator.getByRole("button", { name: "打开文件：renamed.md" })).toHaveCount(0);
+    await expect(editor).toHaveCount(0);
     await expectCreativeWorkbench(page);
   } finally {
     await electronApp.close();

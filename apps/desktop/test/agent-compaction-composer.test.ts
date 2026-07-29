@@ -97,7 +97,7 @@ describe("desktop compaction composer", () => {
     expect(usage.ok).toBe(true);
     if (!usage.ok) return;
     expect(usage.value?.["terminationReason"]).toBe("context_compaction");
-    expect(usage.value?.["compactionAfterTokens"]).toBe(4078);
+    expect(usage.value?.["compactionAfterTokens"]).toBe(4309);
   });
 
   test("protects conventions and evicts workspace outlines to a manifest pointer", async () => {
@@ -319,7 +319,7 @@ describe("desktop compaction composer", () => {
         precision: "estimated",
         pricingVersion: "pricing-2026-11",
         unitPrices: { inputPerMillion: 2, outputPerMillion: 8, currency: "USD" },
-        cost: { amount: 0.00052, currency: "USD", status: "estimated" },
+        cost: { amount: 0.00148, currency: "USD", status: "estimated" },
         timestamp: "2026-11-01T06:30:00.000Z",
         localDate: "2026-11-01",
         timezone: "America/New_York",
@@ -434,11 +434,13 @@ describe("desktop compaction composer", () => {
       userDecisions: ["Keep Mara alive"]
     });
     let tools: readonly unknown[] | undefined;
+    let promptCacheDisabled: boolean | undefined;
     const assistant = createDesktopCompactionModelAssistant({
       repository,
       modelDriver: {
         async *streamRound(input) {
           tools = input.tools;
+          promptCacheDisabled = input.disablePromptCache;
           yield { type: "assistant_text_delta", delta: body };
           yield { type: "round_completed", finishReason: "stop" };
         }
@@ -457,6 +459,7 @@ describe("desktop compaction composer", () => {
       maxSummaryTokens: 1_000
     });
     expect(tools).toEqual([]);
+    expect(promptCacheDisabled).toBe(true);
     expect(summarized).toMatchObject({
       ok: true,
       value: {
@@ -592,6 +595,7 @@ async function seedRun(
     readonly chapterTokens?: number;
     readonly noteTokens?: number;
     readonly historyTokens?: number;
+    readonly contextWindow?: number;
   } = {}
 ): Promise<{
   repository: AgentRunFileRepository;
@@ -612,12 +616,13 @@ async function seedRun(
   const profile = resolveAgentContextProfile(scope, "planning", "writing");
   const chapterTokens = options.chapterTokens ?? 4000;
   const noteTokens = options.noteTokens ?? 20000;
+  const contextWindow = options.contextWindow ?? 40_000;
   const contextSources: AgentContextSourceInput[] = [
     {
       refId: "chapter:ch-01",
       sourceKind: "disk_file",
       relativePath: "chapters/ch-01.md",
-      content: "c".repeat(chapterTokens * 4),
+      content: "c".repeat(chapterTokens),
       dirty: false,
       sourceRevision: 1
     },
@@ -625,7 +630,7 @@ async function seedRun(
       refId: "file:draft-notes.md",
       sourceKind: "disk_file",
       relativePath: "draft-notes.md",
-      content: "n".repeat(noteTokens * 4),
+      content: "n".repeat(noteTokens),
       dirty: false,
       sourceRevision: 1
     }
@@ -709,7 +714,7 @@ async function seedRun(
       streaming: true,
       toolCalling: true,
       structuredArguments: true,
-      contextWindow: 40000,
+      contextWindow,
       requiredContextTokens: 8000
     },
     permissionSummaryId: null,
@@ -758,7 +763,7 @@ async function seedC3OutlineRun(): Promise<{
   outlineManifestChecksum: string;
   outlineRereadHint: string;
 }> {
-  const seeded = await seedRun();
+  const seeded = await seedRun({ contextWindow: 44_000 });
   const scope = {
     kind: "workspace" as const,
     workspaceKind: "engineeringWorkspace" as const,
@@ -769,7 +774,7 @@ async function seedC3OutlineRun(): Promise<{
   const conventionsRefId = "project:conventions";
   const outlineRefId = "project:workspace-outline";
   const conventionsBody = "project conventions body";
-  const outlineBody = "o".repeat(1_500 * 4);
+  const outlineBody = "o".repeat(1_500);
   const outlineRereadHint =
     "Use list_project_entries or search_project_text to reread this outline.";
   const dependencyManifest: WorkspaceOutlineDependencyManifest = {
@@ -965,7 +970,7 @@ async function appendAssistantHistory(
       runRevision: 3,
       type: "assistant_text_completed",
       createdAt: "2026-07-15T00:00:00.000Z",
-      detail: { text: "h".repeat(tokenCount * 4) }
+      detail: { text: "h".repeat(tokenCount) }
     })
   ).toMatchObject({ ok: true });
 }
