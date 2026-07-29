@@ -352,6 +352,8 @@ export type {
   DecidePlanRevisionCommand,
   AgentOperationMode,
   AgentProviderCapabilitySnapshot,
+  AgentProviderCapabilitySnapshotV13,
+  AgentPromptCacheCapabilitySnapshot,
   AgentReasoningEffort,
   AgentRunCommandResult,
   AgentRunCoordinator,
@@ -371,6 +373,7 @@ export type {
   AgentRunSnapshotV10,
   AgentRunSnapshotV11,
   AgentRunSnapshotV12,
+  AgentRunSnapshotV13,
   AgentRunStatus,
   AgentRunStatusV11,
   AgentRunStatusV12,
@@ -391,6 +394,7 @@ export type {
   UndoAgentRunCommand,
   UndoRunCommand
 } from "./agent-run-types.js";
+export { NO_AGENT_PROMPT_CACHE_CAPABILITY } from "./agent-run-types.js";
 export type {
   AgentConfig,
   AgentHandoff,

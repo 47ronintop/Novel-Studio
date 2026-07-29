@@ -1,4 +1,11 @@
-import type { LlmCost } from "@novel-studio/llm-adapter";
+import type {
+  LlmCacheInputTokenSemantics,
+  LlmCacheOutcome,
+  LlmCacheUsageStatus,
+  LlmCost,
+  LlmPromptCacheBypassReason,
+  LlmPromptCacheMode
+} from "@novel-studio/llm-adapter";
 import type { AgentContextScope } from "@novel-studio/agent-engine";
 
 export interface AgentUsageDateRange {
@@ -25,6 +32,7 @@ export interface AgentUsageCostTotal {
   readonly currency: string;
   readonly actualAmount: number;
   readonly estimatedAmount: number;
+  readonly estimatedCacheSavings?: number;
 }
 
 export interface AgentUsageDailyBucket {
@@ -32,6 +40,10 @@ export interface AgentUsageDailyBucket {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly cachedTokens: number;
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
+  readonly cacheEligibleInputTokens?: number;
+  readonly cacheHitRate?: number;
   readonly reasoningTokens: number;
   readonly totalTokens: number;
   readonly costs: readonly AgentUsageCostTotal[];
@@ -48,6 +60,20 @@ export interface AgentUsageRunSummary {
   readonly provider: string;
   readonly model: string;
   readonly totalTokens: number;
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
+  readonly cacheEligibleInputTokens?: number;
+  readonly cacheHitRate?: number;
+  readonly cacheOutcome?: LlmCacheOutcome;
+  readonly cacheBypassReason?: LlmPromptCacheBypassReason;
+  readonly cacheUsageStatus?: LlmCacheUsageStatus;
+  readonly cacheInputTokenSemantics?: LlmCacheInputTokenSemantics;
+  readonly cacheMode?: LlmPromptCacheMode | null;
+  readonly cachePrefixChecksum?: string | null;
+  readonly estimatedCacheSavings?: {
+    readonly amount: number;
+    readonly currency: string;
+  };
   readonly usageStatus: "actual" | "estimated" | "missing";
   readonly cost: LlmCost;
   readonly timestamp: string;

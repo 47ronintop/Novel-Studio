@@ -14,6 +14,21 @@ import { err, ok, type JsonObject, type Result, type UnifiedError } from "@novel
 import { writeTextAtomically } from "./atomic-write.js";
 import { storageError } from "./errors.js";
 
+type CacheOutcome = "hit" | "miss" | "bypass" | "unknown";
+type CacheUsageStatus = "actual" | "derived" | "unavailable";
+type CacheInputTokenSemantics = "included_in_input" | "excluded_from_input" | "unavailable";
+type CacheMode = "none" | "automatic_prefix" | "explicit_breakpoints" | "explicit_resource";
+type CacheBypassReason =
+  | "policy_none"
+  | "unsupported_provider"
+  | "below_minimum_tokens"
+  | "identity_unverified"
+  | "resource_unavailable"
+  | "resource_create_failed"
+  | "resource_expired"
+  | "cache_error"
+  | "usage_unavailable";
+
 export interface AgentUsageFileRepositoryOptions {
   readonly userDataRoot: string;
   readonly traceId?: string;
@@ -37,6 +52,7 @@ export interface AgentUsageRepositoryCostTotal {
   readonly currency: string;
   readonly actualAmount: number;
   readonly estimatedAmount: number;
+  readonly estimatedCacheSavings?: number;
 }
 
 export interface AgentUsageRepositoryDailyBucket {
@@ -45,6 +61,10 @@ export interface AgentUsageRepositoryDailyBucket {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly cachedTokens: number;
+  readonly cacheReadTokens: number;
+  readonly cacheWriteTokens: number;
+  readonly cacheEligibleInputTokens: number;
+  readonly cacheHitRate?: number;
   readonly reasoningTokens: number;
   readonly totalTokens: number;
   readonly costs: readonly AgentUsageRepositoryCostTotal[];
@@ -65,6 +85,20 @@ export interface AgentUsageRepositoryRunSummary {
   readonly provider: string;
   readonly model: string;
   readonly totalTokens: number;
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
+  readonly cacheEligibleInputTokens?: number;
+  readonly cacheHitRate?: number;
+  readonly cacheOutcome: CacheOutcome;
+  readonly cacheBypassReason?: CacheBypassReason;
+  readonly cacheUsageStatus: CacheUsageStatus;
+  readonly cacheInputTokenSemantics: CacheInputTokenSemantics;
+  readonly cacheMode: CacheMode | null;
+  readonly cachePrefixChecksum: string | null;
+  readonly estimatedCacheSavings?: {
+    readonly amount: number;
+    readonly currency: string;
+  };
   readonly usageStatus: "actual" | "estimated" | "missing";
   readonly cost: {
     readonly amount: number;
@@ -121,7 +155,7 @@ export class AgentUsageFileRepository {
   public async writeFinal(record: JsonObject): Promise<Result<JsonObject, UnifiedError>> {
     const redaction = assertRedacted(record);
     if (redaction !== undefined) return err(this.redactionRequired(redaction));
-    if (record["schemaVersion"] !== "1.1") return this.invalid("AGENT_USAGE_RECORD_INVALID");
+    if (record["schemaVersion"] !== "1.2") return this.invalid("AGENT_USAGE_RECORD_INVALID");
     const validated = validateUsageRecord(record);
     if (!validated.ok) return err(validated.error);
 
@@ -354,6 +388,9 @@ export class AgentUsageFileRepository {
       inputTokens: 0,
       outputTokens: 0,
       cachedTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      cacheEligibleInputTokens: 0,
       reasoningTokens: 0,
       totalTokens: 0,
       costs: [],
@@ -370,7 +407,13 @@ export class AgentUsageFileRepository {
       recordCount: numberField(prior, "recordCount") + 1,
       inputTokens: numberField(prior, "inputTokens") + numberField(record, "inputTokens"),
       outputTokens: numberField(prior, "outputTokens") + numberField(record, "outputTokens"),
-      cachedTokens: numberField(prior, "cachedTokens") + numberField(record, "cachedTokens"),
+      cachedTokens: numberField(prior, "cachedTokens") + cacheReadTokens(record),
+      cacheReadTokens:
+        (optionalTokenField(prior, "cacheReadTokens") ?? numberField(prior, "cachedTokens")) +
+        cacheReadTokens(record),
+      cacheWriteTokens: numberField(prior, "cacheWriteTokens") + cacheWriteTokens(record),
+      cacheEligibleInputTokens:
+        numberField(prior, "cacheEligibleInputTokens") + cacheEligibleInputTokens(record),
       reasoningTokens:
         numberField(prior, "reasoningTokens") + numberField(record, "reasoningTokens"),
       totalTokens: numberField(prior, "totalTokens") + numberField(record, "totalTokens"),
@@ -770,8 +813,10 @@ function validateUsageRecord(record: JsonObject): Result<JsonObject, UnifiedErro
       !isUnitPriceScalar(unitPrices["inputPerMillion"]) ||
       !isUnitPriceScalar(unitPrices["outputPerMillion"]) ||
       !isBoundedIdentifier(unitPrices["currency"], false) ||
-      (unitPrices["cachedPerMillion"] !== undefined &&
-        !isUnitPriceScalar(unitPrices["cachedPerMillion"])) ||
+      (unitPrices["cacheReadPerMillion"] !== undefined &&
+        !isUnitPriceScalar(unitPrices["cacheReadPerMillion"])) ||
+      (unitPrices["cacheWritePerMillion"] !== undefined &&
+        !isUnitPriceScalar(unitPrices["cacheWritePerMillion"])) ||
       (unitPrices["reasoningPerMillion"] !== undefined &&
         !isUnitPriceScalar(unitPrices["reasoningPerMillion"]))
     ) {
@@ -788,10 +833,12 @@ const COST_FIELDS = new Set(["amount", "currency", "status"]);
 const UNIT_PRICE_FIELDS = new Set([
   "inputPerMillion",
   "outputPerMillion",
-  "cachedPerMillion",
+  "cacheReadPerMillion",
+  "cacheWritePerMillion",
   "reasoningPerMillion",
   "currency"
 ]);
+const LEGACY_UNIT_PRICE_FIELDS = new Set([...UNIT_PRICE_FIELDS, "cachedPerMillion"]);
 
 function assertRedacted(record: JsonObject): string | undefined {
   for (const field of Object.keys(record)) {
@@ -805,8 +852,12 @@ function assertRedacted(record: JsonObject): string | undefined {
   }
   const unitPrices = record["unitPrices"];
   if (isJsonObject(unitPrices)) {
+    const allowedUnitPriceFields =
+      record["schemaVersion"] === "1.0" || record["schemaVersion"] === "1.1"
+        ? LEGACY_UNIT_PRICE_FIELDS
+        : UNIT_PRICE_FIELDS;
     for (const field of Object.keys(unitPrices)) {
-      if (!UNIT_PRICE_FIELDS.has(field)) return `unitPrices.${field}:forbidden_field`;
+      if (!allowedUnitPriceFields.has(field)) return `unitPrices.${field}:forbidden_field`;
     }
   }
   return scanSensitiveValue(record, "record");
@@ -872,7 +923,7 @@ const ALLOWED_USAGE_FIELDS = new Set([
   "usageId",
   "runId",
   "conversationId",
-  // Legacy 1.0 read compatibility; validateAgentUsageRecord rejects it on new 1.1 writes.
+  // Legacy 1.0 read compatibility; new writes are required to use schema 1.2.
   "projectId",
   "roundId",
   "finalSequence",
@@ -881,6 +932,15 @@ const ALLOWED_USAGE_FIELDS = new Set([
   "inputTokens",
   "outputTokens",
   "cachedTokens",
+  "cacheReadTokens",
+  "cacheWriteTokens",
+  "cacheEligibleInputTokens",
+  "cacheOutcome",
+  "cacheBypassReason",
+  "cacheUsageStatus",
+  "cacheInputTokenSemantics",
+  "cacheMode",
+  "cachePrefixChecksum",
   "reasoningTokens",
   "totalTokens",
   "usageStatus",
@@ -980,6 +1040,12 @@ function toRunSummary(record: JsonObject): AgentUsageRepositoryRunSummary {
   const cost = isJsonObject(record["cost"]) ? record["cost"] : {};
   const scope = usageScope(record);
   const projectId = usageProjectId(record);
+  const cacheRead = optionalTokenField(record, "cacheReadTokens");
+  const cacheWrite = optionalTokenField(record, "cacheWriteTokens");
+  const cacheEligible = optionalTokenField(record, "cacheEligibleInputTokens");
+  const cacheHitRate = cacheHitRateForRecord(record);
+  const estimatedCacheSavings = estimateCacheSavings(record);
+  const bypassReason = cacheBypassReason(record["cacheBypassReason"]);
   return {
     scope,
     usageId: stringField(record, "usageId"),
@@ -989,6 +1055,17 @@ function toRunSummary(record: JsonObject): AgentUsageRepositoryRunSummary {
     provider: stringField(record, "provider"),
     model: stringField(record, "model"),
     totalTokens: numberField(record, "totalTokens"),
+    ...(cacheRead === undefined ? {} : { cacheReadTokens: cacheRead }),
+    ...(cacheWrite === undefined ? {} : { cacheWriteTokens: cacheWrite }),
+    ...(cacheEligible === undefined ? {} : { cacheEligibleInputTokens: cacheEligible }),
+    ...(cacheHitRate === undefined ? {} : { cacheHitRate }),
+    cacheOutcome: cacheOutcome(record["cacheOutcome"]),
+    ...(bypassReason === undefined ? {} : { cacheBypassReason: bypassReason }),
+    cacheUsageStatus: cacheUsageStatus(record["cacheUsageStatus"]),
+    cacheInputTokenSemantics: cacheInputTokenSemantics(record["cacheInputTokenSemantics"]),
+    cacheMode: cacheMode(record["cacheMode"]),
+    cachePrefixChecksum: cachePrefixChecksum(record["cachePrefixChecksum"]),
+    ...(estimatedCacheSavings === undefined ? {} : { estimatedCacheSavings }),
     usageStatus: usageStatus(record["usageStatus"]),
     cost: {
       amount: numberField(cost, "amount"),
@@ -1002,6 +1079,8 @@ function toRunSummary(record: JsonObject): AgentUsageRepositoryRunSummary {
 function createAggregateDimension(record: JsonObject): JsonObject {
   const cost = isJsonObject(record["cost"]) ? record["cost"] : {};
   const status = costStatus(cost["status"]);
+  const cacheHitRate = cacheHitRateForRecord(record);
+  const estimatedCacheSavings = estimateCacheSavings(record);
   return {
     usageId: stringField(record, "usageId"),
     scope: usageScope(record),
@@ -1010,13 +1089,21 @@ function createAggregateDimension(record: JsonObject): JsonObject {
     recordCount: 1,
     inputTokens: numberField(record, "inputTokens"),
     outputTokens: numberField(record, "outputTokens"),
-    cachedTokens: numberField(record, "cachedTokens"),
+    // `cachedTokens` remains a compatibility alias for cache reads only.
+    cachedTokens: cacheReadTokens(record),
+    cacheReadTokens: cacheReadTokens(record),
+    cacheWriteTokens: cacheWriteTokens(record),
+    cacheEligibleInputTokens: cacheEligibleInputTokens(record),
+    cacheHitRateAvailable: cacheHitRate !== undefined,
     reasoningTokens: numberField(record, "reasoningTokens"),
     totalTokens: numberField(record, "totalTokens"),
     currency: status === "unknown" ? "" : stringField(cost, "currency"),
     actualAmount: status === "actual" ? numberField(cost, "amount") : 0,
     estimatedAmount: status === "estimated" ? numberField(cost, "amount") : 0,
-    hasUnknownCost: status === "unknown"
+    hasUnknownCost: status === "unknown",
+    ...(estimatedCacheSavings === undefined
+      ? {}
+      : { estimatedCacheSavings: estimatedCacheSavings.amount })
   };
 }
 
@@ -1034,12 +1121,16 @@ function projectAggregate(
   const hasFilters =
     query.provider !== undefined || query.model !== undefined || query.projectId !== undefined;
   if (allDimensions.length === 0 && !hasFilters) {
+    const cacheRead = optionalTokenField(aggregate, "cacheReadTokens");
     return {
       localDate: stringField(aggregate, "localDate"),
       recordCount: numberField(aggregate, "recordCount"),
       inputTokens: numberField(aggregate, "inputTokens"),
       outputTokens: numberField(aggregate, "outputTokens"),
-      cachedTokens: numberField(aggregate, "cachedTokens"),
+      cachedTokens: cacheRead ?? numberField(aggregate, "cachedTokens"),
+      cacheReadTokens: cacheRead ?? numberField(aggregate, "cachedTokens"),
+      cacheWriteTokens: numberField(aggregate, "cacheWriteTokens"),
+      cacheEligibleInputTokens: numberField(aggregate, "cacheEligibleInputTokens"),
       reasoningTokens: numberField(aggregate, "reasoningTokens"),
       totalTokens: numberField(aggregate, "totalTokens"),
       costs: costTotals(jsonObjectArray(aggregate["costs"])),
@@ -1047,12 +1138,17 @@ function projectAggregate(
       ...(query.includeModelBreakdown === true ? { models: [] } : {})
     };
   }
+  const cacheHitRate = cacheHitRateForDimensions(filtered);
   return {
     localDate: stringField(aggregate, "localDate"),
     recordCount: sumField(filtered, "recordCount"),
     inputTokens: sumField(filtered, "inputTokens"),
     outputTokens: sumField(filtered, "outputTokens"),
     cachedTokens: sumField(filtered, "cachedTokens"),
+    cacheReadTokens: sumCacheReadTokens(filtered),
+    cacheWriteTokens: sumField(filtered, "cacheWriteTokens"),
+    cacheEligibleInputTokens: sumField(filtered, "cacheEligibleInputTokens"),
+    ...(cacheHitRate === undefined ? {} : { cacheHitRate }),
     reasoningTokens: sumField(filtered, "reasoningTokens"),
     totalTokens: sumField(filtered, "totalTokens"),
     costs: costTotals(mergeDimensionCosts(filtered)),
@@ -1097,40 +1193,66 @@ function aggregateModels(
 
 function mergeCosts(existing: readonly JsonObject[], dimension: JsonObject): JsonObject[] {
   return mergeDimensionCosts([
-    ...existing.map((cost) => ({
-      currency: stringField(cost, "currency"),
-      actualAmount: numberField(cost, "actualAmount"),
-      estimatedAmount: numberField(cost, "estimatedAmount")
-    })),
+    ...existing.map((cost) => {
+      const estimatedCacheSavings = optionalNumberField(cost, "estimatedCacheSavings");
+      return {
+        currency: stringField(cost, "currency"),
+        actualAmount: numberField(cost, "actualAmount"),
+        estimatedAmount: numberField(cost, "estimatedAmount"),
+        ...(estimatedCacheSavings === undefined ? {} : { estimatedCacheSavings })
+      };
+    }),
     dimension
   ]);
 }
 
 function mergeDimensionCosts(dimensions: readonly JsonObject[]): JsonObject[] {
-  const totals = new Map<string, { actualAmount: number; estimatedAmount: number }>();
+  const totals = new Map<
+    string,
+    { actualAmount: number; estimatedAmount: number; estimatedCacheSavings?: number }
+  >();
   for (const dimension of dimensions) {
     const currency = stringField(dimension, "currency");
     if (currency.length === 0) continue;
     const prior = totals.get(currency) ?? { actualAmount: 0, estimatedAmount: 0 };
     prior.actualAmount += numberField(dimension, "actualAmount");
     prior.estimatedAmount += numberField(dimension, "estimatedAmount");
+    const estimatedCacheSavings = optionalNumberField(dimension, "estimatedCacheSavings");
+    if (estimatedCacheSavings !== undefined) {
+      prior.estimatedCacheSavings = (prior.estimatedCacheSavings ?? 0) + estimatedCacheSavings;
+    }
     totals.set(currency, prior);
   }
   return [...totals.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([currency, amounts]) => ({ currency, ...amounts }));
+    .map(([currency, amounts]) => ({
+      currency,
+      actualAmount: amounts.actualAmount,
+      estimatedAmount: amounts.estimatedAmount,
+      ...(amounts.estimatedCacheSavings === undefined
+        ? {}
+        : { estimatedCacheSavings: amounts.estimatedCacheSavings })
+    }));
 }
 
 function costTotals(costs: readonly JsonObject[]): readonly AgentUsageRepositoryCostTotal[] {
-  return costs.map((cost) => ({
-    currency: stringField(cost, "currency"),
-    actualAmount: numberField(cost, "actualAmount"),
-    estimatedAmount: numberField(cost, "estimatedAmount")
-  }));
+  return costs.map((cost) => {
+    const estimatedCacheSavings = optionalNumberField(cost, "estimatedCacheSavings");
+    return {
+      currency: stringField(cost, "currency"),
+      actualAmount: numberField(cost, "actualAmount"),
+      estimatedAmount: numberField(cost, "estimatedAmount"),
+      ...(estimatedCacheSavings === undefined ? {} : { estimatedCacheSavings })
+    };
+  });
 }
 
 function sumField(values: readonly JsonObject[], field: string): number {
   return values.reduce((total, value) => total + numberField(value, field), 0);
+}
+
+function sumCacheReadTokens(values: readonly JsonObject[]): number {
+  return values.reduce((total, value) => total + cacheReadTokens(value), 0);
 }
 
 function jsonObjectArray(value: unknown): readonly JsonObject[] {
@@ -1141,8 +1263,142 @@ function stringField(value: JsonObject, key: string): string {
   return typeof value[key] === "string" ? value[key] : "";
 }
 
+function optionalNumberField(value: JsonObject, key: string): number | undefined {
+  const candidate = value[key];
+  return typeof candidate === "number" && Number.isFinite(candidate) ? candidate : undefined;
+}
+
+function optionalTokenField(value: JsonObject, key: string): number | undefined {
+  const candidate = optionalNumberField(value, key);
+  return candidate !== undefined && candidate >= 0 ? candidate : undefined;
+}
+
+function cacheReadTokens(record: JsonObject): number {
+  return (
+    optionalTokenField(record, "cacheReadTokens") ?? optionalTokenField(record, "cachedTokens") ?? 0
+  );
+}
+
+function cacheWriteTokens(record: JsonObject): number {
+  return optionalTokenField(record, "cacheWriteTokens") ?? 0;
+}
+
+function cacheEligibleInputTokens(record: JsonObject): number {
+  return optionalTokenField(record, "cacheEligibleInputTokens") ?? 0;
+}
+
+function cacheHitRateForRecord(record: JsonObject): number | undefined {
+  if (
+    cacheUsageStatus(record["cacheUsageStatus"]) === "unavailable" ||
+    cacheInputTokenSemantics(record["cacheInputTokenSemantics"]) === "unavailable"
+  ) {
+    return undefined;
+  }
+  const cacheRead = optionalTokenField(record, "cacheReadTokens");
+  const cacheEligible = optionalTokenField(record, "cacheEligibleInputTokens");
+  return cacheRead === undefined || cacheEligible === undefined || cacheEligible <= 0
+    ? undefined
+    : cacheRead / cacheEligible;
+}
+
+function cacheHitRateForDimensions(dimensions: readonly JsonObject[]): number | undefined {
+  if (dimensions.length === 0) return undefined;
+  let cacheRead = 0;
+  let cacheEligible = 0;
+  for (const dimension of dimensions) {
+    if (dimension["cacheHitRateAvailable"] !== true) return undefined;
+    const read = optionalTokenField(dimension, "cacheReadTokens");
+    const eligible = optionalTokenField(dimension, "cacheEligibleInputTokens");
+    if (read === undefined || eligible === undefined || eligible <= 0) return undefined;
+    cacheRead += read;
+    cacheEligible += eligible;
+  }
+  return cacheEligible > 0 ? cacheRead / cacheEligible : undefined;
+}
+
+function estimateCacheSavings(
+  record: JsonObject
+): { readonly amount: number; readonly currency: string } | undefined {
+  if (
+    cacheUsageStatus(record["cacheUsageStatus"]) === "unavailable" ||
+    cacheInputTokenSemantics(record["cacheInputTokenSemantics"]) === "unavailable"
+  ) {
+    return undefined;
+  }
+  const cacheRead = optionalTokenField(record, "cacheReadTokens");
+  const cacheWrite = optionalTokenField(record, "cacheWriteTokens") ?? 0;
+  const unitPrices = record["unitPrices"];
+  if (cacheRead === undefined || !isJsonObject(unitPrices)) return undefined;
+  const inputPerMillion = optionalNumberField(unitPrices, "inputPerMillion");
+  const cacheReadPerMillion = optionalNumberField(unitPrices, "cacheReadPerMillion");
+  const cacheWritePerMillion = optionalNumberField(unitPrices, "cacheWritePerMillion");
+  const currency = stringField(unitPrices, "currency");
+  if (
+    inputPerMillion === undefined ||
+    cacheReadPerMillion === undefined ||
+    (cacheWrite > 0 && cacheWritePerMillion === undefined) ||
+    currency.length === 0
+  ) {
+    return undefined;
+  }
+  const readSavings = cacheRead * (inputPerMillion - cacheReadPerMillion);
+  const writeSavings =
+    cacheInputTokenSemantics(record["cacheInputTokenSemantics"]) === "excluded_from_input"
+      ? cacheWrite * (inputPerMillion - (cacheWritePerMillion ?? 0))
+      : -cacheWrite * (cacheWritePerMillion ?? 0);
+  return {
+    amount: (readSavings + writeSavings) / 1_000_000,
+    currency
+  };
+}
+
 function usageStatus(value: unknown): "actual" | "estimated" | "missing" {
   return value === "actual" || value === "estimated" || value === "missing" ? value : "missing";
+}
+
+function cacheOutcome(value: unknown): CacheOutcome {
+  return value === "hit" || value === "miss" || value === "bypass" || value === "unknown"
+    ? value
+    : "unknown";
+}
+
+function cacheUsageStatus(value: unknown): CacheUsageStatus {
+  return value === "actual" || value === "derived" || value === "unavailable"
+    ? value
+    : "unavailable";
+}
+
+function cacheInputTokenSemantics(value: unknown): CacheInputTokenSemantics {
+  return value === "included_in_input" || value === "excluded_from_input" || value === "unavailable"
+    ? value
+    : "unavailable";
+}
+
+function cacheMode(value: unknown): CacheMode | null {
+  return value === "none" ||
+    value === "automatic_prefix" ||
+    value === "explicit_breakpoints" ||
+    value === "explicit_resource"
+    ? value
+    : null;
+}
+
+function cachePrefixChecksum(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function cacheBypassReason(value: unknown): CacheBypassReason | undefined {
+  return value === "policy_none" ||
+    value === "unsupported_provider" ||
+    value === "below_minimum_tokens" ||
+    value === "identity_unverified" ||
+    value === "resource_unavailable" ||
+    value === "resource_create_failed" ||
+    value === "resource_expired" ||
+    value === "cache_error" ||
+    value === "usage_unavailable"
+    ? value
+    : undefined;
 }
 
 function costStatus(value: unknown): "actual" | "estimated" | "unknown" {

@@ -46,11 +46,108 @@ function compactionSummaryArtifact(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function promptCacheArtifact(overrides: Record<string, unknown> = {}) {
+  const unsigned = {
+    schemaVersion: "1.0",
+    artifactId: "prompt_cache_01",
+    runBindingId: "run_01",
+    provider: "google-gemini",
+    modelName: "gemini-1.5-pro",
+    connectionIdentityChecksum: "a".repeat(64),
+    accountIsolationChecksum: "b".repeat(64),
+    adapterVersion: "c5@1.0",
+    capability: {
+      mode: "explicit_resource",
+      policyVersion: "gemini-explicit-resource@1.0",
+      minimumCacheableTokens: 32_768,
+      ttlSeconds: 3_600,
+      inputTokenSemantics: "excluded_from_input",
+      reportsCacheReadTokens: true,
+      reportsCacheWriteTokens: false
+    },
+    scope: {
+      kind: "workspace",
+      workspaceKind: "engineeringWorkspace",
+      workspaceId: "workspace_01"
+    },
+    contextProfileId: "engineering",
+    profileVersion: "2.0",
+    guidanceTemplateChecksum: "c".repeat(64),
+    toolCatalogRevision: "d".repeat(64),
+    logicalPrefixChecksum: "e".repeat(64),
+    stablePrefixMessageCount: 3,
+    eligibleInputTokens: 40_000,
+    identityBaseChecksum: "f".repeat(64),
+    identityChecksum: "0".repeat(64),
+    createdAt: "2026-07-28T00:00:00.000Z",
+    expiresAt: "2026-07-28T01:00:00.000Z",
+    ...overrides
+  };
+  return {
+    ...unsigned,
+    artifactChecksum: checksumText(stableSerialize(unsigned))
+  };
+}
+
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 describe("AgentRunFileRepository", () => {
+  test("persists prompt-cache identity artifacts immutably and rejects tampering or leaks", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-prompt-cache-store-"));
+    roots.push(projectRoot);
+    const repository = new repositoryExports.AgentRunFileRepository({ projectRoot });
+    const artifact = promptCacheArtifact();
+
+    expect(await repository.writePromptCacheArtifact("run_01", artifact)).toMatchObject({
+      ok: true
+    });
+    expect(await repository.writePromptCacheArtifact("run_01", artifact)).toMatchObject({
+      ok: true
+    });
+    expect(await repository.readPromptCacheArtifact("run_01", "prompt_cache_01")).toEqual({
+      ok: true,
+      value: artifact
+    });
+    expect(
+      await repository.writePromptCacheArtifact(
+        "run_01",
+        promptCacheArtifact({ eligibleInputTokens: 40_001 })
+      )
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_PROMPT_CACHE_ARTIFACT_CONFLICT" }
+    });
+
+    const artifactPath = join(
+      projectRoot,
+      "history",
+      "agent-runs",
+      "run_01",
+      "prompt-cache-artifacts",
+      "prompt_cache_01.json"
+    );
+    await writeFile(artifactPath, JSON.stringify({ ...artifact, eligibleInputTokens: 1 }), "utf8");
+    expect(await repository.readPromptCacheArtifact("run_01", "prompt_cache_01")).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_PROMPT_CACHE_ARTIFACT_INVALID" }
+    });
+
+    for (const leaked of [
+      promptCacheArtifact({ resourceRef: "cachedContents/private" }),
+      promptCacheArtifact({ apiKey: "private-provider-key" }),
+      promptCacheArtifact({ metadata: { prompt: "full provider prompt" } }),
+      promptCacheArtifact({ metadata: { path: "D:/private/project" } }),
+      promptCacheArtifact({ metadata: { account: "secret://model-key" } })
+    ]) {
+      expect(await repository.writePromptCacheArtifact("run_leak", leaked)).toMatchObject({
+        ok: false,
+        error: { code: "AGENT_PROMPT_CACHE_ARTIFACT_INVALID" }
+      });
+    }
+  });
+
   test("persists immutable compaction summary artifacts", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-summary-store-"));
     roots.push(projectRoot);

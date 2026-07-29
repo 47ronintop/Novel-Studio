@@ -304,7 +304,10 @@ function DailyUsageTable({
             <th>日期</th>
             <th>Input</th>
             <th>Output</th>
-            <th>Cached</th>
+            <th>缓存读取</th>
+            <th>缓存写入</th>
+            <th>可缓存输入</th>
+            <th>命中率</th>
             <th>费用</th>
           </tr>
         </thead>
@@ -318,12 +321,20 @@ function DailyUsageTable({
               </th>
               <td data-label="Input">{day.inputTokens.toLocaleString()}</td>
               <td data-label="Output">{day.outputTokens.toLocaleString()}</td>
-              <td data-label="Cached">{day.cachedTokens.toLocaleString()}</td>
+              <td data-label="缓存读取">
+                {formatTokenCount(day.cacheReadTokens ?? day.cachedTokens)}
+              </td>
+              <td data-label="缓存写入">{formatTokenCount(day.cacheWriteTokens)}</td>
+              <td data-label="可缓存输入">{formatTokenCount(day.cacheEligibleInputTokens)}</td>
+              <td data-label="命中率">{formatCacheHitRate(day.cacheHitRate)}</td>
               <td data-label="费用">
                 {day.costs.map((cost) => (
                   <span className="agent-usage-cost" key={cost.currency}>
                     {cost.currency} 实际费用 {formatAmount(cost.actualAmount)} · 估算费用{" "}
                     {formatAmount(cost.estimatedAmount)}
+                    {cost.estimatedCacheSavings === undefined
+                      ? null
+                      : ` · 缓存节省 ${formatAmount(cost.estimatedCacheSavings)}`}
                   </span>
                 ))}
                 {day.hasUnknownCost ? <span className="agent-usage-unknown">未知费用</span> : null}
@@ -352,6 +363,7 @@ function RunDetails({ report }: { readonly report: AgentUsageReport }) {
                 <th>Provider / Model</th>
                 <th>Project</th>
                 <th>Tokens</th>
+                <th>缓存</th>
                 <th>用量状态</th>
                 <th>费用</th>
               </tr>
@@ -369,11 +381,34 @@ function RunDetails({ report }: { readonly report: AgentUsageReport }) {
                     {run.scope.kind === "standalone" ? "Standalone" : run.projectId}
                   </td>
                   <td data-label="Tokens">{run.totalTokens.toLocaleString()}</td>
+                  <td data-label="缓存">
+                    <div>模式：{cacheModeLabel(run.cacheMode)}</div>
+                    <div>
+                      结果：{cacheOutcomeLabel(run.cacheOutcome)}
+                      {run.cacheBypassReason === undefined
+                        ? null
+                        : `（${cacheBypassReasonLabel(run.cacheBypassReason)}）`}
+                    </div>
+                    <div>
+                      读取 {formatTokenCount(run.cacheReadTokens)} · 写入{" "}
+                      {formatTokenCount(run.cacheWriteTokens)} · 可缓存输入{" "}
+                      {formatTokenCount(run.cacheEligibleInputTokens)}
+                    </div>
+                    <div>命中率：{formatCacheHitRate(run.cacheHitRate)}</div>
+                    <div>缓存用量：{cacheUsageStatusLabel(run.cacheUsageStatus)}</div>
+                    <div>
+                      输入口径：{cacheInputTokenSemanticsLabel(run.cacheInputTokenSemantics)}
+                    </div>
+                    <div>Prefix：{shortPrefixChecksum(run.cachePrefixChecksum)}</div>
+                  </td>
                   <td data-label="用量状态">{statusLabel(run.usageStatus)}</td>
                   <td data-label="费用">
                     {run.cost.status === "unknown"
                       ? "未知费用"
                       : `${run.cost.currency} ${formatAmount(run.cost.amount)} (${run.cost.status === "actual" ? "实际费用" : "估算费用"})`}
+                    {run.estimatedCacheSavings === undefined
+                      ? null
+                      : ` · 缓存节省 ${run.estimatedCacheSavings.currency} ${formatAmount(run.estimatedCacheSavings.amount)}`}
                   </td>
                 </tr>
               ))}
@@ -388,6 +423,93 @@ function RunDetails({ report }: { readonly report: AgentUsageReport }) {
 function formatAmount(amount: number): string {
   return amount.toFixed(4);
 }
+
+function formatTokenCount(value: number | undefined): string {
+  return value === undefined ? "不可用" : value.toLocaleString();
+}
+
+function formatCacheHitRate(value: number | undefined): string {
+  return value === undefined
+    ? "不可用"
+    : new Intl.NumberFormat("zh-CN", { style: "percent", maximumFractionDigits: 1 }).format(value);
+}
+
+function cacheModeLabel(
+  mode:
+    "none" | "automatic_prefix" | "explicit_breakpoints" | "explicit_resource" | null | undefined
+): string {
+  switch (mode) {
+    case "none":
+      return "无";
+    case "automatic_prefix":
+      return "自动前缀";
+    case "explicit_breakpoints":
+      return "显式断点";
+    case "explicit_resource":
+      return "显式资源";
+    case null:
+      return "不可用";
+    default:
+      return "不可用";
+  }
+}
+
+function cacheOutcomeLabel(outcome: "hit" | "miss" | "bypass" | "unknown" | undefined): string {
+  return outcome === "hit"
+    ? "命中"
+    : outcome === "miss"
+      ? "未命中"
+      : outcome === "bypass"
+        ? "跳过"
+        : "未知";
+}
+
+function cacheBypassReasonLabel(
+  reason:
+    | "policy_none"
+    | "unsupported_provider"
+    | "below_minimum_tokens"
+    | "identity_unverified"
+    | "resource_unavailable"
+    | "resource_create_failed"
+    | "resource_expired"
+    | "cache_error"
+    | "usage_unavailable"
+): string {
+  const labels = {
+    policy_none: "策略未启用",
+    unsupported_provider: "Provider 不支持",
+    below_minimum_tokens: "低于最小 token 数",
+    identity_unverified: "身份未验证",
+    resource_unavailable: "资源不可用",
+    resource_create_failed: "资源创建失败",
+    resource_expired: "资源已过期",
+    cache_error: "缓存错误",
+    usage_unavailable: "用量不可用"
+  } as const;
+  return labels[reason];
+}
+
+function cacheUsageStatusLabel(status: "actual" | "derived" | "unavailable" | undefined): string {
+  return status === "actual" ? "实际" : status === "derived" ? "推导" : "不可用";
+}
+
+function cacheInputTokenSemanticsLabel(
+  semantics: "included_in_input" | "excluded_from_input" | "unavailable" | undefined
+): string {
+  return semantics === "included_in_input"
+    ? "计入输入"
+    : semantics === "excluded_from_input"
+      ? "不计入输入"
+      : "不可用";
+}
+
+function shortPrefixChecksum(checksum: string | null | undefined): string {
+  if (checksum === null) return "不可用";
+  if (typeof checksum !== "string" || checksum.length < 14) return "不可用";
+  return `${checksum.slice(0, 8)}...${checksum.slice(-6)}`;
+}
+
 function statusLabel(status: "actual" | "estimated" | "missing"): string {
   return status === "actual" ? "已报告" : status === "estimated" ? "估算" : "未知";
 }

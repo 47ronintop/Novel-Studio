@@ -1,6 +1,13 @@
 import type { JsonObject, JsonValue } from "@novel-studio/shared";
 
 import { LlmProviderFailure } from "./errors.js";
+import {
+  checksumProviderPayload,
+  rejectLlmPromptCacheRequest,
+  resolveLlmPromptCacheRequest,
+  withLlmPromptCacheUsage,
+  type ResolvedLlmPromptCacheRequest
+} from "./prompt-cache.js";
 import type {
   LlmMessage,
   LlmProvider,
@@ -60,7 +67,7 @@ export function createAnthropicProvider(options: AnthropicProviderOptions): LlmP
           await createTransportRequest(request, options, false)
         );
         throwIfAborted(request);
-        return parseMessage(payload);
+        return parseMessage(payload, request);
       } catch (error) {
         throw normalizeAnthropicError(error, request.abortSignal);
       }
@@ -159,7 +166,7 @@ async function* streamMessages(
       if (eventType === "message_delta") {
         const delta = requireRecord(event["delta"]);
         usage = { ...usage, ...readUsage(event["usage"]) };
-        const finalUsage = toUsage(usage);
+        const finalUsage = toUsage(usage, request);
         if (finalUsage !== undefined) yield { type: "usage", usage: finalUsage };
         const stopReason = stringValue(delta["stop_reason"]);
         if (stopReason !== undefined) {
@@ -209,6 +216,7 @@ async function createTransportRequest(
   streaming: boolean
 ): Promise<AnthropicTransportRequest> {
   const baseUrl = requiredBaseUrl(request);
+  const promptCache = resolveAnthropicPromptCache(request);
   const system = request.messages
     .filter((message) => message.role === "system" || message.role === "developer")
     .map((message) => message.content)
@@ -216,12 +224,28 @@ async function createTransportRequest(
   const body: JsonObject = {
     model: request.modelProfile.modelName,
     max_tokens: request.parameters.maxTokens ?? 1024,
-    messages: request.messages
-      .filter((message) => message.role !== "system" && message.role !== "developer")
-      .map(toAnthropicMessage),
+    messages: request.messages.flatMap((message, index) =>
+      message.role === "system" || message.role === "developer"
+        ? []
+        : [
+            promptCache.resolution.active &&
+            promptCache.resolution.config !== undefined &&
+            index === promptCache.resolution.config.stablePrefixMessageCount - 1
+              ? withAnthropicCacheControl(toAnthropicMessage(message))
+              : toAnthropicMessage(message)
+          ]
+    ),
     stream: streaming
   };
-  if (system.length > 0) body.system = system;
+  if (system.length > 0) {
+    const boundary = promptCache.resolution.config?.stablePrefixMessageCount;
+    const boundaryMessage = boundary === undefined ? undefined : request.messages[boundary - 1];
+    body.system =
+      promptCache.resolution.active &&
+      (boundaryMessage?.role === "system" || boundaryMessage?.role === "developer")
+        ? [withAnthropicCacheControl({ type: "text", text: system })]
+        : system;
+  }
   if (request.parameters.temperature !== undefined)
     body.temperature = request.parameters.temperature;
   if (request.parameters.topP !== undefined) body.top_p = request.parameters.topP;
@@ -290,6 +314,87 @@ function toAnthropicMessage(message: LlmMessage): JsonObject {
   };
 }
 
+function withAnthropicCacheControl(message: JsonObject): JsonObject {
+  const content = message["content"];
+  if (typeof content === "string") {
+    return {
+      ...message,
+      content: [{ type: "text", text: content, cache_control: { type: "ephemeral" } }]
+    };
+  }
+  if (Array.isArray(content) && content.length > 0) {
+    return {
+      ...message,
+      content: content.map((block, index) =>
+        index === content.length - 1 && isRecord(block)
+          ? { ...block, cache_control: { type: "ephemeral" } }
+          : block
+      ) as unknown as JsonValue
+    };
+  }
+  return message;
+}
+
+function resolveAnthropicPromptCache(request: LlmRequest): {
+  readonly resolution: ResolvedLlmPromptCacheRequest;
+  readonly physicalPrefixChecksum?: string;
+} {
+  let resolution = resolveLlmPromptCacheRequest(request, "explicit_breakpoints");
+  if (!resolution.active || resolution.config === undefined) return { resolution };
+
+  const prefixMessages = request.messages.slice(0, resolution.config.stablePrefixMessageCount);
+  const suffixMessages = request.messages.slice(resolution.config.stablePrefixMessageCount);
+  if (
+    prefixMessages.some((message) => message.role === "assistant" || message.role === "tool") ||
+    suffixMessages.some((message) => message.role === "system" || message.role === "developer")
+  ) {
+    return {
+      resolution: rejectLlmPromptCacheRequest(resolution, "identity_unverified")
+    };
+  }
+
+  const boundaryMessage = prefixMessages.at(-1);
+  const system = prefixMessages
+    .filter((message) => message.role === "system" || message.role === "developer")
+    .map((message) => message.content)
+    .join("\n\n");
+  const prefixPayload: JsonObject = {
+    messages: prefixMessages.flatMap((message, index) =>
+      message.role === "system" || message.role === "developer"
+        ? []
+        : [
+            index === prefixMessages.length - 1
+              ? withAnthropicCacheControl(toAnthropicMessage(message))
+              : toAnthropicMessage(message)
+          ]
+    ) as unknown as JsonValue
+  };
+  if (system.length > 0) {
+    prefixPayload["system"] =
+      boundaryMessage?.role === "system" || boundaryMessage?.role === "developer"
+        ? ([withAnthropicCacheControl({ type: "text", text: system })] as unknown as JsonValue)
+        : system;
+  }
+  if (request.tools !== undefined && request.tools.length > 0) {
+    prefixPayload["tools"] = request.tools.map((tool) => ({
+      name: tool.function.name,
+      ...(tool.function.description === undefined
+        ? {}
+        : { description: tool.function.description }),
+      input_schema: tool.function.parameters ?? { type: "object", properties: {} }
+    })) as unknown as JsonValue;
+  }
+  const physicalPrefixChecksum = checksumProviderPayload(prefixPayload);
+  if (
+    resolution.config.physicalPrefixChecksum !== undefined &&
+    resolution.config.physicalPrefixChecksum !== physicalPrefixChecksum
+  ) {
+    resolution = rejectLlmPromptCacheRequest(resolution, "identity_unverified");
+    return { resolution };
+  }
+  return { resolution, physicalPrefixChecksum };
+}
+
 function parseToolArguments(argumentsText: string): JsonObject {
   try {
     const value = JSON.parse(argumentsText) as unknown;
@@ -304,7 +409,7 @@ function parseToolArguments(argumentsText: string): JsonObject {
   });
 }
 
-function parseMessage(payload: unknown): LlmProviderCompletion {
+function parseMessage(payload: unknown, request: LlmRequest): LlmProviderCompletion {
   const root = requireRecord(payload);
   const content = root["content"];
   if (!Array.isArray(content)) throw malformedResponse(root);
@@ -319,7 +424,7 @@ function parseMessage(payload: unknown): LlmProviderCompletion {
     .join("");
   return {
     content: { type: "text", value: text },
-    usage: toUsage(readUsage(root["usage"])) ?? missingUsage()
+    usage: toUsage(readUsage(root["usage"]), request) ?? missingUsage(request)
   };
 }
 
@@ -344,29 +449,60 @@ function readUsage(value: unknown): Partial<AnthropicUsage> {
   };
 }
 
-function toUsage(value: Partial<AnthropicUsage>): LlmUsage | undefined {
+function toUsage(value: Partial<AnthropicUsage>, request?: LlmRequest): LlmUsage | undefined {
   const inputTokens = value.inputTokens;
   const outputTokens = value.outputTokens;
   if (inputTokens === undefined && outputTokens === undefined) return undefined;
-  const cachedTokens = (value.cacheCreationTokens ?? 0) + (value.cacheReadTokens ?? 0);
-  return {
+  const usage: LlmUsage = {
     inputTokens: inputTokens ?? 0,
     outputTokens: outputTokens ?? 0,
-    ...(cachedTokens === 0 ? {} : { cachedTokens }),
-    totalTokens: (inputTokens ?? 0) + (outputTokens ?? 0) + cachedTokens,
+    totalTokens:
+      (inputTokens ?? 0) +
+      (outputTokens ?? 0) +
+      (value.cacheCreationTokens ?? 0) +
+      (value.cacheReadTokens ?? 0),
     usageStatus: "actual",
     cost: { amount: 0, currency: "USD", status: "unknown" }
   };
+  const promptCache =
+    request === undefined
+      ? { resolution: { active: false } satisfies ResolvedLlmPromptCacheRequest }
+      : resolveAnthropicPromptCache(request);
+  const cacheEligibleInputTokens =
+    value.cacheReadTokens === undefined && value.cacheCreationTokens === undefined
+      ? undefined
+      : (value.cacheReadTokens ?? 0) + (value.cacheCreationTokens ?? 0);
+  return withLlmPromptCacheUsage(usage, promptCache.resolution, {
+    ...(value.cacheReadTokens === undefined ? {} : { cacheReadTokens: value.cacheReadTokens }),
+    ...(value.cacheCreationTokens === undefined
+      ? {}
+      : { cacheWriteTokens: value.cacheCreationTokens }),
+    ...(cacheEligibleInputTokens === undefined ? {} : { cacheEligibleInputTokens }),
+    cacheInputTokenSemantics: "excluded_from_input",
+    ...(promptCache.physicalPrefixChecksum === undefined
+      ? {}
+      : { physicalPrefixChecksum: promptCache.physicalPrefixChecksum })
+  });
 }
 
-function missingUsage(): LlmUsage {
-  return {
+function missingUsage(request?: LlmRequest): LlmUsage {
+  const usage: LlmUsage = {
     inputTokens: 0,
     outputTokens: 0,
     totalTokens: 0,
     usageStatus: "missing",
     cost: { amount: 0, currency: "USD", status: "unknown" }
   };
+  const promptCache =
+    request === undefined
+      ? { resolution: { active: false } satisfies ResolvedLlmPromptCacheRequest }
+      : resolveAnthropicPromptCache(request);
+  return withLlmPromptCacheUsage(usage, promptCache.resolution, {
+    cacheInputTokenSemantics: "excluded_from_input",
+    ...(promptCache.physicalPrefixChecksum === undefined
+      ? {}
+      : { physicalPrefixChecksum: promptCache.physicalPrefixChecksum })
+  });
 }
 
 function normalizeFinishReason(

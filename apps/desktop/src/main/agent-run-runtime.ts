@@ -82,6 +82,7 @@ import type {
   VersionGroup
 } from "@novel-studio/agent-engine";
 import {
+  agentContextScopeKey,
   computeAgentRunToolCatalogRevision,
   createDeterministicTokenEstimator,
   createEffectiveCapabilityState,
@@ -166,6 +167,7 @@ export interface DesktopAgentRunSessionOptions {
   readonly createAgentModelDriver?: (input: {
     readonly modelProfile: LlmModelProfile;
     readonly parameters?: LlmParameters;
+    readonly promptCacheScopeKey?: string;
   }) => AgentRunModelDriver;
   readonly resolveModelStartFacts?: (
     profileId: string,
@@ -219,6 +221,8 @@ export interface DesktopAgentRunSessionOptions {
   readonly externalToolDescriptors?: readonly AgentToolDescriptor[];
   /** Closes Main-owned external transports when this workspace runtime is replaced. */
   readonly disposeExternalTools?: () => void;
+  /** Invalidates Main-owned Provider cache resources when this scope is revoked or replaced. */
+  readonly releasePromptCacheScope?: () => void;
 }
 
 export interface PreparedAgentRunStart {
@@ -243,6 +247,7 @@ export interface DesktopAgentRuntimeServices {
   readonly agentUsageSession?: AgentUsageSession;
   readonly prepare: () => Promise<Result<void, UnifiedError>>;
   readonly dispose?: () => void;
+  readonly releasePromptCacheResources?: () => void;
   /** Immediately fail-close network and external tool capabilities after a settings mutation. */
   readonly revokeSettingsCapabilities: () => void;
 }
@@ -883,6 +888,7 @@ function createDesktopAgentRuntimeServices(
       "user_revoked",
       revokedAt
     );
+    options.releasePromptCacheScope?.();
     effectiveCapabilityState = revokeCapability(
       effectiveCapabilityState,
       "mcp_tools",
@@ -1106,7 +1112,17 @@ function createDesktopAgentRuntimeServices(
     ...(usageSession === undefined ? {} : { agentUsageSession: usageSession }),
     prepare,
     revokeSettingsCapabilities,
-    ...(options.disposeExternalTools === undefined ? {} : { dispose: options.disposeExternalTools })
+    ...(options.releasePromptCacheScope === undefined
+      ? {}
+      : { releasePromptCacheResources: options.releasePromptCacheScope }),
+    ...(options.disposeExternalTools === undefined && options.releasePromptCacheScope === undefined
+      ? {}
+      : {
+          dispose: () => {
+            options.releasePromptCacheScope?.();
+            options.disposeExternalTools?.();
+          }
+        })
   };
 }
 
@@ -2394,7 +2410,10 @@ function createDesktopAdaptiveAgentDriver(input: {
       if (profile === undefined) {
         throw new Error("The selected Agent model profile is unavailable.");
       }
-      const driver = input.createAgentModelDriver(profile);
+      const driver = input.createAgentModelDriver({
+        ...profile,
+        promptCacheScopeKey: agentContextScopeKey(roundInput.snapshot.scope)
+      });
       yield* driver.streamRound(roundInput);
     }
   };

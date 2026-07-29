@@ -96,6 +96,7 @@ export interface StandaloneAgentModelPorts {
   readonly createAgentModelDriver?: (input: {
     readonly modelProfile: LlmModelProfile;
     readonly parameters?: LlmParameters;
+    readonly promptCacheScopeKey?: string;
   }) => AgentRunModelDriver;
   /** Server-authoritative capability facts for the selected text model. */
   readonly resolveModelStartFacts?: (
@@ -104,6 +105,8 @@ export interface StandaloneAgentModelPorts {
   ) => Promise<AgentRunStartModelFacts | undefined>;
   /** Optional Main-owned resource cleanup for a provider transport. */
   readonly dispose?: () => void;
+  /** Invalidates Main-owned Provider cache resources when standalone is hidden or disposed. */
+  readonly releasePromptCacheScope?: () => void;
 }
 
 export interface CreateDesktopStandaloneAgentRuntimeOptions extends StandaloneAgentModelPorts {
@@ -318,8 +321,7 @@ function composeDesktopStandaloneAgentRuntime(
       writePromptMaterialization: (runId, artifact) =>
         runRepository.writePromptMaterialization(runId, artifact),
       writeContextSnapshot: (snapshot) => runRepository.writeContextSnapshot(snapshot),
-      writeBudgetSnapshot: (runId, snapshot) =>
-        runRepository.writeBudgetSnapshot(runId, snapshot),
+      writeBudgetSnapshot: (runId, snapshot) => runRepository.writeBudgetSnapshot(runId, snapshot),
       commitCompaction: (snapshot) => runRepository.commitCompaction(snapshot),
       writeCommandReceipt: (runId, commandId, receipt) =>
         runRepository.writeCommandReceipt(runId, `compaction_${commandId}`, receipt),
@@ -423,6 +425,7 @@ function composeDesktopStandaloneAgentRuntime(
   const dispose = () => {
     if (disposed) return;
     disposed = true;
+    options.releasePromptCacheScope?.();
     options.dispose?.();
   };
 
@@ -438,6 +441,9 @@ function composeDesktopStandaloneAgentRuntime(
     agentUsageSession: usageSession,
     prepare,
     listRunSnapshots: () => listStandaloneRunSnapshots(runRepository, scope),
+    ...(options.releasePromptCacheScope === undefined
+      ? {}
+      : { releasePromptCacheResources: options.releasePromptCacheScope }),
     dispose
   };
 }
@@ -526,9 +532,15 @@ function createStandaloneStartPreflight(input: {
 
 function createStandaloneBudgetInputs(
   modelPorts: StandaloneAgentModelPorts,
-  loadConversationContext: (
-    conversationId: string
-  ) => Promise<Result<readonly { readonly role: "system" | "user" | "assistant" | "tool"; readonly content: string }[], UnifiedError>>
+  loadConversationContext: (conversationId: string) => Promise<
+    Result<
+      readonly {
+        readonly role: "system" | "user" | "assistant" | "tool";
+        readonly content: string;
+      }[],
+      UnifiedError
+    >
+  >
 ): AgentContextBudgetInputsPort {
   return {
     async resolveBudgetInputs(input) {
@@ -646,7 +658,12 @@ function createStandaloneModelDriver(options: StandaloneAgentModelPorts): AgentR
         input.snapshot.providerCapabilitySnapshot.modelName
       );
       if (profile === undefined) throw new Error("AGENT_STANDALONE_MODEL_UNAVAILABLE");
-      yield* options.createAgentModelDriver(profile).streamRound(input);
+      yield* options
+        .createAgentModelDriver({
+          ...profile,
+          promptCacheScopeKey: agentContextScopeKey(input.snapshot.scope)
+        })
+        .streamRound(input);
     }
   };
 }

@@ -1,5 +1,12 @@
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
-import type { LlmCost } from "@novel-studio/llm-adapter";
+import type {
+  LlmCacheInputTokenSemantics,
+  LlmCacheOutcome,
+  LlmCacheUsageStatus,
+  LlmCost,
+  LlmPromptCacheBypassReason,
+  LlmPromptCacheMode
+} from "@novel-studio/llm-adapter";
 
 import {
   isAgentContextScope,
@@ -15,7 +22,8 @@ import type { AgentContextPrecision } from "./context-snapshot.js";
 export interface AgentUsageUnitPriceSnapshot {
   readonly inputPerMillion: number;
   readonly outputPerMillion: number;
-  readonly cachedPerMillion?: number;
+  readonly cacheReadPerMillion?: number;
+  readonly cacheWritePerMillion?: number;
   readonly reasoningPerMillion?: number;
   readonly currency: string;
 }
@@ -26,7 +34,7 @@ export interface AgentUsageUnitPriceSnapshot {
  * text, file contents, paths, or credentials (the repository enforces that boundary on write).
  */
 export interface AgentUsageRecord {
-  readonly schemaVersion: "1.1";
+  readonly schemaVersion: "1.2";
   readonly scope: AgentContextScope;
   readonly usageId: string;
   readonly runId: string;
@@ -38,6 +46,15 @@ export interface AgentUsageRecord {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly cachedTokens?: number;
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
+  readonly cacheEligibleInputTokens?: number;
+  readonly cacheOutcome: LlmCacheOutcome;
+  readonly cacheBypassReason?: LlmPromptCacheBypassReason;
+  readonly cacheUsageStatus: LlmCacheUsageStatus;
+  readonly cacheInputTokenSemantics: LlmCacheInputTokenSemantics;
+  readonly cacheMode: LlmPromptCacheMode | null;
+  readonly cachePrefixChecksum: string | null;
   readonly reasoningTokens?: number;
   readonly totalTokens: number;
   readonly usageStatus: "actual" | "estimated" | "missing";
@@ -84,14 +101,21 @@ export function usageRecordIdempotencyKey(input: {
 export function calculateAgentUsageEstimatedCost(input: {
   readonly inputTokens: number;
   readonly outputTokens: number;
-  readonly cachedTokens?: number;
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
+  readonly cacheInputTokenSemantics: LlmCacheInputTokenSemantics;
   readonly reasoningTokens?: number;
   readonly unitPrices: AgentUsageUnitPriceSnapshot;
 }): number {
+  const inputTokens =
+    input.cacheInputTokenSemantics === "included_in_input"
+      ? Math.max(0, input.inputTokens - (input.cacheReadTokens ?? 0))
+      : input.inputTokens;
   return (
-    (input.inputTokens * input.unitPrices.inputPerMillion +
+    (inputTokens * input.unitPrices.inputPerMillion +
       input.outputTokens * input.unitPrices.outputPerMillion +
-      (input.cachedTokens ?? 0) * (input.unitPrices.cachedPerMillion ?? 0) +
+      (input.cacheReadTokens ?? 0) * (input.unitPrices.cacheReadPerMillion ?? 0) +
+      (input.cacheWriteTokens ?? 0) * (input.unitPrices.cacheWritePerMillion ?? 0) +
       (input.reasoningTokens ?? 0) * (input.unitPrices.reasoningPerMillion ?? 0)) /
     1_000_000
   );
@@ -100,6 +124,27 @@ export function calculateAgentUsageEstimatedCost(input: {
 const USAGE_STATUS = new Set(["actual", "estimated", "missing"]);
 const PRECISION = new Set<AgentContextPrecision>(["reported", "estimated", "unknown"]);
 const COST_STATUS = new Set(["actual", "estimated", "unknown"]);
+const CACHE_OUTCOME = new Set(["hit", "miss", "bypass", "unknown"]);
+const CACHE_USAGE_STATUS = new Set(["actual", "derived", "unavailable"]);
+const CACHE_INPUT_SEMANTICS = new Set(["included_in_input", "excluded_from_input", "unavailable"]);
+const CACHE_MODE = new Set([
+  "none",
+  "automatic_prefix",
+  "explicit_breakpoints",
+  "explicit_resource"
+]);
+const CACHE_BYPASS_REASON = new Set([
+  "policy_none",
+  "unsupported_provider",
+  "below_minimum_tokens",
+  "identity_unverified",
+  "resource_unavailable",
+  "resource_create_failed",
+  "resource_expired",
+  "cache_error",
+  "usage_unavailable"
+]);
+const CHECKSUM = /^[a-f0-9]{64}$/u;
 const LOCAL_DATE = /^\d{4}-\d{2}-\d{2}$/;
 // The widest real UTC offset is +14:00; -12:00 is the western extreme. Clamp to ±15h for safety.
 const MAX_OFFSET_MINUTES = 15 * 60;
@@ -116,6 +161,15 @@ const RECORD_FIELDS = new Set([
   "inputTokens",
   "outputTokens",
   "cachedTokens",
+  "cacheReadTokens",
+  "cacheWriteTokens",
+  "cacheEligibleInputTokens",
+  "cacheOutcome",
+  "cacheBypassReason",
+  "cacheUsageStatus",
+  "cacheInputTokenSemantics",
+  "cacheMode",
+  "cachePrefixChecksum",
   "reasoningTokens",
   "totalTokens",
   "usageStatus",
@@ -137,7 +191,8 @@ const COST_FIELDS = new Set(["amount", "currency", "status"]);
 const UNIT_PRICE_FIELDS = new Set([
   "inputPerMillion",
   "outputPerMillion",
-  "cachedPerMillion",
+  "cacheReadPerMillion",
+  "cacheWritePerMillion",
   "reasoningPerMillion",
   "currency"
 ]);
@@ -151,7 +206,7 @@ export function validateAgentUsageRecord(
   record: AgentUsageRecord
 ): Result<AgentUsageRecord, UnifiedError> {
   if (!hasOnlyFields(record, RECORD_FIELDS)) return err(invalid(record, "record fields"));
-  if (record.schemaVersion !== "1.1" || !isAgentContextScope(record.scope)) {
+  if (record.schemaVersion !== "1.2" || !isAgentContextScope(record.scope)) {
     return err(invalid(record, "scope"));
   }
   const required: readonly [string, number][] = [
@@ -167,6 +222,9 @@ export function validateAgentUsageRecord(
   }
   const optional: readonly [string, number | undefined][] = [
     ["cachedTokens", record.cachedTokens],
+    ["cacheReadTokens", record.cacheReadTokens],
+    ["cacheWriteTokens", record.cacheWriteTokens],
+    ["cacheEligibleInputTokens", record.cacheEligibleInputTokens],
     ["reasoningTokens", record.reasoningTokens],
     ["compactionBeforeTokens", record.compactionBeforeTokens],
     ["compactionAfterTokens", record.compactionAfterTokens]
@@ -181,6 +239,31 @@ export function validateAgentUsageRecord(
     return err(invalid(record, "cost.amount"));
   }
   if (!USAGE_STATUS.has(record.usageStatus)) return err(invalid(record, "usageStatus"));
+  if (!CACHE_OUTCOME.has(record.cacheOutcome)) return err(invalid(record, "cacheOutcome"));
+  if (!CACHE_USAGE_STATUS.has(record.cacheUsageStatus)) {
+    return err(invalid(record, "cacheUsageStatus"));
+  }
+  if (!CACHE_INPUT_SEMANTICS.has(record.cacheInputTokenSemantics)) {
+    return err(invalid(record, "cacheInputTokenSemantics"));
+  }
+  if (record.cacheMode !== null && !CACHE_MODE.has(record.cacheMode)) {
+    return err(invalid(record, "cacheMode"));
+  }
+  if (record.cachePrefixChecksum !== null && !CHECKSUM.test(record.cachePrefixChecksum)) {
+    return err(invalid(record, "cachePrefixChecksum"));
+  }
+  if (
+    record.cacheBypassReason !== undefined &&
+    !CACHE_BYPASS_REASON.has(record.cacheBypassReason)
+  ) {
+    return err(invalid(record, "cacheBypassReason"));
+  }
+  if ((record.cacheOutcome === "bypass") !== (record.cacheBypassReason !== undefined)) {
+    return err(invalid(record, "cacheBypassReason"));
+  }
+  if (record.cachedTokens !== undefined && record.cachedTokens !== record.cacheReadTokens) {
+    return err(invalid(record, "cachedTokens"));
+  }
   if (!PRECISION.has(record.precision)) return err(invalid(record, "precision"));
   if (!COST_STATUS.has(record.cost.status)) return err(invalid(record, "cost.status"));
   if (!validateCost(record)) return err(invalid(record, "cost"));
@@ -195,8 +278,8 @@ export function validateAgentUsageRecord(
 }
 
 /**
- * Read compatibility for persisted Stage 5 usage. New writes are always 1.1 and scope-owned;
- * legacy 1.0 records are normalized in memory without rewriting their files.
+ * Read compatibility for persisted usage. New writes are always 1.2; legacy 1.0/1.1 records are
+ * normalized in memory with unavailable cache observability and are never rewritten in place.
  */
 export function normalizeAgentUsageRecord(value: unknown): AgentUsageRecord {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -204,21 +287,52 @@ export function normalizeAgentUsageRecord(value: unknown): AgentUsageRecord {
   }
   const raw = value as Record<string, unknown>;
   let candidate: Record<string, unknown>;
-  if (raw["schemaVersion"] === "1.1") {
+  if (raw["schemaVersion"] === "1.2") {
     candidate = { ...raw, scope: normalizeAgentContextScope(raw["scope"]) };
-  } else if (raw["schemaVersion"] === "1.0") {
-    candidate = {
+  } else if (raw["schemaVersion"] === "1.1" || raw["schemaVersion"] === "1.0") {
+    const scoped: Record<string, unknown> = {
       ...raw,
-      schemaVersion: "1.1",
-      scope: normalizeAgentContextScope(undefined, raw["projectId"])
+      scope:
+        raw["schemaVersion"] === "1.1"
+          ? normalizeAgentContextScope(raw["scope"])
+          : normalizeAgentContextScope(undefined, raw["projectId"])
     };
-    delete candidate["projectId"];
+    delete scoped["projectId"];
+    candidate = normalizeLegacyCacheUsage(scoped);
   } else {
     throw new Error("AGENT_USAGE_RECORD_VERSION_UNSUPPORTED");
   }
   const validated = validateAgentUsageRecord(candidate as unknown as AgentUsageRecord);
   if (!validated.ok) throw new Error(validated.error.code);
   return validated.value;
+}
+
+function normalizeLegacyCacheUsage(raw: Record<string, unknown>): Record<string, unknown> {
+  const cachedTokens = raw["cachedTokens"];
+  const unitPrices = raw["unitPrices"];
+  const normalizedPrices =
+    typeof unitPrices === "object" && unitPrices !== null && !Array.isArray(unitPrices)
+      ? normalizeLegacyUnitPrices(unitPrices as Record<string, unknown>)
+      : unitPrices;
+  return {
+    ...raw,
+    schemaVersion: "1.2",
+    ...(cachedTokens === undefined ? {} : { cacheReadTokens: cachedTokens }),
+    cacheOutcome: "unknown",
+    cacheUsageStatus: "unavailable",
+    cacheInputTokenSemantics: "unavailable",
+    cacheMode: null,
+    cachePrefixChecksum: null,
+    unitPrices: normalizedPrices
+  };
+}
+
+function normalizeLegacyUnitPrices(value: Record<string, unknown>): Record<string, unknown> {
+  const { cachedPerMillion, ...rest } = value;
+  return {
+    ...rest,
+    ...(cachedPerMillion === undefined ? {} : { cacheReadPerMillion: cachedPerMillion })
+  };
 }
 
 function validateCost(record: AgentUsageRecord): boolean {
@@ -250,17 +364,28 @@ function validateCost(record: AgentUsageRecord): boolean {
   if (!hasOnlyFields(prices, UNIT_PRICE_FIELDS) || prices.currency !== record.cost.currency)
     return false;
   if (!isUnitPrice(prices.inputPerMillion) || !isUnitPrice(prices.outputPerMillion)) return false;
-  if (prices.cachedPerMillion !== undefined && !isUnitPrice(prices.cachedPerMillion)) return false;
+  if (prices.cacheReadPerMillion !== undefined && !isUnitPrice(prices.cacheReadPerMillion)) {
+    return false;
+  }
+  if (prices.cacheWritePerMillion !== undefined && !isUnitPrice(prices.cacheWritePerMillion)) {
+    return false;
+  }
   if (prices.reasoningPerMillion !== undefined && !isUnitPrice(prices.reasoningPerMillion))
     return false;
-  if (record.cachedTokens !== undefined && prices.cachedPerMillion === undefined) return false;
+  if (record.cacheReadTokens !== undefined && prices.cacheReadPerMillion === undefined)
+    return false;
+  if (record.cacheWriteTokens !== undefined && prices.cacheWritePerMillion === undefined) {
+    return false;
+  }
   if (record.reasoningTokens !== undefined && prices.reasoningPerMillion === undefined)
     return false;
 
   const expected = calculateAgentUsageEstimatedCost({
     inputTokens: record.inputTokens,
     outputTokens: record.outputTokens,
-    ...(record.cachedTokens === undefined ? {} : { cachedTokens: record.cachedTokens }),
+    ...(record.cacheReadTokens === undefined ? {} : { cacheReadTokens: record.cacheReadTokens }),
+    ...(record.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: record.cacheWriteTokens }),
+    cacheInputTokenSemantics: record.cacheInputTokenSemantics,
     ...(record.reasoningTokens === undefined ? {} : { reasoningTokens: record.reasoningTokens }),
     unitPrices: prices
   });

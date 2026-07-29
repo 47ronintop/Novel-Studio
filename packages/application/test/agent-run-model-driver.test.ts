@@ -336,4 +336,209 @@ describe("AgentRunModelDriver", () => {
     expect(messages.some((message) => message.content === "static base prompt")).toBe(false);
     expect(messages.at(-1)).toEqual({ role: "user", content: "write" });
   });
+
+  test("counts the system message and frozen leading messages without caching the dynamic suffix", () => {
+    const createCacheRequest = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRoundPromptCacheRequest"
+    ];
+    expect(typeof createCacheRequest).toBe("function");
+    if (typeof createCacheRequest !== "function") return;
+
+    let estimatedPayload = "";
+    const request = (
+      createCacheRequest as (
+        input: Record<string, unknown>,
+        messages: readonly Record<string, unknown>[],
+        tools: readonly Record<string, unknown>[],
+        estimator: { count(text: string, modelProfileId: string): unknown }
+      ) => Record<string, unknown> | undefined
+    )(
+      {
+        snapshot: cacheSnapshot({ stablePrefixMessageCount: 3 }),
+        messages: [],
+        tools: []
+      },
+      [
+        { role: "system", content: "frozen guidance" },
+        { role: "user", content: "frozen conventions" },
+        { role: "user", content: "frozen outline" },
+        { role: "user", content: "dynamic request and current file body" }
+      ],
+      [
+        {
+          type: "function",
+          function: { name: "read_file", parameters: { type: "object" } }
+        }
+      ],
+      {
+        count(text, modelProfileId) {
+          estimatedPayload = text;
+          expect(modelProfileId).toBe("profile-cache");
+          return { tokens: 123, precision: "estimated" };
+        }
+      }
+    );
+
+    expect(request).toMatchObject({
+      mode: "automatic_prefix",
+      stablePrefixMessageCount: 3,
+      eligibleInputTokens: 123
+    });
+    expect(estimatedPayload).toContain("frozen guidance");
+    expect(estimatedPayload).toContain("frozen conventions");
+    expect(estimatedPayload).toContain("frozen outline");
+    expect(estimatedPayload).toContain("read_file");
+    expect(estimatedPayload).not.toContain("dynamic request and current file body");
+  });
+
+  test("records a deterministic below-minimum cache bypass", () => {
+    const createCacheRequest = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRoundPromptCacheRequest"
+    ];
+    expect(typeof createCacheRequest).toBe("function");
+    if (typeof createCacheRequest !== "function") return;
+
+    const request = (
+      createCacheRequest as (
+        input: Record<string, unknown>,
+        messages: readonly Record<string, unknown>[],
+        tools: readonly Record<string, unknown>[],
+        estimator: { count(): unknown }
+      ) => Record<string, unknown> | undefined
+    )(
+      {
+        snapshot: cacheSnapshot({ minimumCacheableTokens: 101 }),
+        messages: [],
+        tools: []
+      },
+      [{ role: "system", content: "short prefix" }],
+      [],
+      { count: () => ({ tokens: 100, precision: "estimated" }) }
+    );
+
+    expect(request).toMatchObject({
+      eligibleInputTokens: 100,
+      bypassReason: "below_minimum_tokens"
+    });
+  });
+
+  test("omits cache metadata for legacy or unverified run identities", () => {
+    const createCacheRequest = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRoundPromptCacheRequest"
+    ];
+    expect(typeof createCacheRequest).toBe("function");
+    if (typeof createCacheRequest !== "function") return;
+
+    const request = (
+      createCacheRequest as (
+        input: Record<string, unknown>,
+        messages: readonly Record<string, unknown>[],
+        tools: readonly Record<string, unknown>[]
+      ) => Record<string, unknown> | undefined
+    )(
+      {
+        snapshot: cacheSnapshot({ identityChecksum: "legacy" }),
+        messages: [],
+        tools: []
+      },
+      [{ role: "system", content: "frozen guidance" }],
+      []
+    );
+
+    expect(request).toBeUndefined();
+  });
+
+  test("uses an explicit Main-owned cache request ahead of snapshot derivation", async () => {
+    const createDriver = (applicationExports as unknown as Record<string, unknown>)[
+      "createLlmAgentRunModelDriver"
+    ];
+    expect(typeof createDriver).toBe("function");
+    if (typeof createDriver !== "function") return;
+
+    let providerRequest: Record<string, unknown> | undefined;
+    const driver = (
+      createDriver as (options: Record<string, unknown>) => {
+        streamRound(input: Record<string, unknown>): AsyncIterable<Record<string, unknown>>;
+      }
+    )({
+      adapter: {
+        async *stream(request: Record<string, unknown>) {
+          providerRequest = request;
+          yield { ok: true, value: { type: "round_completed", finishReason: "stop" } };
+        }
+      },
+      modelProfile: {
+        id: "profile-cache",
+        provider: "google-gemini",
+        displayName: "Gemini",
+        modelName: "gemini-1.5-pro"
+      }
+    });
+    const promptCache = {
+      mode: "explicit_resource",
+      policyVersion: "gemini-explicit-resource@1.0",
+      identityChecksum: "d".repeat(64),
+      logicalPrefixChecksum: "e".repeat(64),
+      stablePrefixMessageCount: 2,
+      minimumCacheableTokens: 1,
+      eligibleInputTokens: 80,
+      resourceRef: "cachedContents/opaque-main-owned"
+    };
+
+    for await (const _event of driver.streamRound({
+      runId: "run-explicit-cache",
+      snapshot: {
+        runRevision: 1,
+        operationMode: "execution",
+        contextMode: "writing",
+        userRequest: "write"
+      },
+      systemPrompt: "guidance",
+      messages: [{ role: "user", content: "write" }],
+      tools: [],
+      promptCache,
+      signal: new AbortController().signal
+    })) {
+      void _event;
+    }
+
+    expect(providerRequest?.["promptCache"]).toEqual(promptCache);
+  });
 });
+
+function cacheSnapshot(
+  overrides: {
+    readonly stablePrefixMessageCount?: number;
+    readonly minimumCacheableTokens?: number;
+    readonly identityChecksum?: string;
+  } = {}
+): Record<string, unknown> {
+  return {
+    runRevision: 1,
+    operationMode: "execution",
+    contextMode: "writing",
+    userRequest: "dynamic request",
+    cachePrefixChecksum: "a".repeat(64),
+    promptCacheIdentityChecksum: overrides.identityChecksum ?? "b".repeat(64),
+    promptCacheStablePrefixMessageCount: overrides.stablePrefixMessageCount ?? 1,
+    providerCapabilitySnapshot: {
+      profileId: "profile-cache",
+      provider: "openai",
+      modelName: "gpt-4.1",
+      streaming: true,
+      toolCalling: true,
+      structuredArguments: true,
+      contextWindow: 128_000,
+      requiredContextTokens: 4_096,
+      promptCache: {
+        mode: "automatic_prefix",
+        policyVersion: "openai-automatic-prefix@1.0",
+        minimumCacheableTokens: overrides.minimumCacheableTokens ?? 1,
+        ttlSeconds: null,
+        inputTokenSemantics: "included_in_input",
+        reportsCacheReadTokens: true,
+        reportsCacheWriteTokens: false
+      }
+    }
+  };
+}

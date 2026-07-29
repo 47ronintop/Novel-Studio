@@ -1,6 +1,13 @@
 import type { JsonObject, JsonValue } from "@novel-studio/shared";
 
 import { LlmProviderFailure } from "./errors.js";
+import {
+  checksumProviderPayload,
+  rejectLlmPromptCacheRequest,
+  resolveLlmPromptCacheRequest,
+  withLlmPromptCacheUsage,
+  type ResolvedLlmPromptCacheRequest
+} from "./prompt-cache.js";
 import type {
   LlmMessage,
   LlmProvider,
@@ -27,6 +34,11 @@ export interface GeminiProviderOptions {
   readonly transport: GeminiTransport;
   readonly streamTransport?: GeminiStreamTransport;
   readonly resolveApiKey?: (apiKeyRef: string) => Promise<string | undefined>;
+}
+
+export interface GeminiPromptCacheResourceDescriptor {
+  readonly body: JsonObject;
+  readonly physicalPrefixChecksum: string;
 }
 
 export class GeminiHttpError extends Error {
@@ -56,7 +68,7 @@ export function createGeminiProvider(options: GeminiProviderOptions): LlmProvide
         throwIfAborted(request);
         const payload = await options.transport(await createTransportRequest(request, options));
         throwIfAborted(request);
-        return parseGenerateContent(payload);
+        return parseGenerateContent(payload, request);
       } catch (error) {
         throw normalizeGeminiError(error, request.abortSignal);
       }
@@ -148,7 +160,7 @@ async function* streamGenerateContent(
         }
       }
 
-      const usage = parseUsage(root["usageMetadata"]);
+      const usage = parseUsage(root["usageMetadata"], request);
       if (usage !== undefined) yield { type: "usage", usage };
     }
     throwIfAborted(request);
@@ -180,15 +192,18 @@ async function createTransportRequest(
   streaming = false
 ): Promise<GeminiTransportRequest> {
   const baseUrl = requiredBaseUrl(request);
-  const systemText = request.messages
+  const promptCache = resolveGeminiPromptCache(request);
+  const requestMessages =
+    promptCache.resolution.active && promptCache.resolution.config !== undefined
+      ? request.messages.slice(promptCache.resolution.config.stablePrefixMessageCount)
+      : request.messages;
+  const systemText = requestMessages
     .filter((message) => message.role === "system" || message.role === "developer")
     .map((message) => message.content)
     .join("\n\n");
   const body: JsonObject = {
     contents: toGeminiContents(
-      request.messages.filter(
-        (message) => message.role !== "system" && message.role !== "developer"
-      )
+      requestMessages.filter((message) => message.role !== "system" && message.role !== "developer")
     ) as unknown as JsonValue
   };
   if (systemText.length > 0) {
@@ -203,18 +218,10 @@ async function createTransportRequest(
   if (request.parameters.topP !== undefined) generationConfig["topP"] = request.parameters.topP;
   if (Object.keys(generationConfig).length > 0) body["generationConfig"] = generationConfig;
 
-  if (request.tools !== undefined && request.tools.length > 0) {
-    body["tools"] = [
-      {
-        functionDeclarations: request.tools.map((tool) => ({
-          name: tool.function.name,
-          ...(tool.function.description === undefined
-            ? {}
-            : { description: tool.function.description }),
-          parametersJsonSchema: tool.function.parameters ?? { type: "object", properties: {} }
-        }))
-      }
-    ] as unknown as JsonValue;
+  if (promptCache.resolution.active && promptCache.resolution.config?.resourceRef !== undefined) {
+    body["cachedContent"] = promptCache.resolution.config.resourceRef;
+  } else if (request.tools !== undefined && request.tools.length > 0) {
+    body["tools"] = toGeminiTools(request.tools) as unknown as JsonValue;
   }
 
   const apiKey =
@@ -232,6 +239,98 @@ async function createTransportRequest(
       ? {}
       : { timeoutMs: request.modelProfile.timeoutMs }),
     ...(request.abortSignal === undefined ? {} : { abortSignal: request.abortSignal })
+  };
+}
+
+function toGeminiTools(tools: NonNullable<LlmRequest["tools"]>): readonly JsonObject[] {
+  return [
+    {
+      functionDeclarations: tools.map((tool) => ({
+        name: tool.function.name,
+        ...(tool.function.description === undefined
+          ? {}
+          : { description: tool.function.description }),
+        parametersJsonSchema: tool.function.parameters ?? { type: "object", properties: {} }
+      })) as unknown as JsonValue
+    }
+  ];
+}
+
+function resolveGeminiPromptCache(request: LlmRequest): {
+  readonly resolution: ResolvedLlmPromptCacheRequest;
+  readonly physicalPrefixChecksum?: string;
+} {
+  let resolution = resolveLlmPromptCacheRequest(request, "explicit_resource");
+  if (!resolution.active || resolution.config === undefined) return { resolution };
+  const descriptor = createGeminiPromptCacheResourceDescriptor(request);
+  if (descriptor === undefined) {
+    return {
+      resolution: rejectLlmPromptCacheRequest(resolution, "identity_unverified")
+    };
+  }
+  if (
+    resolution.config.physicalPrefixChecksum === undefined ||
+    resolution.config.physicalPrefixChecksum !== descriptor.physicalPrefixChecksum
+  ) {
+    resolution = rejectLlmPromptCacheRequest(resolution, "identity_unverified");
+    return { resolution };
+  }
+  return { resolution, physicalPrefixChecksum: descriptor.physicalPrefixChecksum };
+}
+
+/**
+ * Builds the exact provider-native stable prefix used to create a Gemini cached-content resource.
+ * Main owns the network lifecycle; the adapter owns this serialization so creation and use cannot
+ * disagree about the physical bytes represented by `physicalPrefixChecksum`.
+ */
+export function createGeminiPromptCacheResourceDescriptor(
+  request: LlmRequest
+): GeminiPromptCacheResourceDescriptor | undefined {
+  const config = request.promptCache;
+  if (config === undefined || config.mode !== "explicit_resource") return undefined;
+  const candidateRequest: LlmRequest = {
+    ...request,
+    promptCache: {
+      ...config,
+      resourceRef: config.resourceRef ?? "cachedContents/main_pending"
+    }
+  };
+  const resolution = resolveLlmPromptCacheRequest(candidateRequest, "explicit_resource");
+  if (!resolution.active || resolution.config === undefined) return undefined;
+
+  const prefixMessages = request.messages.slice(0, config.stablePrefixMessageCount);
+  const suffixMessages = request.messages.slice(config.stablePrefixMessageCount);
+  if (
+    prefixMessages.some((message) => message.role === "assistant" || message.role === "tool") ||
+    suffixMessages.some((message) => message.role === "system" || message.role === "developer")
+  ) {
+    return undefined;
+  }
+
+  const systemText = prefixMessages
+    .filter((message) => message.role === "system" || message.role === "developer")
+    .map((message) => message.content)
+    .join("\n\n");
+  const prefixPayload: JsonObject = {
+    contents: toGeminiContents(
+      prefixMessages.filter((message) => message.role !== "system" && message.role !== "developer")
+    ) as unknown as JsonValue
+  };
+  if (systemText.length > 0) {
+    prefixPayload["systemInstruction"] = {
+      parts: [{ text: systemText }]
+    } as unknown as JsonValue;
+  }
+  if (request.tools !== undefined && request.tools.length > 0) {
+    prefixPayload["tools"] = toGeminiTools(request.tools) as unknown as JsonValue;
+  }
+  return {
+    body: {
+      model: `models/${request.modelProfile.modelName}`,
+      ...prefixPayload,
+      ...(config.ttlSeconds === undefined ? {} : { ttl: `${String(config.ttlSeconds)}s` })
+    },
+    physicalPrefixChecksum: checksumProviderPayload(prefixPayload)
   };
 }
 
@@ -323,7 +422,7 @@ function parseToolResult(value: string): JsonObject {
   return { content: value };
 }
 
-function parseGenerateContent(payload: unknown): LlmProviderCompletion {
+function parseGenerateContent(payload: unknown, request: LlmRequest): LlmProviderCompletion {
   const root = requireRecord(payload);
   const candidates = root["candidates"];
   if (!Array.isArray(candidates) || candidates.length === 0) throw malformedResponse(root);
@@ -339,7 +438,7 @@ function parseGenerateContent(payload: unknown): LlmProviderCompletion {
     .join("");
   return {
     content: { type: "text", value: text },
-    usage: parseUsage(root["usageMetadata"]) ?? missingUsage()
+    usage: parseUsage(root["usageMetadata"], request) ?? missingUsage(request)
   };
 }
 
@@ -350,7 +449,7 @@ function requireParts(content: unknown): readonly unknown[] {
   return parts;
 }
 
-function parseUsage(value: unknown): LlmUsage | undefined {
+function parseUsage(value: unknown, request?: LlmRequest): LlmUsage | undefined {
   if (!isRecord(value)) return undefined;
   const inputTokens = numberValue(value["promptTokenCount"]);
   const outputTokens = numberValue(value["candidatesTokenCount"]);
@@ -366,25 +465,61 @@ function parseUsage(value: unknown): LlmUsage | undefined {
   ) {
     return undefined;
   }
-  return {
+  const usage: LlmUsage = {
     inputTokens: inputTokens ?? 0,
     outputTokens: outputTokens ?? 0,
-    ...(cachedTokens === undefined ? {} : { cachedTokens }),
     ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
     totalTokens: providerTotal ?? (inputTokens ?? 0) + (outputTokens ?? 0),
     usageStatus: "actual",
     cost: { amount: 0, currency: "USD", status: "unknown" }
   };
+  const promptCache =
+    request === undefined
+      ? { resolution: { active: false } satisfies ResolvedLlmPromptCacheRequest }
+      : resolveGeminiPromptCache(request);
+  const cacheWriteTokens = promptCache.resolution.config?.resourceWriteTokens;
+  const cacheEligibleInputTokens = geminiCacheEligibleInputTokens(cachedTokens, cacheWriteTokens);
+  return withLlmPromptCacheUsage(usage, promptCache.resolution, {
+    ...(cachedTokens === undefined ? {} : { cacheReadTokens: cachedTokens }),
+    ...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
+    ...(cacheEligibleInputTokens === undefined ? {} : { cacheEligibleInputTokens }),
+    cacheInputTokenSemantics: "included_in_input",
+    ...(promptCache.physicalPrefixChecksum === undefined
+      ? {}
+      : { physicalPrefixChecksum: promptCache.physicalPrefixChecksum })
+  });
 }
 
-function missingUsage(): LlmUsage {
-  return {
+function missingUsage(request?: LlmRequest): LlmUsage {
+  const usage: LlmUsage = {
     inputTokens: 0,
     outputTokens: 0,
     totalTokens: 0,
     usageStatus: "missing",
     cost: { amount: 0, currency: "USD", status: "unknown" }
   };
+  const promptCache =
+    request === undefined
+      ? { resolution: { active: false } satisfies ResolvedLlmPromptCacheRequest }
+      : resolveGeminiPromptCache(request);
+  const cacheWriteTokens = promptCache.resolution.config?.resourceWriteTokens;
+  return withLlmPromptCacheUsage(usage, promptCache.resolution, {
+    ...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
+    ...(cacheWriteTokens === undefined ? {} : { cacheEligibleInputTokens: cacheWriteTokens }),
+    cacheInputTokenSemantics: "included_in_input",
+    ...(promptCache.physicalPrefixChecksum === undefined
+      ? {}
+      : { physicalPrefixChecksum: promptCache.physicalPrefixChecksum })
+  });
+}
+
+function geminiCacheEligibleInputTokens(
+  cacheReadTokens: number | undefined,
+  cacheWriteTokens: number | undefined
+): number | undefined {
+  return cacheReadTokens !== undefined && cacheReadTokens > 0
+    ? cacheReadTokens
+    : (cacheWriteTokens ?? cacheReadTokens);
 }
 
 function normalizeFinishReason(value: string, sawToolCall: boolean): LlmRoundFinishReason {

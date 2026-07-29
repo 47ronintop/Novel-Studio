@@ -2,9 +2,10 @@ import { describe, expect, test } from "vitest";
 
 import { isErr, isOk } from "@novel-studio/shared";
 
-import { createLlmAdapter, type LlmRequest } from "../src/index.js";
+import { checksumProviderPayload, createLlmAdapter, type LlmRequest } from "../src/index.js";
 import {
   createGeminiProvider,
+  createGeminiPromptCacheResourceDescriptor,
   GeminiHttpError,
   type GeminiTransportRequest
 } from "../src/gemini-provider.js";
@@ -31,6 +32,195 @@ const request = {
 } satisfies LlmRequest;
 
 describe("Gemini provider", () => {
+  test("uses a verified Main-owned cached content resource and sends only the dynamic suffix", async () => {
+    const calls: GeminiTransportRequest[] = [];
+    const provider = createGeminiProvider({
+      transport: async (transportRequest) => {
+        calls.push(transportRequest);
+        return {
+          candidates: [{ content: { role: "model", parts: [{ text: "Cached response." }] } }],
+          usageMetadata: {
+            promptTokenCount: 28,
+            candidatesTokenCount: 4,
+            cachedContentTokenCount: 20,
+            totalTokenCount: 32
+          }
+        };
+      }
+    });
+    const resourceDescriptor = createGeminiPromptCacheResourceDescriptor({
+      ...request,
+      messages: [
+        { role: "system", content: "System guidance." },
+        { role: "user", content: "Stable project context." },
+        { role: "user", content: "Dynamic request." }
+      ],
+      promptCache: {
+        mode: "explicit_resource",
+        policyVersion: "gemini-resource@1.0",
+        identityChecksum: "a".repeat(64),
+        logicalPrefixChecksum: "b".repeat(64),
+        stablePrefixMessageCount: 2,
+        minimumCacheableTokens: 1,
+        eligibleInputTokens: 20,
+        ttlSeconds: 300
+      }
+    });
+    expect(resourceDescriptor?.body).toEqual({
+      model: "models/gemini-fixture",
+      contents: [{ role: "user", parts: [{ text: "Stable project context." }] }],
+      systemInstruction: { parts: [{ text: "System guidance." }] },
+      ttl: "300s"
+    });
+    const physicalPrefixChecksum = resourceDescriptor?.physicalPrefixChecksum;
+    expect(physicalPrefixChecksum).toBe(
+      checksumProviderPayload({
+        contents: [{ role: "user", parts: [{ text: "Stable project context." }] }],
+        systemInstruction: { parts: [{ text: "System guidance." }] }
+      })
+    );
+    if (physicalPrefixChecksum === undefined) return;
+    const result = await createLlmAdapter({ provider }).complete({
+      ...request,
+      messages: [
+        { role: "system", content: "System guidance." },
+        { role: "user", content: "Stable project context." },
+        { role: "user", content: "Dynamic request." }
+      ],
+      promptCache: {
+        mode: "explicit_resource",
+        policyVersion: "gemini-resource@1.0",
+        identityChecksum: "a".repeat(64),
+        logicalPrefixChecksum: "b".repeat(64),
+        physicalPrefixChecksum,
+        stablePrefixMessageCount: 2,
+        minimumCacheableTokens: 1,
+        eligibleInputTokens: 20,
+        ttlSeconds: 300,
+        resourceRef: "cachedContents/cache_fixture_01"
+      }
+    });
+
+    expect(calls[0]?.body).toEqual({
+      contents: [{ role: "user", parts: [{ text: "Dynamic request." }] }],
+      generationConfig: { temperature: 0.4, maxOutputTokens: 64, topP: 0.9 },
+      cachedContent: "cachedContents/cache_fixture_01"
+    });
+    expect(isOk(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.usage).toMatchObject({
+      cachedTokens: 20,
+      cacheReadTokens: 20,
+      cacheEligibleInputTokens: 20,
+      cacheOutcome: "hit",
+      cacheUsageStatus: "actual",
+      cacheInputTokenSemantics: "included_in_input",
+      cachePhysicalPrefixChecksum: physicalPrefixChecksum
+    });
+  });
+
+  test("falls back to the complete uncached prompt when a resource checksum is stale", async () => {
+    const calls: GeminiTransportRequest[] = [];
+    const provider = createGeminiProvider({
+      transport: async (transportRequest) => {
+        calls.push(transportRequest);
+        return {
+          candidates: [{ content: { role: "model", parts: [{ text: "Uncached response." }] } }],
+          usageMetadata: { promptTokenCount: 30, candidatesTokenCount: 4, totalTokenCount: 34 }
+        };
+      }
+    });
+    const result = await createLlmAdapter({ provider }).complete({
+      ...request,
+      messages: [
+        { role: "system", content: "System guidance." },
+        { role: "user", content: "Stable project context." },
+        { role: "user", content: "Dynamic request." }
+      ],
+      promptCache: {
+        mode: "explicit_resource",
+        policyVersion: "gemini-resource@1.0",
+        identityChecksum: "a".repeat(64),
+        logicalPrefixChecksum: "b".repeat(64),
+        physicalPrefixChecksum: "c".repeat(64),
+        stablePrefixMessageCount: 2,
+        minimumCacheableTokens: 1,
+        eligibleInputTokens: 20,
+        ttlSeconds: 300,
+        resourceRef: "cachedContents/cache_fixture_01"
+      }
+    });
+
+    expect(calls[0]?.body).toMatchObject({
+      contents: [
+        { role: "user", parts: [{ text: "Stable project context." }] },
+        { role: "user", parts: [{ text: "Dynamic request." }] }
+      ],
+      systemInstruction: { parts: [{ text: "System guidance." }] }
+    });
+    expect(calls[0]?.body).not.toHaveProperty("cachedContent");
+    expect(isOk(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.usage).toMatchObject({
+      cacheOutcome: "bypass",
+      cacheBypassReason: "identity_unverified",
+      cacheUsageStatus: "unavailable"
+    });
+  });
+
+  test("records a resource creation write as a miss when no cache read is reported", async () => {
+    const messages: LlmRequest["messages"] = [
+      { role: "system", content: "System guidance." },
+      { role: "user", content: "Stable project context." },
+      { role: "user", content: "Dynamic request." }
+    ];
+    const cacheBase = {
+      mode: "explicit_resource" as const,
+      policyVersion: "gemini-resource@1.0",
+      identityChecksum: "a".repeat(64),
+      logicalPrefixChecksum: "b".repeat(64),
+      stablePrefixMessageCount: 2,
+      minimumCacheableTokens: 1,
+      eligibleInputTokens: 20,
+      ttlSeconds: 300
+    };
+    const descriptor = createGeminiPromptCacheResourceDescriptor({
+      ...request,
+      messages,
+      promptCache: cacheBase
+    });
+    expect(descriptor).toBeDefined();
+    if (descriptor === undefined) return;
+    const provider = createGeminiProvider({
+      transport: async () => ({
+        candidates: [{ content: { role: "model", parts: [{ text: "Fresh response." }] } }],
+        usageMetadata: { promptTokenCount: 28, candidatesTokenCount: 4, totalTokenCount: 32 }
+      })
+    });
+
+    const result = await createLlmAdapter({ provider }).complete({
+      ...request,
+      messages,
+      promptCache: {
+        ...cacheBase,
+        physicalPrefixChecksum: descriptor.physicalPrefixChecksum,
+        resourceRef: "cachedContents/cache_new",
+        resourceWriteTokens: 20
+      }
+    });
+
+    expect(isOk(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.usage).toMatchObject({
+      cacheWriteTokens: 20,
+      cacheEligibleInputTokens: 20,
+      cacheOutcome: "miss",
+      cacheUsageStatus: "actual",
+      cacheInputTokenSemantics: "included_in_input"
+    });
+    expect(result.value.usage).not.toHaveProperty("cacheReadTokens");
+  });
+
   test("maps non-streaming generateContent requests and usage", async () => {
     const calls: GeminiTransportRequest[] = [];
     const provider = createGeminiProvider({

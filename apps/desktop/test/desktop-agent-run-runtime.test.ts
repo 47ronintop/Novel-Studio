@@ -1945,7 +1945,7 @@ function desktopUsageRecord(
   finalSequence: number
 ): Record<string, unknown> {
   return {
-    schemaVersion: "1.1",
+    schemaVersion: "1.2",
     scope: {
       kind: "workspace",
       workspaceKind: "creativeProject",
@@ -1962,6 +1962,11 @@ function desktopUsageRecord(
     outputTokens: 0,
     totalTokens: 0,
     usageStatus: "missing",
+    cacheOutcome: "unknown",
+    cacheUsageStatus: "unavailable",
+    cacheInputTokenSemantics: "unavailable",
+    cacheMode: null,
+    cachePrefixChecksum: null,
     precision: "unknown",
     pricingVersion: null,
     unitPrices: null,

@@ -1,6 +1,10 @@
 import { createUnifiedError } from "@novel-studio/shared";
 
-import { attachLegacyProjectId, EMPTY_AGENT_RUN_USAGE_SUMMARY } from "./agent-run-types.js";
+import {
+  attachLegacyProjectId,
+  EMPTY_AGENT_RUN_USAGE_SUMMARY,
+  NO_AGENT_PROMPT_CACHE_CAPABILITY
+} from "./agent-run-types.js";
 import { agentContextScopeKey, type AgentContextScope } from "./agent-context-scope.js";
 import { agentRunToolCatalogSnapshotId } from "./agent-run-tool-catalog.js";
 import type {
@@ -96,8 +100,26 @@ export function createAgentRunCoordinator(
 
       const timestamp = now();
       const runId = createRunId();
+      const promptCache =
+        command.providerCapabilitySnapshot.promptCache ?? NO_AGENT_PROMPT_CACHE_CAPABILITY;
+      if (
+        promptCache.mode !== "none" &&
+        (!isChecksum(command.promptCacheIdentityBaseChecksum) ||
+          !isChecksum(command.promptCacheIdentityChecksum) ||
+          typeof command.promptCacheArtifactId !== "string" ||
+          !Number.isSafeInteger(command.promptCacheStablePrefixMessageCount) ||
+          Number(command.promptCacheStablePrefixMessageCount) < 1 ||
+          command.promptCachePolicyVersion !== promptCache.policyVersion)
+      ) {
+        const result = failure(
+          "AGENT_PROMPT_CACHE_IDENTITY_INVALID",
+          "The frozen prompt cache identity is invalid."
+        );
+        commandReceipts.set(receiptKey, result);
+        return result;
+      }
       const snapshot = attachLegacyProjectId({
-        schemaVersion: "1.2",
+        schemaVersion: "1.3",
         runId,
         scope,
         conversationId: command.conversationId,
@@ -116,7 +138,10 @@ export function createAgentRunCoordinator(
         startedAt: timestamp,
         updatedAt: timestamp,
         limits: { ...defaultLimits, ...command.limits },
-        providerCapabilitySnapshot: command.providerCapabilitySnapshot,
+        providerCapabilitySnapshot: {
+          ...command.providerCapabilitySnapshot,
+          promptCache
+        },
         pendingUserInputId: null,
         contextSnapshotId: null,
         sourcePlanId: command.sourcePlanId ?? null,
@@ -153,8 +178,12 @@ export function createAgentRunCoordinator(
         profileVersion: command.profileVersion ?? "1.0",
         guidanceTemplateChecksum: command.guidanceTemplateChecksum ?? "legacy",
         conventionsArtifactId: command.conventionsArtifactId ?? null,
-        promptCachePolicyVersion: command.promptCachePolicyVersion ?? "none@1.0",
-        cachePrefixChecksum: command.cachePrefixChecksum ?? "legacy"
+        promptCachePolicyVersion: promptCache.policyVersion,
+        cachePrefixChecksum: command.cachePrefixChecksum ?? "legacy",
+        promptCacheArtifactId: command.promptCacheArtifactId ?? null,
+        promptCacheIdentityBaseChecksum: command.promptCacheIdentityBaseChecksum ?? "legacy",
+        promptCacheIdentityChecksum: command.promptCacheIdentityChecksum ?? "legacy",
+        promptCacheStablePrefixMessageCount: command.promptCacheStablePrefixMessageCount ?? 0
       } as Omit<AgentRunSnapshot, "projectId">);
       runs.set(runId, snapshot);
       activeRunByScope.set(scopeKey, runId);
@@ -323,6 +352,10 @@ export function createAgentRunCoordinator(
       return events.get(runId) ?? [];
     }
   };
+}
+
+function isChecksum(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
 }
 
 function toEvent(

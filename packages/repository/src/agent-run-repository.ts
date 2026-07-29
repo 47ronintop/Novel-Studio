@@ -206,6 +206,42 @@ export class AgentRunFileRepository {
       : this.invalidRecord("AGENT_PROMPT_MATERIALIZATION_INVALID");
   }
 
+  public writePromptCacheArtifact(
+    runId: string,
+    artifact: JsonObject
+  ): Promise<Result<JsonObject, UnifiedError>> {
+    const artifactId = readSafeString(artifact, "artifactId");
+    if (
+      !isSafeId(runId) ||
+      artifactId === undefined ||
+      artifact["schemaVersion"] !== "1.0" ||
+      !isPromptCacheArtifactEnvelope(artifact)
+    ) {
+      return Promise.resolve(this.invalidRecord("AGENT_PROMPT_CACHE_ARTIFACT_INVALID"));
+    }
+    return this.writeImmutableJson(
+      this.runPath(runId, join("prompt-cache-artifacts", `${artifactId}.json`)),
+      artifact,
+      "AGENT_PROMPT_CACHE_ARTIFACT_CONFLICT"
+    );
+  }
+
+  public async readPromptCacheArtifact(
+    runId: string,
+    artifactId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    if (!isSafeId(runId) || !isSafeId(artifactId)) {
+      return this.invalidRecord("AGENT_PROMPT_CACHE_ARTIFACT_INVALID");
+    }
+    const read = await this.readJson(
+      this.runPath(runId, join("prompt-cache-artifacts", `${artifactId}.json`))
+    );
+    if (!read.ok || read.value === undefined) return read;
+    return read.value["artifactId"] === artifactId && isPromptCacheArtifactEnvelope(read.value)
+      ? read
+      : this.invalidRecord("AGENT_PROMPT_CACHE_ARTIFACT_INVALID");
+  }
+
   public writeContextSourceMaterialization(
     runId: string,
     artifact: JsonObject
@@ -1087,6 +1123,81 @@ function isSupportedAgentSchemaVersion(value: JsonObject): boolean {
   );
 }
 
+function isPromptCacheArtifactEnvelope(value: JsonObject): boolean {
+  const { artifactChecksum, ...unsigned } = value;
+  void artifactChecksum;
+  const capability = value["capability"];
+  const scope = value["scope"];
+  return (
+    value["schemaVersion"] === "1.0" &&
+    hasOnlyJsonFields(value, PROMPT_CACHE_ARTIFACT_FIELDS) &&
+    isJsonObject(capability) &&
+    hasOnlyJsonFields(capability, PROMPT_CACHE_CAPABILITY_FIELDS) &&
+    isJsonObject(scope) &&
+    hasOnlyJsonFields(
+      scope,
+      scope["kind"] === "standalone"
+        ? STANDALONE_PROMPT_CACHE_SCOPE_FIELDS
+        : WORKSPACE_PROMPT_CACHE_SCOPE_FIELDS
+    ) &&
+    readSafeString(value, "artifactId") !== undefined &&
+    isChecksum(value["identityBaseChecksum"]) &&
+    isChecksum(value["identityChecksum"]) &&
+    isChecksum(value["artifactChecksum"]) &&
+    checksumText(stableSerialize(unsigned)) === value["artifactChecksum"] &&
+    !containsForbiddenPromptCacheData(value)
+  );
+}
+
+const PROMPT_CACHE_ARTIFACT_FIELDS = new Set([
+  "schemaVersion",
+  "artifactId",
+  "runBindingId",
+  "provider",
+  "modelName",
+  "connectionIdentityChecksum",
+  "accountIsolationChecksum",
+  "adapterVersion",
+  "capability",
+  "scope",
+  "contextProfileId",
+  "profileVersion",
+  "guidanceTemplateChecksum",
+  "toolCatalogRevision",
+  "logicalPrefixChecksum",
+  "stablePrefixMessageCount",
+  "eligibleInputTokens",
+  "identityBaseChecksum",
+  "identityChecksum",
+  "createdAt",
+  "expiresAt",
+  "artifactChecksum"
+]);
+const PROMPT_CACHE_CAPABILITY_FIELDS = new Set([
+  "mode",
+  "policyVersion",
+  "minimumCacheableTokens",
+  "ttlSeconds",
+  "inputTokenSemantics",
+  "reportsCacheReadTokens",
+  "reportsCacheWriteTokens"
+]);
+const STANDALONE_PROMPT_CACHE_SCOPE_FIELDS = new Set(["kind", "scopeId"]);
+const WORKSPACE_PROMPT_CACHE_SCOPE_FIELDS = new Set(["kind", "workspaceKind", "workspaceId"]);
+
+function containsForbiddenPromptCacheData(value: unknown): boolean {
+  if (typeof value === "string") return value.includes("secret://");
+  if (Array.isArray(value)) return value.some(containsForbiddenPromptCacheData);
+  if (!isJsonObject(value)) return false;
+  return Object.entries(value).some(
+    ([key, child]) =>
+      key === "resourceRef" ||
+      key === "prompt" ||
+      key === "path" ||
+      containsForbiddenPromptCacheData(child)
+  );
+}
+
 const COMPACTION_SUMMARY_FIELDS = {
   standalone: ["userGoal", "decisions", "constraints", "openQuestions", "nextSteps"],
   writing: ["plotFacts", "characterStates", "foreshadowing", "userDecisions"],
@@ -1262,6 +1373,10 @@ function containsSensitiveDiagnosticKey(value: unknown, seen: WeakSet<object>): 
 
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyJsonFields(value: JsonObject, allowed: ReadonlySet<string>): boolean {
+  return Object.keys(value).every((field) => allowed.has(field));
 }
 
 function isMissingFileError(error: unknown): boolean {

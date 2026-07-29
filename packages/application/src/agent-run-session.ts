@@ -18,6 +18,7 @@ import {
   normalizeAgentContextSnapshot,
   normalizeAgentRunEvent,
   normalizeAgentRunSnapshot,
+  NO_AGENT_PROMPT_CACHE_CAPABILITY,
   validateAgentRunToolCatalogSnapshot,
   validateExternalToolDescriptors,
   validateAgentToolArguments,
@@ -73,7 +74,11 @@ import {
   type ToolApprovalBinding
 } from "@novel-studio/agent-engine";
 import { createHash } from "node:crypto";
-import type { LlmRoundFinishReason, LlmUsage } from "@novel-studio/llm-adapter";
+import type {
+  LlmPromptCacheRequest,
+  LlmRoundFinishReason,
+  LlmUsage
+} from "@novel-studio/llm-adapter";
 import {
   createUnifiedError,
   err,
@@ -112,6 +117,12 @@ import {
   type AgentPromptMaterialization,
   type AgentPromptMaterializationArtifact
 } from "./agent-prompt-materializer.js";
+import {
+  createAgentPromptCacheIdentityArtifact,
+  deriveAgentPromptCacheIdentityChecksum,
+  parseAgentPromptCacheIdentityArtifact,
+  type AgentPromptCacheIdentityArtifact
+} from "./agent-prompt-cache.js";
 import {
   createAgentContextSourceMaterializationArtifact,
   parseAgentContextSourceMaterializationArtifact
@@ -216,6 +227,8 @@ export interface AgentModelRoundInput {
    * driver prepends it as the leading system message; it is trusted authority, not project data.
    */
   readonly systemPrompt?: string;
+  /** Main-owned provider cache request. Renderer/model input can never author this value. */
+  readonly promptCache?: LlmPromptCacheRequest;
 }
 
 export interface AgentRunModelDriver {
@@ -382,6 +395,10 @@ export interface AgentRunStartModelFacts {
   readonly capabilities: AgentModelCapabilityDeclaration;
   readonly requiredContextTokens: number;
   readonly reasoningStrength: ModelReasoningStrengthControl;
+  /** Main-derived endpoint identity; never contains the Base URL or secret itself. */
+  readonly connectionIdentityChecksum?: string;
+  /** Main-derived account isolation identity; only the final composite cache identity is persisted. */
+  readonly accountIsolationChecksum?: string;
 }
 
 /**
@@ -479,6 +496,14 @@ export interface AgentRunPersistencePort {
     artifact: JsonObject
   ): Promise<Result<JsonObject, UnifiedError>>;
   readPromptMaterialization?(
+    runId: string,
+    artifactId: string
+  ): Promise<Result<JsonObject | undefined, UnifiedError>>;
+  writePromptCacheArtifact?(
+    runId: string,
+    artifact: JsonObject
+  ): Promise<Result<JsonObject, UnifiedError>>;
+  readPromptCacheArtifact?(
     runId: string,
     artifactId: string
   ): Promise<Result<JsonObject | undefined, UnifiedError>>;
@@ -758,6 +783,7 @@ interface RunRuntime {
   readonly messages: AgentModelMessage[];
   promptBaseMessageCount: number;
   promptArtifact?: AgentPromptMaterializationArtifact;
+  promptCacheArtifact?: AgentPromptCacheIdentityArtifact;
   systemPrompt: string;
   readonly seenToolCallIds: Set<string>;
   controller: AbortController;
@@ -1099,6 +1125,26 @@ function promptArtifactBinding(runtime: RunRuntime):
       ...artifact.contextSources.map((source) => source.refId)
     ]
   };
+}
+
+function estimatePromptCacheEligibleTokens(
+  prompt: AgentPromptMaterialization | AgentPromptMaterializationArtifact,
+  tools: readonly AgentToolDescriptor[],
+  modelProfileId: string,
+  estimator: AgentTokenEstimator = createDeterministicTokenEstimator()
+): number {
+  return estimator.count(
+    JSON.stringify({
+      systemPrompt: prompt.systemPrompt,
+      stablePrefixMessages: prompt.stablePrefixMessages,
+      tools: tools.map((tool) => ({
+        name: tool.name,
+        ...(tool.description === undefined ? {} : { description: tool.description }),
+        inputSchema: tool.inputSchema
+      }))
+    }),
+    modelProfileId
+  ).tokens;
 }
 
 function rewriteBoundContextHistory(
@@ -1933,6 +1979,72 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     }
   }
 
+  async function hydratePromptCacheArtifact(
+    snapshot: AgentRunSnapshot,
+    prompt: AgentPromptMaterializationArtifact | undefined
+  ): Promise<Result<AgentPromptCacheIdentityArtifact | undefined, UnifiedError>> {
+    const capability = snapshot.providerCapabilitySnapshot.promptCache;
+    if (snapshot.promptCacheArtifactId === null) {
+      return capability.mode === "none"
+        ? ok(undefined)
+        : err(
+            applicationError(
+              "AGENT_PROMPT_CACHE_ARTIFACT_MISSING",
+              "The frozen prompt cache artifact is missing."
+            )
+          );
+    }
+    if (options.repository.readPromptCacheArtifact === undefined) {
+      return err(
+        applicationError(
+          "AGENT_PROMPT_CACHE_ARTIFACT_UNAVAILABLE",
+          "The frozen prompt cache artifact repository is unavailable."
+        )
+      );
+    }
+    const read = await options.repository.readPromptCacheArtifact(
+      snapshot.runId,
+      snapshot.promptCacheArtifactId
+    );
+    if (!read.ok) return read;
+    if (read.value === undefined) {
+      return err(
+        applicationError(
+          "AGENT_PROMPT_CACHE_ARTIFACT_MISSING",
+          "The frozen prompt cache artifact could not be found."
+        )
+      );
+    }
+    try {
+      const artifact = parseAgentPromptCacheIdentityArtifact(read.value);
+      const currentIdentity = deriveAgentPromptCacheIdentityChecksum(
+        artifact.identityBaseChecksum,
+        snapshot.cachePrefixChecksum
+      );
+      if (
+        artifact.artifactId !== snapshot.promptCacheArtifactId ||
+        artifact.provider !== snapshot.providerCapabilitySnapshot.provider ||
+        artifact.modelName !== snapshot.providerCapabilitySnapshot.modelName ||
+        artifact.identityBaseChecksum !== snapshot.promptCacheIdentityBaseChecksum ||
+        currentIdentity !== snapshot.promptCacheIdentityChecksum ||
+        artifact.capability.policyVersion !== snapshot.promptCachePolicyVersion ||
+        artifact.capability.mode !== capability.mode ||
+        (prompt !== undefined &&
+          snapshot.promptCacheStablePrefixMessageCount !== 1 + prompt.stablePrefixMessages.length)
+      ) {
+        throw new Error("AGENT_PROMPT_CACHE_ARTIFACT_INVALID");
+      }
+      return ok(artifact);
+    } catch {
+      return err(
+        applicationError(
+          "AGENT_PROMPT_CACHE_ARTIFACT_INVALID",
+          "The frozen prompt cache artifact is invalid."
+        )
+      );
+    }
+  }
+
   async function hydrateRunOnce(runId: string): Promise<AgentRunCommandResult> {
     const existing = coordinator.readSnapshot(runId);
     if (existing !== undefined) return { ok: true, value: existing };
@@ -2009,6 +2121,14 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         "The frozen prompt materialization could not be found."
       );
     }
+    const restoredPromptCacheArtifactResult = await hydratePromptCacheArtifact(
+      persistedSnapshot,
+      restoredPromptArtifact
+    );
+    if (!restoredPromptCacheArtifactResult.ok) {
+      return { ok: false, error: restoredPromptCacheArtifactResult.error };
+    }
+    const restoredPromptCacheArtifact = restoredPromptCacheArtifactResult.value;
     const restored = coordinator.restoreRun(persistedSnapshot, events);
     if (!restored.ok) return restored;
     const snapshot = restored.value;
@@ -2092,6 +2212,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       messages,
       promptBaseMessageCount,
       ...(restoredPromptArtifact === undefined ? {} : { promptArtifact: restoredPromptArtifact }),
+      ...(restoredPromptCacheArtifact === undefined
+        ? {}
+        : { promptCacheArtifact: restoredPromptCacheArtifact }),
       systemPrompt:
         restoredPromptArtifact?.systemPrompt ?? buildAgentSystemPrompt(snapshot.contextProfileId),
       seenToolCallIds: new Set(
@@ -2959,10 +3082,11 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     }
     const budget = await options.usageBudgetResolver(input.snapshot);
     if (!budget.ok) return err(budget.error);
-    const pricing = priceRoundUsage(input.snapshot, input.usage);
+    const usage = normalizeCacheUsage(input.snapshot, input.usage);
+    const pricing = priceRoundUsage(input.snapshot, usage);
     const time = (options.usageTime ?? currentAgentUsageTime)();
     const record: AgentUsageRecord = {
-      schemaVersion: "1.1",
+      schemaVersion: "1.2",
       scope: input.snapshot.scope,
       usageId: usageRecordIdempotencyKey({
         runId: input.snapshot.runId,
@@ -2975,15 +3099,29 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       finalSequence: input.finalSequence,
       provider: input.snapshot.providerCapabilitySnapshot.provider,
       model: input.snapshot.providerCapabilitySnapshot.modelName,
-      inputTokens: input.usage.inputTokens,
-      outputTokens: input.usage.outputTokens,
-      ...(input.usage.cachedTokens === undefined ? {} : { cachedTokens: input.usage.cachedTokens }),
-      ...(input.usage.reasoningTokens === undefined
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      ...(usage.cacheReadTokens === undefined
         ? {}
-        : { reasoningTokens: input.usage.reasoningTokens }),
-      totalTokens: input.usage.totalTokens,
-      usageStatus: input.usage.usageStatus,
-      precision: usagePrecision(input.usage.usageStatus),
+        : { cachedTokens: usage.cacheReadTokens, cacheReadTokens: usage.cacheReadTokens }),
+      ...(usage.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: usage.cacheWriteTokens }),
+      ...(usage.cacheEligibleInputTokens === undefined
+        ? {}
+        : { cacheEligibleInputTokens: usage.cacheEligibleInputTokens }),
+      cacheOutcome: usage.cacheOutcome ?? "unknown",
+      ...(usage.cacheBypassReason === undefined
+        ? {}
+        : { cacheBypassReason: usage.cacheBypassReason }),
+      cacheUsageStatus: usage.cacheUsageStatus ?? "unavailable",
+      cacheInputTokenSemantics: usage.cacheInputTokenSemantics ?? "unavailable",
+      cacheMode: input.snapshot.providerCapabilitySnapshot.promptCache?.mode ?? null,
+      cachePrefixChecksum: isChecksum(input.snapshot.cachePrefixChecksum)
+        ? input.snapshot.cachePrefixChecksum
+        : null,
+      ...(usage.reasoningTokens === undefined ? {} : { reasoningTokens: usage.reasoningTokens }),
+      totalTokens: usage.totalTokens,
+      usageStatus: usage.usageStatus,
+      precision: usagePrecision(usage.usageStatus),
       pricingVersion: pricing.pricingVersion,
       unitPrices: pricing.unitPrices,
       cost: pricing.cost,
@@ -4893,13 +5031,70 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           : { contextSources: startInput.initialContextSources }),
         conversationSummaryMessages: materializeAgentConversationContext(conversationContext)
       });
+      const promptCacheCapability =
+        startInput.providerCapabilitySnapshot.promptCache ?? NO_AGENT_PROMPT_CACHE_CAPABILITY;
+      if (
+        promptCacheCapability.mode !== "none" &&
+        options.repository.writePromptCacheArtifact === undefined
+      ) {
+        await cancelConversationStart();
+        return recordPreflightFailure(
+          command,
+          applicationError(
+            "AGENT_PROMPT_CACHE_ARTIFACT_UNAVAILABLE",
+            "The frozen prompt cache artifact repository is unavailable."
+          ),
+          preflight.value.model
+        );
+      }
+      const promptCacheArtifact = createAgentPromptCacheIdentityArtifact({
+        runBindingId: command.commandId,
+        provider: startInput.providerCapabilitySnapshot.provider,
+        modelName: startInput.providerCapabilitySnapshot.modelName,
+        connectionIdentityChecksum:
+          startInput.promptCacheConnectionIdentityChecksum ??
+          createHash("sha256")
+            .update(
+              `connection-unavailable\u0000${startInput.providerCapabilitySnapshot.profileId}`,
+              "utf8"
+            )
+            .digest("hex"),
+        accountIsolationChecksum:
+          startInput.promptCacheAccountIsolationChecksum ??
+          createHash("sha256")
+            .update(
+              `account-unavailable\u0000${startInput.providerCapabilitySnapshot.profileId}`,
+              "utf8"
+            )
+            .digest("hex"),
+        capability: promptCacheCapability,
+        scope: startInput.scope ?? commandScope,
+        contextProfileId: startProfile.profileId,
+        profileVersion: startProfile.profileVersion,
+        guidanceTemplateChecksum: createHash("sha256")
+          .update(initialMaterialization.systemPrompt, "utf8")
+          .digest("hex"),
+        toolCatalogRevision: newRunCatalogRevision,
+        logicalPrefixChecksum: initialMaterialization.stablePrefixChecksum,
+        stablePrefixMessageCount: 1 + initialMaterialization.stablePrefixMessages.length,
+        eligibleInputTokens: estimatePromptCacheEligibleTokens(
+          initialMaterialization,
+          newRunDescriptors,
+          startInput.providerCapabilitySnapshot.profileId,
+          options.contextBudgetEstimator
+        ),
+        createdAt: new Date().toISOString()
+      });
       const startBudgetId = `budget_start_${createHash("sha256")
         .update(`${scopeKey}:${command.commandId}`, "utf8")
         .digest("hex")
         .slice(0, 32)}`;
       const startBudget = calculateSessionBudget({
         contextBudgetSnapshotId: startBudgetId,
-        capability: startInput.providerCapabilitySnapshot,
+        capability: {
+          ...startInput.providerCapabilitySnapshot,
+          promptCache: promptCacheCapability
+        },
         profile: startProfile,
         prompt: initialMaterialization,
         contextSources: startInput.initialContextSources ?? [],
@@ -4916,9 +5111,22 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       }
       const catalogStartInput = {
         ...startInput,
+        providerCapabilitySnapshot: {
+          ...startInput.providerCapabilitySnapshot,
+          promptCache:
+            startInput.providerCapabilitySnapshot.promptCache ?? NO_AGENT_PROMPT_CACHE_CAPABILITY
+        },
         scope: startInput.scope ?? commandScope,
         contextBudgetSnapshotId: startBudget.value.contextBudgetSnapshotId,
+        promptCachePolicyVersion: promptCacheCapability.policyVersion,
         cachePrefixChecksum: initialMaterialization.stablePrefixChecksum,
+        promptCacheArtifactId:
+          options.repository.writePromptCacheArtifact === undefined
+            ? null
+            : promptCacheArtifact.artifactId,
+        promptCacheIdentityBaseChecksum: promptCacheArtifact.identityBaseChecksum,
+        promptCacheIdentityChecksum: promptCacheArtifact.identityChecksum,
+        promptCacheStablePrefixMessageCount: promptCacheArtifact.stablePrefixMessageCount,
         toolFacadeVersion: newRunToolFacadeVersion,
         toolCatalogRevision: newRunCatalogRevision
       };
@@ -4966,6 +5174,15 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           return rejectUnpersistedStart(error);
         }
       }
+      if (options.repository.writePromptCacheArtifact !== undefined) {
+        const cacheArtifactPersisted = await options.repository.writePromptCacheArtifact(
+          result.value.runId,
+          asJsonObject(promptCacheArtifact)
+        );
+        if (!cacheArtifactPersisted.ok) {
+          return rejectUnpersistedStart(cacheArtifactPersisted.error);
+        }
+      }
       toolCatalogs.set(result.value.runId, catalog);
       providerMappingsByRun.set(result.value.runId, newRunProviderMapping);
       const initialContextSources = [...(startInput.initialContextSources ?? [])];
@@ -4973,6 +5190,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         messages: [...initialMaterialization.messages],
         promptBaseMessageCount: initialMaterialization.messages.length,
         systemPrompt: initialMaterialization.systemPrompt,
+        ...(options.repository.writePromptCacheArtifact === undefined
+          ? {}
+          : { promptCacheArtifact }),
         seenToolCallIds: new Set(),
         controller: new AbortController(),
         generation: 1,
@@ -5243,7 +5463,15 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           activeCompactionId: compacted.value.compactionId,
           contextSnapshotId: resultSnapshotId,
           contextBudgetSnapshotId: budgetSnapshotId,
-          cachePrefixChecksum: nextContextSnapshot.materialization.stablePrefixChecksum
+          cachePrefixChecksum: nextContextSnapshot.materialization.stablePrefixChecksum,
+          promptCacheIdentityChecksum: nextPromptCacheIdentityChecksum(
+            snapshot,
+            nextContextSnapshot.materialization.stablePrefixChecksum
+          ),
+          promptCacheStablePrefixMessageCount:
+            nextPromptResult.value === undefined
+              ? snapshot.promptCacheStablePrefixMessageCount
+              : 1 + nextPromptResult.value.stablePrefixMessages.length
         },
         detail: {
           compactionId: compacted.value.compactionId,
@@ -5825,6 +6053,48 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         contextSources: runtime.contextSources,
         conversationSummaryMessages: executionConversationSummary
       });
+      const executionPromptCacheArtifact =
+        runtime.promptCacheArtifact === undefined
+          ? undefined
+          : createAgentPromptCacheIdentityArtifact({
+              runBindingId: `execution_${createHash("sha256")
+                .update(command.commandId, "utf8")
+                .digest("hex")
+                .slice(0, 32)}`,
+              provider: runtime.promptCacheArtifact.provider,
+              modelName: runtime.promptCacheArtifact.modelName,
+              connectionIdentityChecksum: runtime.promptCacheArtifact.connectionIdentityChecksum,
+              accountIsolationChecksum: runtime.promptCacheArtifact.accountIsolationChecksum,
+              adapterVersion: runtime.promptCacheArtifact.adapterVersion,
+              capability: snapshot.providerCapabilitySnapshot.promptCache,
+              scope: snapshot.scope,
+              contextProfileId: executionProfile.profileId,
+              profileVersion: executionProfile.profileVersion,
+              guidanceTemplateChecksum: createHash("sha256")
+                .update(executionSystemPrompt, "utf8")
+                .digest("hex"),
+              toolCatalogRevision: executionCatalogRevision,
+              logicalPrefixChecksum: executionMaterialization.stablePrefixChecksum,
+              stablePrefixMessageCount: 1 + executionMaterialization.stablePrefixMessages.length,
+              eligibleInputTokens: estimatePromptCacheEligibleTokens(
+                executionMaterialization,
+                executionDescriptors,
+                snapshot.providerCapabilitySnapshot.profileId,
+                options.contextBudgetEstimator
+              ),
+              createdAt: new Date().toISOString()
+            });
+      if (
+        snapshot.providerCapabilitySnapshot.promptCache.mode !== "none" &&
+        (executionPromptCacheArtifact === undefined ||
+          options.repository.writePromptCacheArtifact === undefined)
+      ) {
+        await cancelExecutionStart();
+        return failure(
+          "AGENT_PROMPT_CACHE_ARTIFACT_UNAVAILABLE",
+          "The execution prompt cache artifact is unavailable."
+        );
+      }
       const approvedPlanMessage: AgentModelMessage = {
         role: "user",
         content: JSON.stringify({
@@ -5885,6 +6155,12 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         conventionsArtifactId: snapshot.conventionsArtifactId,
         promptCachePolicyVersion: snapshot.promptCachePolicyVersion,
         cachePrefixChecksum: executionMaterialization.stablePrefixChecksum,
+        promptCacheArtifactId: executionPromptCacheArtifact?.artifactId ?? null,
+        promptCacheIdentityBaseChecksum:
+          executionPromptCacheArtifact?.identityBaseChecksum ?? "legacy",
+        promptCacheIdentityChecksum: executionPromptCacheArtifact?.identityChecksum ?? "legacy",
+        promptCacheStablePrefixMessageCount:
+          executionPromptCacheArtifact?.stablePrefixMessageCount ?? 0,
         toolFacadeVersion: newRunToolFacadeVersion,
         toolCatalogRevision: executionCatalogRevision,
         ...(executionPermissionSummary === undefined
@@ -5928,12 +6204,27 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           return rejectUnpersistedExecution(error);
         }
       }
+      if (
+        executionPromptCacheArtifact !== undefined &&
+        options.repository.writePromptCacheArtifact !== undefined
+      ) {
+        const cacheArtifactWritten = await options.repository.writePromptCacheArtifact(
+          executionStarted.value.runId,
+          asJsonObject(executionPromptCacheArtifact)
+        );
+        if (!cacheArtifactWritten.ok) {
+          return rejectUnpersistedExecution(cacheArtifactWritten.error);
+        }
+      }
       toolCatalogs.set(executionStarted.value.runId, executionCatalog);
       providerMappingsByRun.set(executionStarted.value.runId, executionProviderMapping);
       const executionRuntime: RunRuntime = {
         messages: [...executionMaterialization.messages, approvedPlanMessage],
         promptBaseMessageCount: executionMaterialization.messages.length,
         systemPrompt: executionSystemPrompt,
+        ...(executionPromptCacheArtifact === undefined
+          ? {}
+          : { promptCacheArtifact: executionPromptCacheArtifact }),
         seenToolCallIds: new Set(),
         controller: new AbortController(),
         generation: 1,
@@ -6417,6 +6708,14 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
               ?.materialization?.artifactId ?? null,
           cachePrefixChecksum:
             runtime.promptArtifact?.stablePrefixChecksum ?? snapshot.cachePrefixChecksum,
+          promptCacheIdentityChecksum: nextPromptCacheIdentityChecksum(
+            snapshot,
+            runtime.promptArtifact?.stablePrefixChecksum ?? snapshot.cachePrefixChecksum
+          ),
+          promptCacheStablePrefixMessageCount:
+            runtime.promptArtifact === undefined
+              ? snapshot.promptCacheStablePrefixMessageCount
+              : 1 + runtime.promptArtifact.stablePrefixMessages.length,
           activeErrorId: null,
           recoveryState: "none"
         },
@@ -7934,14 +8233,45 @@ function readRecoverability(source: unknown): UnifiedError["recoverability"] | u
 
 function addRoundUsage(base: AgentRunUsageSummary, usage: LlmUsage): AgentRunUsageSummary {
   const hasPriorUsage = base.inputTokens > 0 || base.outputTokens > 0 || base.totalTokens > 0;
-  const cachedTokens = (base.cachedTokens ?? 0) + (usage.cachedTokens ?? 0);
+  const nextCacheReadTokens = usage.cacheReadTokens ?? usage.cachedTokens;
+  const cacheReadTokens =
+    (base.cacheReadTokens ?? base.cachedTokens ?? 0) + (nextCacheReadTokens ?? 0);
+  const cacheWriteTokens = (base.cacheWriteTokens ?? 0) + (usage.cacheWriteTokens ?? 0);
+  const cacheEligibleInputTokens =
+    (base.cacheEligibleInputTokens ?? 0) + (usage.cacheEligibleInputTokens ?? 0);
   const reasoningTokens = (base.reasoningTokens ?? 0) + (usage.reasoningTokens ?? 0);
+  const cacheOutcome = aggregateCacheOutcome(base.cacheOutcome, usage.cacheOutcome, hasPriorUsage);
+  const cacheBypassReason =
+    cacheOutcome === "bypass" &&
+    (!hasPriorUsage || base.cacheBypassReason === usage.cacheBypassReason)
+      ? usage.cacheBypassReason
+      : undefined;
   return {
     inputTokens: base.inputTokens + usage.inputTokens,
     outputTokens: base.outputTokens + usage.outputTokens,
-    ...(base.cachedTokens === undefined && usage.cachedTokens === undefined
+    ...(base.cacheReadTokens === undefined &&
+    base.cachedTokens === undefined &&
+    nextCacheReadTokens === undefined
       ? {}
-      : { cachedTokens }),
+      : { cachedTokens: cacheReadTokens, cacheReadTokens }),
+    ...(base.cacheWriteTokens === undefined && usage.cacheWriteTokens === undefined
+      ? {}
+      : { cacheWriteTokens }),
+    ...(base.cacheEligibleInputTokens === undefined && usage.cacheEligibleInputTokens === undefined
+      ? {}
+      : { cacheEligibleInputTokens }),
+    cacheOutcome,
+    ...(cacheBypassReason === undefined ? {} : { cacheBypassReason }),
+    cacheUsageStatus: aggregateCacheUsageStatus(
+      base.cacheUsageStatus,
+      usage.cacheUsageStatus,
+      hasPriorUsage
+    ),
+    cacheInputTokenSemantics: aggregateCacheInputSemantics(
+      base.cacheInputTokenSemantics,
+      usage.cacheInputTokenSemantics,
+      hasPriorUsage
+    ),
     ...(base.reasoningTokens === undefined && usage.reasoningTokens === undefined
       ? {}
       : { reasoningTokens }),
@@ -7953,15 +8283,68 @@ function addRoundUsage(base: AgentRunUsageSummary, usage: LlmUsage): AgentRunUsa
 }
 
 function usageUpdatedDetail(roundId: string, usage: LlmUsage): JsonObject {
+  const cacheReadTokens = usage.cacheReadTokens ?? usage.cachedTokens;
   return {
     roundId,
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
     totalTokens: usage.totalTokens,
     usageStatus: usage.usageStatus,
-    ...(usage.cachedTokens === undefined ? {} : { cachedTokens: usage.cachedTokens }),
+    ...(cacheReadTokens === undefined ? {} : { cachedTokens: cacheReadTokens, cacheReadTokens }),
+    ...(usage.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: usage.cacheWriteTokens }),
+    ...(usage.cacheEligibleInputTokens === undefined
+      ? {}
+      : { cacheEligibleInputTokens: usage.cacheEligibleInputTokens }),
+    cacheOutcome: usage.cacheOutcome ?? "unknown",
+    ...(usage.cacheBypassReason === undefined
+      ? {}
+      : { cacheBypassReason: usage.cacheBypassReason }),
+    cacheUsageStatus: usage.cacheUsageStatus ?? "unavailable",
     ...(usage.reasoningTokens === undefined ? {} : { reasoningTokens: usage.reasoningTokens })
   };
+}
+
+function normalizeCacheUsage(snapshot: AgentRunSnapshot, usage: LlmUsage): LlmUsage {
+  const cacheReadTokens = usage.cacheReadTokens ?? usage.cachedTokens;
+  return {
+    ...usage,
+    ...(cacheReadTokens === undefined ? {} : { cachedTokens: cacheReadTokens, cacheReadTokens }),
+    cacheOutcome: usage.cacheOutcome ?? "unknown",
+    cacheUsageStatus: usage.cacheUsageStatus ?? "unavailable",
+    cacheInputTokenSemantics:
+      usage.cacheInputTokenSemantics ??
+      snapshot.providerCapabilitySnapshot.promptCache?.inputTokenSemantics ??
+      "unavailable"
+  };
+}
+
+function aggregateCacheOutcome(
+  prior: AgentRunUsageSummary["cacheOutcome"],
+  next: LlmUsage["cacheOutcome"],
+  hasPriorUsage: boolean
+): AgentRunUsageSummary["cacheOutcome"] {
+  const current = next ?? "unknown";
+  return !hasPriorUsage ? current : prior === current ? prior : "unknown";
+}
+
+function aggregateCacheUsageStatus(
+  prior: AgentRunUsageSummary["cacheUsageStatus"],
+  next: LlmUsage["cacheUsageStatus"],
+  hasPriorUsage: boolean
+): AgentRunUsageSummary["cacheUsageStatus"] {
+  const current = next ?? "unavailable";
+  if (!hasPriorUsage) return current;
+  if (prior === "unavailable" || current === "unavailable") return "unavailable";
+  return prior === "derived" || current === "derived" ? "derived" : "actual";
+}
+
+function aggregateCacheInputSemantics(
+  prior: AgentRunUsageSummary["cacheInputTokenSemantics"],
+  next: LlmUsage["cacheInputTokenSemantics"],
+  hasPriorUsage: boolean
+): AgentRunUsageSummary["cacheInputTokenSemantics"] {
+  const current = next ?? "unavailable";
+  return !hasPriorUsage ? current : prior === current ? prior : "unavailable";
 }
 
 function missingRoundUsage(): LlmUsage {
@@ -8087,6 +8470,22 @@ function storedSnapshotMatchesScope(stored: JsonObject, scope: AgentContextScope
   }
 }
 
+function isChecksum(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+}
+
+function nextPromptCacheIdentityChecksum(
+  snapshot: AgentRunSnapshot,
+  logicalPrefixChecksum: string
+): string {
+  return isChecksum(snapshot.promptCacheIdentityBaseChecksum) && isChecksum(logicalPrefixChecksum)
+    ? deriveAgentPromptCacheIdentityChecksum(
+        snapshot.promptCacheIdentityBaseChecksum,
+        logicalPrefixChecksum
+      )
+    : "legacy";
+}
+
 /**
  * Turn a draft-only start command plus the server-resolved facts into the internal wide start input
  * the coordinator consumes. This is where the two server-authoritative gates live: the model
@@ -8125,6 +8524,16 @@ function resolveStartInput(
     requireToolCapabilities: contextProfile.value.profileId !== "standalone"
   });
   if (!capability.ok) return err(capability.error);
+  const cacheIdentityAvailable =
+    isChecksum(facts.model.connectionIdentityChecksum) &&
+    isChecksum(facts.model.accountIsolationChecksum);
+  const providerCapabilitySnapshot =
+    capability.value.promptCache.mode === "none" || cacheIdentityAvailable
+      ? capability.value
+      : {
+          ...capability.value,
+          promptCache: NO_AGENT_PROMPT_CACHE_CAPABILITY
+        };
   const reasoning = resolveAgentReasoningEffort({
     profileId: facts.model.profileId,
     modelName: facts.model.modelName,
@@ -8154,13 +8563,19 @@ function resolveStartInput(
       ? { writePolicyAcknowledged: true as const }
       : {}),
     userRequest: facts.userRequest,
-    providerCapabilitySnapshot: capability.value,
+    providerCapabilitySnapshot,
     contextProfileId: contextProfile.value.profileId,
     profileVersion: contextProfile.value.profileVersion,
     guidanceTemplateChecksum: createHash("sha256").update(systemPrompt, "utf8").digest("hex"),
     conventionsArtifactId,
     promptCachePolicyVersion: "none@1.0",
     cachePrefixChecksum: "pending",
+    ...(cacheIdentityAvailable
+      ? {
+          promptCacheConnectionIdentityChecksum: facts.model.connectionIdentityChecksum,
+          promptCacheAccountIsolationChecksum: facts.model.accountIsolationChecksum
+        }
+      : {}),
     ...(reasoning.value.reasoningEffort === undefined
       ? {}
       : { reasoningEffort: reasoning.value.reasoningEffort }),

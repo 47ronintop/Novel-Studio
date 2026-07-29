@@ -286,6 +286,105 @@ describe("M95 real provider runtime", () => {
     }
   );
 
+  test("creates, uses, accounts for, and releases a scoped Gemini cache resource", async () => {
+    const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-gemini-cache-runtime-"));
+    tempRoots.push(userDataRoot);
+    const calls: FetchCall[] = [];
+    const secretRef = "secret://model_google-gemini/cache-runtime-key";
+    const modelProfile = {
+      id: "model_google-gemini_cache",
+      provider: "google-gemini" as const,
+      displayName: "Gemini cache runtime",
+      modelName: "gemini-1.5-pro",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      apiKeyRef: secretRef,
+      timeoutMs: 60_000
+    };
+    const secretStore = createEncryptedFileModelSecretStore({
+      userDataRoot,
+      cipher: testCipher
+    });
+    await secretStore.saveSecret(secretRef, "gemini-cache-secret");
+    await secretStore.markVerified(secretRef, modelProfile);
+    const runtime = createDesktopModelRuntime({
+      userDataRoot,
+      secretStore,
+      fetch: createGeminiCacheStreamingFetch(calls)
+    });
+    const scopeKey = "workspace:engineeringWorkspace:workspace_cache";
+    const driver = runtime.createAgentModelDriver({
+      modelProfile,
+      parameters: { maxTokens: 8 },
+      promptCacheScopeKey: scopeKey
+    });
+    const events: Record<string, unknown>[] = [];
+
+    for await (const event of driver.streamRound({
+      runId: "run_gemini_cache",
+      snapshot: {
+        runRevision: 1,
+        operationMode: "execution",
+        contextMode: "writing",
+        userRequest: "Dynamic request."
+      } as never,
+      systemPrompt: "System guidance.",
+      messages: [
+        { role: "user", content: "Stable project context." },
+        { role: "user", content: "Dynamic request." }
+      ],
+      tools: [],
+      promptCache: {
+        mode: "explicit_resource",
+        policyVersion: "gemini-resource@1.0",
+        identityChecksum: "a".repeat(64),
+        logicalPrefixChecksum: "b".repeat(64),
+        stablePrefixMessageCount: 2,
+        minimumCacheableTokens: 1,
+        eligibleInputTokens: 20,
+        ttlSeconds: 300
+      },
+      signal: new AbortController().signal
+    })) {
+      events.push(event as unknown as Record<string, unknown>);
+    }
+
+    expect(calls[0]).toMatchObject({
+      url: "https://generativelanguage.googleapis.com/v1beta/cachedContents",
+      method: "POST",
+      headers: { "x-goog-api-key": "gemini-cache-secret" },
+      body: {
+        contents: [{ role: "user", parts: [{ text: "Stable project context." }] }],
+        systemInstruction: { parts: [{ text: "System guidance." }] }
+      }
+    });
+    expect(calls[1]).toMatchObject({
+      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:streamGenerateContent?alt=sse",
+      body: {
+        contents: [{ role: "user", parts: [{ text: "Dynamic request." }] }],
+        cachedContent: "cachedContents/cache_runtime"
+      }
+    });
+    expect(events).toContainEqual({
+      type: "usage",
+      usage: expect.objectContaining({
+        cacheReadTokens: 20,
+        cacheWriteTokens: 20,
+        cacheEligibleInputTokens: 20,
+        cacheOutcome: "hit",
+        cacheUsageStatus: "actual"
+      })
+    });
+
+    runtime.releasePromptCacheScope(scopeKey);
+    await runtime.dispose();
+    expect(calls.filter((call) => call.method === "DELETE")).toEqual([
+      expect.objectContaining({
+        url: "https://generativelanguage.googleapis.com/v1beta/cachedContents/cache_runtime",
+        headers: { "x-goog-api-key": "gemini-cache-secret" }
+      })
+    ]);
+  });
+
   test("reports non-JSON provider responses as actionable Base URL errors", async () => {
     const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-runtime-html-"));
     tempRoots.push(userDataRoot);
@@ -822,6 +921,52 @@ function createFiniteStreamingFetch(calls: FetchCall[], chunks: readonly unknown
           for (const chunk of chunks) {
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
           }
+          controller.close();
+        }
+      }),
+      { status: 200, headers: { "content-type": "text/event-stream" } }
+    );
+  }) as typeof fetch;
+}
+
+function createGeminiCacheStreamingFetch(calls: FetchCall[]): typeof fetch {
+  return (async (url, init) => {
+    const call: FetchCall = {
+      url: String(url),
+      method: init?.method,
+      headers: normalizeHeaders(init?.headers),
+      ...(typeof init?.body === "string" ? { body: JSON.parse(init.body) as unknown } : {})
+    };
+    calls.push(call);
+    if (call.method === "DELETE") return new Response(null, { status: 204 });
+    if (call.url.endsWith("/cachedContents")) {
+      return new Response(
+        JSON.stringify({
+          name: "cachedContents/cache_runtime",
+          usageMetadata: { totalTokenCount: 20 }
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    const payload = {
+      candidates: [
+        {
+          content: { role: "model", parts: [{ text: "Cached runtime response." }] },
+          finishReason: "STOP"
+        }
+      ],
+      usageMetadata: {
+        promptTokenCount: 28,
+        candidatesTokenCount: 4,
+        cachedContentTokenCount: 20,
+        totalTokenCount: 32
+      }
+    };
+    const encoder = new TextEncoder();
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
           controller.close();
         }
       }),

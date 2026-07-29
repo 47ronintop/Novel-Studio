@@ -22,6 +22,7 @@ import {
 } from "@novel-studio/agent-engine";
 import {
   calculateResolvedContextBudget,
+  deriveAgentPromptCacheIdentityChecksum,
   resolveBudgetInputs,
   parseAgentPromptMaterializationArtifact,
   parseCompactionSummaryArtifact,
@@ -581,6 +582,14 @@ async function buildArtifacts(
     contextSnapshotId: resultSnapshotId,
     contextBudgetSnapshotId: budgetSnapshotId,
     cachePrefixChecksum: nextPrompt.stablePrefixChecksum,
+    promptCacheIdentityChecksum:
+      isChecksum(run.promptCacheIdentityBaseChecksum) && isChecksum(nextPrompt.stablePrefixChecksum)
+        ? deriveAgentPromptCacheIdentityChecksum(
+            run.promptCacheIdentityBaseChecksum,
+            nextPrompt.stablePrefixChecksum
+          )
+        : "legacy",
+    promptCacheStablePrefixMessageCount: 1 + nextPrompt.stablePrefixMessages.length,
     updatedAt: createdAt
   };
 
@@ -591,6 +600,10 @@ async function buildArtifacts(
     usageRecord: usageRecord.value as unknown as JsonObject,
     runSnapshot
   });
+}
+
+function isChecksum(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
 }
 
 function bindCompactionSummaryArtifact(
@@ -768,7 +781,7 @@ function buildUsageRecord(input: {
     cost: { amount: 0, currency: "", status: "unknown" as const }
   };
   const record: AgentUsageRecord = {
-    schemaVersion: "1.1",
+    schemaVersion: "1.2",
     scope,
     usageId: usageRecordIdempotencyKey({ runId, roundId: compactionId, finalSequence }),
     runId,
@@ -779,6 +792,11 @@ function buildUsageRecord(input: {
     model: String(capability["modelName"] ?? ""),
     inputTokens,
     outputTokens,
+    cacheOutcome: "unknown",
+    cacheUsageStatus: "unavailable",
+    cacheInputTokenSemantics: "unavailable",
+    cacheMode: null,
+    cachePrefixChecksum: null,
     totalTokens: inputTokens + outputTokens,
     usageStatus,
     precision: request.precision,

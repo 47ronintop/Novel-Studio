@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 import type { JsonObject } from "@novel-studio/shared";
 
@@ -11,6 +13,11 @@ import {
   parseAgentPromptMaterializationArtifact,
   rematerializeAgentPromptArtifact
 } from "../src/agent-prompt-materializer.js";
+import {
+  checksumProjectContext,
+  createWorkspaceOutlineSource,
+  type WorkspaceOutlineDependencyManifest
+} from "../src/workspace-project-context.js";
 
 const profile = resolveAgentContextProfile(
   { kind: "workspace", workspaceKind: "creativeProject", workspaceId: "project_1" },
@@ -87,6 +94,69 @@ describe("Agent prompt materializer", () => {
 
     expect(create("first", "body one").stablePrefixChecksum).toBe(
       create("second", "body two").stablePrefixChecksum
+    );
+  });
+
+  it("invalidates the logical prefix when an outline manifest changes without a text change", () => {
+    const source = (treeRevision: string) => {
+      const dependencyManifest: WorkspaceOutlineDependencyManifest = {
+        schemaVersion: "1.0",
+        readerVersion: "1.0",
+        profileId: "creative_general",
+        workspace: {
+          workspaceKind: "creativeProject",
+          workspaceId: "project_1",
+          canonicalRootIdentity: "b".repeat(64)
+        },
+        limits: {
+          maxDepth: 2,
+          maxEntries: 200,
+          maxScannedEntries: 1_000,
+          maxBytes: 65_536,
+          maxDurationMs: 200,
+          maxTokens: 1_500
+        },
+        truncated: false,
+        truncationReasons: [],
+        dependency: {
+          kind: "creative_file_tree",
+          treeRevision,
+          policyVersion: "1.0",
+          visibleNodeChecksum: "a".repeat(64)
+        }
+      };
+      return createWorkspaceOutlineSource({
+        workspaceTrust: "trusted",
+        result: {
+          entries: [],
+          text: "same visible outline",
+          dependencyManifest,
+          dependencyManifestChecksum: checksumProjectContext(dependencyManifest),
+          materializedChecksum: createHash("sha256")
+            .update("same visible outline", "utf8")
+            .digest("hex"),
+          tokenCount: 3,
+          truncationRange: null
+        }
+      }).source;
+    };
+    const materialize = (treeRevision: string) =>
+      materializeAgentPrompt({
+        profile,
+        systemPrompt: "trusted app prompt",
+        toolCatalogRevision: "catalog_1",
+        userRequest: "Edit the notes",
+        contextSources: [source(treeRevision)]
+      });
+
+    expect(materialize("tree_1").stablePrefixMessages[0]?.content).toContain(
+      "same visible outline"
+    );
+    expect(materialize("tree_2").stablePrefixMessages[0]?.content).toContain(
+      "same visible outline"
+    );
+    expect(materialize("tree_1").stablePrefixChecksum).not.toBe(
+      materialize("tree_2").stablePrefixChecksum
     );
   });
 

@@ -18,6 +18,7 @@ export {
 } from "./ipc-contract.js";
 export {
   preflightAgentModelCapabilities,
+  normalizeAgentPromptCacheCapability,
   resolveCatalogAgentModelCapabilities,
   resolveAgentReasoningEffort,
   type AgentModelCapabilityCatalogEntry,
@@ -427,6 +428,17 @@ export {
   promptMaterializationArtifactId,
   rematerializeAgentPromptArtifact
 } from "./agent-prompt-materializer.js";
+export {
+  AGENT_PROMPT_CACHE_ADAPTER_VERSION,
+  AGENT_PROMPT_CACHE_ARTIFACT_VERSION,
+  createAgentPromptCacheIdentityArtifact,
+  deriveAgentPromptCacheIdentityChecksum,
+  parseAgentPromptCacheIdentityArtifact
+} from "./agent-prompt-cache.js";
+export type {
+  AgentPromptCacheIdentityArtifact,
+  CreateAgentPromptCacheIdentityArtifactInput
+} from "./agent-prompt-cache.js";
 export type {
   AgentPromptMaterializationArtifact,
   CreateAgentPromptMaterializationArtifactInput,
@@ -518,7 +530,10 @@ export type {
   UpdateAgentRunDraftCommand,
   UpdateContextDraftCommand
 } from "./agent-run-draft-session.js";
-export { createLlmAgentRunModelDriver } from "./agent-run-model-driver.js";
+export {
+  createAgentRoundPromptCacheRequest,
+  createLlmAgentRunModelDriver
+} from "./agent-run-model-driver.js";
 export {
   AGENT_CONTEXT_BUDGET_CONTRACT_VERSION,
   AGENT_MAX_TOOL_RESULT_SUMMARY_UTF8_BYTES,

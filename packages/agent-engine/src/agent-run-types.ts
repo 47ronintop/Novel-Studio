@@ -1,4 +1,11 @@
 import type { JsonObject, UnifiedError } from "@novel-studio/shared";
+import type {
+  LlmCacheInputTokenSemantics,
+  LlmCacheOutcome,
+  LlmCacheUsageStatus,
+  LlmPromptCacheBypassReason,
+  LlmPromptCacheMode
+} from "@novel-studio/llm-adapter";
 import type { ChangeSetFileSelection, ChangeSetOperationSelection } from "./change-set.js";
 import type { AgentContextSourceInput } from "./context-snapshot.js";
 import type { AgentToolFacadeVersion } from "./tool-registry.js";
@@ -50,6 +57,13 @@ export interface AgentRunUsageSummary {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly cachedTokens?: number;
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
+  readonly cacheEligibleInputTokens?: number;
+  readonly cacheOutcome: LlmCacheOutcome;
+  readonly cacheBypassReason?: LlmPromptCacheBypassReason;
+  readonly cacheUsageStatus: LlmCacheUsageStatus;
+  readonly cacheInputTokenSemantics: LlmCacheInputTokenSemantics;
   readonly reasoningTokens?: number;
   readonly totalTokens: number;
   readonly usageStatus: "actual" | "estimated" | "missing";
@@ -59,8 +73,31 @@ export const EMPTY_AGENT_RUN_USAGE_SUMMARY: AgentRunUsageSummary = {
   inputTokens: 0,
   outputTokens: 0,
   totalTokens: 0,
-  usageStatus: "missing"
+  usageStatus: "missing",
+  cacheOutcome: "unknown",
+  cacheUsageStatus: "unavailable",
+  cacheInputTokenSemantics: "unavailable"
 };
+
+export interface AgentPromptCacheCapabilitySnapshot {
+  readonly mode: LlmPromptCacheMode;
+  readonly policyVersion: string;
+  readonly minimumCacheableTokens: number;
+  readonly ttlSeconds: number | null;
+  readonly inputTokenSemantics: LlmCacheInputTokenSemantics;
+  readonly reportsCacheReadTokens: boolean;
+  readonly reportsCacheWriteTokens: boolean;
+}
+
+export const NO_AGENT_PROMPT_CACHE_CAPABILITY: AgentPromptCacheCapabilitySnapshot = Object.freeze({
+  mode: "none",
+  policyVersion: "none@1.0",
+  minimumCacheableTokens: 0,
+  ttlSeconds: null,
+  inputTokenSemantics: "unavailable",
+  reportsCacheReadTokens: false,
+  reportsCacheWriteTokens: false
+});
 
 export interface AgentProviderCapabilitySnapshot {
   readonly profileId: string;
@@ -71,6 +108,8 @@ export interface AgentProviderCapabilitySnapshot {
   readonly structuredArguments: boolean;
   readonly contextWindow: number;
   readonly requiredContextTokens: number;
+  /** Required on v1.3 snapshots; absent only on normalized historical records. */
+  readonly promptCache?: AgentPromptCacheCapabilitySnapshot;
 }
 
 export interface AgentRunLimits {
@@ -159,11 +198,29 @@ export interface AgentRunSnapshotV12 extends Omit<
   readonly projectId: string;
 }
 
+export interface AgentProviderCapabilitySnapshotV13 extends AgentProviderCapabilitySnapshot {
+  readonly promptCache: AgentPromptCacheCapabilitySnapshot;
+}
+
+/** C5 v1.3 snapshot. Cache capability and identity fields are explicit and fail closed on read. */
+export interface AgentRunSnapshotV13 extends Omit<
+  AgentRunSnapshotV12,
+  "schemaVersion" | "providerCapabilitySnapshot"
+> {
+  readonly schemaVersion: "1.3";
+  readonly providerCapabilitySnapshot: AgentProviderCapabilitySnapshotV13;
+  readonly promptCacheArtifactId: string | null;
+  readonly promptCacheIdentityBaseChecksum: string;
+  readonly promptCacheIdentityChecksum: string;
+  /** Leading provider messages, including the system message. */
+  readonly promptCacheStablePrefixMessageCount: number;
+}
+
 /**
  * The active run snapshot type consumed across Application/IPC/renderer. Aliased to the v1.1 view:
  * new runs are authored as v1.1 and old v1.0 files are normalized on read.
  */
-export type AgentRunSnapshot = AgentRunSnapshotV12;
+export type AgentRunSnapshot = AgentRunSnapshotV13;
 
 /** The persisted v1.0 run event shape. Retained for read compatibility with pre-Stage-5 files. */
 export interface AgentRunEventV10 {
@@ -355,6 +412,8 @@ export interface AgentRunSnapshotPatch {
   readonly toolCatalogRevision?: string | null;
   readonly conventionsArtifactId?: string | null;
   readonly cachePrefixChecksum?: string;
+  readonly promptCacheIdentityChecksum?: string;
+  readonly promptCacheStablePrefixMessageCount?: number;
 }
 
 export interface RecordAgentRunEventInput {
@@ -438,6 +497,13 @@ export interface ResolvedAgentRunStartInput {
   readonly conventionsArtifactId?: string | null;
   readonly promptCachePolicyVersion?: string;
   readonly cachePrefixChecksum?: string;
+  /** Internal Main-derived identities. The coordinator persists only their composite checksum. */
+  readonly promptCacheConnectionIdentityChecksum?: string;
+  readonly promptCacheAccountIsolationChecksum?: string;
+  readonly promptCacheArtifactId?: string | null;
+  readonly promptCacheIdentityBaseChecksum?: string;
+  readonly promptCacheIdentityChecksum?: string;
+  readonly promptCacheStablePrefixMessageCount?: number;
 }
 
 export interface StopAgentRunCommand {
@@ -578,7 +644,7 @@ export interface AgentRunCoordinator {
 export function normalizeAgentRunSnapshot(
   value: JsonObject,
   legacyWorkspaceKind?: AgentWorkspaceKind
-): AgentRunSnapshotV12 {
+): AgentRunSnapshotV13 {
   const conversationId =
     typeof value["conversationId"] === "string" ? value["conversationId"] : null;
   const toolFacadeVersion = value["toolFacadeVersion"] === "v2" ? "v2" : "v1";
@@ -586,16 +652,41 @@ export function normalizeAgentRunSnapshot(
     typeof value["toolCatalogSnapshotId"] === "string" ? value["toolCatalogSnapshotId"] : null;
   const toolCatalogRevision =
     typeof value["toolCatalogRevision"] === "string" ? value["toolCatalogRevision"] : null;
-  if (value["schemaVersion"] === "1.2") {
+  if (value["schemaVersion"] === "1.3") {
     const scope = normalizeAgentContextScope(value["scope"], undefined, legacyWorkspaceKind);
+    if (!isV13PromptCacheState(value)) {
+      throw new Error("AGENT_RUN_SNAPSHOT_INVALID");
+    }
     return attachLegacyProjectId({
       ...withoutLegacyProjectId(value),
       scope,
+      usageSummary: normalizeRunUsageSummary(value["usageSummary"]),
       conversationId,
       toolFacadeVersion,
       toolCatalogSnapshotId,
       toolCatalogRevision
-    } as unknown as AgentRunSnapshotV12);
+    } as unknown as AgentRunSnapshotV13);
+  }
+  if (value["schemaVersion"] === "1.2") {
+    const scope = normalizeAgentContextScope(value["scope"], undefined, legacyWorkspaceKind);
+    const providerCapabilitySnapshot = normalizedLegacyProviderCapability(
+      value["providerCapabilitySnapshot"]
+    );
+    return attachLegacyProjectId({
+      ...withoutLegacyProjectId(value),
+      schemaVersion: "1.3",
+      scope,
+      conversationId,
+      toolFacadeVersion,
+      toolCatalogSnapshotId,
+      toolCatalogRevision,
+      providerCapabilitySnapshot,
+      usageSummary: normalizeRunUsageSummary(value["usageSummary"]),
+      promptCacheArtifactId: null,
+      promptCacheIdentityBaseChecksum: "legacy",
+      promptCacheIdentityChecksum: "legacy",
+      promptCacheStablePrefixMessageCount: 0
+    } as unknown as AgentRunSnapshotV13);
   }
   if (value["schemaVersion"] !== "1.0" && value["schemaVersion"] !== "1.1") {
     throw new Error("AGENT_RUN_SNAPSHOT_VERSION_UNSUPPORTED");
@@ -626,10 +717,11 @@ export function normalizeAgentRunSnapshot(
           usageSummary: EMPTY_AGENT_RUN_USAGE_SUMMARY,
           pendingToolApproval: null
         };
+  const stage5Json = stage5Fields as unknown as JsonObject;
   return attachLegacyProjectId({
-    ...withoutLegacyProjectId(stage5Fields as unknown as JsonObject),
+    ...withoutLegacyProjectId(stage5Json),
     conversationId,
-    schemaVersion: "1.2",
+    schemaVersion: "1.3",
     scope,
     contextProfileId,
     profileVersion: "legacy",
@@ -637,10 +729,87 @@ export function normalizeAgentRunSnapshot(
     conventionsArtifactId: null,
     promptCachePolicyVersion: "none@1.0",
     cachePrefixChecksum: "legacy",
+    providerCapabilitySnapshot: normalizedLegacyProviderCapability(
+      stage5Json["providerCapabilitySnapshot"]
+    ),
+    usageSummary: normalizeRunUsageSummary(stage5Json["usageSummary"]),
+    promptCacheArtifactId: null,
+    promptCacheIdentityBaseChecksum: "legacy",
+    promptCacheIdentityChecksum: "legacy",
+    promptCacheStablePrefixMessageCount: 0,
     toolFacadeVersion,
     toolCatalogSnapshotId,
     toolCatalogRevision
-  } as unknown as AgentRunSnapshotV12);
+  } as unknown as AgentRunSnapshotV13);
+}
+
+function normalizeRunUsageSummary(value: unknown): AgentRunUsageSummary {
+  if (!isRecord(value)) return EMPTY_AGENT_RUN_USAGE_SUMMARY;
+  return {
+    ...(value as unknown as AgentRunUsageSummary),
+    cacheOutcome:
+      value["cacheOutcome"] === "hit" ||
+      value["cacheOutcome"] === "miss" ||
+      value["cacheOutcome"] === "bypass"
+        ? value["cacheOutcome"]
+        : "unknown",
+    cacheUsageStatus:
+      value["cacheUsageStatus"] === "actual" || value["cacheUsageStatus"] === "derived"
+        ? value["cacheUsageStatus"]
+        : "unavailable",
+    cacheInputTokenSemantics:
+      value["cacheInputTokenSemantics"] === "included_in_input" ||
+      value["cacheInputTokenSemantics"] === "excluded_from_input"
+        ? value["cacheInputTokenSemantics"]
+        : "unavailable"
+  };
+}
+
+function normalizedLegacyProviderCapability(value: unknown): AgentProviderCapabilitySnapshotV13 {
+  if (!isRecord(value)) throw new Error("AGENT_RUN_SNAPSHOT_INVALID");
+  return {
+    ...(value as unknown as AgentProviderCapabilitySnapshot),
+    promptCache: NO_AGENT_PROMPT_CACHE_CAPABILITY
+  };
+}
+
+function isV13PromptCacheState(value: JsonObject): boolean {
+  const capability = value["providerCapabilitySnapshot"];
+  return (
+    isRecord(capability) &&
+    isPromptCacheCapability(capability["promptCache"]) &&
+    (value["promptCacheArtifactId"] === null ||
+      typeof value["promptCacheArtifactId"] === "string") &&
+    isChecksumOrLegacy(value["promptCacheIdentityBaseChecksum"]) &&
+    isChecksumOrLegacy(value["promptCacheIdentityChecksum"]) &&
+    Number.isSafeInteger(value["promptCacheStablePrefixMessageCount"]) &&
+    Number(value["promptCacheStablePrefixMessageCount"]) >= 0
+  );
+}
+
+function isPromptCacheCapability(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    (value["mode"] === "none" ||
+      value["mode"] === "automatic_prefix" ||
+      value["mode"] === "explicit_breakpoints" ||
+      value["mode"] === "explicit_resource") &&
+    typeof value["policyVersion"] === "string" &&
+    value["policyVersion"].length > 0 &&
+    Number.isSafeInteger(value["minimumCacheableTokens"]) &&
+    Number(value["minimumCacheableTokens"]) >= 0 &&
+    (value["ttlSeconds"] === null ||
+      (Number.isSafeInteger(value["ttlSeconds"]) && Number(value["ttlSeconds"]) > 0)) &&
+    (value["inputTokenSemantics"] === "included_in_input" ||
+      value["inputTokenSemantics"] === "excluded_from_input" ||
+      value["inputTokenSemantics"] === "unavailable") &&
+    typeof value["reportsCacheReadTokens"] === "boolean" &&
+    typeof value["reportsCacheWriteTokens"] === "boolean"
+  );
+}
+
+function isChecksumOrLegacy(value: unknown): boolean {
+  return value === "legacy" || (typeof value === "string" && /^[a-f0-9]{64}$/u.test(value));
 }
 
 /** Normalize persisted run events into the scope-aware v1.3 view without rewriting disk. */

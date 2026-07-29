@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import { isErr, isOk } from "@novel-studio/shared";
 
-import { createLlmAdapter, type LlmRequest } from "../src/index.js";
+import { createLlmAdapter, isSha256Checksum, type LlmRequest } from "../src/index.js";
 import {
   AnthropicHttpError,
   createAnthropicProvider,
@@ -31,6 +31,73 @@ const request = {
 } satisfies LlmRequest;
 
 describe("Anthropic provider", () => {
+  test("adds an explicit cache breakpoint at the frozen message boundary", async () => {
+    const calls: AnthropicTransportRequest[] = [];
+    const provider = createAnthropicProvider({
+      transport: async (transportRequest) => {
+        calls.push(transportRequest);
+        return {
+          content: [{ type: "text", text: "Cached response." }],
+          usage: {
+            input_tokens: 8,
+            output_tokens: 4,
+            cache_creation_input_tokens: 20,
+            cache_read_input_tokens: 0
+          }
+        };
+      }
+    });
+    const result = await createLlmAdapter({ provider }).complete({
+      ...request,
+      messages: [
+        { role: "system", content: "System guidance." },
+        { role: "user", content: "Stable project context." },
+        { role: "user", content: "Dynamic request." }
+      ],
+      promptCache: {
+        mode: "explicit_breakpoints",
+        policyVersion: "anthropic-explicit@1.0",
+        identityChecksum: "a".repeat(64),
+        logicalPrefixChecksum: "b".repeat(64),
+        stablePrefixMessageCount: 2,
+        minimumCacheableTokens: 1,
+        eligibleInputTokens: 20,
+        ttlSeconds: 300
+      }
+    });
+
+    expect(calls[0]?.body).toMatchObject({
+      system: "System guidance.",
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Stable project context.",
+              cache_control: { type: "ephemeral" }
+            }
+          ]
+        },
+        { role: "user", content: "Dynamic request." }
+      ]
+    });
+    expect(JSON.stringify(calls[0]?.body)).not.toContain("promptCache");
+    expect(isOk(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.usage).toMatchObject({
+      inputTokens: 8,
+      outputTokens: 4,
+      cacheWriteTokens: 20,
+      cacheReadTokens: 0,
+      cacheEligibleInputTokens: 20,
+      cacheOutcome: "miss",
+      cacheUsageStatus: "actual",
+      cacheInputTokenSemantics: "excluded_from_input"
+    });
+    expect(isSha256Checksum(result.value.usage.cachePhysicalPrefixChecksum)).toBe(true);
+  });
+
   test("maps non-streaming Messages API requests and response usage", async () => {
     const calls: AnthropicTransportRequest[] = [];
     const provider = createAnthropicProvider({
@@ -74,7 +141,13 @@ describe("Anthropic provider", () => {
     expect(result.value.usage).toEqual({
       inputTokens: 14,
       outputTokens: 7,
-      cachedTokens: 5,
+      cachedTokens: 2,
+      cacheReadTokens: 2,
+      cacheWriteTokens: 3,
+      cacheEligibleInputTokens: 5,
+      cacheOutcome: "hit",
+      cacheUsageStatus: "actual",
+      cacheInputTokenSemantics: "excluded_from_input",
       totalTokens: 26,
       usageStatus: "actual",
       cost: { amount: 0, currency: "USD", status: "unknown" }
@@ -193,6 +266,11 @@ describe("Anthropic provider", () => {
             inputTokens: 12,
             outputTokens: 5,
             cachedTokens: 4,
+            cacheReadTokens: 4,
+            cacheEligibleInputTokens: 4,
+            cacheOutcome: "hit",
+            cacheUsageStatus: "actual",
+            cacheInputTokenSemantics: "excluded_from_input",
             totalTokens: 21,
             usageStatus: "actual",
             cost: { amount: 0, currency: "USD", status: "unknown" }

@@ -117,6 +117,10 @@ export function materializeAgentPrompt(
       profileVersion: input.profile.profileVersion,
       systemPrompt: input.systemPrompt,
       toolCatalogRevision: input.toolCatalogRevision,
+      sourceIdentities: sources
+        .filter((source) => stableProjectSourceKinds.has(source.sourceKind))
+        .sort(compareStableProjectSources)
+        .map(stableProjectSourceIdentity),
       messages: stablePrefixMessages
     })
   );
@@ -132,6 +136,39 @@ export function materializeAgentPrompt(
     messages: [...stablePrefixMessages, ...dynamicSuffixMessages],
     stablePrefixChecksum
   });
+}
+
+function stableProjectSourceIdentity(source: AgentContextSourceInput): unknown {
+  const materialization = source.materialization;
+  if (materialization === undefined) {
+    return {
+      refId: source.refId,
+      sourceKind: source.sourceKind,
+      contentChecksum: checksum(source.content)
+    };
+  }
+  return materialization.kind === "project_conventions"
+    ? {
+        refId: source.refId,
+        sourceKind: source.sourceKind,
+        artifactId: materialization.artifactId,
+        readerVersion: materialization.readerVersion,
+        sourceIdentity: materialization.sourceIdentity,
+        workspaceTrust: materialization.workspaceTrust,
+        originalChecksum: materialization.originalChecksum,
+        injectedChecksum: materialization.injectedChecksum
+      }
+    : {
+        refId: source.refId,
+        sourceKind: source.sourceKind,
+        artifactId: materialization.artifactId,
+        readerVersion: materialization.readerVersion,
+        sourceIdentity: materialization.sourceIdentity,
+        workspaceTrust: materialization.workspaceTrust,
+        dependencyManifestChecksum: materialization.dependencyManifestChecksum,
+        dependencyRevisionChecksum: materialization.dependencyRevisionChecksum,
+        materializedChecksum: materialization.materializedChecksum
+      };
 }
 
 export function materializeAgentConversationContext(

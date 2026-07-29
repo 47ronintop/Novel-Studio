@@ -9,7 +9,7 @@ import {
 
 function baseRecord(overrides: Partial<AgentUsageRecord> = {}): AgentUsageRecord {
   return {
-    schemaVersion: "1.1",
+    schemaVersion: "1.2",
     scope: {
       kind: "workspace",
       workspaceKind: "creativeProject",
@@ -24,6 +24,11 @@ function baseRecord(overrides: Partial<AgentUsageRecord> = {}): AgentUsageRecord
     model: "scripted-agent",
     inputTokens: 1000,
     outputTokens: 200,
+    cacheOutcome: "unknown",
+    cacheUsageStatus: "unavailable",
+    cacheInputTokenSemantics: "unavailable",
+    cacheMode: null,
+    cachePrefixChecksum: null,
     totalTokens: 1200,
     usageStatus: "estimated",
     precision: "estimated",
@@ -66,7 +71,7 @@ describe("validateAgentUsageRecord", () => {
     const normalized = normalizeAgentUsageRecord(legacy);
 
     expect(normalized).toMatchObject({
-      schemaVersion: "1.1",
+      schemaVersion: "1.2",
       scope: {
         kind: "workspace",
         workspaceKind: "creativeProject",
@@ -87,6 +92,7 @@ describe("validateAgentUsageRecord", () => {
     const result = validateAgentUsageRecord(
       baseRecord({
         cachedTokens: 100,
+        cacheReadTokens: 100,
         reasoningTokens: 50,
         compactionBeforeTokens: 5000,
         compactionAfterTokens: 2000
@@ -113,16 +119,18 @@ describe("validateAgentUsageRecord", () => {
         inputTokens: 1000,
         outputTokens: 200,
         cachedTokens: 100,
+        cacheReadTokens: 100,
+        cacheInputTokenSemantics: "included_in_input",
         reasoningTokens: 50,
         pricingVersion: "pricing-2026-07-17",
         unitPrices: {
           inputPerMillion: 2,
           outputPerMillion: 4,
-          cachedPerMillion: 1,
+          cacheReadPerMillion: 1,
           reasoningPerMillion: 8,
           currency: "USD"
         },
-        cost: { amount: 0.0033, currency: "USD", status: "estimated" }
+        cost: { amount: 0.0031, currency: "USD", status: "estimated" }
       })
     );
     expect(result.ok).toBe(true);
@@ -136,14 +144,14 @@ describe("validateAgentUsageRecord", () => {
     const unitPrices = {
       inputPerMillion: 38_822.390245245384,
       outputPerMillion: 92_349.97973369903,
-      cachedPerMillion: 19_579.586251203596,
+      cacheReadPerMillion: 19_579.586251203596,
       reasoningPerMillion: 70_805.98376757126,
       currency: "USD"
     };
     const amount =
-      (inputTokens * unitPrices.inputPerMillion +
+      ((inputTokens - cachedTokens) * unitPrices.inputPerMillion +
         outputTokens * unitPrices.outputPerMillion +
-        cachedTokens * unitPrices.cachedPerMillion +
+        cachedTokens * unitPrices.cacheReadPerMillion +
         reasoningTokens * unitPrices.reasoningPerMillion) /
       1_000_000;
 
@@ -152,6 +160,8 @@ describe("validateAgentUsageRecord", () => {
         inputTokens,
         outputTokens,
         cachedTokens,
+        cacheReadTokens: cachedTokens,
+        cacheInputTokenSemantics: "included_in_input",
         reasoningTokens,
         totalTokens: inputTokens + outputTokens,
         pricingVersion: "pricing-large",
@@ -232,7 +242,7 @@ describe("validateAgentUsageRecord", () => {
     ["infinite total tokens", { totalTokens: Number.POSITIVE_INFINITY }],
     ["negative context window", { contextWindow: -1 }],
     ["negative safe input budget", { safeInputBudget: -1 }],
-    ["negative cached tokens", { cachedTokens: -1 }],
+    ["negative cached tokens", { cachedTokens: -1, cacheReadTokens: -1 }],
     ["negative cost amount", { cost: { amount: -1, currency: "USD", status: "actual" } }],
     ["overflowing offset", { utcOffsetMinutes: 100000 }]
   ])("rejects %s", (_label, overrides) => {

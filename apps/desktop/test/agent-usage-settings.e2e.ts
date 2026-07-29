@@ -28,6 +28,13 @@ test("shows private daily usage analytics and clears only usage data", async () 
       roundId: "reported",
       finalSequence: 1,
       cachedTokens: 100,
+      cacheReadTokens: 100,
+      cacheEligibleInputTokens: 125,
+      cacheOutcome: "hit",
+      cacheUsageStatus: "actual",
+      cacheInputTokenSemantics: "included_in_input",
+      cacheMode: "automatic_prefix",
+      cachePrefixChecksum: "a".repeat(64),
       usageStatus: "actual",
       precision: "reported",
       cost: { amount: 1.5, currency: "USD", status: "actual" }
@@ -90,7 +97,9 @@ test("shows private daily usage analytics and clears only usage data", async () 
     const daily = page.getByRole("table", { name: "每日 Agent 用量明细" });
     await expect(daily).toContainText("Input");
     await expect(daily).toContainText("Output");
-    await expect(daily).toContainText("Cached");
+    await expect(daily).toContainText("缓存读取");
+    await expect(daily).toContainText("缓存写入");
+    await expect(daily).toContainText("命中率");
     await expect(daily).toContainText("USD 实际费用");
     await expect(daily).toContainText("EUR");
     await expect(daily).toContainText("估算费用");
@@ -106,6 +115,11 @@ test("shows private daily usage analytics and clears only usage data", async () 
     const runs = page.getByRole("table", { name: "所选日期 Agent 运行记录" });
     await expect(runs).toContainText("run_reported");
     await expect(runs).toContainText("已报告");
+    await expect(runs).toContainText("自动前缀");
+    await expect(runs).toContainText("命中");
+    await expect(runs).toContainText("aaaaaaaa...aaaaaa");
+    await expect(runs).toContainText("命中率：不可用");
+    await expect(runs).not.toContainText("a".repeat(64));
     await expect(runs).not.toContainText(/prompt|request|正文内容|secret/i);
 
     await page.getByRole("button", { name: "清除所选范围用量" }).click();
@@ -259,7 +273,7 @@ function sha256(value: string): string {
 function usageRecord(localDate: string, overrides: Record<string, unknown> = {}) {
   const timestamp = `${localDate}T08:00:00.000Z`;
   const base = {
-    schemaVersion: "1.1",
+    schemaVersion: "1.2",
     scope: {
       kind: "workspace",
       workspaceKind: "creativeProject",
@@ -275,6 +289,11 @@ function usageRecord(localDate: string, overrides: Record<string, unknown> = {})
     inputTokens: 1000,
     outputTokens: 200,
     totalTokens: 1200,
+    cacheOutcome: "unknown",
+    cacheUsageStatus: "unavailable",
+    cacheInputTokenSemantics: "unavailable",
+    cacheMode: null,
+    cachePrefixChecksum: null,
     usageStatus: "estimated",
     precision: "estimated",
     pricingVersion: null,

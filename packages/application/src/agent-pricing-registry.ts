@@ -18,10 +18,7 @@ export interface AgentPricingTable {
 export interface AgentUsagePricingInput {
   readonly provider: string;
   readonly model: string;
-  readonly usage: LlmUsage & {
-    readonly cachedTokens?: number;
-    readonly reasoningTokens?: number;
-  };
+  readonly usage: LlmUsage;
 }
 
 export interface AgentUsagePricing {
@@ -59,7 +56,16 @@ export function createAgentPricingRegistry(table: AgentPricingTable): AgentPrici
 
       const unitPrices = entries.get(key(input.provider, input.model));
       if (!unitPrices) return unknownCost();
-      if (input.usage.cachedTokens !== undefined && unitPrices.cachedPerMillion === undefined) {
+      if (
+        input.usage.cacheReadTokens !== undefined &&
+        unitPrices.cacheReadPerMillion === undefined
+      ) {
+        return unknownCost();
+      }
+      if (
+        input.usage.cacheWriteTokens !== undefined &&
+        unitPrices.cacheWritePerMillion === undefined
+      ) {
         return unknownCost();
       }
       if (
@@ -76,9 +82,13 @@ export function createAgentPricingRegistry(table: AgentPricingTable): AgentPrici
           amount: calculateAgentUsageEstimatedCost({
             inputTokens: input.usage.inputTokens,
             outputTokens: input.usage.outputTokens,
-            ...(input.usage.cachedTokens === undefined
+            ...(input.usage.cacheReadTokens === undefined
               ? {}
-              : { cachedTokens: input.usage.cachedTokens }),
+              : { cacheReadTokens: input.usage.cacheReadTokens }),
+            ...(input.usage.cacheWriteTokens === undefined
+              ? {}
+              : { cacheWriteTokens: input.usage.cacheWriteTokens }),
+            cacheInputTokenSemantics: input.usage.cacheInputTokenSemantics ?? "unavailable",
             ...(input.usage.reasoningTokens === undefined
               ? {}
               : { reasoningTokens: input.usage.reasoningTokens }),
@@ -114,7 +124,11 @@ function validateUnitPrices(prices: AgentUsageUnitPriceSnapshot): void {
   if (!isUnitPrice(prices.inputPerMillion) || !isUnitPrice(prices.outputPerMillion)) {
     throw new Error("Agent unit prices must be finite non-negative amounts.");
   }
-  const optionalValues = [prices.cachedPerMillion, prices.reasoningPerMillion];
+  const optionalValues = [
+    prices.cacheReadPerMillion,
+    prices.cacheWritePerMillion,
+    prices.reasoningPerMillion
+  ];
   if (optionalValues.some((value) => value !== undefined && !isUnitPrice(value))) {
     throw new Error("Agent unit prices must be finite non-negative amounts.");
   }
@@ -136,7 +150,12 @@ function snapshot(prices: AgentUsageUnitPriceSnapshot): AgentUsageUnitPriceSnaps
   return {
     inputPerMillion: prices.inputPerMillion,
     outputPerMillion: prices.outputPerMillion,
-    ...(prices.cachedPerMillion === undefined ? {} : { cachedPerMillion: prices.cachedPerMillion }),
+    ...(prices.cacheReadPerMillion === undefined
+      ? {}
+      : { cacheReadPerMillion: prices.cacheReadPerMillion }),
+    ...(prices.cacheWritePerMillion === undefined
+      ? {}
+      : { cacheWritePerMillion: prices.cacheWritePerMillion }),
     ...(prices.reasoningPerMillion === undefined
       ? {}
       : { reasoningPerMillion: prices.reasoningPerMillion }),

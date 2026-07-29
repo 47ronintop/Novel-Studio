@@ -31,6 +31,7 @@ interface DesktopAgentRuntimeSessions {
   readonly agentUsageSession?: AgentUsageSession;
   readonly prepare: () => Promise<Result<void, UnifiedError>>;
   readonly dispose?: () => void;
+  readonly releasePromptCacheResources?: () => void;
   /** Fail-close settings-backed capability/executor access without waiting for a rebuild. */
   readonly revokeSettingsCapabilities?: () => void;
 }
@@ -565,6 +566,9 @@ export function createDesktopAgentRuntimeManager(
       state.state = "committed";
       const previousUnsubscribe = unsubscribeRuntime;
       const previousRuntime = runtime;
+      if (selectedScope === "standalone") {
+        standaloneRuntime?.releasePromptCacheResources?.();
+      }
       runtime = prepared.runtime;
       currentBinding = prepared.binding;
       unsubscribeRuntime = state.unsubscribe;

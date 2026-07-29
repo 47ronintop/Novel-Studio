@@ -5,6 +5,7 @@ import { describe, expect, test } from "vitest";
 import { isErr, isOk, type JsonObject } from "@novel-studio/shared";
 
 import {
+  checksumProviderPayload,
   createLlmAdapter,
   createOpenAiCompatibleProvider,
   OpenAiCompatibleHttpError,
@@ -45,6 +46,62 @@ const request = {
 } satisfies LlmRequest;
 
 describe("OpenAI-compatible provider", () => {
+  test("uses verified automatic prefix caching without adding private request fields", async () => {
+    const calls: OpenAiCompatibleTransportRequest[] = [];
+    const provider = createOpenAiCompatibleProvider({
+      transport: async (transportRequest) => {
+        calls.push(transportRequest);
+        return {
+          choices: [{ message: { content: "Cached response." } }],
+          usage: {
+            prompt_tokens: 40,
+            completion_tokens: 5,
+            total_tokens: 45,
+            prompt_tokens_details: { cached_tokens: 24 }
+          }
+        };
+      }
+    });
+    const promptCache = {
+      mode: "automatic_prefix",
+      policyVersion: "openai-automatic@1.0",
+      identityChecksum: "a".repeat(64),
+      logicalPrefixChecksum: "b".repeat(64),
+      stablePrefixMessageCount: 1,
+      minimumCacheableTokens: 1,
+      eligibleInputTokens: 32
+    } as const;
+
+    const result = await createLlmAdapter({ provider }).complete({ ...request, promptCache });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.body).toEqual({
+      model: "fixture-model",
+      messages: [
+        { role: "developer", content: "Return one sentence." },
+        { role: "user", content: "Write a rainy city line." }
+      ],
+      temperature: 0.4,
+      max_tokens: 64,
+      top_p: 0.9,
+      stream: false
+    });
+    expect(JSON.stringify(calls[0]?.body)).not.toContain("promptCache");
+    expect(isOk(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.usage).toMatchObject({
+      cachedTokens: 24,
+      cacheReadTokens: 24,
+      cacheOutcome: "hit",
+      cacheUsageStatus: "actual",
+      cacheInputTokenSemantics: "included_in_input",
+      cachePhysicalPrefixChecksum: checksumProviderPayload({
+        messages: [{ role: "developer", content: "Return one sentence." }]
+      })
+    });
+    expect(result.value.usage).not.toHaveProperty("cacheEligibleInputTokens");
+  });
+
   test("maps provider-neutral non-streaming requests and fixture responses", async () => {
     const calls: OpenAiCompatibleTransportRequest[] = [];
     const provider = createOpenAiCompatibleProvider({

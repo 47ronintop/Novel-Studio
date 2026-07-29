@@ -16,7 +16,7 @@ function latestRoot(): string {
 // Mirrors @novel-studio/agent-engine's AgentUsageRecord. The repository is a sibling layer that does
 // not import agent-engine, so tests describe the record shape structurally.
 interface AgentUsageRecord {
-  schemaVersion: "1.1";
+  schemaVersion: "1.2";
   scope:
     | { kind: "standalone"; scopeId: "standalone" }
     | {
@@ -35,6 +35,24 @@ interface AgentUsageRecord {
   inputTokens: number;
   outputTokens: number;
   cachedTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  cacheEligibleInputTokens?: number;
+  cacheOutcome: "hit" | "miss" | "bypass" | "unknown";
+  cacheBypassReason?:
+    | "policy_none"
+    | "unsupported_provider"
+    | "below_minimum_tokens"
+    | "identity_unverified"
+    | "resource_unavailable"
+    | "resource_create_failed"
+    | "resource_expired"
+    | "cache_error"
+    | "usage_unavailable";
+  cacheUsageStatus: "actual" | "derived" | "unavailable";
+  cacheInputTokenSemantics: "included_in_input" | "excluded_from_input" | "unavailable";
+  cacheMode: "none" | "automatic_prefix" | "explicit_breakpoints" | "explicit_resource" | null;
+  cachePrefixChecksum: string | null;
   reasoningTokens?: number;
   totalTokens: number;
   usageStatus: "actual" | "estimated" | "missing";
@@ -43,7 +61,8 @@ interface AgentUsageRecord {
   unitPrices: {
     inputPerMillion: number;
     outputPerMillion: number;
-    cachedPerMillion?: number;
+    cacheReadPerMillion?: number;
+    cacheWritePerMillion?: number;
     reasoningPerMillion?: number;
     currency: string;
   } | null;
@@ -65,7 +84,7 @@ afterEach(async () => {
 
 function baseRecord(overrides: Partial<AgentUsageRecord> = {}): AgentUsageRecord {
   const record: AgentUsageRecord = {
-    schemaVersion: "1.1" as const,
+    schemaVersion: "1.2" as const,
     scope: {
       kind: "workspace",
       workspaceKind: "creativeProject",
@@ -81,6 +100,11 @@ function baseRecord(overrides: Partial<AgentUsageRecord> = {}): AgentUsageRecord
     inputTokens: 1000,
     outputTokens: 200,
     totalTokens: 1200,
+    cacheOutcome: "unknown",
+    cacheUsageStatus: "unavailable",
+    cacheInputTokenSemantics: "unavailable",
+    cacheMode: null,
+    cachePrefixChecksum: null,
     usageStatus: "estimated",
     precision: "estimated",
     pricingVersion: null,
@@ -126,10 +150,22 @@ type UsageRepository = {
         | "provider"
         | "model"
         | "totalTokens"
+        | "cacheReadTokens"
+        | "cacheWriteTokens"
+        | "cacheEligibleInputTokens"
+        | "cacheOutcome"
+        | "cacheBypassReason"
+        | "cacheUsageStatus"
+        | "cacheInputTokenSemantics"
+        | "cacheMode"
+        | "cachePrefixChecksum"
         | "usageStatus"
         | "cost"
         | "timestamp"
-      >
+      > & {
+        cacheHitRate?: number;
+        estimatedCacheSavings?: { amount: number; currency: string };
+      }
     >;
     error?: { code: string };
   }>;
@@ -147,9 +183,18 @@ type UsageRepository = {
       inputTokens: number;
       outputTokens: number;
       cachedTokens: number;
+      cacheReadTokens: number;
+      cacheWriteTokens: number;
+      cacheEligibleInputTokens: number;
+      cacheHitRate?: number;
       reasoningTokens: number;
       totalTokens: number;
-      costs: ReadonlyArray<{ currency: string; actualAmount: number; estimatedAmount: number }>;
+      costs: ReadonlyArray<{
+        currency: string;
+        actualAmount: number;
+        estimatedAmount: number;
+        estimatedCacheSavings?: number;
+      }>;
       hasUnknownCost: boolean;
       models?: ReadonlyArray<{ provider: string; model: string; totalTokens: number }>;
     }>;
@@ -199,9 +244,19 @@ describe("AgentUsageFileRepository", () => {
     const persistedLegacyRecord = {
       ...currentRecord,
       schemaVersion: "1.0",
-      projectId: "legacy_project"
+      projectId: "legacy_project",
+      cachedTokens: 24
     } as Record<string, unknown>;
     delete persistedLegacyRecord["scope"];
+    delete persistedLegacyRecord["cacheReadTokens"];
+    delete persistedLegacyRecord["cacheWriteTokens"];
+    delete persistedLegacyRecord["cacheEligibleInputTokens"];
+    delete persistedLegacyRecord["cacheOutcome"];
+    delete persistedLegacyRecord["cacheBypassReason"];
+    delete persistedLegacyRecord["cacheUsageStatus"];
+    delete persistedLegacyRecord["cacheInputTokenSemantics"];
+    delete persistedLegacyRecord["cacheMode"];
+    delete persistedLegacyRecord["cachePrefixChecksum"];
     const detailPath = join(
       userDataRoot,
       "agent-usage",
@@ -217,13 +272,19 @@ describe("AgentUsageFileRepository", () => {
     expect(read).toMatchObject({
       ok: true,
       value: {
-        schemaVersion: "1.1",
+        schemaVersion: "1.2",
         scope: {
           kind: "workspace",
           workspaceKind: "creativeProject",
           workspaceId: "legacy_project"
         },
-        usageId: currentRecord.usageId
+        usageId: currentRecord.usageId,
+        cachedTokens: 24,
+        cacheReadTokens: 24,
+        cacheUsageStatus: "unavailable",
+        cacheInputTokenSemantics: "unavailable",
+        cacheMode: null,
+        cachePrefixChecksum: null
       }
     });
     expect(read.value).not.toHaveProperty("projectId");
@@ -281,6 +342,7 @@ describe("AgentUsageFileRepository", () => {
         roundId: "usd_actual",
         finalSequence: 1,
         cachedTokens: 25,
+        cacheReadTokens: 25,
         reasoningTokens: 10,
         cost: { amount: 1.5, currency: "USD", status: "actual" }
       })
@@ -334,6 +396,117 @@ describe("AgentUsageFileRepository", () => {
         hasUnknownCost: true
       })
     ]);
+  });
+
+  test("projects verifiable cache usage, hit rates, and estimated savings without guessing", async () => {
+    const repository = await createRepository();
+    const unitPrices = {
+      inputPerMillion: 10,
+      outputPerMillion: 20,
+      cacheReadPerMillion: 2,
+      cacheWritePerMillion: 40,
+      currency: "USD"
+    };
+    const checksum = "a".repeat(64);
+    await repository.writeFinal(
+      baseRecord({
+        roundId: "cache_hit",
+        finalSequence: 1,
+        cacheReadTokens: 600,
+        cacheEligibleInputTokens: 800,
+        cacheOutcome: "hit",
+        cacheUsageStatus: "actual",
+        cacheInputTokenSemantics: "included_in_input",
+        cacheMode: "automatic_prefix",
+        cachePrefixChecksum: checksum,
+        pricingVersion: "pricing-v2",
+        unitPrices,
+        cost: { amount: 0.0092, currency: "USD", status: "estimated" }
+      })
+    );
+    await repository.writeFinal(
+      baseRecord({
+        roundId: "cache_miss",
+        finalSequence: 2,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 100,
+        cacheEligibleInputTokens: 200,
+        cacheOutcome: "miss",
+        cacheUsageStatus: "actual",
+        cacheInputTokenSemantics: "included_in_input",
+        cacheMode: "automatic_prefix",
+        cachePrefixChecksum: checksum,
+        pricingVersion: "pricing-v2",
+        unitPrices,
+        cost: { amount: 0.018, currency: "USD", status: "estimated" }
+      })
+    );
+    await repository.writeFinal(
+      baseRecord({
+        roundId: "cache_unavailable",
+        finalSequence: 3,
+        localDate: "2026-07-17",
+        cacheReadTokens: 10,
+        cachedTokens: 10,
+        cacheOutcome: "hit",
+        cacheUsageStatus: "actual",
+        cacheInputTokenSemantics: "included_in_input",
+        cacheMode: "automatic_prefix",
+        cachePrefixChecksum: checksum
+      })
+    );
+
+    const days = await repository.queryDailyAggregates({
+      range: { fromLocalDate: "2026-07-16", toLocalDate: "2026-07-17" }
+    });
+    expect(days.value).toEqual([
+      expect.objectContaining({
+        localDate: "2026-07-16",
+        cacheReadTokens: 600,
+        cacheWriteTokens: 100,
+        cacheEligibleInputTokens: 1000,
+        cacheHitRate: 0.6,
+        cachedTokens: 600,
+        costs: [
+          expect.objectContaining({
+            currency: "USD",
+            actualAmount: 0,
+            estimatedAmount: 0.0272
+          })
+        ]
+      }),
+      expect.objectContaining({
+        localDate: "2026-07-17",
+        cacheReadTokens: 10,
+        cacheEligibleInputTokens: 0
+      })
+    ]);
+    expect(days.value?.[0]?.costs[0]?.estimatedCacheSavings).toBeCloseTo(0.0008, 10);
+    expect(days.value?.[1]?.cacheHitRate).toBeUndefined();
+
+    const details = await repository.queryDetails({
+      range: { fromLocalDate: "2026-07-16", toLocalDate: "2026-07-16" },
+      detailLocalDate: "2026-07-16"
+    });
+    expect(
+      details.value?.find((detail) => detail.runId === "run_01" && detail.usageId.endsWith(":1"))
+    ).toMatchObject({
+      cacheReadTokens: 600,
+      cacheEligibleInputTokens: 800,
+      cacheHitRate: 0.75,
+      cacheOutcome: "hit",
+      cacheUsageStatus: "actual",
+      cacheInputTokenSemantics: "included_in_input",
+      cacheMode: "automatic_prefix",
+      cachePrefixChecksum: checksum,
+      estimatedCacheSavings: { amount: 0.0048, currency: "USD" }
+    });
+    expect(
+      details.value?.find((detail) => detail.runId === "run_01" && detail.usageId.endsWith(":2"))
+    ).toMatchObject({
+      cacheOutcome: "miss",
+      estimatedCacheSavings: { amount: -0.004, currency: "USD" }
+    });
   });
 
   test("queries bounded immutable details using stored local dates and stable filters", async () => {
@@ -796,7 +969,7 @@ describe("AgentUsageFileRepository", () => {
   test("rejects malformed record scalars and nested objects without writing details", async () => {
     const repository = await createRepository();
     const invalidRecords = [
-      baseRecord({ roundId: "schema_version", schemaVersion: "2.0" as "1.1" }),
+      baseRecord({ roundId: "schema_version", schemaVersion: "2.0" as "1.2" }),
       baseRecord({
         roundId: "conversation_object",
         conversationId: { prompt: "private" } as unknown as string

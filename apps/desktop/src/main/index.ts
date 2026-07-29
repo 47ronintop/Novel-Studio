@@ -51,8 +51,11 @@ import type {
 } from "@novel-studio/application";
 import type { LlmModelProfile, LlmProviderId } from "@novel-studio/llm-adapter";
 import {
+  STANDALONE_AGENT_CONTEXT_SCOPE,
+  agentContextScopeKey,
   computeAgentToolDescriptorDigest,
   MAX_EXTERNAL_TOOL_DESCRIPTORS,
+  NO_AGENT_PROMPT_CACHE_CAPABILITY,
   validateExternalToolDescriptors
 } from "@novel-studio/agent-engine";
 import type { AgentToolDescriptor } from "@novel-studio/agent-engine";
@@ -64,11 +67,12 @@ import {
   type Result,
   type UnifiedError
 } from "@novel-studio/shared";
-import type { ModelSecretStore } from "./model-runtime.js";
+import type { DesktopModelRuntime, ModelSecretStore } from "./model-runtime.js";
 
 const currentDirectory = fileURLToPath(new URL(".", import.meta.url));
 let activeDesktopApplication: DesktopApplication | undefined;
 let activeAgentRuntimeManager: DesktopAgentRuntimeManager | undefined;
+let activeDesktopModelRuntime: DesktopModelRuntime | undefined;
 let shutdownInProgress = false;
 
 export async function registerApplicationIpcHandlers(): Promise<void> {
@@ -82,6 +86,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     userDataRoot,
     secretStore: modelSecretStore
   });
+  activeDesktopModelRuntime = modelRuntime;
   const projectLockOwnerId = createProjectLockOwnerId();
   const agentWriteSaveCoordinator = createAgentWriteSaveCoordinator();
   const creativeProjectFileSession = createCreativeProjectFileSession({
@@ -196,6 +201,14 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         resumeAutosave: agentWriteSaveCoordinator.resumeAutosave,
         ...(failAgentWriteAt === undefined ? {} : { failAgentWriteAt }),
         createAgentModelDriver: modelRuntime.createAgentModelDriver,
+        releasePromptCacheScope: () =>
+          modelRuntime.releasePromptCacheScope(
+            agentContextScopeKey({
+              kind: "workspace",
+              workspaceKind: binding.kind,
+              workspaceId: binding.workspaceId
+            })
+          ),
         ...(binding.kind !== "creativeProject"
           ? {}
           : {
@@ -257,6 +270,10 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
       const created = await createDesktopStandaloneAgentRuntime({
         userDataRoot,
         createAgentModelDriver: modelRuntime.createAgentModelDriver,
+        releasePromptCacheScope: () =>
+          modelRuntime.releasePromptCacheScope(
+            agentContextScopeKey(STANDALONE_AGENT_CONTEXT_SCOPE)
+          ),
         resolveModelProfile: resolveAgentModelProfile,
         resolveModelStartFacts: resolveAgentModelStartFacts
       });
@@ -273,8 +290,10 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     });
     if (!fileSession.ok) {
       agentRuntimeManager.dispose();
+      await modelRuntime.dispose();
       await application.shutdown();
       activeDesktopApplication = undefined;
+      activeDesktopModelRuntime = undefined;
       throw new Error(fileSession.error.message);
     }
     const initialBinding = await agentRuntimeManager.bindWorkspace({
@@ -290,8 +309,10 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     if (!initialBinding.ok) {
       creativeProjectFileSession.deactivate();
       agentRuntimeManager.dispose();
+      await modelRuntime.dispose();
       await application.shutdown();
       activeDesktopApplication = undefined;
+      activeDesktopModelRuntime = undefined;
       throw new Error(initialBinding.error.message);
     }
   } else {
@@ -417,6 +438,13 @@ async function resolveDesktopAgentModelStartFacts(
     profile.apiKeyRef.trim().length === 0 ||
     (storedSecret.ok && storedSecret.value === undefined)
   ) {
+    const connectionIdentityChecksum = agentModelConnectionIdentityChecksum({
+      profileId: profile.id,
+      provider: "demo",
+      modelName: "desktop-scripted-agent",
+      ...(profile.baseUrl === undefined ? {} : { baseUrl: profile.baseUrl }),
+      apiKeyRef: profile.apiKeyRef
+    });
     return {
       profileId: profile.id,
       provider: "demo",
@@ -428,7 +456,11 @@ async function resolveDesktopAgentModelStartFacts(
         contextWindow: 128_000
       },
       requiredContextTokens: 8_000,
-      reasoningStrength: reasoningStrengthForModel("demo", "desktop-scripted-agent")
+      reasoningStrength: reasoningStrengthForModel("demo", "desktop-scripted-agent"),
+      connectionIdentityChecksum,
+      accountIsolationChecksum: createHash("sha256")
+        .update(`demo-account\u0000${profile.id}`, "utf8")
+        .digest("hex")
     };
   }
 
@@ -471,11 +503,51 @@ async function resolveDesktopAgentModelStartFacts(
       ...(streaming === undefined ? {} : { streaming }),
       ...(toolCalling === undefined ? {} : { toolCalling }),
       ...(structuredArguments === undefined ? {} : { structuredArguments }),
-      ...(contextWindow === undefined ? {} : { contextWindow })
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+      promptCache:
+        storedSecret.ok && storedSecret.value !== undefined
+          ? (catalogCapabilities?.promptCache ?? NO_AGENT_PROMPT_CACHE_CAPABILITY)
+          : NO_AGENT_PROMPT_CACHE_CAPABILITY
     },
     requiredContextTokens: 8_000,
-    reasoningStrength
+    reasoningStrength,
+    connectionIdentityChecksum: agentModelConnectionIdentityChecksum({
+      profileId: profile.id,
+      provider: profile.provider,
+      modelName: selectedModelName,
+      ...(profile.baseUrl === undefined ? {} : { baseUrl: profile.baseUrl }),
+      apiKeyRef: profile.apiKeyRef
+    }),
+    accountIsolationChecksum: createHash("sha256")
+      .update(
+        storedSecret.ok && storedSecret.value !== undefined
+          ? `provider-account\u0000${profile.provider}\u0000${storedSecret.value}`
+          : `provider-account-unavailable\u0000${profile.id}`,
+        "utf8"
+      )
+      .digest("hex")
   };
+}
+
+function agentModelConnectionIdentityChecksum(input: {
+  readonly profileId: string;
+  readonly provider: string;
+  readonly modelName: string;
+  readonly baseUrl?: string;
+  readonly apiKeyRef: string;
+}): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        profileId: input.profileId,
+        provider: input.provider.trim().toLowerCase(),
+        modelName: input.modelName,
+        baseUrl: (input.baseUrl ?? "").trim().replace(/\/+$/u, ""),
+        apiKeyRef: input.apiKeyRef
+      }),
+      "utf8"
+    )
+    .digest("hex");
 }
 
 async function resolveDesktopNetworkRuntime(input: {
@@ -836,6 +908,9 @@ export async function syncSavedEditorForPath(
 export async function shutdownDesktopApplication(): Promise<void> {
   activeAgentRuntimeManager?.dispose();
   activeAgentRuntimeManager = undefined;
+  const modelRuntime = activeDesktopModelRuntime;
+  activeDesktopModelRuntime = undefined;
+  await modelRuntime?.dispose();
   const application = activeDesktopApplication;
   activeDesktopApplication = undefined;
   if (application !== undefined) {

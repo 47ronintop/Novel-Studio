@@ -1,4 +1,8 @@
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
+import {
+  NO_AGENT_PROMPT_CACHE_CAPABILITY,
+  type AgentPromptCacheCapabilitySnapshot
+} from "@novel-studio/agent-engine";
 
 import type {
   ModelReasoningStrengthControl,
@@ -10,6 +14,7 @@ export interface AgentModelCapabilityDeclaration {
   readonly toolCalling?: boolean;
   readonly structuredArguments?: boolean;
   readonly contextWindow?: number;
+  readonly promptCache?: AgentPromptCacheCapabilitySnapshot;
 }
 
 export interface AgentModelCapabilityCatalogEntry extends AgentModelCapabilityDeclaration {
@@ -19,6 +24,7 @@ export interface AgentModelCapabilityCatalogEntry extends AgentModelCapabilityDe
   readonly toolCalling: true;
   readonly structuredArguments: true;
   readonly contextWindow: number;
+  readonly promptCache: AgentPromptCacheCapabilitySnapshot;
 }
 
 const AGENT_MODEL_CAPABILITY_CATALOG: readonly AgentModelCapabilityCatalogEntry[] = [
@@ -28,7 +34,16 @@ const AGENT_MODEL_CAPABILITY_CATALOG: readonly AgentModelCapabilityCatalogEntry[
     streaming: true,
     toolCalling: true,
     structuredArguments: true,
-    contextWindow: 1_000_000
+    contextWindow: 1_000_000,
+    promptCache: {
+      mode: "automatic_prefix",
+      policyVersion: "openai-automatic@1.0",
+      minimumCacheableTokens: 1_024,
+      ttlSeconds: 300,
+      inputTokenSemantics: "included_in_input",
+      reportsCacheReadTokens: true,
+      reportsCacheWriteTokens: false
+    }
   },
   {
     provider: "anthropic",
@@ -36,7 +51,16 @@ const AGENT_MODEL_CAPABILITY_CATALOG: readonly AgentModelCapabilityCatalogEntry[
     streaming: true,
     toolCalling: true,
     structuredArguments: true,
-    contextWindow: 200_000
+    contextWindow: 200_000,
+    promptCache: {
+      mode: "explicit_breakpoints",
+      policyVersion: "anthropic-ephemeral@1.0",
+      minimumCacheableTokens: 1_024,
+      ttlSeconds: 300,
+      inputTokenSemantics: "excluded_from_input",
+      reportsCacheReadTokens: true,
+      reportsCacheWriteTokens: true
+    }
   },
   {
     provider: "google-gemini",
@@ -44,7 +68,16 @@ const AGENT_MODEL_CAPABILITY_CATALOG: readonly AgentModelCapabilityCatalogEntry[
     streaming: true,
     toolCalling: true,
     structuredArguments: true,
-    contextWindow: 2_000_000
+    contextWindow: 2_000_000,
+    promptCache: {
+      mode: "explicit_resource",
+      policyVersion: "gemini-cached-content@1.0",
+      minimumCacheableTokens: 32_768,
+      ttlSeconds: 300,
+      inputTokenSemantics: "included_in_input",
+      reportsCacheReadTokens: true,
+      reportsCacheWriteTokens: true
+    }
   },
   {
     provider: "deepseek",
@@ -52,7 +85,8 @@ const AGENT_MODEL_CAPABILITY_CATALOG: readonly AgentModelCapabilityCatalogEntry[
     streaming: true,
     toolCalling: true,
     structuredArguments: true,
-    contextWindow: 64_000
+    contextWindow: 64_000,
+    promptCache: NO_AGENT_PROMPT_CACHE_CAPABILITY
   }
 ] as const;
 
@@ -87,6 +121,7 @@ export interface AgentModelCapabilitySnapshot {
   readonly structuredArguments: boolean;
   readonly contextWindow: number;
   readonly requiredContextTokens: number;
+  readonly promptCache: AgentPromptCacheCapabilitySnapshot;
 }
 
 export function preflightAgentModelCapabilities(
@@ -157,8 +192,33 @@ export function preflightAgentModelCapabilities(
     toolCalling: requireToolCapabilities || input.capabilities.toolCalling === true,
     structuredArguments: requireToolCapabilities || input.capabilities.structuredArguments === true,
     contextWindow,
-    requiredContextTokens: input.requiredContextTokens
+    requiredContextTokens: input.requiredContextTokens,
+    promptCache: normalizeAgentPromptCacheCapability(input.capabilities.promptCache)
   });
+}
+
+export function normalizeAgentPromptCacheCapability(
+  value: AgentPromptCacheCapabilitySnapshot | undefined
+): AgentPromptCacheCapabilitySnapshot {
+  if (value === undefined || value.mode === "none") return NO_AGENT_PROMPT_CACHE_CAPABILITY;
+  if (
+    (value.mode !== "automatic_prefix" &&
+      value.mode !== "explicit_breakpoints" &&
+      value.mode !== "explicit_resource") ||
+    value.policyVersion.trim().length === 0 ||
+    value.policyVersion.length > 128 ||
+    !Number.isSafeInteger(value.minimumCacheableTokens) ||
+    value.minimumCacheableTokens < 0 ||
+    (value.ttlSeconds !== null &&
+      (!Number.isSafeInteger(value.ttlSeconds) || value.ttlSeconds <= 0)) ||
+    (value.inputTokenSemantics !== "included_in_input" &&
+      value.inputTokenSemantics !== "excluded_from_input") ||
+    typeof value.reportsCacheReadTokens !== "boolean" ||
+    typeof value.reportsCacheWriteTokens !== "boolean"
+  ) {
+    return NO_AGENT_PROMPT_CACHE_CAPABILITY;
+  }
+  return Object.freeze({ ...value });
 }
 
 export interface AgentReasoningEffortResolutionInput {

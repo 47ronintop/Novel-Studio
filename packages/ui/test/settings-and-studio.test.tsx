@@ -397,6 +397,7 @@ describe("M8 Settings and Studio UI", () => {
   });
 
   test("renders server-authoritative Agent usage trends, costs, filters, and private run summaries", () => {
+    const prefixChecksum = "a".repeat(64);
     const html = renderToStaticMarkup(
       <ModelSettingsPanel
         {...createModelSettingsPanelProps()}
@@ -416,10 +417,19 @@ describe("M8 Settings and Studio UI", () => {
                 inputTokens: 1200,
                 outputTokens: 300,
                 cachedTokens: 400,
+                cacheReadTokens: 400,
+                cacheWriteTokens: 10,
+                cacheEligibleInputTokens: 500,
+                cacheHitRate: 0.8,
                 reasoningTokens: 0,
                 totalTokens: 1500,
                 costs: [
-                  { currency: "USD", actualAmount: 0.04, estimatedAmount: 0.02 },
+                  {
+                    currency: "USD",
+                    actualAmount: 0.04,
+                    estimatedAmount: 0.02,
+                    estimatedCacheSavings: 0.012
+                  },
                   { currency: "EUR", actualAmount: 0, estimatedAmount: 0.03 }
                 ],
                 hasUnknownCost: true,
@@ -440,9 +450,42 @@ describe("M8 Settings and Studio UI", () => {
                 provider: "openai",
                 model: "gpt-5",
                 totalTokens: 1500,
+                cacheReadTokens: 400,
+                cacheWriteTokens: 10,
+                cacheEligibleInputTokens: 500,
+                cacheHitRate: 0.8,
+                cacheOutcome: "hit",
+                cacheUsageStatus: "actual",
+                cacheInputTokenSemantics: "included_in_input",
+                cacheMode: "automatic_prefix",
+                cachePrefixChecksum: prefixChecksum,
+                estimatedCacheSavings: { amount: 0.012, currency: "USD" },
                 usageStatus: "actual",
                 cost: { status: "actual", amount: 0.04, currency: "USD" },
                 timestamp: "2026-07-16T08:00:00.000Z"
+              },
+              {
+                scope: {
+                  kind: "workspace",
+                  workspaceKind: "creativeProject",
+                  workspaceId: "project_01"
+                },
+                usageId: "run_02:round_03:8",
+                runId: "run_02",
+                conversationId: "conversation_01",
+                projectId: "project_01",
+                provider: "openai",
+                model: "gpt-5",
+                totalTokens: 100,
+                cacheOutcome: "bypass",
+                cacheBypassReason: "below_minimum_tokens",
+                cacheUsageStatus: "unavailable",
+                cacheInputTokenSemantics: "unavailable",
+                cacheMode: "automatic_prefix",
+                cachePrefixChecksum: null,
+                usageStatus: "actual",
+                cost: { status: "unknown", amount: 0, currency: "" },
+                timestamp: "2026-07-16T09:00:00.000Z"
               }
             ],
             generatedAt: "2026-07-17T12:00:00.000Z"
@@ -463,7 +506,20 @@ describe("M8 Settings and Studio UI", () => {
     expect(html).toContain('data-model-key="openai/gpt-5"');
     expect(html).toContain("Input");
     expect(html).toContain("Output");
-    expect(html).toContain("Cached");
+    expect(html).toContain("缓存读取");
+    expect(html).toContain("缓存写入");
+    expect(html).toContain("可缓存输入");
+    expect(html).toContain("命中率");
+    expect(html).toContain("80%");
+    expect(html).toContain("缓存节省 0.0120");
+    expect(html).toContain("缓存节省 USD 0.0120");
+    expect(html).toContain("自动前缀");
+    expect(html).toContain("命中");
+    expect(html).toContain("跳过");
+    expect(html).toContain("低于最小 token 数");
+    expect(html).toContain("命中率：不可用");
+    expect(html).toContain("aaaaaaaa...aaaaaa");
+    expect(html).not.toContain(prefixChecksum);
     expect(html).toContain("实际费用");
     expect(html).toContain("估算费用");
     expect(html).toContain("未知费用");

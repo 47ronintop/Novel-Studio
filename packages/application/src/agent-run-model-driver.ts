@@ -3,8 +3,14 @@ import type {
   LlmMessage,
   LlmModelProfile,
   LlmParameters,
-  LlmToolDefinition
+  LlmToolDefinition,
+  LlmPromptCacheRequest,
+  LlmRequest
 } from "@novel-studio/llm-adapter";
+import {
+  createDeterministicTokenEstimator,
+  type AgentTokenEstimator
+} from "@novel-studio/agent-engine";
 
 import type {
   AgentModelMessage,
@@ -18,6 +24,8 @@ export interface CreateLlmAgentRunModelDriverOptions {
   readonly modelProfile: LlmModelProfile;
   readonly parameters?: LlmParameters;
   readonly systemPrompt?: string;
+  /** Main-only resolver for provider resources. Failures degrade to a full uncached request. */
+  readonly resolvePromptCache?: (request: LlmRequest) => Promise<LlmPromptCacheRequest | undefined>;
 }
 
 export function createLlmAgentRunModelDriver(
@@ -40,6 +48,8 @@ export function createLlmAgentRunModelDriver(
         }
       }));
       const requestId = `agent_${input.runId}_${input.snapshot.runRevision}`;
+      const promptCache =
+        input.promptCache ?? createAgentRoundPromptCacheRequest(input, messages, tools);
       // The run snapshot's reasoning effort is server-authoritative (validated against the model at
       // start). It overrides any static reasoning in the driver's base parameters so the value the
       // preflight approved is exactly what reaches the provider.
@@ -48,7 +58,7 @@ export function createLlmAgentRunModelDriver(
         input.snapshot.reasoningEffort === undefined
           ? baseParameters
           : { ...baseParameters, reasoningEffort: input.snapshot.reasoningEffort };
-      for await (const result of options.adapter.stream({
+      const baseRequest: LlmRequest = {
         schemaVersion: "1.0",
         requestId,
         traceId: requestId,
@@ -58,6 +68,15 @@ export function createLlmAgentRunModelDriver(
         parameters,
         abortSignal: input.signal,
         ...(tools.length === 0 ? {} : { tools })
+      };
+      const resolvedPromptCache = await resolveMainPromptCache(
+        options.resolvePromptCache,
+        baseRequest,
+        promptCache
+      );
+      for await (const result of options.adapter.stream({
+        ...baseRequest,
+        ...(resolvedPromptCache === undefined ? {} : { promptCache: resolvedPromptCache })
       })) {
         if (!result.ok) throw result.error;
         if (result.value.type === "delta") {
@@ -82,6 +101,83 @@ export function createLlmAgentRunModelDriver(
       }
     }
   };
+}
+
+async function resolveMainPromptCache(
+  resolver: CreateLlmAgentRunModelDriverOptions["resolvePromptCache"],
+  request: LlmRequest,
+  promptCache: LlmPromptCacheRequest | undefined
+): Promise<LlmPromptCacheRequest | undefined> {
+  if (resolver === undefined) return promptCache;
+  try {
+    return await resolver({
+      ...request,
+      ...(promptCache === undefined ? {} : { promptCache })
+    });
+  } catch {
+    return promptCache === undefined
+      ? undefined
+      : withoutPromptCacheResource(promptCache, "cache_error");
+  }
+}
+
+function withoutPromptCacheResource(
+  promptCache: LlmPromptCacheRequest,
+  bypassReason: NonNullable<LlmPromptCacheRequest["bypassReason"]>
+): LlmPromptCacheRequest {
+  const { resourceRef, physicalPrefixChecksum, resourceWriteTokens, ...base } = promptCache;
+  void resourceRef;
+  void physicalPrefixChecksum;
+  void resourceWriteTokens;
+  return { ...base, bypassReason };
+}
+
+export function createAgentRoundPromptCacheRequest(
+  input: AgentModelRoundInput,
+  messages: readonly LlmMessage[],
+  tools: readonly LlmToolDefinition[],
+  estimator: AgentTokenEstimator = createDeterministicTokenEstimator()
+): LlmPromptCacheRequest | undefined {
+  const capability = input.snapshot.providerCapabilitySnapshot?.promptCache;
+  const stablePrefixMessageCount = input.snapshot.promptCacheStablePrefixMessageCount;
+  if (
+    capability === undefined ||
+    !isChecksum(input.snapshot.promptCacheIdentityChecksum) ||
+    !isChecksum(input.snapshot.cachePrefixChecksum) ||
+    !Number.isSafeInteger(stablePrefixMessageCount) ||
+    stablePrefixMessageCount < 1 ||
+    stablePrefixMessageCount > messages.length
+  ) {
+    return undefined;
+  }
+  const eligibleInputTokens = estimator.count(
+    JSON.stringify({
+      messages: messages.slice(0, stablePrefixMessageCount),
+      ...(tools.length === 0 ? {} : { tools })
+    }),
+    input.snapshot.providerCapabilitySnapshot.profileId
+  ).tokens;
+  const bypassReason =
+    capability.mode === "none"
+      ? "policy_none"
+      : eligibleInputTokens < capability.minimumCacheableTokens
+        ? "below_minimum_tokens"
+        : undefined;
+  return {
+    mode: capability.mode,
+    policyVersion: capability.policyVersion,
+    identityChecksum: input.snapshot.promptCacheIdentityChecksum,
+    logicalPrefixChecksum: input.snapshot.cachePrefixChecksum,
+    stablePrefixMessageCount,
+    minimumCacheableTokens: capability.minimumCacheableTokens,
+    eligibleInputTokens,
+    ...(capability.ttlSeconds === null ? {} : { ttlSeconds: capability.ttlSeconds }),
+    ...(bypassReason === undefined ? {} : { bypassReason })
+  };
+}
+
+function isChecksum(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
 }
 
 function toLlmMessage(message: AgentModelMessage): LlmMessage {

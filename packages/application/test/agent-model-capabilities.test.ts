@@ -33,7 +33,8 @@ describe("agent model capability preflight", () => {
         toolCalling: true,
         structuredArguments: true,
         contextWindow: 32_000,
-        requiredContextTokens: 8_000
+        requiredContextTokens: 8_000,
+        promptCache: { mode: "none", policyVersion: "none@1.0" }
       }
     });
 
@@ -83,11 +84,64 @@ describe("agent model capability preflight", () => {
       applicationExports.resolveCatalogAgentModelCapabilities("openai", "gpt-4.1")
     ).toMatchObject({
       contextWindow: 1_000_000,
-      toolCalling: true
+      toolCalling: true,
+      promptCache: {
+        mode: "automatic_prefix",
+        minimumCacheableTokens: 1_024,
+        reportsCacheReadTokens: true,
+        reportsCacheWriteTokens: false
+      }
     });
     expect(
       applicationExports.resolveCatalogAgentModelCapabilities("openai-compatible", "gpt-4.1")
     ).toBeUndefined();
+  });
+
+  test("freezes verified cache policy and degrades malformed declarations to none", () => {
+    const catalogCapabilities = applicationExports.resolveCatalogAgentModelCapabilities(
+      "anthropic",
+      "claude-3-5-sonnet"
+    );
+    expect(catalogCapabilities).toBeDefined();
+    if (catalogCapabilities === undefined) return;
+    const verified = applicationExports.preflightAgentModelCapabilities({
+      profileId: "anthropic_verified",
+      provider: "anthropic",
+      modelName: "claude-3-5-sonnet",
+      capabilities: catalogCapabilities,
+      requiredContextTokens: 8_000
+    });
+    expect(verified).toMatchObject({
+      ok: true,
+      value: {
+        promptCache: {
+          mode: "explicit_breakpoints",
+          policyVersion: "anthropic-ephemeral@1.0",
+          ttlSeconds: 300,
+          inputTokenSemantics: "excluded_from_input"
+        }
+      }
+    });
+
+    expect(
+      applicationExports.normalizeAgentPromptCacheCapability({
+        mode: "explicit_resource",
+        policyVersion: "",
+        minimumCacheableTokens: -1,
+        ttlSeconds: 0,
+        inputTokenSemantics: "unavailable",
+        reportsCacheReadTokens: true,
+        reportsCacheWriteTokens: true
+      })
+    ).toEqual({
+      mode: "none",
+      policyVersion: "none@1.0",
+      minimumCacheableTokens: 0,
+      ttlSeconds: null,
+      inputTokenSemantics: "unavailable",
+      reportsCacheReadTokens: false,
+      reportsCacheWriteTokens: false
+    });
   });
 
   test("accepts a text-only model for standalone conversation", () => {

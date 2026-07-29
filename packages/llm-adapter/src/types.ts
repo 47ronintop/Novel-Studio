@@ -69,6 +69,45 @@ export interface LlmParameters {
 /** Provider-declared string; callers must validate it against the selected model's capabilities. */
 export type LlmReasoningEffort = string;
 
+export type LlmPromptCacheMode =
+  "none" | "automatic_prefix" | "explicit_breakpoints" | "explicit_resource";
+
+export type LlmCacheOutcome = "hit" | "miss" | "bypass" | "unknown";
+export type LlmCacheUsageStatus = "actual" | "derived" | "unavailable";
+export type LlmCacheInputTokenSemantics =
+  "included_in_input" | "excluded_from_input" | "unavailable";
+
+export type LlmPromptCacheBypassReason =
+  | "policy_none"
+  | "unsupported_provider"
+  | "below_minimum_tokens"
+  | "identity_unverified"
+  | "resource_unavailable"
+  | "resource_create_failed"
+  | "resource_expired"
+  | "cache_error"
+  | "usage_unavailable";
+
+/** Main-authored cache metadata. Provider adapters may consume it but never derive its identity. */
+export interface LlmPromptCacheRequest {
+  readonly mode: LlmPromptCacheMode;
+  readonly policyVersion: string;
+  readonly identityChecksum: string;
+  readonly logicalPrefixChecksum: string;
+  /** Number of leading `messages` entries in the stable prefix, including the system message. */
+  readonly stablePrefixMessageCount: number;
+  readonly minimumCacheableTokens: number;
+  readonly eligibleInputTokens?: number;
+  readonly ttlSeconds?: number;
+  /** Main-owned opaque provider resource name. It must never be rendered or written to usage data. */
+  readonly resourceRef?: string;
+  /** Checksum of the provider-native bytes used to create an explicit resource. */
+  readonly physicalPrefixChecksum?: string;
+  /** Provider-reported tokens written while Main created an explicit resource for this request. */
+  readonly resourceWriteTokens?: number;
+  readonly bypassReason?: LlmPromptCacheBypassReason;
+}
+
 export interface LlmRequest {
   readonly schemaVersion: "1.0";
   readonly requestId: string;
@@ -80,6 +119,7 @@ export interface LlmRequest {
   readonly abortSignal?: AbortSignal;
   readonly responseFormat?: JsonValue;
   readonly tools?: readonly LlmToolDefinition[];
+  readonly promptCache?: LlmPromptCacheRequest;
 }
 
 export interface LlmTextContent {
@@ -107,6 +147,14 @@ export interface LlmUsage {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly cachedTokens?: number;
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
+  readonly cacheEligibleInputTokens?: number;
+  readonly cacheOutcome?: LlmCacheOutcome;
+  readonly cacheBypassReason?: LlmPromptCacheBypassReason;
+  readonly cacheUsageStatus?: LlmCacheUsageStatus;
+  readonly cacheInputTokenSemantics?: LlmCacheInputTokenSemantics;
+  readonly cachePhysicalPrefixChecksum?: string;
   readonly reasoningTokens?: number;
   readonly totalTokens: number;
   readonly usageStatus: LlmUsageStatus;

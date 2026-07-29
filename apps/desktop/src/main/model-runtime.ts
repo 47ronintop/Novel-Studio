@@ -34,6 +34,7 @@ import {
   type GeminiTransportRequest,
   type LlmProvider,
   type LlmProviderId,
+  type LlmPromptCacheRequest,
   type LlmRequest,
   type LlmModelProfile,
   type LlmParameters,
@@ -48,6 +49,7 @@ import {
   type Result,
   type UnifiedError
 } from "@novel-studio/shared";
+import { createGeminiPromptCacheResourceManager } from "./gemini-prompt-cache-resource-manager.js";
 
 export interface DesktopSecretCipher {
   isEncryptionAvailable(): boolean;
@@ -83,7 +85,10 @@ export interface DesktopModelRuntime {
   readonly createAgentModelDriver: (input: {
     readonly modelProfile: LlmModelProfile;
     readonly parameters?: LlmParameters;
+    readonly promptCacheScopeKey?: string;
   }) => AgentRunModelDriver;
+  readonly releasePromptCacheScope: (scopeKey: string) => void;
+  readonly dispose: () => Promise<void>;
 }
 
 export interface DesktopModelRuntimeOptions {
@@ -217,6 +222,16 @@ export function createDesktopModelRuntime(
       cipher: fallbackUnavailableCipher
     });
   const fetchImpl = options.fetch ?? globalThis.fetch;
+  const promptCacheResources = createGeminiPromptCacheResourceManager({
+    userDataRoot: options.userDataRoot,
+    fetch: fetchImpl
+  });
+  const pendingPromptCacheCleanup = new Set<Promise<void>>();
+  const schedulePromptCacheCleanup = (operation: Promise<void>): void => {
+    const tracked = operation.catch(() => undefined);
+    pendingPromptCacheCleanup.add(tracked);
+    void tracked.finally(() => pendingPromptCacheCleanup.delete(tracked));
+  };
 
   const transport: OpenAiCompatibleTransport = (request) =>
     postOpenAiCompatibleJson(fetchImpl, request);
@@ -395,12 +410,57 @@ export function createDesktopModelRuntime(
       return createLlmAgentRunModelDriver({
         adapter: createLlmAdapter({ provider }),
         modelProfile: input.modelProfile,
+        resolvePromptCache: async (request) => {
+          const config = request.promptCache;
+          if (config === undefined || config.mode !== "explicit_resource") return config;
+          if (
+            request.modelProfile.provider !== "google-gemini" ||
+            input.promptCacheScopeKey === undefined
+          ) {
+            return promptCacheBypass(config, "resource_unavailable");
+          }
+          const secretRef = request.modelProfile.apiKeyRef;
+          if (secretRef === undefined) {
+            return promptCacheBypass(config, "resource_unavailable");
+          }
+          const secret = await secretStore.readSecret(secretRef);
+          if (!secret.ok || secret.value === undefined) {
+            return promptCacheBypass(config, "resource_unavailable");
+          }
+          const verified = await secretStore.isVerified(secretRef, request.modelProfile);
+          if (!verified.ok || !verified.value) {
+            return promptCacheBypass(config, "resource_unavailable");
+          }
+          return promptCacheResources.resolve({
+            scopeKey: input.promptCacheScopeKey,
+            request: withRuntimeBaseUrl(request),
+            apiKey: secret.value
+          });
+        },
         ...(input.parameters === undefined ? {} : { parameters: input.parameters })
       } satisfies CreateLlmAgentRunModelDriverOptions);
+    },
+    releasePromptCacheScope(scopeKey) {
+      schedulePromptCacheCleanup(promptCacheResources.releaseScope(scopeKey));
+    },
+    async dispose() {
+      await promptCacheResources.dispose().catch(() => undefined);
+      await Promise.all(pendingPromptCacheCleanup);
     }
   };
 
   return runtime;
+}
+
+function promptCacheBypass(
+  config: LlmPromptCacheRequest,
+  bypassReason: NonNullable<LlmPromptCacheRequest["bypassReason"]>
+): LlmPromptCacheRequest {
+  const { resourceRef, physicalPrefixChecksum, resourceWriteTokens, ...base } = config;
+  void resourceRef;
+  void physicalPrefixChecksum;
+  void resourceWriteTokens;
+  return { ...base, bypassReason };
 }
 
 function connectionProbeRequest(profile: ModelProfile): LlmRequest {

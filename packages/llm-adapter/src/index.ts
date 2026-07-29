@@ -1,6 +1,12 @@
 export { createLlmAdapter } from "./adapter.js";
 export { LlmProviderFailure } from "./errors.js";
 export { createMockProvider } from "./mock-provider.js";
+export {
+  checksumProviderPayload,
+  isSha256Checksum,
+  resolveLlmPromptCacheRequest,
+  type ResolvedLlmPromptCacheRequest
+} from "./prompt-cache.js";
 export { createProviderRouter, type ProviderRouterOptions } from "./provider-router.js";
 export {
   createAnthropicProvider,
@@ -12,7 +18,9 @@ export {
 } from "./anthropic-provider.js";
 export {
   createGeminiProvider,
+  createGeminiPromptCacheResourceDescriptor,
   GeminiHttpError,
+  type GeminiPromptCacheResourceDescriptor,
   type GeminiProviderOptions,
   type GeminiStreamTransport,
   type GeminiTransport,
@@ -30,6 +38,9 @@ export type {
   LlmAdapter,
   LlmAdapterOptions,
   LlmContent,
+  LlmCacheInputTokenSemantics,
+  LlmCacheOutcome,
+  LlmCacheUsageStatus,
   LlmCost,
   LlmCostStatus,
   LlmJsonContent,
@@ -43,6 +54,9 @@ export type {
   LlmProviderId,
   LlmProviderStreamEvent,
   LlmProviderWarning,
+  LlmPromptCacheBypassReason,
+  LlmPromptCacheMode,
+  LlmPromptCacheRequest,
   LlmReasoningEffort,
   LlmRequest,
   LlmResponse,

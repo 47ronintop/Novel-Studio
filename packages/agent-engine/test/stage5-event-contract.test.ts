@@ -46,10 +46,10 @@ const v10Snapshot: AgentRunSnapshotV10 = {
 };
 
 describe("Stage 5 run/context contract normalization", () => {
-  test("normalizes a v1.0 run snapshot into the scope-aware v1.2 view", () => {
+  test("normalizes a v1.0 run snapshot into the cache-aware v1.3 view", () => {
     const normalized = normalizeAgentRunSnapshot(asJson(v10Snapshot));
 
-    expect(normalized.schemaVersion).toBe("1.2");
+    expect(normalized.schemaVersion).toBe("1.3");
     expect(normalized.scope).toEqual({
       kind: "workspace",
       workspaceKind: "creativeProject",
@@ -68,6 +68,17 @@ describe("Stage 5 run/context contract normalization", () => {
     expect(normalized.activeErrorId).toBeNull();
     expect(normalized.recoveryState).toBe("none");
     expect(normalized.usageSummary).toEqual(EMPTY_AGENT_RUN_USAGE_SUMMARY);
+    expect(normalized.providerCapabilitySnapshot.promptCache).toEqual({
+      mode: "none",
+      policyVersion: "none@1.0",
+      minimumCacheableTokens: 0,
+      ttlSeconds: null,
+      inputTokenSemantics: "unavailable",
+      reportsCacheReadTokens: false,
+      reportsCacheWriteTokens: false
+    });
+    expect(normalized.promptCacheArtifactId).toBeNull();
+    expect(normalized.promptCacheIdentityChecksum).toBe("legacy");
     // v1.0 fields are preserved.
     expect(normalized.userRequest).toBe("Continue the chapter.");
     expect(normalized.conversationId).toBe("conv_01");
@@ -80,7 +91,7 @@ describe("Stage 5 run/context contract normalization", () => {
     expect(normalized.conversationId).toBeNull();
   });
 
-  test("preserves v1.1 fields while adding the v1.2 scope fields", () => {
+  test("preserves v1.1 fields while adding the v1.3 scope and cache fields", () => {
     const v11: AgentRunSnapshotV11 = {
       ...v10Snapshot,
       schemaVersion: "1.1",
@@ -102,12 +113,15 @@ describe("Stage 5 run/context contract normalization", () => {
         inputTokens: 100,
         outputTokens: 50,
         totalTokens: 150,
-        usageStatus: "actual"
+        usageStatus: "actual",
+        cacheOutcome: "unknown",
+        cacheUsageStatus: "unavailable",
+        cacheInputTokenSemantics: "unavailable"
       }
     };
     const normalized = normalizeAgentRunSnapshot(asJson(v11));
     expect(normalized).toMatchObject({
-      schemaVersion: "1.2",
+      schemaVersion: "1.3",
       scope: {
         kind: "workspace",
         workspaceKind: "creativeProject",
@@ -120,6 +134,53 @@ describe("Stage 5 run/context contract normalization", () => {
     });
     // The v1.1 waiting states survive normalization.
     expect(normalized.status).toBe("context_compacting");
+  });
+
+  test("normalizes a v1.2 run snapshot into a cache-disabled v1.3 view", () => {
+    const v12 = {
+      ...v10Snapshot,
+      schemaVersion: "1.2",
+      scope: {
+        kind: "workspace",
+        workspaceKind: "creativeProject",
+        workspaceId: "project_01"
+      },
+      contextProfileId: "writing",
+      profileVersion: "2.0",
+      guidanceTemplateChecksum: "a".repeat(64),
+      conventionsArtifactId: null,
+      promptCachePolicyVersion: "none@1.0",
+      cachePrefixChecksum: "b".repeat(64),
+      modelProfileId: "model_01",
+      reasoningEffort: undefined,
+      permissionSummaryId: null,
+      permissionSummaryChecksum: null,
+      contextBudgetSnapshotId: null,
+      activeCompactionId: null,
+      planExecutionId: null,
+      planExecutionRevision: null,
+      activeErrorId: null,
+      recoveryState: "none",
+      toolFacadeVersion: "v1",
+      toolCatalogSnapshotId: null,
+      toolCatalogRevision: null,
+      usageSummary: EMPTY_AGENT_RUN_USAGE_SUMMARY,
+      pendingToolApproval: null
+    };
+
+    expect(normalizeAgentRunSnapshot(asJson(v12))).toMatchObject({
+      schemaVersion: "1.3",
+      promptCacheArtifactId: null,
+      promptCacheIdentityBaseChecksum: "legacy",
+      promptCacheIdentityChecksum: "legacy",
+      promptCacheStablePrefixMessageCount: 0,
+      providerCapabilitySnapshot: {
+        promptCache: {
+          mode: "none",
+          policyVersion: "none@1.0"
+        }
+      }
+    });
   });
 
   test("normalizes legacy events to the scope-aware v1.3 view", () => {

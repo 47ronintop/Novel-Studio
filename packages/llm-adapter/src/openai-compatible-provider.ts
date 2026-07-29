@@ -1,6 +1,13 @@
 import type { JsonObject } from "@novel-studio/shared";
 
 import { LlmProviderFailure } from "./errors.js";
+import {
+  checksumProviderPayload,
+  rejectLlmPromptCacheRequest,
+  resolveLlmPromptCacheRequest,
+  withLlmPromptCacheUsage,
+  type ResolvedLlmPromptCacheRequest
+} from "./prompt-cache.js";
 import type {
   LlmMessage,
   LlmProvider,
@@ -66,7 +73,7 @@ export function createOpenAiCompatibleProvider(
         const transportRequest = await createTransportRequest(request, options);
         const result = await transportWithReasoningFallback(options.transport, transportRequest);
         return {
-          ...parseChatCompletion(result.payload),
+          ...parseChatCompletion(result.payload, request),
           ...(result.warning === undefined ? {} : { warnings: [result.warning] })
         };
       } catch (error) {
@@ -96,7 +103,12 @@ async function* streamChatCompletion(
     const syntheticToolCallPrefix = `tool_call_${safeIdentifier(request.requestId)}`;
     try {
       for await (const chunk of streamTransport(transportRequest)) {
-        for (const event of parseStreamChunk(chunk, toolCallIdsByIndex, syntheticToolCallPrefix)) {
+        for (const event of parseStreamChunk(
+          chunk,
+          toolCallIdsByIndex,
+          syntheticToolCallPrefix,
+          request
+        )) {
           emittedEvent = true;
           if (event.type === "round_completed") {
             if (sawRoundCompleted) throw duplicateRoundCompletion();
@@ -114,7 +126,8 @@ async function* streamChatCompletion(
           for (const event of parseStreamChunk(
             chunk,
             toolCallIdsByIndex,
-            syntheticToolCallPrefix
+            syntheticToolCallPrefix,
+            request
           )) {
             if (event.type === "round_completed") {
               if (sawRoundCompleted) throw duplicateRoundCompletion();
@@ -309,7 +322,7 @@ function toOpenAiCompatibleMessage(message: LlmMessage): JsonObject {
   };
 }
 
-function parseChatCompletion(payload: unknown): LlmProviderCompletion {
+function parseChatCompletion(payload: unknown, request: LlmRequest): LlmProviderCompletion {
   const root = requireRecord(payload);
   const choices = root.choices;
   if (!Array.isArray(choices)) {
@@ -338,14 +351,15 @@ function parseChatCompletion(payload: unknown): LlmProviderCompletion {
       type: "text",
       value: typeof content === "string" ? content : ""
     },
-    usage: parseUsage(root.usage)
+    usage: parseUsage(root.usage, request)
   };
 }
 
 function parseStreamChunk(
   payload: unknown,
   toolCallIdsByIndex: Map<number, string> = new Map(),
-  syntheticToolCallPrefix = "tool_call_stream"
+  syntheticToolCallPrefix = "tool_call_stream",
+  request?: LlmRequest
 ): readonly LlmProviderStreamEvent[] {
   const root = requireRecord(payload);
   const choices = root.choices;
@@ -433,7 +447,7 @@ function parseStreamChunk(
   if (root.usage !== undefined) {
     events.push({
       type: "usage",
-      usage: parseUsage(root.usage)
+      usage: parseUsage(root.usage, request)
     });
   }
 
@@ -445,7 +459,7 @@ function safeIdentifier(value: string): string {
   return normalized.length > 0 ? normalized : "request";
 }
 
-function parseUsage(value: unknown): LlmUsage {
+function parseUsage(value: unknown, request?: LlmRequest): LlmUsage {
   if (!isRecord(value)) {
     return unknownUsage();
   }
@@ -458,7 +472,7 @@ function parseUsage(value: unknown): LlmUsage {
     return unknownUsage();
   }
 
-  return {
+  const usage: LlmUsage = {
     inputTokens,
     outputTokens,
     totalTokens,
@@ -469,6 +483,42 @@ function parseUsage(value: unknown): LlmUsage {
       status: "unknown"
     }
   };
+  const promptTokenDetails = isRecord(value["prompt_tokens_details"])
+    ? value["prompt_tokens_details"]
+    : undefined;
+  const cacheReadTokens =
+    promptTokenDetails === undefined ? undefined : readNumber(promptTokenDetails, "cached_tokens");
+  const cache = resolveOpenAiPromptCache(request);
+  return withLlmPromptCacheUsage(usage, cache.resolution, {
+    ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
+    cacheInputTokenSemantics: "included_in_input",
+    ...(cache.physicalPrefixChecksum === undefined
+      ? {}
+      : { physicalPrefixChecksum: cache.physicalPrefixChecksum })
+  });
+}
+
+function resolveOpenAiPromptCache(request: LlmRequest | undefined): {
+  readonly resolution: ResolvedLlmPromptCacheRequest;
+  readonly physicalPrefixChecksum?: string;
+} {
+  if (request === undefined) return { resolution: { active: false } };
+  let resolution = resolveLlmPromptCacheRequest(request, "automatic_prefix");
+  if (!resolution.active || resolution.config === undefined) return { resolution };
+  const physicalPrefixChecksum = checksumProviderPayload({
+    messages: request.messages
+      .slice(0, resolution.config.stablePrefixMessageCount)
+      .map(toOpenAiCompatibleMessage),
+    ...(request.tools === undefined || request.tools.length === 0 ? {} : { tools: request.tools })
+  });
+  if (
+    resolution.config.physicalPrefixChecksum !== undefined &&
+    resolution.config.physicalPrefixChecksum !== physicalPrefixChecksum
+  ) {
+    resolution = rejectLlmPromptCacheRequest(resolution, "identity_unverified");
+    return { resolution };
+  }
+  return { resolution, physicalPrefixChecksum };
 }
 
 function unknownUsage(): LlmUsage {

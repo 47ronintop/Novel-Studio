@@ -77,7 +77,7 @@ describe("AgentRunSession", () => {
             unitPrices: {
               inputPerMillion: 2,
               outputPerMillion: 8,
-              cachedPerMillion: 1,
+              cacheReadPerMillion: 1,
               reasoningPerMillion: 4,
               currency: "USD"
             },
@@ -123,7 +123,7 @@ describe("AgentRunSession", () => {
     const finalSequence = usageEvents.at(-1)?.["sequence"];
     expect(written).toEqual([
       expect.objectContaining({
-        schemaVersion: "1.1",
+        schemaVersion: "1.2",
         scope: {
           kind: "workspace",
           workspaceKind: "creativeProject",
@@ -139,6 +139,12 @@ describe("AgentRunSession", () => {
         inputTokens: 120,
         outputTokens: 30,
         cachedTokens: 40,
+        cacheReadTokens: 40,
+        cacheOutcome: "unknown",
+        cacheUsageStatus: "unavailable",
+        cacheInputTokenSemantics: "unavailable",
+        cacheMode: "none",
+        cachePrefixChecksum: expect.stringMatching(/^[a-f0-9]{64}$/u),
         reasoningTokens: 10,
         totalTokens: 150,
         usageStatus: "actual",

@@ -177,7 +177,7 @@ describe("standalone Agent state root", () => {
       unknown
     >;
     expect(record).toMatchObject({
-      schemaVersion: "1.1",
+      schemaVersion: "1.2",
       scope: STANDALONE_AGENT_SCOPE,
       runId: "standalone_run_usage",
       conversationId: "standalone_conversation_usage",

@@ -15,7 +15,8 @@ const table: AgentPricingTable = {
       unitPrices: {
         inputPerMillion: 2,
         outputPerMillion: 8,
-        cachedPerMillion: 0.5,
+        cacheReadPerMillion: 0.5,
+        cacheWritePerMillion: 2.5,
         reasoningPerMillion: 12,
         currency: "USD"
       }
@@ -37,6 +38,7 @@ describe("AgentPricingRegistry", () => {
           inputTokens: 1_000_000,
           outputTokens: 2_000_000,
           cachedTokens: 3_000_000,
+          cacheReadTokens: 3_000_000,
           reasoningTokens: 4_000_000,
           totalTokens: 10_000_000,
           usageStatus: "actual",
@@ -117,7 +119,8 @@ describe("AgentPricingRegistry", () => {
   });
 
   test.each([
-    ["cached", { cachedTokens: 3 }],
+    ["cache read", { cacheReadTokens: 3 }],
+    ["cache write", { cacheWriteTokens: 3 }],
     ["reasoning", { reasoningTokens: 2 }]
   ] as const)(
     "keeps cost unknown when reported %s tokens have no matching unit price",
