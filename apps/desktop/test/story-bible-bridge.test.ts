@@ -18,6 +18,8 @@ const snapshot: StoryBibleSnapshot = {
       title: "Hero",
       status: "active",
       summary: "A procedural protagonist with a hidden oath.",
+      aliases: ["Oath bearer"],
+      relatedEntityIds: ["loc_capital"],
       details: {
         role: "lead",
         futureDetailField: ["kept"]
@@ -86,9 +88,18 @@ describe("Story Bible bridge", () => {
       "Old key",
       "Oath"
     ]);
-    expect(bridge.getEditorProps().entries.some((entry) => entry.id.startsWith("fsh_"))).toBe(
-      false
+    expect(bridge.getEditorProps().entries).toContainEqual(
+      expect.objectContaining({
+        id: "fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        kind: "foreshadow",
+        assetType: "foreshadow",
+        summary: "The key will reveal who sealed the archive.",
+        details: expect.objectContaining({ trackingStatus: "planned" }),
+        createdAt: "2026-07-05T00:00:00.000Z",
+        updatedAt: "2026-07-05T00:00:00.000Z"
+      })
     );
+    expect(bridge.getEditorProps().entries.some((entry) => entry.id === "mem_oath")).toBe(false);
     expect(props.assets[2]).toMatchObject({
       id: "fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       type: "foreshadow",
@@ -106,7 +117,7 @@ describe("Story Bible bridge", () => {
     });
   });
 
-  test("loads Story Bible consistency warnings into editor props", async () => {
+  test("keeps memory consistency refs out of the author UI while allowing foreshadow refs", async () => {
     const bridge = createStoryBibleBridge(
       createApi([], snapshot, {
         status: "attention",
@@ -128,6 +139,23 @@ describe("Story Bible bridge", () => {
               title: "Oath"
             },
             suggestedAction: "Open the linked Story Bible entry and resolve the setting conflict."
+          },
+          {
+            id: "story-consistency.foreshadow.fsh_key.loc_capital",
+            severity: "warning",
+            title: "Foreshadow and location need review",
+            message: "The key conflicts with the archive location.",
+            sourceRef: {
+              kind: "foreshadow",
+              id: "fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              title: "Old key"
+            },
+            targetRef: {
+              kind: "world",
+              id: "loc_capital",
+              title: "Capital"
+            },
+            suggestedAction: "Review the linked entries."
           }
         ]
       })
@@ -139,10 +167,9 @@ describe("Story Bible bridge", () => {
       status: "attention",
       issues: [
         {
-          targetRef: {
-            id: "mem_oath",
-            title: "Oath"
-          }
+          id: "story-consistency.foreshadow.fsh_key.loc_capital",
+          sourceRef: { kind: "foreshadow", id: "fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+          targetRef: { kind: "world", id: "loc_capital" }
         }
       ]
     });
@@ -189,7 +216,13 @@ describe("Story Bible bridge", () => {
     await bridge.load("workspace-01");
 
     bridge.selectEntry("chr_hero");
-    bridge.updateDraft({ title: "Hero Revised", body: "A revised oath holder." });
+    expect(bridge.getEditorProps()).toMatchObject({ viewMode: "detail", dirty: false });
+    bridge.updateDraft("character", {
+      title: "Hero Revised",
+      summary: "A revised oath holder.",
+      details: { role: "mentor" }
+    });
+    expect(bridge.getEditorProps().dirty).toBe(true);
     const editor = await bridge.saveDraft();
 
     expect(calls).toContain("storyBible.saveAsset:chr_hero:Hero Revised");
@@ -200,22 +233,109 @@ describe("Story Bible bridge", () => {
     expect(bridge.getProps().assets[0]?.title).toBe("Hero Revised");
     expect(bridge.getSnapshot().characters[0]).toMatchObject({
       futureRootField: { enabled: true },
+      aliases: ["Oath bearer"],
+      relatedEntityIds: ["loc_capital"],
       details: {
-        role: "lead",
+        role: "mentor",
         futureDetailField: ["kept"]
+      }
+    });
+    expect(editor).toMatchObject({ viewMode: "detail", dirty: false });
+  });
+
+  test("moves between list and detail, tracks dirty drafts, and rejects cross-kind patches", async () => {
+    const bridge = createStoryBibleBridge(createApi([]));
+    await bridge.load("workspace-01");
+
+    expect(bridge.getEditorProps()).toMatchObject({
+      activeKind: "character",
+      viewMode: "list",
+      dirty: false,
+      externalUpdate: { status: "none" }
+    });
+    expect(bridge.updateFilters({ query: "hero", status: "draft" }).filters).toMatchObject({
+      query: "hero",
+      status: "draft",
+      worldAssetType: "all",
+      foreshadowTrackingStatus: "all"
+    });
+    expect(bridge.selectEntry("chr_hero")).toMatchObject({
+      activeKind: "character",
+      viewMode: "detail",
+      dirty: false
+    });
+    expect(() => bridge.updateDraft("world", { title: "Wrong kind" })).toThrowError(
+      /active character draft/u
+    );
+    expect(() =>
+      bridge.updateDraft("character", {
+        assetType: "world.location"
+      } as never)
+    ).toThrowError(/asset type/u);
+
+    bridge.updateDraft("character", { title: "Local edit" });
+    expect(bridge.getEditorProps().dirty).toBe(true);
+    expect(bridge.cancelDraft()).toMatchObject({ viewMode: "list", dirty: false });
+    expect(bridge.beginCreate("foreshadow")).toMatchObject({
+      activeKind: "foreshadow",
+      viewMode: "detail",
+      dirty: false,
+      draft: {
+        kind: "foreshadow",
+        assetType: "foreshadow",
+        details: { trackingStatus: "planned", origin: "manual" }
       }
     });
   });
 
-  test("creates confirmed memory drafts through the preload API", async () => {
+  test.each([
+    ["character", "character", "chr_"],
+    ["world", "world.location", "loc_"],
+    ["world", "world.faction", "fac_"],
+    ["world", "world.rule", "rule_"],
+    ["world", "world.glossary", "term_"],
+    ["foreshadow", "foreshadow", "fsh_"]
+  ] as const)(
+    "creates %s/%s IDs from an injected 32-hex identity",
+    async (kind, assetType, prefix) => {
+      const calls: string[] = [];
+      const bridge = createStoryBibleBridge(createApi(calls), {
+        createAssetIdentity: () => "b".repeat(32)
+      });
+
+      bridge.beginCreate(kind);
+      bridge.updateDraft(kind, {
+        assetType,
+        title: "中文标题不会进入 ID",
+        summary: "A new structured asset."
+      } as never);
+      const saved = await bridge.saveDraft();
+
+      expect(calls).toContain(
+        `storyBible.saveAsset:${prefix}${"b".repeat(32)}:中文标题不会进入 ID`
+      );
+      expect(saved.draft.id).toBe(`${prefix}${"b".repeat(32)}`);
+      expect(saved).toMatchObject({ viewMode: "detail", dirty: false });
+    }
+  );
+
+  test.each([
+    ["outline", "outline_main"],
+    ["timeline", "timeline_main"]
+  ] as const)("keeps the %s singleton ID fixed", async (kind, expectedId) => {
     const calls: string[] = [];
-    const bridge = createStoryBibleBridge(createApi(calls));
+    const bridge = createStoryBibleBridge(createApi(calls), {
+      createAssetIdentity: () => {
+        throw new Error("singleton assets must not request a random identity");
+      }
+    });
 
-    bridge.selectKind("memory");
-    bridge.updateDraft({ title: "Hidden Oath", body: "The oath is never spoken aloud." });
-    await bridge.saveDraft();
+    bridge.beginCreate(kind);
+    bridge.updateDraft(kind, { title: "Main", summary: "Singleton summary." });
+    const saved = await bridge.saveDraft();
 
-    expect(calls).toContain("storyBible.saveMemory:mem_hidden_oath:Hidden Oath");
+    expect(calls).toContain(`storyBible.saveAsset:${expectedId}:Main`);
+    expect(saved.draft.id).toBe(expectedId);
   });
 
   test("maps structured timeline events for the timeline workspace", async () => {
@@ -465,6 +585,10 @@ function createApi(
           worldAssets: asset.type.startsWith("world.")
             ? replaceAsset(currentSnapshot.worldAssets, asset)
             : currentSnapshot.worldAssets,
+          foreshadows:
+            asset.type === "foreshadow"
+              ? replaceAsset(currentSnapshot.foreshadows, asset)
+              : currentSnapshot.foreshadows,
           ...(asset.type === "outline" ? { outline: asset } : {}),
           ...(asset.type === "timeline.events" ? { timeline: asset } : {})
         };
@@ -500,10 +624,9 @@ function createApi(
   };
 }
 
-function replaceAsset<T extends StoryBibleSnapshot["characters"][number]>(
-  assets: readonly T[],
-  asset: T
-): readonly T[] {
+function replaceAsset<
+  T extends StoryBibleSnapshot["characters"][number] | StoryBibleSnapshot["foreshadows"][number]
+>(assets: readonly T[], asset: T): readonly T[] {
   const exists = assets.some((entry) => entry.id === asset.id);
   if (!exists) {
     return [...assets, asset];

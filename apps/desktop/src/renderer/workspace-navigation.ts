@@ -40,7 +40,8 @@ export interface WorkspaceNavigationDependencies {
   readonly getWorkspaceContext: () => WorkspaceContextDto;
   readonly projectWorkflowBridge?: Pick<ProjectWorkflowBridge, "selectChapterAndLoad"> | undefined;
   readonly chapterEditorBridge?: Pick<ChapterEditorBridge, "adopt"> | undefined;
-  readonly storyBibleBridge?: Pick<StoryBibleBridge, "selectKind" | "selectEntry"> | undefined;
+  readonly storyBibleBridge?:
+    Pick<StoryBibleBridge, "selectKind" | "selectEntry" | "beginCreate"> | undefined;
   readonly plainFileBridge?: Pick<PlainFileEditorBridge, "openFile"> | undefined;
   readonly creativePlainFileBridge?: Pick<PlainFileEditorBridge, "openFile" | "clear"> | undefined;
   readonly creativeProjectFilesBridge?:
@@ -118,7 +119,7 @@ export function createWorkspaceNavigation(
       navigateToStory(() => {
         const bridge = dependencies.storyBibleBridge;
         if (bridge === undefined) return;
-        dependencies.setStoryBibleEditor(bridge.selectKind(kind));
+        dependencies.setStoryBibleEditor(bridge.beginCreate(kind));
       });
     },
     async navigateToFile(path) {

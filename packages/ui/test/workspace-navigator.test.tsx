@@ -133,12 +133,12 @@ describe("CreativeWorkspaceNavigator", () => {
       "character",
       "world",
       "outline",
-      "timeline",
-      "memory"
+      "foreshadow",
+      "timeline"
     ]);
     expect(
       kindButtons.map((button) => button.querySelector(".ns-creative-row-label")?.textContent)
-    ).toEqual(["人物", "世界观", "大纲", "时间线", "记忆"]);
+    ).toEqual(["人物", "世界观", "大纲", "伏笔", "时间线"]);
     expect(
       kindButtons.map((button) => button.querySelector(".ns-creative-row-count")?.textContent)
     ).toEqual(["1", "1", "1", "1", "1"]);
@@ -508,54 +508,101 @@ function createCreativeProps(
 function createStoryBible(overrides: Partial<StoryBibleEditorProps> = {}): StoryBibleEditorProps {
   return {
     activeKind: "character",
+    viewMode: "list",
     status: "idle",
+    dirty: false,
     entries: [
       {
         id: "character_lin",
         kind: "character",
+        assetType: "character",
         title: "林照月",
-        status: "主角",
-        body: "开篇出现。"
+        status: "active",
+        summary: "开篇出现。",
+        aliases: [],
+        relatedEntityIds: [],
+        details: { role: "主角" },
+        createdAt: "2026-07-05T00:00:00.000Z",
+        updatedAt: "2026-07-05T00:00:00.000Z"
       },
       {
         id: "world_changan",
         kind: "world",
+        assetType: "world.location",
         title: "长安城",
-        status: "完成",
-        body: "雨夜中的旧城。"
+        status: "active",
+        summary: "雨夜中的旧城。",
+        aliases: [],
+        relatedEntityIds: [],
+        details: {},
+        createdAt: "2026-07-05T00:00:00.000Z",
+        updatedAt: "2026-07-05T00:00:00.000Z"
       },
       {
         id: "outline_main",
         kind: "outline",
+        assetType: "outline",
         title: "主大纲",
-        status: "完成",
-        body: "三幕结构。"
+        status: "active",
+        summary: "三幕结构。",
+        aliases: [],
+        relatedEntityIds: [],
+        details: {},
+        createdAt: "2026-07-05T00:00:00.000Z",
+        updatedAt: "2026-07-05T00:00:00.000Z"
+      },
+      {
+        id: "fsh_letter",
+        kind: "foreshadow",
+        assetType: "foreshadow",
+        title: "旧信伏笔",
+        status: "active",
+        summary: "林照月仍保留那封信。",
+        aliases: [],
+        relatedEntityIds: [],
+        details: { trackingStatus: "planted", origin: "manual" },
+        createdAt: "2026-07-05T00:00:00.000Z",
+        updatedAt: "2026-07-05T00:00:00.000Z"
       },
       {
         id: "timeline_main",
         kind: "timeline",
+        assetType: "timeline.events",
         title: "主时间线",
-        status: "完成",
-        body: "雨夜开场。"
-      },
-      {
-        id: "memory_letter",
-        kind: "memory",
-        title: "旧信记忆",
-        status: "活动",
-        body: "林照月记得那封信。"
+        status: "active",
+        summary: "雨夜开场。",
+        aliases: [],
+        relatedEntityIds: [],
+        details: {},
+        createdAt: "2026-07-05T00:00:00.000Z",
+        updatedAt: "2026-07-05T00:00:00.000Z",
+        timelineEvents: []
       }
     ],
+    chapterOptions: [],
+    filters: {
+      query: "",
+      status: "all",
+      worldAssetType: "all",
+      foreshadowTrackingStatus: "all"
+    },
+    externalUpdate: { status: "none" },
     draft: {
       kind: "character",
+      assetType: "character",
       title: "林照月",
-      body: "开篇出现。",
-      status: "主角"
+      summary: "开篇出现。",
+      status: "active",
+      aliases: [],
+      relatedEntityIds: [],
+      details: { role: "主角" }
     },
     onKindSelect: () => undefined,
     onEntrySelect: () => undefined,
     onDraftChange: () => undefined,
+    onFiltersChange: () => undefined,
     onNewDraft: () => undefined,
+    onCancelDraft: () => undefined,
     onSave: () => undefined,
     ...overrides
   };

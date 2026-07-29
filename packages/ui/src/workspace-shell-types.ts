@@ -16,11 +16,16 @@ import type {
   PlanArtifact,
   PlanExecutionRecord,
   ProjectSearchResultItem,
-  ProjectWorkspaceHealth
+  ProjectWorkspaceHealth,
+  StoryBibleAssetType,
+  StoryBibleEntityStatus
 } from "@novel-studio/application";
 import type {
   ChapterSummary,
   CreativeNavigatorMode,
+  ForeshadowDetails,
+  ForeshadowTrackingStatus,
+  JsonObject,
   UserAppearancePreferences,
   WorkbenchMode
 } from "@novel-studio/shared";
@@ -693,17 +698,37 @@ export interface StoryBibleSummaryAsset {
   readonly contextEligible?: boolean;
 }
 
-export type StoryBibleEditorKind = "character" | "world" | "outline" | "timeline" | "memory";
+export type StoryBibleEditorKind = "character" | "world" | "outline" | "foreshadow" | "timeline";
+export type StoryBibleWorldAssetType = Extract<StoryBibleAssetType, `world.${string}`>;
+export type StoryBibleEditorViewMode = "list" | "detail";
 export type StoryBibleEditorStatus = "idle" | "saving" | "saved" | "error";
 
-export interface StoryBibleEditorEntry {
+interface StoryBibleEditorEntryBase<
+  K extends StoryBibleEditorKind,
+  A extends StoryBibleAssetType,
+  D extends JsonObject = JsonObject
+> {
   readonly id: string;
-  readonly kind: StoryBibleEditorKind;
+  readonly kind: K;
+  readonly assetType: A;
   readonly title: string;
-  readonly status: string;
-  readonly body: string;
-  readonly timelineEvents?: readonly StoryTimelineEvent[];
+  readonly status: StoryBibleEntityStatus;
+  readonly summary: string;
+  readonly aliases: readonly string[];
+  readonly relatedEntityIds: readonly string[];
+  readonly details: D;
+  readonly createdAt: string;
+  readonly updatedAt: string;
 }
+
+export type StoryBibleEditorEntry =
+  | StoryBibleEditorEntryBase<"character", "character">
+  | StoryBibleEditorEntryBase<"world", StoryBibleWorldAssetType>
+  | StoryBibleEditorEntryBase<"outline", "outline">
+  | StoryBibleEditorEntryBase<"foreshadow", "foreshadow", ForeshadowDetails>
+  | (StoryBibleEditorEntryBase<"timeline", "timeline.events"> & {
+      readonly timelineEvents: readonly StoryTimelineEvent[];
+    });
 
 export interface StoryTimelineEvent {
   readonly id: string;
@@ -715,25 +740,81 @@ export interface StoryTimelineEvent {
   readonly chapterIds: readonly string[];
 }
 
-export interface StoryBibleEditorDraft {
+interface StoryBibleEditorDraftBase<
+  K extends StoryBibleEditorKind,
+  A extends StoryBibleAssetType,
+  D extends JsonObject = JsonObject
+> {
   readonly id?: string;
-  readonly kind: StoryBibleEditorKind;
+  readonly kind: K;
+  readonly assetType: A;
   readonly title: string;
-  readonly body: string;
-  readonly status: string;
+  readonly status: StoryBibleEntityStatus;
+  readonly summary: string;
+  readonly aliases: readonly string[];
+  readonly relatedEntityIds: readonly string[];
+  readonly details: D;
+  readonly createdAt?: string;
+  readonly updatedAt?: string;
 }
+
+export type StoryBibleEditorDraft =
+  | StoryBibleEditorDraftBase<"character", "character">
+  | StoryBibleEditorDraftBase<"world", StoryBibleWorldAssetType>
+  | StoryBibleEditorDraftBase<"outline", "outline">
+  | StoryBibleEditorDraftBase<"foreshadow", "foreshadow", ForeshadowDetails>
+  | StoryBibleEditorDraftBase<"timeline", "timeline.events">;
+
+export type StoryBibleEditorDraftFor<K extends StoryBibleEditorKind> = Extract<
+  StoryBibleEditorDraft,
+  { readonly kind: K }
+>;
+
+export interface StoryBibleChapterOption {
+  readonly id: string;
+  readonly title: string;
+  readonly order: number;
+  readonly status: ChapterSummary["status"];
+}
+
+export interface StoryBibleEditorFilters {
+  readonly query: string;
+  readonly status: StoryBibleEntityStatus | "all";
+  readonly worldAssetType: StoryBibleWorldAssetType | "all";
+  readonly foreshadowTrackingStatus: ForeshadowTrackingStatus | "all";
+}
+
+export type StoryBibleExternalUpdateState =
+  | { readonly status: "none" }
+  | {
+      readonly status: "available";
+      readonly message: string;
+      readonly affectedEntryIds: readonly string[];
+      readonly versionGroupId?: string;
+    };
 
 export interface StoryBibleEditorProps {
   readonly activeKind: StoryBibleEditorKind;
+  readonly viewMode: StoryBibleEditorViewMode;
   readonly status: StoryBibleEditorStatus;
+  readonly dirty: boolean;
   readonly entries: readonly StoryBibleEditorEntry[];
+  readonly chapterOptions: readonly StoryBibleChapterOption[];
+  readonly currentChapterId?: string;
+  readonly filters: StoryBibleEditorFilters;
+  readonly externalUpdate: StoryBibleExternalUpdateState;
   readonly consistency?: StoryBibleConsistencyProps;
   readonly draft: StoryBibleEditorDraft;
   readonly feedback?: ProjectWorkflowFeedback;
   readonly onKindSelect: (kind: StoryBibleEditorKind) => void;
   readonly onEntrySelect: (entryId: string) => void;
-  readonly onDraftChange: (draft: Partial<StoryBibleEditorDraft>) => void;
+  readonly onDraftChange: <K extends StoryBibleEditorKind>(
+    kind: K,
+    draft: Partial<StoryBibleEditorDraftFor<K>>
+  ) => void;
+  readonly onFiltersChange: (filters: Partial<StoryBibleEditorFilters>) => void;
   readonly onNewDraft: () => void;
+  readonly onCancelDraft: () => void;
   readonly onSave: () => void;
 }
 

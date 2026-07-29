@@ -108,6 +108,7 @@ export interface RendererWorkspaceShellProps {
   readonly onStudioSave: NonNullable<ConfigStudioPanelProps["onSave"]>;
   readonly onStudioRestoreVersion: NonNullable<ConfigStudioPanelProps["onRestoreVersion"]>;
   readonly onStoryBibleDraftChange: StoryBibleEditorProps["onDraftChange"];
+  readonly onStoryBibleFiltersChange: StoryBibleEditorProps["onFiltersChange"];
   readonly onCreativeNavigatorModeSelect: (mode: CreativeNavigatorMode) => void;
   readonly onEngineeringExpandedPathIdsChange: (pathIds: readonly string[]) => void;
   readonly onRefreshEngineeringTree: () => void;
@@ -174,7 +175,16 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
           onKindSelect: props.navigation.navigateToStoryKind,
           onEntrySelect: props.navigation.navigateToStoryEntry,
           onDraftChange: props.onStoryBibleDraftChange,
+          onFiltersChange: props.onStoryBibleFiltersChange,
           onNewDraft: () => props.navigation.createStoryEntry(sourceStoryBibleEditor.activeKind),
+          onCancelDraft: () =>
+            props.navigation.navigateToStoryKind(sourceStoryBibleEditor.activeKind),
+          chapterOptions: (projectWorkflow?.chapters ?? [])
+            .map(({ id, title, order, status }) => ({ id, title, order, status }))
+            .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id)),
+          ...(projectWorkflow?.activeChapterId === undefined
+            ? {}
+            : { currentChapterId: projectWorkflow.activeChapterId }),
           onSave: props.onSaveStoryBibleDraft
         } satisfies StoryBibleEditorProps);
   const creativeNavigator =

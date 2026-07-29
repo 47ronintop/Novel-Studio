@@ -15,7 +15,6 @@ import type {
   CommandPaletteFeedback,
   ModelSettingsDraft,
   SettingsPanelSection,
-  StoryBibleEditorDraft,
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
 import { ProjectCreateDialog } from "@novel-studio/ui";
@@ -398,7 +397,10 @@ export function App() {
     handleCloseChapterTab,
     handlePreviewRecoveryDraft,
     handleApplyRecoveryDraft,
-    handleDiscardRecoveryDraft
+    handleDiscardRecoveryDraft,
+    handleStoryBibleDraftChange,
+    handleStoryBibleFiltersChange,
+    handleSaveStoryBibleDraft
   } = useProjectWorkflowActions({
     api,
     chapterBridge,
@@ -697,29 +699,6 @@ export function App() {
     onUndoSelection: handleUndoSelectionReview
   });
 
-  const handleStoryBibleDraftChange = useCallback(
-    (draft: Partial<StoryBibleEditorDraft>) => {
-      if (storyBibleBridge === undefined) {
-        return;
-      }
-
-      setStoryBibleEditor(storyBibleBridge.updateDraft(draft));
-    },
-    [storyBibleBridge]
-  );
-
-  const handleSaveStoryBibleDraft = useCallback(() => {
-    if (storyBibleBridge === undefined) {
-      return;
-    }
-
-    setStoryBibleEditor(storyBibleBridge.beginSave());
-    void storyBibleBridge.saveDraft().then((nextStoryBibleEditor) => {
-      setStoryBibleEditor(nextStoryBibleEditor);
-      setStoryBible(storyBibleBridge.getProps());
-    });
-  }, [storyBibleBridge]);
-
   const handleSettingsProfileSelect = useCallback(
     (profileId: string) => {
       if (settingsBridge === undefined) {
@@ -1003,6 +982,7 @@ export function App() {
         onStudioSave={handleStudioSave}
         onStudioRestoreVersion={handleStudioRestoreVersion}
         onStoryBibleDraftChange={handleStoryBibleDraftChange}
+        onStoryBibleFiltersChange={handleStoryBibleFiltersChange}
         onCreativeNavigatorModeSelect={creativeProjectFileShell.onNavigatorModeSelect}
         engineeringWorkspace={engineeringWorkspace}
         onEngineeringExpandedPathIdsChange={handleEngineeringExpandedPathIdsChange}

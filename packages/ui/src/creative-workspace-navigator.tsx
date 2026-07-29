@@ -1,12 +1,12 @@
 import type { CreativeNavigatorMode } from "@novel-studio/shared";
 import {
   BookOpenText,
-  Brain,
   Clock3,
   FilePlus2,
   FileText,
   FolderPlus,
   Globe2,
+  Milestone,
   MoreHorizontal,
   Plus,
   RefreshCw,
@@ -28,8 +28,8 @@ const STORY_KINDS: readonly StoryBibleEditorKind[] = [
   "character",
   "world",
   "outline",
-  "timeline",
-  "memory"
+  "foreshadow",
+  "timeline"
 ];
 
 const SINGLETON_KINDS = new Set<StoryBibleEditorKind>(["outline", "timeline"]);
@@ -52,6 +52,7 @@ const BLOCKED_CREATIVE_PROJECT_PATH_SEGMENTS = new Set([
   "world",
   "outline",
   "timeline",
+  "foreshadows",
   "memories",
   "prompts",
   "agents",
@@ -103,16 +104,16 @@ const storyKindLabels: Readonly<Record<StoryBibleEditorKind, string>> = {
   character: "人物",
   world: "世界观",
   outline: "大纲",
-  timeline: "时间线",
-  memory: "记忆"
+  foreshadow: "伏笔",
+  timeline: "时间线"
 };
 
 const storyKindIcons: Readonly<Record<StoryBibleEditorKind, LucideIcon>> = {
   character: UserRound,
   world: Globe2,
   outline: BookOpenText,
-  timeline: Clock3,
-  memory: Brain
+  foreshadow: Milestone,
+  timeline: Clock3
 };
 
 export function CreativeWorkspaceNavigator(props: CreativeWorkspaceNavigatorProps) {
@@ -303,7 +304,7 @@ function StoryProjection(props: CreativeWorkspaceNavigatorProps) {
   const activeEntries = props.storyBible.entries
     .filter((entry) => entry.kind === activeKind)
     .filter((entry) =>
-      [entry.title, entry.status, entry.body].some((value) =>
+      [entry.title, entry.status, entry.summary].some((value) =>
         value.toLocaleLowerCase().includes(normalizedQuery)
       )
     );

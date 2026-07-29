@@ -12,7 +12,8 @@ import type { ApplicationCommandId } from "@novel-studio/application";
 import type {
   AgentConversationNavigatorProps,
   AgentConversationViewProps,
-  ModelSettingsPanelProps
+  ModelSettingsPanelProps,
+  StoryBibleEditorProps
 } from "../src/index.js";
 import { WorkspaceShell } from "../src/index.js";
 import { workspaceActivitiesFor } from "../src/workspace-shell-activity.js";
@@ -964,30 +965,33 @@ describe("WorkspaceShell", () => {
 
   test("renders the focused creative navigator for a creative project context", () => {
     const application = createDesktopApplication();
-    const storyBibleEditor = {
-      activeKind: "character" as const,
-      status: "idle" as const,
+    const storyBibleEditor = createStoryBibleEditorProps({
       entries: [
         {
           id: "character_lin",
-          kind: "character" as const,
+          kind: "character",
+          assetType: "character",
           title: "林照月",
-          status: "主角",
-          body: "开篇出现。"
+          status: "active",
+          summary: "开篇出现。",
+          aliases: [],
+          relatedEntityIds: [],
+          details: { role: "主角" },
+          createdAt: "2026-07-05T00:00:00.000Z",
+          updatedAt: "2026-07-05T00:00:00.000Z"
         }
       ],
       draft: {
-        kind: "character" as const,
+        kind: "character",
+        assetType: "character",
         title: "林照月",
-        body: "开篇出现。",
-        status: "主角"
-      },
-      onKindSelect: () => undefined,
-      onEntrySelect: () => undefined,
-      onDraftChange: () => undefined,
-      onNewDraft: () => undefined,
-      onSave: () => undefined
-    };
+        summary: "开篇出现。",
+        status: "active",
+        aliases: [],
+        relatedEntityIds: [],
+        details: { role: "主角" }
+      }
+    });
     const html = renderToStaticMarkup(
       <WorkspaceShell
         shellState={{
@@ -1725,30 +1729,34 @@ describe("WorkspaceShell", () => {
         shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
         commands={application.listCommands()}
         commandPaletteOpen={false}
-        storyBibleEditor={{
-          activeKind: "character",
-          status: "idle",
+        storyBibleEditor={createStoryBibleEditorProps({
+          viewMode: "detail",
           entries: [
             {
               id: "chr_hero",
               kind: "character",
+              assetType: "character",
               title: "Hero",
               status: "active",
-              body: "A procedural protagonist with a hidden oath."
+              summary: "A procedural protagonist with a hidden oath.",
+              aliases: [],
+              relatedEntityIds: [],
+              details: {},
+              createdAt: "2026-07-05T00:00:00.000Z",
+              updatedAt: "2026-07-05T00:00:00.000Z"
             }
           ],
           draft: {
             kind: "character",
+            assetType: "character",
             title: "Hero",
-            body: "A procedural protagonist with a hidden oath.",
-            status: "active"
-          },
-          onKindSelect: () => undefined,
-          onEntrySelect: () => undefined,
-          onDraftChange: () => undefined,
-          onNewDraft: () => undefined,
-          onSave: () => undefined
-        }}
+            summary: "A procedural protagonist with a hidden oath.",
+            status: "active",
+            aliases: [],
+            relatedEntityIds: [],
+            details: {}
+          }
+        })}
       />
     );
 
@@ -1757,8 +1765,9 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("人物");
     expect(html).toContain("世界观");
     expect(html).toContain("大纲");
+    expect(html).toContain("伏笔");
     expect(html).toContain("时间线");
-    expect(html).toContain("记忆");
+    expect(html).not.toContain("记忆");
     expect(html).toContain('aria-label="设定标题"');
     expect(html).toContain('aria-label="设定正文"');
     expect(html).toContain("保存设定");
@@ -1772,23 +1781,34 @@ describe("WorkspaceShell", () => {
       shellState: { ...application.getShellState(), activeActivity: "storyBible" },
       commands: application.listCommands(),
       commandPaletteOpen: false,
-      storyBibleEditor: {
-        activeKind: "character",
-        status: "idle",
+      storyBibleEditor: createStoryBibleEditorProps({
+        viewMode: "detail",
         entries: [
           {
             id: "chr_hero",
             kind: "character",
+            assetType: "character",
             title: "Mira",
             status: "active",
-            body: "Mira is established as an only child."
+            summary: "Mira is established as an only child.",
+            aliases: [],
+            relatedEntityIds: [],
+            details: {},
+            createdAt: "2026-07-05T00:00:00.000Z",
+            updatedAt: "2026-07-05T00:00:00.000Z"
           },
           {
             id: "world_mira_family",
             kind: "world",
+            assetType: "world.glossary",
             title: "Mira Family Rumor",
             status: "active",
-            body: "Conflict: Captain Mira has a younger brother in the capital."
+            summary: "Conflict: Captain Mira has a younger brother in the capital.",
+            aliases: [],
+            relatedEntityIds: ["chr_hero"],
+            details: {},
+            createdAt: "2026-07-05T00:00:00.000Z",
+            updatedAt: "2026-07-05T00:00:00.000Z"
           }
         ],
         consistency: {
@@ -1817,16 +1837,16 @@ describe("WorkspaceShell", () => {
         },
         draft: {
           kind: "character",
+          assetType: "character",
           title: "Mira",
-          body: "Mira is established as an only child.",
-          status: "active"
+          summary: "Mira is established as an only child.",
+          status: "active",
+          aliases: [],
+          relatedEntityIds: [],
+          details: {}
         },
-        onKindSelect: () => undefined,
-        onEntrySelect: (entryId) => openedEntries.push(entryId),
-        onDraftChange: () => undefined,
-        onNewDraft: () => undefined,
-        onSave: () => undefined
-      }
+        onEntrySelect: (entryId) => openedEntries.push(entryId)
+      })
     });
     const jumpButton = findElementByAriaLabel(tree, "Open consistency target: Mira Family Rumor");
 
@@ -1849,30 +1869,36 @@ describe("WorkspaceShell", () => {
       shellState: { ...application.getShellState(), activeActivity: "timeline" },
       commands: application.listCommands(),
       commandPaletteOpen: false,
-      storyBibleEditor: {
+      storyBibleEditor: createStoryBibleEditorProps({
         activeKind: "timeline",
-        status: "idle",
+        viewMode: "detail",
         entries: [
           {
             id: "timeline_main",
             kind: "timeline",
+            assetType: "timeline.events",
             title: "主线时间线",
             status: "active",
-            body: "第一幕到第三幕的关键事件。"
+            summary: "第一幕到第三幕的关键事件。",
+            aliases: [],
+            relatedEntityIds: [],
+            details: {},
+            createdAt: "2026-07-05T00:00:00.000Z",
+            updatedAt: "2026-07-05T00:00:00.000Z",
+            timelineEvents: []
           }
         ],
         draft: {
           kind: "timeline",
+          assetType: "timeline.events",
           title: "主线时间线",
-          body: "第一幕到第三幕的关键事件。",
-          status: "active"
-        },
-        onKindSelect: () => undefined,
-        onEntrySelect: () => undefined,
-        onDraftChange: () => undefined,
-        onNewDraft: () => undefined,
-        onSave: () => undefined
-      },
+          summary: "第一幕到第三幕的关键事件。",
+          status: "active",
+          aliases: [],
+          relatedEntityIds: [],
+          details: {}
+        }
+      }),
       onTimelineEntryOpen: (entryId) => openedEntries.push(entryId)
     });
     const openTimeline = findElementByAriaLabel(tree, "打开时间线条目：主线时间线");
@@ -1896,16 +1922,22 @@ describe("WorkspaceShell", () => {
         shellState={{ ...application.getShellState(), activeActivity: "timeline" }}
         commands={application.listCommands()}
         commandPaletteOpen={false}
-        storyBibleEditor={{
+        storyBibleEditor={createStoryBibleEditorProps({
           activeKind: "timeline",
-          status: "idle",
+          viewMode: "detail",
           entries: [
             {
               id: "timeline_main",
               kind: "timeline",
+              assetType: "timeline.events",
               title: "Main Timeline",
               status: "active",
-              body: "Arrival happens before the council summons.",
+              summary: "Arrival happens before the council summons.",
+              aliases: [],
+              relatedEntityIds: [],
+              details: {},
+              createdAt: "2026-07-05T00:00:00.000Z",
+              updatedAt: "2026-07-05T00:00:00.000Z",
               timelineEvents: [
                 {
                   id: "event_01",
@@ -1929,16 +1961,15 @@ describe("WorkspaceShell", () => {
           ],
           draft: {
             kind: "timeline",
+            assetType: "timeline.events",
             title: "Main Timeline",
-            body: "Arrival happens before the council summons.",
-            status: "active"
-          },
-          onKindSelect: () => undefined,
-          onEntrySelect: () => undefined,
-          onDraftChange: () => undefined,
-          onNewDraft: () => undefined,
-          onSave: () => undefined
-        }}
+            summary: "Arrival happens before the council summons.",
+            status: "active",
+            aliases: [],
+            relatedEntityIds: [],
+            details: {}
+          }
+        })}
         onTimelineEntryOpen={(entryId) => openedEntries.push(entryId)}
       />
     );
@@ -2017,6 +2048,44 @@ function createSettingsProps(): ModelSettingsPanelProps {
       timeoutMs: "60000"
     },
     saveStatus: "idle"
+  };
+}
+
+function createStoryBibleEditorProps(
+  overrides: Partial<StoryBibleEditorProps> = {}
+): StoryBibleEditorProps {
+  return {
+    activeKind: "character",
+    viewMode: "list",
+    status: "idle",
+    dirty: false,
+    entries: [],
+    chapterOptions: [],
+    filters: {
+      query: "",
+      status: "all",
+      worldAssetType: "all",
+      foreshadowTrackingStatus: "all"
+    },
+    externalUpdate: { status: "none" },
+    draft: {
+      kind: "character",
+      assetType: "character",
+      title: "",
+      status: "active",
+      summary: "",
+      aliases: [],
+      relatedEntityIds: [],
+      details: {}
+    },
+    onKindSelect: () => undefined,
+    onEntrySelect: () => undefined,
+    onDraftChange: () => undefined,
+    onFiltersChange: () => undefined,
+    onNewDraft: () => undefined,
+    onCancelDraft: () => undefined,
+    onSave: () => undefined,
+    ...overrides
   };
 }
 

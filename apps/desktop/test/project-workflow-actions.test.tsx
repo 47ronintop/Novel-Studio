@@ -11,6 +11,7 @@ import type {
 } from "@novel-studio/ui";
 import { useProjectWorkflowActions } from "../src/renderer/project-workflow-actions.js";
 import type { ProjectWorkflowBridge } from "../src/renderer/project-workflow-bridge.js";
+import type { StoryBibleBridge } from "../src/renderer/story-bible-bridge.js";
 
 (
   globalThis as typeof globalThis & {
@@ -346,6 +347,71 @@ describe("useProjectWorkflowActions", () => {
       feedback: { kind: "error", message: "Project chooser failed." }
     });
   });
+
+  test("publishes Story Bible draft, filter, and save state through the bridge", async () => {
+    const draftEditor = createStoryBibleEditor("draft");
+    const filteredEditor = createStoryBibleEditor("filtered");
+    const savingEditor = createStoryBibleEditor("saving");
+    const savedEditor = createStoryBibleEditor("saved");
+    const summary: StoryBibleSummaryProps = { assets: [] };
+    let resolveSave: ((editor: StoryBibleEditorProps) => void) | undefined;
+    const saved = new Promise<StoryBibleEditorProps>((resolve) => {
+      resolveSave = resolve;
+    });
+    const storyBibleBridge = {
+      updateDraft: vi.fn(() => draftEditor),
+      updateFilters: vi.fn(() => filteredEditor),
+      beginSave: vi.fn(() => savingEditor),
+      saveDraft: vi.fn(() => saved),
+      getProps: vi.fn(() => summary)
+    } as unknown as StoryBibleBridge;
+    const editorStates: Array<StoryBibleEditorProps | undefined> = [];
+    const summaryStates: Array<StoryBibleSummaryProps | undefined> = [];
+    let actions: ReturnType<typeof useProjectWorkflowActions> | undefined;
+
+    function Harness() {
+      actions = useProjectWorkflowActions({
+        api: undefined,
+        chapterBridge: undefined,
+        projectWorkflowBridge: undefined,
+        settingsBridge: undefined,
+        storyBibleBridge,
+        studioBridge: undefined,
+        setChapterEditor: () => undefined,
+        setProjectWorkflow: () => undefined,
+        setSettings: () => undefined,
+        setShellState: () => undefined,
+        setStoryBible: (next) => summaryStates.push(resolveState(next)),
+        setStoryBibleEditor: (next) => editorStates.push(resolveState(next)),
+        setStudio: () => undefined
+      });
+      return null;
+    }
+
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<Harness />));
+
+    act(() => {
+      actions?.handleStoryBibleDraftChange("character", { title: "Revised" });
+      actions?.handleStoryBibleFiltersChange({ query: "hero" });
+      actions?.handleSaveStoryBibleDraft();
+    });
+    expect(editorStates).toEqual([draftEditor, filteredEditor, savingEditor]);
+
+    await act(async () => {
+      resolveSave?.(savedEditor);
+      await saved;
+    });
+
+    expect(storyBibleBridge.updateDraft).toHaveBeenCalledWith("character", {
+      title: "Revised"
+    });
+    expect(storyBibleBridge.updateFilters).toHaveBeenCalledWith({ query: "hero" });
+    expect(editorStates).toEqual([draftEditor, filteredEditor, savingEditor, savedEditor]);
+    expect(summaryStates).toEqual([summary]);
+  });
 });
 
 function createWorkflow(): ProjectWorkflowProps {
@@ -380,6 +446,41 @@ function createChapterEditor(chapterId: string): ChapterEditorProps {
     saveStatus: "Saved",
     versions: [],
     onBodyChange: () => undefined,
+    onSave: () => undefined
+  };
+}
+
+function createStoryBibleEditor(title: string): StoryBibleEditorProps {
+  return {
+    activeKind: "character",
+    viewMode: "detail",
+    status: "idle",
+    dirty: false,
+    entries: [],
+    chapterOptions: [],
+    filters: {
+      query: "",
+      status: "all",
+      worldAssetType: "all",
+      foreshadowTrackingStatus: "all"
+    },
+    externalUpdate: { status: "none" },
+    draft: {
+      kind: "character",
+      assetType: "character",
+      title,
+      status: "active",
+      summary: "",
+      aliases: [],
+      relatedEntityIds: [],
+      details: {}
+    },
+    onKindSelect: () => undefined,
+    onEntrySelect: () => undefined,
+    onDraftChange: () => undefined,
+    onFiltersChange: () => undefined,
+    onNewDraft: () => undefined,
+    onCancelDraft: () => undefined,
     onSave: () => undefined
   };
 }

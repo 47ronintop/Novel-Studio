@@ -1,4 +1,5 @@
 import type {
+  ForeshadowAsset,
   MemoryRecord,
   NovelStudioApi,
   StoryBibleAsset,
@@ -10,7 +11,9 @@ import type {
 import type { Result, UnifiedError } from "@novel-studio/shared";
 import type {
   StoryBibleEditorDraft,
+  StoryBibleEditorDraftFor,
   StoryBibleEditorEntry,
+  StoryBibleEditorFilters,
   StoryBibleEditorKind,
   StoryBibleEditorProps,
   StoryBibleConsistencyProps,
@@ -28,9 +31,20 @@ export interface StoryBibleBridge {
   load(workspaceId: string): Promise<StoryBibleSummaryProps>;
   selectKind(kind: StoryBibleEditorKind): StoryBibleEditorProps;
   selectEntry(entryId: string): StoryBibleEditorProps;
-  updateDraft(draft: Partial<StoryBibleEditorDraft>): StoryBibleEditorProps;
+  beginCreate(kind: StoryBibleEditorKind): StoryBibleEditorProps;
+  cancelDraft(): StoryBibleEditorProps;
+  updateDraft<K extends StoryBibleEditorKind>(
+    kind: K,
+    draft: Partial<StoryBibleEditorDraftFor<K>>
+  ): StoryBibleEditorProps;
+  updateFilters(filters: Partial<StoryBibleEditorFilters>): StoryBibleEditorProps;
   beginSave(): StoryBibleEditorProps;
   saveDraft(): Promise<StoryBibleEditorProps>;
+}
+
+export interface StoryBibleBridgeOptions {
+  readonly createAssetIdentity?: () => string;
+  readonly now?: () => string;
 }
 
 export interface StoryBibleSnapshotBinding {
@@ -38,20 +52,51 @@ export interface StoryBibleSnapshotBinding {
   readonly snapshot: StoryBibleSnapshot;
 }
 
-export function createStoryBibleBridge(api: NovelStudioApi): StoryBibleBridge {
+interface StoryBibleEditorState {
+  readonly activeKind: StoryBibleEditorKind;
+  readonly viewMode: StoryBibleEditorProps["viewMode"];
+  readonly status: StoryBibleEditorProps["status"];
+  readonly dirty: boolean;
+  readonly draft: StoryBibleEditorDraft;
+  readonly filters: StoryBibleEditorFilters;
+  readonly externalUpdate: StoryBibleEditorProps["externalUpdate"];
+  readonly feedback?: StoryBibleEditorProps["feedback"];
+}
+
+const DEFAULT_FILTERS: StoryBibleEditorFilters = {
+  query: "",
+  status: "all",
+  worldAssetType: "all",
+  foreshadowTrackingStatus: "all"
+};
+
+export function createStoryBibleBridge(
+  api: NovelStudioApi,
+  options: StoryBibleBridgeOptions = {}
+): StoryBibleBridge {
+  const createAssetIdentity = options.createAssetIdentity ?? createRandomAssetIdentity;
+  const now = options.now ?? (() => new Date().toISOString());
   let props: StoryBibleSummaryProps = { assets: [] };
   let snapshot = emptySnapshot();
   let snapshotBinding: StoryBibleSnapshotBinding | undefined;
   let loadGeneration = 0;
   let consistency: StoryBibleConsistencyProps | undefined;
-  let editorProps = createEditorProps(
-    snapshot,
-    "character",
-    emptyDraft("character"),
-    "idle",
-    undefined,
-    consistency
-  );
+  let baselineDraft = emptyDraft("character");
+  let editorState: StoryBibleEditorState = {
+    activeKind: "character",
+    viewMode: "list",
+    status: "idle",
+    dirty: false,
+    draft: baselineDraft,
+    filters: DEFAULT_FILTERS,
+    externalUpdate: { status: "none" }
+  };
+  let editorProps = createEditorProps(snapshot, editorState, consistency);
+
+  const publishEditor = (): StoryBibleEditorProps => {
+    editorProps = createEditorProps(snapshot, editorState, consistency);
+    return editorProps;
+  };
 
   return {
     getProps: () => props,
@@ -79,26 +124,22 @@ export function createStoryBibleBridge(api: NovelStudioApi): StoryBibleBridge {
       snapshotBinding = { workspaceId, snapshot };
       consistency = nextConsistency;
       props = toProps(snapshot);
-      editorProps = createEditorProps(
-        snapshot,
-        editorProps.activeKind,
-        draftFromSnapshot(snapshot, editorProps.draft),
-        "idle",
-        undefined,
-        consistency
-      );
+      publishEditor();
       return props;
     },
     selectKind(kind) {
-      editorProps = createEditorProps(
-        snapshot,
-        kind,
-        emptyDraft(kind),
-        "idle",
-        undefined,
-        consistency
-      );
-      return editorProps;
+      baselineDraft = emptyDraft(kind);
+      editorState = {
+        ...editorState,
+        activeKind: kind,
+        viewMode: "list",
+        status: "idle",
+        dirty: false,
+        draft: baselineDraft,
+        externalUpdate: { status: "none" }
+      };
+      deleteFeedback();
+      return publishEditor();
     },
     selectEntry(entryId) {
       const entry = createEditorEntries(snapshot).find((candidate) => candidate.id === entryId);
@@ -106,70 +147,92 @@ export function createStoryBibleBridge(api: NovelStudioApi): StoryBibleBridge {
         return editorProps;
       }
 
-      editorProps = createEditorProps(
-        snapshot,
-        entry.kind,
-        {
-          id: entry.id,
-          kind: entry.kind,
-          title: entry.title,
-          body: entry.body,
-          status: entry.status
-        },
-        "idle",
-        undefined,
-        consistency
-      );
-      return editorProps;
+      baselineDraft = draftFromEntry(entry);
+      editorState = {
+        ...editorState,
+        activeKind: entry.kind,
+        viewMode: "detail",
+        status: "idle",
+        dirty: false,
+        draft: baselineDraft,
+        externalUpdate: { status: "none" }
+      };
+      deleteFeedback();
+      return publishEditor();
     },
-    updateDraft(draft) {
-      editorProps = createEditorProps(
-        snapshot,
-        draft.kind ?? editorProps.activeKind,
-        {
-          ...editorProps.draft,
-          ...draft
-        },
-        "idle",
-        undefined,
-        consistency
-      );
-      return editorProps;
+    beginCreate(kind) {
+      baselineDraft = emptyDraft(kind);
+      editorState = {
+        ...editorState,
+        activeKind: kind,
+        viewMode: "detail",
+        status: "idle",
+        dirty: false,
+        draft: baselineDraft,
+        externalUpdate: { status: "none" }
+      };
+      deleteFeedback();
+      return publishEditor();
+    },
+    cancelDraft() {
+      baselineDraft = emptyDraft(editorState.activeKind);
+      editorState = {
+        ...editorState,
+        viewMode: "list",
+        status: "idle",
+        dirty: false,
+        draft: baselineDraft,
+        externalUpdate: { status: "none" }
+      };
+      deleteFeedback();
+      return publishEditor();
+    },
+    updateDraft(kind, draft) {
+      assertDraftPatch(editorState.draft, kind, draft);
+      const nextDraft = mergeDraftPatch(editorState.draft, draft);
+      editorState = {
+        ...editorState,
+        activeKind: nextDraft.kind,
+        viewMode: "detail",
+        status: "idle",
+        dirty: !draftsEqual(nextDraft, baselineDraft),
+        draft: nextDraft
+      };
+      deleteFeedback();
+      return publishEditor();
+    },
+    updateFilters(filters) {
+      editorState = {
+        ...editorState,
+        filters: { ...editorState.filters, ...filters }
+      };
+      return publishEditor();
     },
     beginSave() {
-      editorProps = createEditorProps(
-        snapshot,
-        editorProps.activeKind,
-        editorProps.draft,
-        "saving",
-        undefined,
-        consistency
-      );
-      return editorProps;
+      editorState = { ...editorState, status: "saving" };
+      deleteFeedback();
+      return publishEditor();
     },
     async saveDraft() {
       const generation = loadGeneration;
       const workspaceId = snapshotBinding?.workspaceId;
-      const now = new Date().toISOString();
-      const draft = normalizeDraft(editorProps.draft);
-      const saved =
-        draft.kind === "memory"
-          ? await api.storyBible.saveMemory(toMemoryRecord(draft, now, snapshot))
-          : await api.storyBible.saveAsset(toStoryAsset(draft, now, snapshot));
+      const draft = normalizeDraft(editorState.draft);
+      const saved = await api.storyBible.saveAsset(
+        toStoryAsset(draft, now(), snapshot, createAssetIdentity)
+      );
 
       if (!saved.ok) {
-        editorProps = createEditorProps(
-          snapshot,
-          editorProps.activeKind,
+        editorState = {
+          ...editorState,
+          status: "error",
+          dirty: true,
           draft,
-          "error",
-          {
+          feedback: {
             kind: "error",
             message: saved.error.message
-          },
-          consistency
-        );
-        return editorProps;
+          }
+        };
+        return publishEditor();
       }
 
       if (generation !== loadGeneration) return editorProps;
@@ -183,34 +246,55 @@ export function createStoryBibleBridge(api: NovelStudioApi): StoryBibleBridge {
       snapshotBinding = workspaceId === undefined ? undefined : { workspaceId, snapshot };
       consistency = nextConsistency;
       props = toProps(snapshot);
-      editorProps = createEditorProps(
-        snapshot,
-        draft.kind,
-        draftFromSnapshot(snapshot, draft),
-        "saved",
-        {
+      baselineDraft = draftFromSnapshot(snapshot, { ...draft, id: saved.value.id });
+      editorState = {
+        ...editorState,
+        activeKind: baselineDraft.kind,
+        viewMode: "detail",
+        status: "saved",
+        dirty: false,
+        draft: baselineDraft,
+        externalUpdate: { status: "none" },
+        feedback: {
           kind: "info",
           message: "故事圣经已保存。"
-        },
-        consistency
-      );
-      return editorProps;
+        }
+      };
+      return publishEditor();
     }
   };
+
+  function deleteFeedback(): void {
+    if (editorState.feedback === undefined) {
+      return;
+    }
+    editorState = {
+      activeKind: editorState.activeKind,
+      viewMode: editorState.viewMode,
+      status: editorState.status,
+      dirty: editorState.dirty,
+      draft: editorState.draft,
+      filters: editorState.filters,
+      externalUpdate: editorState.externalUpdate
+    };
+  }
 
   function reset(): void {
     snapshot = emptySnapshot();
     snapshotBinding = undefined;
     consistency = undefined;
     props = { assets: [] };
-    editorProps = createEditorProps(
-      snapshot,
-      editorProps.activeKind,
-      emptyDraft(editorProps.activeKind),
-      "idle",
-      undefined,
-      consistency
-    );
+    baselineDraft = emptyDraft(editorState.activeKind);
+    editorState = {
+      ...editorState,
+      viewMode: "list",
+      status: "idle",
+      dirty: false,
+      draft: baselineDraft,
+      externalUpdate: { status: "none" }
+    };
+    deleteFeedback();
+    publishEditor();
   }
 }
 
@@ -290,23 +374,27 @@ function toProps(snapshot: StoryBibleSnapshot): StoryBibleSummaryProps {
 
 function createEditorProps(
   snapshot: StoryBibleSnapshot,
-  activeKind: StoryBibleEditorKind,
-  draft: StoryBibleEditorDraft,
-  status: StoryBibleEditorProps["status"],
-  feedback?: StoryBibleEditorProps["feedback"],
+  state: StoryBibleEditorState,
   consistency?: StoryBibleConsistencyProps
 ): StoryBibleEditorProps {
   return {
-    activeKind,
-    status,
+    activeKind: state.activeKind,
+    viewMode: state.viewMode,
+    status: state.status,
+    dirty: state.dirty,
     entries: createEditorEntries(snapshot),
+    chapterOptions: [],
+    filters: state.filters,
+    externalUpdate: state.externalUpdate,
     ...(consistency === undefined ? {} : { consistency }),
-    draft,
-    ...(feedback === undefined ? {} : { feedback }),
+    draft: state.draft,
+    ...(state.feedback === undefined ? {} : { feedback: state.feedback }),
     onKindSelect: () => undefined,
     onEntrySelect: () => undefined,
     onDraftChange: () => undefined,
+    onFiltersChange: () => undefined,
     onNewDraft: () => undefined,
+    onCancelDraft: () => undefined,
     onSave: () => undefined
   };
 }
@@ -345,43 +433,72 @@ function isNavigableConsistencyRef(
     case "character":
     case "world":
     case "outline":
-    case "timeline":
-    case "memory":
-      return true;
     case "foreshadow":
+    case "timeline":
+      return true;
     case "chapter":
+    case "memory":
       return false;
   }
 }
 
 function createEditorEntries(snapshot: StoryBibleSnapshot): readonly StoryBibleEditorEntry[] {
   return [
-    ...snapshot.characters.map((asset) => assetEntry(asset, "character")),
-    ...snapshot.worldAssets.map((asset) => assetEntry(asset, "world")),
-    ...(snapshot.outline === undefined ? [] : [assetEntry(snapshot.outline, "outline")]),
-    ...(snapshot.timeline === undefined ? [] : [assetEntry(snapshot.timeline, "timeline")]),
-    ...snapshot.memories.map((memory) => ({
-      id: memory.id,
-      kind: "memory" as const,
-      title: memory.title,
-      status: memory.status,
-      body: memory.content
-    }))
-  ];
+    ...snapshot.characters,
+    ...snapshot.worldAssets,
+    ...(snapshot.outline === undefined ? [] : [snapshot.outline]),
+    ...snapshot.foreshadows,
+    ...(snapshot.timeline === undefined ? [] : [snapshot.timeline])
+  ]
+    .map(assetEntry)
+    .sort(compareEditorEntries);
 }
 
-function assetEntry(
-  asset: StoryBibleAsset,
-  kind: Exclude<StoryBibleEditorKind, "memory">
-): StoryBibleEditorEntry {
-  return {
+function assetEntry(asset: StoryBibleAsset): StoryBibleEditorEntry {
+  const common = {
     id: asset.id,
-    kind,
     title: asset.title,
     status: asset.status,
-    body: asset.summary,
-    ...(kind === "timeline" ? { timelineEvents: timelineEventsFromAsset(asset) } : {})
+    summary: asset.summary,
+    aliases: [...(asset.aliases ?? [])],
+    relatedEntityIds: [...(asset.relatedEntityIds ?? [])],
+    createdAt: asset.createdAt,
+    updatedAt: asset.updatedAt
   };
+  switch (asset.type) {
+    case "character":
+      return { ...common, kind: "character", assetType: asset.type, details: asset.details ?? {} };
+    case "world.location":
+    case "world.faction":
+    case "world.rule":
+    case "world.glossary":
+      return { ...common, kind: "world", assetType: asset.type, details: asset.details ?? {} };
+    case "outline":
+      return { ...common, kind: "outline", assetType: asset.type, details: asset.details ?? {} };
+    case "foreshadow":
+      return { ...common, kind: "foreshadow", assetType: asset.type, details: asset.details };
+    case "timeline.events":
+      return {
+        ...common,
+        kind: "timeline",
+        assetType: asset.type,
+        details: asset.details ?? {},
+        timelineEvents: timelineEventsFromAsset(asset)
+      };
+  }
+}
+
+const STORY_ENTRY_COLLATOR = new Intl.Collator("zh-CN", {
+  numeric: true,
+  sensitivity: "base",
+  usage: "sort"
+});
+
+function compareEditorEntries(left: StoryBibleEditorEntry, right: StoryBibleEditorEntry): number {
+  return (
+    STORY_ENTRY_COLLATOR.compare(left.title, right.title) ||
+    left.id.localeCompare(right.id, "en-US")
+  );
 }
 
 function timelineEventsFromAsset(asset: StoryBibleAsset): readonly StoryTimelineEvent[] {
@@ -393,7 +510,10 @@ function timelineEventsFromAsset(asset: StoryBibleAsset): readonly StoryTimeline
   return events
     .map((event, index) => toTimelineEvent(event, index, asset.id))
     .filter((event): event is StoryTimelineEvent => event !== undefined)
-    .sort((left, right) => left.sequence - right.sequence || left.title.localeCompare(right.title));
+    .sort(
+      (left, right) =>
+        left.sequence - right.sequence || STORY_ENTRY_COLLATOR.compare(left.title, right.title)
+    );
 }
 
 function toTimelineEvent(
@@ -435,20 +555,40 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function emptyDraft(kind: StoryBibleEditorKind): StoryBibleEditorDraft {
-  return {
-    kind,
+  const common = {
     title: "",
-    body: "",
-    status: "active"
+    status: "active" as const,
+    summary: "",
+    aliases: [],
+    relatedEntityIds: []
   };
+  switch (kind) {
+    case "character":
+      return { ...common, kind, assetType: "character", details: {} };
+    case "world":
+      return { ...common, kind, assetType: "world.location", details: {} };
+    case "outline":
+      return { ...common, kind, assetType: "outline", details: {} };
+    case "foreshadow":
+      return {
+        ...common,
+        kind,
+        assetType: "foreshadow",
+        details: { trackingStatus: "planned", origin: "manual" }
+      };
+    case "timeline":
+      return { ...common, kind, assetType: "timeline.events", details: {} };
+  }
 }
 
 function normalizeDraft(draft: StoryBibleEditorDraft): StoryBibleEditorDraft {
   return {
     ...draft,
     title: draft.title.trim(),
-    body: draft.body.trim()
-  };
+    summary: draft.summary.trim(),
+    aliases: draft.aliases.map((alias) => alias.trim()).filter((alias) => alias.length > 0),
+    relatedEntityIds: draft.relatedEntityIds.map((id) => id.trim()).filter((id) => id.length > 0)
+  } as StoryBibleEditorDraft;
 }
 
 function draftFromSnapshot(
@@ -464,63 +604,57 @@ function draftFromSnapshot(
     return fallback;
   }
 
-  return {
-    id: entry.id,
-    kind: entry.kind,
-    title: entry.title,
-    body: entry.body,
-    status: entry.status
-  };
+  return draftFromEntry(entry);
 }
 
 function toStoryAsset(
   draft: StoryBibleEditorDraft,
   now: string,
-  snapshot: StoryBibleSnapshot
-): StoryBibleRegularAsset {
-  if (draft.kind === "memory") {
-    throw new Error("Memory drafts must be saved with saveMemory.");
-  }
+  snapshot: StoryBibleSnapshot,
+  createAssetIdentity: () => string
+): StoryBibleAsset {
   const existing = findExistingAsset(snapshot, draft.id);
-  const id = draft.id ?? defaultAssetId(draft);
-  return {
+  if (existing !== undefined && existing.type !== draft.assetType) {
+    throw new Error("Existing Story Bible assets cannot change asset type.");
+  }
+  const id = draft.id ?? defaultAssetId(draft, createAssetIdentity);
+  const details = {
+    ...(existing?.details ?? {}),
+    ...draft.details
+  };
+  const common = {
     ...(existing ?? {}),
     schemaVersion: "1.0",
     id,
-    type: existing?.type ?? storyAssetType(draft.kind),
     title: draft.title,
-    status: "active",
-    summary: draft.body,
+    status: draft.status,
+    summary: draft.summary,
+    aliases: [...draft.aliases],
+    relatedEntityIds: [...draft.relatedEntityIds],
     createdAt: existing?.createdAt ?? now,
     updatedAt: now
   };
-}
-
-function toMemoryRecord(
-  draft: StoryBibleEditorDraft,
-  now: string,
-  snapshot: StoryBibleSnapshot
-): MemoryRecord {
-  const existing = snapshot.memories.find((memory) => memory.id === draft.id);
+  if (draft.kind === "foreshadow") {
+    return {
+      ...common,
+      type: "foreshadow",
+      details: {
+        ...details,
+        trackingStatus: draft.details.trackingStatus
+      }
+    } as ForeshadowAsset;
+  }
   return {
-    schemaVersion: "1.0",
-    id: draft.id ?? defaultAssetId(draft),
-    type: existing?.type ?? "memory.long-term",
-    title: draft.title,
-    status: "active",
-    origin: existing?.origin ?? "user-confirmed-ai",
-    confidence: existing?.confidence ?? "confirmed",
-    content: draft.body,
-    ...(existing?.sourceRefs === undefined ? {} : { sourceRefs: existing.sourceRefs }),
-    createdAt: existing?.createdAt ?? now,
-    updatedAt: now
-  };
+    ...common,
+    type: draft.assetType,
+    details
+  } as StoryBibleRegularAsset;
 }
 
 function findExistingAsset(
   snapshot: StoryBibleSnapshot,
   id: string | undefined
-): StoryBibleRegularAsset | undefined {
+): StoryBibleAsset | undefined {
   if (id === undefined) {
     return undefined;
   }
@@ -529,49 +663,141 @@ function findExistingAsset(
     ...snapshot.characters,
     ...snapshot.worldAssets,
     ...(snapshot.outline === undefined ? [] : [snapshot.outline]),
+    ...snapshot.foreshadows,
     ...(snapshot.timeline === undefined ? [] : [snapshot.timeline])
   ].find((asset) => asset.id === id);
 }
 
-function storyAssetType(
-  kind: Exclude<StoryBibleEditorKind, "memory">
-): StoryBibleRegularAsset["type"] {
+function defaultAssetId(draft: StoryBibleEditorDraft, createAssetIdentity: () => string): string {
+  if (draft.assetType === "outline") {
+    return "outline_main";
+  }
+  if (draft.assetType === "timeline.events") {
+    return "timeline_main";
+  }
+  const identity = createAssetIdentity();
+  if (!/^[0-9a-f]{32}$/u.test(identity)) {
+    throw new Error("Story Bible asset identity must be 32 lowercase hexadecimal characters.");
+  }
+  switch (draft.assetType) {
+    case "character":
+      return `chr_${identity}`;
+    case "world.location":
+      return `loc_${identity}`;
+    case "world.faction":
+      return `fac_${identity}`;
+    case "world.rule":
+      return `rule_${identity}`;
+    case "world.glossary":
+      return `term_${identity}`;
+    case "foreshadow":
+      return `fsh_${identity}`;
+  }
+}
+
+function draftFromEntry(entry: StoryBibleEditorEntry): StoryBibleEditorDraft {
+  const common = {
+    id: entry.id,
+    title: entry.title,
+    status: entry.status,
+    summary: entry.summary,
+    aliases: [...entry.aliases],
+    relatedEntityIds: [...entry.relatedEntityIds],
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt
+  };
+  switch (entry.kind) {
+    case "character":
+      return { ...common, kind: entry.kind, assetType: entry.assetType, details: entry.details };
+    case "world":
+      return { ...common, kind: entry.kind, assetType: entry.assetType, details: entry.details };
+    case "outline":
+      return { ...common, kind: entry.kind, assetType: entry.assetType, details: entry.details };
+    case "foreshadow":
+      return { ...common, kind: entry.kind, assetType: entry.assetType, details: entry.details };
+    case "timeline":
+      return { ...common, kind: entry.kind, assetType: entry.assetType, details: entry.details };
+  }
+}
+
+function assertDraftPatch<K extends StoryBibleEditorKind>(
+  current: StoryBibleEditorDraft,
+  kind: K,
+  patch: Partial<StoryBibleEditorDraftFor<K>>
+): void {
+  if (kind !== current.kind) {
+    throw new Error(`Cannot apply a ${kind} patch to the active ${current.kind} draft.`);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "kind")) {
+    throw new Error("Story Bible draft patches cannot modify kind.");
+  }
+  const allowedKeys = new Set([
+    "assetType",
+    "title",
+    "status",
+    "summary",
+    "aliases",
+    "relatedEntityIds",
+    "details"
+  ]);
+  const unknownKey = Object.keys(patch).find((key) => !allowedKeys.has(key));
+  if (unknownKey !== undefined) {
+    throw new Error(`Story Bible draft patch contains an unsupported ${unknownKey} field.`);
+  }
+  if (
+    patch.assetType !== undefined &&
+    (!assetTypeMatchesKind(kind, patch.assetType) ||
+      (current.id !== undefined && patch.assetType !== current.assetType))
+  ) {
+    throw new Error(`Story Bible draft asset type does not match the active ${kind} draft.`);
+  }
+}
+
+function assetTypeMatchesKind(
+  kind: StoryBibleEditorKind,
+  assetType: StoryBibleAsset["type"]
+): boolean {
   switch (kind) {
     case "character":
-      return "character";
+      return assetType === "character";
     case "world":
-      return "world.location";
+      return WORLD_ASSET_TYPES.has(assetType);
     case "outline":
-      return "outline";
+      return assetType === "outline";
+    case "foreshadow":
+      return assetType === "foreshadow";
     case "timeline":
-      return "timeline.events";
+      return assetType === "timeline.events";
   }
 }
 
-function defaultAssetId(draft: StoryBibleEditorDraft): string {
-  const slug = slugify(draft.title);
-  switch (draft.kind) {
-    case "character":
-      return `chr_${slug}`;
-    case "world":
-      return `world_${slug}`;
-    case "outline":
-      return "outline_main";
-    case "timeline":
-      return "timeline_main";
-    case "memory":
-      return `mem_${slug}`;
-  }
+const WORLD_ASSET_TYPES = new Set<StoryBibleAsset["type"]>([
+  "world.location",
+  "world.faction",
+  "world.rule",
+  "world.glossary"
+]);
+
+function mergeDraftPatch<K extends StoryBibleEditorKind>(
+  current: StoryBibleEditorDraft,
+  patch: Partial<StoryBibleEditorDraftFor<K>>
+): StoryBibleEditorDraft {
+  return {
+    ...current,
+    ...patch,
+    details:
+      patch.details === undefined ? current.details : { ...current.details, ...patch.details }
+  } as StoryBibleEditorDraft;
 }
 
-function slugify(value: string): string {
-  const slug = value
-    .trim()
-    .toLocaleLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
+function draftsEqual(left: StoryBibleEditorDraft, right: StoryBibleEditorDraft): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
 
-  return slug.length === 0 ? "untitled" : slug;
+function createRandomAssetIdentity(): string {
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
 function memorySummary(memory: MemoryRecord): StoryBibleSummaryAsset {

@@ -276,6 +276,32 @@ export function useProjectWorkflowActions({
     [projectWorkflowBridge, setProjectWorkflow]
   );
 
+  const handleStoryBibleDraftChange = useCallback<StoryBibleEditorProps["onDraftChange"]>(
+    (kind, draft) => {
+      if (storyBibleBridge === undefined) return;
+      setStoryBibleEditor(storyBibleBridge.updateDraft(kind, draft));
+    },
+    [setStoryBibleEditor, storyBibleBridge]
+  );
+
+  const handleStoryBibleFiltersChange = useCallback<StoryBibleEditorProps["onFiltersChange"]>(
+    (filters) => {
+      if (storyBibleBridge === undefined) return;
+      setStoryBibleEditor(storyBibleBridge.updateFilters(filters));
+    },
+    [setStoryBibleEditor, storyBibleBridge]
+  );
+
+  const handleSaveStoryBibleDraft = useCallback(() => {
+    if (storyBibleBridge === undefined) return;
+
+    setStoryBibleEditor(storyBibleBridge.beginSave());
+    void storyBibleBridge.saveDraft().then((nextStoryBibleEditor) => {
+      setStoryBibleEditor(nextStoryBibleEditor);
+      setStoryBible(storyBibleBridge.getProps());
+    });
+  }, [setStoryBible, setStoryBibleEditor, storyBibleBridge]);
+
   return {
     refreshProjectWorkflow,
     handleProjectTitleChange,
@@ -291,6 +317,9 @@ export function useProjectWorkflowActions({
     handleCloseChapterTab,
     handlePreviewRecoveryDraft,
     handleApplyRecoveryDraft,
-    handleDiscardRecoveryDraft
+    handleDiscardRecoveryDraft,
+    handleStoryBibleDraftChange,
+    handleStoryBibleFiltersChange,
+    handleSaveStoryBibleDraft
   };
 }

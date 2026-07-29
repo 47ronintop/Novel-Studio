@@ -83,6 +83,7 @@ describe("workspace navigation", () => {
       ...state.dependencies(log),
       storyBibleBridge: {
         selectKind: () => nextStory,
+        beginCreate: () => nextStory,
         selectEntry(entryId) {
           log.push(`story.selectEntry:${entryId}`);
           return nextStory;
@@ -94,6 +95,37 @@ describe("workspace navigation", () => {
 
     expect(log).toEqual([
       "story.selectEntry:timeline_main",
+      "state.workbench:creative",
+      "state.navigator:story",
+      "state.activity:storyBible"
+    ]);
+    expect(state.storyBibleEditor).toBe(nextStory);
+  });
+
+  test("begins a typed story draft before committing the creative story surface", () => {
+    const log: string[] = [];
+    const state = createState({
+      workbenchMode: "engineering",
+      creativeNavigatorMode: "writing",
+      activeActivity: "workspace"
+    });
+    const nextStory = { ...storyEditor("", "foreshadow"), viewMode: "detail" as const };
+    const navigation = createWorkspaceNavigation({
+      ...state.dependencies(log),
+      storyBibleBridge: {
+        selectKind: () => nextStory,
+        selectEntry: () => nextStory,
+        beginCreate(kind) {
+          log.push(`story.beginCreate:${kind}`);
+          return nextStory;
+        }
+      }
+    });
+
+    navigation.createStoryEntry("foreshadow");
+
+    expect(log).toEqual([
+      "story.beginCreate:foreshadow",
       "state.workbench:creative",
       "state.navigator:story",
       "state.activity:storyBible"
@@ -426,13 +458,56 @@ function fileEditor(path: string): PlainFileEditorProps {
 function storyEditor(id: string, kind: StoryBibleEditorProps["activeKind"]): StoryBibleEditorProps {
   return {
     activeKind: kind,
+    viewMode: id.length === 0 ? "list" : "detail",
+    status: "idle",
+    dirty: false,
     entries: [],
-    draft: { id, kind, title: "", body: "", status: "draft" },
-    saveStatus: "idle",
+    chapterOptions: [],
+    filters: {
+      query: "",
+      status: "all",
+      worldAssetType: "all",
+      foreshadowTrackingStatus: "all"
+    },
+    externalUpdate: { status: "none" },
+    draft: storyDraft(id, kind),
     onKindSelect: () => undefined,
     onEntrySelect: () => undefined,
     onDraftChange: () => undefined,
+    onFiltersChange: () => undefined,
     onNewDraft: () => undefined,
+    onCancelDraft: () => undefined,
     onSave: () => undefined
   };
+}
+
+function storyDraft(
+  id: string,
+  kind: StoryBibleEditorProps["activeKind"]
+): StoryBibleEditorProps["draft"] {
+  const common = {
+    ...(id.length === 0 ? {} : { id }),
+    title: "",
+    status: "draft" as const,
+    summary: "",
+    aliases: [],
+    relatedEntityIds: []
+  };
+  switch (kind) {
+    case "character":
+      return { ...common, kind, assetType: "character", details: {} };
+    case "world":
+      return { ...common, kind, assetType: "world.location", details: {} };
+    case "outline":
+      return { ...common, kind, assetType: "outline", details: {} };
+    case "foreshadow":
+      return {
+        ...common,
+        kind,
+        assetType: "foreshadow",
+        details: { trackingStatus: "planned", origin: "manual" }
+      };
+    case "timeline":
+      return { ...common, kind, assetType: "timeline.events", details: {} };
+  }
 }

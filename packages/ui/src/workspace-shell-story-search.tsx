@@ -92,7 +92,7 @@ export function TimelineMainView({
                   <strong>{entry.title}</strong>
                   <span>{entry.status}</span>
                 </span>
-                <span>{entry.body}</span>
+                <span>{entry.summary}</span>
               </button>
             </li>
           ))}
@@ -110,7 +110,7 @@ export function StoryBibleEditorView({ editor }: { readonly editor: StoryBibleEd
       <div className="ns-story-editor-header">
         <div>
           <h1>故事圣经</h1>
-          <p>维护人物、世界观、大纲、时间线和记忆。保存前始终由你确认。</p>
+          <p>维护人物、世界观、大纲、伏笔和时间线。保存前始终由你确认。</p>
         </div>
         <button className="ns-icon-text-button" onClick={editor.onNewDraft} type="button">
           <FilePlus aria-hidden="true" size={14} />
@@ -185,17 +185,21 @@ export function StoryBibleEditorView({ editor }: { readonly editor: StoryBibleEd
             <input
               aria-label="设定标题"
               className="ns-search-input"
-              onChange={(event) => editor.onDraftChange({ title: event.currentTarget.value })}
+              onChange={(event) =>
+                editor.onDraftChange(editor.draft.kind, { title: event.currentTarget.value })
+              }
               value={editor.draft.title}
             />
           </label>
           <label className="ns-story-field">
-            <span>{editor.activeKind === "memory" ? "记忆内容" : "摘要"}</span>
+            <span>摘要</span>
             <textarea
               aria-label="设定正文"
               className="ns-story-textarea"
-              onChange={(event) => editor.onDraftChange({ body: event.currentTarget.value })}
-              value={editor.draft.body}
+              onChange={(event) =>
+                editor.onDraftChange(editor.draft.kind, { summary: event.currentTarget.value })
+              }
+              value={editor.draft.summary}
             />
           </label>
           <div className="ns-story-editor-actions">
@@ -255,8 +259,8 @@ const storyBibleKindOptions: readonly {
   { kind: "character", label: "人物" },
   { kind: "world", label: "世界观" },
   { kind: "outline", label: "大纲" },
-  { kind: "timeline", label: "时间线" },
-  { kind: "memory", label: "记忆" }
+  { kind: "foreshadow", label: "伏笔" },
+  { kind: "timeline", label: "时间线" }
 ];
 
 function storyBibleKindLabel(kind: StoryBibleEditorKind): string {

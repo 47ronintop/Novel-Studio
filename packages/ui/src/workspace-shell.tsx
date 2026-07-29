@@ -826,7 +826,7 @@ function ActivityEmptyState({
     return (
       <section className="ns-activity-view" aria-label="故事圣经视图">
         <h1>故事圣经</h1>
-        <p>打开项目后可以编辑人物、世界观、大纲、时间线和记忆。</p>
+        <p>打开项目后可以编辑人物、世界观、大纲、伏笔和时间线。</p>
         <div className="ns-activity-view-actions">
           <span>下一步：打开项目并加载故事圣经。</span>
         </div>
