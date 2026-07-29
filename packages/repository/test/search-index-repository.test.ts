@@ -148,6 +148,60 @@ describe("SearchIndexFileRepository", () => {
       });
     }
   });
+
+  test("invalidates the cache so a restarted repository rebuilds from current sources", async () => {
+    const projectRoot = await createSearchProject();
+    const repository = new SearchIndexFileRepository({ projectRoot, now: () => now });
+    await repository.rebuildIndex();
+    const characterPath = join(projectRoot, "characters", "chr_hero.json");
+    const character = JSON.parse(await readFile(characterPath, "utf8")) as Record<string, unknown>;
+    await writeFile(
+      characterPath,
+      `${JSON.stringify({ ...character, summary: "The renewed promise is now current." }, null, 2)}\n`,
+      "utf8"
+    );
+
+    const invalidated = await repository.invalidate();
+
+    expect(invalidated).toEqual({ ok: true, value: undefined });
+    await expect(
+      readFile(join(projectRoot, "cache", "indexes", "search.json"), "utf8")
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(repository.invalidate()).resolves.toEqual({ ok: true, value: undefined });
+
+    const restarted = new SearchIndexFileRepository({ projectRoot, now: () => now });
+    const searched = await restarted.search({ query: "renewed promise" });
+    expect(searched.ok).toBe(true);
+    if (searched.ok) {
+      expect(searched.value.results).toContainEqual(
+        expect.objectContaining({ type: "story.character", title: "Hero" })
+      );
+    }
+  });
+
+  test("clears the memory snapshot and reports cache deletion failures", async () => {
+    const projectRoot = await createSearchProject();
+    const repository = new SearchIndexFileRepository({
+      projectRoot,
+      removeIndexFile: async () => {
+        throw Object.assign(new Error("cache is locked"), { code: "EACCES" });
+      }
+    });
+    await repository.rebuildIndex();
+
+    const invalidated = await repository.invalidate();
+
+    expect(invalidated.ok).toBe(false);
+    if (!invalidated.ok) {
+      expect(invalidated.error).toMatchObject({
+        code: "SEARCH_INDEX_INVALIDATE_FAILED",
+        redactedDetail: {
+          filePath: "cache/indexes/search.json",
+          reason: "cache is locked"
+        }
+      });
+    }
+  });
 });
 
 async function createSearchProject(): Promise<string> {

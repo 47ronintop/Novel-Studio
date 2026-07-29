@@ -204,6 +204,10 @@ export interface DesktopAgentRunSessionOptions {
     relativePath: string,
     options?: { readonly expectedDirtyChecksum?: string }
   ) => Promise<void>;
+  readonly notifyProjectFilesChanged?: (input: {
+    readonly reason: "agent-change-set-apply" | "agent-run-undo";
+    readonly relativePaths: readonly string[];
+  }) => Promise<void>;
   readonly surfaceTransactionRecoveryReview?: (group: VersionGroup) => Promise<void>;
   readonly projectLockOwnerId?: string;
   readonly failAgentWriteAt?: number;
@@ -672,6 +676,9 @@ function createDesktopAgentRuntimeServices(
           ...(options.syncSavedEditor === undefined
             ? {}
             : { syncSavedEditor: options.syncSavedEditor }),
+          ...(options.notifyProjectFilesChanged === undefined
+            ? {}
+            : { notifyProjectFilesChanged: options.notifyProjectFilesChanged }),
           ...(options.surfaceTransactionRecoveryReview === undefined
             ? {}
             : { surfaceTransactionRecoveryReview: options.surfaceTransactionRecoveryReview }),
@@ -1586,6 +1593,7 @@ function createDesktopVersionGroupServices(input: {
   readonly resumeAutosave?: DesktopAgentRunSessionOptions["resumeAutosave"];
   readonly preserveDirtyBuffers?: DesktopAgentRunSessionOptions["preserveDirtyBuffers"];
   readonly syncSavedEditor?: DesktopAgentRunSessionOptions["syncSavedEditor"];
+  readonly notifyProjectFilesChanged?: DesktopAgentRunSessionOptions["notifyProjectFilesChanged"];
   readonly surfaceTransactionRecoveryReview?: DesktopAgentRunSessionOptions["surfaceTransactionRecoveryReview"];
   readonly failAgentWriteAt?: number;
 }): {
@@ -1698,9 +1706,15 @@ function createDesktopVersionGroupServices(input: {
         }
         const applied = await versionGroupSession.applyApproved({ changeSet, approval });
         if (!applied.ok) return applied;
-        return applied.value.transactionStatus === "applied"
-          ? ok(asJsonObject(applied.value))
-          : err(versionGroupFailure(applied.value));
+        if (applied.value.transactionStatus !== "applied") {
+          return err(versionGroupFailure(applied.value));
+        }
+        await notifyProjectFilesChanged(
+          input.notifyProjectFilesChanged,
+          "agent-change-set-apply",
+          versionGroupRelativePaths(applied.value)
+        );
+        return ok(asJsonObject(applied.value));
       },
       async undoRun({ runId, commandId, action, reviewId, decisions, retryFailedOnly }) {
         const recovered = await recover();
@@ -1727,11 +1741,19 @@ function createDesktopVersionGroupServices(input: {
             : {})
         });
         if (!undone.ok) return undone;
-        return undone.value.transactionStatus === "applied" ||
+        const accepted =
+          undone.value.transactionStatus === "applied" ||
           undone.value.transactionStatus === "awaiting_review" ||
-          undone.value.transactionStatus === "partial_failure"
-          ? ok(asJsonObject(undone.value))
-          : err(versionGroupFailure(undone.value));
+          undone.value.transactionStatus === "partial_failure";
+        if (!accepted) {
+          return err(versionGroupFailure(undone.value));
+        }
+        await notifyProjectFilesChanged(
+          input.notifyProjectFilesChanged,
+          "agent-run-undo",
+          versionGroupRelativePaths(undone.value)
+        );
+        return ok(asJsonObject(undone.value));
       },
       async readRollbackReview({ runId }) {
         const review = await recoveryRepository.readRollbackReview(runId);
@@ -1758,6 +1780,30 @@ function createDesktopVersionGroupServices(input: {
     },
     recoverOnStartup: recover
   };
+}
+
+function versionGroupRelativePaths(group: VersionGroup): readonly string[] {
+  return [
+    ...new Set([
+      ...group.writes.map((write) => write.relativePath),
+      ...(group.operations ?? []).flatMap((operation) => operation.relativePaths)
+    ])
+  ];
+}
+
+async function notifyProjectFilesChanged(
+  notify: DesktopAgentRunSessionOptions["notifyProjectFilesChanged"],
+  reason: "agent-change-set-apply" | "agent-run-undo",
+  relativePaths: readonly string[]
+): Promise<void> {
+  if (notify === undefined || relativePaths.length === 0) {
+    return;
+  }
+  try {
+    await notify({ reason, relativePaths });
+  } catch {
+    // The Version Group already committed; search invalidation is retried by later project reads.
+  }
 }
 
 function recoveredVersionGroup(

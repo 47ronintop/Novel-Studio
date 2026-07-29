@@ -1,4 +1,4 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, unlink } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 
 import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
@@ -70,9 +70,11 @@ export interface SearchIndexFileRepositoryOptions {
   readonly projectRoot: string;
   readonly traceId?: string;
   readonly now?: () => string;
+  readonly removeIndexFile?: (path: string) => Promise<void>;
 }
 
 const SEARCH_INDEX_RELATIVE_PATH = join("cache", "indexes", "search.json");
+const SEARCH_INDEX_DISPLAY_PATH = "cache/indexes/search.json";
 
 export class SearchIndexFileRepository {
   private readonly traceId: string;
@@ -80,6 +82,32 @@ export class SearchIndexFileRepository {
 
   public constructor(private readonly options: SearchIndexFileRepositoryOptions) {
     this.traceId = options.traceId ?? "trace_repository_search_index";
+  }
+
+  public async invalidate(): Promise<Result<void, UnifiedError>> {
+    this.snapshot = undefined;
+    const indexPath = join(this.options.projectRoot, SEARCH_INDEX_RELATIVE_PATH);
+
+    try {
+      await (this.options.removeIndexFile ?? unlink)(indexPath);
+      return ok(undefined);
+    } catch (error) {
+      if (isMissingFileError(error)) {
+        return ok(undefined);
+      }
+      return err(
+        storageError({
+          code: "SEARCH_INDEX_INVALIDATE_FAILED",
+          message: "Search index cache could not be invalidated.",
+          suggestedAction: "Close processes using the cache file and retry project search.",
+          traceId: this.traceId,
+          redactedDetail: {
+            filePath: SEARCH_INDEX_DISPLAY_PATH,
+            reason: error instanceof Error ? error.message : "Unknown cache deletion error"
+          }
+        })
+      );
+    }
   }
 
   public async rebuildIndex(): Promise<Result<SearchIndexSnapshot, UnifiedError>> {
@@ -504,4 +532,8 @@ function typeOrder(type: SearchIndexEntryType): number {
 
 function toProjectRelativePath(path: string): string {
   return relative(".", path).replaceAll("\\", "/");
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }

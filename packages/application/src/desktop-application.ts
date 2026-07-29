@@ -92,9 +92,11 @@ import type { WorkspaceActivationContext } from "./workspace-activation-context.
 import { toWorkspaceContextDto } from "./workspace-activation-context.js";
 import type {
   ProjectSearchIndex,
+  ProjectSearchInvalidationReason,
   ProjectSearchQuery,
   ProjectSearchResults,
-  ProjectSearchSession
+  ProjectSearchSession,
+  ProjectSearchSourcesChangedInput
 } from "./project-search-session.js";
 import type {
   MemoryRecord,
@@ -266,6 +268,7 @@ export interface DesktopApplication {
   }): Promise<Result<EngineeringTextFileSaveResult, UnifiedError>>;
   rebuildProjectSearchIndex(): Promise<Result<ProjectSearchIndex, UnifiedError>>;
   searchProject(input: ProjectSearchQuery): Promise<Result<ProjectSearchResults, UnifiedError>>;
+  notifyProjectSearchSourcesChanged(input: ProjectSearchSourcesChangedInput): Promise<void>;
   loadStoryBible(): Promise<Result<StoryBibleSnapshot, UnifiedError>>;
   saveStoryBibleAsset(asset: StoryBibleAsset): Promise<Result<StoryBibleAsset, UnifiedError>>;
   saveStoryBibleMemory(memory: MemoryRecord): Promise<Result<MemoryRecord, UnifiedError>>;
@@ -370,6 +373,12 @@ interface PreparedWorkspaceActivationRecord {
   state: "prepared" | "committed";
 }
 
+interface ActiveProjectSearchBinding {
+  readonly projectId: string;
+  readonly projectRoot: string;
+  readonly session: ProjectSearchSession;
+}
+
 const DEFAULT_SHELL_STATE: DesktopShellState = {
   projectTitle: "未打开项目",
   activeActivity: "workspace",
@@ -409,13 +418,46 @@ export function createDesktopApplication(
   const userPreferencesSession = options.userPreferencesSession;
   const storyBibleSession = options.storyBibleSession;
   const createProjectSearchSession = options.createProjectSearchSession;
+  const initialProjectSnapshot = activeProjectWorkspaceSession?.getSnapshot();
+  let activeProjectSearchBinding: ActiveProjectSearchBinding | undefined =
+    initialProjectSnapshot === undefined || createProjectSearchSession === undefined
+      ? undefined
+      : {
+          projectId: initialProjectSnapshot.project.projectId,
+          projectRoot: initialProjectSnapshot.projectRoot,
+          session: createProjectSearchSession(initialProjectSnapshot.projectRoot)
+        };
   const aiWritingWorkflowSession = options.aiWritingWorkflowSession;
   const createAiWritingWorkflowSession = options.createAiWritingWorkflowSession;
   let dynamicAiWritingWorkflowSession: AiWritingWorkflowSession | undefined;
   let dynamicAiChapterEditorSession: ChapterEditorSession | undefined;
   let shellState = createInitialShellState(options);
 
+  const refreshProjectSearchBinding = (projectRoot: string | undefined): void => {
+    const snapshot = activeProjectWorkspaceSession?.getSnapshot();
+    if (
+      projectRoot === undefined ||
+      snapshot === undefined ||
+      createProjectSearchSession === undefined
+    ) {
+      activeProjectSearchBinding = undefined;
+      return;
+    }
+    if (
+      activeProjectSearchBinding?.projectRoot === projectRoot &&
+      activeProjectSearchBinding.projectId === snapshot.project.projectId
+    ) {
+      return;
+    }
+    activeProjectSearchBinding = {
+      projectId: snapshot.project.projectId,
+      projectRoot,
+      session: createProjectSearchSession(projectRoot)
+    };
+  };
+
   const refreshProjectScopedBindings = (projectRoot: string | undefined): void => {
+    refreshProjectSearchBinding(projectRoot);
     try {
       options.onActiveProjectRootChange?.(projectRoot);
     } catch {
@@ -455,6 +497,7 @@ export function createDesktopApplication(
       if (releasedAttached !== undefined && !releasedAttached.ok && firstError === undefined) {
         firstError = releasedAttached.error;
       }
+      activeProjectSearchBinding = undefined;
       return firstError === undefined ? ok(undefined) : err(firstError);
     },
     canCloseWorkspace() {
@@ -778,6 +821,15 @@ export function createDesktopApplication(
 
       return searchSession.search(input);
     },
+    async notifyProjectSearchSourcesChanged(input) {
+      if (
+        activeProjectSearchBinding?.projectId !== input.projectId ||
+        !input.relativePaths.some(isManagedStoryBibleRelativePath)
+      ) {
+        return;
+      }
+      await invalidateActiveProjectSearch(input.reason);
+    },
     async loadStoryBible() {
       if (storyBibleSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
         return storyBibleUnavailable();
@@ -790,14 +842,22 @@ export function createDesktopApplication(
         return storyBibleUnavailable();
       }
 
-      return storyBibleSession.saveStoryAsset(asset);
+      const saved = await storyBibleSession.saveStoryAsset(asset);
+      if (saved.ok) {
+        await invalidateActiveProjectSearch("story-bible-save");
+      }
+      return saved;
     },
     async saveStoryBibleMemory(memory) {
       if (storyBibleSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
         return storyBibleUnavailable();
       }
 
-      return storyBibleSession.saveMemory(memory);
+      const saved = await storyBibleSession.saveMemory(memory);
+      if (saved.ok) {
+        await invalidateActiveProjectSearch("story-bible-save");
+      }
+      return saved;
     },
     async buildStoryBibleConsistencyReport() {
       if (storyBibleSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
@@ -1186,12 +1246,21 @@ export function createDesktopApplication(
   }
 
   function getProjectSearchSession(): ProjectSearchSession | undefined {
-    const projectRoot = activeProjectWorkspaceSession?.getSnapshot()?.projectRoot;
-    if (projectRoot === undefined || createProjectSearchSession === undefined) {
-      return undefined;
-    }
+    return activeProjectSearchBinding?.session;
+  }
 
-    return createProjectSearchSession(projectRoot);
+  async function invalidateActiveProjectSearch(
+    reason: ProjectSearchInvalidationReason
+  ): Promise<void> {
+    const session = activeProjectSearchBinding?.session;
+    if (session === undefined) {
+      return;
+    }
+    try {
+      await session.invalidate(reason);
+    } catch {
+      // The source write already committed; search can retry cache invalidation on its next rebuild.
+    }
   }
 }
 
@@ -1458,6 +1527,21 @@ function projectSearchUnavailable<T>(): Result<T, UnifiedError> {
       traceId: "application-project-search"
     })
   );
+}
+
+const MANAGED_STORY_BIBLE_PATH_ROOTS = new Set([
+  "characters",
+  "world",
+  "outline",
+  "timeline",
+  "foreshadows",
+  "memories"
+]);
+
+function isManagedStoryBibleRelativePath(relativePath: string): boolean {
+  const normalized = relativePath.replaceAll("\\", "/").replace(/^\.\//u, "");
+  const root = normalized.split("/", 1)[0];
+  return root !== undefined && MANAGED_STORY_BIBLE_PATH_ROOTS.has(root);
 }
 
 function aiWritingWorkflowUnavailable<T>(): Result<T, UnifiedError> {

@@ -53,11 +53,16 @@ export interface ProjectSearchResults {
 }
 
 export interface ProjectSearchRepositoryPort {
+  invalidate(): Promise<Result<void, UnifiedError>>;
   rebuildIndex(): Promise<Result<ProjectSearchIndex, UnifiedError>>;
   search(input: ProjectSearchQuery): Promise<Result<ProjectSearchResults, UnifiedError>>;
 }
 
+export type ProjectSearchSessionState = "clean" | "dirty";
+
 export interface ProjectSearchSession {
+  getState(): ProjectSearchSessionState;
+  invalidate(reason: string): Promise<Result<void, UnifiedError>>;
   rebuildIndex(): Promise<Result<ProjectSearchIndex, UnifiedError>>;
   search(input: ProjectSearchQuery): Promise<Result<ProjectSearchResults, UnifiedError>>;
 }
@@ -66,26 +71,94 @@ export interface ProjectSearchSessionOptions {
   readonly repository: ProjectSearchRepositoryPort;
 }
 
+export type ProjectSearchInvalidationReason =
+  "story-bible-save" | "agent-change-set-apply" | "agent-run-undo";
+
+export interface ProjectSearchSourcesChangedInput {
+  readonly projectId: string;
+  readonly reason: ProjectSearchInvalidationReason;
+  readonly relativePaths: readonly string[];
+}
+
 export function createProjectSearchSession(
   options: ProjectSearchSessionOptions
 ): ProjectSearchSession {
+  let state: ProjectSearchSessionState = "clean";
+  let generation = 0;
+  let rebuildInFlight: Promise<Result<ProjectSearchIndex, UnifiedError>> | undefined;
+  let invalidationTail: Promise<void> = Promise.resolve();
+
+  const rebuildOnce = (): Promise<Result<ProjectSearchIndex, UnifiedError>> => {
+    if (rebuildInFlight !== undefined) {
+      return rebuildInFlight;
+    }
+
+    const rebuildGeneration = generation;
+    const rebuild = options.repository.rebuildIndex().then((result) => {
+      if (result.ok && generation === rebuildGeneration) {
+        state = "clean";
+      }
+      return result;
+    });
+    rebuildInFlight = rebuild;
+    const clearRebuild = () => {
+      if (rebuildInFlight === rebuild) {
+        rebuildInFlight = undefined;
+      }
+    };
+    void rebuild.then(clearRebuild, clearRebuild);
+    return rebuild;
+  };
+
   return {
-    rebuildIndex: () => options.repository.rebuildIndex(),
-    search(input) {
+    getState: () => state,
+    invalidate() {
+      state = "dirty";
+      generation += 1;
+      const previousInvalidation = invalidationTail;
+      const invalidation = (async () => {
+        await previousInvalidation;
+        const activeRebuild = rebuildInFlight;
+        if (activeRebuild !== undefined) {
+          try {
+            await activeRebuild;
+          } catch {
+            // Repository ports return Result, but invalidation must still run if a port rejects.
+          }
+        }
+        return options.repository.invalidate();
+      })();
+      invalidationTail = invalidation.then(
+        () => undefined,
+        () => undefined
+      );
+      return invalidation;
+    },
+    async rebuildIndex() {
+      await invalidationTail;
+      return rebuildOnce();
+    },
+    async search(input) {
       const query = input.query.trim();
       if (query.length === 0) {
-        return Promise.resolve(
-          err(
-            createUnifiedError({
-              code: "PROJECT_SEARCH_QUERY_EMPTY",
-              category: "UserError",
-              message: "Search query is empty.",
-              recoverability: "user-action",
-              suggestedAction: "Enter a search keyword before running project search.",
-              traceId: "project-search-session"
-            })
-          )
+        return err(
+          createUnifiedError({
+            code: "PROJECT_SEARCH_QUERY_EMPTY",
+            category: "UserError",
+            message: "Search query is empty.",
+            recoverability: "user-action",
+            suggestedAction: "Enter a search keyword before running project search.",
+            traceId: "project-search-session"
+          })
         );
+      }
+
+      await invalidationTail;
+      if (state === "dirty") {
+        const rebuilt = await rebuildOnce();
+        if (!rebuilt.ok) {
+          return rebuilt;
+        }
       }
 
       return options.repository.search({

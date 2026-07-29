@@ -133,12 +133,15 @@ export type {
   ProjectSearchEntryType,
   ProjectSearchIndex,
   ProjectSearchIndexEntry,
+  ProjectSearchInvalidationReason,
   ProjectSearchQuery,
   ProjectSearchRepositoryPort,
   ProjectSearchResultItem,
   ProjectSearchResults,
   ProjectSearchSession,
   ProjectSearchSessionOptions,
+  ProjectSearchSessionState,
+  ProjectSearchSourcesChangedInput,
   ProjectSearchSourceRef
 } from "./project-search-session.js";
 export {

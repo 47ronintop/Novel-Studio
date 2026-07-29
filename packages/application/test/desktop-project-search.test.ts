@@ -1,7 +1,24 @@
 import { describe, expect, test } from "vitest";
 
-import { createDesktopApplication, createProjectSearchSession } from "../src/index.js";
-import { ok } from "@novel-studio/shared";
+import {
+  createDesktopApplication,
+  createProjectSearchSession,
+  type MemoryRecord,
+  type ProjectSearchIndex,
+  type ProjectWorkspaceSession,
+  type ProjectWorkspaceSnapshot,
+  type StoryBibleAsset,
+  type StoryBibleSession
+} from "../src/index.js";
+import { createUnifiedError, err, ok } from "@novel-studio/shared";
+
+const now = "2026-07-05T00:00:00.000Z";
+const emptyIndex: ProjectSearchIndex = {
+  schemaVersion: "1.0",
+  generatedAt: now,
+  entryCount: 0,
+  entries: []
+};
 
 describe("DesktopApplication project search", () => {
   test("returns a stable error when no project is open", async () => {
@@ -17,107 +34,331 @@ describe("DesktopApplication project search", () => {
     expect(result.error.redactedDetail).toBeUndefined();
   });
 
-  test("creates a project-bound search session from the active workspace root", async () => {
+  test("owns one search session per active project and replaces it on project switch", async () => {
     const roots: string[] = [];
+    const workspaceSession = createProjectWorkspaceSessionStub("D:/Novel/M20");
     const application = createDesktopApplication({
-      projectWorkspaceSession: {
-        getSnapshot: () => ({
-          projectRoot: "D:/Novel/M20",
-          project: {
-            schemaVersion: "1.0",
-            projectId: "prj_m20",
-            title: "M20",
-            projectType: "novel",
-            language: "zh-CN",
-            createdAt: "2026-07-05T00:00:00.000Z",
-            updatedAt: "2026-07-05T00:00:00.000Z"
-          },
-          settings: {
-            schemaVersion: "1.0",
-            autosave: {},
-            history: {},
-            models: {}
-          },
-          chapters: [],
-          recovery: {
-            availableItems: []
-          },
-          health: {
-            status: "healthy",
-            checkedAt: "2026-07-05T00:00:00.000Z",
-            summary: {
-              errorCount: 0,
-              warningCount: 0,
-              infoCount: 0
-            },
-            issues: []
-          }
-        }),
-        getActiveChapterEditorSession: () => undefined,
-        openProject: async () => {
-          throw new Error("not used");
-        },
-        createProject: async () => {
-          throw new Error("not used");
-        },
-        createProjectInParent: async () => {
-          throw new Error("not used");
-        },
-        listChapters: async () => ok([]),
-        createChapter: async () => {
-          throw new Error("not used");
-        },
-        renameChapter: async () => {
-          throw new Error("not used");
-        },
-        duplicateChapter: async () => {
-          throw new Error("not used");
-        },
-        deleteChapter: async () => {
-          throw new Error("not used");
-        },
-        selectChapter: async () => {
-          throw new Error("not used");
-        },
-        selectChapterAndLoad: async () => {
-          throw new Error("not used");
-        },
-        previewRecoveryDraft: async () => {
-          throw new Error("not used");
-        },
-        applyRecoveryDraft: async () => {
-          throw new Error("not used");
-        },
-        discardRecoveryDraft: async () => {
-          throw new Error("not used");
-        },
-        releaseProjectLock: async () => {
-          return ok(undefined);
-        }
-      },
+      projectWorkspaceSession: workspaceSession,
       createProjectSearchSession: (projectRoot) => {
         roots.push(projectRoot);
         return createProjectSearchSession({
           repository: {
+            async invalidate() {
+              return ok(undefined);
+            },
             async rebuildIndex() {
-              throw new Error("not used");
+              return ok(emptyIndex);
             },
             async search(input) {
-              return ok({
-                query: input.query,
-                generatedAt: "2026-07-05T00:00:00.000Z",
-                entryCount: 0,
-                results: []
-              });
+              return ok(emptySearchResults(input.query));
             }
           }
         });
       }
     });
 
-    const result = await application.searchProject({ query: "oath" });
+    await application.searchProject({ query: "oath" });
+    await application.searchProject({ query: "gate" });
+    await application.rebuildProjectSearchIndex();
 
-    expect(result.ok).toBe(true);
     expect(roots).toEqual(["D:/Novel/M20"]);
+
+    const opened = await application.openProject("D:/Novel/M21");
+    expect(opened.ok).toBe(true);
+    await application.searchProject({ query: "bell" });
+
+    expect(roots).toEqual(["D:/Novel/M20", "D:/Novel/M21"]);
+  });
+
+  test("ignores stale Agent notifications after project switch and close", async () => {
+    const invalidations: string[] = [];
+    const application = createDesktopApplication({
+      createProjectWorkspaceSession: () => createProjectWorkspaceSessionStub("D:/Novel/Bootstrap"),
+      createProjectSearchSession: (projectRoot) => ({
+        getState: () => "clean" as const,
+        async invalidate(reason) {
+          invalidations.push(`${projectRoot}:${reason}`);
+          return ok(undefined);
+        },
+        async rebuildIndex() {
+          return ok(emptyIndex);
+        },
+        async search(input) {
+          return ok(emptySearchResults(input.query));
+        }
+      })
+    });
+
+    const first = await application.prepareOpenCreativeProject("D:/Novel/M20");
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    application.commitWorkspaceActivation(first.value.activationId);
+    expect((await application.finalizeWorkspaceActivation(first.value.activationId)).ok).toBe(true);
+    await application.notifyProjectSearchSourcesChanged({
+      projectId: "prj_m20",
+      reason: "agent-change-set-apply",
+      relativePaths: ["characters/chr_hero.json"]
+    });
+
+    const second = await application.prepareOpenCreativeProject("D:/Novel/M21");
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    application.commitWorkspaceActivation(second.value.activationId);
+    expect((await application.finalizeWorkspaceActivation(second.value.activationId)).ok).toBe(
+      true
+    );
+    await application.notifyProjectSearchSourcesChanged({
+      projectId: "prj_m20",
+      reason: "agent-run-undo",
+      relativePaths: ["characters/chr_hero.json"]
+    });
+    await application.notifyProjectSearchSourcesChanged({
+      projectId: "prj_m21",
+      reason: "agent-change-set-apply",
+      relativePaths: ["world/loc_gate.json"]
+    });
+
+    expect((await application.closeWorkspace()).ok).toBe(true);
+    await application.notifyProjectSearchSourcesChanged({
+      projectId: "prj_m21",
+      reason: "agent-run-undo",
+      relativePaths: ["world/loc_gate.json"]
+    });
+
+    expect(invalidations).toEqual([
+      "D:/Novel/M20:agent-change-set-apply",
+      "D:/Novel/M21:agent-change-set-apply"
+    ]);
+    await expect(application.searchProject({ query: "oath" })).resolves.toMatchObject({
+      ok: false,
+      error: { code: "PROJECT_SEARCH_UNAVAILABLE" }
+    });
+  });
+
+  test("invalidates after successful Story Bible saves without turning cleanup failure into write failure", async () => {
+    const invalidationReasons: string[] = [];
+    let failAssetSave = false;
+    let failInvalidation = false;
+    const storyBibleSession = {
+      getSnapshot: () => undefined,
+      clearSnapshot: () => undefined,
+      async loadStoryBible() {
+        throw new Error("not used");
+      },
+      async saveStoryAsset(asset: StoryBibleAsset) {
+        return failAssetSave ? err(testError("STORY_BIBLE_SAVE_FAILED")) : ok(asset);
+      },
+      async saveMemory(memory: MemoryRecord) {
+        return ok(memory);
+      },
+      async buildConsistencyReport() {
+        throw new Error("not used");
+      },
+      async buildContextCandidates() {
+        throw new Error("not used");
+      }
+    } satisfies StoryBibleSession;
+    const application = createDesktopApplication({
+      projectWorkspaceSession: createProjectWorkspaceSessionStub("D:/Novel/M20"),
+      storyBibleSession,
+      createProjectSearchSession: () => ({
+        getState: () => "clean" as const,
+        async invalidate(reason) {
+          invalidationReasons.push(reason);
+          return failInvalidation
+            ? err(testError("SEARCH_INDEX_INVALIDATE_FAILED"))
+            : ok(undefined);
+        },
+        async rebuildIndex() {
+          return ok(emptyIndex);
+        },
+        async search(input) {
+          return ok(emptySearchResults(input.query));
+        }
+      })
+    });
+
+    const savedAsset = await application.saveStoryBibleAsset(characterAsset());
+    failInvalidation = true;
+    const savedMemory = await application.saveStoryBibleMemory(memoryRecord());
+    failAssetSave = true;
+    const failedAsset = await application.saveStoryBibleAsset(characterAsset());
+
+    expect(savedAsset.ok).toBe(true);
+    expect(savedMemory.ok).toBe(true);
+    expect(failedAsset.ok).toBe(false);
+    expect(invalidationReasons).toEqual(["story-bible-save", "story-bible-save"]);
+  });
+
+  test("invalidates Agent changes only for the active project's managed Story Bible paths", async () => {
+    const invalidationReasons: string[] = [];
+    const application = createDesktopApplication({
+      projectWorkspaceSession: createProjectWorkspaceSessionStub("D:/Novel/M20"),
+      createProjectSearchSession: () => ({
+        getState: () => "clean" as const,
+        async invalidate(reason) {
+          invalidationReasons.push(reason);
+          return ok(undefined);
+        },
+        async rebuildIndex() {
+          return ok(emptyIndex);
+        },
+        async search(input) {
+          return ok(emptySearchResults(input.query));
+        }
+      })
+    });
+
+    await application.notifyProjectSearchSourcesChanged({
+      projectId: "prj_m20",
+      reason: "agent-change-set-apply",
+      relativePaths: ["chapters/ch_01.md"]
+    });
+    await application.notifyProjectSearchSourcesChanged({
+      projectId: "prj_other",
+      reason: "agent-change-set-apply",
+      relativePaths: ["characters/chr_other.json"]
+    });
+    await application.notifyProjectSearchSourcesChanged({
+      projectId: "prj_m20",
+      reason: "agent-change-set-apply",
+      relativePaths: ["characters/chr_hero.json"]
+    });
+    await application.notifyProjectSearchSourcesChanged({
+      projectId: "prj_m20",
+      reason: "agent-run-undo",
+      relativePaths: ["foreshadows/fsh_018f12a7b91c4a2f9437c3d764e9a120.json"]
+    });
+
+    expect(invalidationReasons).toEqual(["agent-change-set-apply", "agent-run-undo"]);
   });
 });
+
+function createProjectWorkspaceSessionStub(initialProjectRoot: string): ProjectWorkspaceSession {
+  let snapshot = projectSnapshot(initialProjectRoot);
+  return {
+    getSnapshot: () => snapshot,
+    getActiveChapterEditorSession: () => undefined,
+    async openProject(projectRoot) {
+      snapshot = projectSnapshot(projectRoot);
+      return ok(snapshot);
+    },
+    async createProject() {
+      throw new Error("not used");
+    },
+    async createProjectInParent() {
+      throw new Error("not used");
+    },
+    async listChapters() {
+      return ok([]);
+    },
+    async createChapter() {
+      throw new Error("not used");
+    },
+    async renameChapter() {
+      throw new Error("not used");
+    },
+    async duplicateChapter() {
+      throw new Error("not used");
+    },
+    async deleteChapter() {
+      throw new Error("not used");
+    },
+    async selectChapter() {
+      throw new Error("not used");
+    },
+    async selectChapterAndLoad() {
+      throw new Error("not used");
+    },
+    async previewRecoveryDraft() {
+      throw new Error("not used");
+    },
+    async applyRecoveryDraft() {
+      throw new Error("not used");
+    },
+    async discardRecoveryDraft() {
+      throw new Error("not used");
+    },
+    async releaseProjectLock() {
+      return ok(undefined);
+    }
+  };
+}
+
+function projectSnapshot(projectRoot: string): ProjectWorkspaceSnapshot {
+  const suffix = projectRoot.split("/").at(-1)?.toLocaleLowerCase() ?? "project";
+  return {
+    projectRoot,
+    project: {
+      schemaVersion: "1.0",
+      projectId: `prj_${suffix}`,
+      title: suffix.toLocaleUpperCase(),
+      projectType: "novel",
+      language: "zh-CN",
+      createdAt: now,
+      updatedAt: now
+    },
+    settings: {
+      schemaVersion: "1.0",
+      autosave: {},
+      history: {},
+      models: {}
+    },
+    chapters: [],
+    recovery: { availableItems: [] },
+    health: {
+      status: "healthy",
+      checkedAt: now,
+      summary: { errorCount: 0, warningCount: 0, infoCount: 0 },
+      issues: []
+    }
+  };
+}
+
+function emptySearchResults(query: string) {
+  return {
+    query,
+    generatedAt: now,
+    entryCount: 0,
+    results: []
+  };
+}
+
+function characterAsset(): StoryBibleAsset {
+  return {
+    schemaVersion: "1.0",
+    id: "chr_hero",
+    type: "character",
+    title: "Hero",
+    status: "active",
+    summary: "The protagonist.",
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function memoryRecord(): MemoryRecord {
+  return {
+    schemaVersion: "1.0",
+    id: "mem_oath",
+    type: "memory.long-term",
+    title: "Oath",
+    status: "active",
+    origin: "user-confirmed-ai",
+    confidence: "confirmed",
+    content: "The oath remains active.",
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function testError(code: string) {
+  return createUnifiedError({
+    code,
+    category: "StorageError",
+    message: "Test operation failed.",
+    recoverability: "retryable",
+    suggestedAction: "Retry.",
+    traceId: "desktop-project-search-test"
+  });
+}

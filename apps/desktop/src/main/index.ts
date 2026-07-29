@@ -227,6 +227,12 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         ...(binding.kind !== "creativeProject"
           ? {}
           : {
+              notifyProjectFilesChanged: (input) =>
+                application.notifyProjectSearchSourcesChanged({
+                  projectId: binding.workspaceId,
+                  reason: input.reason,
+                  relativePaths: input.relativePaths
+                }),
               getCreativeProjectFileTreeSnapshot: () => {
                 const identity = creativeProjectFileSession.getActiveIdentity();
                 const snapshot = creativeProjectFileSession.getSnapshot();

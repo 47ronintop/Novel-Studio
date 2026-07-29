@@ -1287,6 +1287,8 @@ describe("desktop Agent Run runtime", () => {
     const lock = new ProjectLockFileRepository({ projectRoot, ownerId: lockOwnerId });
     expect((await lock.acquireProjectLock()).ok).toBe(true);
     const operations: string[] = [];
+    const projectChanges: { readonly reason: string; readonly relativePaths: readonly string[] }[] =
+      [];
     let round = 0;
     const session = createDesktopRuntime({
       workspaceKind: "creativeProject",
@@ -1304,6 +1306,12 @@ describe("desktop Agent Run runtime", () => {
       },
       resumeAutosave: async (relativePaths: readonly string[]) => {
         operations.push(`resume:${relativePaths.join(",")}`);
+      },
+      notifyProjectFilesChanged: async (input: {
+        readonly reason: string;
+        readonly relativePaths: readonly string[];
+      }) => {
+        projectChanges.push(input);
       },
       modelDriver: {
         async *streamRound() {
@@ -1362,6 +1370,7 @@ describe("desktop Agent Run runtime", () => {
       `preserve:chapters/${chapterId}.md`,
       `resume:chapters/${chapterId}.md`
     ]);
+    expect(projectChanges).toEqual([]);
     expect(await readFile(chapterPath, "utf8")).toContain("Externally changed chapter body.");
   });
 
@@ -1516,7 +1525,7 @@ describe("desktop Agent Run runtime", () => {
     expect(editorDirty).toBe(false);
   });
 
-  test("applies and undoes an ordinary text proposal through the trusted creative fallback", async () => {
+  test("does not notify for rejection, then notifies for apply and undo", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-agent-text-"));
     roots.push(projectRoot);
     const notesPath = join(projectRoot, "notes.txt");
@@ -1525,6 +1534,8 @@ describe("desktop Agent Run runtime", () => {
     const lockOwnerId = "desktop-agent-trusted-text-test";
     const lock = new ProjectLockFileRepository({ projectRoot, ownerId: lockOwnerId });
     expect((await lock.acquireProjectLock()).ok).toBe(true);
+    const projectChanges: { readonly reason: string; readonly relativePaths: readonly string[] }[] =
+      [];
     let round = 0;
     const session = createDesktopRuntime({
       workspaceKind: "creativeProject",
@@ -1534,11 +1545,17 @@ describe("desktop Agent Run runtime", () => {
       activeChapterId: "chapter-unused",
       projectLockOwnerId: lockOwnerId,
       createRunId: () => "run-desktop-text-validation",
+      notifyProjectFilesChanged: async (input: {
+        readonly reason: string;
+        readonly relativePaths: readonly string[];
+      }) => {
+        projectChanges.push(input);
+      },
       modelDriver: {
         async *streamRound() {
           round += 1;
-          if (round === 1) {
-            yield runtimeToolCall("proposal-text", "edit_text", {
+          if (round <= 2) {
+            yield runtimeToolCall(`proposal-text-${round}`, "edit_text", {
               ref: "file:notes.txt",
               baseHash: sha256(notes),
               range: { unit: "character", start: 0, end: 8 },
@@ -1588,6 +1605,35 @@ describe("desktop Agent Run runtime", () => {
     expect(await readFile(notesPath, "utf8")).toBe(notes);
     if (changeSet === undefined) throw new Error("Expected a staged text Change Set.");
 
+    const rejected = await session.decideChangeSet({
+      runId: "run-desktop-text-validation",
+      projectId: "project-01",
+      commandId: "reject-desktop-trusted-text",
+      expectedRunRevision: awaitingRevision,
+      changeSetId: changeSet["changeSetId"],
+      revision: changeSet["revision"],
+      checksum: changeSet["checksum"],
+      decision: "reject_all"
+    });
+    expect(rejected).toMatchObject({ ok: true });
+    expect(await readFile(notesPath, "utf8")).toBe(notes);
+    expect(projectChanges).toEqual([]);
+
+    changeSet = undefined;
+    await vi.waitFor(async () => {
+      const read = await session.readAgentRun("run-desktop-text-validation");
+      expect(read).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "awaiting_write_approval" } }
+      });
+      const value = read as {
+        value: { snapshot: { runRevision: number }; changeSet: Record<string, unknown> };
+      };
+      awaitingRevision = value.value.snapshot.runRevision;
+      changeSet = value.value.changeSet;
+    });
+    if (changeSet === undefined) throw new Error("Expected a second staged text Change Set.");
+
     await session.decideChangeSet({
       runId: "run-desktop-text-validation",
       projectId: "project-01",
@@ -1605,6 +1651,9 @@ describe("desktop Agent Run runtime", () => {
       });
     });
     expect(await readFile(notesPath, "utf8")).toBe("Revised notes.\n");
+    expect(projectChanges).toEqual([
+      { reason: "agent-change-set-apply", relativePaths: ["notes.txt"] }
+    ]);
 
     const completed = (await session.readAgentRun("run-desktop-text-validation")) as {
       value: { snapshot: { runRevision: number } };
@@ -1617,6 +1666,10 @@ describe("desktop Agent Run runtime", () => {
     });
     expect(undone).toMatchObject({ ok: true, value: { status: "completed" } });
     expect(await readFile(notesPath, "utf8")).toBe(notes);
+    expect(projectChanges).toEqual([
+      { reason: "agent-change-set-apply", relativePaths: ["notes.txt"] },
+      { reason: "agent-run-undo", relativePaths: ["notes.txt"] }
+    ]);
   });
 
   test("applies allowed v2 file lifecycle proposals and rejects managed creative resources", async () => {
