@@ -116,7 +116,7 @@ export interface RendererWorkspaceShellProps {
   readonly onOpenEngineeringWorkspace: NonNullable<
     WorkspaceShellProps["onOpenEngineeringWorkspace"]
   >;
-  readonly onSaveStoryBibleDraft: StoryBibleEditorProps["onSave"];
+  readonly onSaveStoryBibleDraft: (chapterIds: readonly string[]) => void;
   readonly onCommandExecute: NonNullable<WorkspaceShellProps["onCommandExecute"]>;
   readonly onCommandPaletteActiveCommandChange: NonNullable<
     WorkspaceShellProps["onCommandPaletteActiveCommandChange"]
@@ -167,6 +167,9 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
           onDiscardRecoveryDraft: props.onDiscardRecoveryDraft
         } satisfies ProjectWorkflowProps);
   const sourceStoryBibleEditor = props.storyBibleEditor;
+  const storyBibleChapterOptions = (projectWorkflow?.chapters ?? [])
+    .map(({ id, title, order, status }) => ({ id, title, order, status }))
+    .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
   const storyBibleEditor =
     sourceStoryBibleEditor === undefined
       ? undefined
@@ -185,13 +188,12 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
           onNewDraft: (assetType) =>
             props.navigation.createStoryEntry(sourceStoryBibleEditor.activeKind, assetType),
           onCancelDraft: props.navigation.cancelStoryDraft,
-          chapterOptions: (projectWorkflow?.chapters ?? [])
-            .map(({ id, title, order, status }) => ({ id, title, order, status }))
-            .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id)),
+          chapterOptions: storyBibleChapterOptions,
           ...(projectWorkflow?.activeChapterId === undefined
             ? {}
             : { currentChapterId: projectWorkflow.activeChapterId }),
-          onSave: props.onSaveStoryBibleDraft
+          onSave: () =>
+            props.onSaveStoryBibleDraft(storyBibleChapterOptions.map((chapter) => chapter.id))
         } satisfies StoryBibleEditorProps);
   const creativeNavigator =
     props.shellState.workspaceContext.kind === "creativeProject" &&

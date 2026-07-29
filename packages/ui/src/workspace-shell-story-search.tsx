@@ -10,6 +10,11 @@ import type {
   StoryBibleEditorProps,
   StoryBibleWorldAssetType
 } from "./workspace-shell-types.js";
+import { StoryBibleOutlineEditor } from "./story-bible-outline-editor.js";
+import {
+  storyBibleOutlineValidationMessage,
+  validateStoryBibleOutline
+} from "./story-bible-outline.js";
 
 const WORLD_ASSET_TYPE_OPTIONS: ReadonlyArray<{
   readonly value: StoryBibleWorldAssetType;
@@ -413,16 +418,38 @@ function StoryBibleDetailForm({
   readonly editor: StoryBibleEditorProps;
   readonly kindLabel: string;
 }) {
+  const outlineValidationIssues =
+    editor.draft.kind === "outline"
+      ? validateStoryBibleOutline(
+          editor.draft.details,
+          editor.chapterOptions.map((chapter) => chapter.id)
+        )
+      : [];
+
   return (
     <form
       aria-label="故事圣经编辑器"
       className="ns-story-editor-form"
       onSubmit={(event) => {
         event.preventDefault();
+        if (outlineValidationIssues.length > 0) return;
         editor.onSave();
       }}
     >
       <StoryBibleDetailFields editor={editor} />
+
+      {outlineValidationIssues.length === 0 ? null : (
+        <section aria-label="大纲保存校验" className="ns-story-validation" role="alert">
+          <strong>无法保存大纲</strong>
+          <ul>
+            {outlineValidationIssues.map((issue) => (
+              <li key={`${issue.code}:${issue.chapterId}`}>
+                {storyBibleOutlineValidationMessage(issue)}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {editor.draft.createdAt === undefined && editor.draft.updatedAt === undefined ? null : (
         <dl className="ns-story-metadata">
@@ -457,8 +484,13 @@ function StoryBibleDetailForm({
             </button>
           ) : null}
           <button
+            aria-label="保存设定"
             className="ns-icon-text-button"
-            disabled={editor.status === "saving" || editor.draft.title.trim().length === 0}
+            disabled={
+              editor.status === "saving" ||
+              editor.draft.title.trim().length === 0 ||
+              outlineValidationIssues.length > 0
+            }
             type="submit"
           >
             <Check aria-hidden="true" size={14} />
@@ -482,6 +514,7 @@ function StoryBibleDetailFields({ editor }: { readonly editor: StoryBibleEditorP
     case "world":
       return <WorldDetailFields editor={editor} />;
     case "outline":
+      return <StoryBibleOutlineEditor editor={editor} />;
     case "foreshadow":
     case "timeline":
       return <GenericStoryDetailFields editor={editor} />;

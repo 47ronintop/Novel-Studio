@@ -60,6 +60,17 @@ export type { AgentToolSourcePanelProps, AgentToolSourceEntry } from "./agent-to
 export { AgentNetworkSettingsPanel } from "./agent-network-settings-panel.js";
 export type { AgentNetworkSettingsPanelProps } from "./agent-network-settings-panel.js";
 export { WorkspaceShell } from "./workspace-shell.js";
+export {
+  readStoryBibleOutline,
+  storyBibleOutlineValidationMessage,
+  validateStoryBibleOutline
+} from "./story-bible-outline.js";
+export type {
+  StoryBibleChapterOutline,
+  StoryBibleOutlineModel,
+  StoryBibleOutlineValidationIssue,
+  StoryBibleOutlineVolume
+} from "./story-bible-outline.js";
 export { AgentRunPanel } from "./agent-run-panel.js";
 export { AgentErrorCard } from "./agent-error-card.js";
 export type { AgentErrorCardProps } from "./agent-error-card.js";

@@ -146,11 +146,11 @@ npm exec vitest -- packages/ui/test/workspace-navigator.test.tsx packages/ui/tes
 
 ### C2. 大纲卷章树
 
-- [ ] 解析 `outline.details.volumes` 和 `chapterOutlines`，与真实章节 catalog 按 ID 联结。
-- [ ] 卷树顺序使用 volumes 顺序，章顺序使用各卷 `chapterIds` 顺序；未引用章节进入“未归卷”。
-- [ ] 支持新增、重命名、排序卷，向卷中加入/移出真实章节，并编辑卷摘要与章纲。
-- [ ] 同一章节不得同时属于两个卷；保存前验证重复和不存在的章节 ID。
-- [ ] 已不存在章节保留占位与章纲，用户显式清理后才删除引用。
+- [x] 解析 `outline.details.volumes` 和 `chapterOutlines`，与真实章节 catalog 按 ID 联结。
+- [x] 卷树顺序使用 volumes 顺序，章顺序使用各卷 `chapterIds` 顺序；未引用章节进入“未归卷”。
+- [x] 支持新增、重命名、排序卷，向卷中加入/移出真实章节，并编辑卷摘要与章纲。
+- [x] 同一章节不得同时属于两个卷；保存前验证重复和不存在的章节 ID。
+- [x] 已不存在章节保留占位与章纲，用户显式清理后才删除引用。
 
 ### C3. 伏笔追踪
 

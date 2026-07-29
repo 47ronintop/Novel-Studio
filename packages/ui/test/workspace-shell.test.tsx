@@ -1962,6 +1962,285 @@ describe("WorkspaceShell", () => {
     expect(html).not.toContain('aria-label="地理"');
   });
 
+  test("renders the outline in stored volume order with unassigned and missing chapters", () => {
+    const application = createDesktopApplication();
+    const tree = (
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        storyBibleEditor={createStoryBibleEditorProps({
+          activeKind: "outline",
+          viewMode: "detail",
+          chapterOptions: [
+            { id: "ch_01", title: "雨夜入城", order: 1, status: "draft" },
+            { id: "ch_02", title: "无名档案", order: 2, status: "draft" },
+            { id: "ch_03", title: "旧证词", order: 3, status: "draft" }
+          ],
+          draft: {
+            id: "outline_main",
+            kind: "outline",
+            assetType: "outline",
+            title: "主线大纲",
+            summary: "旧案逐层揭开。",
+            status: "active",
+            aliases: [],
+            relatedEntityIds: [],
+            details: {
+              volumes: [
+                {
+                  id: "vol_02",
+                  title: "第二卷",
+                  summary: "进入王都核心。",
+                  chapterIds: ["ch_02", "ch_missing"]
+                },
+                { id: "vol_01", title: "第一卷", chapterIds: ["ch_01"] }
+              ],
+              chapterOutlines: [
+                { chapterId: "ch_missing", goal: "保留旧章纲", notes: "等待作者清理" }
+              ]
+            }
+          }
+        })}
+      />
+    );
+    const html = renderToStaticMarkup(tree);
+    const save = findElementByAriaLabel(tree, "保存设定");
+
+    expect(html).toContain('aria-label="大纲卷章树"');
+    expect(html.indexOf("第二卷")).toBeLessThan(html.indexOf("第一卷"));
+    expect(html.indexOf("无名档案")).toBeLessThan(html.indexOf("章节已不存在"));
+    expect(html).toContain("未归卷");
+    expect(html).toContain("旧证词");
+    expect(html).toContain("ch_missing");
+    expect(html).toContain("无法保存大纲");
+    expect(save?.props.disabled).toBe(true);
+  });
+
+  test("edits volumes and chapter outlines without discarding unknown nested fields", () => {
+    const application = createDesktopApplication();
+    const updates: Array<{ readonly kind: string; readonly patch: unknown }> = [];
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+
+    act(() => {
+      root.render(
+        <WorkspaceShell
+          shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+          commands={application.listCommands()}
+          commandPaletteOpen={false}
+          storyBibleEditor={createStoryBibleEditorProps({
+            activeKind: "outline",
+            viewMode: "detail",
+            chapterOptions: [
+              { id: "ch_01", title: "雨夜入城", order: 1, status: "draft" },
+              { id: "ch_02", title: "无名档案", order: 2, status: "draft" }
+            ],
+            draft: {
+              id: "outline_main",
+              kind: "outline",
+              assetType: "outline",
+              title: "主线大纲",
+              summary: "旧案逐层揭开。",
+              status: "active",
+              aliases: [],
+              relatedEntityIds: [],
+              details: {
+                volumes: [
+                  {
+                    id: "vol_01",
+                    title: "第一卷",
+                    summary: "进入王都。",
+                    chapterIds: ["ch_01"],
+                    futureVolumeField: { kept: true }
+                  }
+                ],
+                chapterOutlines: [
+                  {
+                    chapterId: "ch_01",
+                    goal: "找到案卷",
+                    futureChapterField: ["kept"]
+                  }
+                ]
+              }
+            },
+            onDraftChange: (kind, patch) => updates.push({ kind, patch })
+          })}
+        />
+      );
+    });
+
+    act(() => {
+      host
+        .querySelector<HTMLButtonElement>('[aria-label="打开卷：第一卷"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    const volumeTitle = host.querySelector<HTMLInputElement>('[aria-label="卷名称"]');
+    expect(volumeTitle).not.toBeNull();
+    act(() => {
+      if (volumeTitle !== null) {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
+          volumeTitle,
+          "第一卷：入城"
+        );
+      }
+      volumeTitle?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(updates.at(-1)).toMatchObject({
+      kind: "outline",
+      patch: {
+        details: {
+          volumes: [
+            {
+              id: "vol_01",
+              title: "第一卷：入城",
+              futureVolumeField: { kept: true }
+            }
+          ]
+        }
+      }
+    });
+
+    act(() => {
+      host
+        .querySelector<HTMLButtonElement>('[aria-label="加入章节到第一卷"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(updates.at(-1)).toMatchObject({
+      patch: { details: { volumes: [{ chapterIds: ["ch_01", "ch_02"] }] } }
+    });
+
+    act(() => {
+      host
+        .querySelector<HTMLButtonElement>('[aria-label="打开章纲：雨夜入城"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(host.querySelector('[aria-label="章纲目标"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="章纲冲突"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="章纲转折"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="章纲备注"]')).not.toBeNull();
+
+    const chapterGoal = host.querySelector<HTMLTextAreaElement>('[aria-label="章纲目标"]');
+    act(() => {
+      if (chapterGoal !== null) {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(
+          chapterGoal,
+          "取得关键证词"
+        );
+      }
+      chapterGoal?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(updates.at(-1)).toMatchObject({
+      kind: "outline",
+      patch: {
+        details: {
+          chapterOutlines: [
+            {
+              chapterId: "ch_01",
+              goal: "取得关键证词",
+              futureChapterField: ["kept"]
+            }
+          ]
+        }
+      }
+    });
+
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  test("adds and reorders volumes while moving real chapters in and out", () => {
+    const application = createDesktopApplication();
+    const updates: Array<{ readonly kind: string; readonly patch: unknown }> = [];
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+
+    act(() => {
+      root.render(
+        <WorkspaceShell
+          shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+          commands={application.listCommands()}
+          commandPaletteOpen={false}
+          storyBibleEditor={createStoryBibleEditorProps({
+            activeKind: "outline",
+            viewMode: "detail",
+            chapterOptions: [
+              { id: "ch_01", title: "雨夜入城", order: 1, status: "draft" },
+              { id: "ch_02", title: "无名档案", order: 2, status: "draft" }
+            ],
+            draft: {
+              id: "outline_main",
+              kind: "outline",
+              assetType: "outline",
+              title: "主线大纲",
+              summary: "",
+              status: "active",
+              aliases: [],
+              relatedEntityIds: [],
+              details: {
+                volumes: [
+                  { id: "vol_01", title: "第一卷", summary: "", chapterIds: ["ch_01"] },
+                  { id: "vol_02", title: "第二卷", summary: "", chapterIds: [] }
+                ],
+                chapterOutlines: []
+              }
+            },
+            onDraftChange: (kind, patch) => updates.push({ kind, patch })
+          })}
+        />
+      );
+    });
+
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="新增卷"]')?.click());
+    expect(updates.at(-1)).toMatchObject({
+      patch: {
+        details: {
+          volumes: [
+            { id: "vol_01" },
+            { id: "vol_02" },
+            { id: "vol_03", title: "第3卷", chapterIds: [] }
+          ]
+        }
+      }
+    });
+
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="下移卷：第一卷"]')?.click());
+    expect(updates.at(-1)).toMatchObject({
+      patch: { details: { volumes: [{ id: "vol_02" }, { id: "vol_01" }] } }
+    });
+
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="打开卷：第二卷"]')?.click());
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="加入章节到第二卷"]')?.click());
+    expect(updates.at(-1)).toMatchObject({
+      patch: {
+        details: {
+          volumes: [
+            { id: "vol_01", chapterIds: ["ch_01"] },
+            { id: "vol_02", chapterIds: ["ch_02"] }
+          ]
+        }
+      }
+    });
+
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="打开章纲：雨夜入城"]')?.click());
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="移出本卷：雨夜入城"]')?.click());
+    expect(updates.at(-1)).toMatchObject({
+      patch: {
+        details: {
+          volumes: [
+            { id: "vol_01", chapterIds: [] },
+            { id: "vol_02", chapterIds: [] }
+          ]
+        }
+      }
+    });
+
+    act(() => root.unmount());
+    host.remove();
+  });
+
   test("renders the common Story Bible detail form", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(

@@ -422,10 +422,51 @@ describe("Story Bible bridge", () => {
 
     bridge.beginCreate(kind);
     bridge.updateDraft(kind, { title: "Main", summary: "Singleton summary." });
-    const saved = await bridge.saveDraft();
+    const saved = await bridge.saveDraft(kind === "outline" ? { chapterIds: [] } : undefined);
 
     expect(calls).toContain(`storyBible.saveAsset:${expectedId}:Main`);
     expect(saved.draft.id).toBe(expectedId);
+  });
+
+  test("blocks outline saves with duplicate or missing chapter references", async () => {
+    const calls: string[] = [];
+    const bridge = createStoryBibleBridge(
+      createApi(calls, {
+        ...snapshot,
+        outline: {
+          schemaVersion: "1.0",
+          id: "outline_main",
+          type: "outline",
+          title: "Main Outline",
+          status: "active",
+          summary: "The investigation outline.",
+          details: {
+            volumes: [
+              { id: "vol_01", title: "Volume One", chapterIds: ["ch_01"] },
+              {
+                id: "vol_02",
+                title: "Volume Two",
+                chapterIds: ["ch_01", "ch_missing"]
+              }
+            ],
+            chapterOutlines: [{ chapterId: "ch_missing", notes: "Keep until reviewed." }]
+          },
+          createdAt: "2026-07-05T00:00:00.000Z",
+          updatedAt: "2026-07-05T00:00:00.000Z"
+        }
+      })
+    );
+    await bridge.load("workspace-01");
+    bridge.selectEntry("outline_main");
+    bridge.updateDraft("outline", { summary: "Changed but not valid yet." });
+    bridge.beginSave();
+
+    const saved = await bridge.saveDraft({ chapterIds: ["ch_01"] });
+
+    expect(saved).toMatchObject({ status: "error", dirty: true, viewMode: "detail" });
+    expect(saved.feedback?.message).toContain("ch_01");
+    expect(saved.feedback?.message).toContain("ch_missing");
+    expect(calls.some((call) => call.startsWith("storyBible.saveAsset:"))).toBe(false);
   });
 
   test("maps structured timeline events for the timeline workspace", async () => {

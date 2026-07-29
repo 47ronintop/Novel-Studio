@@ -21,6 +21,7 @@ import type { StudioBridge } from "./studio-bridge.js";
 export interface ProjectWorkflowActionInputs {
   readonly api: NovelStudioApi | undefined;
   readonly chapterBridge: ChapterEditorBridge | undefined;
+  readonly projectWorkflow?: ProjectWorkflowProps | undefined;
   readonly projectWorkflowBridge: ProjectWorkflowBridge | undefined;
   readonly settingsBridge: SettingsBridge | undefined;
   readonly storyBibleBridge: StoryBibleBridge | undefined;
@@ -40,6 +41,7 @@ export interface ProjectWorkflowActionInputs {
 export function useProjectWorkflowActions({
   api,
   chapterBridge,
+  projectWorkflow,
   projectWorkflowBridge,
   settingsBridge,
   storyBibleBridge,
@@ -293,23 +295,33 @@ export function useProjectWorkflowActions({
     [setStoryBibleEditor, storyBibleBridge]
   );
 
-  const handleSaveStoryBibleDraft = useCallback(() => {
-    if (storyBibleBridge === undefined) return;
+  const handleSaveStoryBibleDraft = useCallback(
+    (chapterIds: readonly string[]) => {
+      if (storyBibleBridge === undefined) return;
 
-    setStoryBibleEditor(storyBibleBridge.beginSave());
-    void storyBibleBridge.saveDraft().then((nextStoryBibleEditor) => {
-      setStoryBibleEditor(nextStoryBibleEditor);
-      setStoryBible(storyBibleBridge.getProps());
-    });
-  }, [setStoryBible, setStoryBibleEditor, storyBibleBridge]);
+      setStoryBibleEditor(storyBibleBridge.beginSave());
+      void storyBibleBridge.saveDraft({ chapterIds }).then((nextStoryBibleEditor) => {
+        setStoryBibleEditor(nextStoryBibleEditor);
+        setStoryBible(storyBibleBridge.getProps());
+      });
+    },
+    [setStoryBible, setStoryBibleEditor, storyBibleBridge]
+  );
 
   const guardStoryBibleDraft = useCallback(
     () =>
-      guardDirtyStoryBibleDraft(storyBibleBridge, (bridge, editor) => {
-        setStoryBibleEditor(editor);
-        setStoryBible(bridge.getProps());
-      }),
-    [setStoryBible, setStoryBibleEditor, storyBibleBridge]
+      guardDirtyStoryBibleDraft(
+        storyBibleBridge,
+        (bridge, editor) => {
+          setStoryBibleEditor(editor);
+          setStoryBible(bridge.getProps());
+        },
+        undefined,
+        projectWorkflow === undefined
+          ? undefined
+          : { chapterIds: projectWorkflow.chapters.map((chapter) => chapter.id) }
+      ),
+    [projectWorkflow?.chapters, setStoryBible, setStoryBibleEditor, storyBibleBridge]
   );
 
   return {

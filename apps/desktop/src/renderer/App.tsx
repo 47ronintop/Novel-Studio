@@ -405,6 +405,7 @@ export function App() {
   } = useProjectWorkflowActions({
     api,
     chapterBridge,
+    projectWorkflow,
     projectWorkflowBridge,
     settingsBridge,
     storyBibleBridge,

@@ -1,6 +1,6 @@
 import type { StoryBibleEditorProps } from "@novel-studio/ui";
 
-import type { StoryBibleBridge } from "./story-bible-bridge.js";
+import type { StoryBibleBridge, StoryBibleSaveOptions } from "./story-bible-bridge.js";
 
 export type StoryBibleEditorUpdate = (
   bridge: StoryBibleBridge,
@@ -12,14 +12,15 @@ export type ConfirmDirtyStoryBibleDraft = (message: string) => boolean;
 export async function guardDirtyStoryBibleDraft(
   bridge: StoryBibleBridge | undefined,
   update: StoryBibleEditorUpdate,
-  confirm: ConfirmDirtyStoryBibleDraft = confirmDirtyStoryBibleDraft
+  confirm: ConfirmDirtyStoryBibleDraft = confirmDirtyStoryBibleDraft,
+  saveOptions?: StoryBibleSaveOptions
 ): Promise<boolean> {
   if (bridge === undefined || !bridge.getEditorProps().dirty) return true;
 
   if (confirm("当前故事资料尚未保存。是否先保存？")) {
     update(bridge, bridge.beginSave());
     try {
-      const saved = await bridge.saveDraft();
+      const saved = await bridge.saveDraft(saveOptions);
       update(bridge, saved);
       return !saved.dirty;
     } catch {

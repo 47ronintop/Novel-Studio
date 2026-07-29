@@ -27,13 +27,14 @@ describe("Story Bible draft guard", () => {
       guardDirtyStoryBibleDraft(
         bridge,
         (_bridge, next) => updates.push(next),
-        vi.fn(() => true)
+        vi.fn(() => true),
+        { chapterIds: ["ch_01"] }
       )
     ).resolves.toBe(true);
 
     expect(updates).toEqual([saving, saved]);
     expect(bridge.beginSave).toHaveBeenCalledOnce();
-    expect(bridge.saveDraft).toHaveBeenCalledOnce();
+    expect(bridge.saveDraft).toHaveBeenCalledWith({ chapterIds: ["ch_01"] });
   });
 
   test("stays in detail when saving fails and preserves the dirty draft", async () => {

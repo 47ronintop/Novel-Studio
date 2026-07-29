@@ -396,7 +396,7 @@ describe("useProjectWorkflowActions", () => {
     act(() => {
       actions?.handleStoryBibleDraftChange("character", { title: "Revised" });
       actions?.handleStoryBibleFiltersChange({ query: "hero" });
-      actions?.handleSaveStoryBibleDraft();
+      actions?.handleSaveStoryBibleDraft(["ch_01"]);
     });
     expect(editorStates).toEqual([draftEditor, filteredEditor, savingEditor]);
 
@@ -409,6 +409,7 @@ describe("useProjectWorkflowActions", () => {
       title: "Revised"
     });
     expect(storyBibleBridge.updateFilters).toHaveBeenCalledWith({ query: "hero" });
+    expect(storyBibleBridge.saveDraft).toHaveBeenCalledWith({ chapterIds: ["ch_01"] });
     expect(editorStates).toEqual([draftEditor, filteredEditor, savingEditor, savedEditor]);
     expect(summaryStates).toEqual([summary]);
   });

@@ -9,6 +9,7 @@ import type {
   StoryBibleSnapshot
 } from "@novel-studio/application";
 import type { JsonObject, Result, UnifiedError } from "@novel-studio/shared";
+import { storyBibleOutlineValidationMessage, validateStoryBibleOutline } from "@novel-studio/ui";
 import type {
   StoryBibleEditorDraft,
   StoryBibleEditorDraftFor,
@@ -43,7 +44,11 @@ export interface StoryBibleBridge {
   ): StoryBibleEditorProps;
   updateFilters(filters: Partial<StoryBibleEditorFilters>): StoryBibleEditorProps;
   beginSave(): StoryBibleEditorProps;
-  saveDraft(): Promise<StoryBibleEditorProps>;
+  saveDraft(options?: StoryBibleSaveOptions): Promise<StoryBibleEditorProps>;
+}
+
+export interface StoryBibleSaveOptions {
+  readonly chapterIds?: readonly string[];
 }
 
 export interface StoryBibleBridgeOptions {
@@ -223,10 +228,24 @@ export function createStoryBibleBridge(
       deleteFeedback();
       return publishEditor();
     },
-    async saveDraft() {
+    async saveDraft(saveOptions) {
       const generation = loadGeneration;
       const workspaceId = snapshotBinding?.workspaceId;
       const draft = normalizeDraft(editorState.draft);
+      const outlineValidationError = validateOutlineDraft(draft, saveOptions);
+      if (outlineValidationError !== undefined) {
+        editorState = {
+          ...editorState,
+          status: "error",
+          dirty: true,
+          draft,
+          feedback: {
+            kind: "error",
+            message: outlineValidationError
+          }
+        };
+        return publishEditor();
+      }
       const saved = await api.storyBible.saveAsset(
         toStoryAsset(draft, now(), snapshot, createAssetIdentity)
       );
@@ -602,6 +621,20 @@ function normalizeDraft(draft: StoryBibleEditorDraft): StoryBibleEditorDraft {
     aliases: draft.aliases.map((alias) => alias.trim()).filter((alias) => alias.length > 0),
     relatedEntityIds: draft.relatedEntityIds.map((id) => id.trim()).filter((id) => id.length > 0)
   } as StoryBibleEditorDraft;
+}
+
+function validateOutlineDraft(
+  draft: StoryBibleEditorDraft,
+  saveOptions: StoryBibleSaveOptions | undefined
+): string | undefined {
+  if (draft.kind !== "outline") return undefined;
+  if (saveOptions?.chapterIds === undefined) {
+    return "无法保存大纲：当前章节目录不可用。";
+  }
+  const issues = validateStoryBibleOutline(draft.details, saveOptions.chapterIds);
+  return issues.length === 0
+    ? undefined
+    : `无法保存大纲：${issues.map(storyBibleOutlineValidationMessage).join(" ")}`;
 }
 
 function draftFromSnapshot(
