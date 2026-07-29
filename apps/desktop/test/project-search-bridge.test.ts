@@ -12,20 +12,33 @@ describe("project search navigation bridge", () => {
 
     await openProjectSearchResult(navigation, result("chapter", "ch_01"));
     await openProjectSearchResult(navigation, result("story-asset", "timeline_main"));
+    await openProjectSearchResult(
+      navigation,
+      result("story-asset", "fsh_018f12a7b91c4a2f9437c3d764e9a120", "story.foreshadow")
+    );
     await openProjectSearchResult(navigation, result("memory", "memory_01"));
 
     expect(navigateToChapter).toHaveBeenCalledWith("ch_01");
-    expect(navigateToStoryEntry.mock.calls).toEqual([["timeline_main"], ["memory_01"]]);
+    expect(navigateToStoryEntry.mock.calls).toEqual([
+      ["timeline_main"],
+      ["fsh_018f12a7b91c4a2f9437c3d764e9a120"],
+      ["memory_01"]
+    ]);
   });
 });
 
 function result(
   kind: ProjectSearchResultItem["sourceRef"]["kind"],
-  id: string
+  id: string,
+  type: ProjectSearchResultItem["type"] = kind === "chapter"
+    ? "chapter"
+    : kind === "memory"
+      ? "memory"
+      : "story.timeline"
 ): ProjectSearchResultItem {
   return {
     id: `result_${id}`,
-    type: kind === "chapter" ? "chapter" : kind === "memory" ? "memory" : "story.timeline",
+    type,
     title: id,
     snippet: id,
     score: 1,

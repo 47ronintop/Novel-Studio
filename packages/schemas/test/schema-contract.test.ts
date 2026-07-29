@@ -93,6 +93,39 @@ describe("schema contract coverage", () => {
     }
   });
 
+  test("accepts foreshadow entries without changing the search index schema version", () => {
+    const legacyFixture = readFixture("valid", "search-index") as {
+      readonly schemaVersion: "1.0";
+      readonly generatedAt: string;
+      readonly entryCount: number;
+      readonly entries: readonly unknown[];
+    };
+    const fixture = {
+      ...legacyFixture,
+      entryCount: legacyFixture.entryCount + 1,
+      entries: [
+        ...legacyFixture.entries,
+        {
+          id: "story.foreshadow:fsh_018f12a7b91c4a2f9437c3d764e9a120",
+          type: "story.foreshadow",
+          title: "旧钥匙的来源",
+          text: "第一章出现的旧钥匙将在第五章揭示来源。",
+          updatedAt: "2026-07-29T00:00:00.000Z",
+          sourceRef: {
+            kind: "story-asset",
+            id: "fsh_018f12a7b91c4a2f9437c3d764e9a120",
+            relativePath: "foreshadows/fsh_018f12a7b91c4a2f9437c3d764e9a120.json"
+          }
+        }
+      ]
+    };
+    const validate = createSchemaValidator(readSchema("search-index"));
+
+    expect(fixture.schemaVersion).toBe("1.0");
+    expect(validate(legacyFixture)).toEqual({ valid: true, issues: [] });
+    expect(validate(fixture)).toEqual({ valid: true, issues: [] });
+  });
+
   test("preserves unknown fields by default after validation", () => {
     const fixture = {
       schemaVersion: "1.0",

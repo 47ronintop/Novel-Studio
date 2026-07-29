@@ -9,12 +9,19 @@ import { storageError, validationError } from "./errors.js";
 import { validateWithSchema } from "./schema-validation.js";
 import {
   StoryBibleFileRepository,
+  type ForeshadowAsset,
   type MemoryRecord,
   type StoryBibleRegularAsset
 } from "./story-bible-repository.js";
 
 export type SearchIndexEntryType =
-  "chapter" | "story.character" | "story.world" | "story.outline" | "story.timeline" | "memory";
+  | "chapter"
+  | "story.character"
+  | "story.world"
+  | "story.outline"
+  | "story.timeline"
+  | "story.foreshadow"
+  | "memory";
 
 export interface SearchSourceRef {
   readonly kind: "chapter" | "story-asset" | "memory";
@@ -177,6 +184,16 @@ export class SearchIndexFileRepository {
       return storyBible;
     }
 
+    const storyAssetTitles = new Map(
+      [
+        ...storyBible.value.characters,
+        ...storyBible.value.worldAssets,
+        ...(storyBible.value.outline === undefined ? [] : [storyBible.value.outline]),
+        ...(storyBible.value.timeline === undefined ? [] : [storyBible.value.timeline]),
+        ...storyBible.value.foreshadows
+      ].map((asset) => [asset.id, asset.title] as const)
+    );
+
     entries.push(...storyBible.value.characters.map((asset) => storyAssetEntry(asset)));
     entries.push(...storyBible.value.worldAssets.map((asset) => storyAssetEntry(asset)));
     if (storyBible.value.outline !== undefined) {
@@ -185,6 +202,9 @@ export class SearchIndexFileRepository {
     if (storyBible.value.timeline !== undefined) {
       entries.push(storyAssetEntry(storyBible.value.timeline));
     }
+    entries.push(
+      ...storyBible.value.foreshadows.map((asset) => foreshadowEntry(asset, storyAssetTitles))
+    );
     entries.push(...storyBible.value.memories.map((memory) => memoryEntry(memory)));
 
     return ok(entries);
@@ -306,6 +326,35 @@ function storyAssetEntry(asset: StoryBibleRegularAsset): SearchIndexEntry {
   };
 }
 
+function foreshadowEntry(
+  asset: ForeshadowAsset,
+  storyAssetTitles: ReadonlyMap<string, string>
+): SearchIndexEntry {
+  const relatedTitles = (asset.relatedEntityIds ?? []).flatMap((id) => {
+    const title = storyAssetTitles.get(id);
+    return title === undefined ? [] : [title];
+  });
+
+  return {
+    id: `story.foreshadow:${asset.id}`,
+    type: "story.foreshadow",
+    title: asset.title,
+    text: [
+      asset.summary,
+      ...(asset.aliases ?? []),
+      ...(asset.details.sourceRefs ?? []).map((sourceRef) => sourceRef.excerpt),
+      asset.details.notes ?? "",
+      ...relatedTitles
+    ].join("\n"),
+    updatedAt: asset.updatedAt,
+    sourceRef: {
+      kind: "story-asset",
+      id: asset.id,
+      relativePath: toProjectRelativePath(join("foreshadows", `${asset.id}.json`))
+    }
+  };
+}
+
 function memoryEntry(memory: MemoryRecord): SearchIndexEntry {
   return {
     id: `memory:${memory.id}`,
@@ -408,6 +457,7 @@ function typeBoost(type: SearchIndexEntryType): number {
     case "story.world":
     case "story.outline":
     case "story.timeline":
+    case "story.foreshadow":
       return 2;
     case "memory":
       return 1;
@@ -445,8 +495,10 @@ function typeOrder(type: SearchIndexEntryType): number {
       return 3;
     case "story.timeline":
       return 4;
-    case "memory":
+    case "story.foreshadow":
       return 5;
+    case "memory":
+      return 6;
   }
 }
 

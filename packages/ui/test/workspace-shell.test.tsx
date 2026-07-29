@@ -828,7 +828,7 @@ describe("WorkspaceShell", () => {
         search={{
           query: "oath",
           status: "results-ready",
-          entryCount: 4,
+          entryCount: 5,
           generatedAt: "2026-07-05T00:00:00.000Z",
           results: [
             {
@@ -842,6 +842,18 @@ describe("WorkspaceShell", () => {
                 id: "ch_opening",
                 relativePath: "chapters/ch_opening.md"
               }
+            },
+            {
+              id: "story.foreshadow:fsh_018f12a7b91c4a2f9437c3d764e9a120",
+              type: "story.foreshadow",
+              title: "旧钥匙的来源",
+              snippet: "第一章出现的旧钥匙将在第五章揭示来源。",
+              score: 2,
+              sourceRef: {
+                kind: "story-asset",
+                id: "fsh_018f12a7b91c4a2f9437c3d764e9a120",
+                relativePath: "foreshadows/fsh_018f12a7b91c4a2f9437c3d764e9a120.json"
+              }
             }
           ],
           onQueryChange: () => undefined,
@@ -854,10 +866,12 @@ describe("WorkspaceShell", () => {
     expect(html).toContain('aria-label="项目全文搜索"');
     expect(html).toContain('aria-label="搜索关键词"');
     expect(html).toContain("重建索引");
-    expect(html).toContain("索引条目 4");
+    expect(html).toContain("索引条目 5");
     expect(html).toContain("开篇");
     expect(html).toContain("chapters/ch_opening.md");
     expect(html).toContain("The hero keeps a hidden oath.");
+    expect(html).toContain("<span>伏笔</span>");
+    expect(html).toContain("foreshadows/fsh_018f12a7b91c4a2f9437c3d764e9a120.json");
   });
 
   test("opens a search result through a structured click callback", () => {

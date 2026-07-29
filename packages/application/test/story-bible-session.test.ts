@@ -86,6 +86,48 @@ describe("StoryBibleSession", () => {
     expect(candidates.value.map((candidate) => candidate.refId)).toEqual(["loc_capital"]);
   });
 
+  test("maps only active non-abandoned foreshadows to goal candidates before memories", async () => {
+    const session = createStoryBibleSession({
+      repository: createStaticStoryBibleRepository({
+        characters: [],
+        worldAssets: [],
+        foreshadows: [
+          foreshadowAsset({ id: "fsh_active" }),
+          foreshadowAsset({
+            id: "fsh_abandoned",
+            details: { trackingStatus: "abandoned" }
+          }),
+          foreshadowAsset({ id: "fsh_archived", status: "archived" })
+        ],
+        memories: [unconfirmedMemory()]
+      })
+    });
+
+    const candidates = await session.buildContextCandidates({ includeStatuses: ["active"] });
+
+    expect(candidates.ok).toBe(true);
+    if (!candidates.ok) {
+      return;
+    }
+    expect(candidates.value).toEqual([
+      {
+        refType: "goal",
+        refId: "fsh_active",
+        content: "The old key will reveal its origin later.",
+        priority: 350,
+        sourceRefs: [{ entityType: "foreshadow", entityId: "fsh_active" }]
+      },
+      {
+        refType: "memory",
+        refId: "mem_possible_betrayal",
+        content: "Possible envoy betrayal.",
+        priority: 400,
+        memoryConfidence: "ai-unconfirmed",
+        sourceRefs: [{ entityType: "memory", entityId: "mem_possible_betrayal" }]
+      }
+    ]);
+  });
+
   test("finds active Story Bible title and alias mentions in stable asset order", () => {
     const suggestions = findStoryBibleMentionSuggestions({
       snapshot: {

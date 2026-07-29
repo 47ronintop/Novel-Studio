@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 
+import { createForeshadowEvidence } from "@novel-studio/shared";
+
 import { SearchIndexFileRepository } from "../src/index.js";
 
 const now = "2026-07-05T00:00:00.000Z";
@@ -21,11 +23,12 @@ describe("SearchIndexFileRepository", () => {
     if (!rebuilt.ok) {
       return;
     }
-    expect(rebuilt.value.entryCount).toBe(4);
+    expect(rebuilt.value.entryCount).toBe(5);
     expect(rebuilt.value.entries.map((entry) => entry.type)).toEqual([
       "chapter",
       "story.character",
       "story.world",
+      "story.foreshadow",
       "memory"
     ]);
 
@@ -33,8 +36,50 @@ describe("SearchIndexFileRepository", () => {
     expect(JSON.parse(cacheText)).toMatchObject({
       schemaVersion: "1.0",
       generatedAt: now,
-      entryCount: 4
+      entryCount: 5
     });
+  });
+
+  test("indexes foreshadow summaries, evidence, notes, and related Story Bible titles", async () => {
+    const projectRoot = await createSearchProject();
+    const repository = new SearchIndexFileRepository({
+      projectRoot,
+      now: () => now
+    });
+
+    const rebuilt = await repository.rebuildIndex();
+
+    expect(rebuilt.ok).toBe(true);
+    if (!rebuilt.ok) {
+      return;
+    }
+    const foreshadow = rebuilt.value.entries.find((entry) => entry.type === "story.foreshadow");
+    expect(foreshadow).toMatchObject({
+      id: "story.foreshadow:fsh_018f12a7b91c4a2f9437c3d764e9a120",
+      title: "The Returning Bell",
+      sourceRef: {
+        kind: "story-asset",
+        id: "fsh_018f12a7b91c4a2f9437c3d764e9a120",
+        relativePath: "foreshadows/fsh_018f12a7b91c4a2f9437c3d764e9a120.json"
+      }
+    });
+    expect(foreshadow?.text).toContain("A slow-burning promise beneath the city gate.");
+    expect(foreshadow?.text).toContain("A silver bell rings beneath the sealed arch.");
+    expect(foreshadow?.text).toContain("Unmask the steward before the final council.");
+    expect(foreshadow?.text).toContain("City Gate");
+
+    const evidenceResults = await repository.search({ query: "silver bell" });
+    expect(evidenceResults.ok).toBe(true);
+    if (evidenceResults.ok) {
+      expect(evidenceResults.value.results).toContainEqual(
+        expect.objectContaining({
+          type: "story.foreshadow",
+          sourceRef: expect.objectContaining({
+            relativePath: "foreshadows/fsh_018f12a7b91c4a2f9437c3d764e9a120.json"
+          })
+        })
+      );
+    }
   });
 
   test("searches the rebuilt index with stable snippets and source refs", async () => {
@@ -63,6 +108,46 @@ describe("SearchIndexFileRepository", () => {
     });
     expect(results.value.results[0]?.snippet).toContain("hidden oath");
   });
+
+  test("reads legacy v1.0 caches that do not contain foreshadow entries", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-search-legacy-"));
+    await mkdir(join(projectRoot, "cache", "indexes"), { recursive: true });
+    await writeFile(
+      join(projectRoot, "cache", "indexes", "search.json"),
+      `${JSON.stringify({
+        schemaVersion: "1.0",
+        generatedAt: now,
+        entryCount: 1,
+        entries: [
+          {
+            id: "memory:mem_legacy",
+            type: "memory",
+            title: "Legacy memory",
+            text: "A remembered signal remains searchable.",
+            updatedAt: now,
+            sourceRef: {
+              kind: "memory",
+              id: "mem_legacy",
+              relativePath: "memories/long-term/mem_legacy.json"
+            }
+          }
+        ]
+      })}\n`,
+      "utf8"
+    );
+    const repository = new SearchIndexFileRepository({ projectRoot });
+
+    const results = await repository.search({ query: "remembered signal" });
+
+    expect(results.ok).toBe(true);
+    if (results.ok) {
+      expect(results.value).toMatchObject({
+        generatedAt: now,
+        entryCount: 1,
+        results: [{ type: "memory", title: "Legacy memory" }]
+      });
+    }
+  });
 });
 
 async function createSearchProject(): Promise<string> {
@@ -70,6 +155,7 @@ async function createSearchProject(): Promise<string> {
   await mkdir(join(projectRoot, "chapters"), { recursive: true });
   await mkdir(join(projectRoot, "characters"), { recursive: true });
   await mkdir(join(projectRoot, "world"), { recursive: true });
+  await mkdir(join(projectRoot, "foreshadows"), { recursive: true });
   await mkdir(join(projectRoot, "memories", "long-term"), { recursive: true });
 
   await writeFile(
@@ -118,6 +204,35 @@ async function createSearchProject(): Promise<string> {
         title: "City Gate",
         status: "active",
         summary: "The northern gate is sealed at midnight.",
+        createdAt: now,
+        updatedAt: now
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+  const foreshadowEvidence = await createForeshadowEvidence(
+    "ch_opening",
+    "A silver bell rings beneath the sealed arch."
+  );
+  await writeFile(
+    join(projectRoot, "foreshadows", "fsh_018f12a7b91c4a2f9437c3d764e9a120.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: "1.0",
+        id: "fsh_018f12a7b91c4a2f9437c3d764e9a120",
+        type: "foreshadow",
+        title: "The Returning Bell",
+        status: "active",
+        summary: "A slow-burning promise beneath the city gate.",
+        details: {
+          trackingStatus: "planted",
+          plantedChapterId: "ch_opening",
+          sourceRefs: [foreshadowEvidence],
+          notes: "Unmask the steward before the final council."
+        },
+        relatedEntityIds: ["loc_gate"],
         createdAt: now,
         updatedAt: now
       },

@@ -360,6 +360,8 @@ function searchResultTypeLabel(type: ProjectSearchResultItem["type"]): string {
       return "大纲";
     case "story.timeline":
       return "时间线";
+    case "story.foreshadow":
+      return "伏笔";
     case "memory":
       return "记忆";
   }

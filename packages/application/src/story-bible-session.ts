@@ -543,6 +543,16 @@ function createContextCandidates(
   if (snapshot.timeline !== undefined && includeStatuses.includes(snapshot.timeline.status)) {
     candidates.push(assetCandidate(snapshot.timeline, "timeline", 300));
   }
+  snapshot.foreshadows
+    .filter(
+      (foreshadow) =>
+        foreshadow.status === "active" &&
+        includeStatuses.includes(foreshadow.status) &&
+        foreshadow.details.trackingStatus !== "abandoned"
+    )
+    .forEach((foreshadow) => {
+      candidates.push(assetCandidate(foreshadow, "goal", 350, "foreshadow"));
+    });
   snapshot.memories
     .filter((memory) => includeStatuses.includes(memory.status))
     .forEach((memory, index) => {

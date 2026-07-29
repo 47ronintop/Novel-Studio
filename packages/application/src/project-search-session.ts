@@ -1,7 +1,13 @@
 import { createUnifiedError, err, type Result, type UnifiedError } from "@novel-studio/shared";
 
 export type ProjectSearchEntryType =
-  "chapter" | "story.character" | "story.world" | "story.outline" | "story.timeline" | "memory";
+  | "chapter"
+  | "story.character"
+  | "story.world"
+  | "story.outline"
+  | "story.timeline"
+  | "story.foreshadow"
+  | "memory";
 
 export interface ProjectSearchSourceRef {
   readonly kind: "chapter" | "story-asset" | "memory";
