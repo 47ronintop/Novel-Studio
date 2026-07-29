@@ -811,7 +811,7 @@ export interface StoryBibleEditorProps {
     draft: Partial<StoryBibleEditorDraftFor<K>>
   ) => void;
   readonly onFiltersChange: (filters: Partial<StoryBibleEditorFilters>) => void;
-  readonly onNewDraft: () => void;
+  readonly onNewDraft: (assetType?: StoryBibleWorldAssetType) => void;
   readonly onCancelDraft: () => void;
   readonly onSave: () => void;
 }

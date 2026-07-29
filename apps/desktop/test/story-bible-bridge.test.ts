@@ -22,6 +22,10 @@ const snapshot: StoryBibleSnapshot = {
       relatedEntityIds: ["loc_capital"],
       details: {
         role: "lead",
+        arc: {
+          start: "Avoids responsibility",
+          futureArcField: "kept"
+        },
         futureDetailField: ["kept"]
       },
       futureRootField: { enabled: true },
@@ -237,10 +241,38 @@ describe("Story Bible bridge", () => {
       relatedEntityIds: ["loc_capital"],
       details: {
         role: "mentor",
+        arc: {
+          start: "Avoids responsibility",
+          futureArcField: "kept"
+        },
         futureDetailField: ["kept"]
       }
     });
     expect(editor).toMatchObject({ viewMode: "detail", dirty: false });
+  });
+
+  test("deep-merges edited character details without dropping unknown nested fields", async () => {
+    const bridge = createStoryBibleBridge(createApi([]));
+    await bridge.load("workspace-01");
+
+    bridge.selectEntry("chr_hero");
+    bridge.updateDraft("character", {
+      details: {
+        arc: {
+          start: "Accepts the investigation"
+        }
+      }
+    });
+    await bridge.saveDraft();
+
+    expect(bridge.getSnapshot().characters[0]?.details).toMatchObject({
+      role: "lead",
+      futureDetailField: ["kept"],
+      arc: {
+        start: "Accepts the investigation",
+        futureArcField: "kept"
+      }
+    });
   });
 
   test("retains the dirty detail draft when Story Bible saving fails", async () => {
@@ -334,9 +366,8 @@ describe("Story Bible bridge", () => {
         createAssetIdentity: () => "b".repeat(32)
       });
 
-      bridge.beginCreate(kind);
+      bridge.beginCreate(kind, kind === "world" ? assetType : undefined);
       bridge.updateDraft(kind, {
-        assetType,
         title: "中文标题不会进入 ID",
         summary: "A new structured asset."
       } as never);
@@ -349,6 +380,34 @@ describe("Story Bible bridge", () => {
       expect(saved).toMatchObject({ viewMode: "detail", dirty: false });
     }
   );
+
+  test("requires a concrete world type before beginning a world draft", () => {
+    const bridge = createStoryBibleBridge(createApi([]));
+
+    expect(() => bridge.beginCreate("world")).toThrowError(/world asset type/u);
+    expect(bridge.beginCreate("world", "world.glossary")).toMatchObject({
+      activeKind: "world",
+      viewMode: "detail",
+      draft: {
+        kind: "world",
+        assetType: "world.glossary"
+      }
+    });
+  });
+
+  test("clears incompatible details when a new world draft changes type", () => {
+    const bridge = createStoryBibleBridge(createApi([]));
+
+    bridge.beginCreate("world", "world.rule");
+    bridge.updateDraft("world", { details: { rule: "Magic echoes once." } });
+    const editor = bridge.updateDraft("world", { assetType: "world.glossary" });
+
+    expect(editor.draft).toMatchObject({
+      kind: "world",
+      assetType: "world.glossary",
+      details: {}
+    });
+  });
 
   test.each([
     ["outline", "outline_main"],

@@ -10,7 +10,8 @@ import type {
   PlainFileEditorProps,
   ProjectWorkflowProps,
   StoryBibleEditorKind,
-  StoryBibleEditorProps
+  StoryBibleEditorProps,
+  StoryBibleWorldAssetType
 } from "@novel-studio/ui";
 
 import type { PlainFileEditorBridge } from "./plain-file-editor-bridge.js";
@@ -30,7 +31,7 @@ export interface WorkspaceNavigation {
   navigateToChapter(chapterId: string): Promise<void>;
   navigateToStoryKind(kind: StoryBibleEditorKind): void;
   navigateToStoryEntry(entryId: string): void;
-  createStoryEntry(kind: StoryBibleEditorKind): void;
+  createStoryEntry(kind: StoryBibleEditorKind, assetType?: StoryBibleWorldAssetType): void;
   navigateToTimeline(): void;
   navigateToTimelineEntry(entryId: string): void;
   cancelStoryDraft(): void;
@@ -120,11 +121,11 @@ export function createWorkspaceNavigation(
         dependencies.setStoryBibleEditor(bridge.selectEntry(entryId));
       });
     },
-    createStoryEntry(kind) {
+    createStoryEntry(kind, assetType) {
       navigateToStory(() => {
         const bridge = dependencies.storyBibleBridge;
         if (bridge === undefined) return;
-        dependencies.setStoryBibleEditor(bridge.beginCreate(kind));
+        dependencies.setStoryBibleEditor(bridge.beginCreate(kind, assetType));
       });
     },
     navigateToTimeline() {

@@ -182,7 +182,8 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
           onEntrySelect: props.navigation.navigateToStoryEntry,
           onDraftChange: props.onStoryBibleDraftChange,
           onFiltersChange: props.onStoryBibleFiltersChange,
-          onNewDraft: () => props.navigation.createStoryEntry(sourceStoryBibleEditor.activeKind),
+          onNewDraft: (assetType) =>
+            props.navigation.createStoryEntry(sourceStoryBibleEditor.activeKind, assetType),
           onCancelDraft: props.navigation.cancelStoryDraft,
           chapterOptions: (projectWorkflow?.chapters ?? [])
             .map(({ id, title, order, status }) => ({ id, title, order, status }))

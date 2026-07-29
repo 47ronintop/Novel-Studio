@@ -8,7 +8,7 @@ import type {
   StoryBibleRegularAsset,
   StoryBibleSnapshot
 } from "@novel-studio/application";
-import type { Result, UnifiedError } from "@novel-studio/shared";
+import type { JsonObject, Result, UnifiedError } from "@novel-studio/shared";
 import type {
   StoryBibleEditorDraft,
   StoryBibleEditorDraftFor,
@@ -16,6 +16,7 @@ import type {
   StoryBibleEditorFilters,
   StoryBibleEditorKind,
   StoryBibleEditorProps,
+  StoryBibleWorldAssetType,
   StoryBibleConsistencyProps,
   StoryTimelineEvent,
   StoryBibleSummaryAsset,
@@ -31,7 +32,10 @@ export interface StoryBibleBridge {
   load(workspaceId: string): Promise<StoryBibleSummaryProps>;
   selectKind(kind: StoryBibleEditorKind): StoryBibleEditorProps;
   selectEntry(entryId: string): StoryBibleEditorProps;
-  beginCreate(kind: StoryBibleEditorKind): StoryBibleEditorProps;
+  beginCreate(
+    kind: StoryBibleEditorKind,
+    assetType?: StoryBibleWorldAssetType
+  ): StoryBibleEditorProps;
   cancelDraft(): StoryBibleEditorProps;
   updateDraft<K extends StoryBibleEditorKind>(
     kind: K,
@@ -160,8 +164,14 @@ export function createStoryBibleBridge(
       deleteFeedback();
       return publishEditor();
     },
-    beginCreate(kind) {
-      baselineDraft = emptyDraft(kind);
+    beginCreate(kind, assetType) {
+      if (kind === "world" && assetType === undefined) {
+        throw new Error("A world asset type is required before creating a world draft.");
+      }
+      if (assetType !== undefined && (kind !== "world" || !WORLD_ASSET_TYPES.has(assetType))) {
+        throw new Error("World asset types can only be used to create world drafts.");
+      }
+      baselineDraft = emptyDraft(kind, assetType);
       editorState = {
         ...editorState,
         activeKind: kind,
@@ -554,7 +564,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function emptyDraft(kind: StoryBibleEditorKind): StoryBibleEditorDraft {
+function emptyDraft(
+  kind: StoryBibleEditorKind,
+  worldAssetType: StoryBibleWorldAssetType = "world.location"
+): StoryBibleEditorDraft {
   const common = {
     title: "",
     status: "active" as const,
@@ -566,7 +579,7 @@ function emptyDraft(kind: StoryBibleEditorKind): StoryBibleEditorDraft {
     case "character":
       return { ...common, kind, assetType: "character", details: {} };
     case "world":
-      return { ...common, kind, assetType: "world.location", details: {} };
+      return { ...common, kind, assetType: worldAssetType, details: {} };
     case "outline":
       return { ...common, kind, assetType: "outline", details: {} };
     case "foreshadow":
@@ -618,10 +631,7 @@ function toStoryAsset(
     throw new Error("Existing Story Bible assets cannot change asset type.");
   }
   const id = draft.id ?? defaultAssetId(draft, createAssetIdentity);
-  const details = {
-    ...(existing?.details ?? {}),
-    ...draft.details
-  };
+  const details = mergeJsonObjects(existing?.details ?? {}, draft.details);
   const common = {
     ...(existing ?? {}),
     schemaVersion: "1.0",
@@ -782,12 +792,32 @@ function mergeDraftPatch<K extends StoryBibleEditorKind>(
   current: StoryBibleEditorDraft,
   patch: Partial<StoryBibleEditorDraftFor<K>>
 ): StoryBibleEditorDraft {
+  const assetTypeChanged = patch.assetType !== undefined && patch.assetType !== current.assetType;
   return {
     ...current,
     ...patch,
-    details:
-      patch.details === undefined ? current.details : { ...current.details, ...patch.details }
+    details: assetTypeChanged
+      ? (patch.details ?? {})
+      : patch.details === undefined
+        ? current.details
+        : mergeJsonObjects(current.details, patch.details)
   } as StoryBibleEditorDraft;
+}
+
+function mergeJsonObjects(current: JsonObject, patch: JsonObject): JsonObject {
+  const merged: JsonObject = { ...current };
+  for (const [key, value] of Object.entries(patch)) {
+    const currentValue = current[key];
+    merged[key] =
+      isJsonObject(currentValue) && isJsonObject(value)
+        ? mergeJsonObjects(currentValue, value)
+        : value;
+  }
+  return merged;
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function draftsEqual(left: StoryBibleEditorDraft, right: StoryBibleEditorDraft): boolean {

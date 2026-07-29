@@ -1780,6 +1780,188 @@ describe("WorkspaceShell", () => {
     expect(html).not.toContain('aria-label="故事圣经编辑器"');
   });
 
+  test("renders character identity and summary columns without expanding the category surface", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        storyBibleEditor={createStoryBibleEditorProps({
+          entries: [
+            {
+              id: "chr_hero",
+              kind: "character",
+              assetType: "character",
+              title: "林舟",
+              status: "active",
+              summary: "为查清旧案进入王都。",
+              aliases: ["阿舟"],
+              relatedEntityIds: [],
+              details: { role: "主角" },
+              createdAt: "2026-07-05T00:00:00.000Z",
+              updatedAt: "2026-07-06T00:00:00.000Z"
+            }
+          ]
+        })}
+      />
+    );
+
+    expect(html).toContain('data-story-list-kind="character"');
+    expect(html).toContain("姓名");
+    expect(html).toContain("身份定位");
+    expect(html).toContain("主角");
+    expect(html).toContain("为查清旧案进入王都。");
+  });
+
+  test("renders focused character fields and keeps secondary settings collapsed", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        storyBibleEditor={createStoryBibleEditorProps({
+          viewMode: "detail",
+          chapterOptions: [{ id: "ch_01", title: "第一章", order: 1, status: "draft" }],
+          draft: {
+            id: "chr_hero",
+            kind: "character",
+            assetType: "character",
+            title: "林舟",
+            summary: "为查清旧案进入王都。",
+            status: "active",
+            aliases: ["阿舟"],
+            relatedEntityIds: ["chr_friend"],
+            details: {
+              role: "主角",
+              goals: ["查清旧案", "接受自己的身世"],
+              conflicts: ["忠诚与真相不可兼得"],
+              arc: {
+                start: "逃避责任",
+                turningPoints: ["发现老师隐瞒真相"],
+                end: "主动承担后果"
+              },
+              appearanceChapterIds: ["ch_01"]
+            }
+          }
+        })}
+      />
+    );
+
+    for (const label of [
+      "人物姓名",
+      "身份定位",
+      "人物简介",
+      "外在目标",
+      "内在目标",
+      "主要冲突",
+      "人物弧起点",
+      "人物弧转折",
+      "人物弧目标状态",
+      "关联章节"
+    ]) {
+      expect(html).toContain(`aria-label="${label}"`);
+    }
+    expect(html).toContain("补充设定");
+    expect(html).toContain("第一章");
+  });
+
+  test("filters one world list and requires an existing world type before creation", () => {
+    const application = createDesktopApplication();
+    const createdTypes: string[] = [];
+    const tree = WorkspaceShell({
+      shellState: { ...application.getShellState(), activeActivity: "storyBible" },
+      commands: application.listCommands(),
+      commandPaletteOpen: false,
+      storyBibleEditor: createStoryBibleEditorProps({
+        activeKind: "world",
+        filters: {
+          query: "",
+          status: "all",
+          worldAssetType: "world.location",
+          foreshadowTrackingStatus: "all"
+        },
+        entries: [
+          {
+            id: "loc_capital",
+            kind: "world",
+            assetType: "world.location",
+            title: "王都",
+            status: "active",
+            summary: "帝国中枢。",
+            aliases: [],
+            relatedEntityIds: [],
+            details: { geography: "河谷平原" },
+            createdAt: "2026-07-05T00:00:00.000Z",
+            updatedAt: "2026-07-06T00:00:00.000Z"
+          },
+          {
+            id: "fac_council",
+            kind: "world",
+            assetType: "world.faction",
+            title: "议政会",
+            status: "active",
+            summary: "控制王都议会。",
+            aliases: [],
+            relatedEntityIds: [],
+            details: { goals: ["维持旧秩序"] },
+            createdAt: "2026-07-05T00:00:00.000Z",
+            updatedAt: "2026-07-06T00:00:00.000Z"
+          }
+        ],
+        onNewDraft: (assetType) => createdTypes.push(assetType ?? "missing")
+      })
+    });
+
+    findElementByAriaLabel(tree, "新建规则")?.props.onClick?.();
+    expect(createdTypes).toEqual(["world.rule"]);
+
+    const html = renderToStaticMarkup(tree);
+    expect(html).toContain('aria-label="筛选世界观类型"');
+    expect(html).toContain('aria-label="选择世界观类型"');
+    expect(html).toContain('data-story-list-kind="world"');
+    expect(html).toContain('data-story-entry-id="loc_capital"');
+    expect(html).not.toContain('data-story-entry-id="fac_council"');
+    expect(html).toContain("地点");
+  });
+
+  test("locks an existing world asset type and shows only its minimum fields", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        storyBibleEditor={createStoryBibleEditorProps({
+          activeKind: "world",
+          viewMode: "detail",
+          draft: {
+            id: "rule_magic",
+            kind: "world",
+            assetType: "world.rule",
+            title: "回声法则",
+            summary: "所有法术都会留下回声。",
+            status: "active",
+            aliases: [],
+            relatedEntityIds: [],
+            details: {
+              rule: "法术会在原地重复一次。",
+              scope: "王都结界内",
+              constraints: ["重复回声不可再次触发"]
+            }
+          }
+        })}
+      />
+    );
+
+    expect(html).toMatch(/aria-label="世界观类型"[^>]*disabled/u);
+    expect(html).toContain('aria-label="规则正文"');
+    expect(html).toContain('aria-label="适用范围"');
+    expect(html).toContain('aria-label="限制或例外"');
+    expect(html).not.toContain('aria-label="地理"');
+  });
+
   test("renders the common Story Bible detail form", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
@@ -1827,11 +2009,11 @@ describe("WorkspaceShell", () => {
     expect(html).not.toContain('aria-label="故事圣经分类"');
     expect(html).not.toContain("记忆");
     expect(html).toContain('aria-label="返回人物列表"');
-    expect(html).toContain('aria-label="设定标题"');
-    expect(html).toContain('aria-label="设定正文"');
+    expect(html).toContain('aria-label="人物姓名"');
+    expect(html).toContain('aria-label="人物简介"');
     expect(html).toContain('aria-label="资料状态"');
     expect(html).toContain('aria-label="资料别名"');
-    expect(html).toContain('aria-label="关联资料 ID"');
+    expect(html).toContain('aria-label="关联人物与资料"');
     expect(html).toContain("保存设定");
     expect(html).toContain("Hero");
   });

@@ -135,6 +135,29 @@ describe("workspace navigation", () => {
     expect(state.storyBibleEditor).toBe(nextStory);
   });
 
+  test("forwards the selected world asset type before committing the story surface", () => {
+    const log: string[] = [];
+    const state = createState();
+    const nextStory = { ...storyEditor("", "world"), viewMode: "detail" as const };
+    const navigation = createWorkspaceNavigation({
+      ...state.dependencies(log),
+      storyBibleBridge: {
+        selectKind: () => nextStory,
+        selectEntry: () => nextStory,
+        cancelDraft: () => nextStory,
+        beginCreate(kind, assetType) {
+          log.push(`story.beginCreate:${kind}:${assetType ?? "none"}`);
+          return nextStory;
+        }
+      }
+    });
+
+    navigation.createStoryEntry("world", "world.faction");
+
+    expect(log[0]).toBe("story.beginCreate:world:world.faction");
+    expect(state.storyBibleEditor).toBe(nextStory);
+  });
+
   test("opens the timeline activity in list mode before committing its surface", () => {
     const log: string[] = [];
     const state = createState({
