@@ -51,6 +51,7 @@ import type {
   ReadAgentPermissionSummaryQuery,
   PluginSettingsSnapshot,
   ProjectChapterSelectionDto,
+  ProjectConventionsCreateResult,
   ProjectDirectorySelectionDto,
   ProjectTextFileSelectionDto,
   ProjectCreationPreviewDto,
@@ -237,6 +238,10 @@ const api: NovelStudioApi = {
       invokeTyped<Result<EngineeringTextFileSaveResult, UnifiedError>>(
         "application:workspace:save-text-file",
         input
+      ),
+    createProjectConventions: () =>
+      invokeTyped<Result<ProjectConventionsCreateResult, UnifiedError>>(
+        "application:workspace:create-project-conventions"
       )
   },
   creativeProjectFiles: {

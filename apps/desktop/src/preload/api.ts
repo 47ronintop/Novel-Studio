@@ -41,6 +41,7 @@ import type {
   ReadAgentPermissionSummaryQuery,
   PluginSettingsSnapshot,
   ProjectChapterSelectionDto,
+  ProjectConventionsCreateResult,
   ProjectRecoveryApplyResultDto,
   ProjectRecoveryDraftPreview,
   ProjectDirectorySelectionDto,
@@ -271,6 +272,11 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           ipc,
           "application:workspace:save-text-file",
           input
+        ),
+      createProjectConventions: () =>
+        invokeTyped<Result<ProjectConventionsCreateResult, UnifiedError>>(
+          ipc,
+          "application:workspace:create-project-conventions"
         )
     },
     creativeProjectFiles: {

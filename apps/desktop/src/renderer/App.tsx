@@ -280,6 +280,7 @@ export function App() {
     activeChapterId: projectWorkflow?.activeChapterId ?? chapterEditor?.chapter.frontmatter.id,
     chapterEditor,
     fileEditor,
+    storyBibleSnapshot: storyBibleBridge?.getSnapshot(),
     settings,
     onAgentRunChange: setAgentRun
   });

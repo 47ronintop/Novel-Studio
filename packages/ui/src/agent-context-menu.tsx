@@ -1,4 +1,4 @@
-import { AlertTriangle, Layers, RefreshCw, Scissors } from "lucide-react";
+import { AlertTriangle, FilePlus2, Layers, RefreshCw, Scissors } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { AgentPopover } from "./agent-popover.js";
@@ -25,6 +25,12 @@ const PRECISION_LABEL: Record<AgentContextPrecision, string> = {
   estimated: "估算",
   unknown: "未知"
 };
+
+const CONVENTIONS_STATUS_LABEL = {
+  available: "已载入",
+  created: "已创建",
+  existing: "已存在"
+} as const;
 
 /**
  * The composer's context-status control: a button that stays quiet in the normal state and only
@@ -76,12 +82,50 @@ export function AgentContextMenu(props: AgentContextMenuProps): ReactNode {
             ) : (
               control.sources.map((source) => (
                 <li key={source.refId}>
-                  <span className="ns-agent-context-source-label">{source.label}</span>
-                  <span className="ns-agent-context-source-detail">{source.detail}</span>
+                  <div className="ns-agent-context-source-main">
+                    <span className="ns-agent-context-source-label">{source.label}</span>
+                    {source.layerLabel === undefined ? null : (
+                      <span className="ns-agent-context-source-layer">{source.layerLabel}</span>
+                    )}
+                  </div>
+                  <div className="ns-agent-context-source-facts">
+                    <span className="ns-agent-context-source-detail">{source.detail}</span>
+                    {source.metadata === undefined || source.metadata.length === 0 ? null : (
+                      <span className="ns-agent-context-source-metadata">
+                        {source.metadata.join(" · ")}
+                      </span>
+                    )}
+                  </div>
                 </li>
               ))
             )}
           </ul>
+          {control.conventions === undefined ? null : (
+            <div className="ns-agent-context-conventions">
+              <p>
+                <span>项目约定</span>
+                <code>{control.conventions.relativePath}</code>
+                {control.conventions.status === "unknown" ? null : (
+                  <span>{CONVENTIONS_STATUS_LABEL[control.conventions.status]}</span>
+                )}
+              </p>
+              {control.conventions.errorMessage === undefined ? null : (
+                <p className="ns-agent-context-warning" role="alert">
+                  {control.conventions.errorMessage}
+                </p>
+              )}
+              {control.conventions.onCreate === undefined ? null : (
+                <button
+                  disabled={control.conventions.busy === true}
+                  onClick={() => control.conventions?.onCreate?.()}
+                  type="button"
+                >
+                  <FilePlus2 aria-hidden="true" size={13} />
+                  创建约定文件
+                </button>
+              )}
+            </div>
+          )}
           <div className="ns-agent-context-actions">
             {control.onRefresh === undefined ? null : (
               <button

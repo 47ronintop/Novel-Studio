@@ -210,6 +210,7 @@ export interface NovelStudioApi {
       readonly content: string;
       readonly expectedChecksum: string;
     }): Promise<Result<EngineeringTextFileSaveResult, UnifiedError>>;
+    createProjectConventions(): Promise<Result<ProjectConventionsCreateResult, UnifiedError>>;
   };
   creativeProjectFiles: {
     refresh(
@@ -412,6 +413,11 @@ export interface ProjectTextFileSelectionDto {
   /** POSIX-style path relative to the active workspace root. Absolute paths never cross IPC. */
   readonly relativePath?: string;
   readonly displayName?: string;
+}
+
+export interface ProjectConventionsCreateResult {
+  readonly relativePath: "AGENTS.md" | "conventions/writing.md";
+  readonly status: "created" | "existing";
 }
 
 export interface CreateCreativeProjectRequest {

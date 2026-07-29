@@ -28,9 +28,14 @@ import type {
   ModelReasoningStrengthControl,
   ModelReasoningStrengthValue,
   NovelStudioApi,
-  PlanArtifact
+  PlanArtifact,
+  ProjectConventionsCreateResult,
+  StoryBibleSnapshot
 } from "@novel-studio/application";
-import { reasoningStrengthForModel } from "@novel-studio/application";
+import {
+  findStoryBibleMentionSuggestions,
+  reasoningStrengthForModel
+} from "@novel-studio/application";
 import type {
   AgentComposerContextStatusControl,
   AgentComposerContextSourceRow,
@@ -76,6 +81,7 @@ export interface AgentRunBridgeContext {
   readonly activeChapterId?: string;
   readonly chapterEditor?: ChapterEditorProps;
   readonly fileEditor?: PlainFileEditorProps;
+  readonly storyBibleSnapshot?: StoryBibleSnapshot;
   readonly settings?: ModelSettingsPanelProps;
 }
 
@@ -154,6 +160,9 @@ interface BridgeState {
   readonly permissionPending: boolean;
   readonly permissionError: string | undefined;
   readonly planExecution: PlanExecutionRecord | undefined;
+  readonly conventionsCreatePending: boolean;
+  readonly conventionsCreateResult: ProjectConventionsCreateResult | undefined;
+  readonly conventionsCreateError: string | undefined;
 }
 
 export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
@@ -186,7 +195,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     permissionSummary: undefined,
     permissionPending: false,
     permissionError: undefined,
-    planExecution: undefined
+    planExecution: undefined,
+    conventionsCreatePending: false,
+    conventionsCreateResult: undefined,
+    conventionsCreateError: undefined
   };
   const listeners = new Set<() => void>();
   let approvalInFlight: Promise<AgentRunPanelProps> | undefined;
@@ -1385,9 +1397,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   }
 
   function addReferenceDraft(refId: string): void {
-    const ref = availableReferenceRefs(context, state.contextDraft).find(
-      (candidate) => candidate.refId === refId
-    );
+    const ref = [
+      ...availableReferenceRefs(context, state.contextDraft),
+      ...suggestedStoryBibleReferenceRefs(context, state.contextDraft, state.userRequest)
+    ].find((candidate) => candidate.refId === refId);
     if (ref === undefined) return;
     addReferenceValue(ref);
   }
@@ -1483,6 +1496,51 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       applyDraftResult(result, token);
       await previewBudget(token);
     });
+  }
+
+  function createProjectConventions(): void {
+    const create = api.workspace?.createProjectConventions;
+    const scope = context?.scope;
+    if (
+      create === undefined ||
+      scope === undefined ||
+      isStandaloneScope(scope) ||
+      state.conventionsCreatePending
+    ) {
+      return;
+    }
+    state = {
+      ...state,
+      conventionsCreatePending: true,
+      conventionsCreateError: undefined
+    };
+    notify();
+    void create()
+      .then((result) => {
+        if (context === undefined || !sameAgentScope(context.scope, scope)) return;
+        state = result.ok
+          ? {
+              ...state,
+              conventionsCreatePending: false,
+              conventionsCreateResult: result.value,
+              conventionsCreateError: undefined
+            }
+          : {
+              ...state,
+              conventionsCreatePending: false,
+              conventionsCreateError: result.error.message
+            };
+        notify();
+      })
+      .catch((error: unknown) => {
+        if (context === undefined || !sameAgentScope(context.scope, scope)) return;
+        state = {
+          ...state,
+          conventionsCreatePending: false,
+          conventionsCreateError: thrownErrorMessage(error)
+        };
+        notify();
+      });
   }
 
   /** Compact the live run's context. Only available while a run holds an active budget snapshot. */
@@ -1601,6 +1659,11 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     const references: AgentComposerReferenceControl = {
       chips: contextDraft.refs.map(refToChip),
       available: availableReferenceRefs(context, contextDraft).map(refToChip),
+      suggested: suggestedStoryBibleReferenceRefs(
+        context,
+        contextDraft,
+        state.userRequest
+      ).map(refToChip),
       onAdd: (refId) => addReferenceDraft(refId),
       onRemove: (refId) => removeReferenceDraft(refId),
       onPickFile: () => void pickProjectFile()
@@ -1644,6 +1707,17 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       snapshot.contextBudgetSnapshotId !== null;
     const automaticSources = automaticContextSourceRows(state.events);
     const automaticRefIds = new Set(automaticSources.map((source) => source.refId));
+    const conventionsSource = automaticSources.find(
+      (source) => source.sourceKind === "project_conventions"
+    );
+    const conventionsPath =
+      context?.workspaceKind === "engineeringWorkspace"
+        ? ("AGENTS.md" as const)
+        : ("conventions/writing.md" as const);
+    const conventionsStatus =
+      conventionsSource !== undefined
+        ? ("available" as const)
+        : (state.conventionsCreateResult?.status ?? "unknown");
     return {
       state: contextStatusState(),
       usageLabel: budgetUsageLabel(budget),
@@ -1652,6 +1726,21 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         ...automaticSources,
         ...contextDraft.refs.map(refToSource).filter((source) => !automaticRefIds.has(source.refId))
       ],
+      conventions: {
+        relativePath:
+          conventionsSource?.relativePath === "AGENTS.md" ||
+          conventionsSource?.relativePath === "conventions/writing.md"
+            ? conventionsSource.relativePath
+            : (state.conventionsCreateResult?.relativePath ?? conventionsPath),
+        status: conventionsStatus,
+        busy: state.conventionsCreatePending,
+        ...(state.conventionsCreateError === undefined
+          ? {}
+          : { errorMessage: state.conventionsCreateError }),
+        ...(conventionsStatus === "available" || state.conventionsCreateResult !== undefined
+          ? {}
+          : { onCreate: () => createProjectConventions() })
+      },
       ...(canCompact ? { onCompact: () => compactActiveContext() } : {}),
       ...(draftApi.refreshContextDraft === undefined
         ? {}
@@ -2104,7 +2193,10 @@ function resetRunState(state: BridgeState, scope?: AgentContextScope): BridgeSta
     permissionSummary: undefined,
     permissionPending: false,
     permissionError: undefined,
-    planExecution: undefined
+    planExecution: undefined,
+    conventionsCreatePending: false,
+    conventionsCreateResult: undefined,
+    conventionsCreateError: undefined
   };
 }
 
@@ -2625,7 +2717,40 @@ function automaticContextSourceRows(
     ) {
       continue;
     }
-    rows.push({ refId: value["refId"], label: value["label"], detail: value["detail"] });
+    const sourceKind = value["sourceKind"];
+    const metadata: string[] = [];
+    if (
+      typeof value["tokenCount"] === "number" &&
+      Number.isSafeInteger(value["tokenCount"]) &&
+      value["tokenCount"] >= 0
+    ) {
+      metadata.push(`${value["tokenCount"]} tokens`);
+    }
+    if (value["truncationRange"] === null) metadata.push("完整");
+    else if (typeof value["truncationRange"] === "object") metadata.push("已截断");
+    if (value["workspaceTrust"] === "trusted") metadata.push("受信任工作区");
+    else if (value["workspaceTrust"] === "untrusted") metadata.push("未受信任工作区");
+    if (value["instructionPolicy"] === "content_is_data_not_authority") {
+      metadata.push("内容仅作为数据");
+    }
+    if (
+      typeof value["sourceRevision"] === "number" &&
+      Number.isSafeInteger(value["sourceRevision"]) &&
+      value["sourceRevision"] >= 0
+    ) {
+      metadata.push(`修订 ${value["sourceRevision"]}`);
+    }
+    rows.push({
+      refId: value["refId"],
+      label: value["label"],
+      detail: value["detail"],
+      sourceKind,
+      layerLabel: sourceKind === "project_conventions" ? "约定层" : "工作区定向块",
+      ...(typeof value["relativePath"] === "string"
+        ? { relativePath: value["relativePath"] }
+        : {}),
+      ...(metadata.length === 0 ? {} : { metadata })
+    });
   }
   return rows;
 }
@@ -2664,6 +2789,30 @@ function availableReferenceRefs(
       ? candidates.filter((ref) => ref.kind !== "chapter" && ref.kind !== "story_bible")
       : candidates;
   return allowed.filter((ref) => !present.has(ref.refId));
+}
+
+function suggestedStoryBibleReferenceRefs(
+  context: AgentRunBridgeContext | undefined,
+  contextDraft: ContextDraft | undefined,
+  userRequest: string
+): ContextDraftRef[] {
+  if (
+    context === undefined ||
+    contextDraft === undefined ||
+    contextDraft.contextMode !== "writing" ||
+    context.storyBibleSnapshot === undefined ||
+    (context.scope !== undefined && isStandaloneScope(context.scope))
+  ) {
+    return [];
+  }
+  const present = new Set(contextDraft.refs.map((ref) => ref.refId));
+  return findStoryBibleMentionSuggestions({
+    snapshot: context.storyBibleSnapshot,
+    userRequest,
+    ...(context.chapterEditor === undefined
+      ? {}
+      : { currentChapterBody: context.chapterEditor.chapter.body })
+  }).filter((ref) => !present.has(ref.refId));
 }
 
 /** True when the latest compaction event for the run is a failure (no success has superseded it). */

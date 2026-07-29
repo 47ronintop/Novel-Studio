@@ -5,7 +5,7 @@ import {
   type ElectronApplication,
   type Page
 } from "@playwright/test";
-import { cp, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -171,7 +171,6 @@ test("sends profile-specific conventions and outlines in real workspace provider
   const modelRequests: Record<string, unknown>[] = [];
 
   await mkdir(join(engineeringRoot, "src"), { recursive: true });
-  await writeFile(join(engineeringRoot, "AGENTS.md"), "ENGINEERING_E2E_CONVENTION", "utf8");
   await writeFile(join(engineeringRoot, "src", "main.ts"), "export {};\n", "utf8");
 
   await cp(fixtureRoot, creativeRoot, { recursive: true });
@@ -214,6 +213,7 @@ test("sends profile-specific conventions and outlines in real workspace provider
       id: "asset-outline-e2e",
       type: "character",
       title: "Outline Character",
+      aliases: ["The Cartographer"],
       status: "active",
       summary: "WRITING_STORY_BIBLE_BODY_SECRET",
       createdAt: "2026-01-01T00:00:00.000Z",
@@ -275,6 +275,16 @@ test("sends profile-specific conventions and outlines in real workspace provider
     await openQueuedEngineeringWorkspace(page);
     await ensureAgentConversation(page);
     await configureLocalModel(page, baseUrl);
+    const sourceTrigger = page.getByLabel("会话输入区").getByTitle("查看来源");
+    await sourceTrigger.click();
+    const sourcePanel = page.getByRole("dialog", { name: "上下文用量" });
+    await sourcePanel.getByRole("button", { name: "创建约定文件" }).click();
+    await expect(sourcePanel).toContainText("已创建");
+    expect(await readFile(join(engineeringRoot, "AGENTS.md"), "utf8")).toBe(
+      "# Project conventions\n\n"
+    );
+    await writeFile(join(engineeringRoot, "AGENTS.md"), "ENGINEERING_E2E_CONVENTION", "utf8");
+    await sourcePanel.press("Escape");
     const engineeringRequest = "ENGINEERING_CONTEXT_E2E_REQUEST";
     await selectOperationMode(page, page.getByLabel("会话输入区"), "execution");
     await sendProviderRequest(page, engineeringRequest);
@@ -308,6 +318,20 @@ test("sends profile-specific conventions and outlines in real workspace provider
     await queueDirectorySelection(creativeApp, creativeRoot);
     await openAgentPanel(page);
     await configureLocalModel(page, baseUrl);
+
+    const writingComposer = page.getByLabel("会话输入区");
+    await writingComposer
+      .getByLabel("Agent 请求")
+      .fill("Ask The Cartographer to verify the route.");
+    const suggestedReferences = writingComposer.getByLabel("建议引用");
+    await expect(suggestedReferences).toContainText("Outline Character");
+    await expect(writingComposer.getByLabel("已选引用")).not.toContainText("Outline Character");
+    const providerRequestCountBeforeSuggestion = modelRequests.length;
+    await suggestedReferences
+      .locator('[data-suggested-reference="story_bible:asset-outline-e2e"]')
+      .click();
+    await expect(writingComposer.getByLabel("已选引用")).toContainText("Outline Character");
+    expect(modelRequests).toHaveLength(providerRequestCountBeforeSuggestion);
 
     const writingRequest = "WRITING_CONTEXT_E2E_REQUEST";
     await selectOperationMode(page, page.getByLabel("会话输入区"), "execution");
@@ -692,6 +716,11 @@ async function expectWorkspaceSourcePanel(
   await expect(sources).toContainText(input.outlineLabel);
   await expect(sources).toContainText("project_conventions");
   await expect(sources).toContainText("workspace_outline");
+  await expect(sources).toContainText("约定层");
+  await expect(sources).toContainText("工作区定向块");
+  await expect(sources).toContainText("受信任工作区");
+  await expect(sources).toContainText("内容仅作为数据");
+  await expect(sources).toContainText("tokens");
   await panel.press("Escape");
 }
 
@@ -733,7 +762,8 @@ function lastUserRequest(request: Record<string, unknown>): string {
     messages
       .filter((message) => message.role === "user")
       .findLast(
-        (message) => parseJsonObject(message.content)?.["kind"] !== "untrusted_project_data"
+        (message) =>
+          typeof parseJsonObject(message.content)?.["instructionPolicy"] !== "string"
       )?.content ?? ""
   );
 }

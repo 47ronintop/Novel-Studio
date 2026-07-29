@@ -60,6 +60,7 @@ export type {
   AiWritingSuggestionStreamOptions,
   CreateCreativeProjectRequest,
   NovelStudioApi,
+  ProjectConventionsCreateResult,
   ReadAgentPermissionSummaryQuery,
   ProjectDirectorySelectionDto,
   ProjectTextFileSelectionDto
@@ -194,12 +195,17 @@ export type {
   StoryBibleContextCandidate,
   StoryBibleContextCandidateOptions,
   StoryBibleEntityStatus,
+  StoryBibleMentionScanInput,
+  StoryBibleMentionSuggestion,
   StoryBibleRepositoryPort,
   StoryBibleSession,
   StoryBibleSessionOptions,
   StoryBibleSnapshot
 } from "./story-bible-session.js";
-export { createStoryBibleSession } from "./story-bible-session.js";
+export {
+  createStoryBibleSession,
+  findStoryBibleMentionSuggestions
+} from "./story-bible-session.js";
 export type { ModelProvider, ModelProviderCatalogEntry } from "./model-provider-catalog.js";
 export { MODEL_PROVIDER_CATALOG, isModelProvider } from "./model-provider-catalog.js";
 export type {

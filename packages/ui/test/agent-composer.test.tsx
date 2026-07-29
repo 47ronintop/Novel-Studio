@@ -50,6 +50,7 @@ describe("AgentComposer", () => {
       references: {
         chips: [{ refId: "chapter:ch-01", label: "第一章", kind: "chapter" }],
         available: [{ refId: "file:notes.md", label: "notes.md", kind: "project_file" }],
+        suggested: [],
         onAdd: vi.fn(),
         onRemove: vi.fn(),
         onPickFile: vi.fn()
@@ -463,12 +464,22 @@ describe("AgentComposer", () => {
       references: {
         chips: [{ refId: "chapter:ch-01", label: "第一章", kind: "chapter" }],
         available: [{ refId: "file:notes.md", label: "notes.md", kind: "project_file" }],
+        suggested: [{ refId: "story_bible:mira", label: "Mira", kind: "story_bible" }],
         onAdd,
         onRemove,
         onPickFile
       }
     });
     expect(host.querySelector('[aria-label="已选引用"]')?.textContent).toContain("第一章");
+    expect(onAdd).not.toHaveBeenCalled();
+    expect(host.querySelector('[aria-label="建议引用"]')?.textContent).toContain("Mira");
+    act(() =>
+      host
+        .querySelector<HTMLButtonElement>('[data-suggested-reference="story_bible:mira"]')
+        ?.click()
+    );
+    expect(onAdd).toHaveBeenCalledWith("story_bible:mira");
+    onAdd.mockClear();
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="添加引用与执行审批"]')?.click());
     act(() =>
       document.querySelector<HTMLButtonElement>('[data-reference-option="file:notes.md"]')?.click()
@@ -482,13 +493,29 @@ describe("AgentComposer", () => {
   });
 
   test("keeps context mode and legacy quick actions out while exposing context usage", () => {
+    const onCreateConventions = vi.fn();
     const { host } = renderComposer({
       availableContextModes: ["general_file"],
       contextStatus: {
         state: "heavy",
         usageLabel: "120k / 128k",
         precision: "estimated",
-        sources: [{ refId: "chapter:ch-01", label: "第一章", detail: "4k · 精确" }]
+        sources: [
+          {
+            refId: "project_conventions:AGENTS.md",
+            label: "AGENTS.md",
+            detail: "project_conventions · 42 tokens",
+            sourceKind: "project_conventions",
+            relativePath: "AGENTS.md",
+            layerLabel: "约定层",
+            metadata: ["42 tokens", "完整", "受信任工作区", "内容仅作为数据", "修订 0"]
+          }
+        ],
+        conventions: {
+          relativePath: "AGENTS.md",
+          status: "unknown",
+          onCreate: onCreateConventions
+        }
       },
       quickActions: [
         { id: "rewrite_selection", label: "改写当前选区", onSelect: vi.fn() },
@@ -505,7 +532,17 @@ describe("AgentComposer", () => {
     const contextPopover = document.querySelector<HTMLElement>('[aria-label="上下文用量"]');
     expect(contextPopover?.textContent).toContain("120k / 128k");
     expect(contextPopover?.parentElement?.classList).toContain("ns-agent-popover-layer");
-    expect(document.querySelector('[aria-label="上下文来源"]')?.textContent).toContain("第一章");
+    const sourceText = document.querySelector('[aria-label="上下文来源"]')?.textContent;
+    expect(sourceText).toContain("AGENTS.md");
+    expect(sourceText).toContain("约定层");
+    expect(sourceText).toContain("受信任工作区");
+    expect(sourceText).toContain("内容仅作为数据");
+    act(() =>
+      document
+        .querySelector<HTMLButtonElement>(".ns-agent-context-conventions > button")
+        ?.click()
+    );
+    expect(onCreateConventions).toHaveBeenCalledTimes(1);
     const css = readFileSync(join(process.cwd(), "packages", "ui", "src", "styles.css"), "utf8");
     expect(css).toMatch(
       /\.ns-agent-composer-surface \.ns-agent-context-popover-root\s*\{[^}]*grid-column:\s*3/s
@@ -527,6 +564,7 @@ describe("AgentComposer", () => {
       references: {
         chips: [{ refId: "chapter:ch-01", label: "第一章", kind: "chapter" }],
         available: [{ refId: "file:notes.md", label: "notes.md", kind: "project_file" }],
+        suggested: [],
         onAdd: vi.fn(),
         onRemove: vi.fn()
       }

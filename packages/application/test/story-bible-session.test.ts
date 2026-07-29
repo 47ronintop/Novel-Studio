@@ -4,6 +4,7 @@ import { err, ok, type UnifiedError, createUnifiedError } from "@novel-studio/sh
 
 import {
   createStoryBibleSession,
+  findStoryBibleMentionSuggestions,
   type MemoryRecord,
   type StoryBibleAsset,
   type StoryBibleRepositoryPort,
@@ -72,6 +73,71 @@ describe("StoryBibleSession", () => {
       return;
     }
     expect(candidates.value.map((candidate) => candidate.refId)).toEqual(["loc_capital"]);
+  });
+
+  test("finds active Story Bible title and alias mentions in stable asset order", () => {
+    const suggestions = findStoryBibleMentionSuggestions({
+      snapshot: {
+        characters: [
+          {
+            ...characterAsset(),
+            title: "Mira",
+            aliases: ["Captain Mira", "   "]
+          },
+          {
+            ...characterAsset(),
+            id: "chr_archived",
+            title: "Archived Hero",
+            status: "archived"
+          }
+        ],
+        worldAssets: [worldAsset()],
+        outline: {
+          ...timelineAsset(),
+          id: "outline_main",
+          type: "outline",
+          title: "Northern Passage"
+        },
+        memories: []
+      },
+      currentChapterBody: "CAPTAIN MIRA reaches the gate.",
+      userRequest: "Check the Capital and Northern Passage references."
+    });
+
+    expect(suggestions).toEqual([
+      {
+        kind: "story_bible",
+        refId: "story_bible:chr_hero",
+        assetId: "chr_hero",
+        label: "Mira"
+      },
+      {
+        kind: "story_bible",
+        refId: "story_bible:loc_capital",
+        assetId: "loc_capital",
+        label: "Capital"
+      },
+      {
+        kind: "story_bible",
+        refId: "story_bible:outline_main",
+        assetId: "outline_main",
+        label: "Northern Passage"
+      }
+    ]);
+  });
+
+  test("returns no mention suggestions when neither writing input names an asset", () => {
+    expect(
+      findStoryBibleMentionSuggestions({
+        snapshot: {
+          characters: [characterAsset()],
+          worldAssets: [worldAsset()],
+          memories: []
+        },
+        currentChapterBody: "An unnamed traveler waits.",
+        userRequest: "Continue the scene."
+      })
+    ).toEqual([]);
   });
 
   test("reports minimal Story Bible consistency conflicts with jump targets", async () => {

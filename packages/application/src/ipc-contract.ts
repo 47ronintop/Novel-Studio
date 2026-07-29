@@ -15,6 +15,7 @@ export const APPLICATION_IPC_CHANNELS = [
   "application:workspace:refresh-engineering-tree",
   "application:workspace:read-text-file",
   "application:workspace:save-text-file",
+  "application:workspace:create-project-conventions",
   "application:creative-project-files:refresh",
   "application:creative-project-files:read-text-file",
   "application:creative-project-files:save-text-file",

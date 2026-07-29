@@ -88,6 +88,7 @@ import type { ModelSecretStore } from "./model-runtime.js";
 import type { DesktopAgentRuntimeManager } from "./agent-runtime-manager.js";
 import type { WorkspaceActivationCoordinator } from "./workspace-activation.js";
 import { normalizeCreativeProjectFilePath } from "@novel-studio/repository";
+import { createDesktopProjectConventionsFile } from "./project-conventions-file.js";
 
 export type ApplicationIpcHandlers = {
   readonly [Channel in ApplicationIpcChannel]: (...args: readonly unknown[]) => Promise<unknown>;
@@ -447,6 +448,15 @@ export function createApplicationIpcHandlers(
       return request === undefined
         ? Promise.resolve(invalidWorkspaceRequest())
         : application.saveEngineeringTextFile(request);
+    },
+    "application:workspace:create-project-conventions": () => {
+      const active = options.agentRuntimeManager?.active();
+      return active?.scope === "workspace"
+        ? createDesktopProjectConventionsFile({
+            workspaceKind: active.binding.kind,
+            projectRoot: active.binding.contentRoot
+          })
+        : Promise.resolve(err(projectConventionsUnavailable()));
     },
     "application:creative-project-files:refresh": (input: unknown) => {
       const identity = toCreativeProjectFileIdentity(input);
@@ -2700,6 +2710,17 @@ function workspaceActivationUnavailable<T>(): Result<T, UnifiedError> {
       traceId: "desktop-workspace-ipc"
     })
   );
+}
+
+function projectConventionsUnavailable(): UnifiedError {
+  return createUnifiedError({
+    code: "PROJECT_CONVENTIONS_UNAVAILABLE",
+    category: "UserError",
+    message: "Project conventions require an active workspace.",
+    recoverability: "user-action",
+    suggestedAction: "Open a creative project or engineering workspace and try again.",
+    traceId: "desktop-project-conventions-file"
+  });
 }
 
 function directorySelectionFailed(): UnifiedError {

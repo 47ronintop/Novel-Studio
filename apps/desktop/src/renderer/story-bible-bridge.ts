@@ -20,6 +20,7 @@ import type {
 export interface StoryBibleBridge {
   getProps(): StoryBibleSummaryProps;
   getEditorProps(): StoryBibleEditorProps;
+  getSnapshot(): StoryBibleSnapshot;
   load(): Promise<StoryBibleSummaryProps>;
   selectKind(kind: StoryBibleEditorKind): StoryBibleEditorProps;
   selectEntry(entryId: string): StoryBibleEditorProps;
@@ -48,6 +49,7 @@ export function createStoryBibleBridge(api: NovelStudioApi): StoryBibleBridge {
   return {
     getProps: () => props,
     getEditorProps: () => editorProps,
+    getSnapshot: () => snapshot,
     async load() {
       snapshot = await unwrap(api.storyBible.load());
       consistency = toConsistencyProps(await unwrap(api.storyBible.buildConsistencyReport()));

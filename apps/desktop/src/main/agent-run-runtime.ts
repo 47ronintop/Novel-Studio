@@ -2319,6 +2319,7 @@ async function resolveContextDraftSources(
       sources.push({
         refId: ref.refId,
         sourceKind: "disk_file",
+        assetId: ref.assetId,
         content: JSON.stringify(asset.value),
         dirty: false
       });

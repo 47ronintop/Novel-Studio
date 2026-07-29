@@ -277,6 +277,7 @@ describe("AgentConversationBridge", () => {
       references: {
         chips: [{ refId: "chapter:ch-01", label: "第一章", kind: "chapter" as const }],
         available: [],
+        suggested: [],
         onAdd: onAddRef,
         onRemove: () => undefined
       },

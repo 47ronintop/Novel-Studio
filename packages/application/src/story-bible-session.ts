@@ -98,6 +98,19 @@ export interface StoryBibleContextCandidateOptions {
   readonly includeStatuses?: readonly StoryBibleEntityStatus[];
 }
 
+export interface StoryBibleMentionScanInput {
+  readonly snapshot: StoryBibleSnapshot;
+  readonly userRequest: string;
+  readonly currentChapterBody?: string;
+}
+
+export interface StoryBibleMentionSuggestion {
+  readonly kind: "story_bible";
+  readonly refId: string;
+  readonly assetId: string;
+  readonly label: string;
+}
+
 export interface StoryBibleSession {
   getSnapshot(): StoryBibleSnapshot | undefined;
   clearSnapshot?(): void;
@@ -191,6 +204,46 @@ export function createStoryBibleSession(options: StoryBibleSessionOptions = {}):
       };
     }
   };
+}
+
+/**
+ * Finds active Story Bible assets whose title or alias appears in the current writing input.
+ * The result is presentation-only until the user explicitly adds one of these refs to a draft.
+ */
+export function findStoryBibleMentionSuggestions(
+  input: StoryBibleMentionScanInput
+): readonly StoryBibleMentionSuggestion[] {
+  const texts = [input.currentChapterBody ?? "", input.userRequest]
+    .map((text) => text.toLowerCase())
+    .filter((text) => text.length > 0);
+  if (texts.length === 0) return [];
+
+  const assets = [
+    ...input.snapshot.characters,
+    ...input.snapshot.worldAssets,
+    ...(input.snapshot.outline === undefined ? [] : [input.snapshot.outline]),
+    ...(input.snapshot.timeline === undefined ? [] : [input.snapshot.timeline])
+  ];
+  const seenAssetIds = new Set<string>();
+  const suggestions: StoryBibleMentionSuggestion[] = [];
+
+  for (const asset of assets) {
+    if (asset.status !== "active" || seenAssetIds.has(asset.id)) continue;
+    const names = [asset.title, ...(asset.aliases ?? [])]
+      .map((name) => name.trim().toLowerCase())
+      .filter((name) => name.length > 0);
+    if (!names.some((name) => texts.some((text) => text.includes(name)))) continue;
+
+    seenAssetIds.add(asset.id);
+    suggestions.push({
+      kind: "story_bible",
+      refId: `story_bible:${asset.id}`,
+      assetId: asset.id,
+      label: asset.title
+    });
+  }
+
+  return suggestions;
 }
 
 function createConsistencyReport(snapshot: StoryBibleSnapshot): StoryBibleConsistencyReport {

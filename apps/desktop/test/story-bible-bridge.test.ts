@@ -64,6 +64,7 @@ describe("Story Bible bridge", () => {
       type: "memory.long-term",
       contextEligible: true
     });
+    expect(bridge.getSnapshot()).toBe(snapshot);
   });
 
   test("loads Story Bible consistency warnings into editor props", async () => {

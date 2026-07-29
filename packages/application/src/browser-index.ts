@@ -1,5 +1,6 @@
 export { MODEL_PROVIDER_CATALOG, isModelProvider } from "./model-provider-catalog.js";
 export { reasoningStrengthForModel } from "./model-discovery-session.js";
+export { findStoryBibleMentionSuggestions } from "./story-bible-session.js";
 export { createPluginSecurityAuditReport } from "./plugin-runtime-session.js";
 export {
   applyConfigWorkflowGraphLayoutEdit,

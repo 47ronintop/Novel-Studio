@@ -330,6 +330,26 @@ export function AgentComposer(props: AgentComposerProps) {
             ))}
           </ul>
         ) : null}
+        {!isStandaloneConversation && references !== undefined && references.suggested.length > 0 ? (
+          <div aria-label="建议引用" className="ns-agent-composer-suggested-references">
+            <span>建议引用</span>
+            <ul>
+              {references.suggested.map((ref) => (
+                <li key={ref.refId}>
+                  <button
+                    data-suggested-reference={ref.refId}
+                    disabled={draftDisabled}
+                    onClick={() => references.onAdd(ref.refId)}
+                    type="button"
+                  >
+                    <Plus aria-hidden="true" size={11} />
+                    <span>{ref.label}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         <div className="ns-agent-composer-toolbar">
           <div aria-label="会话工具栏" className="ns-agent-composer-footer" role="toolbar">
             {isStandaloneConversation ? null : (

@@ -10,7 +10,8 @@ import { STANDALONE_AGENT_CONTEXT_SCOPE } from "@novel-studio/agent-engine";
 import {
   createAgentRunDraftSession,
   type AgentRunDraftSessionRepository,
-  type NovelStudioApi
+  type NovelStudioApi,
+  type StoryBibleSnapshot
 } from "@novel-studio/application";
 import { createUnifiedError, err, ok, type JsonObject } from "@novel-studio/shared";
 import type { ChapterEditorProps, ModelSettingsPanelProps } from "@novel-studio/ui";
@@ -2772,6 +2773,58 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     );
   });
 
+  test("suggests mentioned Story Bible refs without adding them until the user clicks", async () => {
+    const { api } = createDraftApi();
+    const bridge = createAgentRunBridge(api);
+    const storyBibleSnapshot: StoryBibleSnapshot = {
+      characters: [
+        {
+          schemaVersion: "1.0",
+          id: "chr_mira",
+          type: "character",
+          title: "Mira",
+          aliases: ["Captain Mira"],
+          status: "active",
+          summary: "Captain of the city watch.",
+          createdAt: "2026-07-16T00:00:00.000Z",
+          updatedAt: "2026-07-16T00:00:00.000Z"
+        }
+      ],
+      worldAssets: [],
+      memories: []
+    };
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      storyBibleSnapshot,
+      settings: draftSettings
+    });
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.references).toBeDefined());
+
+    bridge.getComposerProps()?.onRequestChange("Ask Captain Mira about the gate.");
+    expect(bridge.getComposerProps()?.references?.suggested).toEqual([
+      {
+        refId: "story_bible:chr_mira",
+        label: "Mira",
+        kind: "story_bible"
+      }
+    ]);
+    expect(bridge.getComposerProps()?.references?.chips.map((chip) => chip.refId)).toEqual([
+      "chapter:chapter-01"
+    ]);
+
+    bridge.getComposerProps()?.references?.onAdd("story_bible:chr_mira");
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()?.references?.chips.map((chip) => chip.refId)).toEqual([
+        "chapter:chapter-01",
+        "story_bible:chr_mira"
+      ])
+    );
+    expect(bridge.getComposerProps()?.references?.suggested).toEqual([]);
+  });
+
   test("accepts only server-described automatic project context sources", async () => {
     const activeRun = { ...snapshot, status: "planning_model" as const };
     const { api, emitEvent } = createDraftApi({ activeRun });
@@ -2800,13 +2853,29 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
             sourceKind: "project_conventions",
             refId: "project_conventions:AGENTS.md",
             label: "AGENTS.md",
-            detail: "project_conventions"
+            detail: "project_conventions · 42 tokens",
+            relativePath: "AGENTS.md",
+            tokenCount: 42,
+            truncationRange: null,
+            workspaceTrust: "trusted",
+            instructionPolicy: "content_is_data_not_authority",
+            sourceRevision: 3
           },
           {
             sourceKind: "workspace_outline",
             refId: "workspace_outline:engineering",
             label: "Workspace outline (engineering)",
-            detail: "workspace_outline"
+            detail: "workspace_outline · 120 tokens · truncated",
+            tokenCount: 120,
+            truncationRange: {
+              unit: "unicode_code_point",
+              start: 0,
+              end: 400,
+              originalEnd: 900
+            },
+            workspaceTrust: "trusted",
+            instructionPolicy: "content_is_data_not_authority",
+            sourceRevision: 1
           },
           {
             sourceKind: "disk_file",
@@ -2823,16 +2892,56 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
         {
           refId: "project_conventions:AGENTS.md",
           label: "AGENTS.md",
-          detail: "project_conventions"
+          detail: "project_conventions · 42 tokens",
+          sourceKind: "project_conventions",
+          relativePath: "AGENTS.md",
+          layerLabel: "约定层",
+          metadata: ["42 tokens", "完整", "受信任工作区", "内容仅作为数据", "修订 3"]
         },
         {
           refId: "workspace_outline:engineering",
           label: "Workspace outline (engineering)",
-          detail: "workspace_outline"
+          detail: "workspace_outline · 120 tokens · truncated",
+          sourceKind: "workspace_outline",
+          layerLabel: "工作区定向块",
+          metadata: ["120 tokens", "已截断", "受信任工作区", "内容仅作为数据", "修订 1"]
         },
         { refId: "chapter:chapter-01", label: "第一章", detail: "章节" }
       ])
     );
+  });
+
+  test("creates the fixed conventions file without sending a renderer path", async () => {
+    const { api } = createDraftApi();
+    const createProjectConventions = vi.fn(async () =>
+      ok({ relativePath: "AGENTS.md" as const, status: "created" as const })
+    );
+    api.workspace = { createProjectConventions } as never;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      scope: engineeringScope("project-01"),
+      projectId: "project-01",
+      workspaceKind: "engineeringWorkspace",
+      conversationId: "conversation-01",
+      settings: draftSettings
+    });
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.contextStatus).toBeDefined());
+
+    expect(bridge.getComposerProps()?.contextStatus?.conventions).toMatchObject({
+      relativePath: "AGENTS.md",
+      status: "unknown"
+    });
+    bridge.getComposerProps()?.contextStatus?.conventions?.onCreate?.();
+
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()?.contextStatus?.conventions).toMatchObject({
+        relativePath: "AGENTS.md",
+        status: "created",
+        busy: false
+      })
+    );
+    expect(createProjectConventions).toHaveBeenCalledWith();
+    expect(bridge.getComposerProps()?.contextStatus?.conventions?.onCreate).toBeUndefined();
   });
 
   test("surfaces a heavy context and compacts the live run", async () => {

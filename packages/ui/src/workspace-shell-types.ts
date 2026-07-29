@@ -371,6 +371,7 @@ export interface AgentComposerReferenceChip {
 export interface AgentComposerReferenceControl {
   readonly chips: readonly AgentComposerReferenceChip[];
   readonly available: readonly AgentComposerReferenceChip[];
+  readonly suggested: readonly AgentComposerReferenceChip[];
   readonly onAdd: (refId: string) => void;
   readonly onRemove: (refId: string) => void;
   /** Opens the native project-file picker used by the + menu. */
@@ -383,6 +384,18 @@ export interface AgentComposerContextSourceRow {
   readonly refId: string;
   readonly label: string;
   readonly detail: string;
+  readonly sourceKind?: "project_conventions" | "workspace_outline";
+  readonly relativePath?: string;
+  readonly layerLabel?: string;
+  readonly metadata?: readonly string[];
+}
+
+export interface AgentComposerConventionsControl {
+  readonly relativePath: "AGENTS.md" | "conventions/writing.md";
+  readonly status: "unknown" | "created" | "existing" | "available";
+  readonly busy?: boolean;
+  readonly errorMessage?: string;
+  readonly onCreate?: (() => void) | undefined;
 }
 
 export interface AgentComposerContextStatusControl {
@@ -390,6 +403,7 @@ export interface AgentComposerContextStatusControl {
   readonly usageLabel: string;
   readonly precision: AgentContextPrecision;
   readonly sources: readonly AgentComposerContextSourceRow[];
+  readonly conventions?: AgentComposerConventionsControl;
   readonly onCompact?: (() => void) | undefined;
   readonly onRefresh?: (() => void) | undefined;
   readonly busy?: boolean | undefined;

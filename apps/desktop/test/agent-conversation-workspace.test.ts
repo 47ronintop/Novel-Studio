@@ -91,6 +91,7 @@ describe("agent conversation workspace presentation", () => {
           references: {
             chips: [],
             available: [],
+            suggested: [],
             onAdd: () => undefined,
             onRemove: () => undefined
           },

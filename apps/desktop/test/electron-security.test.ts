@@ -52,6 +52,7 @@ describe("Electron security baseline", () => {
       "application:workspace:refresh-engineering-tree",
       "application:workspace:read-text-file",
       "application:workspace:save-text-file",
+      "application:workspace:create-project-conventions",
       "application:creative-project-files:refresh",
       "application:creative-project-files:read-text-file",
       "application:creative-project-files:save-text-file",
@@ -160,6 +161,7 @@ describe("Electron security baseline", () => {
     expect(isApplicationIpcChannel("application:agent-conversation:search")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-conversation:delete")).toBe(true);
     expect(isApplicationIpcChannel("application:creative-project-files:refresh")).toBe(true);
+    expect(isApplicationIpcChannel("application:workspace:create-project-conventions")).toBe(true);
     expect(isApplicationIpcChannel("application:creative-project-files:read-text-file")).toBe(true);
     expect(isApplicationIpcChannel("application:creative-project-files:save-text-file")).toBe(true);
     expect(isApplicationIpcChannel("application:creative-project-files:execute-lifecycle")).toBe(
@@ -191,6 +193,7 @@ describe("Electron security baseline", () => {
     await api.project.chooseCreateParentDirectory();
     await api.workspace.chooseEngineeringDirectory();
     await api.workspace.chooseTextFile();
+    await api.workspace.createProjectConventions();
     await api.creativeProjectFiles.refresh({
       projectId: "project_security",
       workspaceId: "workspace_security"
@@ -333,6 +336,7 @@ describe("Electron security baseline", () => {
       "application:project:choose-create-parent-directory",
       "application:workspace:choose-engineering-directory",
       "application:workspace:choose-text-file",
+      "application:workspace:create-project-conventions",
       "application:creative-project-files:refresh",
       "application:creative-project-files:read-text-file",
       "application:creative-project-files:save-text-file",
