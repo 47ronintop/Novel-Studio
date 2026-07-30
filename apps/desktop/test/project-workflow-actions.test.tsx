@@ -508,7 +508,8 @@ describe("useProjectWorkflowActions", () => {
             cost: { amount: 0, currency: "USD", status: "unknown" }
           },
           createdAt: "2026-07-30T00:00:00.000Z"
-        }
+        },
+        review: { step: "candidates", selectedCandidateIds: [] }
       }
     };
     const storyBibleBridge = {
@@ -684,6 +685,120 @@ describe("useProjectWorkflowActions", () => {
 
     expect(editorStates).toEqual([preparingEditor, scanningEditor]);
   });
+
+  test("confirmation updates only Story Bible projections", async () => {
+    const result = {
+      analysisId: "analysis-confirm",
+      chapterIds: ["ch_01"],
+      candidates: [],
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        usageStatus: "missing" as const,
+        cost: { amount: 0, currency: "USD", status: "unknown" as const }
+      },
+      createdAt: "2026-07-30T00:00:00.000Z"
+    };
+    const change = {
+      changeId: "new:candidate-new",
+      operation: "create" as const,
+      assetId: "fsh_new",
+      title: "窗台徽章",
+      sourceCandidateIds: ["candidate-new"],
+      fields: [{ field: "title" as const, after: "窗台徽章" }],
+      evidenceAdditions: [],
+      status: "applying" as const
+    };
+    const applyingEditor: StoryBibleEditorProps = {
+      ...createStoryBibleEditor("applying"),
+      activeKind: "foreshadow",
+      foreshadowAnalysis: {
+        status: "review",
+        selectedChapterIds: ["ch_01"],
+        result,
+        review: {
+          step: "applying",
+          selectedCandidateIds: ["candidate-new"],
+          changes: [change]
+        }
+      }
+    };
+    const completedEditor: StoryBibleEditorProps = {
+      ...applyingEditor,
+      foreshadowAnalysis: {
+        status: "review",
+        selectedChapterIds: ["ch_01"],
+        result,
+        review: {
+          step: "results",
+          selectedCandidateIds: ["candidate-new"],
+          changes: [{ ...change, status: "succeeded" }],
+          outcome: "completed"
+        }
+      }
+    };
+    const summary: StoryBibleSummaryProps = { assets: [] };
+    const storyBibleBridge = {
+      beginForeshadowAnalysisSave: vi.fn(() => ({
+        editor: applyingEditor,
+        started: true,
+        token: 12
+      })),
+      saveForeshadowAnalysisChanges: vi.fn(async () => ({
+        editor: completedEditor,
+        applied: true
+      })),
+      getEditorProps: () => applyingEditor,
+      getProps: () => summary
+    } as unknown as StoryBibleBridge;
+    const editorStates: Array<StoryBibleEditorProps | undefined> = [];
+    const summaryStates: Array<StoryBibleSummaryProps | undefined> = [];
+    const setChapterEditor = vi.fn();
+    const setProjectWorkflow = vi.fn();
+    const setSettings = vi.fn();
+    const setShellState = vi.fn();
+    const setStudio = vi.fn();
+    let actions: ReturnType<typeof useProjectWorkflowActions> | undefined;
+
+    function Harness() {
+      actions = useProjectWorkflowActions({
+        api: undefined,
+        chapterBridge: undefined,
+        projectWorkflowBridge: undefined,
+        settingsBridge: undefined,
+        storyBibleBridge,
+        studioBridge: undefined,
+        setChapterEditor,
+        setProjectWorkflow,
+        setSettings,
+        setShellState,
+        setStoryBible: (next) => summaryStates.push(resolveState(next)),
+        setStoryBibleEditor: (next) => editorStates.push(resolveState(next)),
+        setStudio
+      });
+      return null;
+    }
+
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<Harness />));
+
+    await act(async () => {
+      actions?.handleConfirmForeshadowAnalysisChanges();
+      await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    });
+
+    expect(editorStates).toEqual([applyingEditor, completedEditor]);
+    expect(summaryStates).toEqual([summary]);
+    expect(setChapterEditor).not.toHaveBeenCalled();
+    expect(setProjectWorkflow).not.toHaveBeenCalled();
+    expect(setSettings).not.toHaveBeenCalled();
+    expect(setShellState).not.toHaveBeenCalled();
+    expect(setStudio).not.toHaveBeenCalled();
+    await expect(actions?.guardStoryBibleDraft()).resolves.toBe(false);
+  });
 });
 
 function createWorkflow(): ProjectWorkflowProps {
@@ -758,6 +873,11 @@ function createStoryBibleEditor(title: string): StoryBibleEditorProps {
     onForeshadowAnalysisOpen: () => undefined,
     onForeshadowAnalysisChapterToggle: () => undefined,
     onForeshadowAnalysisStart: () => undefined,
+    onForeshadowAnalysisCandidateToggle: () => undefined,
+    onForeshadowAnalysisPreview: () => undefined,
+    onForeshadowAnalysisBack: () => undefined,
+    onForeshadowAnalysisConfirm: () => undefined,
+    onForeshadowAnalysisRetryFailed: () => undefined,
     onForeshadowAnalysisClose: () => undefined
   };
 }

@@ -8,7 +8,10 @@ import type {
 } from "@novel-studio/application";
 import { createUnifiedError, err, hashForeshadowEvidence, ok } from "@novel-studio/shared";
 
-import { createStoryBibleBridge } from "../src/renderer/story-bible-bridge.js";
+import {
+  createStoryBibleBridge,
+  type StoryBibleBridge
+} from "../src/renderer/story-bible-bridge.js";
 
 const snapshot: StoryBibleSnapshot = {
   characters: [
@@ -1065,7 +1068,405 @@ describe("Story Bible bridge", () => {
       applied: false
     });
   });
+
+  test("previews selected candidates without writing and groups one target update", async () => {
+    const calls: string[] = [];
+    const baseApi = createApi(calls);
+    const result = analysisWithUpdateCandidate();
+    const bridge = createStoryBibleBridge(
+      {
+        ...baseApi,
+        storyBible: {
+          ...baseApi.storyBible,
+          detectForeshadows: async () => ok(result)
+        }
+      },
+      {
+        createAssetIdentity: () => "c".repeat(32),
+        now: () => "2026-07-30T12:00:00.000Z"
+      }
+    );
+    await enterForeshadowReview(bridge);
+
+    bridge.toggleForeshadowAnalysisCandidate("candidate-new");
+    bridge.toggleForeshadowAnalysisCandidate("candidate-progress");
+    const previewStart = bridge.beginForeshadowAnalysisPreview();
+    expect(previewStart.started).toBe(true);
+    if (previewStart.token === undefined) throw new Error("Expected a preview token.");
+    const preview = await bridge.prepareForeshadowAnalysisPreview(previewStart.token, [
+      "ch_01",
+      "ch_02"
+    ]);
+
+    expect(preview.applied).toBe(true);
+    expect(preview.editor.foreshadowAnalysis).toMatchObject({
+      status: "review",
+      review: {
+        step: "confirmation",
+        selectedCandidateIds: ["candidate-new", "candidate-progress"],
+        changes: [
+          {
+            changeId: "new:candidate-new",
+            operation: "create",
+            status: "pending"
+          },
+          {
+            changeId: "update:fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            operation: "update",
+            status: "pending"
+          }
+        ]
+      }
+    });
+    expect(calls.some((call) => call.startsWith("storyBible.saveAsset:"))).toBe(false);
+
+    bridge.backToForeshadowAnalysisCandidates();
+    bridge.closeForeshadowAnalysis();
+    expect(calls.some((call) => call.startsWith("storyBible.saveAsset:"))).toBe(false);
+  });
+
+  test("keeps successful confirmation changes out of failed-only retry", async () => {
+    const calls: string[] = [];
+    const baseApi = createApi(calls);
+    const originalSaveAsset = baseApi.storyBible.saveAsset;
+    const saveAttempts = new Map<string, number>();
+    const saveAsset = vi.fn<NovelStudioApi["storyBible"]["saveAsset"]>(async (asset) => {
+      const attempt = (saveAttempts.get(asset.id) ?? 0) + 1;
+      saveAttempts.set(asset.id, attempt);
+      if (asset.id === "fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" && attempt === 1) {
+        return err(
+          createUnifiedError({
+            code: "STORY_BIBLE_WRITE_FAILED",
+            message: "Target update failed.",
+            recoverability: "retryable",
+            suggestedAction: "Retry the failed change."
+          })
+        );
+      }
+      return originalSaveAsset(asset);
+    });
+    const bridge = createStoryBibleBridge(
+      {
+        ...baseApi,
+        storyBible: {
+          ...baseApi.storyBible,
+          detectForeshadows: async () => ok(analysisWithUpdateCandidate()),
+          saveAsset
+        }
+      },
+      {
+        createAssetIdentity: () => "d".repeat(32),
+        now: () => "2026-07-30T12:00:00.000Z"
+      }
+    );
+    await enterForeshadowReview(bridge);
+    bridge.toggleForeshadowAnalysisCandidate("candidate-new");
+    bridge.toggleForeshadowAnalysisCandidate("candidate-progress");
+    const previewStart = bridge.beginForeshadowAnalysisPreview();
+    if (previewStart.token === undefined) throw new Error("Expected a preview token.");
+    await bridge.prepareForeshadowAnalysisPreview(previewStart.token, ["ch_01", "ch_02"]);
+
+    const saveStart = bridge.beginForeshadowAnalysisSave(false);
+    expect(saveStart.started).toBe(true);
+    if (saveStart.token === undefined) throw new Error("Expected a save token.");
+    expect(bridge.selectKind("character").activeKind).toBe("foreshadow");
+    const partial = await bridge.saveForeshadowAnalysisChanges(saveStart.token);
+
+    expect(partial.applied).toBe(true);
+    expect(partial.editor.foreshadowAnalysis).toMatchObject({
+      status: "review",
+      review: {
+        step: "results",
+        outcome: "partial_failure",
+        changes: [
+          { changeId: "new:candidate-new", status: "succeeded" },
+          {
+            changeId: "update:fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            status: "failed",
+            errorMessage: "Target update failed."
+          }
+        ]
+      }
+    });
+    expect(saveAsset.mock.calls.map(([asset]) => asset.id)).toEqual([
+      `fsh_${"d".repeat(32)}`,
+      "fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ]);
+
+    const retryStart = bridge.beginForeshadowAnalysisSave(true);
+    expect(retryStart.started).toBe(true);
+    if (retryStart.token === undefined) throw new Error("Expected a retry token.");
+    const completed = await bridge.saveForeshadowAnalysisChanges(retryStart.token);
+
+    expect(completed.editor.foreshadowAnalysis).toMatchObject({
+      status: "review",
+      review: {
+        step: "results",
+        outcome: "completed",
+        changes: [
+          { changeId: "new:candidate-new", status: "succeeded" },
+          {
+            changeId: "update:fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            status: "succeeded"
+          }
+        ]
+      }
+    });
+    expect(saveAsset.mock.calls.map(([asset]) => asset.id)).toEqual([
+      `fsh_${"d".repeat(32)}`,
+      "fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ]);
+    expect(bridge.getEditorProps().entries).toContainEqual(
+      expect.objectContaining({ id: `fsh_${"d".repeat(32)}`, title: "Old key" })
+    );
+  });
+
+  test("plans updates from the latest snapshot and preserves external fields", async () => {
+    const calls: string[] = [];
+    const baseApi = createApi(calls);
+    const originalTarget = snapshot.foreshadows[0];
+    if (originalTarget === undefined) throw new Error("Expected a foreshadow fixture.");
+    const latestTarget = {
+      ...originalTarget,
+      externalRootField: { revision: 2 },
+      details: {
+        ...originalTarget.details,
+        externalDetailField: "keep-latest"
+      }
+    };
+    const latestSnapshot: StoryBibleSnapshot = {
+      ...snapshot,
+      foreshadows: [latestTarget]
+    };
+    let loadCount = 0;
+    const savedAssets: Array<StoryBibleSnapshot["foreshadows"][number]> = [];
+    const bridge = createStoryBibleBridge(
+      {
+        ...baseApi,
+        storyBible: {
+          ...baseApi.storyBible,
+          load: async () => ok(++loadCount === 1 ? snapshot : latestSnapshot),
+          detectForeshadows: async () => ok(analysisWithUpdateCandidate()),
+          saveAsset: async (asset) => {
+            if (asset.type === "foreshadow") savedAssets.push(asset);
+            return ok(asset);
+          }
+        }
+      },
+      { now: () => "2026-07-30T12:00:00.000Z" }
+    );
+    await enterForeshadowReview(bridge);
+    bridge.toggleForeshadowAnalysisCandidate("candidate-progress");
+    const previewStart = bridge.beginForeshadowAnalysisPreview();
+    if (previewStart.token === undefined) throw new Error("Expected a preview token.");
+    await bridge.prepareForeshadowAnalysisPreview(previewStart.token, ["ch_01", "ch_02"]);
+    const saveStart = bridge.beginForeshadowAnalysisSave(false);
+    if (saveStart.token === undefined) throw new Error("Expected a save token.");
+
+    await bridge.saveForeshadowAnalysisChanges(saveStart.token);
+
+    expect(savedAssets).toHaveLength(1);
+    expect(savedAssets[0]).toMatchObject({
+      id: latestTarget.id,
+      externalRootField: { revision: 2 },
+      details: {
+        externalDetailField: "keep-latest",
+        trackingStatus: "ready-to-payoff"
+      }
+    });
+  });
+
+  test("returns to candidate review when a target changes after preview", async () => {
+    const calls: string[] = [];
+    const baseApi = createApi(calls);
+    const originalTarget = snapshot.foreshadows[0];
+    if (originalTarget === undefined) throw new Error("Expected a foreshadow fixture.");
+    let currentSnapshot = snapshot;
+    const saveAsset = vi.fn<NovelStudioApi["storyBible"]["saveAsset"]>(async (asset) => ok(asset));
+    const bridge = createStoryBibleBridge({
+      ...baseApi,
+      storyBible: {
+        ...baseApi.storyBible,
+        load: async () => ok(currentSnapshot),
+        detectForeshadows: async () => ok(analysisWithUpdateCandidate()),
+        saveAsset
+      }
+    });
+    await enterForeshadowReview(bridge);
+    bridge.toggleForeshadowAnalysisCandidate("candidate-progress");
+    const previewStart = bridge.beginForeshadowAnalysisPreview();
+    if (previewStart.token === undefined) throw new Error("Expected a preview token.");
+    await bridge.prepareForeshadowAnalysisPreview(previewStart.token, ["ch_01", "ch_02"]);
+    currentSnapshot = {
+      ...snapshot,
+      foreshadows: [
+        {
+          ...originalTarget,
+          summary: "Agent changed this after preview.",
+          updatedAt: "2026-07-30T12:05:00.000Z"
+        }
+      ]
+    };
+    const saveStart = bridge.beginForeshadowAnalysisSave(false);
+    if (saveStart.token === undefined) throw new Error("Expected a save token.");
+
+    const completion = await bridge.saveForeshadowAnalysisChanges(saveStart.token);
+
+    expect(completion.applied).toBe(true);
+    expect(completion.editor.foreshadowAnalysis).toMatchObject({
+      status: "review",
+      review: {
+        step: "candidates",
+        selectedCandidateIds: ["candidate-progress"],
+        message: "故事资料已在预览后发生变化，请重新预览并确认。"
+      }
+    });
+    expect(saveAsset).not.toHaveBeenCalled();
+  });
+
+  test("does not save when a referenced chapter disappears after preview", async () => {
+    const calls: string[] = [];
+    const baseApi = createApi(calls);
+    const saveAsset = vi.fn<NovelStudioApi["storyBible"]["saveAsset"]>(async (asset) => ok(asset));
+    const bridge = createStoryBibleBridge({
+      ...baseApi,
+      project: {
+        ...baseApi.project,
+        listChapters: async () =>
+          ok([
+            {
+              id: "ch_01",
+              title: "Chapter 1",
+              order: 1,
+              status: "draft",
+              updatedAt: "2026-07-30T00:00:00.000Z"
+            }
+          ])
+      },
+      storyBible: {
+        ...baseApi.storyBible,
+        detectForeshadows: async () => ok(analysisWithUpdateCandidate()),
+        saveAsset
+      }
+    });
+    await enterForeshadowReview(bridge);
+    bridge.toggleForeshadowAnalysisCandidate("candidate-progress");
+    const previewStart = bridge.beginForeshadowAnalysisPreview();
+    if (previewStart.token === undefined) throw new Error("Expected a preview token.");
+    await bridge.prepareForeshadowAnalysisPreview(previewStart.token, ["ch_01", "ch_02"]);
+    const saveStart = bridge.beginForeshadowAnalysisSave(false);
+    if (saveStart.token === undefined) throw new Error("Expected a save token.");
+
+    const completion = await bridge.saveForeshadowAnalysisChanges(saveStart.token);
+
+    expect(completion.editor.foreshadowAnalysis).toMatchObject({
+      status: "review",
+      review: {
+        step: "candidates",
+        message: "候选引用的章节已发生变化，请重新识别后再保存。"
+      }
+    });
+    expect(saveAsset).not.toHaveBeenCalled();
+  });
+
+  test("keeps saved results visible when post-save refresh APIs reject", async () => {
+    for (const rejectedApi of ["load", "consistency"] as const) {
+      const calls: string[] = [];
+      const baseApi = createApi(calls);
+      const originalLoad = baseApi.storyBible.load;
+      const originalConsistency = baseApi.storyBible.buildConsistencyReport;
+      let loadCount = 0;
+      let consistencyCount = 0;
+      const bridge = createStoryBibleBridge(
+        {
+          ...baseApi,
+          storyBible: {
+            ...baseApi.storyBible,
+            load: async () => {
+              loadCount += 1;
+              if (rejectedApi === "load" && loadCount === 4) {
+                throw new Error("refresh load rejected");
+              }
+              return originalLoad();
+            },
+            buildConsistencyReport: async () => {
+              consistencyCount += 1;
+              if (rejectedApi === "consistency" && consistencyCount === 2) {
+                throw new Error("refresh consistency rejected");
+              }
+              return originalConsistency();
+            },
+            detectForeshadows: async () => ok(analysisResult)
+          }
+        },
+        {
+          createAssetIdentity: () => (rejectedApi === "load" ? "e" : "f").repeat(32),
+          now: () => "2026-07-30T12:00:00.000Z"
+        }
+      );
+      await enterForeshadowReview(bridge);
+      bridge.toggleForeshadowAnalysisCandidate("candidate-new");
+      const previewStart = bridge.beginForeshadowAnalysisPreview();
+      if (previewStart.token === undefined) throw new Error("Expected a preview token.");
+      await bridge.prepareForeshadowAnalysisPreview(previewStart.token, ["ch_01", "ch_02"]);
+      const saveStart = bridge.beginForeshadowAnalysisSave(false);
+      if (saveStart.token === undefined) throw new Error("Expected a save token.");
+
+      const completion = await bridge.saveForeshadowAnalysisChanges(saveStart.token);
+
+      expect(completion.applied).toBe(true);
+      expect(completion.editor.foreshadowAnalysis).toMatchObject({
+        status: "review",
+        review: {
+          step: "results",
+          outcome: "completed",
+          changes: [{ changeId: "new:candidate-new", status: "succeeded" }],
+          message:
+            rejectedApi === "load"
+              ? "变更已保存，但故事资料刷新失败；重新打开项目后可查看。"
+              : "变更已保存，但一致性检查刷新失败。"
+        }
+      });
+    }
+  });
 });
+
+async function enterForeshadowReview(bridge: StoryBibleBridge): Promise<void> {
+  await bridge.load("workspace-01");
+  bridge.selectKind("foreshadow");
+  bridge.openForeshadowAnalysis("ch_01");
+  const preparation = bridge.prepareForeshadowAnalysis();
+  if (preparation.token === undefined) throw new Error("Expected an analysis token.");
+  bridge.beginForeshadowAnalysis(preparation.token);
+  const completion = await bridge.detectForeshadows(preparation.token);
+  if (!completion.applied) throw new Error("Expected analysis results.");
+}
+
+function analysisWithUpdateCandidate(): ForeshadowAnalysisResultDto {
+  return {
+    ...analysisResult,
+    candidates: [
+      ...analysisResult.candidates,
+      {
+        candidateId: "candidate-progress",
+        kind: "progress",
+        targetForeshadowId: "fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        evidence: {
+          chapterId: "ch_02",
+          excerpt: "The archive lock matches the old key.",
+          excerptHash: "2".repeat(64)
+        },
+        reason: "The key now points to a specific locked archive.",
+        duplicateForeshadowIds: [],
+        suggested: {
+          trackingStatus: "ready-to-payoff",
+          summary: "The key is ready to open the archive."
+        }
+      }
+    ]
+  };
+}
 
 function createApi(
   calls: string[],
@@ -1119,7 +1520,15 @@ function createApi(
         throw new Error("not used");
       },
       listChapters: async () => {
-        throw new Error("not used");
+        return ok(
+          ["ch_01", "ch_02", "ch_03", "ch_05"].map((id, index) => ({
+            id,
+            title: `Chapter ${index + 1}`,
+            order: index + 1,
+            status: "draft" as const,
+            updatedAt: "2026-07-30T00:00:00.000Z"
+          }))
+        );
       },
       createChapter: async () => {
         throw new Error("not used");

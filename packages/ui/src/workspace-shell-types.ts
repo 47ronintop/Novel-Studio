@@ -10,6 +10,7 @@ import type {
   ApplicationCommand,
   ApplicationCommandId,
   DesktopShellState,
+  ForeshadowAnalysisEvidenceDto,
   ForeshadowAnalysisResultDto,
   ModelDiscoverySnapshot,
   ModelReasoningStrengthValue,
@@ -781,6 +782,57 @@ export interface StoryBibleChapterOption {
   readonly status: ChapterSummary["status"];
 }
 
+export type StoryBibleForeshadowChangeField =
+  | "title"
+  | "summary"
+  | "trackingStatus"
+  | "plantedChapterId"
+  | "plannedPayoffChapterId"
+  | "actualPayoffChapterId"
+  | "notes"
+  | "relatedEntityIds";
+
+export interface StoryBibleForeshadowFieldChange {
+  readonly field: StoryBibleForeshadowChangeField;
+  readonly before?: string;
+  readonly after: string;
+}
+
+export interface StoryBibleForeshadowChangeItem {
+  readonly changeId: string;
+  readonly operation: "create" | "update";
+  readonly assetId: string;
+  readonly title: string;
+  readonly sourceCandidateIds: readonly string[];
+  readonly fields: readonly StoryBibleForeshadowFieldChange[];
+  readonly evidenceAdditions: readonly ForeshadowAnalysisEvidenceDto[];
+  readonly status: "pending" | "applying" | "succeeded" | "failed";
+  readonly errorMessage?: string;
+}
+
+export type StoryBibleForeshadowReviewState =
+  | {
+      readonly step: "candidates";
+      readonly selectedCandidateIds: readonly string[];
+      readonly message?: string;
+    }
+  | {
+      readonly step: "preparing";
+      readonly selectedCandidateIds: readonly string[];
+    }
+  | {
+      readonly step: "confirmation" | "applying";
+      readonly selectedCandidateIds: readonly string[];
+      readonly changes: readonly StoryBibleForeshadowChangeItem[];
+    }
+  | {
+      readonly step: "results";
+      readonly selectedCandidateIds: readonly string[];
+      readonly changes: readonly StoryBibleForeshadowChangeItem[];
+      readonly outcome: "completed" | "partial_failure";
+      readonly message?: string;
+    };
+
 export type StoryBibleForeshadowAnalysisState =
   | {
       readonly status: "closed" | "selecting" | "preparing" | "scanning";
@@ -790,6 +842,7 @@ export type StoryBibleForeshadowAnalysisState =
       readonly status: "review";
       readonly selectedChapterIds: readonly string[];
       readonly result: ForeshadowAnalysisResultDto;
+      readonly review: StoryBibleForeshadowReviewState;
     }
   | {
       readonly status: "error";
@@ -841,6 +894,11 @@ export interface StoryBibleEditorProps {
   readonly onForeshadowAnalysisOpen: () => void;
   readonly onForeshadowAnalysisChapterToggle: (chapterId: string) => void;
   readonly onForeshadowAnalysisStart: () => void;
+  readonly onForeshadowAnalysisCandidateToggle: (candidateId: string) => void;
+  readonly onForeshadowAnalysisPreview: () => void;
+  readonly onForeshadowAnalysisBack: () => void;
+  readonly onForeshadowAnalysisConfirm: () => void;
+  readonly onForeshadowAnalysisRetryFailed: () => void;
   readonly onForeshadowAnalysisClose: () => void;
 }
 

@@ -23,6 +23,7 @@ import type {
   StoryBibleEditorDraftFor,
   StoryBibleEditorEntry,
   StoryBibleEditorFilters,
+  StoryBibleForeshadowChangeItem,
   StoryBibleForeshadowAnalysisState,
   StoryBibleEditorKind,
   StoryBibleEditorProps,
@@ -32,6 +33,11 @@ import type {
   StoryBibleSummaryAsset,
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
+
+import {
+  createForeshadowConfirmationPlan,
+  type ForeshadowConfirmationPlan
+} from "./foreshadow-confirmation-plan.js";
 
 export interface StoryBibleBridge {
   getProps(): StoryBibleSummaryProps;
@@ -59,6 +65,15 @@ export interface StoryBibleBridge {
   cancelForeshadowAnalysisPreparation(token: number): ForeshadowAnalysisTransition;
   failForeshadowAnalysisPreparation(token: number, message: string): ForeshadowAnalysisTransition;
   detectForeshadows(token: number): Promise<ForeshadowAnalysisTransition>;
+  toggleForeshadowAnalysisCandidate(candidateId: string): StoryBibleEditorProps;
+  beginForeshadowAnalysisPreview(): ForeshadowAnalysisStart;
+  prepareForeshadowAnalysisPreview(
+    token: number,
+    chapterIdsInOrder: readonly string[]
+  ): Promise<ForeshadowAnalysisTransition>;
+  backToForeshadowAnalysisCandidates(): StoryBibleEditorProps;
+  beginForeshadowAnalysisSave(retryFailedOnly: boolean): ForeshadowAnalysisStart;
+  saveForeshadowAnalysisChanges(token: number): Promise<ForeshadowAnalysisTransition>;
   closeForeshadowAnalysis(): StoryBibleEditorProps;
   beginSave(): StoryBibleEditorProps;
   saveDraft(options?: StoryBibleSaveOptions): Promise<StoryBibleEditorProps>;
@@ -72,6 +87,7 @@ export interface ForeshadowAnalysisPreparation {
 export interface ForeshadowAnalysisStart {
   readonly editor: StoryBibleEditorProps;
   readonly started: boolean;
+  readonly token?: number;
 }
 
 export interface ForeshadowAnalysisTransition {
@@ -124,6 +140,7 @@ export function createStoryBibleBridge(
   let snapshotBinding: StoryBibleSnapshotBinding | undefined;
   let loadGeneration = 0;
   let foreshadowAnalysisGeneration = 0;
+  let foreshadowConfirmationPlan: ForeshadowConfirmationPlan | undefined;
   let consistency: StoryBibleConsistencyProps | undefined;
   let baselineDraft = emptyDraft("character");
   let editorState: StoryBibleEditorState = {
@@ -174,7 +191,9 @@ export function createStoryBibleBridge(
       return props;
     },
     selectKind(kind) {
+      if (isForeshadowAnalysisApplying(editorState.foreshadowAnalysis)) return editorProps;
       foreshadowAnalysisGeneration += 1;
+      foreshadowConfirmationPlan = undefined;
       baselineDraft = emptyDraft(kind);
       editorState = {
         ...editorState,
@@ -191,6 +210,7 @@ export function createStoryBibleBridge(
       return publishEditor();
     },
     selectEntry(entryId) {
+      if (isForeshadowAnalysisApplying(editorState.foreshadowAnalysis)) return editorProps;
       const entries = createEditorEntries(snapshot);
       let activeTimelineEventId: string | undefined;
       let entry = entries.find((candidate) => candidate.id === entryId);
@@ -207,6 +227,7 @@ export function createStoryBibleBridge(
       }
 
       foreshadowAnalysisGeneration += 1;
+      foreshadowConfirmationPlan = undefined;
       baselineDraft = draftFromEntry(entry);
       editorState = {
         ...editorState,
@@ -223,6 +244,7 @@ export function createStoryBibleBridge(
       return publishEditor();
     },
     beginCreate(kind, assetType) {
+      if (isForeshadowAnalysisApplying(editorState.foreshadowAnalysis)) return editorProps;
       if (kind === "world" && assetType === undefined) {
         throw new Error("A world asset type is required before creating a world draft.");
       }
@@ -230,6 +252,7 @@ export function createStoryBibleBridge(
         throw new Error("World asset types can only be used to create world drafts.");
       }
       foreshadowAnalysisGeneration += 1;
+      foreshadowConfirmationPlan = undefined;
       baselineDraft = emptyDraft(kind, assetType);
       editorState = {
         ...editorState,
@@ -246,7 +269,9 @@ export function createStoryBibleBridge(
       return publishEditor();
     },
     cancelDraft() {
+      if (isForeshadowAnalysisApplying(editorState.foreshadowAnalysis)) return editorProps;
       foreshadowAnalysisGeneration += 1;
+      foreshadowConfirmationPlan = undefined;
       baselineDraft = emptyDraft(editorState.activeKind);
       editorState = {
         ...editorState,
@@ -284,6 +309,7 @@ export function createStoryBibleBridge(
     },
     openForeshadowAnalysis(defaultChapterId) {
       foreshadowAnalysisGeneration += 1;
+      foreshadowConfirmationPlan = undefined;
       editorState = {
         ...editorState,
         foreshadowAnalysis: {
@@ -398,7 +424,12 @@ export function createStoryBibleBridge(
         editorState = {
           ...editorState,
           foreshadowAnalysis: result.ok
-            ? { status: "review", selectedChapterIds, result: result.value }
+            ? {
+                status: "review",
+                selectedChapterIds,
+                result: result.value,
+                review: { step: "candidates", selectedCandidateIds: [] }
+              }
             : {
                 status: "error",
                 selectedChapterIds,
@@ -420,8 +451,408 @@ export function createStoryBibleBridge(
       }
       return { editor: publishEditor(), applied: true };
     },
-    closeForeshadowAnalysis() {
+    toggleForeshadowAnalysisCandidate(candidateId) {
+      const analysis = editorState.foreshadowAnalysis;
+      if (
+        analysis.status !== "review" ||
+        analysis.review.step !== "candidates" ||
+        !analysis.result.candidates.some((candidate) => candidate.candidateId === candidateId)
+      ) {
+        return editorProps;
+      }
+      const selectedCandidateIds = analysis.review.selectedCandidateIds.includes(candidateId)
+        ? analysis.review.selectedCandidateIds.filter((selectedId) => selectedId !== candidateId)
+        : [...analysis.review.selectedCandidateIds, candidateId];
+      editorState = {
+        ...editorState,
+        foreshadowAnalysis: {
+          ...analysis,
+          review: { step: "candidates", selectedCandidateIds }
+        }
+      };
+      return publishEditor();
+    },
+    beginForeshadowAnalysisPreview() {
+      const analysis = editorState.foreshadowAnalysis;
+      if (analysis.status !== "review" || analysis.review.step !== "candidates") {
+        return { editor: editorProps, started: false };
+      }
+      if (analysis.review.selectedCandidateIds.length === 0) {
+        editorState = {
+          ...editorState,
+          foreshadowAnalysis: {
+            ...analysis,
+            review: {
+              step: "candidates",
+              selectedCandidateIds: [],
+              message: "请至少选择一条伏笔候选。"
+            }
+          }
+        };
+        return { editor: publishEditor(), started: false };
+      }
+      const token = ++foreshadowAnalysisGeneration;
+      editorState = {
+        ...editorState,
+        foreshadowAnalysis: {
+          ...analysis,
+          review: {
+            step: "preparing",
+            selectedCandidateIds: analysis.review.selectedCandidateIds
+          }
+        }
+      };
+      return { editor: publishEditor(), started: true, token };
+    },
+    async prepareForeshadowAnalysisPreview(token, chapterIdsInOrder) {
+      const analysis = editorState.foreshadowAnalysis;
+      if (
+        token !== foreshadowAnalysisGeneration ||
+        analysis.status !== "review" ||
+        analysis.review.step !== "preparing"
+      ) {
+        return { editor: editorProps, applied: false };
+      }
+      const workspaceId = snapshotBinding?.workspaceId;
+      let latestSnapshot: StoryBibleSnapshot;
+      try {
+        const loaded = await api.storyBible.load();
+        if (token !== foreshadowAnalysisGeneration) {
+          return { editor: editorProps, applied: false };
+        }
+        if (!loaded.ok) {
+          foreshadowConfirmationPlan = undefined;
+          editorState = {
+            ...editorState,
+            foreshadowAnalysis: {
+              ...analysis,
+              review: {
+                step: "candidates",
+                selectedCandidateIds: analysis.review.selectedCandidateIds,
+                message: "无法读取最新故事资料，请稍后重试。"
+              }
+            }
+          };
+          return { editor: publishEditor(), applied: true };
+        }
+        latestSnapshot = loaded.value;
+      } catch {
+        if (token !== foreshadowAnalysisGeneration) {
+          return { editor: editorProps, applied: false };
+        }
+        foreshadowConfirmationPlan = undefined;
+        editorState = {
+          ...editorState,
+          foreshadowAnalysis: {
+            ...analysis,
+            review: {
+              step: "candidates",
+              selectedCandidateIds: analysis.review.selectedCandidateIds,
+              message: "无法读取最新故事资料，请稍后重试。"
+            }
+          }
+        };
+        return { editor: publishEditor(), applied: true };
+      }
+      snapshot = latestSnapshot;
+      snapshotBinding = workspaceId === undefined ? undefined : { workspaceId, snapshot };
+      props = toProps(snapshot);
+      const plan = await createForeshadowConfirmationPlan({
+        candidates: analysis.result.candidates,
+        selectedCandidateIds: analysis.review.selectedCandidateIds,
+        foreshadows: snapshot.foreshadows,
+        chapterIdsInOrder,
+        createAssetIdentity,
+        now
+      });
+      if (token !== foreshadowAnalysisGeneration) {
+        return { editor: editorProps, applied: false };
+      }
+      if (!plan.ok) {
+        foreshadowConfirmationPlan = undefined;
+        editorState = {
+          ...editorState,
+          foreshadowAnalysis: {
+            ...analysis,
+            review: {
+              step: "candidates",
+              selectedCandidateIds: analysis.review.selectedCandidateIds,
+              message: plan.message
+            }
+          }
+        };
+        return { editor: publishEditor(), applied: true };
+      }
+      foreshadowConfirmationPlan = plan.value;
+      editorState = {
+        ...editorState,
+        foreshadowAnalysis: {
+          ...analysis,
+          review: {
+            step: "confirmation",
+            selectedCandidateIds: analysis.review.selectedCandidateIds,
+            changes: plan.value.operations.map((operation) => operation.preview)
+          }
+        }
+      };
+      return { editor: publishEditor(), applied: true };
+    },
+    backToForeshadowAnalysisCandidates() {
+      const analysis = editorState.foreshadowAnalysis;
+      if (analysis.status !== "review" || analysis.review.step !== "confirmation") {
+        return editorProps;
+      }
       foreshadowAnalysisGeneration += 1;
+      foreshadowConfirmationPlan = undefined;
+      editorState = {
+        ...editorState,
+        foreshadowAnalysis: {
+          ...analysis,
+          review: {
+            step: "candidates",
+            selectedCandidateIds: analysis.review.selectedCandidateIds
+          }
+        }
+      };
+      return publishEditor();
+    },
+    beginForeshadowAnalysisSave(retryFailedOnly) {
+      const analysis = editorState.foreshadowAnalysis;
+      if (analysis.status !== "review" || foreshadowConfirmationPlan === undefined) {
+        return { editor: editorProps, started: false };
+      }
+      const changes = changesToApply(analysis, retryFailedOnly);
+      if (changes === undefined || !changes.some((change) => change.status === "applying")) {
+        return { editor: editorProps, started: false };
+      }
+      const token = ++foreshadowAnalysisGeneration;
+      editorState = {
+        ...editorState,
+        foreshadowAnalysis: {
+          ...analysis,
+          review: {
+            step: "applying",
+            selectedCandidateIds: analysis.review.selectedCandidateIds,
+            changes
+          }
+        }
+      };
+      return { editor: publishEditor(), started: true, token };
+    },
+    async saveForeshadowAnalysisChanges(token) {
+      const analysis = editorState.foreshadowAnalysis;
+      const plan = foreshadowConfirmationPlan;
+      if (
+        token !== foreshadowAnalysisGeneration ||
+        analysis.status !== "review" ||
+        analysis.review.step !== "applying" ||
+        plan === undefined
+      ) {
+        return { editor: editorProps, applied: false };
+      }
+      let changes = [...analysis.review.changes];
+      const workspaceId = snapshotBinding?.workspaceId;
+      const failSavePreparation = (message: string): ForeshadowAnalysisTransition => {
+        changes = failApplyingForeshadowChanges(changes, message);
+        editorState = {
+          ...editorState,
+          foreshadowAnalysis: {
+            ...analysis,
+            review: {
+              step: "results",
+              selectedCandidateIds: analysis.review.selectedCandidateIds,
+              changes,
+              outcome: "partial_failure"
+            }
+          }
+        };
+        return { editor: publishEditor(), applied: true };
+      };
+      let latestChapterIds: ReadonlySet<string>;
+      try {
+        const chapters = await api.project.listChapters();
+        if (token !== foreshadowAnalysisGeneration) {
+          return { editor: editorProps, applied: false };
+        }
+        if (!chapters.ok) {
+          return failSavePreparation("无法读取最新章节目录，本次未保存；请重试。");
+        }
+        latestChapterIds = new Set(chapters.value.map((chapter) => chapter.id));
+      } catch {
+        if (token !== foreshadowAnalysisGeneration) {
+          return { editor: editorProps, applied: false };
+        }
+        return failSavePreparation("无法读取最新章节目录，本次未保存；请重试。");
+      }
+      if (plan.referencedChapterIds.some((chapterId) => !latestChapterIds.has(chapterId))) {
+        if (!changes.some((change) => change.status === "succeeded")) {
+          foreshadowAnalysisGeneration += 1;
+          foreshadowConfirmationPlan = undefined;
+          editorState = {
+            ...editorState,
+            foreshadowAnalysis: {
+              ...analysis,
+              review: {
+                step: "candidates",
+                selectedCandidateIds: analysis.review.selectedCandidateIds,
+                message: "候选引用的章节已发生变化，请重新识别后再保存。"
+              }
+            }
+          };
+          return { editor: publishEditor(), applied: true };
+        }
+        return failSavePreparation("候选引用的章节已发生变化，请重新识别后再保存。");
+      }
+      let latestSnapshot: StoryBibleSnapshot;
+      try {
+        const loaded = await api.storyBible.load();
+        if (token !== foreshadowAnalysisGeneration) {
+          return { editor: editorProps, applied: false };
+        }
+        if (!loaded.ok) {
+          return failSavePreparation("无法读取最新故事资料，本次未保存；请重试。");
+        }
+        latestSnapshot = loaded.value;
+      } catch {
+        if (token !== foreshadowAnalysisGeneration) {
+          return { editor: editorProps, applied: false };
+        }
+        return failSavePreparation("无法读取最新故事资料，本次未保存；请重试。");
+      }
+
+      snapshot = latestSnapshot;
+      snapshotBinding = workspaceId === undefined ? undefined : { workspaceId, snapshot };
+      props = toProps(snapshot);
+      const conflictingChangeIds = new Set(
+        plan.operations
+          .filter((operation) => {
+            const change = changes.find((item) => item.changeId === operation.changeId);
+            return (
+              change?.status === "applying" &&
+              foreshadowOperationHasConflict(operation, latestSnapshot.foreshadows)
+            );
+          })
+          .map((operation) => operation.changeId)
+      );
+      if (
+        conflictingChangeIds.size > 0 &&
+        !changes.some((change) => change.status === "succeeded")
+      ) {
+        foreshadowAnalysisGeneration += 1;
+        foreshadowConfirmationPlan = undefined;
+        editorState = {
+          ...editorState,
+          foreshadowAnalysis: {
+            ...analysis,
+            review: {
+              step: "candidates",
+              selectedCandidateIds: analysis.review.selectedCandidateIds,
+              message: "故事资料已在预览后发生变化，请重新预览并确认。"
+            }
+          }
+        };
+        return { editor: publishEditor(), applied: true };
+      }
+      for (const changeId of conflictingChangeIds) {
+        const change = changes.find((item) => item.changeId === changeId);
+        if (change === undefined) continue;
+        changes = replaceForeshadowChange(changes, changeId, {
+          ...change,
+          status: "failed",
+          errorMessage: "目标伏笔已在预览后发生变化，请重新识别后再保存。"
+        });
+      }
+
+      let anySucceeded = false;
+      for (const operation of plan.operations) {
+        const change = changes.find((item) => item.changeId === operation.changeId);
+        if (change?.status !== "applying") continue;
+        try {
+          const saved = await api.storyBible.saveAsset(operation.asset);
+          if (token !== foreshadowAnalysisGeneration) {
+            return { editor: editorProps, applied: false };
+          }
+          changes = replaceForeshadowChange(changes, operation.changeId, {
+            ...change,
+            status: saved.ok ? "succeeded" : "failed",
+            ...(saved.ok ? {} : { errorMessage: saved.error.message })
+          });
+          anySucceeded ||= saved.ok;
+        } catch {
+          if (token !== foreshadowAnalysisGeneration) {
+            return { editor: editorProps, applied: false };
+          }
+          changes = replaceForeshadowChange(changes, operation.changeId, {
+            ...change,
+            status: "failed",
+            errorMessage: "保存伏笔变更失败，请重试。"
+          });
+        }
+      }
+
+      let refreshMessage: string | undefined;
+      if (anySucceeded) {
+        try {
+          const loaded = await api.storyBible.load();
+          if (token !== foreshadowAnalysisGeneration) {
+            return { editor: editorProps, applied: false };
+          }
+          if (loaded.ok) {
+            snapshot = loaded.value;
+            snapshotBinding = workspaceId === undefined ? undefined : { workspaceId, snapshot };
+            props = toProps(snapshot);
+            try {
+              const report = await api.storyBible.buildConsistencyReport();
+              if (token !== foreshadowAnalysisGeneration) {
+                return { editor: editorProps, applied: false };
+              }
+              if (report.ok) {
+                consistency = toConsistencyProps(report.value);
+              } else {
+                refreshMessage = "变更已保存，但一致性检查刷新失败。";
+              }
+            } catch {
+              if (token !== foreshadowAnalysisGeneration) {
+                return { editor: editorProps, applied: false };
+              }
+              refreshMessage = "变更已保存，但一致性检查刷新失败。";
+            }
+          } else {
+            refreshMessage = "变更已保存，但故事资料刷新失败；重新打开项目后可查看。";
+          }
+        } catch {
+          if (token !== foreshadowAnalysisGeneration) {
+            return { editor: editorProps, applied: false };
+          }
+          refreshMessage = "变更已保存，但故事资料刷新失败；重新打开项目后可查看。";
+        }
+      }
+
+      const outcome = changes.every((change) => change.status === "succeeded")
+        ? "completed"
+        : "partial_failure";
+      editorState = {
+        ...editorState,
+        foreshadowAnalysis: {
+          ...analysis,
+          review: {
+            step: "results",
+            selectedCandidateIds: analysis.review.selectedCandidateIds,
+            changes,
+            outcome,
+            ...(refreshMessage === undefined ? {} : { message: refreshMessage })
+          }
+        }
+      };
+      return { editor: publishEditor(), applied: true };
+    },
+    closeForeshadowAnalysis() {
+      const analysis = editorState.foreshadowAnalysis;
+      if (analysis.status === "review" && analysis.review.step === "applying") {
+        return editorProps;
+      }
+      foreshadowAnalysisGeneration += 1;
+      foreshadowConfirmationPlan = undefined;
       editorState = {
         ...editorState,
         foreshadowAnalysis: closedForeshadowAnalysis()
@@ -525,6 +956,7 @@ export function createStoryBibleBridge(
 
   function reset(): void {
     foreshadowAnalysisGeneration += 1;
+    foreshadowConfirmationPlan = undefined;
     snapshot = emptySnapshot();
     snapshotBinding = undefined;
     consistency = undefined;
@@ -545,8 +977,65 @@ export function createStoryBibleBridge(
   }
 }
 
+function changesToApply(
+  analysis: Extract<StoryBibleForeshadowAnalysisState, { readonly status: "review" }>,
+  retryFailedOnly: boolean
+): readonly StoryBibleForeshadowChangeItem[] | undefined {
+  if (!retryFailedOnly && analysis.review.step === "confirmation") {
+    return analysis.review.changes.map(markForeshadowChangeApplying);
+  }
+  if (
+    retryFailedOnly &&
+    analysis.review.step === "results" &&
+    analysis.review.outcome === "partial_failure"
+  ) {
+    return analysis.review.changes.map((change) =>
+      change.status === "failed" ? markForeshadowChangeApplying(change) : change
+    );
+  }
+  return undefined;
+}
+
+function markForeshadowChangeApplying(
+  change: StoryBibleForeshadowChangeItem
+): StoryBibleForeshadowChangeItem {
+  const { errorMessage: _errorMessage, ...rest } = change;
+  void _errorMessage;
+  return { ...rest, status: "applying" };
+}
+
+function replaceForeshadowChange(
+  changes: readonly StoryBibleForeshadowChangeItem[],
+  changeId: string,
+  replacement: StoryBibleForeshadowChangeItem
+): StoryBibleForeshadowChangeItem[] {
+  return changes.map((change) => (change.changeId === changeId ? replacement : change));
+}
+
+function failApplyingForeshadowChanges(
+  changes: readonly StoryBibleForeshadowChangeItem[],
+  errorMessage: string
+): StoryBibleForeshadowChangeItem[] {
+  return changes.map((change) =>
+    change.status === "applying" ? { ...change, status: "failed", errorMessage } : change
+  );
+}
+
+function foreshadowOperationHasConflict(
+  operation: ForeshadowConfirmationPlan["operations"][number],
+  latestForeshadows: readonly ForeshadowAsset[]
+): boolean {
+  const latest = latestForeshadows.find((asset) => asset.id === operation.asset.id);
+  if (operation.baseAsset === undefined) return latest !== undefined;
+  return latest === undefined || JSON.stringify(latest) !== JSON.stringify(operation.baseAsset);
+}
+
 function closedForeshadowAnalysis(): StoryBibleForeshadowAnalysisState {
   return { status: "closed", selectedChapterIds: [] };
+}
+
+function isForeshadowAnalysisApplying(analysis: StoryBibleForeshadowAnalysisState): boolean {
+  return analysis.status === "review" && analysis.review.step === "applying";
 }
 
 function emptySnapshot(): StoryBibleSnapshot {
@@ -654,6 +1143,11 @@ function createEditorProps(
     onForeshadowAnalysisOpen: () => undefined,
     onForeshadowAnalysisChapterToggle: () => undefined,
     onForeshadowAnalysisStart: () => undefined,
+    onForeshadowAnalysisCandidateToggle: () => undefined,
+    onForeshadowAnalysisPreview: () => undefined,
+    onForeshadowAnalysisBack: () => undefined,
+    onForeshadowAnalysisConfirm: () => undefined,
+    onForeshadowAnalysisRetryFailed: () => undefined,
     onForeshadowAnalysisClose: () => undefined
   };
 }

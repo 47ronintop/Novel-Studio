@@ -2,6 +2,7 @@ import type { ForeshadowAnalysisCandidateDto } from "@novel-studio/application";
 import { LoaderCircle, X } from "lucide-react";
 import { useEffect, useRef } from "react";
 
+import { StoryBibleForeshadowConfirmation } from "./story-bible-foreshadow-confirmation.js";
 import { storyBibleForeshadowStatusLabel } from "./story-bible-foreshadow.js";
 import type {
   StoryBibleChapterOption,
@@ -13,8 +14,13 @@ export interface StoryBibleForeshadowAnalysisProps {
   readonly analysis: StoryBibleForeshadowAnalysisState;
   readonly chapterOptions: readonly StoryBibleChapterOption[];
   readonly entries: readonly StoryBibleEditorEntry[];
+  readonly onBack: () => void;
+  readonly onCandidateToggle: (candidateId: string) => void;
   readonly onChapterToggle: (chapterId: string) => void;
   readonly onClose: () => void;
+  readonly onConfirm: () => void;
+  readonly onPreview: () => void;
+  readonly onRetryFailed: () => void;
   readonly onStart: () => void;
 }
 
@@ -22,8 +28,13 @@ export function StoryBibleForeshadowAnalysis({
   analysis,
   chapterOptions,
   entries,
+  onBack,
+  onCandidateToggle,
   onChapterToggle,
   onClose,
+  onConfirm,
+  onPreview,
+  onRetryFailed,
   onStart
 }: StoryBibleForeshadowAnalysisProps) {
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -39,6 +50,7 @@ export function StoryBibleForeshadowAnalysis({
   );
   const selected = new Set(analysis.selectedChapterIds);
   const selecting = analysis.status === "selecting" || analysis.status === "error";
+  const applying = analysis.status === "review" && analysis.review.step === "applying";
   const analysisLabel =
     analysis.status === "review"
       ? "伏笔识别候选审查"
@@ -49,6 +61,7 @@ export function StoryBibleForeshadowAnalysis({
   return (
     <section
       aria-label={analysisLabel}
+      aria-busy={analysis.status === "scanning" || applying}
       className="ns-foreshadow-analysis"
       data-status={analysis.status}
       id="ns-foreshadow-analysis"
@@ -59,16 +72,15 @@ export function StoryBibleForeshadowAnalysis({
             AI 识别伏笔
           </h2>
           <span aria-live="polite" role="status">
-            {analysis.status === "review"
-              ? `${analysis.result.candidates.length} 条候选`
-              : `已选 ${analysis.selectedChapterIds.length} / 5 章`}
+            {analysisHeaderStatus(analysis)}
           </span>
         </div>
         <button
           aria-label="关闭伏笔识别"
           className="ns-icon-button"
+          disabled={applying}
           onClick={onClose}
-          title="关闭伏笔识别"
+          title={applying ? "正在保存，完成后可关闭" : "关闭伏笔识别"}
           type="button"
         >
           <X aria-hidden="true" size={14} />
@@ -127,19 +139,55 @@ export function StoryBibleForeshadowAnalysis({
       ) : null}
 
       {analysis.status === "review" ? (
-        analysis.result.candidates.length === 0 ? (
+        analysis.review.step === "candidates" && analysis.result.candidates.length === 0 ? (
           <p className="ns-foreshadow-analysis-empty">未识别到需要记录的伏笔候选。</p>
+        ) : analysis.review.step === "candidates" ? (
+          <>
+            <fieldset className="ns-foreshadow-candidate-fieldset">
+              <legend className="ns-visually-hidden">选择要保存的伏笔候选</legend>
+              <ol className="ns-foreshadow-candidate-list">
+                {analysis.result.candidates.map((candidate) => (
+                  <ForeshadowCandidate
+                    candidate={candidate}
+                    chapterOptions={chapters}
+                    checked={analysis.review.selectedCandidateIds.includes(candidate.candidateId)}
+                    entries={entries}
+                    key={candidate.candidateId}
+                    onToggle={onCandidateToggle}
+                  />
+                ))}
+              </ol>
+            </fieldset>
+            {analysis.review.message === undefined ? null : (
+              <p className="ns-foreshadow-analysis-error" role="alert">
+                {analysis.review.message}
+              </p>
+            )}
+            <div className="ns-foreshadow-analysis-actions">
+              <button
+                aria-label="预览所选伏笔变更"
+                className="ns-icon-text-button ns-foreshadow-analysis-start"
+                disabled={analysis.review.selectedCandidateIds.length === 0}
+                onClick={onPreview}
+                type="button"
+              >
+                预览所选变更
+              </button>
+            </div>
+          </>
+        ) : analysis.review.step === "preparing" ? (
+          <div className="ns-foreshadow-analysis-progress" role="status">
+            <LoaderCircle aria-hidden="true" className="ns-spin" size={16} />
+            <span>正在整理合并后的变更...</span>
+          </div>
         ) : (
-          <ol className="ns-foreshadow-candidate-list">
-            {analysis.result.candidates.map((candidate) => (
-              <ForeshadowCandidate
-                candidate={candidate}
-                chapterOptions={chapters}
-                entries={entries}
-                key={candidate.candidateId}
-              />
-            ))}
-          </ol>
+          <StoryBibleForeshadowConfirmation
+            chapterOptions={chapters}
+            onBack={onBack}
+            onConfirm={onConfirm}
+            onRetryFailed={onRetryFailed}
+            review={analysis.review}
+          />
         )
       ) : null}
     </section>
@@ -149,21 +197,42 @@ export function StoryBibleForeshadowAnalysis({
 function ForeshadowCandidate({
   candidate,
   chapterOptions,
-  entries
+  checked,
+  entries,
+  onToggle
 }: {
   readonly candidate: ForeshadowAnalysisCandidateDto;
   readonly chapterOptions: readonly StoryBibleChapterOption[];
+  readonly checked: boolean;
   readonly entries: readonly StoryBibleEditorEntry[];
+  readonly onToggle: (candidateId: string) => void;
 }) {
   const evidenceChapter = chapterOptions.find(
     (chapter) => chapter.id === candidate.evidence.chapterId
   );
   const suggestionRows = candidateSuggestionRows(candidate, chapterOptions, entries);
+  const duplicateMessageId = `ns-foreshadow-duplicate-${candidate.candidateId}`;
+  const candidateTitle =
+    candidate.kind === "new"
+      ? candidate.suggested.title
+      : (entries.find((entry) => entry.id === candidate.targetForeshadowId)?.title ??
+        candidate.targetForeshadowId);
 
   return (
     <li data-candidate-kind={candidate.kind}>
       <div className="ns-foreshadow-candidate-heading">
-        <strong>{candidateKindLabel(candidate.kind)}</strong>
+        <label className="ns-foreshadow-candidate-select">
+          <input
+            {...(candidate.duplicateForeshadowIds.length === 0
+              ? {}
+              : { "aria-describedby": duplicateMessageId })}
+            aria-label={`选择候选：${candidateKindLabel(candidate.kind)} ${candidateTitle}`}
+            checked={checked}
+            onChange={() => onToggle(candidate.candidateId)}
+            type="checkbox"
+          />
+          <strong>{candidateKindLabel(candidate.kind)}</strong>
+        </label>
         <span>{chapterLabel(evidenceChapter, candidate.evidence.chapterId)}</span>
       </div>
       <span className="ns-foreshadow-candidate-label">原文证据</span>
@@ -179,7 +248,7 @@ function ForeshadowCandidate({
         ))}
       </dl>
       {candidate.duplicateForeshadowIds.length === 0 ? null : (
-        <p className="ns-foreshadow-candidate-duplicate">
+        <p className="ns-foreshadow-candidate-duplicate" id={duplicateMessageId}>
           可能与已有伏笔重复：
           {candidate.duplicateForeshadowIds
             .map((id) => entries.find((entry) => entry.id === id)?.title ?? id)
@@ -188,6 +257,28 @@ function ForeshadowCandidate({
       )}
     </li>
   );
+}
+
+function analysisHeaderStatus(analysis: StoryBibleForeshadowAnalysisState): string {
+  if (analysis.status !== "review") {
+    return `已选 ${analysis.selectedChapterIds.length} / 5 章`;
+  }
+  switch (analysis.review.step) {
+    case "candidates":
+      return `已选 ${analysis.review.selectedCandidateIds.length} / ${analysis.result.candidates.length} 条候选`;
+    case "preparing":
+      return "正在准备变更";
+    case "confirmation":
+      return `${analysis.review.changes.length} 项变更待确认`;
+    case "applying":
+      return "正在保存变更";
+    case "results": {
+      const succeeded = analysis.review.changes.filter(
+        (change) => change.status === "succeeded"
+      ).length;
+      return `已保存 ${succeeded} / ${analysis.review.changes.length} 项变更`;
+    }
+  }
 }
 
 function candidateSuggestionRows(

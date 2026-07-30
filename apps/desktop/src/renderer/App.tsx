@@ -163,6 +163,11 @@ export function App() {
     guardCreativeFile,
     guardWorkspaceFileEditors
   } = fileEditorRuntime;
+  const guardWorkspaceTransition = useCallback(async () => {
+    const analysis = storyBibleBridge?.getEditorProps().foreshadowAnalysis;
+    if (analysis?.status === "review" && analysis.review.step === "applying") return false;
+    return guardWorkspaceFileEditors();
+  }, [guardWorkspaceFileEditors, storyBibleBridge]);
   const [pendingMainReview, setPendingMainReview] = useState<
     PendingAgentConversationMainReview | undefined
   >();
@@ -413,6 +418,11 @@ export function App() {
     handleOpenForeshadowAnalysis,
     handleToggleForeshadowAnalysisChapter,
     handleDetectForeshadows,
+    handleToggleForeshadowAnalysisCandidate,
+    handlePreviewForeshadowAnalysisChanges,
+    handleBackToForeshadowAnalysisCandidates,
+    handleConfirmForeshadowAnalysisChanges,
+    handleRetryFailedForeshadowAnalysisChanges,
     handleCloseForeshadowAnalysis,
     guardStoryBibleDraft
   } = useProjectWorkflowActions({
@@ -425,7 +435,7 @@ export function App() {
     settingsBridge,
     storyBibleBridge,
     studioBridge,
-    beforeWorkspaceTransition: guardWorkspaceFileEditors,
+    beforeWorkspaceTransition: guardWorkspaceTransition,
     setChapterEditor,
     clearFileEditor,
     setProjectWorkflow,
@@ -445,12 +455,12 @@ export function App() {
     if (api === undefined || engineeringWorkspaceBridge === undefined) return;
 
     void (async () => {
-      if (!(await guardWorkspaceFileEditors())) return;
+      if (!(await guardWorkspaceTransition())) return;
       const next = await engineeringWorkspaceBridge.openEngineeringWorkspace();
       if (next.status !== "ready" || next.workspace === undefined) return;
       setShellState(await api.getShellState());
     })().catch(() => undefined);
-  }, [api, engineeringWorkspaceBridge, guardWorkspaceFileEditors]);
+  }, [api, engineeringWorkspaceBridge, guardWorkspaceTransition]);
 
   const applyActivity = useCallback(
     (activityId: ActivityId) => {
@@ -526,7 +536,7 @@ export function App() {
       }
 
       void (async () => {
-        if (commandId === "workspace.close-current" && !(await guardWorkspaceFileEditors())) {
+        if (commandId === "workspace.close-current" && !(await guardWorkspaceTransition())) {
           return;
         }
         const result = await commandExecutionBridge.execute(commandId);
@@ -578,7 +588,7 @@ export function App() {
       commandExecutionBridge,
       clearWorkspaceFileEditors,
       engineeringWorkspaceBridge,
-      guardWorkspaceFileEditors,
+      guardWorkspaceTransition,
       persistUserPreferences
     ]
   );
@@ -592,7 +602,7 @@ export function App() {
     plainFileBridge,
     creativePlainFileBridge: creativePlainFileBridgeRef.current,
     creativeProjectFilesBridge,
-    canLeaveCreativeFile: guardWorkspaceFileEditors,
+    canLeaveCreativeFile: guardWorkspaceTransition,
     canLeaveStoryBibleDraft: guardStoryBibleDraft,
     setShellState,
     setProjectWorkflow,
@@ -1015,6 +1025,11 @@ export function App() {
         onForeshadowAnalysisOpen={handleOpenForeshadowAnalysis}
         onForeshadowAnalysisChapterToggle={handleToggleForeshadowAnalysisChapter}
         onForeshadowAnalysisStart={handleDetectForeshadows}
+        onForeshadowAnalysisCandidateToggle={handleToggleForeshadowAnalysisCandidate}
+        onForeshadowAnalysisPreview={handlePreviewForeshadowAnalysisChanges}
+        onForeshadowAnalysisBack={handleBackToForeshadowAnalysisCandidates}
+        onForeshadowAnalysisConfirm={handleConfirmForeshadowAnalysisChanges}
+        onForeshadowAnalysisRetryFailed={handleRetryFailedForeshadowAnalysisChanges}
         onForeshadowAnalysisClose={handleCloseForeshadowAnalysis}
         onCommandExecute={handleCommandExecute}
         onCommandPaletteActiveCommandChange={handleCommandPaletteActiveCommandChange}

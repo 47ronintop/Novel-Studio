@@ -13,7 +13,8 @@ import type {
   AgentConversationNavigatorProps,
   AgentConversationViewProps,
   ModelSettingsPanelProps,
-  StoryBibleEditorProps
+  StoryBibleEditorProps,
+  StoryBibleForeshadowChangeItem
 } from "../src/index.js";
 import { WorkspaceShell } from "../src/index.js";
 import { workspaceActivitiesFor } from "../src/workspace-shell-activity.js";
@@ -2381,9 +2382,10 @@ describe("WorkspaceShell", () => {
     expect(characterHtml).not.toContain("AI 识别伏笔");
   });
 
-  test("renders read-only new, progress, and payoff foreshadow candidates", () => {
+  test("renders selectable new, progress, and payoff foreshadow candidates", () => {
     const application = createDesktopApplication();
-    const html = renderToStaticMarkup(
+    const toggledCandidateIds: string[] = [];
+    const tree = (
       <WorkspaceShell
         shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
         commands={application.listCommands()}
@@ -2414,6 +2416,7 @@ describe("WorkspaceShell", () => {
           foreshadowAnalysis: {
             status: "review",
             selectedChapterIds: ["ch_01", "ch_02", "ch_03"],
+            review: { step: "candidates", selectedCandidateIds: [] },
             result: {
               analysisId: "analysis-01",
               chapterIds: ["ch_01", "ch_02", "ch_03"],
@@ -2480,6 +2483,8 @@ describe("WorkspaceShell", () => {
               createdAt: "2026-07-30T00:00:00.000Z"
             }
           },
+          onForeshadowAnalysisCandidateToggle: (candidateId) =>
+            toggledCandidateIds.push(candidateId),
           draft: {
             kind: "foreshadow",
             assetType: "foreshadow",
@@ -2493,6 +2498,7 @@ describe("WorkspaceShell", () => {
         })}
       />
     );
+    const html = renderToStaticMarkup(tree);
 
     for (const text of [
       "新伏笔",
@@ -2511,8 +2517,161 @@ describe("WorkspaceShell", () => {
     ]) {
       expect(html).toContain(text);
     }
-    expect(html).not.toContain("确认保存");
+    expect(findElementByAriaLabel(tree, "选择候选：新伏笔 袖口里的钥匙")?.props.checked).toBe(
+      false
+    );
+    expect(findElementByAriaLabel(tree, "预览所选伏笔变更")?.props.disabled).toBe(true);
+    findElementByAriaLabel(tree, "选择候选：推进 生锈的钥匙")?.props.onClick?.();
+    expect(toggledCandidateIds).toEqual(["candidate-progress"]);
     expect(html).not.toContain('data-story-entry-id="fsh_key"');
+  });
+
+  test("renders one merged confirmation diff and partial-failure retry state", () => {
+    const application = createDesktopApplication();
+    const callbacks: string[] = [];
+    const result = {
+      analysisId: "analysis-confirmation",
+      chapterIds: ["ch_01", "ch_02"],
+      candidates: [],
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        usageStatus: "missing" as const,
+        cost: { amount: 0, currency: "USD", status: "unknown" as const }
+      },
+      createdAt: "2026-07-30T00:00:00.000Z"
+    };
+    const chapterOptions = [
+      { id: "ch_01", title: "雨夜入城", order: 1, status: "draft" as const },
+      { id: "ch_02", title: "旧门开启", order: 2, status: "draft" as const }
+    ];
+    const mergedChange: StoryBibleForeshadowChangeItem = {
+      changeId: "update:fsh_key",
+      operation: "update",
+      assetId: "fsh_key",
+      title: "生锈的钥匙",
+      sourceCandidateIds: ["candidate-progress", "candidate-payoff"],
+      fields: [
+        { field: "trackingStatus", before: "progressing", after: "paid-off" },
+        { field: "actualPayoffChapterId", after: "ch_02" }
+      ],
+      evidenceAdditions: [
+        {
+          chapterId: "ch_02",
+          excerpt: "旧门终于被钥匙打开。",
+          excerptHash: "3".repeat(64)
+        }
+      ],
+      status: "pending"
+    };
+    const confirmationTree = (
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        storyBibleEditor={createStoryBibleEditorProps({
+          activeKind: "foreshadow",
+          chapterOptions,
+          foreshadowAnalysis: {
+            status: "review",
+            selectedChapterIds: ["ch_01", "ch_02"],
+            result,
+            review: {
+              step: "confirmation",
+              selectedCandidateIds: mergedChange.sourceCandidateIds,
+              changes: [mergedChange]
+            }
+          },
+          onForeshadowAnalysisBack: () => callbacks.push("back"),
+          onForeshadowAnalysisConfirm: () => callbacks.push("confirm")
+        })}
+      />
+    );
+    const confirmationHtml = renderToStaticMarkup(confirmationTree);
+    for (const text of [
+      "更新《生锈的钥匙》",
+      "合并 2 条候选",
+      "原值",
+      "推进中",
+      "新值",
+      "已回收",
+      "2. 旧门开启",
+      "待保存",
+      "旧门终于被钥匙打开。"
+    ]) {
+      expect(confirmationHtml).toContain(text);
+    }
+    expect(confirmationHtml.match(/data-change-id=/gu)).toHaveLength(1);
+    findElementByAriaLabel(confirmationTree, "确认保存伏笔变更")?.props.onClick?.();
+    expect(callbacks).toEqual(["confirm"]);
+
+    const failedChange: StoryBibleForeshadowChangeItem = {
+      ...mergedChange,
+      changeId: "new:candidate-new",
+      operation: "create",
+      assetId: "fsh_new",
+      title: "窗台徽章",
+      sourceCandidateIds: ["candidate-new"],
+      fields: [{ field: "title", after: "窗台徽章" }],
+      evidenceAdditions: [],
+      status: "failed",
+      errorMessage: "目标文件暂时不可写。"
+    };
+    const resultsTree = (
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        storyBibleEditor={createStoryBibleEditorProps({
+          activeKind: "foreshadow",
+          chapterOptions,
+          foreshadowAnalysis: {
+            status: "review",
+            selectedChapterIds: ["ch_01", "ch_02"],
+            result,
+            review: {
+              step: "results",
+              selectedCandidateIds: ["candidate-progress", "candidate-payoff", "candidate-new"],
+              changes: [{ ...mergedChange, status: "succeeded" }, failedChange],
+              outcome: "partial_failure"
+            }
+          },
+          onForeshadowAnalysisRetryFailed: () => callbacks.push("retry")
+        })}
+      />
+    );
+    const resultsHtml = renderToStaticMarkup(resultsTree);
+    expect(resultsHtml).toContain("已保存");
+    expect(resultsHtml).toContain("保存失败");
+    expect(resultsHtml).toContain("目标文件暂时不可写。");
+    expect(resultsHtml).toContain("1 项保存失败");
+    findElementByAriaLabel(resultsTree, "仅重试失败的伏笔变更")?.props.onClick?.();
+    expect(callbacks).toEqual(["confirm", "retry"]);
+
+    const applyingTree = (
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        storyBibleEditor={createStoryBibleEditorProps({
+          activeKind: "foreshadow",
+          chapterOptions,
+          foreshadowAnalysis: {
+            status: "review",
+            selectedChapterIds: ["ch_01", "ch_02"],
+            result,
+            review: {
+              step: "applying",
+              selectedCandidateIds: mergedChange.sourceCandidateIds,
+              changes: [{ ...mergedChange, status: "applying" }]
+            }
+          }
+        })}
+      />
+    );
+    expect(renderToStaticMarkup(applyingTree)).toContain('aria-busy="true"');
+    expect(findElementByAriaLabel(applyingTree, "关闭伏笔识别")?.props.disabled).toBe(true);
   });
 
   test("renders foreshadow analysis progress, error, empty, and close states", () => {
@@ -2560,6 +2719,7 @@ describe("WorkspaceShell", () => {
       renderAnalysis({
         status: "review",
         selectedChapterIds: ["ch_01"],
+        review: { step: "candidates", selectedCandidateIds: [] },
         result: {
           analysisId: "analysis-empty",
           chapterIds: ["ch_01"],
@@ -2636,6 +2796,82 @@ describe("WorkspaceShell", () => {
       await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
     });
     expect(document.activeElement).toBe(trigger);
+
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  test("does not steal focus while foreshadow review advances", () => {
+    const application = createDesktopApplication();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const result = {
+      analysisId: "analysis-focus",
+      chapterIds: ["ch_01"],
+      candidates: [],
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        usageStatus: "missing" as const,
+        cost: { amount: 0, currency: "USD", status: "unknown" as const }
+      },
+      createdAt: "2026-07-30T00:00:00.000Z"
+    };
+    const change: StoryBibleForeshadowChangeItem = {
+      changeId: "update:fsh_key",
+      operation: "update",
+      assetId: "fsh_key",
+      title: "生锈的钥匙",
+      sourceCandidateIds: ["candidate-progress"],
+      fields: [{ field: "trackingStatus", before: "progressing", after: "ready-to-payoff" }],
+      evidenceAdditions: [],
+      status: "succeeded"
+    };
+    let advanceReview: () => void = () => undefined;
+
+    function Harness() {
+      const [analysis, setAnalysis] = useState<StoryBibleEditorProps["foreshadowAnalysis"]>({
+        status: "review",
+        selectedChapterIds: ["ch_01"],
+        result,
+        review: { step: "candidates", selectedCandidateIds: [] }
+      });
+      advanceReview = () =>
+        setAnalysis({
+          status: "review",
+          selectedChapterIds: ["ch_01"],
+          result,
+          review: {
+            step: "results",
+            selectedCandidateIds: ["candidate-progress"],
+            changes: [change],
+            outcome: "completed"
+          }
+        });
+      return (
+        <>
+          <button aria-label="伏笔审查焦点哨兵" type="button" />
+          <WorkspaceShell
+            shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+            commands={application.listCommands()}
+            commandPaletteOpen={false}
+            storyBibleEditor={createStoryBibleEditorProps({
+              activeKind: "foreshadow",
+              chapterOptions: [{ id: "ch_01", title: "雨夜入城", order: 1, status: "draft" }],
+              foreshadowAnalysis: analysis
+            })}
+          />
+        </>
+      );
+    }
+
+    act(() => root.render(<Harness />));
+    const sentinel = host.querySelector<HTMLButtonElement>('[aria-label="伏笔审查焦点哨兵"]');
+    act(() => sentinel?.focus());
+    act(() => advanceReview());
+    expect(document.activeElement).toBe(sentinel);
 
     act(() => root.unmount());
     host.remove();
@@ -3499,6 +3735,11 @@ function createStoryBibleEditorProps(
     onForeshadowAnalysisOpen: () => undefined,
     onForeshadowAnalysisChapterToggle: () => undefined,
     onForeshadowAnalysisStart: () => undefined,
+    onForeshadowAnalysisCandidateToggle: () => undefined,
+    onForeshadowAnalysisPreview: () => undefined,
+    onForeshadowAnalysisBack: () => undefined,
+    onForeshadowAnalysisConfirm: () => undefined,
+    onForeshadowAnalysisRetryFailed: () => undefined,
     onForeshadowAnalysisClose: () => undefined,
     ...overrides
   };
@@ -3530,6 +3771,7 @@ function emptyConversationView(): AgentConversationViewProps {
 }
 
 interface InspectableElementProps {
+  readonly checked?: boolean;
   readonly disabled?: boolean;
   readonly onClick?: () => void;
 }
@@ -3557,6 +3799,7 @@ function findElementByAriaLabel(
 
   return {
     props: {
+      ...(element instanceof HTMLInputElement ? { checked: element.checked } : {}),
       ...((element instanceof HTMLButtonElement ||
         element instanceof HTMLInputElement ||
         element instanceof HTMLSelectElement) &&

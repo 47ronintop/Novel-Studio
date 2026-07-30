@@ -120,6 +120,11 @@ export interface RendererWorkspaceShellProps {
   readonly onForeshadowAnalysisOpen: StoryBibleEditorProps["onForeshadowAnalysisOpen"];
   readonly onForeshadowAnalysisChapterToggle: StoryBibleEditorProps["onForeshadowAnalysisChapterToggle"];
   readonly onForeshadowAnalysisStart: StoryBibleEditorProps["onForeshadowAnalysisStart"];
+  readonly onForeshadowAnalysisCandidateToggle: StoryBibleEditorProps["onForeshadowAnalysisCandidateToggle"];
+  readonly onForeshadowAnalysisPreview: StoryBibleEditorProps["onForeshadowAnalysisPreview"];
+  readonly onForeshadowAnalysisBack: StoryBibleEditorProps["onForeshadowAnalysisBack"];
+  readonly onForeshadowAnalysisConfirm: StoryBibleEditorProps["onForeshadowAnalysisConfirm"];
+  readonly onForeshadowAnalysisRetryFailed: StoryBibleEditorProps["onForeshadowAnalysisRetryFailed"];
   readonly onForeshadowAnalysisClose: StoryBibleEditorProps["onForeshadowAnalysisClose"];
   readonly onCommandExecute: NonNullable<WorkspaceShellProps["onCommandExecute"]>;
   readonly onCommandPaletteActiveCommandChange: NonNullable<
@@ -197,6 +202,11 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
           onForeshadowAnalysisOpen: props.onForeshadowAnalysisOpen,
           onForeshadowAnalysisChapterToggle: props.onForeshadowAnalysisChapterToggle,
           onForeshadowAnalysisStart: props.onForeshadowAnalysisStart,
+          onForeshadowAnalysisCandidateToggle: props.onForeshadowAnalysisCandidateToggle,
+          onForeshadowAnalysisPreview: props.onForeshadowAnalysisPreview,
+          onForeshadowAnalysisBack: props.onForeshadowAnalysisBack,
+          onForeshadowAnalysisConfirm: props.onForeshadowAnalysisConfirm,
+          onForeshadowAnalysisRetryFailed: props.onForeshadowAnalysisRetryFailed,
           onForeshadowAnalysisClose: props.onForeshadowAnalysisClose,
           chapterOptions: storyBibleChapterOptions,
           ...(storyBibleCurrentChapterId === undefined

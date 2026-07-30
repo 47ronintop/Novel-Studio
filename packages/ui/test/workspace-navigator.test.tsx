@@ -596,6 +596,11 @@ function createStoryBible(overrides: Partial<StoryBibleEditorProps> = {}): Story
     onForeshadowAnalysisOpen: () => undefined,
     onForeshadowAnalysisChapterToggle: () => undefined,
     onForeshadowAnalysisStart: () => undefined,
+    onForeshadowAnalysisCandidateToggle: () => undefined,
+    onForeshadowAnalysisPreview: () => undefined,
+    onForeshadowAnalysisBack: () => undefined,
+    onForeshadowAnalysisConfirm: () => undefined,
+    onForeshadowAnalysisRetryFailed: () => undefined,
     onForeshadowAnalysisClose: () => undefined,
     ...overrides
   };

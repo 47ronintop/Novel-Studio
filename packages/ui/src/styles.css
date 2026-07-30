@@ -6633,6 +6633,25 @@ textarea:focus-visible,
   padding: 6px 10px;
 }
 
+.ns-foreshadow-candidate-fieldset {
+  border: 0;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.ns-foreshadow-candidate-select {
+  align-items: center;
+  display: inline-flex;
+  gap: 7px;
+  min-width: 0;
+}
+
+.ns-foreshadow-candidate-select input {
+  accent-color: var(--ns-primary);
+  flex: 0 0 auto;
+}
+
 .ns-foreshadow-candidate-label {
   color: var(--ns-muted);
   font-size: 10px;
@@ -6676,6 +6695,208 @@ textarea:focus-visible,
   border-left: 3px solid var(--ns-warning);
   color: var(--ns-warning-text);
   padding: 6px 9px;
+}
+
+.ns-foreshadow-confirmation {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ns-foreshadow-change-list {
+  list-style: none;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.ns-foreshadow-change-list > li {
+  border-top: 1px solid color-mix(in srgb, var(--ns-border) 72%, transparent);
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px 0;
+}
+
+.ns-foreshadow-change-list > li:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.ns-foreshadow-change-heading,
+.ns-foreshadow-confirmation-actions,
+.ns-foreshadow-change-status,
+.ns-foreshadow-confirmation-progress {
+  align-items: center;
+  display: flex;
+}
+
+.ns-foreshadow-change-heading,
+.ns-foreshadow-confirmation-actions {
+  justify-content: space-between;
+}
+
+.ns-foreshadow-change-heading {
+  gap: 12px;
+  min-width: 0;
+}
+
+.ns-foreshadow-change-heading > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ns-foreshadow-change-heading strong,
+.ns-foreshadow-change-heading span,
+.ns-foreshadow-change-status,
+.ns-foreshadow-confirmation-actions > span,
+.ns-foreshadow-confirmation-progress {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.ns-foreshadow-change-heading strong {
+  color: var(--ns-ink);
+  overflow-wrap: anywhere;
+}
+
+.ns-foreshadow-change-heading > div > span,
+.ns-foreshadow-confirmation-actions > span,
+.ns-foreshadow-confirmation-progress {
+  color: var(--ns-muted);
+}
+
+.ns-foreshadow-change-status,
+.ns-foreshadow-confirmation-progress {
+  gap: 5px;
+}
+
+.ns-foreshadow-change-list > li[data-change-status="succeeded"] .ns-foreshadow-change-status {
+  color: var(--ns-success);
+}
+
+.ns-foreshadow-change-list > li[data-change-status="failed"] .ns-foreshadow-change-status {
+  color: var(--ns-danger);
+}
+
+.ns-foreshadow-change-fields {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  min-width: 0;
+}
+
+.ns-foreshadow-change-fields > div {
+  align-items: start;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 82px minmax(0, 1fr);
+  min-width: 0;
+}
+
+.ns-foreshadow-change-fields dt,
+.ns-foreshadow-change-fields dd,
+.ns-foreshadow-change-fields small {
+  font-size: 11px;
+  line-height: 1.5;
+  margin: 0;
+  min-width: 0;
+}
+
+.ns-foreshadow-change-fields dt,
+.ns-foreshadow-change-fields small,
+.ns-foreshadow-change-evidence > span {
+  color: var(--ns-muted);
+}
+
+.ns-foreshadow-change-fields dd {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+}
+
+.ns-foreshadow-change-fields dd > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ns-foreshadow-change-fields dd > span > span {
+  color: var(--ns-ink);
+  overflow-wrap: anywhere;
+}
+
+.ns-foreshadow-change-fields dd > svg {
+  color: var(--ns-muted);
+}
+
+.ns-foreshadow-change-evidence {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ns-foreshadow-change-evidence > span {
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.ns-foreshadow-change-evidence ol {
+  display: grid;
+  gap: 7px;
+  list-style: none;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.ns-foreshadow-change-evidence li {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ns-foreshadow-change-evidence strong,
+.ns-foreshadow-change-evidence blockquote,
+.ns-foreshadow-change-error {
+  font-size: 11px;
+  line-height: 1.55;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.ns-foreshadow-change-evidence strong {
+  color: var(--ns-muted);
+}
+
+.ns-foreshadow-change-evidence blockquote {
+  border-left: 3px solid var(--ns-border-strong);
+  color: var(--ns-ink);
+  padding: 5px 9px;
+}
+
+.ns-foreshadow-change-error {
+  color: var(--ns-danger);
+}
+
+.ns-foreshadow-confirmation-actions {
+  gap: 8px;
+}
+
+.ns-foreshadow-confirm {
+  background: color-mix(in srgb, var(--ns-primary) 14%, var(--ns-surface-raised));
+  border-color: color-mix(in srgb, var(--ns-primary) 45%, var(--ns-border));
+}
+
+.ns-foreshadow-confirmation-progress {
+  margin: 0;
+  min-height: 34px;
+}
+
+.ns-foreshadow-confirmation .ns-spin {
+  animation: ns-agent-spin 900ms linear infinite;
 }
 
 .ns-story-create-menu {
@@ -8820,6 +9041,25 @@ textarea:focus-visible,
     align-items: flex-start;
     flex-direction: column;
     gap: 2px;
+  }
+
+  .ns-foreshadow-change-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .ns-foreshadow-change-fields > div {
+    gap: 3px;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ns-foreshadow-change-fields dd {
+    align-items: start;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ns-foreshadow-change-fields dd > svg {
+    transform: rotate(90deg);
   }
 
   .ns-story-list-columns {

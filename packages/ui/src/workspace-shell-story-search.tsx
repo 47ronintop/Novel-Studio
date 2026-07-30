@@ -350,8 +350,13 @@ export function StoryBibleEditorView({ editor }: { readonly editor: StoryBibleEd
           analysis={editor.foreshadowAnalysis}
           chapterOptions={editor.chapterOptions}
           entries={editor.entries}
+          onBack={editor.onForeshadowAnalysisBack}
+          onCandidateToggle={editor.onForeshadowAnalysisCandidateToggle}
           onChapterToggle={editor.onForeshadowAnalysisChapterToggle}
           onClose={closeForeshadowAnalysis}
+          onConfirm={editor.onForeshadowAnalysisConfirm}
+          onPreview={editor.onForeshadowAnalysisPreview}
+          onRetryFailed={editor.onForeshadowAnalysisRetryFailed}
           onStart={editor.onForeshadowAnalysisStart}
         />
       ) : null}

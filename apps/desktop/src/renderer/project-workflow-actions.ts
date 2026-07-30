@@ -339,6 +339,58 @@ export function useProjectWorkflowActions({
     setStoryBibleEditor(storyBibleBridge.closeForeshadowAnalysis());
   }, [setStoryBibleEditor, storyBibleBridge]);
 
+  const handleToggleForeshadowAnalysisCandidate = useCallback(
+    (candidateId: string) => {
+      if (storyBibleBridge === undefined) return;
+      setStoryBibleEditor(storyBibleBridge.toggleForeshadowAnalysisCandidate(candidateId));
+    },
+    [setStoryBibleEditor, storyBibleBridge]
+  );
+
+  const handlePreviewForeshadowAnalysisChanges = useCallback(async () => {
+    if (storyBibleBridge === undefined) return;
+    const start = storyBibleBridge.beginForeshadowAnalysisPreview();
+    setStoryBibleEditor(start.editor);
+    if (!start.started || start.token === undefined) return;
+    const chapterIdsInOrder = [...(projectWorkflow?.chapters ?? [])]
+      .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id))
+      .map((chapter) => chapter.id);
+    const completion = await storyBibleBridge.prepareForeshadowAnalysisPreview(
+      start.token,
+      chapterIdsInOrder
+    );
+    if (completion.applied) setStoryBibleEditor(completion.editor);
+  }, [projectWorkflow?.chapters, setStoryBibleEditor, storyBibleBridge]);
+
+  const handleBackToForeshadowAnalysisCandidates = useCallback(() => {
+    if (storyBibleBridge === undefined) return;
+    setStoryBibleEditor(storyBibleBridge.backToForeshadowAnalysisCandidates());
+  }, [setStoryBibleEditor, storyBibleBridge]);
+
+  const saveForeshadowAnalysisChanges = useCallback(
+    async (retryFailedOnly: boolean) => {
+      if (storyBibleBridge === undefined) return;
+      const start = storyBibleBridge.beginForeshadowAnalysisSave(retryFailedOnly);
+      if (!start.started || start.token === undefined) return;
+      setStoryBibleEditor(start.editor);
+      const completion = await storyBibleBridge.saveForeshadowAnalysisChanges(start.token);
+      if (!completion.applied) return;
+      setStoryBibleEditor(completion.editor);
+      setStoryBible(storyBibleBridge.getProps());
+    },
+    [setStoryBible, setStoryBibleEditor, storyBibleBridge]
+  );
+
+  const handleConfirmForeshadowAnalysisChanges = useCallback(
+    () => void saveForeshadowAnalysisChanges(false),
+    [saveForeshadowAnalysisChanges]
+  );
+
+  const handleRetryFailedForeshadowAnalysisChanges = useCallback(
+    () => void saveForeshadowAnalysisChanges(true),
+    [saveForeshadowAnalysisChanges]
+  );
+
   const handleDetectForeshadows = useCallback(async () => {
     if (storyBibleBridge === undefined) return;
     const preparation = storyBibleBridge.prepareForeshadowAnalysis();
@@ -376,21 +428,23 @@ export function useProjectWorkflowActions({
     storyBibleBridge
   ]);
 
-  const guardStoryBibleDraft = useCallback(
-    () =>
-      guardDirtyStoryBibleDraft(
-        storyBibleBridge,
-        (bridge, editor) => {
-          setStoryBibleEditor(editor);
-          setStoryBible(bridge.getProps());
-        },
-        undefined,
-        projectWorkflow === undefined
-          ? undefined
-          : { chapterIds: projectWorkflow.chapters.map((chapter) => chapter.id) }
-      ),
-    [projectWorkflow?.chapters, setStoryBible, setStoryBibleEditor, storyBibleBridge]
-  );
+  const guardStoryBibleDraft = useCallback(() => {
+    const analysis = storyBibleBridge?.getEditorProps().foreshadowAnalysis;
+    if (analysis?.status === "review" && analysis.review.step === "applying") {
+      return Promise.resolve(false);
+    }
+    return guardDirtyStoryBibleDraft(
+      storyBibleBridge,
+      (bridge, editor) => {
+        setStoryBibleEditor(editor);
+        setStoryBible(bridge.getProps());
+      },
+      undefined,
+      projectWorkflow === undefined
+        ? undefined
+        : { chapterIds: projectWorkflow.chapters.map((chapter) => chapter.id) }
+    );
+  }, [projectWorkflow?.chapters, setStoryBible, setStoryBibleEditor, storyBibleBridge]);
 
   return {
     refreshProjectWorkflow,
@@ -414,6 +468,11 @@ export function useProjectWorkflowActions({
     handleOpenForeshadowAnalysis,
     handleToggleForeshadowAnalysisChapter,
     handleDetectForeshadows,
+    handleToggleForeshadowAnalysisCandidate,
+    handlePreviewForeshadowAnalysisChanges,
+    handleBackToForeshadowAnalysisCandidates,
+    handleConfirmForeshadowAnalysisChanges,
+    handleRetryFailedForeshadowAnalysisChanges,
     handleCloseForeshadowAnalysis,
     guardStoryBibleDraft
   };
