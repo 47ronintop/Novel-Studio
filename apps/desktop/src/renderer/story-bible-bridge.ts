@@ -13,8 +13,10 @@ import { createForeshadowEvidence } from "@novel-studio/shared";
 import {
   storyBibleForeshadowValidationMessage,
   storyBibleOutlineValidationMessage,
+  storyBibleTimelineValidationMessage,
   validateStoryBibleForeshadow,
-  validateStoryBibleOutline
+  validateStoryBibleOutline,
+  validateStoryBibleTimeline
 } from "@novel-studio/ui";
 import type {
   StoryBibleEditorDraft,
@@ -69,6 +71,7 @@ export interface StoryBibleSnapshotBinding {
 
 interface StoryBibleEditorState {
   readonly activeKind: StoryBibleEditorKind;
+  readonly activeTimelineEventId: string | undefined;
   readonly viewMode: StoryBibleEditorProps["viewMode"];
   readonly status: StoryBibleEditorProps["status"];
   readonly dirty: boolean;
@@ -99,6 +102,7 @@ export function createStoryBibleBridge(
   let baselineDraft = emptyDraft("character");
   let editorState: StoryBibleEditorState = {
     activeKind: "character",
+    activeTimelineEventId: undefined,
     viewMode: "list",
     status: "idle",
     dirty: false,
@@ -147,6 +151,7 @@ export function createStoryBibleBridge(
       editorState = {
         ...editorState,
         activeKind: kind,
+        activeTimelineEventId: undefined,
         viewMode: "list",
         status: "idle",
         dirty: false,
@@ -157,7 +162,17 @@ export function createStoryBibleBridge(
       return publishEditor();
     },
     selectEntry(entryId) {
-      const entry = createEditorEntries(snapshot).find((candidate) => candidate.id === entryId);
+      const entries = createEditorEntries(snapshot);
+      let activeTimelineEventId: string | undefined;
+      let entry = entries.find((candidate) => candidate.id === entryId);
+      if (entry === undefined) {
+        entry = entries.find(
+          (candidate) =>
+            candidate.kind === "timeline" &&
+            candidate.timelineEvents.some((event) => event.id === entryId)
+        );
+        if (entry !== undefined) activeTimelineEventId = entryId;
+      }
       if (entry === undefined) {
         return editorProps;
       }
@@ -166,6 +181,7 @@ export function createStoryBibleBridge(
       editorState = {
         ...editorState,
         activeKind: entry.kind,
+        activeTimelineEventId,
         viewMode: "detail",
         status: "idle",
         dirty: false,
@@ -186,6 +202,7 @@ export function createStoryBibleBridge(
       editorState = {
         ...editorState,
         activeKind: kind,
+        activeTimelineEventId: undefined,
         viewMode: "detail",
         status: "idle",
         dirty: false,
@@ -199,6 +216,7 @@ export function createStoryBibleBridge(
       baselineDraft = emptyDraft(editorState.activeKind);
       editorState = {
         ...editorState,
+        activeTimelineEventId: undefined,
         viewMode: "list",
         status: "idle",
         dirty: false,
@@ -284,9 +302,15 @@ export function createStoryBibleBridge(
       consistency = nextConsistency;
       props = toProps(snapshot);
       baselineDraft = draftFromSnapshot(snapshot, { ...normalizedDraft, id: saved.value.id });
+      const activeTimelineEventId =
+        editorState.activeTimelineEventId !== undefined &&
+        draftHasTimelineEvent(baselineDraft, editorState.activeTimelineEventId)
+          ? editorState.activeTimelineEventId
+          : undefined;
       editorState = {
         ...editorState,
         activeKind: baselineDraft.kind,
+        activeTimelineEventId,
         viewMode: "detail",
         status: "saved",
         dirty: false,
@@ -307,6 +331,7 @@ export function createStoryBibleBridge(
     }
     editorState = {
       activeKind: editorState.activeKind,
+      activeTimelineEventId: editorState.activeTimelineEventId,
       viewMode: editorState.viewMode,
       status: editorState.status,
       dirty: editorState.dirty,
@@ -324,6 +349,7 @@ export function createStoryBibleBridge(
     baselineDraft = emptyDraft(editorState.activeKind);
     editorState = {
       ...editorState,
+      activeTimelineEventId: undefined,
       viewMode: "list",
       status: "idle",
       dirty: false,
@@ -416,6 +442,9 @@ function createEditorProps(
 ): StoryBibleEditorProps {
   return {
     activeKind: state.activeKind,
+    ...(state.activeTimelineEventId === undefined
+      ? {}
+      : { activeTimelineEventId: state.activeTimelineEventId }),
     viewMode: state.viewMode,
     status: state.status,
     dirty: state.dirty,
@@ -567,14 +596,22 @@ function toTimelineEvent(
     return undefined;
   }
 
-  const sequence = typeof value.sequence === "number" ? value.sequence : index + 1;
+  const sequence =
+    typeof value.sequence === "number" && Number.isFinite(value.sequence)
+      ? value.sequence
+      : index + 1;
   const title = typeof value.title === "string" && value.title.length > 0 ? value.title : id;
   const status =
     typeof value.status === "string" && value.status.length > 0 ? value.status : "active";
   const summary = typeof value.summary === "string" ? value.summary : "";
+  const timeLabel = typeof value.timeLabel === "string" ? value.timeLabel : "";
   const chapterIds = Array.isArray(value.chapterIds)
     ? value.chapterIds.filter((chapterId): chapterId is string => typeof chapterId === "string")
     : [];
+  const characterIds = stringArray(value.characterIds);
+  const locationIds = stringArray(value.locationIds);
+  const causes = stringArray(value.causes);
+  const effects = stringArray(value.effects);
 
   return {
     id,
@@ -582,9 +619,26 @@ function toTimelineEvent(
     sequence,
     title,
     status,
+    timeLabel,
     summary,
-    chapterIds
+    chapterIds,
+    characterIds,
+    locationIds,
+    causes,
+    effects
   };
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.length > 0)
+    : [];
+}
+
+function draftHasTimelineEvent(draft: StoryBibleEditorDraft, eventId: string): boolean {
+  if (draft.kind !== "timeline") return false;
+  const events = draft.details["events"];
+  return Array.isArray(events) && events.some((event) => isRecord(event) && event.id === eventId);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -650,6 +704,12 @@ function validateStoryBibleDraft(
     return issues.length === 0
       ? undefined
       : `无法保存伏笔：${issues.map(storyBibleForeshadowValidationMessage).join(" ")}`;
+  }
+  if (draft.kind === "timeline") {
+    const issues = validateStoryBibleTimeline(draft.details);
+    return issues.length === 0
+      ? undefined
+      : `无法保存时间线：${issues.map(storyBibleTimelineValidationMessage).join(" ")}`;
   }
   return undefined;
 }

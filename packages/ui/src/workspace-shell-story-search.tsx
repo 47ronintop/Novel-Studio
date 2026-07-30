@@ -1,6 +1,6 @@
 ﻿import type { ProjectSearchResultItem } from "@novel-studio/application";
 import type { ForeshadowTrackingStatus, JsonObject } from "@novel-studio/shared";
-import { ArrowLeft, Check, Clock3, FilePlus, RotateCcw, Search, X } from "lucide-react";
+import { ArrowLeft, Check, Clock3, FilePlus, Pencil, RotateCcw, Search, X } from "lucide-react";
 
 import type {
   ProjectSearchProps,
@@ -8,6 +8,7 @@ import type {
   StoryBibleEditorEntry,
   StoryBibleEditorKind,
   StoryBibleEditorProps,
+  StoryTimelineEvent,
   StoryBibleWorldAssetType
 } from "./workspace-shell-types.js";
 import { StoryBibleForeshadowEditor } from "./story-bible-foreshadow-editor.js";
@@ -23,6 +24,11 @@ import {
   storyBibleOutlineValidationMessage,
   validateStoryBibleOutline
 } from "./story-bible-outline.js";
+import { StoryBibleTimelineEditor } from "./story-bible-timeline-editor.js";
+import {
+  storyBibleTimelineValidationMessage,
+  validateStoryBibleTimeline
+} from "./story-bible-timeline.js";
 
 const WORLD_ASSET_TYPE_OPTIONS: ReadonlyArray<{
   readonly value: StoryBibleWorldAssetType;
@@ -42,89 +48,142 @@ export function TimelineMainView({
   readonly onTimelineEntryOpen: ((entryId: string) => void) | undefined;
 }) {
   const timelineEntries = editor?.entries.filter((entry) => entry.kind === "timeline") ?? [];
-  const timelineEvents = timelineEntries
+  const timelineEvents = collectTimelineEvents(timelineEntries);
+
+  return (
+    <section className="ns-timeline-view" aria-label="时间线主视图">
+      <div className="ns-timeline-header">
+        <h1>时间线</h1>
+        <span>{timelineEvents.length} 个事件</span>
+      </div>
+      <TimelineEventRail
+        chapterOptions={editor?.chapterOptions ?? []}
+        entries={timelineEntries}
+        events={timelineEvents}
+        onOpen={(entryId) => onTimelineEntryOpen?.(entryId)}
+      />
+    </section>
+  );
+}
+
+type TimelineEditorEntry = Extract<StoryBibleEditorEntry, { readonly kind: "timeline" }>;
+type TimelineRailEvent = StoryTimelineEvent & {
+  readonly parentEntryId: string;
+  readonly parentTitle: string;
+};
+
+function collectTimelineEvents(
+  entries: readonly TimelineEditorEntry[],
+  query = ""
+): readonly TimelineRailEvent[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
+  return entries
     .flatMap((entry) =>
-      (entry.timelineEvents ?? []).map((event) => ({
+      entry.timelineEvents.map((event) => ({
         ...event,
         parentEntryId: event.parentEntryId ?? entry.id,
         parentTitle: entry.title
       }))
     )
-    .sort((left, right) => left.sequence - right.sequence || left.title.localeCompare(right.title));
-  const linkedChapterCount = new Set(timelineEvents.flatMap((event) => event.chapterIds)).size;
-  const activeCount = timelineEvents.filter((event) => event.status === "active").length;
-  const draftCount = timelineEvents.filter((event) => event.status === "draft").length;
+    .filter((event) => {
+      if (normalizedQuery.length === 0) return true;
+      return [
+        event.title,
+        event.timeLabel,
+        event.summary,
+        ...event.chapterIds,
+        ...event.characterIds,
+        ...event.locationIds
+      ].some((value) => value.toLocaleLowerCase("zh-CN").includes(normalizedQuery));
+    })
+    .sort(
+      (left, right) => left.sequence - right.sequence || left.id.localeCompare(right.id, "en-US")
+    );
+}
+
+function TimelineEventRail({
+  chapterOptions,
+  entries,
+  events,
+  onOpen,
+  query = ""
+}: {
+  readonly chapterOptions: StoryBibleEditorProps["chapterOptions"];
+  readonly entries: readonly TimelineEditorEntry[];
+  readonly events: readonly TimelineRailEvent[];
+  readonly onOpen: (entryId: string) => void;
+  readonly query?: string;
+}) {
+  const linkedChapterCount = new Set(events.flatMap((event) => event.chapterIds)).size;
+  const chapterById = new Map(chapterOptions.map((chapter) => [chapter.id, chapter]));
+
+  if (events.length === 0) {
+    const entry = entries[0];
+    return (
+      <div className="ns-timeline-empty">
+        <span>
+          {query.trim().length > 0
+            ? "未找到匹配事件"
+            : entry === undefined
+              ? "还没有时间线"
+              : "暂无时间线事件"}
+        </span>
+        {entry === undefined || query.trim().length > 0 ? null : (
+          <button
+            aria-label={`打开时间线设置：${entry.title}`}
+            className="ns-icon-text-button"
+            onClick={() => onOpen(entry.id)}
+            type="button"
+          >
+            打开时间线设置
+          </button>
+        )}
+      </div>
+    );
+  }
 
   return (
-    <section className="ns-timeline-view" aria-label="时间线主视图">
-      <div className="ns-timeline-header">
-        <div>
-          <h1>时间线</h1>
-          <p>集中查看故事圣经中的时间线条目，点击后进入可编辑详情。</p>
-        </div>
-        <span>{timelineEntries.length} 条</span>
+    <div className="ns-timeline-rail-layout">
+      <div className="ns-timeline-summary" aria-label="时间线统计">
+        <span>事件 {events.length}</span>
+        <span>关联章节 {linkedChapterCount}</span>
       </div>
-
-      {timelineEvents.length > 0 ? (
-        <>
-          <div className="ns-timeline-summary" aria-label="Timeline metrics">
-            <span>Events {timelineEvents.length}</span>
-            <span>Linked chapters {linkedChapterCount}</span>
-            <span>active {activeCount}</span>
-            <span>draft {draftCount}</span>
-          </div>
-          <ol className="ns-timeline-event-rail" aria-label="Timeline event rail">
-            {timelineEvents.map((event) => (
-              <li className="ns-timeline-event" key={event.id}>
-                <span className="ns-timeline-sequence">{event.sequence}</span>
-                <div className="ns-timeline-event-body">
-                  <div className="ns-timeline-entry-header">
-                    <strong>{event.title}</strong>
-                    <span>{event.status}</span>
-                  </div>
-                  <p>{event.summary}</p>
-                  <div className="ns-timeline-event-meta">
-                    <span>{event.parentTitle}</span>
-                    {event.chapterIds.map((chapterId) => (
-                      <span key={chapterId}>{chapterId}</span>
-                    ))}
-                  </div>
+      <ol className="ns-timeline-event-rail" aria-label="时间线事件轨道">
+        {events.map((event, index) => (
+          <li className="ns-timeline-event" key={`${event.id}:${index}`}>
+            <span className="ns-timeline-sequence">{event.sequence}</span>
+            <div className="ns-timeline-event-body">
+              <div className="ns-timeline-entry-header">
+                <strong>{event.title}</strong>
+                <span>{event.timeLabel || "未设置时间"}</span>
+              </div>
+              <p>{event.summary || "暂无摘要"}</p>
+              {event.chapterIds.length === 0 ? null : (
+                <div className="ns-timeline-event-meta">
+                  {event.chapterIds.map((chapterId) => {
+                    const chapter = chapterById.get(chapterId);
+                    return (
+                      <span key={chapterId}>
+                        {chapter === undefined ? chapterId : `${chapter.order}. ${chapter.title}`}
+                      </span>
+                    );
+                  })}
                 </div>
-                <button
-                  aria-label={`Edit timeline: ${event.parentTitle}`}
-                  className="ns-icon-text-button"
-                  onClick={() => onTimelineEntryOpen?.(event.parentEntryId)}
-                  type="button"
-                >
-                  Edit
-                </button>
-              </li>
-            ))}
-          </ol>
-        </>
-      ) : timelineEntries.length === 0 ? (
-        <div className="ns-timeline-empty">当前项目还没有时间线条目。</div>
-      ) : (
-        <ol className="ns-timeline-list" aria-label="时间线条目">
-          {timelineEntries.map((entry) => (
-            <li key={entry.id}>
-              <button
-                aria-label={`打开时间线条目：${entry.title}`}
-                className="ns-timeline-entry-button"
-                onClick={() => onTimelineEntryOpen?.(entry.id)}
-                type="button"
-              >
-                <span className="ns-timeline-entry-header">
-                  <strong>{entry.title}</strong>
-                  <span>{entry.status}</span>
-                </span>
-                <span>{entry.summary}</span>
-              </button>
-            </li>
-          ))}
-        </ol>
-      )}
-    </section>
+              )}
+            </div>
+            <button
+              aria-label={`编辑时间线事件：${event.title}`}
+              className="ns-icon-button"
+              onClick={() => onOpen(event.id)}
+              title="编辑事件"
+              type="button"
+            >
+              <Pencil aria-hidden="true" size={14} />
+            </button>
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }
 
@@ -135,6 +194,13 @@ export function StoryBibleEditorView({ editor }: { readonly editor: StoryBibleEd
   const singleton = editor.activeKind === "outline" || editor.activeKind === "timeline";
   const canCreate = !singleton || categoryEntries.length === 0;
   const detailTitle = editor.draft.title.trim() || `新建${kindLabel}`;
+  const categoryCount =
+    editor.activeKind === "timeline"
+      ? categoryEntries.reduce(
+          (count, entry) => count + (entry.kind === "timeline" ? entry.timelineEvents.length : 0),
+          0
+        )
+      : categoryEntries.length;
 
   return (
     <section aria-label="故事圣经" className="ns-story-editor" data-view-mode={editor.viewMode}>
@@ -156,7 +222,9 @@ export function StoryBibleEditorView({ editor }: { readonly editor: StoryBibleEd
             <span className="ns-muted">
               {editor.viewMode === "detail"
                 ? `${kindLabel}${editor.dirty ? " · 未保存" : ""}`
-                : `${categoryEntries.length} 项`}
+                : editor.activeKind === "timeline"
+                  ? `${categoryCount} 个事件`
+                  : `${categoryCount} 项`}
             </span>
           </div>
         </div>
@@ -173,24 +241,27 @@ export function StoryBibleEditorView({ editor }: { readonly editor: StoryBibleEd
                 value={editor.filters.query}
               />
             </label>
-            <label className="ns-story-filter-control">
-              <span>状态</span>
-              <select
-                aria-label="筛选资料状态"
-                onChange={(event) =>
-                  editor.onFiltersChange({
-                    status: event.currentTarget.value as StoryBibleEditorProps["filters"]["status"]
-                  })
-                }
-                value={editor.filters.status}
-              >
-                <option value="all">全部</option>
-                <option value="active">启用</option>
-                <option value="draft">草稿</option>
-                <option value="archived">归档</option>
-                <option value="deleted">已删除</option>
-              </select>
-            </label>
+            {editor.activeKind === "timeline" ? null : (
+              <label className="ns-story-filter-control">
+                <span>状态</span>
+                <select
+                  aria-label="筛选资料状态"
+                  onChange={(event) =>
+                    editor.onFiltersChange({
+                      status: event.currentTarget
+                        .value as StoryBibleEditorProps["filters"]["status"]
+                    })
+                  }
+                  value={editor.filters.status}
+                >
+                  <option value="all">全部</option>
+                  <option value="active">启用</option>
+                  <option value="draft">草稿</option>
+                  <option value="archived">归档</option>
+                  <option value="deleted">已删除</option>
+                </select>
+              </label>
+            )}
             {editor.activeKind === "world" ? (
               <label className="ns-story-filter-control">
                 <span>类型</span>
@@ -264,7 +335,20 @@ export function StoryBibleEditorView({ editor }: { readonly editor: StoryBibleEd
       )}
 
       {editor.viewMode === "list" ? (
-        <StoryBibleList editor={editor} entries={visibleEntries} kindLabel={kindLabel} />
+        editor.activeKind === "timeline" ? (
+          <TimelineEventRail
+            chapterOptions={editor.chapterOptions}
+            entries={visibleEntries.filter((entry) => entry.kind === "timeline")}
+            events={collectTimelineEvents(
+              visibleEntries.filter((entry) => entry.kind === "timeline"),
+              editor.filters.query
+            )}
+            onOpen={editor.onEntrySelect}
+            query={editor.filters.query}
+          />
+        ) : (
+          <StoryBibleList editor={editor} entries={visibleEntries} kindLabel={kindLabel} />
+        )
       ) : (
         <StoryBibleDetailForm editor={editor} kindLabel={kindLabel} />
       )}
@@ -515,8 +599,17 @@ function StoryBibleDetailForm({
             editor.draft,
             editor.entries.filter((entry) => entry.kind === "foreshadow")
           ).map(storyBibleForeshadowValidationMessage)
-        : [];
-  const validationKindLabel = editor.draft.kind === "outline" ? "大纲" : "伏笔";
+        : editor.draft.kind === "timeline"
+          ? validateStoryBibleTimeline(editor.draft.details).map(
+              storyBibleTimelineValidationMessage
+            )
+          : [];
+  const validationKindLabel =
+    editor.draft.kind === "outline"
+      ? "大纲"
+      : editor.draft.kind === "foreshadow"
+        ? "伏笔"
+        : "时间线";
 
   return (
     <form
@@ -612,7 +705,7 @@ function StoryBibleDetailFields({ editor }: { readonly editor: StoryBibleEditorP
     case "foreshadow":
       return <StoryBibleForeshadowEditor editor={editor} />;
     case "timeline":
-      return <GenericStoryDetailFields editor={editor} />;
+      return <StoryBibleTimelineEditor editor={editor} />;
   }
 }
 
@@ -785,30 +878,6 @@ function WorldDetailFields({ editor }: { readonly editor: StoryBibleEditorProps 
       <StoryAliasesField editor={editor} />
       <StoryRelatedIdsField ariaLabel="关联资料 ID" editor={editor} label="关联资料 ID" />
       <StoryStatusField editor={editor} />
-    </div>
-  );
-}
-
-function GenericStoryDetailFields({ editor }: { readonly editor: StoryBibleEditorProps }) {
-  return (
-    <div className="ns-story-form-grid">
-      <StoryTextInput
-        ariaLabel="设定标题"
-        label="标题"
-        onChange={(title) => editor.onDraftChange(editor.draft.kind, { title })}
-        value={editor.draft.title}
-      />
-      <StoryStatusField editor={editor} />
-      <StoryAliasesField editor={editor} />
-      <StoryTextArea
-        ariaLabel="设定正文"
-        compact={false}
-        label="摘要"
-        onChange={(summary) => editor.onDraftChange(editor.draft.kind, { summary })}
-        value={editor.draft.summary}
-        wide
-      />
-      <StoryRelatedIdsField ariaLabel="关联资料 ID" editor={editor} label="关联资料 ID" />
     </div>
   );
 }
@@ -1021,7 +1090,13 @@ function filterStoryBibleEntries(
 ): readonly StoryBibleEditorEntry[] {
   const query = editor.filters.query.trim().toLocaleLowerCase("zh-CN");
   return entries.filter((entry) => {
-    if (editor.filters.status !== "all" && entry.status !== editor.filters.status) return false;
+    if (
+      editor.activeKind !== "timeline" &&
+      editor.filters.status !== "all" &&
+      entry.status !== editor.filters.status
+    ) {
+      return false;
+    }
     if (
       entry.kind === "world" &&
       editor.filters.worldAssetType !== "all" &&

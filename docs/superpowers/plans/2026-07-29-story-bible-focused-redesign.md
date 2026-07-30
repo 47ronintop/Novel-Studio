@@ -162,9 +162,9 @@ npm exec vitest -- packages/ui/test/workspace-navigator.test.tsx packages/ui/tes
 
 ### C4. 时间线详情
 
-- [ ] 将现有时间线事件轨道纳入新的 list 模式。
-- [ ] 详情支持顺序、时间标签、摘要、章节、人物、地点、前因和后果。
-- [ ] 保持时间线单例和既有搜索/Activity Bar 跳转。
+- [x] 将现有时间线事件轨道纳入新的 list 模式。
+- [x] 详情支持顺序、时间标签、摘要、章节、人物、地点、前因和后果。
+- [x] 保持时间线单例和既有搜索/Activity Bar 跳转。
 
 定向验证：
 

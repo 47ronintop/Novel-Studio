@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactNode } from "react";
@@ -2669,7 +2669,7 @@ describe("WorkspaceShell", () => {
       }),
       onTimelineEntryOpen: (entryId) => openedEntries.push(entryId)
     });
-    const openTimeline = findElementByAriaLabel(tree, "打开时间线条目：主线时间线");
+    const openTimeline = findElementByAriaLabel(tree, "打开时间线设置：主线时间线");
 
     expect(openTimeline).toBeDefined();
     openTimeline?.props.onClick?.();
@@ -2678,7 +2678,7 @@ describe("WorkspaceShell", () => {
     const html = renderToStaticMarkup(tree);
     expect(html).toContain('aria-label="时间线主视图"');
     expect(html).toContain("主线时间线");
-    expect(html).toContain("第一幕到第三幕的关键事件。");
+    expect(html).toContain("暂无时间线事件");
     expect(html).not.toContain("完整可视化编辑会在后续里程碑补齐");
   });
 
@@ -2693,6 +2693,12 @@ describe("WorkspaceShell", () => {
         storyBibleEditor={createStoryBibleEditorProps({
           activeKind: "timeline",
           viewMode: "list",
+          filters: {
+            query: "",
+            status: "draft",
+            worldAssetType: "all",
+            foreshadowTrackingStatus: "all"
+          },
           entries: [
             {
               id: "timeline_main",
@@ -2713,16 +2719,26 @@ describe("WorkspaceShell", () => {
                   sequence: 20,
                   title: "Council summons",
                   status: "draft",
+                  timeLabel: "第二日",
                   summary: "The council asks for the sealed archive.",
-                  chapterIds: ["ch_02"]
+                  chapterIds: ["ch_02"],
+                  characterIds: ["chr_council"],
+                  locationIds: ["loc_archive"],
+                  causes: ["evt_arrival"],
+                  effects: []
                 },
                 {
                   id: "evt_arrival",
                   sequence: 10,
                   title: "Hero arrives",
                   status: "active",
+                  timeLabel: "第一日",
                   summary: "The hero enters the capital.",
-                  chapterIds: ["ch_01"]
+                  chapterIds: ["ch_01"],
+                  characterIds: ["chr_hero"],
+                  locationIds: ["loc_capital"],
+                  causes: [],
+                  effects: ["event_01"]
                 }
               ]
             }
@@ -2741,20 +2757,295 @@ describe("WorkspaceShell", () => {
         onTimelineEntryOpen={(entryId) => openedEntries.push(entryId)}
       />
     );
-    const openEvent = findElementByAriaLabel(tree, "Edit timeline: Main Timeline");
+    const openEvent = findElementByAriaLabel(tree, "编辑时间线事件：Hero arrives");
     openEvent?.props.onClick?.();
     const html = renderToStaticMarkup(tree);
 
-    expect(openedEntries).toEqual(["timeline_main"]);
-    expect(html).toContain('aria-label="Timeline event rail"');
+    expect(openedEntries).toEqual(["evt_arrival"]);
+    expect(html).toContain('aria-label="时间线事件轨道"');
     expect(html.indexOf("Hero arrives")).toBeLessThan(html.indexOf("Council summons"));
-    expect(html).toContain("Events 2");
-    expect(html).toContain("Linked chapters 2");
-    expect(html).toContain("active");
-    expect(html).toContain("draft");
+    expect(html).toContain("事件 2");
+    expect(html).toContain("关联章节 2");
+    expect(html).toContain("第一日");
+    expect(html).toContain("第二日");
     expect(html).toContain("ch_01");
     expect(html).toContain("ch_02");
-    expect(html).toContain('aria-label="Edit timeline: Main Timeline"');
+    expect(html).toContain('aria-label="编辑时间线事件：Hero arrives"');
+  });
+
+  test("uses the event rail in the Story Bible timeline list", () => {
+    const application = createDesktopApplication();
+    const openedEntries: string[] = [];
+    const tree = (
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        storyBibleEditor={createStoryBibleEditorProps({
+          activeKind: "timeline",
+          viewMode: "list",
+          entries: [
+            {
+              id: "timeline_main",
+              kind: "timeline",
+              assetType: "timeline.events",
+              title: "主时间线",
+              status: "active",
+              summary: "",
+              aliases: [],
+              relatedEntityIds: [],
+              details: {},
+              createdAt: "2026-07-05T00:00:00.000Z",
+              updatedAt: "2026-07-05T00:00:00.000Z",
+              timelineEvents: [
+                {
+                  id: "evt_arrival",
+                  sequence: 1,
+                  title: "雨夜入城",
+                  status: "active",
+                  timeLabel: "第一日",
+                  summary: "主角进入王都。",
+                  chapterIds: ["ch_01"],
+                  characterIds: ["chr_hero"],
+                  locationIds: ["loc_capital"],
+                  causes: [],
+                  effects: []
+                }
+              ]
+            }
+          ],
+          draft: {
+            kind: "timeline",
+            assetType: "timeline.events",
+            title: "",
+            status: "active",
+            summary: "",
+            aliases: [],
+            relatedEntityIds: [],
+            details: {}
+          },
+          onEntrySelect: (entryId) => openedEntries.push(entryId)
+        })}
+      />
+    );
+
+    findElementByAriaLabel(tree, "编辑时间线事件：雨夜入城")?.props.onClick?.();
+    const html = renderToStaticMarkup(tree);
+
+    expect(openedEntries).toEqual(["evt_arrival"]);
+    expect(html).toContain('aria-label="时间线事件轨道"');
+    expect(html).toContain("1 个事件");
+    expect(html).not.toContain('aria-label="筛选资料状态"');
+    expect(html).not.toContain('data-story-list-kind="timeline"');
+  });
+
+  test("edits every timeline event relation without discarding unknown fields", () => {
+    const application = createDesktopApplication();
+    const updates: Array<{ readonly kind: string; readonly patch: unknown }> = [];
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+
+    act(() => {
+      root.render(
+        <WorkspaceShell
+          shellState={{ ...application.getShellState(), activeActivity: "timeline" }}
+          commands={application.listCommands()}
+          commandPaletteOpen={false}
+          storyBibleEditor={createStoryBibleEditorProps({
+            activeKind: "timeline",
+            activeTimelineEventId: "evt_arrival",
+            viewMode: "detail",
+            chapterOptions: [
+              { id: "ch_01", title: "雨夜入城", order: 1, status: "draft" },
+              { id: "ch_02", title: "议会传唤", order: 2, status: "draft" }
+            ],
+            entries: [
+              {
+                id: "chr_hero",
+                kind: "character",
+                assetType: "character",
+                title: "林默",
+                status: "active",
+                summary: "",
+                aliases: [],
+                relatedEntityIds: [],
+                details: {},
+                createdAt: "2026-07-05T00:00:00.000Z",
+                updatedAt: "2026-07-05T00:00:00.000Z"
+              },
+              {
+                id: "loc_capital",
+                kind: "world",
+                assetType: "world.location",
+                title: "王都",
+                status: "active",
+                summary: "",
+                aliases: [],
+                relatedEntityIds: [],
+                details: {},
+                createdAt: "2026-07-05T00:00:00.000Z",
+                updatedAt: "2026-07-05T00:00:00.000Z"
+              }
+            ],
+            draft: {
+              id: "timeline_main",
+              kind: "timeline",
+              assetType: "timeline.events",
+              title: "主时间线",
+              status: "active",
+              summary: "关键事件顺序。",
+              aliases: [],
+              relatedEntityIds: [],
+              details: {
+                futureTimelineField: { kept: true },
+                events: [
+                  {
+                    id: "evt_arrival",
+                    sequence: 1,
+                    title: "雨夜入城",
+                    timeLabel: "第一日",
+                    summary: "主角进入王都。",
+                    chapterIds: ["ch_01"],
+                    characterIds: ["chr_hero"],
+                    locationIds: ["loc_capital"],
+                    causes: [],
+                    effects: ["evt_council"],
+                    futureEventField: ["kept"]
+                  },
+                  {
+                    id: "evt_council",
+                    sequence: 2,
+                    title: "议会传唤",
+                    timeLabel: "第二日",
+                    summary: "",
+                    chapterIds: ["ch_02"],
+                    characterIds: [],
+                    locationIds: [],
+                    causes: ["evt_arrival"],
+                    effects: []
+                  }
+                ]
+              }
+            },
+            onDraftChange: (kind, patch) => updates.push({ kind, patch })
+          })}
+        />
+      );
+    });
+
+    for (const label of [
+      "事件标题",
+      "事件顺序",
+      "事件时间标签",
+      "事件摘要",
+      "事件关联章节",
+      "事件关联人物",
+      "事件关联地点",
+      "事件前因",
+      "事件后果"
+    ]) {
+      expect(host.querySelector(`[aria-label="${label}"]`)).not.toBeNull();
+    }
+    expect(host.textContent).toContain("议会传唤");
+    expect(host.textContent).toContain("林默");
+    expect(host.textContent).toContain("王都");
+
+    const timeLabel = host.querySelector<HTMLInputElement>('[aria-label="事件时间标签"]');
+    act(() => {
+      if (timeLabel !== null) {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
+          timeLabel,
+          "第一日深夜"
+        );
+      }
+      timeLabel?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(updates.at(-1)).toMatchObject({
+      kind: "timeline",
+      patch: {
+        details: {
+          futureTimelineField: { kept: true },
+          events: [
+            {
+              id: "evt_arrival",
+              timeLabel: "第一日深夜",
+              futureEventField: ["kept"]
+            },
+            { id: "evt_council" }
+          ]
+        }
+      }
+    });
+
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  test("keeps a newly added timeline event selected through its first save", () => {
+    const application = createDesktopApplication();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    let markTimelineSaved: (() => void) | undefined;
+
+    function TimelineHarness() {
+      const [draftId, setDraftId] = useState<string>();
+      const [details, setDetails] = useState<StoryBibleEditorProps["draft"]["details"]>({
+        events: [
+          {
+            id: "evt_arrival",
+            sequence: 1,
+            title: "雨夜入城",
+            timeLabel: "第一日",
+            summary: "",
+            chapterIds: [],
+            characterIds: [],
+            locationIds: [],
+            causes: [],
+            effects: []
+          }
+        ]
+      });
+      markTimelineSaved = () => setDraftId("timeline_main");
+      return (
+        <WorkspaceShell
+          shellState={{ ...application.getShellState(), activeActivity: "timeline" }}
+          commands={application.listCommands()}
+          commandPaletteOpen={false}
+          storyBibleEditor={createStoryBibleEditorProps({
+            activeKind: "timeline",
+            viewMode: "detail",
+            draft: {
+              ...(draftId === undefined ? {} : { id: draftId }),
+              kind: "timeline",
+              assetType: "timeline.events",
+              title: "主时间线",
+              status: "active",
+              summary: "",
+              aliases: [],
+              relatedEntityIds: [],
+              details
+            },
+            onDraftChange: (_kind, patch) => {
+              if (patch.details !== undefined) setDetails(patch.details);
+            }
+          })}
+        />
+      );
+    }
+
+    act(() => root.render(<TimelineHarness />));
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="新增时间线事件"]')?.click());
+
+    expect(host.querySelector<HTMLInputElement>('[aria-label="事件标题"]')?.value).toBe("新事件");
+    act(() => markTimelineSaved?.());
+    expect(host.querySelector<HTMLInputElement>('[aria-label="事件标题"]')?.value).toBe("新事件");
+    expect(host.querySelector(".ns-story-editor-header h1")?.textContent).toBe("主时间线");
+    expect(host.querySelector('[aria-label^="删除时间线事件"]')).toBeNull();
+
+    act(() => root.unmount());
+    host.remove();
   });
 
   test("renders timeline detail inside the timeline activity and returns to its list", () => {

@@ -734,8 +734,13 @@ export interface StoryTimelineEvent {
   readonly sequence: number;
   readonly title: string;
   readonly status: string;
+  readonly timeLabel: string;
   readonly summary: string;
   readonly chapterIds: readonly string[];
+  readonly characterIds: readonly string[];
+  readonly locationIds: readonly string[];
+  readonly causes: readonly string[];
+  readonly effects: readonly string[];
 }
 
 interface StoryBibleEditorDraftBase<
@@ -793,6 +798,7 @@ export type StoryBibleExternalUpdateState =
 
 export interface StoryBibleEditorProps {
   readonly activeKind: StoryBibleEditorKind;
+  readonly activeTimelineEventId?: string;
   readonly viewMode: StoryBibleEditorViewMode;
   readonly status: StoryBibleEditorStatus;
   readonly dirty: boolean;

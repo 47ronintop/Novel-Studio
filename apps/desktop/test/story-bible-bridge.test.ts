@@ -660,16 +660,26 @@ describe("Story Bible bridge", () => {
                 sequence: 20,
                 title: "Council summons",
                 status: "draft",
+                timeLabel: "第二日",
                 summary: "The council asks for the sealed archive.",
-                chapterIds: ["ch_02"]
+                chapterIds: ["ch_02"],
+                characterIds: ["chr_council"],
+                locationIds: ["loc_archive"],
+                causes: ["evt_arrival"],
+                effects: []
               },
               {
                 id: "evt_arrival",
                 sequence: 10,
                 title: "Hero arrives",
                 status: "active",
+                timeLabel: "第一日",
                 summary: "The hero enters the capital.",
-                chapterIds: ["ch_01"]
+                chapterIds: ["ch_01"],
+                characterIds: ["chr_hero"],
+                locationIds: ["loc_capital"],
+                causes: [],
+                effects: ["evt_council"]
               }
             ]
           },
@@ -693,8 +703,145 @@ describe("Story Bible bridge", () => {
       title: "Hero arrives",
       status: "active",
       sequence: 10,
-      chapterIds: ["ch_01"]
+      timeLabel: "第一日",
+      chapterIds: ["ch_01"],
+      characterIds: ["chr_hero"],
+      locationIds: ["loc_capital"],
+      causes: [],
+      effects: ["evt_council"]
     });
+
+    const selected = bridge.selectEntry("evt_council");
+    expect(selected).toMatchObject({
+      activeKind: "timeline",
+      activeTimelineEventId: "evt_council",
+      viewMode: "detail",
+      draft: { id: "timeline_main", assetType: "timeline.events" }
+    });
+  });
+
+  test("saves timeline event fields while preserving unknown root and event data", async () => {
+    const timelineSnapshot: StoryBibleSnapshot = {
+      ...snapshot,
+      timeline: {
+        schemaVersion: "1.0",
+        id: "timeline_main",
+        type: "timeline.events",
+        title: "Main Timeline",
+        status: "active",
+        summary: "Ordered events.",
+        details: {
+          futureTimelineField: { kept: true },
+          events: [
+            {
+              id: "evt_arrival",
+              sequence: 1,
+              title: "Hero arrives",
+              timeLabel: "First day",
+              summary: "The hero enters the capital.",
+              chapterIds: ["ch_01"],
+              characterIds: ["chr_hero"],
+              locationIds: ["loc_capital"],
+              causes: [],
+              effects: [],
+              futureEventField: ["kept"]
+            }
+          ]
+        },
+        futureRootField: { kept: true },
+        createdAt: "2026-07-05T00:00:00.000Z",
+        updatedAt: "2026-07-05T00:00:00.000Z"
+      }
+    };
+    const api = createApi([], timelineSnapshot);
+    const saveAsset = vi.spyOn(api.storyBible, "saveAsset");
+    const bridge = createStoryBibleBridge(api, {
+      now: () => "2026-07-06T00:00:00.000Z"
+    });
+
+    await bridge.load("workspace-01");
+    bridge.selectEntry("evt_arrival");
+    const currentEvents = bridge.getEditorProps().draft.details["events"];
+    expect(Array.isArray(currentEvents)).toBe(true);
+    bridge.updateDraft("timeline", {
+      details: {
+        events: [
+          {
+            ...((currentEvents as Array<Record<string, unknown>>)[0] ?? {}),
+            timeLabel: "First night",
+            effects: ["evt_council"]
+          }
+        ]
+      }
+    });
+
+    const saved = await bridge.saveDraft();
+
+    expect(saved).toMatchObject({
+      status: "saved",
+      dirty: false,
+      activeTimelineEventId: "evt_arrival"
+    });
+    expect(saveAsset).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "timeline_main",
+        type: "timeline.events",
+        futureRootField: { kept: true },
+        details: {
+          futureTimelineField: { kept: true },
+          events: [
+            expect.objectContaining({
+              id: "evt_arrival",
+              timeLabel: "First night",
+              effects: ["evt_council"],
+              futureEventField: ["kept"]
+            })
+          ]
+        }
+      })
+    );
+  });
+
+  test("rejects invalid timeline event sequences and self references before persistence", async () => {
+    const calls: string[] = [];
+    const bridge = createStoryBibleBridge(
+      createApi(calls, {
+        ...snapshot,
+        timeline: {
+          schemaVersion: "1.0",
+          id: "timeline_main",
+          type: "timeline.events",
+          title: "Main Timeline",
+          status: "active",
+          summary: "",
+          details: {
+            events: [
+              {
+                id: "evt_invalid",
+                sequence: 0,
+                title: "Invalid event",
+                causes: ["evt_invalid"]
+              }
+            ]
+          },
+          createdAt: "2026-07-05T00:00:00.000Z",
+          updatedAt: "2026-07-05T00:00:00.000Z"
+        }
+      })
+    );
+
+    await bridge.load("workspace-01");
+    bridge.selectEntry("timeline_main");
+    const result = await bridge.saveDraft();
+
+    expect(result).toMatchObject({
+      status: "error",
+      dirty: true,
+      feedback: { kind: "error" }
+    });
+    expect(result.feedback?.message).toContain("顺序必须是大于 0 的整数");
+    expect(result.feedback?.message).toContain("不能把自身设为前因或后果");
+    expect(calls.some((call) => call.startsWith("storyBible.saveAsset:"))).toBe(false);
   });
 
   test("clears the previous workspace snapshot while the next one is loading", async () => {

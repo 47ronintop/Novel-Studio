@@ -83,6 +83,19 @@ export type {
   StoryBibleForeshadowRecord,
   StoryBibleForeshadowValidationIssue
 } from "./story-bible-foreshadow.js";
+export {
+  appendStoryBibleTimelineEvent,
+  createStoryBibleTimelineEvent,
+  readStoryBibleTimeline,
+  storyBibleTimelineValidationMessage,
+  updateStoryBibleTimelineEvent,
+  validateStoryBibleTimeline
+} from "./story-bible-timeline.js";
+export type {
+  StoryBibleTimelineEvent,
+  StoryBibleTimelineModel,
+  StoryBibleTimelineValidationIssue
+} from "./story-bible-timeline.js";
 export { AgentRunPanel } from "./agent-run-panel.js";
 export { AgentErrorCard } from "./agent-error-card.js";
 export type { AgentErrorCardProps } from "./agent-error-card.js";
