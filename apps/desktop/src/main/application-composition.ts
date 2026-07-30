@@ -8,12 +8,14 @@ import {
   createConfigStudioSession,
   createDesktopApplication,
   createEngineeringWorkspaceSession,
+  createForeshadowAnalysisSession,
   createModelSettingsSession,
   createPluginSettingsSession,
   createProjectSearchSession,
   createProjectWorkspaceSession,
   createStoryBibleSession,
   createUserPreferencesSession,
+  resolveDefaultForeshadowAnalysisRuntimeProfile,
   resolveDefaultModelRuntimeProfile
 } from "@novel-studio/application";
 import type {
@@ -290,6 +292,41 @@ export function createProjectDesktopApplication(
         listChapters: () => createStoryBibleChapterCatalogRepository().listChapters()
       }
     }),
+    createForeshadowAnalysisSession: (projectRoot) => {
+      const analysisChapterRepository = new ChapterFileRepository({
+        projectRoot,
+        traceId: "trace_desktop_foreshadow_analysis_chapter_repository",
+        ...(options.now === undefined ? {} : { now: options.now })
+      });
+      const analysisStoryBibleRepository = new StoryBibleFileRepository({
+        projectRoot,
+        traceId: "trace_desktop_foreshadow_analysis_story_bible_repository"
+      });
+      return createForeshadowAnalysisSession({
+        chapterRepository: {
+          readChapter: (chapterId) => analysisChapterRepository.readChapter(chapterId)
+        },
+        storyBibleRepository: {
+          readStoryBible: () => analysisStoryBibleRepository.readStoryBible()
+        },
+        resolveModelRuntimeProfile: async () => {
+          const settings = await new ProjectSettingsRepository({
+            projectRoot: options.applicationSettingsRoot ?? projectRoot,
+            traceId: "trace_desktop_foreshadow_analysis_settings_repository"
+          }).readSettings();
+          return settings.ok
+            ? resolveDefaultForeshadowAnalysisRuntimeProfile(settings.value)
+            : settings;
+        },
+        llmAdapter: createLlmAdapter({
+          provider:
+            options.createAiProvider?.({ chapterEditorSession }) ??
+            createDesktopMockAiProvider(chapterEditorSession),
+          clock: () => options.now?.() ?? new Date().toISOString()
+        }),
+        ...(options.now === undefined ? {} : { now: options.now })
+      });
+    },
     createProjectSearchSession: (projectRoot) =>
       createProjectSearchSession({
         repository: new SearchIndexFileRepository({
@@ -482,12 +519,14 @@ function createDesktopMockAiProvider(chapterEditorSession: ChapterEditorSession)
       const currentBody = chapterEditorSession.getState()?.chapter.body ?? "";
       const separator = currentBody.endsWith("\n") || currentBody.length === 0 ? "" : "\n";
       const selectedText = desktopMockSelectionText(request);
+      const isForeshadowAnalysis = request.traceId === "foreshadow-analysis";
 
       return {
         content: {
           type: "json",
-          value:
-            selectedText === undefined
+          value: isForeshadowAnalysis
+            ? { candidates: [] }
+            : selectedText === undefined
               ? {
                   proposedBody: `${currentBody}${separator}AI continuation draft.\n`,
                   summary: "Generated a local mock continuation for review."

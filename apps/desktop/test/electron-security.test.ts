@@ -131,6 +131,7 @@ describe("Electron security baseline", () => {
       "application:story-bible:save-memory",
       "application:story-bible:build-consistency-report",
       "application:story-bible:build-context-candidates",
+      "application:story-bible:detect-foreshadows",
       "application:studio:load-config-asset",
       "application:studio:save-config-asset",
       "application:studio:restore-config-version",
@@ -173,6 +174,7 @@ describe("Electron security baseline", () => {
     expect(isApplicationIpcChannel("application:settings:discover-models")).toBe(true);
     expect(isApplicationIpcChannel("application:settings:list-agent-usage")).toBe(true);
     expect(isApplicationIpcChannel("application:story-bible:load")).toBe(true);
+    expect(isApplicationIpcChannel("application:story-bible:detect-foreshadows")).toBe(true);
     expect(isApplicationIpcChannel("application:studio:save-config-asset")).toBe(true);
     expect(isApplicationIpcChannel("application:preferences:load")).toBe(true);
     expect(isApplicationIpcChannel("fs:read-file")).toBe(false);
@@ -314,6 +316,7 @@ describe("Electron security baseline", () => {
       updatedAt: "2026-07-05T00:00:00.000Z"
     });
     await api.storyBible.buildContextCandidates({ includeStatuses: ["active"] });
+    await api.storyBible.detectForeshadows({ chapterIds: ["ch_opening"] });
     await api.studio.loadConfigAsset("workflow", "wf_review_chapter");
     await api.studio.saveConfigAsset({
       assetType: "workflow",
@@ -379,6 +382,7 @@ describe("Electron security baseline", () => {
       "application:story-bible:save-asset",
       "application:story-bible:save-memory",
       "application:story-bible:build-context-candidates",
+      "application:story-bible:detect-foreshadows",
       "application:studio:load-config-asset",
       "application:studio:save-config-asset",
       "application:studio:restore-config-version",

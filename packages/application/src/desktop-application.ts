@@ -107,6 +107,11 @@ import type {
   StoryBibleSnapshot
 } from "./story-bible-session.js";
 import type {
+  ForeshadowAnalysisInput,
+  ForeshadowAnalysisResult,
+  ForeshadowAnalysisSession
+} from "./foreshadow-analysis-session.js";
+import type {
   UserPreferencesSaveInput,
   UserPreferencesSession,
   UserPreferencesSnapshot
@@ -276,6 +281,9 @@ export interface DesktopApplication {
   buildStoryBibleContextCandidates(
     options?: StoryBibleContextCandidateOptions
   ): Promise<Result<readonly ContextCandidate[], UnifiedError>>;
+  detectForeshadows(
+    input: ForeshadowAnalysisInput
+  ): Promise<Result<ForeshadowAnalysisResult, UnifiedError>>;
   generateActiveChapterSuggestion(
     request: AiWritingSuggestionRequest
   ): Promise<Result<AiWritingSuggestion, UnifiedError>>;
@@ -353,6 +361,7 @@ export interface DesktopApplicationOptions {
   readonly configStudioSession?: ConfigStudioSession;
   readonly userPreferencesSession?: UserPreferencesSession;
   readonly storyBibleSession?: StoryBibleSession;
+  readonly createForeshadowAnalysisSession?: (projectRoot: string) => ForeshadowAnalysisSession;
   readonly createProjectSearchSession?: (projectRoot: string) => ProjectSearchSession;
   readonly aiWritingWorkflowSession?: AiWritingWorkflowSession;
   readonly workflowRunHistory?: WorkflowRunHistoryPort;
@@ -417,6 +426,7 @@ export function createDesktopApplication(
   const configStudioSession = options.configStudioSession;
   const userPreferencesSession = options.userPreferencesSession;
   const storyBibleSession = options.storyBibleSession;
+  const createForeshadowAnalysisSession = options.createForeshadowAnalysisSession;
   const createProjectSearchSession = options.createProjectSearchSession;
   const initialProjectSnapshot = activeProjectWorkspaceSession?.getSnapshot();
   let activeProjectSearchBinding: ActiveProjectSearchBinding | undefined =
@@ -427,6 +437,7 @@ export function createDesktopApplication(
           projectRoot: initialProjectSnapshot.projectRoot,
           session: createProjectSearchSession(initialProjectSnapshot.projectRoot)
         };
+  let projectScopeGeneration = 0;
   const aiWritingWorkflowSession = options.aiWritingWorkflowSession;
   const createAiWritingWorkflowSession = options.createAiWritingWorkflowSession;
   let dynamicAiWritingWorkflowSession: AiWritingWorkflowSession | undefined;
@@ -457,6 +468,7 @@ export function createDesktopApplication(
   };
 
   const refreshProjectScopedBindings = (projectRoot: string | undefined): void => {
+    projectScopeGeneration += 1;
     refreshProjectSearchBinding(projectRoot);
     try {
       options.onActiveProjectRootChange?.(projectRoot);
@@ -872,6 +884,27 @@ export function createDesktopApplication(
       }
 
       return storyBibleSession.buildContextCandidates(options);
+    },
+    async detectForeshadows(input) {
+      const projectRoot = activeProjectWorkspaceSession?.getSnapshot()?.projectRoot;
+      if (
+        projectRoot === undefined ||
+        createForeshadowAnalysisSession === undefined ||
+        activeEngineeringWorkspaceSession !== undefined
+      ) {
+        return storyBibleUnavailable();
+      }
+
+      const generation = projectScopeGeneration;
+      const result = await createForeshadowAnalysisSession(projectRoot).analyze(input);
+      if (
+        generation !== projectScopeGeneration ||
+        activeEngineeringWorkspaceSession !== undefined ||
+        activeProjectWorkspaceSession?.getSnapshot()?.projectRoot !== projectRoot
+      ) {
+        return foreshadowScanWorkspaceChanged();
+      }
+      return result;
     },
     async generateActiveChapterSuggestion(request) {
       const activeAiWritingWorkflowSession = getAiWritingWorkflowSession();
@@ -1475,6 +1508,19 @@ function storyBibleUnavailable<T>(): Result<T, UnifiedError> {
       recoverability: "user-action",
       suggestedAction: "Open a project before using Story Bible commands.",
       traceId: "application-story-bible"
+    })
+  );
+}
+
+function foreshadowScanWorkspaceChanged<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "FORESHADOW_SCAN_WORKSPACE_CHANGED",
+      category: "UserError",
+      message: "The active workspace changed before foreshadow analysis finished.",
+      recoverability: "user-action",
+      suggestedAction: "Run the analysis again in the current project.",
+      traceId: "application-foreshadow-analysis"
     })
   );
 }

@@ -94,6 +94,7 @@ export const APPLICATION_IPC_CHANNELS = [
   "application:story-bible:save-memory",
   "application:story-bible:build-consistency-report",
   "application:story-bible:build-context-candidates",
+  "application:story-bible:detect-foreshadows",
   "application:studio:load-config-asset",
   "application:studio:save-config-asset",
   "application:studio:restore-config-version",

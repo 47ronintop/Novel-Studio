@@ -186,10 +186,10 @@ npm exec vitest -- packages/ui/test/workspace-shell.test.tsx packages/ui/test/wo
 
 ### D2. API、IPC 与 preload
 
-- [ ] 在 `NovelStudioApi.storyBible` 增加 `detectForeshadows(input)` 只读方法。
-- [ ] Main handler 对 chapter ID 数量、格式和结构化返回值再次收窄；白名单和 Electron security 测试同步更新。
-- [ ] Renderer 只接收候选 DTO，不接收文件路径或模型密钥。
-- [ ] 取消或关闭候选审查不产生持久化副作用。
+- [x] 在 `NovelStudioApi.storyBible` 增加 `detectForeshadows(input)` 只读方法。
+- [x] Main handler 对 chapter ID 数量、格式和结构化返回值再次收窄；白名单和 Electron security 测试同步更新。
+- [x] Renderer 只接收候选 DTO，不接收文件路径或模型密钥。
+- [x] 取消或关闭候选审查不产生持久化副作用。
 
 ### D3. 候选审查 UI
 

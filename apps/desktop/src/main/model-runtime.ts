@@ -1225,11 +1225,13 @@ function createDemoModeProvider(chapterEditorSession: ChapterEditorSession): Llm
       const body = currentBody();
       const separator = body.endsWith("\n") || body.length === 0 ? "" : "\n";
       const selectedText = demoSelectionText(request);
+      const isForeshadowAnalysis = request.traceId === "foreshadow-analysis";
       return {
         content: {
           type: "json",
-          value:
-            selectedText === undefined
+          value: isForeshadowAnalysis
+            ? { candidates: [] }
+            : selectedText === undefined
               ? {
                   proposedBody: `${body}${separator}AI continuation draft.\n`,
                   summary: "当前是演示模式，未配置真实Key。"

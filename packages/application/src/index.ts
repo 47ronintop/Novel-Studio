@@ -59,6 +59,13 @@ export type {
 export type {
   AiWritingSuggestionStreamOptions,
   CreateCreativeProjectRequest,
+  ForeshadowAnalysisCandidateDto,
+  ForeshadowAnalysisEvidenceDto,
+  ForeshadowAnalysisResultDto,
+  ForeshadowAnalysisUsageDto,
+  ForeshadowNewCandidateDto,
+  ForeshadowPayoffCandidateDto,
+  ForeshadowProgressCandidateDto,
   NovelStudioApi,
   ProjectConventionsCreateResult,
   ReadAgentPermissionSummaryQuery,

@@ -57,6 +57,9 @@ import type {
   AiWritingSuggestionStreamPushEvent,
   AiWritingSuggestionStreamStartRequest,
   ModelProfile,
+  ForeshadowAnalysisCandidateDto,
+  ForeshadowAnalysisInput,
+  ForeshadowAnalysisResultDto,
   ForeshadowAsset,
   MemoryRecord,
   ListAgentConversationsQuery,
@@ -1212,6 +1215,24 @@ export function createApplicationIpcHandlers(
       application.buildStoryBibleConsistencyReport(),
     "application:story-bible:build-context-candidates": (options: unknown) =>
       application.buildStoryBibleContextCandidates(toStoryBibleContextCandidateOptions(options)),
+    "application:story-bible:detect-foreshadows": async (input: unknown) => {
+      const analysisInput = toForeshadowAnalysisInput(input);
+      if (analysisInput === undefined) {
+        return foreshadowScanInputInvalid();
+      }
+
+      let result: Awaited<ReturnType<DesktopApplication["detectForeshadows"]>>;
+      try {
+        result = await application.detectForeshadows(analysisInput);
+      } catch {
+        return foreshadowScanApplicationError(undefined);
+      }
+      if (!result.ok) {
+        return foreshadowScanApplicationError(result.error);
+      }
+      const dto = toForeshadowAnalysisResultDto(result.value, analysisInput.chapterIds);
+      return dto === undefined ? foreshadowScanIpcResultInvalid() : ok(dto);
+    },
     "application:studio:load-config-asset": (assetType: unknown, assetId: unknown) => {
       if (!isConfigAssetType(assetType) || typeof assetId !== "string") {
         return application.loadConfigAsset("prompt", "");
@@ -2485,6 +2506,474 @@ function readThrownStreamErrorDetail(error: unknown): JsonObject {
   }
 
   return detail;
+}
+
+const FORESHADOW_CHAPTER_ID_PATTERN = /^ch_[A-Za-z0-9_-]+$/u;
+const FORESHADOW_ANALYSIS_ID_PATTERN = /^fsa_([a-f0-9]{32})$/u;
+const FORESHADOW_ID_PATTERN = /^fsh_[a-f0-9]{32}$/u;
+const FORESHADOW_EVIDENCE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
+const MAX_FORESHADOW_SCAN_CHAPTERS = 5;
+const MAX_FORESHADOW_SCAN_CANDIDATES = 100;
+
+function toForeshadowAnalysisInput(value: unknown): ForeshadowAnalysisInput | undefined {
+  if (
+    !isRecord(value) ||
+    !Object.prototype.hasOwnProperty.call(value, "chapterIds") ||
+    !hasOnlyKeys(value, ["chapterIds"])
+  ) {
+    return undefined;
+  }
+  const chapterIds = value["chapterIds"];
+  if (
+    !Array.isArray(chapterIds) ||
+    !isDenseArray(chapterIds) ||
+    chapterIds.length < 1 ||
+    chapterIds.length > MAX_FORESHADOW_SCAN_CHAPTERS ||
+    !chapterIds.every(
+      (chapterId): chapterId is string =>
+        typeof chapterId === "string" && FORESHADOW_CHAPTER_ID_PATTERN.test(chapterId)
+    ) ||
+    new Set(chapterIds).size !== chapterIds.length
+  ) {
+    return undefined;
+  }
+  return { chapterIds: [...chapterIds] };
+}
+
+function toForeshadowAnalysisResultDto(
+  value: unknown,
+  expectedChapterIds: readonly string[]
+): ForeshadowAnalysisResultDto | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const analysisId = value["analysisId"];
+  if (typeof analysisId !== "string") {
+    return undefined;
+  }
+  const analysisMatch = FORESHADOW_ANALYSIS_ID_PATTERN.exec(analysisId);
+  const chapterIds = value["chapterIds"];
+  const candidates = value["candidates"];
+  const createdAt = value["createdAt"];
+  if (
+    analysisMatch === null ||
+    !Array.isArray(chapterIds) ||
+    !isDenseArray(chapterIds) ||
+    chapterIds.length !== expectedChapterIds.length ||
+    !chapterIds.every((chapterId, index) => chapterId === expectedChapterIds[index]) ||
+    !Array.isArray(candidates) ||
+    !isDenseArray(candidates) ||
+    candidates.length > MAX_FORESHADOW_SCAN_CANDIDATES ||
+    typeof createdAt !== "string" ||
+    !isCanonicalIsoDateTime(createdAt)
+  ) {
+    return undefined;
+  }
+
+  const selectedChapterIds = new Set(expectedChapterIds);
+  const candidateDtos: ForeshadowAnalysisCandidateDto[] = [];
+  for (const [index, candidate] of candidates.entries()) {
+    const candidateDto = toForeshadowAnalysisCandidateDto(
+      candidate,
+      analysisMatch[1] ?? "",
+      index,
+      selectedChapterIds
+    );
+    if (candidateDto === undefined) {
+      return undefined;
+    }
+    candidateDtos.push(candidateDto);
+  }
+
+  const usage = toForeshadowAnalysisUsageDto(value["usage"]);
+  if (usage === undefined) {
+    return undefined;
+  }
+  return {
+    analysisId,
+    chapterIds: [...expectedChapterIds],
+    candidates: candidateDtos,
+    usage,
+    createdAt
+  };
+}
+
+function toForeshadowAnalysisCandidateDto(
+  value: unknown,
+  analysisIdentity: string,
+  index: number,
+  selectedChapterIds: ReadonlySet<string>
+): ForeshadowAnalysisCandidateDto | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const expectedCandidateId = `fsc_${analysisIdentity}_${String(index + 1).padStart(3, "0")}`;
+  const candidateId = value["candidateId"];
+  const reason = boundedText(value["reason"], 1, 2_000);
+  const evidence = toForeshadowAnalysisEvidenceDto(value["evidence"], selectedChapterIds);
+  const duplicateForeshadowIds = toForeshadowIdArray(value["duplicateForeshadowIds"]);
+  if (
+    candidateId !== expectedCandidateId ||
+    reason === undefined ||
+    evidence === undefined ||
+    duplicateForeshadowIds === undefined
+  ) {
+    return undefined;
+  }
+
+  const base = { candidateId, evidence, reason, duplicateForeshadowIds };
+  if (value["kind"] === "new") {
+    const suggested = toForeshadowNewSuggestionDto(value["suggested"], evidence.chapterId);
+    return suggested === undefined ? undefined : { ...base, kind: "new", suggested };
+  }
+  if (value["kind"] === "progress") {
+    const targetForeshadowId = value["targetForeshadowId"];
+    const suggested = toForeshadowProgressSuggestionDto(value["suggested"]);
+    return typeof targetForeshadowId !== "string" ||
+      !FORESHADOW_ID_PATTERN.test(targetForeshadowId) ||
+      suggested === undefined
+      ? undefined
+      : { ...base, kind: "progress", targetForeshadowId, suggested };
+  }
+  if (value["kind"] === "payoff") {
+    const targetForeshadowId = value["targetForeshadowId"];
+    const suggested = toForeshadowPayoffSuggestionDto(value["suggested"], evidence.chapterId);
+    return typeof targetForeshadowId !== "string" ||
+      !FORESHADOW_ID_PATTERN.test(targetForeshadowId) ||
+      suggested === undefined
+      ? undefined
+      : { ...base, kind: "payoff", targetForeshadowId, suggested };
+  }
+  return undefined;
+}
+
+function toForeshadowAnalysisEvidenceDto(
+  value: unknown,
+  selectedChapterIds: ReadonlySet<string>
+): ForeshadowAnalysisResultDto["candidates"][number]["evidence"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const chapterId = value["chapterId"];
+  const excerpt = boundedText(value["excerpt"], 1, 2_000);
+  const excerptHash = value["excerptHash"];
+  if (
+    typeof chapterId !== "string" ||
+    !selectedChapterIds.has(chapterId) ||
+    excerpt === undefined ||
+    typeof excerptHash !== "string" ||
+    !FORESHADOW_EVIDENCE_HASH_PATTERN.test(excerptHash)
+  ) {
+    return undefined;
+  }
+  return { chapterId, excerpt, excerptHash };
+}
+
+function toForeshadowNewSuggestionDto(
+  value: unknown,
+  evidenceChapterId: string
+): Extract<ForeshadowAnalysisCandidateDto, { readonly kind: "new" }>["suggested"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const title = boundedText(value["title"], 1, 160);
+  const summary = boundedText(value["summary"], 0, 1_000);
+  const plannedPayoffChapterId = optionalChapterId(value["plannedPayoffChapterId"]);
+  const notes = optionalBoundedText(value["notes"], 2_000);
+  const relatedEntityIds = optionalUniqueTextArray(value["relatedEntityIds"], 100);
+  if (
+    title === undefined ||
+    summary === undefined ||
+    value["trackingStatus"] !== "planted" ||
+    value["plantedChapterId"] !== evidenceChapterId ||
+    plannedPayoffChapterId === false ||
+    notes === false ||
+    relatedEntityIds === false
+  ) {
+    return undefined;
+  }
+  return {
+    title,
+    summary,
+    trackingStatus: "planted",
+    plantedChapterId: evidenceChapterId,
+    ...(plannedPayoffChapterId === undefined ? {} : { plannedPayoffChapterId }),
+    ...(notes === undefined ? {} : { notes }),
+    ...(relatedEntityIds === undefined ? {} : { relatedEntityIds })
+  };
+}
+
+function toForeshadowProgressSuggestionDto(
+  value: unknown
+): Extract<ForeshadowAnalysisCandidateDto, { readonly kind: "progress" }>["suggested"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const trackingStatus = value["trackingStatus"];
+  const summary = optionalBoundedText(value["summary"], 1_000);
+  const notes = optionalBoundedText(value["notes"], 2_000);
+  if (
+    (trackingStatus !== "progressing" && trackingStatus !== "ready-to-payoff") ||
+    summary === false ||
+    notes === false
+  ) {
+    return undefined;
+  }
+  return {
+    trackingStatus,
+    ...(summary === undefined ? {} : { summary }),
+    ...(notes === undefined ? {} : { notes })
+  };
+}
+
+function toForeshadowPayoffSuggestionDto(
+  value: unknown,
+  evidenceChapterId: string
+): Extract<ForeshadowAnalysisCandidateDto, { readonly kind: "payoff" }>["suggested"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const summary = optionalBoundedText(value["summary"], 1_000);
+  const notes = optionalBoundedText(value["notes"], 2_000);
+  if (
+    value["trackingStatus"] !== "paid-off" ||
+    value["actualPayoffChapterId"] !== evidenceChapterId ||
+    summary === false ||
+    notes === false
+  ) {
+    return undefined;
+  }
+  return {
+    trackingStatus: "paid-off",
+    actualPayoffChapterId: evidenceChapterId,
+    ...(summary === undefined ? {} : { summary }),
+    ...(notes === undefined ? {} : { notes })
+  };
+}
+
+function toForeshadowAnalysisUsageDto(
+  value: unknown
+): ForeshadowAnalysisResultDto["usage"] | undefined {
+  if (!isRecord(value) || !isRecord(value["cost"])) {
+    return undefined;
+  }
+  const inputTokens = value["inputTokens"];
+  const outputTokens = value["outputTokens"];
+  const totalTokens = value["totalTokens"];
+  const usageStatus = value["usageStatus"];
+  const cost = value["cost"];
+  const amount = cost["amount"];
+  const currency = cost["currency"];
+  const costStatus = cost["status"];
+  if (
+    !isNonNegativeSafeInteger(inputTokens) ||
+    !isNonNegativeSafeInteger(outputTokens) ||
+    !isNonNegativeSafeInteger(totalTokens) ||
+    (usageStatus !== "missing" && usageStatus !== "estimated" && usageStatus !== "actual") ||
+    typeof amount !== "number" ||
+    !Number.isFinite(amount) ||
+    amount < 0 ||
+    typeof currency !== "string" ||
+    !/^(?:[A-Z]{3})?$/u.test(currency) ||
+    (costStatus !== "unknown" && costStatus !== "estimated" && costStatus !== "actual")
+  ) {
+    return undefined;
+  }
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    usageStatus,
+    cost: { amount, currency, status: costStatus }
+  };
+}
+
+function toForeshadowIdArray(value: unknown): readonly string[] | undefined {
+  if (
+    !Array.isArray(value) ||
+    !isDenseArray(value) ||
+    value.length > MAX_FORESHADOW_SCAN_CANDIDATES ||
+    !value.every(
+      (foreshadowId): foreshadowId is string =>
+        typeof foreshadowId === "string" && FORESHADOW_ID_PATTERN.test(foreshadowId)
+    ) ||
+    new Set(value).size !== value.length
+  ) {
+    return undefined;
+  }
+  return [...value];
+}
+
+function optionalChapterId(value: unknown): string | undefined | false {
+  return value === undefined
+    ? undefined
+    : typeof value === "string" && FORESHADOW_CHAPTER_ID_PATTERN.test(value)
+      ? value
+      : false;
+}
+
+function optionalBoundedText(value: unknown, maxLength: number): string | undefined | false {
+  return value === undefined ? undefined : (boundedText(value, 0, maxLength) ?? false);
+}
+
+function optionalUniqueTextArray(
+  value: unknown,
+  maxItems: number
+): readonly string[] | undefined | false {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (
+    !Array.isArray(value) ||
+    !isDenseArray(value) ||
+    value.length > maxItems ||
+    !value.every(
+      (entry): entry is string =>
+        typeof entry === "string" &&
+        boundedText(entry, 1, 512) !== undefined &&
+        entry === entry.trim()
+    ) ||
+    new Set(value).size !== value.length
+  ) {
+    return false;
+  }
+  return [...value];
+}
+
+function boundedText(value: unknown, minLength: number, maxLength: number): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.normalize("NFC").replace(/\r\n?/gu, "\n").trim();
+  if (normalized !== value) {
+    return undefined;
+  }
+  const length = Array.from(normalized).length;
+  return length >= minLength && length <= maxLength ? value : undefined;
+}
+
+function isCanonicalIsoDateTime(value: string): boolean {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isDenseArray(value: readonly unknown[]): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value, index)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function foreshadowScanInputInvalid<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "FORESHADOW_SCAN_INPUT_INVALID",
+      category: "ValidationError",
+      message: "Choose between one and five unique saved chapters.",
+      recoverability: "user-action",
+      suggestedAction: "Choose one to five valid saved chapter IDs and retry.",
+      traceId: "desktop-foreshadow-analysis-ipc"
+    })
+  );
+}
+
+function foreshadowScanIpcResultInvalid<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "FORESHADOW_SCAN_IPC_RESULT_INVALID",
+      category: "AgentError",
+      message: "The foreshadow analysis result could not be verified.",
+      recoverability: "retryable",
+      suggestedAction: "Retry the foreshadow analysis.",
+      traceId: "desktop-foreshadow-analysis-ipc"
+    })
+  );
+}
+
+function foreshadowScanApplicationError<T>(value: unknown): Result<T, UnifiedError> {
+  const error = isRecord(value) ? value : {};
+  const rawCode = error["code"];
+  const code =
+    typeof rawCode === "string" && /^[A-Z][A-Z0-9_]{0,127}$/u.test(rawCode)
+      ? rawCode
+      : "FORESHADOW_SCAN_FAILED";
+  const descriptor = foreshadowScanErrorDescriptor(code);
+  return err(
+    createUnifiedError({
+      code,
+      category: toSafeErrorCategory(error["category"]),
+      message: descriptor.message,
+      recoverability: toSafeRecoverability(error["recoverability"]),
+      suggestedAction: descriptor.suggestedAction,
+      traceId: "desktop-foreshadow-analysis-ipc"
+    })
+  );
+}
+
+function foreshadowScanErrorDescriptor(code: string): {
+  readonly message: string;
+  readonly suggestedAction: string;
+} {
+  switch (code) {
+    case "FORESHADOW_SCAN_INPUT_INVALID":
+      return {
+        message: "The selected chapters are not valid for foreshadow analysis.",
+        suggestedAction: "Refresh the chapter list, select one to five chapters, and retry."
+      };
+    case "FORESHADOW_SCAN_MODEL_CONTEXT_INVALID":
+      return {
+        message: "The selected model does not have a verified context window.",
+        suggestedAction: "Configure the model context window and retry."
+      };
+    case "FORESHADOW_SCAN_CONTEXT_TOO_LARGE":
+      return {
+        message: "The selected chapters exceed the model context budget.",
+        suggestedAction: "Select fewer or shorter chapters, or choose a larger-context model."
+      };
+    case "FORESHADOW_SCAN_WORKSPACE_CHANGED":
+      return {
+        message: "The active workspace changed before foreshadow analysis finished.",
+        suggestedAction: "Run the analysis again in the current project."
+      };
+    case "CHAPTER_FILE_MISSING":
+      return {
+        message: "A selected chapter could not be read.",
+        suggestedAction: "Refresh the chapter list, select saved chapters, and retry."
+      };
+    default:
+      return {
+        message: "Foreshadow analysis could not be completed.",
+        suggestedAction: "Check the selected chapters and model settings, then retry."
+      };
+  }
+}
+
+function toSafeErrorCategory(value: unknown): UnifiedError["category"] {
+  return value === "UserError" ||
+    value === "ValidationError" ||
+    value === "StorageError" ||
+    value === "ModelProviderError" ||
+    value === "LLMAdapterError" ||
+    value === "WorkflowError" ||
+    value === "AgentError" ||
+    value === "PluginError"
+    ? value
+    : "AgentError";
+}
+
+function toSafeRecoverability(value: unknown): UnifiedError["recoverability"] {
+  return value === "retryable" ||
+    value === "user-action" ||
+    value === "fatal" ||
+    value === "unknown"
+    ? value
+    : "unknown";
 }
 
 const STORY_BIBLE_ASSET_CANONICAL_FIELDS = new Set([

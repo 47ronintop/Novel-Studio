@@ -65,6 +65,8 @@ import type {
   EngineeringTextFileSaveResult,
   EngineeringTextFileSnapshot,
   EngineeringWorkspaceSnapshot,
+  ForeshadowAnalysisInput,
+  ForeshadowAnalysisResultDto,
   StoryBibleAsset,
   StoryBibleConsistencyReport,
   StoryBibleContextCandidate,
@@ -533,6 +535,11 @@ const api: NovelStudioApi = {
       invokeTyped<Result<readonly StoryBibleContextCandidate[], UnifiedError>>(
         "application:story-bible:build-context-candidates",
         options
+      ),
+    detectForeshadows: (input: ForeshadowAnalysisInput) =>
+      invokeTyped<Result<ForeshadowAnalysisResultDto, UnifiedError>>(
+        "application:story-bible:detect-foreshadows",
+        input
       )
   },
   studio: {

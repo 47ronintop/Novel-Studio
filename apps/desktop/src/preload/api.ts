@@ -62,6 +62,8 @@ import type {
   ListAgentConversationsQuery,
   ReadAgentConversationQuery,
   SearchAgentConversationsQuery,
+  ForeshadowAnalysisInput,
+  ForeshadowAnalysisResultDto,
   MemoryRecord,
   StoryBibleAsset,
   StoryBibleConsistencyReport,
@@ -642,6 +644,12 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           ipc,
           "application:story-bible:build-context-candidates",
           options
+        ),
+      detectForeshadows: (input: ForeshadowAnalysisInput) =>
+        invokeTyped<Result<ForeshadowAnalysisResultDto, UnifiedError>>(
+          ipc,
+          "application:story-bible:detect-foreshadows",
+          input
         )
     },
     studio: {

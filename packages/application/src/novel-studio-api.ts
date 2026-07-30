@@ -106,6 +106,7 @@ import type {
   StoryBibleContextCandidateOptions,
   StoryBibleSnapshot
 } from "./story-bible-session.js";
+import type { ForeshadowAnalysisInput } from "./foreshadow-analysis-session.js";
 import type {
   UserPreferencesSaveInput,
   UserPreferencesSnapshot
@@ -148,6 +149,76 @@ export type ReadAgentPermissionSummaryQuery =
       readonly runId: string;
       readonly permissionSummaryId: string;
     };
+
+export interface ForeshadowAnalysisEvidenceDto {
+  readonly chapterId: string;
+  readonly excerpt: string;
+  readonly excerptHash: string;
+}
+
+export interface ForeshadowAnalysisUsageDto {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly totalTokens: number;
+  readonly usageStatus: "missing" | "estimated" | "actual";
+  readonly cost: {
+    readonly amount: number;
+    readonly currency: string;
+    readonly status: "unknown" | "estimated" | "actual";
+  };
+}
+
+interface ForeshadowAnalysisCandidateDtoBase {
+  readonly candidateId: string;
+  readonly evidence: ForeshadowAnalysisEvidenceDto;
+  readonly reason: string;
+  readonly duplicateForeshadowIds: readonly string[];
+}
+
+export interface ForeshadowNewCandidateDto extends ForeshadowAnalysisCandidateDtoBase {
+  readonly kind: "new";
+  readonly suggested: {
+    readonly title: string;
+    readonly summary: string;
+    readonly trackingStatus: "planted";
+    readonly plantedChapterId: string;
+    readonly plannedPayoffChapterId?: string;
+    readonly notes?: string;
+    readonly relatedEntityIds?: readonly string[];
+  };
+}
+
+export interface ForeshadowProgressCandidateDto extends ForeshadowAnalysisCandidateDtoBase {
+  readonly kind: "progress";
+  readonly targetForeshadowId: string;
+  readonly suggested: {
+    readonly trackingStatus: "progressing" | "ready-to-payoff";
+    readonly summary?: string;
+    readonly notes?: string;
+  };
+}
+
+export interface ForeshadowPayoffCandidateDto extends ForeshadowAnalysisCandidateDtoBase {
+  readonly kind: "payoff";
+  readonly targetForeshadowId: string;
+  readonly suggested: {
+    readonly trackingStatus: "paid-off";
+    readonly actualPayoffChapterId: string;
+    readonly summary?: string;
+    readonly notes?: string;
+  };
+}
+
+export type ForeshadowAnalysisCandidateDto =
+  ForeshadowNewCandidateDto | ForeshadowProgressCandidateDto | ForeshadowPayoffCandidateDto;
+
+export interface ForeshadowAnalysisResultDto {
+  readonly analysisId: string;
+  readonly chapterIds: readonly string[];
+  readonly candidates: readonly ForeshadowAnalysisCandidateDto[];
+  readonly usage: ForeshadowAnalysisUsageDto;
+  readonly createdAt: string;
+}
 
 export interface NovelStudioApi {
   getShellState(): Promise<DesktopShellState>;
@@ -357,6 +428,9 @@ export interface NovelStudioApi {
     buildContextCandidates(
       options?: StoryBibleContextCandidateOptions
     ): Promise<Result<readonly StoryBibleContextCandidate[], UnifiedError>>;
+    detectForeshadows(
+      input: ForeshadowAnalysisInput
+    ): Promise<Result<ForeshadowAnalysisResultDto, UnifiedError>>;
   };
   studio: {
     loadConfigAsset(

@@ -709,6 +709,27 @@ describe("M95 real provider runtime", () => {
     });
   });
 
+  test("returns the foreshadow analysis response schema through demo mode", async () => {
+    const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-foreshadow-demo-"));
+    tempRoots.push(userDataRoot);
+    const runtime = createDesktopModelRuntime({
+      userDataRoot,
+      secretStore: createEncryptedFileModelSecretStore({
+        userDataRoot,
+        cipher: testCipher
+      })
+    });
+    const chapterEditorSession = await createLoadedChapterEditorSession();
+    const provider = runtime.createAiProvider({ chapterEditorSession });
+
+    const completed = await provider.complete(foreshadowAnalysisRequest());
+
+    expect(completed.content).toEqual({
+      type: "json",
+      value: { candidates: [] }
+    });
+  });
+
   test("streams through a verified OpenAI-compatible profile and aborts the fetch when cancelled", async () => {
     const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-stream-real-"));
     tempRoots.push(userDataRoot);
@@ -1131,6 +1152,16 @@ function selectionRequest(): LlmRequest {
         content: "Selection offsets: 0-13\nSelected text: Opening line."
       }
     ],
+    responseFormat: { type: "json_object" }
+  };
+}
+
+function foreshadowAnalysisRequest(): LlmRequest {
+  return {
+    ...streamingRequest(),
+    requestId: "llmreq_foreshadow_demo",
+    traceId: "foreshadow-analysis",
+    mode: "non-streaming",
     responseFormat: { type: "json_object" }
   };
 }
