@@ -212,6 +212,24 @@ export {
   createStoryBibleSession,
   findStoryBibleMentionSuggestions
 } from "./story-bible-session.js";
+export {
+  createForeshadowAnalysisSession,
+  resolveDefaultForeshadowAnalysisRuntimeProfile
+} from "./foreshadow-analysis-session.js";
+export type {
+  CreateForeshadowAnalysisSessionOptions,
+  ForeshadowAnalysisCandidate,
+  ForeshadowAnalysisInput,
+  ForeshadowAnalysisResult,
+  ForeshadowAnalysisRuntimeProfile,
+  ForeshadowAnalysisSession,
+  ForeshadowNewCandidate,
+  ForeshadowNewSuggestion,
+  ForeshadowPayoffCandidate,
+  ForeshadowPayoffSuggestion,
+  ForeshadowProgressCandidate,
+  ForeshadowProgressSuggestion
+} from "./foreshadow-analysis-session.js";
 export type { ModelProvider, ModelProviderCatalogEntry } from "./model-provider-catalog.js";
 export { MODEL_PROVIDER_CATALOG, isModelProvider } from "./model-provider-catalog.js";
 export type {

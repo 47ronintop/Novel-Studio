@@ -176,13 +176,13 @@ npm exec vitest -- packages/ui/test/workspace-shell.test.tsx packages/ui/test/wo
 
 ### D1. Application 分析合同
 
-- [ ] 新建只读 `ForeshadowAnalysisSession`，依赖 Chapter Repository、Story Bible Repository、模型 profile resolver 和 LLM adapter。
-- [ ] 输入为 1–5 个已保存章节 ID；输出包含 analysis ID、候选数组、使用量和可诊断错误。
-- [ ] 候选联合类型固定为 `new | progress | payoff`；均包含证据、理由、章节 ID、建议字段和稳定 candidate ID。
-- [ ] 请求中指示只返回 JSON，并与现有 AI 写作请求一致，无条件携带 `responseFormat={ type: "json_object" }` 元数据；当前 Provider 不消费该字段，本期不新增 JSON capability 分支，无论如何都对实际响应执行 candidate schema 校验，失败时返回 `FORESHADOW_SCAN_OUTPUT_INVALID`，不得保存半结构化结果。
-- [ ] 将现有未删除伏笔的标题、摘要和来源哈希作为有界去重上下文；发送前使用已解析的 model context window、输出预留和现有确定性 token estimator 预检完整请求，超限返回 `FORESHADOW_SCAN_CONTEXT_TOO_LARGE`，不调用 Provider、不截断。
-- [ ] 测试只使用 mock provider，CI 不调用真实模型。
-- [ ] 测试断言预算超限时 provider 调用次数为零，非法 JSON/不合 schema 的响应不产生候选或写入。
+- [x] 新建只读 `ForeshadowAnalysisSession`，依赖 Chapter Repository、Story Bible Repository、模型 profile resolver 和 LLM adapter。
+- [x] 输入为 1–5 个已保存章节 ID；输出包含 analysis ID、候选数组、使用量和可诊断错误。
+- [x] 候选联合类型固定为 `new | progress | payoff`；均包含证据、理由、章节 ID、建议字段和稳定 candidate ID。
+- [x] 请求中指示只返回 JSON，并与现有 AI 写作请求一致，无条件携带 `responseFormat={ type: "json_object" }` 元数据；当前 Provider 不消费该字段，本期不新增 JSON capability 分支，无论如何都对实际响应执行 candidate schema 校验，失败时返回 `FORESHADOW_SCAN_OUTPUT_INVALID`，不得保存半结构化结果。
+- [x] 将现有未删除伏笔的标题、摘要和来源哈希作为有界去重上下文；发送前使用已解析的 model context window、输出预留和现有确定性 token estimator 预检完整请求，超限返回 `FORESHADOW_SCAN_CONTEXT_TOO_LARGE`，不调用 Provider、不截断。
+- [x] 测试只使用 mock provider，CI 不调用真实模型。
+- [x] 测试断言预算超限时 provider 调用次数为零，非法 JSON/不合 schema 的响应不产生候选或写入。
 
 ### D2. API、IPC 与 preload
 
