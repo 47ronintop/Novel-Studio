@@ -323,9 +323,9 @@ export function App() {
     setChapterSelection(selection);
   }, []);
 
-  const handleSave = useCallback(() => {
+  const saveCurrentChapter = useCallback(async (): Promise<boolean> => {
     if (chapterBridge === undefined) {
-      return;
+      return false;
     }
 
     const savingEditor = chapterBridge.beginSave();
@@ -333,7 +333,11 @@ export function App() {
       setChapterEditor(savingEditor);
     }
 
-    void chapterBridge.save().then(setChapterEditor, () => {
+    try {
+      const saved = await chapterBridge.save();
+      setChapterEditor(saved);
+      return !saved.dirty;
+    } catch {
       setChapterEditor((current) =>
         current === undefined || current.saveStatus !== "Saving"
           ? current
@@ -342,8 +346,13 @@ export function App() {
               saveStatus: "Unsaved"
             }
       );
-    });
+      return false;
+    }
   }, [chapterBridge]);
+
+  const handleSave = useCallback(() => {
+    void saveCurrentChapter();
+  }, [saveCurrentChapter]);
 
   const handleVersionPreview = useCallback(
     (versionId: string) => {
@@ -401,10 +410,16 @@ export function App() {
     handleStoryBibleDraftChange,
     handleStoryBibleFiltersChange,
     handleSaveStoryBibleDraft,
+    handleOpenForeshadowAnalysis,
+    handleToggleForeshadowAnalysisChapter,
+    handleDetectForeshadows,
+    handleCloseForeshadowAnalysis,
     guardStoryBibleDraft
   } = useProjectWorkflowActions({
     api,
     chapterBridge,
+    chapterEditor,
+    saveCurrentChapter,
     projectWorkflow,
     projectWorkflowBridge,
     settingsBridge,
@@ -997,6 +1012,10 @@ export function App() {
         onWorkbenchSelect={workspaceNavigation.selectWorkbench}
         onOpenEngineeringWorkspace={handleOpenEngineeringWorkspace}
         onSaveStoryBibleDraft={handleSaveStoryBibleDraft}
+        onForeshadowAnalysisOpen={handleOpenForeshadowAnalysis}
+        onForeshadowAnalysisChapterToggle={handleToggleForeshadowAnalysisChapter}
+        onForeshadowAnalysisStart={handleDetectForeshadows}
+        onForeshadowAnalysisClose={handleCloseForeshadowAnalysis}
         onCommandExecute={handleCommandExecute}
         onCommandPaletteActiveCommandChange={handleCommandPaletteActiveCommandChange}
         onCommandPaletteClose={handleCommandPaletteClose}

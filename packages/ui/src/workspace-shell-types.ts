@@ -10,6 +10,7 @@ import type {
   ApplicationCommand,
   ApplicationCommandId,
   DesktopShellState,
+  ForeshadowAnalysisResultDto,
   ModelDiscoverySnapshot,
   ModelReasoningStrengthValue,
   PermissionSummary,
@@ -780,6 +781,22 @@ export interface StoryBibleChapterOption {
   readonly status: ChapterSummary["status"];
 }
 
+export type StoryBibleForeshadowAnalysisState =
+  | {
+      readonly status: "closed" | "selecting" | "preparing" | "scanning";
+      readonly selectedChapterIds: readonly string[];
+    }
+  | {
+      readonly status: "review";
+      readonly selectedChapterIds: readonly string[];
+      readonly result: ForeshadowAnalysisResultDto;
+    }
+  | {
+      readonly status: "error";
+      readonly selectedChapterIds: readonly string[];
+      readonly message: string;
+    };
+
 export interface StoryBibleEditorFilters {
   readonly query: string;
   readonly status: StoryBibleEntityStatus | "all";
@@ -805,6 +822,7 @@ export interface StoryBibleEditorProps {
   readonly entries: readonly StoryBibleEditorEntry[];
   readonly chapterOptions: readonly StoryBibleChapterOption[];
   readonly currentChapterId?: string;
+  readonly foreshadowAnalysis: StoryBibleForeshadowAnalysisState;
   readonly filters: StoryBibleEditorFilters;
   readonly externalUpdate: StoryBibleExternalUpdateState;
   readonly consistency?: StoryBibleConsistencyProps;
@@ -820,6 +838,10 @@ export interface StoryBibleEditorProps {
   readonly onNewDraft: (assetType?: StoryBibleWorldAssetType) => void;
   readonly onCancelDraft: () => void;
   readonly onSave: () => void;
+  readonly onForeshadowAnalysisOpen: () => void;
+  readonly onForeshadowAnalysisChapterToggle: (chapterId: string) => void;
+  readonly onForeshadowAnalysisStart: () => void;
+  readonly onForeshadowAnalysisClose: () => void;
 }
 
 export type StoryBibleConsistencyStatus = "healthy" | "attention";

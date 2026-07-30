@@ -117,6 +117,10 @@ export interface RendererWorkspaceShellProps {
     WorkspaceShellProps["onOpenEngineeringWorkspace"]
   >;
   readonly onSaveStoryBibleDraft: (chapterIds: readonly string[]) => void;
+  readonly onForeshadowAnalysisOpen: StoryBibleEditorProps["onForeshadowAnalysisOpen"];
+  readonly onForeshadowAnalysisChapterToggle: StoryBibleEditorProps["onForeshadowAnalysisChapterToggle"];
+  readonly onForeshadowAnalysisStart: StoryBibleEditorProps["onForeshadowAnalysisStart"];
+  readonly onForeshadowAnalysisClose: StoryBibleEditorProps["onForeshadowAnalysisClose"];
   readonly onCommandExecute: NonNullable<WorkspaceShellProps["onCommandExecute"]>;
   readonly onCommandPaletteActiveCommandChange: NonNullable<
     WorkspaceShellProps["onCommandPaletteActiveCommandChange"]
@@ -170,6 +174,8 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
   const storyBibleChapterOptions = (projectWorkflow?.chapters ?? [])
     .map(({ id, title, order, status }) => ({ id, title, order, status }))
     .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
+  const storyBibleCurrentChapterId =
+    projectWorkflow?.activeChapterId ?? props.chapterEditor?.chapter.frontmatter.id;
   const storyBibleEditor =
     sourceStoryBibleEditor === undefined
       ? undefined
@@ -188,10 +194,14 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
           onNewDraft: (assetType) =>
             props.navigation.createStoryEntry(sourceStoryBibleEditor.activeKind, assetType),
           onCancelDraft: props.navigation.cancelStoryDraft,
+          onForeshadowAnalysisOpen: props.onForeshadowAnalysisOpen,
+          onForeshadowAnalysisChapterToggle: props.onForeshadowAnalysisChapterToggle,
+          onForeshadowAnalysisStart: props.onForeshadowAnalysisStart,
+          onForeshadowAnalysisClose: props.onForeshadowAnalysisClose,
           chapterOptions: storyBibleChapterOptions,
-          ...(projectWorkflow?.activeChapterId === undefined
+          ...(storyBibleCurrentChapterId === undefined
             ? {}
-            : { currentChapterId: projectWorkflow.activeChapterId }),
+            : { currentChapterId: storyBibleCurrentChapterId }),
           onSave: () =>
             props.onSaveStoryBibleDraft(storyBibleChapterOptions.map((chapter) => chapter.id))
         } satisfies StoryBibleEditorProps);

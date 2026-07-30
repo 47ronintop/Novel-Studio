@@ -222,6 +222,7 @@ export type {
   StoryBibleEditorStatus,
   StoryBibleEditorViewMode,
   StoryBibleExternalUpdateState,
+  StoryBibleForeshadowAnalysisState,
   StoryBibleSummaryAsset,
   StoryBibleSummaryProps,
   StoryTimelineEvent,

@@ -1,6 +1,17 @@
 ﻿import type { ProjectSearchResultItem } from "@novel-studio/application";
 import type { ForeshadowTrackingStatus, JsonObject } from "@novel-studio/shared";
-import { ArrowLeft, Check, Clock3, FilePlus, Pencil, RotateCcw, Search, X } from "lucide-react";
+import {
+  ArrowLeft,
+  Check,
+  Clock3,
+  FilePlus,
+  Pencil,
+  RotateCcw,
+  Search,
+  Sparkles,
+  X
+} from "lucide-react";
+import { useRef } from "react";
 
 import type {
   ProjectSearchProps,
@@ -12,6 +23,7 @@ import type {
   StoryBibleWorldAssetType
 } from "./workspace-shell-types.js";
 import { StoryBibleForeshadowEditor } from "./story-bible-foreshadow-editor.js";
+import { StoryBibleForeshadowAnalysis } from "./story-bible-foreshadow-analysis.js";
 import {
   STORY_BIBLE_FORESHADOW_STATUS_OPTIONS,
   isStoryBibleForeshadowOverdue,
@@ -188,6 +200,7 @@ function TimelineEventRail({
 }
 
 export function StoryBibleEditorView({ editor }: { readonly editor: StoryBibleEditorProps }) {
+  const foreshadowAnalysisTriggerRef = useRef<HTMLButtonElement>(null);
   const kindLabel = storyBibleKindLabel(editor.activeKind);
   const categoryEntries = editor.entries.filter((entry) => entry.kind === editor.activeKind);
   const visibleEntries = filterStoryBibleEntries(categoryEntries, editor);
@@ -201,6 +214,12 @@ export function StoryBibleEditorView({ editor }: { readonly editor: StoryBibleEd
           0
         )
       : categoryEntries.length;
+  const foreshadowAnalysisOpen =
+    editor.activeKind === "foreshadow" && editor.foreshadowAnalysis.status !== "closed";
+  const closeForeshadowAnalysis = () => {
+    editor.onForeshadowAnalysisClose();
+    globalThis.setTimeout(() => foreshadowAnalysisTriggerRef.current?.focus(), 0);
+  };
 
   return (
     <section aria-label="故事圣经" className="ns-story-editor" data-view-mode={editor.viewMode}>
@@ -284,31 +303,58 @@ export function StoryBibleEditorView({ editor }: { readonly editor: StoryBibleEd
               </label>
             ) : null}
             {editor.activeKind === "foreshadow" ? (
-              <label className="ns-story-filter-control">
-                <span>跟踪</span>
-                <select
-                  aria-label="筛选伏笔跟踪状态"
-                  onChange={(event) =>
-                    editor.onFiltersChange({
-                      foreshadowTrackingStatus: event.currentTarget.value as
-                        ForeshadowTrackingStatus | "all"
-                    })
-                  }
-                  value={editor.filters.foreshadowTrackingStatus}
+              <>
+                <button
+                  aria-controls="ns-foreshadow-analysis"
+                  aria-expanded={editor.foreshadowAnalysis.status !== "closed"}
+                  aria-label="AI 识别伏笔"
+                  className="ns-icon-text-button"
+                  disabled={editor.foreshadowAnalysis.status !== "closed"}
+                  onClick={editor.onForeshadowAnalysisOpen}
+                  ref={foreshadowAnalysisTriggerRef}
+                  title="AI 识别伏笔"
+                  type="button"
                 >
-                  <option value="all">全部</option>
-                  {STORY_BIBLE_FORESHADOW_STATUS_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  <Sparkles aria-hidden="true" size={14} />
+                  AI 识别
+                </button>
+                <label className="ns-story-filter-control">
+                  <span>跟踪</span>
+                  <select
+                    aria-label="筛选伏笔跟踪状态"
+                    onChange={(event) =>
+                      editor.onFiltersChange({
+                        foreshadowTrackingStatus: event.currentTarget.value as
+                          ForeshadowTrackingStatus | "all"
+                      })
+                    }
+                    value={editor.filters.foreshadowTrackingStatus}
+                  >
+                    <option value="all">全部</option>
+                    {STORY_BIBLE_FORESHADOW_STATUS_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </>
             ) : null}
             {canCreate ? <StoryBibleCreateControl editor={editor} kindLabel={kindLabel} /> : null}
           </div>
         ) : null}
       </div>
+
+      {editor.activeKind === "foreshadow" && editor.viewMode === "list" ? (
+        <StoryBibleForeshadowAnalysis
+          analysis={editor.foreshadowAnalysis}
+          chapterOptions={editor.chapterOptions}
+          entries={editor.entries}
+          onChapterToggle={editor.onForeshadowAnalysisChapterToggle}
+          onClose={closeForeshadowAnalysis}
+          onStart={editor.onForeshadowAnalysisStart}
+        />
+      ) : null}
 
       {editor.externalUpdate.status === "available" ? (
         <p className="ns-story-external-update" role="status">
@@ -346,7 +392,7 @@ export function StoryBibleEditorView({ editor }: { readonly editor: StoryBibleEd
             onOpen={editor.onEntrySelect}
             query={editor.filters.query}
           />
-        ) : (
+        ) : foreshadowAnalysisOpen ? null : (
           <StoryBibleList editor={editor} entries={visibleEntries} kindLabel={kindLabel} />
         )
       ) : (

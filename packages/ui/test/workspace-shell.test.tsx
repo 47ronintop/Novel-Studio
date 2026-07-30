@@ -2324,6 +2324,323 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("2026-07-06");
   });
 
+  test("offers a compact foreshadow analysis selector with a five chapter limit", () => {
+    const application = createDesktopApplication();
+    const chapterOptions = Array.from({ length: 6 }, (_, index) => ({
+      id: `ch_0${index + 1}`,
+      title: `第${index + 1}章`,
+      order: index + 1,
+      status: "draft" as const
+    }));
+    const tree = (
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        storyBibleEditor={createStoryBibleEditorProps({
+          activeKind: "foreshadow",
+          currentChapterId: "ch_03",
+          chapterOptions,
+          foreshadowAnalysis: {
+            status: "selecting",
+            selectedChapterIds: chapterOptions.slice(0, 5).map((chapter) => chapter.id)
+          },
+          draft: {
+            kind: "foreshadow",
+            assetType: "foreshadow",
+            title: "",
+            status: "active",
+            summary: "",
+            aliases: [],
+            relatedEntityIds: [],
+            details: { trackingStatus: "planned", origin: "manual" }
+          }
+        })}
+      />
+    );
+    const html = renderToStaticMarkup(tree);
+    const selectedChapter = findElementByAriaLabel(tree, "选择章节：第1章");
+    const sixthChapter = findElementByAriaLabel(tree, "选择章节：第6章");
+
+    expect(html).toContain('aria-label="AI 识别伏笔"');
+    expect(html).toContain('aria-controls="ns-foreshadow-analysis"');
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain('aria-label="伏笔识别章节选择"');
+    expect(html).toContain("已选 5 / 5 章");
+    expect(selectedChapter?.props.disabled).not.toBe(true);
+    expect(sixthChapter?.props.disabled).toBe(true);
+
+    const characterHtml = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        storyBibleEditor={createStoryBibleEditorProps()}
+      />
+    );
+    expect(characterHtml).not.toContain("AI 识别伏笔");
+  });
+
+  test("renders read-only new, progress, and payoff foreshadow candidates", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        storyBibleEditor={createStoryBibleEditorProps({
+          activeKind: "foreshadow",
+          currentChapterId: "ch_02",
+          chapterOptions: [
+            { id: "ch_01", title: "雨夜入城", order: 1, status: "draft" },
+            { id: "ch_02", title: "无名档案", order: 2, status: "draft" },
+            { id: "ch_03", title: "旧门开启", order: 3, status: "draft" }
+          ],
+          entries: [
+            {
+              id: "fsh_key",
+              kind: "foreshadow",
+              assetType: "foreshadow",
+              title: "生锈的钥匙",
+              status: "active",
+              summary: "钥匙会打开旧档案室。",
+              aliases: [],
+              relatedEntityIds: [],
+              details: { trackingStatus: "progressing" },
+              createdAt: "2026-07-05T00:00:00.000Z",
+              updatedAt: "2026-07-06T00:00:00.000Z"
+            }
+          ],
+          foreshadowAnalysis: {
+            status: "review",
+            selectedChapterIds: ["ch_01", "ch_02", "ch_03"],
+            result: {
+              analysisId: "analysis-01",
+              chapterIds: ["ch_01", "ch_02", "ch_03"],
+              candidates: [
+                {
+                  candidateId: "candidate-new",
+                  kind: "new",
+                  evidence: {
+                    chapterId: "ch_01",
+                    excerpt: "他把那把生锈的钥匙收进袖口。",
+                    excerptHash: "1".repeat(64)
+                  },
+                  reason: "反复强调钥匙，像是后续线索。",
+                  duplicateForeshadowIds: ["fsh_key"],
+                  suggested: {
+                    title: "袖口里的钥匙",
+                    summary: "钥匙的用途尚未揭示。",
+                    trackingStatus: "planted",
+                    plantedChapterId: "ch_01",
+                    plannedPayoffChapterId: "ch_03"
+                  }
+                },
+                {
+                  candidateId: "candidate-progress",
+                  kind: "progress",
+                  targetForeshadowId: "fsh_key",
+                  evidence: {
+                    chapterId: "ch_02",
+                    excerpt: "档案上的锁孔正好与钥匙相合。",
+                    excerptHash: "2".repeat(64)
+                  },
+                  reason: "钥匙与目标地点建立了联系。",
+                  duplicateForeshadowIds: [],
+                  suggested: {
+                    trackingStatus: "ready-to-payoff",
+                    summary: "钥匙即将打开旧档案室。"
+                  }
+                },
+                {
+                  candidateId: "candidate-payoff",
+                  kind: "payoff",
+                  targetForeshadowId: "fsh_key",
+                  evidence: {
+                    chapterId: "ch_03",
+                    excerpt: "旧门终于被钥匙打开。",
+                    excerptHash: "3".repeat(64)
+                  },
+                  reason: "钥匙的用途已经完整揭示。",
+                  duplicateForeshadowIds: [],
+                  suggested: {
+                    trackingStatus: "paid-off",
+                    actualPayoffChapterId: "ch_03",
+                    notes: "在旧门场景完成回收。"
+                  }
+                }
+              ],
+              usage: {
+                inputTokens: 120,
+                outputTokens: 80,
+                totalTokens: 200,
+                usageStatus: "actual",
+                cost: { amount: 0, currency: "USD", status: "unknown" }
+              },
+              createdAt: "2026-07-30T00:00:00.000Z"
+            }
+          },
+          draft: {
+            kind: "foreshadow",
+            assetType: "foreshadow",
+            title: "",
+            status: "active",
+            summary: "",
+            aliases: [],
+            relatedEntityIds: [],
+            details: { trackingStatus: "planned", origin: "manual" }
+          }
+        })}
+      />
+    );
+
+    for (const text of [
+      "新伏笔",
+      "推进",
+      "回收",
+      "原文证据",
+      "判断理由",
+      "已埋",
+      "他把那把生锈的钥匙收进袖口。",
+      "反复强调钥匙，像是后续线索。",
+      "袖口里的钥匙",
+      "生锈的钥匙",
+      "可能与已有伏笔重复",
+      "钥匙即将打开旧档案室。",
+      "在旧门场景完成回收。"
+    ]) {
+      expect(html).toContain(text);
+    }
+    expect(html).not.toContain("确认保存");
+    expect(html).not.toContain('data-story-entry-id="fsh_key"');
+  });
+
+  test("renders foreshadow analysis progress, error, empty, and close states", () => {
+    const application = createDesktopApplication();
+    const closed: string[] = [];
+    const renderAnalysis = (analysis: StoryBibleEditorProps["foreshadowAnalysis"]) =>
+      renderToStaticMarkup(
+        <WorkspaceShell
+          shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+          commands={application.listCommands()}
+          commandPaletteOpen={false}
+          storyBibleEditor={createStoryBibleEditorProps({
+            activeKind: "foreshadow",
+            chapterOptions: [{ id: "ch_01", title: "雨夜入城", order: 1, status: "draft" }],
+            foreshadowAnalysis: analysis,
+            draft: {
+              kind: "foreshadow",
+              assetType: "foreshadow",
+              title: "",
+              status: "active",
+              summary: "",
+              aliases: [],
+              relatedEntityIds: [],
+              details: { trackingStatus: "planned", origin: "manual" }
+            },
+            onForeshadowAnalysisClose: () => closed.push("close")
+          })}
+        />
+      );
+
+    expect(renderAnalysis({ status: "preparing", selectedChapterIds: ["ch_01"] })).toContain(
+      "正在保存所选的当前章节"
+    );
+    expect(renderAnalysis({ status: "scanning", selectedChapterIds: ["ch_01"] })).toContain(
+      "正在分析所选章节"
+    );
+    expect(
+      renderAnalysis({
+        status: "error",
+        selectedChapterIds: ["ch_01"],
+        message: "识别输出格式无效。"
+      })
+    ).toContain("识别输出格式无效");
+    expect(
+      renderAnalysis({
+        status: "review",
+        selectedChapterIds: ["ch_01"],
+        result: {
+          analysisId: "analysis-empty",
+          chapterIds: ["ch_01"],
+          candidates: [],
+          usage: {
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+            usageStatus: "missing",
+            cost: { amount: 0, currency: "USD", status: "unknown" }
+          },
+          createdAt: "2026-07-30T00:00:00.000Z"
+        }
+      })
+    ).toContain("未识别到需要记录的伏笔候选");
+
+    const closeTree = (
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        storyBibleEditor={createStoryBibleEditorProps({
+          activeKind: "foreshadow",
+          foreshadowAnalysis: { status: "selecting", selectedChapterIds: [] },
+          onForeshadowAnalysisClose: () => closed.push("close")
+        })}
+      />
+    );
+    findElementByAriaLabel(closeTree, "关闭伏笔识别")?.props.onClick?.();
+    expect(closed).toEqual(["close"]);
+  });
+
+  test("moves focus into foreshadow analysis and restores it to the trigger on close", async () => {
+    const application = createDesktopApplication();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+
+    function Harness() {
+      const [analysis, setAnalysis] = useState<StoryBibleEditorProps["foreshadowAnalysis"]>({
+        status: "closed",
+        selectedChapterIds: []
+      });
+      return (
+        <WorkspaceShell
+          shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+          commands={application.listCommands()}
+          commandPaletteOpen={false}
+          storyBibleEditor={createStoryBibleEditorProps({
+            activeKind: "foreshadow",
+            chapterOptions: [{ id: "ch_01", title: "雨夜入城", order: 1, status: "draft" }],
+            foreshadowAnalysis: analysis,
+            onForeshadowAnalysisOpen: () =>
+              setAnalysis({ status: "selecting", selectedChapterIds: ["ch_01"] }),
+            onForeshadowAnalysisStart: () =>
+              setAnalysis({ status: "scanning", selectedChapterIds: ["ch_01"] }),
+            onForeshadowAnalysisClose: () =>
+              setAnalysis({ status: "closed", selectedChapterIds: [] })
+          })}
+        />
+      );
+    }
+
+    act(() => root.render(<Harness />));
+    const trigger = host.querySelector<HTMLButtonElement>('[aria-label="AI 识别伏笔"]');
+    act(() => trigger?.click());
+    expect(document.activeElement).toBe(host.querySelector(".ns-foreshadow-analysis h2"));
+
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="开始识别伏笔"]')?.click());
+    expect(document.activeElement).toBe(host.querySelector(".ns-foreshadow-analysis h2"));
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[aria-label="关闭伏笔识别"]')?.click();
+      await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    });
+    expect(document.activeElement).toBe(trigger);
+
+    act(() => root.unmount());
+    host.remove();
+  });
+
   test("renders the focused foreshadow editor and blocks invalid or duplicate evidence", () => {
     const application = createDesktopApplication();
     const tree = (
@@ -3154,6 +3471,7 @@ function createStoryBibleEditorProps(
     dirty: false,
     entries: [],
     chapterOptions: [],
+    foreshadowAnalysis: { status: "closed", selectedChapterIds: [] },
     filters: {
       query: "",
       status: "all",
@@ -3178,6 +3496,10 @@ function createStoryBibleEditorProps(
     onNewDraft: () => undefined,
     onCancelDraft: () => undefined,
     onSave: () => undefined,
+    onForeshadowAnalysisOpen: () => undefined,
+    onForeshadowAnalysisChapterToggle: () => undefined,
+    onForeshadowAnalysisStart: () => undefined,
+    onForeshadowAnalysisClose: () => undefined,
     ...overrides
   };
 }
@@ -3235,7 +3557,12 @@ function findElementByAriaLabel(
 
   return {
     props: {
-      ...(element instanceof HTMLButtonElement && element.disabled ? { disabled: true } : {}),
+      ...((element instanceof HTMLButtonElement ||
+        element instanceof HTMLInputElement ||
+        element instanceof HTMLSelectElement) &&
+      element.disabled
+        ? { disabled: true }
+        : {}),
       onClick: () => {
         act(() => {
           element.dispatchEvent(new MouseEvent("click", { bubbles: true }));

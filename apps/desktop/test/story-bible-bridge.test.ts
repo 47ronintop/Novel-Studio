@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 
 import type {
+  ForeshadowAnalysisResultDto,
   NovelStudioApi,
   StoryBibleConsistencyReport,
   StoryBibleSnapshot
@@ -76,6 +77,38 @@ const snapshot: StoryBibleSnapshot = {
       updatedAt: "2026-07-05T00:00:00.000Z"
     }
   ]
+};
+
+const analysisResult: ForeshadowAnalysisResultDto = {
+  analysisId: "analysis-01",
+  chapterIds: ["ch_01", "ch_02"],
+  candidates: [
+    {
+      candidateId: "candidate-new",
+      kind: "new",
+      evidence: {
+        chapterId: "ch_01",
+        excerpt: "He slipped the old key into his sleeve.",
+        excerptHash: "1".repeat(64)
+      },
+      reason: "The key is emphasized without an immediate explanation.",
+      duplicateForeshadowIds: [],
+      suggested: {
+        title: "Old key",
+        summary: "The key's purpose remains hidden.",
+        trackingStatus: "planted",
+        plantedChapterId: "ch_01"
+      }
+    }
+  ],
+  usage: {
+    inputTokens: 120,
+    outputTokens: 80,
+    totalTokens: 200,
+    usageStatus: "actual",
+    cost: { amount: 0, currency: "USD", status: "unknown" }
+  },
+  createdAt: "2026-07-30T00:00:00.000Z"
 };
 
 describe("Story Bible bridge", () => {
@@ -907,6 +940,131 @@ describe("Story Bible bridge", () => {
     expect(bridge.getSnapshotBinding("workspace-a")).toBeUndefined();
     expect(bridge.getSnapshotBinding("workspace-b")?.snapshot.characters).toEqual([]);
   });
+
+  test("opens foreshadow analysis on the current chapter and enforces the five chapter limit", async () => {
+    const calls: string[] = [];
+    const baseApi = createApi(calls);
+    const detectForeshadows = vi.fn(async (input: { readonly chapterIds: readonly string[] }) => {
+      calls.push(`storyBible.detectForeshadows:${input.chapterIds.join(",")}`);
+      return ok({ ...analysisResult, chapterIds: input.chapterIds });
+    });
+    const bridge = createStoryBibleBridge({
+      ...baseApi,
+      storyBible: { ...baseApi.storyBible, detectForeshadows }
+    });
+
+    await bridge.load("workspace-01");
+    bridge.selectKind("foreshadow");
+    bridge.openForeshadowAnalysis("ch_01");
+    for (const chapterId of ["ch_02", "ch_03", "ch_04", "ch_05", "ch_06"]) {
+      bridge.toggleForeshadowAnalysisChapter(chapterId);
+    }
+
+    expect(bridge.getEditorProps().foreshadowAnalysis).toEqual({
+      status: "selecting",
+      selectedChapterIds: ["ch_01", "ch_02", "ch_03", "ch_04", "ch_05"]
+    });
+    const preparation = bridge.prepareForeshadowAnalysis();
+    expect(preparation.editor.foreshadowAnalysis.status).toBe("preparing");
+    expect(preparation.token).toEqual(expect.any(Number));
+    if (preparation.token === undefined) throw new Error("Expected an analysis token.");
+    expect(bridge.prepareForeshadowAnalysis().token).toBeUndefined();
+    expect(bridge.beginForeshadowAnalysis(preparation.token)).toMatchObject({ started: true });
+
+    const reviewed = await bridge.detectForeshadows(preparation.token);
+
+    expect(detectForeshadows).toHaveBeenCalledWith({
+      chapterIds: ["ch_01", "ch_02", "ch_03", "ch_04", "ch_05"]
+    });
+    expect(reviewed.applied).toBe(true);
+    expect(reviewed.editor.foreshadowAnalysis).toMatchObject({
+      status: "review",
+      selectedChapterIds: ["ch_01", "ch_02", "ch_03", "ch_04", "ch_05"],
+      result: { analysisId: "analysis-01" }
+    });
+    expect(calls.some((call) => call.startsWith("storyBible.saveAsset:"))).toBe(false);
+  });
+
+  test("keeps a closed foreshadow analysis closed when a scan resolves late", async () => {
+    let resolveAnalysis:
+      | ((value: Awaited<ReturnType<NovelStudioApi["storyBible"]["detectForeshadows"]>>) => void)
+      | undefined;
+    const calls: string[] = [];
+    const baseApi = createApi(calls);
+    const bridge = createStoryBibleBridge({
+      ...baseApi,
+      storyBible: {
+        ...baseApi.storyBible,
+        detectForeshadows: () =>
+          new Promise((resolve) => {
+            resolveAnalysis = resolve;
+          })
+      }
+    });
+
+    await bridge.load("workspace-01");
+    bridge.selectKind("foreshadow");
+    bridge.openForeshadowAnalysis("ch_01");
+    const preparation = bridge.prepareForeshadowAnalysis();
+    if (preparation.token === undefined) throw new Error("Expected an analysis token.");
+    bridge.beginForeshadowAnalysis(preparation.token);
+    const pending = bridge.detectForeshadows(preparation.token);
+    await vi.waitFor(() => expect(resolveAnalysis).toBeDefined());
+
+    bridge.closeForeshadowAnalysis();
+    resolveAnalysis?.(ok(analysisResult));
+    const completion = await pending;
+
+    expect(completion.applied).toBe(false);
+    expect(bridge.getEditorProps().foreshadowAnalysis).toEqual({
+      status: "closed",
+      selectedChapterIds: []
+    });
+    expect(calls.some((call) => call.startsWith("storyBible.saveAsset:"))).toBe(false);
+  });
+
+  test("does not let an old preparation start a reopened foreshadow analysis", async () => {
+    const bridge = createStoryBibleBridge(createApi([]));
+    await bridge.load("workspace-01");
+    bridge.selectKind("foreshadow");
+    bridge.openForeshadowAnalysis("ch_01");
+    const oldPreparation = bridge.prepareForeshadowAnalysis();
+    if (oldPreparation.token === undefined) throw new Error("Expected an analysis token.");
+
+    bridge.closeForeshadowAnalysis();
+    bridge.openForeshadowAnalysis("ch_01");
+    const staleStart = bridge.beginForeshadowAnalysis(oldPreparation.token);
+
+    expect(staleStart.started).toBe(false);
+    expect(staleStart.editor.foreshadowAnalysis).toEqual({
+      status: "selecting",
+      selectedChapterIds: ["ch_01"]
+    });
+  });
+
+  test("turns a current preparation save failure into a visible analysis error", async () => {
+    const bridge = createStoryBibleBridge(createApi([]));
+    await bridge.load("workspace-01");
+    bridge.selectKind("foreshadow");
+    bridge.openForeshadowAnalysis("ch_01");
+    const preparation = bridge.prepareForeshadowAnalysis();
+    if (preparation.token === undefined) throw new Error("Expected an analysis token.");
+
+    const failure = bridge.failForeshadowAnalysisPreparation(
+      preparation.token,
+      "当前章节保存失败，未开始识别。"
+    );
+
+    expect(failure.applied).toBe(true);
+    expect(failure.editor.foreshadowAnalysis).toEqual({
+      status: "error",
+      selectedChapterIds: ["ch_01"],
+      message: "当前章节保存失败，未开始识别。"
+    });
+    expect(bridge.failForeshadowAnalysisPreparation(preparation.token, "不应覆盖")).toMatchObject({
+      applied: false
+    });
+  });
 });
 
 function createApi(
@@ -1058,6 +1216,9 @@ function createApi(
         return ok(consistencyReport);
       },
       buildContextCandidates: async () => {
+        throw new Error("not used");
+      },
+      detectForeshadows: async () => {
         throw new Error("not used");
       }
     },

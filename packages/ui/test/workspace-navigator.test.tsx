@@ -568,6 +568,7 @@ function createStoryBible(overrides: Partial<StoryBibleEditorProps> = {}): Story
       }
     ],
     chapterOptions: [],
+    foreshadowAnalysis: { status: "closed", selectedChapterIds: [] },
     filters: {
       query: "",
       status: "all",
@@ -592,6 +593,10 @@ function createStoryBible(overrides: Partial<StoryBibleEditorProps> = {}): Story
     onNewDraft: () => undefined,
     onCancelDraft: () => undefined,
     onSave: () => undefined,
+    onForeshadowAnalysisOpen: () => undefined,
+    onForeshadowAnalysisChapterToggle: () => undefined,
+    onForeshadowAnalysisStart: () => undefined,
+    onForeshadowAnalysisClose: () => undefined,
     ...overrides
   };
 }

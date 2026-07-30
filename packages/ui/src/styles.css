@@ -6487,6 +6487,197 @@ textarea:focus-visible,
   min-width: 0;
 }
 
+.ns-foreshadow-analysis {
+  border-block: 1px solid var(--ns-border);
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px 0;
+}
+
+.ns-foreshadow-analysis-header,
+.ns-foreshadow-analysis-actions,
+.ns-foreshadow-candidate-heading {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.ns-foreshadow-analysis-header > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ns-foreshadow-analysis-header h2,
+.ns-foreshadow-candidate-heading strong {
+  color: var(--ns-ink);
+  font-size: 13px;
+}
+
+.ns-foreshadow-analysis-header h2 {
+  line-height: 1.4;
+  margin: 0;
+}
+
+.ns-foreshadow-analysis-header h2:focus {
+  outline: none;
+}
+
+.ns-foreshadow-analysis-header span,
+.ns-foreshadow-candidate-heading span {
+  color: var(--ns-muted);
+  font-size: 11px;
+}
+
+.ns-foreshadow-analysis-chapters {
+  display: grid;
+  gap: 6px 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  max-height: 240px;
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
+.ns-foreshadow-analysis-chapters > label {
+  align-items: center;
+  color: var(--ns-ink);
+  display: flex;
+  font-size: 12px;
+  gap: 7px;
+  min-height: 30px;
+  min-width: 0;
+}
+
+.ns-foreshadow-analysis-chapters input {
+  accent-color: var(--ns-primary);
+  flex: 0 0 auto;
+}
+
+.ns-foreshadow-analysis-chapters span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ns-foreshadow-analysis-start {
+  background: color-mix(in srgb, var(--ns-primary) 14%, var(--ns-surface-raised));
+  border-color: color-mix(in srgb, var(--ns-primary) 45%, var(--ns-border));
+}
+
+.ns-foreshadow-analysis-progress {
+  align-items: center;
+  color: var(--ns-muted);
+  display: flex;
+  font-size: 12px;
+  gap: 8px;
+  min-height: 44px;
+}
+
+.ns-foreshadow-analysis-progress .ns-spin {
+  animation: ns-agent-spin 900ms linear infinite;
+}
+
+.ns-foreshadow-analysis-empty,
+.ns-foreshadow-analysis-error,
+.ns-foreshadow-candidate-reason,
+.ns-foreshadow-candidate-duplicate {
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.ns-foreshadow-analysis-empty,
+.ns-foreshadow-candidate-reason {
+  color: var(--ns-muted);
+}
+
+.ns-foreshadow-analysis-error {
+  border-left: 3px solid var(--ns-danger);
+  color: var(--ns-danger);
+  padding: 7px 9px;
+}
+
+.ns-foreshadow-candidate-list {
+  list-style: none;
+  margin: 0;
+  max-height: min(56vh, 520px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0;
+  padding-right: 4px;
+}
+
+.ns-foreshadow-candidate-list > li {
+  border-top: 1px solid color-mix(in srgb, var(--ns-border) 72%, transparent);
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px 0;
+}
+
+.ns-foreshadow-candidate-list > li:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.ns-foreshadow-candidate-list blockquote {
+  border-left: 3px solid var(--ns-border-strong);
+  color: var(--ns-ink);
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0;
+  overflow-wrap: anywhere;
+  padding: 6px 10px;
+}
+
+.ns-foreshadow-candidate-label {
+  color: var(--ns-muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.ns-foreshadow-candidate-suggestion {
+  display: grid;
+  gap: 5px 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+  min-width: 0;
+}
+
+.ns-foreshadow-candidate-suggestion > div {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 68px minmax(0, 1fr);
+  min-width: 0;
+}
+
+.ns-foreshadow-candidate-suggestion dt,
+.ns-foreshadow-candidate-suggestion dd {
+  font-size: 11px;
+  line-height: 1.5;
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ns-foreshadow-candidate-suggestion dt {
+  color: var(--ns-muted);
+}
+
+.ns-foreshadow-candidate-suggestion dd {
+  color: var(--ns-ink);
+}
+
+.ns-foreshadow-candidate-duplicate {
+  background: color-mix(in srgb, var(--ns-warning) 9%, transparent);
+  border-left: 3px solid var(--ns-warning);
+  color: var(--ns-warning-text);
+  padding: 6px 9px;
+}
+
 .ns-story-create-menu {
   position: relative;
 }
@@ -8610,6 +8801,25 @@ textarea:focus-visible,
 
   .ns-story-search-control .ns-search-input {
     width: 100%;
+  }
+
+  .ns-foreshadow-analysis-chapters,
+  .ns-foreshadow-candidate-suggestion {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ns-foreshadow-analysis-chapters {
+    max-height: 210px;
+  }
+
+  .ns-foreshadow-candidate-list {
+    max-height: 52vh;
+  }
+
+  .ns-foreshadow-candidate-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
   }
 
   .ns-story-list-columns {

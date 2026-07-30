@@ -9,7 +9,10 @@ import type {
   StoryBibleEditorProps,
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
-import { useProjectWorkflowActions } from "../src/renderer/project-workflow-actions.js";
+import {
+  guardDirtyChapterForForeshadowAnalysis,
+  useProjectWorkflowActions
+} from "../src/renderer/project-workflow-actions.js";
 import type { ProjectWorkflowBridge } from "../src/renderer/project-workflow-bridge.js";
 import type { StoryBibleBridge } from "../src/renderer/story-bible-bridge.js";
 
@@ -413,6 +416,274 @@ describe("useProjectWorkflowActions", () => {
     expect(editorStates).toEqual([draftEditor, filteredEditor, savingEditor, savedEditor]);
     expect(summaryStates).toEqual([summary]);
   });
+
+  test("guards only a selected dirty current chapter before foreshadow analysis", async () => {
+    const dirtyChapter = { ...createChapterEditor("ch_01"), dirty: true as const };
+    const saveCurrentChapter = vi.fn(async () => true);
+    const confirmSave = vi.fn(() => false);
+
+    await expect(
+      guardDirtyChapterForForeshadowAnalysis(
+        ["ch_02"],
+        dirtyChapter,
+        saveCurrentChapter,
+        confirmSave
+      )
+    ).resolves.toBe("ready");
+    expect(confirmSave).not.toHaveBeenCalled();
+    expect(saveCurrentChapter).not.toHaveBeenCalled();
+
+    await expect(
+      guardDirtyChapterForForeshadowAnalysis(
+        ["ch_01"],
+        dirtyChapter,
+        saveCurrentChapter,
+        confirmSave
+      )
+    ).resolves.toBe("cancelled");
+    expect(confirmSave).toHaveBeenCalledTimes(1);
+    expect(saveCurrentChapter).not.toHaveBeenCalled();
+
+    confirmSave.mockReturnValue(true);
+    await expect(
+      guardDirtyChapterForForeshadowAnalysis(
+        ["ch_01"],
+        dirtyChapter,
+        saveCurrentChapter,
+        confirmSave
+      )
+    ).resolves.toBe("ready");
+    expect(saveCurrentChapter).toHaveBeenCalledTimes(1);
+
+    saveCurrentChapter.mockResolvedValueOnce(false);
+    await expect(
+      guardDirtyChapterForForeshadowAnalysis(
+        ["ch_01"],
+        dirtyChapter,
+        saveCurrentChapter,
+        confirmSave
+      )
+    ).resolves.toBe("save-failed");
+
+    saveCurrentChapter.mockRejectedValueOnce(new Error("disk full"));
+    await expect(
+      guardDirtyChapterForForeshadowAnalysis(
+        ["ch_01"],
+        dirtyChapter,
+        saveCurrentChapter,
+        confirmSave
+      )
+    ).resolves.toBe("save-failed");
+  });
+
+  test("saves a selected dirty chapter before starting read-only foreshadow analysis", async () => {
+    const events: string[] = [];
+    const selectingEditor: StoryBibleEditorProps = {
+      ...createStoryBibleEditor("selecting"),
+      activeKind: "foreshadow",
+      foreshadowAnalysis: { status: "selecting", selectedChapterIds: ["ch_01"] }
+    };
+    const preparingEditor: StoryBibleEditorProps = {
+      ...selectingEditor,
+      foreshadowAnalysis: { status: "preparing", selectedChapterIds: ["ch_01"] }
+    };
+    const scanningEditor: StoryBibleEditorProps = {
+      ...selectingEditor,
+      foreshadowAnalysis: { status: "scanning", selectedChapterIds: ["ch_01"] }
+    };
+    const reviewedEditor: StoryBibleEditorProps = {
+      ...selectingEditor,
+      foreshadowAnalysis: {
+        status: "review",
+        selectedChapterIds: ["ch_01"],
+        result: {
+          analysisId: "analysis-01",
+          chapterIds: ["ch_01"],
+          candidates: [],
+          usage: {
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+            usageStatus: "missing",
+            cost: { amount: 0, currency: "USD", status: "unknown" }
+          },
+          createdAt: "2026-07-30T00:00:00.000Z"
+        }
+      }
+    };
+    const storyBibleBridge = {
+      prepareForeshadowAnalysis: vi.fn(() => ({ editor: preparingEditor, token: 1 })),
+      cancelForeshadowAnalysisPreparation: vi.fn(() => ({
+        editor: selectingEditor,
+        applied: true
+      })),
+      failForeshadowAnalysisPreparation: vi.fn(() => ({
+        editor: selectingEditor,
+        applied: true
+      })),
+      beginForeshadowAnalysis: vi.fn(() => {
+        events.push("begin-analysis");
+        return { editor: scanningEditor, started: true };
+      }),
+      detectForeshadows: vi.fn(async () => {
+        events.push("detect");
+        return { editor: reviewedEditor, applied: true };
+      })
+    } as unknown as StoryBibleBridge;
+    const saveCurrentChapter = vi.fn(async () => {
+      events.push("save-chapter");
+      return true;
+    });
+    const editorStates: Array<StoryBibleEditorProps | undefined> = [];
+    let actions: ReturnType<typeof useProjectWorkflowActions> | undefined;
+
+    function Harness() {
+      actions = useProjectWorkflowActions({
+        api: undefined,
+        chapterBridge: undefined,
+        chapterEditor: { ...createChapterEditor("ch_01"), dirty: true },
+        saveCurrentChapter,
+        confirmForeshadowAnalysisSave: () => true,
+        projectWorkflowBridge: undefined,
+        settingsBridge: undefined,
+        storyBibleBridge,
+        studioBridge: undefined,
+        setChapterEditor: () => undefined,
+        setProjectWorkflow: () => undefined,
+        setSettings: () => undefined,
+        setShellState: () => undefined,
+        setStoryBible: () => undefined,
+        setStoryBibleEditor: (next) => editorStates.push(resolveState(next)),
+        setStudio: () => undefined
+      });
+      return null;
+    }
+
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<Harness />));
+
+    await act(async () => {
+      await actions?.handleDetectForeshadows();
+    });
+
+    expect(events).toEqual(["save-chapter", "begin-analysis", "detect"]);
+    expect(editorStates).toEqual([preparingEditor, scanningEditor, reviewedEditor]);
+  });
+
+  test("reports a selected dirty chapter save failure without starting analysis", async () => {
+    const preparingEditor: StoryBibleEditorProps = {
+      ...createStoryBibleEditor("preparing"),
+      activeKind: "foreshadow",
+      foreshadowAnalysis: { status: "preparing", selectedChapterIds: ["ch_01"] }
+    };
+    const failedEditor: StoryBibleEditorProps = {
+      ...preparingEditor,
+      foreshadowAnalysis: {
+        status: "error",
+        selectedChapterIds: ["ch_01"],
+        message: "当前章节保存失败，未开始识别。"
+      }
+    };
+    const beginForeshadowAnalysis = vi.fn();
+    const detectForeshadows = vi.fn();
+    const failForeshadowAnalysisPreparation = vi.fn(() => ({
+      editor: failedEditor,
+      applied: true
+    }));
+    const storyBibleBridge = {
+      prepareForeshadowAnalysis: vi.fn(() => ({ editor: preparingEditor, token: 7 })),
+      cancelForeshadowAnalysisPreparation: vi.fn(),
+      failForeshadowAnalysisPreparation,
+      beginForeshadowAnalysis,
+      detectForeshadows
+    } as unknown as StoryBibleBridge;
+    const editorStates: Array<StoryBibleEditorProps | undefined> = [];
+    let actions: ReturnType<typeof useProjectWorkflowActions> | undefined;
+
+    function Harness() {
+      actions = useProjectWorkflowActions({
+        api: undefined,
+        chapterBridge: undefined,
+        chapterEditor: { ...createChapterEditor("ch_01"), dirty: true },
+        saveCurrentChapter: async () => false,
+        confirmForeshadowAnalysisSave: () => true,
+        projectWorkflowBridge: undefined,
+        settingsBridge: undefined,
+        storyBibleBridge,
+        studioBridge: undefined,
+        setChapterEditor: () => undefined,
+        setProjectWorkflow: () => undefined,
+        setSettings: () => undefined,
+        setShellState: () => undefined,
+        setStoryBible: () => undefined,
+        setStoryBibleEditor: (next) => editorStates.push(resolveState(next)),
+        setStudio: () => undefined
+      });
+      return null;
+    }
+
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<Harness />));
+
+    await act(async () => {
+      await actions?.handleDetectForeshadows();
+    });
+
+    expect(failForeshadowAnalysisPreparation).toHaveBeenCalledWith(
+      7,
+      "当前章节保存失败，未开始识别。"
+    );
+    expect(beginForeshadowAnalysis).not.toHaveBeenCalled();
+    expect(detectForeshadows).not.toHaveBeenCalled();
+    expect(editorStates).toEqual([preparingEditor, failedEditor]);
+  });
+
+  test("does not write back an analysis result rejected by a stale token", async () => {
+    const preparingEditor = createStoryBibleEditor("preparing");
+    const scanningEditor = createStoryBibleEditor("scanning");
+    const clearedEditor = createStoryBibleEditor("idle");
+    const storyBibleBridge = {
+      prepareForeshadowAnalysis: vi.fn(() => ({ editor: preparingEditor, token: 9 })),
+      beginForeshadowAnalysis: vi.fn(() => ({ editor: scanningEditor, started: true })),
+      detectForeshadows: vi.fn(async () => ({ editor: clearedEditor, applied: false }))
+    } as unknown as StoryBibleBridge;
+    const editorStates: Array<StoryBibleEditorProps | undefined> = [];
+    let actions: ReturnType<typeof useProjectWorkflowActions> | undefined;
+
+    function Harness() {
+      actions = useProjectWorkflowActions({
+        api: undefined,
+        chapterBridge: undefined,
+        projectWorkflowBridge: undefined,
+        settingsBridge: undefined,
+        storyBibleBridge,
+        studioBridge: undefined,
+        setChapterEditor: () => undefined,
+        setProjectWorkflow: () => undefined,
+        setSettings: () => undefined,
+        setShellState: () => undefined,
+        setStoryBible: () => undefined,
+        setStoryBibleEditor: (next) => editorStates.push(resolveState(next)),
+        setStudio: () => undefined
+      });
+      return null;
+    }
+
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<Harness />));
+
+    await act(async () => {
+      await actions?.handleDetectForeshadows();
+    });
+
+    expect(editorStates).toEqual([preparingEditor, scanningEditor]);
+  });
 });
 
 function createWorkflow(): ProjectWorkflowProps {
@@ -459,6 +730,7 @@ function createStoryBibleEditor(title: string): StoryBibleEditorProps {
     dirty: false,
     entries: [],
     chapterOptions: [],
+    foreshadowAnalysis: { status: "closed", selectedChapterIds: [] },
     filters: {
       query: "",
       status: "all",
@@ -482,6 +754,10 @@ function createStoryBibleEditor(title: string): StoryBibleEditorProps {
     onFiltersChange: () => undefined,
     onNewDraft: () => undefined,
     onCancelDraft: () => undefined,
-    onSave: () => undefined
+    onSave: () => undefined,
+    onForeshadowAnalysisOpen: () => undefined,
+    onForeshadowAnalysisChapterToggle: () => undefined,
+    onForeshadowAnalysisStart: () => undefined,
+    onForeshadowAnalysisClose: () => undefined
   };
 }

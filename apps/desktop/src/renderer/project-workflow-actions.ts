@@ -21,6 +21,9 @@ import type { StudioBridge } from "./studio-bridge.js";
 export interface ProjectWorkflowActionInputs {
   readonly api: NovelStudioApi | undefined;
   readonly chapterBridge: ChapterEditorBridge | undefined;
+  readonly chapterEditor?: ChapterEditorProps | undefined;
+  readonly saveCurrentChapter?: (() => Promise<boolean>) | undefined;
+  readonly confirmForeshadowAnalysisSave?: ((message: string) => boolean) | undefined;
   readonly projectWorkflow?: ProjectWorkflowProps | undefined;
   readonly projectWorkflowBridge: ProjectWorkflowBridge | undefined;
   readonly settingsBridge: SettingsBridge | undefined;
@@ -41,6 +44,9 @@ export interface ProjectWorkflowActionInputs {
 export function useProjectWorkflowActions({
   api,
   chapterBridge,
+  chapterEditor,
+  saveCurrentChapter,
+  confirmForeshadowAnalysisSave,
   projectWorkflow,
   projectWorkflowBridge,
   settingsBridge,
@@ -308,6 +314,68 @@ export function useProjectWorkflowActions({
     [setStoryBible, setStoryBibleEditor, storyBibleBridge]
   );
 
+  const handleOpenForeshadowAnalysis = useCallback(() => {
+    if (storyBibleBridge === undefined) return;
+    const currentChapterId =
+      projectWorkflow?.activeChapterId ?? chapterEditor?.chapter.frontmatter.id;
+    setStoryBibleEditor(storyBibleBridge.openForeshadowAnalysis(currentChapterId));
+  }, [
+    chapterEditor?.chapter.frontmatter.id,
+    projectWorkflow?.activeChapterId,
+    setStoryBibleEditor,
+    storyBibleBridge
+  ]);
+
+  const handleToggleForeshadowAnalysisChapter = useCallback(
+    (chapterId: string) => {
+      if (storyBibleBridge === undefined) return;
+      setStoryBibleEditor(storyBibleBridge.toggleForeshadowAnalysisChapter(chapterId));
+    },
+    [setStoryBibleEditor, storyBibleBridge]
+  );
+
+  const handleCloseForeshadowAnalysis = useCallback(() => {
+    if (storyBibleBridge === undefined) return;
+    setStoryBibleEditor(storyBibleBridge.closeForeshadowAnalysis());
+  }, [setStoryBibleEditor, storyBibleBridge]);
+
+  const handleDetectForeshadows = useCallback(async () => {
+    if (storyBibleBridge === undefined) return;
+    const preparation = storyBibleBridge.prepareForeshadowAnalysis();
+    setStoryBibleEditor(preparation.editor);
+    if (preparation.token === undefined) return;
+    const selectedChapterIds = preparation.editor.foreshadowAnalysis.selectedChapterIds;
+    const guardResult = await guardDirtyChapterForForeshadowAnalysis(
+      selectedChapterIds,
+      chapterEditor,
+      saveCurrentChapter,
+      confirmForeshadowAnalysisSave
+    );
+    if (guardResult !== "ready") {
+      const transition =
+        guardResult === "cancelled"
+          ? storyBibleBridge.cancelForeshadowAnalysisPreparation(preparation.token)
+          : storyBibleBridge.failForeshadowAnalysisPreparation(
+              preparation.token,
+              "当前章节保存失败，未开始识别。"
+            );
+      if (transition.applied) setStoryBibleEditor(transition.editor);
+      return;
+    }
+
+    const start = storyBibleBridge.beginForeshadowAnalysis(preparation.token);
+    if (!start.started) return;
+    setStoryBibleEditor(start.editor);
+    const completion = await storyBibleBridge.detectForeshadows(preparation.token);
+    if (completion.applied) setStoryBibleEditor(completion.editor);
+  }, [
+    chapterEditor,
+    confirmForeshadowAnalysisSave,
+    saveCurrentChapter,
+    setStoryBibleEditor,
+    storyBibleBridge
+  ]);
+
   const guardStoryBibleDraft = useCallback(
     () =>
       guardDirtyStoryBibleDraft(
@@ -343,6 +411,37 @@ export function useProjectWorkflowActions({
     handleStoryBibleDraftChange,
     handleStoryBibleFiltersChange,
     handleSaveStoryBibleDraft,
+    handleOpenForeshadowAnalysis,
+    handleToggleForeshadowAnalysisChapter,
+    handleDetectForeshadows,
+    handleCloseForeshadowAnalysis,
     guardStoryBibleDraft
   };
+}
+
+export async function guardDirtyChapterForForeshadowAnalysis(
+  selectedChapterIds: readonly string[],
+  chapterEditor: ChapterEditorProps | undefined,
+  saveCurrentChapter: (() => Promise<boolean>) | undefined,
+  confirmSave: (message: string) => boolean = confirmForeshadowAnalysisSave
+): Promise<"ready" | "cancelled" | "save-failed"> {
+  if (
+    chapterEditor?.dirty !== true ||
+    !selectedChapterIds.includes(chapterEditor.chapter.frontmatter.id)
+  ) {
+    return "ready";
+  }
+  if (!confirmSave("当前章节尚未保存。是否先保存，再开始识别伏笔？")) {
+    return "cancelled";
+  }
+  if (saveCurrentChapter === undefined) return "save-failed";
+  try {
+    return (await saveCurrentChapter()) ? "ready" : "save-failed";
+  } catch {
+    return "save-failed";
+  }
+}
+
+function confirmForeshadowAnalysisSave(message: string): boolean {
+  return globalThis.window?.confirm(message) === true;
 }
