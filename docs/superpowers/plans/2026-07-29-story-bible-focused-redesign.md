@@ -211,15 +211,15 @@ npm exec vitest -- packages/application/test/foreshadow-analysis-session.test.ts
 
 ### E1. 工具与路径
 
-- [ ] `propose_story_bible_write` / v2 `create_resource` 接受 `assetType=foreshadow`。
-- [ ] 抽取 create/edit 共用的穷举 asset type/path resolver；`foreshadow` 严格解析为 `foreshadows/<id>.json`，`timeline.events` 才能解析为 `timeline/events.json`，未知类型显式拒绝且没有 default fallback。
-- [ ] 修正 `apps/desktop/src/main/agent-run-runtime.ts` 的 `findStoryBibleAsset` 和 `storyBibleAssetRelativePath`：编辑候选加入 foreshadows、排除 memories，并让无法解析的路径返回校验错误，不能把 memory/foreshadow/未知类型落到时间线。
-- [ ] `schemaNameForProjectText`、Agent managed-resource 路径识别、搜索引用和 workspace outline 索引纳入 `foreshadows/<id>.json`，并选择 foreshadow v1.0 schema。
-- [ ] `DEFAULT_MANAGED_PATH_SEGMENTS` 增加 `foreshadows`，项目文件和 general-file 路径拒绝直接写入；policy 不做项目数据迁移，内部调用方/测试更新到新默认值，缺少该 segment 的注入 policy 继续 fail closed。
-- [ ] writing profile 可读写伏笔；general_file 和 standalone 继续拒绝所有 Story Bible 专用操作。
-- [ ] 新建和编辑继续生成 Change Set；伏笔通过 foreshadow v1.0 schema，其他类型通过原 story asset v1.0 schema。
-- [ ] 更新 writing guidance 和工具说明，明确伏笔 ID/字段合同以及“先读后改、确认前只提案”；不把字段规则复制成第二套运行时 validator。
-- [ ] 回归测试覆盖：编辑 foreshadow 命中 `foreshadows/<id>.json`；`story_bible:<memoryId>` 和未知类型被拒绝且 `timeline/events.json` 不变；项目文件/general-file 无法把 foreshadows 当普通文本写入。
+- [x] `propose_story_bible_write` / v2 `create_resource` 接受 `assetType=foreshadow`。
+- [x] 抽取 create/edit 共用的穷举 asset type/path resolver；`foreshadow` 严格解析为 `foreshadows/<id>.json`，`timeline.events` 才能解析为 `timeline/events.json`，未知类型显式拒绝且没有 default fallback。
+- [x] 修正 `apps/desktop/src/main/agent-run-runtime.ts` 的 `findStoryBibleAsset` 和 `storyBibleAssetRelativePath`：编辑候选加入 foreshadows、排除 memories，并让无法解析的路径返回校验错误，不能把 memory/foreshadow/未知类型落到时间线。
+- [x] `schemaNameForProjectText`、Agent managed-resource 路径识别、搜索引用和 workspace outline 索引纳入 `foreshadows/<id>.json`，并选择 foreshadow v1.0 schema。
+- [x] `DEFAULT_MANAGED_PATH_SEGMENTS` 增加 `foreshadows`，项目文件和 general-file 路径拒绝直接写入；policy 不做项目数据迁移，内部调用方/测试更新到新默认值，缺少该 segment 的注入 policy 继续 fail closed。
+- [x] writing profile 可读写伏笔；general_file 和 standalone 继续拒绝所有 Story Bible 专用操作。
+- [x] 新建和编辑继续生成 Change Set；伏笔通过 foreshadow v1.0 schema，其他类型通过原 story asset v1.0 schema。
+- [x] 更新 writing guidance 和工具说明，明确伏笔 ID/字段合同以及“先读后改、确认前只提案”；不把字段规则复制成第二套运行时 validator。
+- [x] 回归测试覆盖：编辑 foreshadow 命中 `foreshadows/<id>.json`；`story_bible:<memoryId>` 和未知类型被拒绝且 `timeline/events.json` 不变；项目文件/general-file 无法把 foreshadows 当普通文本写入。
 
 ### E2. Application 失效、Renderer 刷新与冲突
 

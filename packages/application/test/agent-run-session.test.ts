@@ -5576,6 +5576,12 @@ describe("AgentRunSession context-engineering profiles", () => {
     expect(captured.systemPrompt).toContain("叙事连续性");
     expect(captured.systemPrompt).toContain("人物一致性");
     expect(captured.systemPrompt).toContain("不要臆造");
+    expect(captured.systemPrompt).toContain("foreshadow v1.0");
+    expect(captured.systemPrompt).toContain("fsh_");
+    expect(captured.systemPrompt).toContain("trackingStatus");
+    expect(captured.systemPrompt).toContain("actualPayoffChapterId");
+    expect(captured.systemPrompt).toContain("Change Set");
+    expect(captured.systemPrompt).toContain("应用成功");
     // The writing style pack is injected as persistent guidance (the novel-project CLAUDE.md).
     expect(captured.systemPrompt).toContain("文风规则");
     expect(captured.systemPrompt).toContain("连续比喻");
@@ -5594,6 +5600,7 @@ describe("AgentRunSession context-engineering profiles", () => {
     );
     expect(guidance).toBeDefined();
     expect(guidance?.["layer"]).toBe("system");
+    expect(guidance?.["refId"]).toBe("system_guidance:writing@2.1");
     expect(String(guidance?.["checksum"])).toMatch(/^[0-9a-f]{64}$/);
   });
 
@@ -5619,6 +5626,8 @@ describe("AgentRunSession context-engineering profiles", () => {
     // No writing style pack / Story Bible / character bodies belong in general-file guidance.
     expect(captured.systemPrompt).not.toContain("文风规则");
     expect(captured.systemPrompt).not.toContain("连续比喻");
+    expect(captured.systemPrompt).not.toContain("fsh_");
+    expect(captured.systemPrompt).not.toContain("trackingStatus");
 
     // The two profiles are genuinely different guidance, not the same string.
     expect(captured.systemPrompt).not.toContain("叙事连续性");
@@ -5638,14 +5647,17 @@ describe("AgentRunSession context-engineering profiles", () => {
     const version = exports["AGENT_SYSTEM_GUIDANCE_VERSION"];
     expect(typeof build).toBe("function");
     expect(typeof estimate).toBe("function");
-    expect(typeof version).toBe("string");
+    expect(version).toBe("2.1");
     if (typeof build !== "function" || typeof estimate !== "function") return;
 
     const writing = (build as (mode: string) => string)("writing");
     const general = (build as (mode: string) => string)("general_file");
+    const standalone = (build as (mode: string) => string)("standalone_chat");
     expect(writing).not.toEqual(general);
     expect(writing).toContain("文风规则");
     expect(general).not.toContain("文风规则");
+    expect(standalone).toContain("未绑定");
+    expect(standalone).not.toContain("fsh_");
 
     // The reserve estimate is a positive token count and larger for the style-pack-bearing mode.
     const writingReserve = (estimate as (mode: string) => number)("writing");

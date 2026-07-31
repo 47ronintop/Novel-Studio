@@ -126,6 +126,40 @@ describe("Agent tool registry", () => {
     ).toMatchObject({ ok: false });
   });
 
+  test("documents foreshadow creation in the v1 Story Bible proposal", () => {
+    const descriptor = engineExports
+      .listAgentTools({
+        facadeVersion: "v1",
+        operationMode: "execution",
+        contextMode: "writing",
+        writePolicy: "write_before_confirmation",
+        capabilitySnapshot: {
+          workspaceKind: "creativeProject",
+          searchEnabled: false,
+          fileLifecycleEnabled: true,
+          controlledExecutionEnabled: false,
+          gitReadEnabled: false,
+          networkReadEnabled: false,
+          pluginToolsEnabled: false,
+          mcpToolsEnabled: false,
+          featureFlagRevision: "foreshadow-description-v1"
+        }
+      })
+      .find((tool) => tool.name === "propose_story_bible_write");
+    if (descriptor === undefined) throw new Error("Missing Story Bible proposal descriptor.");
+
+    expect(descriptor.description).toContain("foreshadow");
+    expect(descriptor.description).toContain("Change Set");
+    const arguments_ = { assetType: "foreshadow", content: "{}" };
+    expect(
+      engineExports.validateAgentToolArguments({
+        descriptor,
+        arguments: arguments_,
+        argumentsText: JSON.stringify(arguments_)
+      })
+    ).toMatchObject({ ok: true });
+  });
+
   test("assigns stable non-empty digests to static descriptors", () => {
     const listTools = (engineExports as unknown as Record<string, unknown>)["listAgentTools"] as (
       input: Record<string, unknown>
@@ -288,6 +322,7 @@ describe("Agent tool registry", () => {
       input: Record<string, unknown>
     ) => readonly {
       readonly name: string;
+      readonly description?: string;
       readonly destructive?: boolean;
       readonly inputSchema: Record<string, unknown>;
     }[];
@@ -372,10 +407,12 @@ describe("Agent tool registry", () => {
     expect(
       isValid("create_resource", {
         kind: "story_bible",
-        assetType: "character.hero",
+        assetType: "foreshadow",
         content: "{}"
       })
     ).toBe(true);
+    expect(descriptor("create_resource").description).toContain("foreshadow");
+    expect(descriptor("create_resource").description).toContain("Change Set");
     expect(
       isValid("create_resource", { kind: "file", path: "notes/new.md", content: "Draft" })
     ).toBe(true);

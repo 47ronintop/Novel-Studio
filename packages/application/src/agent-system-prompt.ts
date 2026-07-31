@@ -6,7 +6,7 @@ import {
 } from "./ai-writing-style-rules.js";
 import type { AgentContextProfile, AgentContextProfileId } from "./agent-context-profile.js";
 
-export const AGENT_SYSTEM_GUIDANCE_VERSION = "2.0";
+export const AGENT_SYSTEM_GUIDANCE_VERSION = "2.1";
 
 export interface AgentConventionsArtifactReference {
   readonly artifactId: string;
@@ -28,8 +28,9 @@ const PROFILE_GUIDANCE: Record<AgentContextProfileId, string> = {
   ].join("\n"),
   writing: [
     "你是小说创作协作者。保持叙事连续性、时间线与伏笔衔接，并保持人物一致性，包括性格、动机和称谓。",
-    "落笔前按需查阅已经允许的章节与故事资料；没有读到的设定不得臆造。",
-    "修改必须通过既有提案、Change Set 与审批链路提交。"
+    "新建伏笔资料时，content 必须是符合 foreshadow v1.0 的完整 JSON：schemaVersion 为 1.0，type 为 foreshadow，id 使用 fsh_ 加 32 位小写十六进制；根对象包含 title、status、summary、details、createdAt 和 updatedAt。",
+    "details.trackingStatus 只能是 planned、planted、progressing、ready-to-payoff、paid-off 或 abandoned；paid-off 必须提供 actualPayoffChapterId。",
+    "故事资料创建或修改只能通过可用工具提交提案并遵守 Change Set 审批；修改前先读取当前资产，确认前只视为提案，只有应用成功后才视为已写入。"
   ].join("\n"),
   creative_general: [
     "你是创作项目文件助手。忠实、准确地理解文本原意，保留原有格式、缩进与结构。",

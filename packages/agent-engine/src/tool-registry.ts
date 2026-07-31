@@ -515,7 +515,8 @@ function descriptionFor(name: StaticAgentToolName): string {
     search_project_text: "在项目内进行有界全文搜索。",
     find_project_references: "查找章节或资产的引用。",
     propose_chapter_create: "提案创建新章节。",
-    propose_story_bible_write: "提案新增或修改 Story Bible 资产。",
+    propose_story_bible_write:
+      "提案新建完整的 Story Bible JSON 资产；assetType 支持 character、world.location、world.faction、world.rule、world.glossary、outline、foreshadow 和 timeline.events，写入进入 Change Set 审批流程。",
     propose_file_create: "提案创建新 UTF-8 文本文件。",
     propose_file_move: "提案移动或重命名文件。",
     propose_file_delete: "提案删除文件（始终需要人工确认）。",
@@ -528,7 +529,8 @@ function descriptionFor(name: StaticAgentToolName): string {
     read_resource: "按稳定引用读取章节、Story Bible 或项目文本。",
     search_project: "在项目内搜索文本或查找稳定引用的使用位置。",
     edit_text: "基于内容哈希和有界范围提案修改已有文本。",
-    create_resource: "提案创建章节、Story Bible 资产或普通文本文件。",
+    create_resource:
+      "提案创建章节、Story Bible JSON 资产或普通文本文件；Story Bible 使用 assetType（含 foreshadow）和完整 JSON 内容，写入进入 Change Set 审批流程。",
     manage_path: "提案移动、删除文件或创建目录。"
   };
   return descs[name] ?? "";
