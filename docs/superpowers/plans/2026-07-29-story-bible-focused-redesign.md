@@ -272,11 +272,13 @@ npm run package:check
 
 检查最终 diff，确认没有：
 
-- [ ] 新增未批准的故事资料类目。
-- [ ] Renderer 文件系统访问或绕过 schema 的写入。
-- [ ] memory 数据删除或静默迁移。
-- [ ] AI/Agent 未经确认写入。
-- [ ] 未知字段丢失、旧项目批量改写或缓存成为事实来源。
+- [x] 新增未批准的故事资料类目。
+- [x] Renderer 文件系统访问或绕过 schema 的写入。
+- [x] memory 数据删除或静默迁移。
+- [x] AI/Agent 未经确认写入。
+- [x] 未知字段丢失、旧项目批量改写或缓存成为事实来源。
+
+门禁记录（2026-07-31）：`npm run typecheck`、`npm run lint`、`npm run test -- --no-file-parallelism`（217 个文件、2308 项用例）、`npm run test:contract`（58 项）、`npm run build` 与 `npm run package:check` 全部通过。结构门禁发现 `App.tsx` 超限后，将既有模型设置回调原样迁入设置动作模块，最终降至 998 行；未提高阈值，也未改变 Story Bible 行为边界。
 
 ## 9. 完成定义
 

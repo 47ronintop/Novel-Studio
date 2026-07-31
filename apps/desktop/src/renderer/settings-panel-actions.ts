@@ -2,7 +2,9 @@ import type { AgentNetworkSettingsData, McpServerConfig } from "@novel-studio/ap
 import type {
   AgentNetworkSettingsPanelProps,
   AgentToolSourcePanelProps,
-  ModelSettingsPanelProps
+  ModelSettingsDraft,
+  ModelSettingsPanelProps,
+  SettingsPanelSection
 } from "@novel-studio/ui";
 import { useCallback } from "react";
 
@@ -21,6 +23,110 @@ type ToolSourceActions = Pick<
   AgentToolSourcePanelProps,
   "onAddServer" | "onRemoveServer" | "onSetEnabled" | "onTestConnection" | "onRevokeServer"
 >;
+
+export function useModelSettingsActions(
+  settingsBridge: SettingsBridge | undefined,
+  setSettings: (settings: ModelSettingsPanelProps) => void
+) {
+  const handleSettingsProfileSelect = useCallback(
+    (profileId: string) => {
+      if (settingsBridge === undefined) return;
+      setSettings(settingsBridge.selectProfile(profileId));
+      void settingsBridge.discoverModelOptions(profileId).then(setSettings);
+    },
+    [settingsBridge, setSettings]
+  );
+
+  const handleDiscoverSettingsModelOptions = useCallback(
+    (profileId: string) => {
+      if (settingsBridge === undefined) return;
+      void settingsBridge.discoverModelOptions(profileId).then(setSettings);
+    },
+    [settingsBridge, setSettings]
+  );
+
+  const handleSettingsSectionSelect = useCallback(
+    (section: SettingsPanelSection) => {
+      if (settingsBridge === undefined) return;
+      setSettings(settingsBridge.selectSection(section));
+
+      const pending =
+        section === "usage"
+          ? settingsBridge.loadAgentUsage()
+          : section === "network"
+            ? settingsBridge.loadNetworkSettings()
+            : section === "mcp"
+              ? settingsBridge.loadMcpServers()
+              : undefined;
+      if (pending !== undefined) {
+        setSettings(settingsBridge.getProps());
+        void pending.then(setSettings);
+      }
+    },
+    [settingsBridge, setSettings]
+  );
+
+  const handleSettingsDraftChange = useCallback(
+    (draft: Partial<ModelSettingsDraft>) => {
+      if (settingsBridge !== undefined) setSettings(settingsBridge.updateDraft(draft));
+    },
+    [settingsBridge, setSettings]
+  );
+
+  const handleNewSettingsProfile = useCallback(() => {
+    if (settingsBridge !== undefined) setSettings(settingsBridge.newProfile());
+  }, [settingsBridge, setSettings]);
+
+  const handleSaveSettingsProfile = useCallback(() => {
+    if (settingsBridge === undefined) return;
+    setSettings(settingsBridge.beginSave());
+    void settingsBridge.saveDraft().then(setSettings);
+  }, [settingsBridge, setSettings]);
+
+  const handleTestSettingsConnection = useCallback(
+    (profileId: string) => {
+      if (settingsBridge === undefined) return;
+      setSettings(settingsBridge.beginTestConnection(profileId));
+      void settingsBridge.testConnection(profileId).then(setSettings);
+    },
+    [settingsBridge, setSettings]
+  );
+
+  const handleMakeSettingsDefault = useCallback(
+    (profileId: string) => {
+      if (settingsBridge === undefined) return;
+      setSettings(settingsBridge.beginSave());
+      void settingsBridge.makeDefault(profileId).then(setSettings);
+    },
+    [settingsBridge, setSettings]
+  );
+
+  const handleRefreshPluginRegistry = useCallback(() => {
+    if (settingsBridge !== undefined) void settingsBridge.loadPlugins().then(setSettings);
+  }, [settingsBridge, setSettings]);
+
+  const handleSetPluginEnabled = useCallback(
+    (pluginId: string, enabled: boolean) => {
+      if (settingsBridge !== undefined) {
+        void settingsBridge.setPluginEnabled(pluginId, enabled).then(setSettings);
+      }
+    },
+    [settingsBridge, setSettings]
+  );
+
+  return {
+    handleSettingsProfileSelect,
+    handleDiscoverSettingsModelOptions,
+    handleSettingsSectionSelect,
+    handleSettingsDraftChange,
+    handleNewSettingsProfile,
+    handleSaveSettingsProfile,
+    handleTestSettingsConnection,
+    handleMakeSettingsDefault,
+    handleRefreshPluginRegistry,
+    handleSetPluginEnabled
+  };
+}
 
 export function useSettingsPanelActions(
   settingsBridge: SettingsBridge | undefined,

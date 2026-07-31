@@ -5,7 +5,10 @@ import { afterEach, describe, expect, test } from "vitest";
 
 import type { ModelSettingsPanelProps } from "@novel-studio/ui";
 import type { SettingsBridge } from "../src/renderer/settings-bridge.js";
-import { useSettingsPanelActions } from "../src/renderer/settings-panel-actions.js";
+import {
+  useModelSettingsActions,
+  useSettingsPanelActions
+} from "../src/renderer/settings-panel-actions.js";
 
 (
   globalThis as typeof globalThis & {
@@ -24,7 +27,9 @@ describe("useSettingsPanelActions", () => {
 
   test("publishes the final bridge state and preserves a rejected settings action", async () => {
     const loading = { feedback: { kind: "info", message: "loading" } } as ModelSettingsPanelProps;
-    const failed = { feedback: { kind: "error", message: "update failed" } } as ModelSettingsPanelProps;
+    const failed = {
+      feedback: { kind: "error", message: "update failed" }
+    } as ModelSettingsPanelProps;
     let current = loading;
     let rejectUpdate: ((error: Error) => void) | undefined;
     const bridge = {
@@ -55,5 +60,66 @@ describe("useSettingsPanelActions", () => {
     rejectUpdate?.(new Error("update failed"));
     await expect(pending).rejects.toThrow("update failed");
     expect(published).toEqual([loading, failed]);
+  });
+
+  test("preserves model discovery and section loading publication order", async () => {
+    const profileSelected = { activeProfileId: "model_b" } as ModelSettingsPanelProps;
+    const profileDiscovered = {
+      feedback: { kind: "info", message: "models ready" }
+    } as ModelSettingsPanelProps;
+    const usageSelected = { activeSection: "usage" } as ModelSettingsPanelProps;
+    const usageLoading = {
+      feedback: { kind: "info", message: "usage loading" }
+    } as ModelSettingsPanelProps;
+    const usageLoaded = {
+      feedback: { kind: "info", message: "usage ready" }
+    } as ModelSettingsPanelProps;
+    let current = profileSelected;
+    const bridge = {
+      getProps: () => current,
+      selectProfile: () => profileSelected,
+      discoverModelOptions: async () => {
+        current = profileDiscovered;
+        return current;
+      },
+      selectSection: () => usageSelected,
+      loadAgentUsage: async () => {
+        current = usageLoading;
+        await Promise.resolve();
+        current = usageLoaded;
+        return current;
+      }
+    } as unknown as SettingsBridge;
+    const published: ModelSettingsPanelProps[] = [];
+    let actions: ReturnType<typeof useModelSettingsActions> | undefined;
+
+    function Harness() {
+      actions = useModelSettingsActions(bridge, (settings) => published.push(settings));
+      return null;
+    }
+
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<Harness />));
+
+    await act(async () => {
+      actions?.handleSettingsProfileSelect("model_b");
+      await Promise.resolve();
+    });
+    expect(published).toEqual([profileSelected, profileDiscovered]);
+
+    await act(async () => {
+      actions?.handleSettingsSectionSelect("usage");
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(published).toEqual([
+      profileSelected,
+      profileDiscovered,
+      usageSelected,
+      usageLoading,
+      usageLoaded
+    ]);
   });
 });

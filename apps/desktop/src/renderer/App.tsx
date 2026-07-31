@@ -13,8 +13,6 @@ import type {
   ChapterEditorSelection,
   ChapterEditorProps,
   CommandPaletteFeedback,
-  ModelSettingsDraft,
-  SettingsPanelSection,
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
 import { ProjectCreateDialog } from "@novel-studio/ui";
@@ -55,7 +53,7 @@ import { RendererWorkspaceShell } from "./renderer-workspace-shell.js";
 import { useProjectWorkflowActions } from "./project-workflow-actions.js";
 import { useAiWritingWorkflowActions } from "./ai-writing-workflow-actions.js";
 import { useAgentUsageSettingsActions } from "./agent-usage-settings-actions.js";
-import { useSettingsPanelActions } from "./settings-panel-actions.js";
+import { useModelSettingsActions, useSettingsPanelActions } from "./settings-panel-actions.js";
 import { useShellPreferenceActions } from "./shell-preference-actions.js";
 import { createWorkspaceNavigation, type WorkspaceNavigation } from "./workspace-navigation.js";
 import { useStudioActions } from "./studio-actions.js";
@@ -768,55 +766,6 @@ export function App() {
     onUndoSelection: handleUndoSelectionReview
   });
 
-  const handleSettingsProfileSelect = useCallback(
-    (profileId: string) => {
-      if (settingsBridge === undefined) {
-        return;
-      }
-
-      setSettings(settingsBridge.selectProfile(profileId));
-      void settingsBridge.discoverModelOptions(profileId).then(setSettings);
-    },
-    [settingsBridge]
-  );
-
-  const handleDiscoverSettingsModelOptions = useCallback(
-    (profileId: string) => {
-      if (settingsBridge === undefined) {
-        return;
-      }
-
-      void settingsBridge.discoverModelOptions(profileId).then(setSettings);
-    },
-    [settingsBridge]
-  );
-
-  const handleSettingsSectionSelect = useCallback(
-    (section: SettingsPanelSection) => {
-      if (settingsBridge === undefined) {
-        return;
-      }
-
-      setSettings(settingsBridge.selectSection(section));
-      if (section === "usage") {
-        const pending = settingsBridge.loadAgentUsage();
-        setSettings(settingsBridge.getProps());
-        void pending.then(setSettings);
-      }
-      if (section === "network") {
-        const pending = settingsBridge.loadNetworkSettings();
-        setSettings(settingsBridge.getProps());
-        void pending.then(setSettings);
-      }
-      if (section === "mcp") {
-        const pending = settingsBridge.loadMcpServers();
-        setSettings(settingsBridge.getProps());
-        void pending.then(setSettings);
-      }
-    },
-    [settingsBridge]
-  );
-
   const handleAppearancePreferencesChange = useCallback(
     (preferences: UserAppearancePreferences) => {
       setAppearancePreferences(preferences);
@@ -826,77 +775,18 @@ export function App() {
     [api]
   );
 
-  const handleSettingsDraftChange = useCallback(
-    (draft: Partial<ModelSettingsDraft>) => {
-      if (settingsBridge === undefined) {
-        return;
-      }
-
-      setSettings(settingsBridge.updateDraft(draft));
-    },
-    [settingsBridge]
-  );
-
-  const handleNewSettingsProfile = useCallback(() => {
-    if (settingsBridge === undefined) {
-      return;
-    }
-
-    setSettings(settingsBridge.newProfile());
-  }, [settingsBridge]);
-
-  const handleSaveSettingsProfile = useCallback(() => {
-    if (settingsBridge === undefined) {
-      return;
-    }
-
-    setSettings(settingsBridge.beginSave());
-    void settingsBridge.saveDraft().then(setSettings);
-  }, [settingsBridge]);
-
-  const handleTestSettingsConnection = useCallback(
-    (profileId: string) => {
-      if (settingsBridge === undefined) {
-        return;
-      }
-
-      setSettings(settingsBridge.beginTestConnection(profileId));
-      void settingsBridge.testConnection(profileId).then(setSettings);
-    },
-    [settingsBridge]
-  );
-
-  const handleMakeSettingsDefault = useCallback(
-    (profileId: string) => {
-      if (settingsBridge === undefined) {
-        return;
-      }
-
-      setSettings(settingsBridge.beginSave());
-      void settingsBridge.makeDefault(profileId).then(setSettings);
-    },
-    [settingsBridge]
-  );
-
-  const handleRefreshPluginRegistry = useCallback(() => {
-    if (settingsBridge === undefined) {
-      return;
-    }
-
-    void settingsBridge.loadPlugins().then(setSettings);
-  }, [settingsBridge]);
-
-  const handleSetPluginEnabled = useCallback(
-    (pluginId: string, enabled: boolean) => {
-      if (settingsBridge === undefined) {
-        return;
-      }
-
-      void settingsBridge.setPluginEnabled(pluginId, enabled).then(setSettings);
-    },
-    [settingsBridge]
-  );
-
+  const {
+    handleSettingsProfileSelect,
+    handleDiscoverSettingsModelOptions,
+    handleSettingsSectionSelect,
+    handleSettingsDraftChange,
+    handleNewSettingsProfile,
+    handleSaveSettingsProfile,
+    handleTestSettingsConnection,
+    handleMakeSettingsDefault,
+    handleRefreshPluginRegistry,
+    handleSetPluginEnabled
+  } = useModelSettingsActions(settingsBridge, setSettings);
   const agentUsageSettingsActions = useAgentUsageSettingsActions(settingsBridge, setSettings);
   const settingsPanelActions = useSettingsPanelActions(settingsBridge, setSettings);
 
