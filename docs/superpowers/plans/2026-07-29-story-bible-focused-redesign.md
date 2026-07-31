@@ -241,10 +241,10 @@ npm exec vitest -- packages/agent-engine/test/tool-registry.test.ts packages/app
 
 ### F1. 兼容场景
 
-- [ ] 无 Story Bible、只有 v1.0 资产、包含未知字段、缺少 foreshadows 目录的项目均可打开。
-- [ ] memories 文件仍可读写、可构建 Context candidate，且故事资料 UI 中完全不可见。
-- [ ] 旧 v1.0 搜索 cache 继续可读；相关 Story Bible 写入成功后 cache 被安全失效并在下一次查询重建，手动清理 cache 不影响任何 Story Bible 源数据。
-- [ ] Agent planning、execution/default approval、preapproved、general_file 和 standalone 权限矩阵无回归。
+- [x] 无 Story Bible、只有 v1.0 资产、包含未知字段、缺少 foreshadows 目录的项目均可打开。
+- [x] memories 文件仍可读写、可构建 Context candidate，且故事资料 UI 中完全不可见。
+- [x] 旧 v1.0 搜索 cache 继续可读；相关 Story Bible 写入成功后 cache 被安全失效并在下一次查询重建，手动清理 cache 不影响任何 Story Bible 源数据。
+- [x] Agent planning、execution/default approval、preapproved、general_file 和 standalone 权限矩阵无回归。
 
 ### F2. 视觉与可访问性
 

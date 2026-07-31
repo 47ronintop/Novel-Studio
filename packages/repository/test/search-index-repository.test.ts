@@ -160,10 +160,12 @@ describe("SearchIndexFileRepository", () => {
       `${JSON.stringify({ ...character, summary: "The renewed promise is now current." }, null, 2)}\n`,
       "utf8"
     );
+    const sourceAfterEdit = await readFile(characterPath, "utf8");
 
     const invalidated = await repository.invalidate();
 
     expect(invalidated).toEqual({ ok: true, value: undefined });
+    await expect(readFile(characterPath, "utf8")).resolves.toBe(sourceAfterEdit);
     await expect(
       readFile(join(projectRoot, "cache", "indexes", "search.json"), "utf8")
     ).rejects.toMatchObject({ code: "ENOENT" });

@@ -88,6 +88,25 @@ describe("StoryBibleFileRepository", () => {
     await expect(readFile(join(projectRoot, "foreshadows"), "utf8")).rejects.toThrow();
   });
 
+  test("opens a project that has no Story Bible directories", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-story-bible-empty-"));
+    tempRoots.push(projectRoot);
+    const repository = new StoryBibleFileRepository({ projectRoot });
+
+    const snapshot = await repository.readStoryBible();
+
+    expect(snapshot).toEqual({
+      ok: true,
+      value: {
+        characters: [],
+        worldAssets: [],
+        foreshadows: [],
+        memories: []
+      }
+    });
+    await expect(readdir(projectRoot)).resolves.toEqual([]);
+  });
+
   test("does not read nested JSON as a foreshadow asset", async () => {
     const projectRoot = await createTempProject();
     const nestedDirectory = join(projectRoot, "foreshadows", "nested");
