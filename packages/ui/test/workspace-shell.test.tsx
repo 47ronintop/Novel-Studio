@@ -75,6 +75,7 @@ describe("WorkspaceShell", () => {
 
     expect(groups.projectActivities.map((activity) => activity.id)).toEqual([
       "workspace",
+      "storyBible",
       "search",
       "timeline"
     ]);
@@ -254,7 +255,10 @@ describe("WorkspaceShell", () => {
 
     expect(narrowStart).toBeGreaterThanOrEqual(0);
     expect(narrowWorkspace).toMatch(
-      /\[data-agent-conversation="true"\]\[data-focus-mode="false"\][^{]*\.ns-agent-conversation-navigator-region[^{]*\{[^}]*display:\s*none/s
+      /\[data-agent-conversation="true"\]\[data-focus-mode="false"\][^{]*\.ns-navigator,[\s\S]*?\.ns-agent-conversation-navigator-region[^{]*\{[^}]*display:\s*none/s
+    );
+    expect(narrowWorkspace).toMatch(
+      /\[data-agent-conversation="true"\]\[data-focus-mode="false"\][^{]*\.ns-story-responsive-kind-switch\s*\{[^}]*display:\s*block/s
     );
     expect(narrowWorkspace).toMatch(
       /\[data-agent-conversation="true"\]\[data-focus-mode="false"\][^{]*\.ns-ai-panel\s*\{[^}]*display:\s*grid/s
@@ -1772,6 +1776,7 @@ describe("WorkspaceShell", () => {
     expect(openedEntries).toEqual(["chr_hero"]);
     expect(createdKinds).toEqual(["character"]);
     expect(html).toContain('aria-label="人物列表"');
+    expect(html).toContain('aria-label="切换故事资料分类"');
     expect(html).toContain('aria-label="搜索人物"');
     expect(html).toContain('aria-label="筛选资料状态"');
     expect(html.match(/aria-label="新建人物"/gu)).toHaveLength(1);

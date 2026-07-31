@@ -52,6 +52,14 @@ const WORLD_ASSET_TYPE_OPTIONS: ReadonlyArray<{
   { value: "world.glossary", label: "术语" }
 ];
 
+const STORY_BIBLE_KINDS: readonly StoryBibleEditorKind[] = [
+  "character",
+  "world",
+  "outline",
+  "foreshadow",
+  "timeline"
+];
+
 export function TimelineMainView({
   editor,
   onTimelineEntryOpen
@@ -246,6 +254,22 @@ export function StoryBibleEditorView({ editor }: { readonly editor: StoryBibleEd
                   : `${categoryCount} 项`}
             </span>
           </div>
+          <label className="ns-story-responsive-kind-switch">
+            <span className="ns-visually-hidden">切换故事资料分类</span>
+            <select
+              aria-label="切换故事资料分类"
+              onChange={(event) =>
+                editor.onKindSelect(event.currentTarget.value as StoryBibleEditorKind)
+              }
+              value={editor.activeKind}
+            >
+              {STORY_BIBLE_KINDS.map((kind) => (
+                <option key={kind} value={kind}>
+                  {storyBibleKindLabel(kind)}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
         {editor.viewMode === "list" ? (
           <div className="ns-story-toolbar">
