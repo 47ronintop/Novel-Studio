@@ -223,13 +223,13 @@ npm exec vitest -- packages/application/test/foreshadow-analysis-session.test.ts
 
 ### E2. Application 失效、Renderer 刷新与冲突
 
-- [ ] 资料详情打开时把 `story_bible:<assetId>` 同步为下一次 writing Agent run 的活动资料引用，同时保留当前章节引用；返回列表后移除。
-- [ ] 当前资料 dirty 时，Agent run 启动前复用“保存 / 放弃 / 取消”守门，禁止模型读取旧磁盘资产。
-- [ ] apply 和 undo 成功后都返回受影响路径与 version group ID；Main/Application 对受管 Story Bible 路径调用 A4 的 `invalidate`，Renderer 以 version group ID 去重刷新。
-- [ ] 无 dirty 草稿时重新加载 snapshot；若 apply 只创建或修改一个资产则定位到该详情，undo 后定位仍存在的当前资产，否则回到所属分类列表。
-- [ ] 有 dirty 草稿时不覆盖，显示外部更新提示以及“重新加载 / 继续编辑”。
-- [ ] 继续编辑后保存使用最新基线校验；基线已变化时显示冲突，不覆盖 Agent 结果。
-- [ ] reject、失败 apply 和失败 undo 不触发索引失效或 snapshot 刷新；Agent 创建、修改和成功撤销后导航计数与主区状态保持一致。
+- [x] 资料详情打开时把 `story_bible:<assetId>` 同步为下一次 writing Agent run 的活动资料引用，同时保留当前章节引用；返回列表后移除。
+- [x] 当前资料 dirty 时，Agent run 启动前复用“保存 / 放弃 / 取消”守门，禁止模型读取旧磁盘资产。
+- [x] apply 和 undo 成功后都返回受影响路径与 version group ID；Main/Application 对受管 Story Bible 路径调用 A4 的 `invalidate`，Renderer 以 version group ID 去重刷新。
+- [x] 无 dirty 草稿时重新加载 snapshot；若 apply 只创建或修改一个资产则定位到该详情，undo 后定位仍存在的当前资产，否则回到所属分类列表。
+- [x] 有 dirty 草稿时不覆盖，显示外部更新提示以及“重新加载 / 继续编辑”。
+- [x] 继续编辑后保存使用最新基线校验；基线已变化时显示冲突，不覆盖 Agent 结果。
+- [x] reject、失败 apply 和失败 undo 不触发索引失效或 snapshot 刷新；Agent 创建、修改和成功撤销后导航计数与主区状态保持一致。
 
 定向验证：
 

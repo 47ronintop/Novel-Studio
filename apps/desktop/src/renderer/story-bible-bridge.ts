@@ -8,6 +8,7 @@ import type {
   StoryBibleRegularAsset,
   StoryBibleSnapshot
 } from "@novel-studio/application";
+import type { ContextDraftActiveResourceRef } from "@novel-studio/agent-engine";
 import type { JsonObject, Result, UnifiedError } from "@novel-studio/shared";
 import { createForeshadowEvidence } from "@novel-studio/shared";
 import {
@@ -44,6 +45,7 @@ export interface StoryBibleBridge {
   getEditorProps(): StoryBibleEditorProps;
   getSnapshot(): StoryBibleSnapshot;
   getSnapshotBinding(workspaceId?: string): StoryBibleSnapshotBinding | undefined;
+  getActiveResourceRef(): ContextDraftActiveResourceRef | null;
   clear(): void;
   load(workspaceId: string): Promise<StoryBibleSummaryProps>;
   selectKind(kind: StoryBibleEditorKind): StoryBibleEditorProps;
@@ -75,8 +77,18 @@ export interface StoryBibleBridge {
   beginForeshadowAnalysisSave(retryFailedOnly: boolean): ForeshadowAnalysisStart;
   saveForeshadowAnalysisChanges(token: number): Promise<ForeshadowAnalysisTransition>;
   closeForeshadowAnalysis(): StoryBibleEditorProps;
+  handleExternalUpdate(input: StoryBibleExternalUpdateInput): Promise<StoryBibleEditorProps>;
+  reloadExternalUpdate(): Promise<StoryBibleEditorProps>;
+  continueExternalUpdate(): StoryBibleEditorProps;
   beginSave(): StoryBibleEditorProps;
   saveDraft(options?: StoryBibleSaveOptions): Promise<StoryBibleEditorProps>;
+}
+
+export interface StoryBibleExternalUpdateInput {
+  readonly projectId: string;
+  readonly reason: "agent-change-set-apply" | "agent-run-undo";
+  readonly versionGroupId: string;
+  readonly relativePaths: readonly string[];
 }
 
 export interface ForeshadowAnalysisPreparation {
@@ -122,6 +134,15 @@ interface StoryBibleEditorState {
   readonly feedback?: StoryBibleEditorProps["feedback"];
 }
 
+interface StoryBibleAffectedPath {
+  readonly kind: StoryBibleEditorKind;
+  readonly assetId?: string;
+}
+
+interface PendingStoryBibleExternalUpdate extends StoryBibleExternalUpdateInput {
+  readonly affectedPaths: readonly StoryBibleAffectedPath[];
+}
+
 const DEFAULT_FILTERS: StoryBibleEditorFilters = {
   query: "",
   status: "all",
@@ -143,6 +164,11 @@ export function createStoryBibleBridge(
   let foreshadowConfirmationPlan: ForeshadowConfirmationPlan | undefined;
   let consistency: StoryBibleConsistencyProps | undefined;
   let baselineDraft = emptyDraft("character");
+  let baselineAsset: StoryBibleAsset | undefined;
+  let externalRefreshGeneration = 0;
+  let pendingExternalUpdates: PendingStoryBibleExternalUpdate[] = [];
+  let validateExternalBaselineBeforeSave = false;
+  const handledVersionGroupIds = new Set<string>();
   let editorState: StoryBibleEditorState = {
     activeKind: "character",
     activeTimelineEventId: undefined,
@@ -165,6 +191,15 @@ export function createStoryBibleBridge(
     getProps: () => props,
     getEditorProps: () => editorProps,
     getSnapshot: () => snapshot,
+    getActiveResourceRef() {
+      if (editorState.viewMode !== "detail" || editorState.draft.id === undefined) return null;
+      return {
+        kind: "story_bible",
+        refId: `story_bible:${editorState.draft.id}`,
+        assetId: editorState.draft.id,
+        label: baselineAsset?.title.trim() || editorState.draft.title.trim() || editorState.draft.id
+      };
+    },
     getSnapshotBinding(workspaceId) {
       return workspaceId === undefined || snapshotBinding?.workspaceId !== workspaceId
         ? undefined
@@ -195,6 +230,8 @@ export function createStoryBibleBridge(
       foreshadowAnalysisGeneration += 1;
       foreshadowConfirmationPlan = undefined;
       baselineDraft = emptyDraft(kind);
+      baselineAsset = undefined;
+      const externalUpdate = externalUpdateAfterNavigation();
       editorState = {
         ...editorState,
         activeKind: kind,
@@ -204,7 +241,7 @@ export function createStoryBibleBridge(
         dirty: false,
         draft: baselineDraft,
         foreshadowAnalysis: closedForeshadowAnalysis(),
-        externalUpdate: { status: "none" }
+        externalUpdate
       };
       deleteFeedback();
       return publishEditor();
@@ -229,6 +266,8 @@ export function createStoryBibleBridge(
       foreshadowAnalysisGeneration += 1;
       foreshadowConfirmationPlan = undefined;
       baselineDraft = draftFromEntry(entry);
+      baselineAsset = findExistingAsset(snapshot, entry.id);
+      const externalUpdate = externalUpdateAfterNavigation();
       editorState = {
         ...editorState,
         activeKind: entry.kind,
@@ -238,7 +277,7 @@ export function createStoryBibleBridge(
         dirty: false,
         draft: baselineDraft,
         foreshadowAnalysis: closedForeshadowAnalysis(),
-        externalUpdate: { status: "none" }
+        externalUpdate
       };
       deleteFeedback();
       return publishEditor();
@@ -254,6 +293,8 @@ export function createStoryBibleBridge(
       foreshadowAnalysisGeneration += 1;
       foreshadowConfirmationPlan = undefined;
       baselineDraft = emptyDraft(kind, assetType);
+      baselineAsset = undefined;
+      const externalUpdate = externalUpdateAfterNavigation();
       editorState = {
         ...editorState,
         activeKind: kind,
@@ -263,7 +304,7 @@ export function createStoryBibleBridge(
         dirty: false,
         draft: baselineDraft,
         foreshadowAnalysis: closedForeshadowAnalysis(),
-        externalUpdate: { status: "none" }
+        externalUpdate
       };
       deleteFeedback();
       return publishEditor();
@@ -273,6 +314,8 @@ export function createStoryBibleBridge(
       foreshadowAnalysisGeneration += 1;
       foreshadowConfirmationPlan = undefined;
       baselineDraft = emptyDraft(editorState.activeKind);
+      baselineAsset = undefined;
+      const externalUpdate = externalUpdateAfterNavigation();
       editorState = {
         ...editorState,
         activeTimelineEventId: undefined,
@@ -281,7 +324,7 @@ export function createStoryBibleBridge(
         dirty: false,
         draft: baselineDraft,
         foreshadowAnalysis: closedForeshadowAnalysis(),
-        externalUpdate: { status: "none" }
+        externalUpdate
       };
       deleteFeedback();
       return publishEditor();
@@ -289,6 +332,7 @@ export function createStoryBibleBridge(
     updateDraft(kind, draft) {
       assertDraftPatch(editorState.draft, kind, draft);
       const nextDraft = mergeDraftPatch(editorState.draft, draft);
+      if (pendingExternalUpdates.length > 0) validateExternalBaselineBeforeSave = true;
       editorState = {
         ...editorState,
         activeKind: nextDraft.kind,
@@ -859,6 +903,39 @@ export function createStoryBibleBridge(
       };
       return publishEditor();
     },
+    async handleExternalUpdate(input) {
+      if (
+        snapshotBinding?.workspaceId !== input.projectId ||
+        handledVersionGroupIds.has(input.versionGroupId)
+      ) {
+        return editorProps;
+      }
+      const affectedPaths = input.relativePaths.flatMap(parseStoryBibleAffectedPath);
+      if (affectedPaths.length === 0) return editorProps;
+      rememberHandledVersionGroup(input.versionGroupId);
+      const update: PendingStoryBibleExternalUpdate = { ...input, affectedPaths };
+      pendingExternalUpdates = [...pendingExternalUpdates, update];
+      if (editorState.dirty) {
+        validateExternalBaselineBeforeSave = true;
+        editorState = {
+          ...editorState,
+          externalUpdate: externalUpdateState(pendingExternalUpdates, snapshot)
+        };
+        return publishEditor();
+      }
+      return refreshExternalUpdates(pendingExternalUpdates);
+    },
+    reloadExternalUpdate() {
+      return pendingExternalUpdates.length === 0
+        ? Promise.resolve(editorProps)
+        : refreshExternalUpdates(pendingExternalUpdates);
+    },
+    continueExternalUpdate() {
+      if (pendingExternalUpdates.length === 0) return editorProps;
+      validateExternalBaselineBeforeSave = true;
+      editorState = { ...editorState, externalUpdate: { status: "none" } };
+      return publishEditor();
+    },
     beginSave() {
       editorState = { ...editorState, status: "saving" };
       deleteFeedback();
@@ -884,6 +961,57 @@ export function createStoryBibleBridge(
       }
       const normalizedDraft = await normalizeForeshadowDraft(draft);
       if (generation !== loadGeneration) return editorProps;
+      if (
+        validateExternalBaselineBeforeSave &&
+        normalizedDraft.id !== undefined &&
+        baselineAsset !== undefined
+      ) {
+        let latest: Result<StoryBibleSnapshot, UnifiedError>;
+        try {
+          latest = await api.storyBible.load();
+        } catch {
+          editorState = {
+            ...editorState,
+            status: "error",
+            dirty: true,
+            draft: normalizedDraft,
+            feedback: {
+              kind: "error",
+              message: "无法读取最新故事资料，本次未保存；请重试。"
+            }
+          };
+          return publishEditor();
+        }
+        if (generation !== loadGeneration) return editorProps;
+        if (!latest.ok) {
+          editorState = {
+            ...editorState,
+            status: "error",
+            dirty: true,
+            draft: normalizedDraft,
+            feedback: { kind: "error", message: latest.error.message }
+          };
+          return publishEditor();
+        }
+        snapshot = latest.value;
+        snapshotBinding = workspaceId === undefined ? undefined : { workspaceId, snapshot };
+        props = toProps(snapshot);
+        const latestAsset = findExistingAsset(snapshot, normalizedDraft.id);
+        if (latestAsset === undefined || !storyBibleAssetsEqual(latestAsset, baselineAsset)) {
+          editorState = {
+            ...editorState,
+            status: "error",
+            dirty: true,
+            draft: normalizedDraft,
+            externalUpdate: externalUpdateState(pendingExternalUpdates, snapshot),
+            feedback: {
+              kind: "error",
+              message: "该资料已由 Agent 更新，当前草稿与最新版本冲突。请重新加载后再编辑。"
+            }
+          };
+          return publishEditor();
+        }
+      }
       const saved = await api.storyBible.saveAsset(
         toStoryAsset(normalizedDraft, now(), snapshot, createAssetIdentity)
       );
@@ -914,6 +1042,8 @@ export function createStoryBibleBridge(
       consistency = nextConsistency;
       props = toProps(snapshot);
       baselineDraft = draftFromSnapshot(snapshot, { ...normalizedDraft, id: saved.value.id });
+      baselineAsset = findExistingAsset(snapshot, saved.value.id);
+      clearPendingExternalUpdate();
       const activeTimelineEventId =
         editorState.activeTimelineEventId !== undefined &&
         draftHasTimelineEvent(baselineDraft, editorState.activeTimelineEventId)
@@ -954,14 +1084,177 @@ export function createStoryBibleBridge(
     };
   }
 
+  function clearPendingExternalUpdate(): void {
+    pendingExternalUpdates = [];
+    validateExternalBaselineBeforeSave = false;
+  }
+
+  function externalUpdateAfterNavigation(): StoryBibleEditorProps["externalUpdate"] {
+    if (pendingExternalUpdates.length > 0) return editorState.externalUpdate;
+    clearPendingExternalUpdate();
+    return { status: "none" };
+  }
+
+  function rememberHandledVersionGroup(versionGroupId: string): void {
+    handledVersionGroupIds.add(versionGroupId);
+    if (handledVersionGroupIds.size <= 128) return;
+    const oldest = handledVersionGroupIds.values().next().value as string | undefined;
+    if (oldest !== undefined) handledVersionGroupIds.delete(oldest);
+  }
+
+  async function refreshExternalUpdates(
+    updates: readonly PendingStoryBibleExternalUpdate[]
+  ): Promise<StoryBibleEditorProps> {
+    const workspaceId = snapshotBinding?.workspaceId;
+    if (workspaceId === undefined || updates.length === 0) return editorProps;
+    const generation = ++externalRefreshGeneration;
+    const previousState = editorState;
+    let loaded: Result<StoryBibleSnapshot, UnifiedError>;
+    try {
+      loaded = await api.storyBible.load();
+    } catch {
+      if (
+        generation !== externalRefreshGeneration ||
+        snapshotBinding?.workspaceId !== workspaceId
+      ) {
+        return editorProps;
+      }
+      return failExternalRefresh(updates, "故事资料已由 Agent 更新，但重新加载失败；请重试。");
+    }
+    if (
+      generation !== externalRefreshGeneration ||
+      snapshotBinding?.workspaceId !== workspaceId
+    ) {
+      return editorProps;
+    }
+    if (!loaded.ok) return failExternalRefresh(updates, loaded.error.message);
+
+    let nextConsistency = consistency;
+    try {
+      const report = await api.storyBible.buildConsistencyReport();
+      if (
+        generation !== externalRefreshGeneration ||
+        snapshotBinding?.workspaceId !== workspaceId
+      ) {
+        return editorProps;
+      }
+      if (report.ok) nextConsistency = toConsistencyProps(report.value);
+    } catch {
+      // The source snapshot is authoritative; a later consistency check can refresh diagnostics.
+    }
+
+    snapshot = loaded.value;
+    snapshotBinding = { workspaceId, snapshot };
+    consistency = nextConsistency;
+    props = toProps(snapshot);
+    if (!previousState.dirty && editorState.dirty) {
+      editorState = {
+        ...editorState,
+        status: "idle",
+        externalUpdate: externalUpdateState(updates, snapshot)
+      };
+      return publishEditor();
+    }
+    applyExternalRefreshNavigation(previousState, updates);
+    clearPendingExternalUpdate();
+    return publishEditor();
+  }
+
+  function failExternalRefresh(
+    updates: readonly PendingStoryBibleExternalUpdate[],
+    message: string
+  ): StoryBibleEditorProps {
+    pendingExternalUpdates = [...updates];
+    editorState = {
+      ...editorState,
+      status: "error",
+      externalUpdate: externalUpdateState(updates, snapshot),
+      feedback: { kind: "error", message }
+    };
+    return publishEditor();
+  }
+
+  function applyExternalRefreshNavigation(
+    previousState: StoryBibleEditorState,
+    updates: readonly PendingStoryBibleExternalUpdate[]
+  ): void {
+    const entries = createEditorEntries(snapshot);
+    const affectedEntryIds = affectedEntryIdsForSnapshot(updates, snapshot);
+    const allApply = updates.every((update) => update.reason === "agent-change-set-apply");
+    const allUndo = updates.every((update) => update.reason === "agent-run-undo");
+    const currentEntryId =
+      previousState.viewMode === "detail" ? previousState.draft.id : undefined;
+    const targetEntryId =
+      allApply && affectedEntryIds.length === 1
+        ? affectedEntryIds[0]
+        : allUndo && currentEntryId !== undefined
+          ? currentEntryId
+          : undefined;
+    const targetEntry = entries.find((entry) => entry.id === targetEntryId);
+    if (targetEntry !== undefined) {
+      baselineDraft = draftFromEntry(targetEntry);
+      baselineAsset = findExistingAsset(snapshot, targetEntry.id);
+      const activeTimelineEventId =
+        targetEntry.kind === "timeline" &&
+        previousState.activeTimelineEventId !== undefined &&
+        targetEntry.timelineEvents.some(
+          (event) => event.id === previousState.activeTimelineEventId
+        )
+          ? previousState.activeTimelineEventId
+          : undefined;
+      editorState = {
+        ...previousState,
+        activeKind: targetEntry.kind,
+        activeTimelineEventId,
+        viewMode: "detail",
+        status: "idle",
+        dirty: false,
+        draft: baselineDraft,
+        externalUpdate: { status: "none" },
+        feedback: {
+          kind: "info",
+          message: "故事资料已同步 Agent 的最新变更。"
+        }
+      };
+      return;
+    }
+
+    const affectedKinds = updates.flatMap((update) =>
+      update.affectedPaths.map((affected) => affected.kind)
+    );
+    const activeKind = affectedKinds.includes(previousState.activeKind)
+      ? previousState.activeKind
+      : (affectedKinds[0] ?? previousState.activeKind);
+    baselineDraft = emptyDraft(activeKind);
+    baselineAsset = undefined;
+    editorState = {
+      ...previousState,
+      activeKind,
+      activeTimelineEventId: undefined,
+      viewMode: "list",
+      status: "idle",
+      dirty: false,
+      draft: baselineDraft,
+      externalUpdate: { status: "none" },
+      feedback: {
+        kind: "info",
+        message: "故事资料已同步 Agent 的最新变更。"
+      }
+    };
+  }
+
   function reset(): void {
     foreshadowAnalysisGeneration += 1;
+    externalRefreshGeneration += 1;
     foreshadowConfirmationPlan = undefined;
+    handledVersionGroupIds.clear();
+    clearPendingExternalUpdate();
     snapshot = emptySnapshot();
     snapshotBinding = undefined;
     consistency = undefined;
     props = { assets: [] };
     baselineDraft = emptyDraft(editorState.activeKind);
+    baselineAsset = undefined;
     editorState = {
       ...editorState,
       activeTimelineEventId: undefined,
@@ -975,6 +1268,60 @@ export function createStoryBibleBridge(
     deleteFeedback();
     publishEditor();
   }
+}
+
+function parseStoryBibleAffectedPath(relativePath: string): StoryBibleAffectedPath[] {
+  const normalized = relativePath.replaceAll("\\", "/").replace(/^\.\//u, "");
+  const regular = /^(characters|world|foreshadows)\/([A-Za-z0-9_-]+)\.json$/u.exec(normalized);
+  if (regular?.[1] !== undefined && regular[2] !== undefined) {
+    const kind =
+      regular[1] === "characters"
+        ? "character"
+        : regular[1] === "world"
+          ? "world"
+          : "foreshadow";
+    return [{ kind, assetId: regular[2] }];
+  }
+  if (normalized === "outline/outline.json") return [{ kind: "outline" }];
+  if (normalized === "timeline/events.json") return [{ kind: "timeline" }];
+  return [];
+}
+
+function externalUpdateState(
+  updates: readonly PendingStoryBibleExternalUpdate[],
+  snapshot: StoryBibleSnapshot
+): StoryBibleEditorProps["externalUpdate"] {
+  const latest = updates.at(-1);
+  if (latest === undefined) return { status: "none" };
+  return {
+    status: "available",
+    message: "故事资料已由 Agent 更新。当前草稿未被覆盖。",
+    affectedEntryIds: affectedEntryIdsForSnapshot(updates, snapshot),
+    versionGroupId: latest.versionGroupId
+  };
+}
+
+function affectedEntryIdsForSnapshot(
+  updates: readonly PendingStoryBibleExternalUpdate[],
+  snapshot: StoryBibleSnapshot
+): string[] {
+  const ids = updates.flatMap((update) =>
+    update.affectedPaths.flatMap((affected) => {
+      if (affected.assetId !== undefined) return [affected.assetId];
+      if (affected.kind === "outline" && snapshot.outline !== undefined) {
+        return [snapshot.outline.id];
+      }
+      if (affected.kind === "timeline" && snapshot.timeline !== undefined) {
+        return [snapshot.timeline.id];
+      }
+      return [];
+    })
+  );
+  return [...new Set(ids)];
+}
+
+function storyBibleAssetsEqual(left: StoryBibleAsset, right: StoryBibleAsset): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function changesToApply(
@@ -1140,6 +1487,8 @@ function createEditorProps(
     onNewDraft: () => undefined,
     onCancelDraft: () => undefined,
     onSave: () => undefined,
+    onExternalUpdateReload: () => undefined,
+    onExternalUpdateContinue: () => undefined,
     onForeshadowAnalysisOpen: () => undefined,
     onForeshadowAnalysisChapterToggle: () => undefined,
     onForeshadowAnalysisStart: () => undefined,

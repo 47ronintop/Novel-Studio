@@ -7233,6 +7233,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         runtime.versionGroup = applied.value;
         runtime.changeSet = { ...changeSet, status: "applied" };
         const versionGroupId = readString(applied.value, "versionGroupId") ?? "version_group";
+        const relativePaths = versionGroupRelativePaths(applied.value);
         const synchronization = isJsonObject(applied.value["synchronization"])
           ? applied.value["synchronization"]
           : undefined;
@@ -7267,6 +7268,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           },
           detail: {
             versionGroupId,
+            relativePaths,
             changeSetId: changeSet.changeSetId,
             revision: changeSet.revision,
             checksum: changeSet.checksum,
@@ -7381,10 +7383,15 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         if (runtime !== undefined && rollbackReview !== undefined) {
           runtime.rollbackReview = rollbackReview;
         }
+        const versionGroupId = readString(undone.value, "versionGroupId") ?? "version_group";
         const audited = await recordTerminalAuditEvent(command.runId, {
           runId: command.runId,
           type: "run_undone",
-          detail: { versionGroup: undone.value }
+          detail: {
+            versionGroupId,
+            relativePaths: versionGroupRelativePaths(undone.value),
+            versionGroup: undone.value
+          }
         });
         if (!audited.ok) return audited;
         return persistCommandReceipt(command.runId, command.projectId, command.commandId, audited);
@@ -7701,6 +7708,26 @@ function readStringArray(value: JsonObject, key: string): string[] {
   return Array.isArray(candidate) && candidate.every((item) => typeof item === "string")
     ? candidate
     : [];
+}
+
+function versionGroupRelativePaths(value: JsonObject): string[] {
+  const paths: string[] = [];
+  const writes = value["writes"];
+  if (Array.isArray(writes)) {
+    for (const write of writes) {
+      if (!isJsonObject(write)) continue;
+      const relativePath = readString(write, "relativePath");
+      if (relativePath !== undefined) paths.push(relativePath);
+    }
+  }
+  const operations = value["operations"];
+  if (Array.isArray(operations)) {
+    for (const operation of operations) {
+      if (!isJsonObject(operation)) continue;
+      paths.push(...readStringArray(operation, "relativePaths"));
+    }
+  }
+  return [...new Set(paths)];
 }
 
 function isJsonObject(value: unknown): value is JsonObject {

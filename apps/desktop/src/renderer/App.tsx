@@ -267,27 +267,8 @@ export function App() {
     [engineeringWorkspaceBridge]
   );
 
-  useAgentRunWorkspaceEffects({
-    agentRunBridge,
-    scope: activeAgentScope,
-    projectId: activeProjectId,
-    workspaceKind: shellState.workspaceContext.kind,
-    surfaceContextMode:
-      shellState.workspaceContext.kind === "creativeProject"
-        ? shellState.workbenchMode === "engineering" || shellState.creativeNavigatorMode === "files"
-          ? "general_file"
-          : "writing"
-        : undefined,
-    activeResourceRef: activeCreativeFileRef,
-    beforeStart: activeCreativeFileRef === null ? undefined : guardCreativeFile,
-    conversationId: agentConversationWorkspace.selectedConversationId,
-    activeChapterId: projectWorkflow?.activeChapterId ?? chapterEditor?.chapter.frontmatter.id,
-    chapterEditor,
-    fileEditor,
-    storyBibleSnapshotBinding: storyBibleBridge?.getSnapshotBinding(activeCreativeWorkspaceId),
-    settings,
-    onAgentRunChange: setAgentRun
-  });
+  const activeAgentResourceRef =
+    activeCreativeFileRef ?? storyBibleBridge?.getActiveResourceRef() ?? null;
 
   useRendererAppEffects({
     api,
@@ -445,6 +426,62 @@ export function App() {
     setStoryBibleEditor,
     setStudio
   });
+  const guardAgentStart = useCallback(async () => {
+    if (activeCreativeFileRef !== null && !(await guardCreativeFile())) return false;
+    return guardStoryBibleDraft();
+  }, [activeCreativeFileRef, guardCreativeFile, guardStoryBibleDraft]);
+
+  useAgentRunWorkspaceEffects({
+    agentRunBridge,
+    scope: activeAgentScope,
+    projectId: activeProjectId,
+    workspaceKind: shellState.workspaceContext.kind,
+    surfaceContextMode:
+      shellState.workspaceContext.kind === "creativeProject"
+        ? shellState.workbenchMode === "engineering" || shellState.creativeNavigatorMode === "files"
+          ? "general_file"
+          : "writing"
+        : undefined,
+    activeResourceRef: activeAgentResourceRef,
+    beforeStart: guardAgentStart,
+    conversationId: agentConversationWorkspace.selectedConversationId,
+    activeChapterId: projectWorkflow?.activeChapterId ?? chapterEditor?.chapter.frontmatter.id,
+    chapterEditor,
+    fileEditor,
+    storyBibleSnapshotBinding: storyBibleBridge?.getSnapshotBinding(activeCreativeWorkspaceId),
+    settings,
+    onAgentRunChange: setAgentRun
+  });
+
+  const publishStoryBibleEditor = useCallback(
+    (editor: NonNullable<typeof storyBibleEditor>) => {
+      setStoryBibleEditor(editor);
+      if (storyBibleBridge !== undefined) setStoryBible(storyBibleBridge.getProps());
+    },
+    [setStoryBible, setStoryBibleEditor, storyBibleBridge]
+  );
+  const handleStoryBibleExternalUpdateReload = useCallback(() => {
+    if (storyBibleBridge === undefined) return;
+    void storyBibleBridge.reloadExternalUpdate().then(publishStoryBibleEditor);
+  }, [publishStoryBibleEditor, storyBibleBridge]);
+  const handleStoryBibleExternalUpdateContinue = useCallback(() => {
+    if (storyBibleBridge === undefined) return;
+    publishStoryBibleEditor(storyBibleBridge.continueExternalUpdate());
+  }, [publishStoryBibleEditor, storyBibleBridge]);
+
+  useEffect(() => {
+    if (agentRunBridge === undefined || storyBibleBridge === undefined) return;
+    let active = true;
+    const unsubscribe = agentRunBridge.subscribeProjectFilesChanged((event) => {
+      void storyBibleBridge.handleExternalUpdate(event).then((editor) => {
+        if (active) publishStoryBibleEditor(editor);
+      });
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [agentRunBridge, publishStoryBibleEditor, storyBibleBridge]);
   const {
     handleCreativeNavigatorModeSelect,
     handleCreativeFileExpandedPathIdsChange,
@@ -1022,6 +1059,8 @@ export function App() {
         onWorkbenchSelect={workspaceNavigation.selectWorkbench}
         onOpenEngineeringWorkspace={handleOpenEngineeringWorkspace}
         onSaveStoryBibleDraft={handleSaveStoryBibleDraft}
+        onStoryBibleExternalUpdateReload={handleStoryBibleExternalUpdateReload}
+        onStoryBibleExternalUpdateContinue={handleStoryBibleExternalUpdateContinue}
         onForeshadowAnalysisOpen={handleOpenForeshadowAnalysis}
         onForeshadowAnalysisChapterToggle={handleToggleForeshadowAnalysisChapter}
         onForeshadowAnalysisStart={handleDetectForeshadows}

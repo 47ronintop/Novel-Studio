@@ -75,6 +75,7 @@ import type {
   AgentContextSourceIdentity,
   AgentContextSourceInput,
   AgentContextMode,
+  ContextDraftActiveResourceRef,
   ContextDraftRef,
   AgentRunSnapshot,
   AgentUsageRecord,
@@ -209,6 +210,7 @@ export interface DesktopAgentRunSessionOptions {
   ) => Promise<void>;
   readonly notifyProjectFilesChanged?: (input: {
     readonly reason: "agent-change-set-apply" | "agent-run-undo";
+    readonly versionGroupId: string;
     readonly relativePaths: readonly string[];
   }) => Promise<void>;
   readonly surfaceTransactionRecoveryReview?: (group: VersionGroup) => Promise<void>;
@@ -1304,6 +1306,12 @@ function createDesktopAgentContextSession(input: {
         if (input.verifyCreativeGeneralActiveResource === undefined) {
           return err(runtimeError("AGENT_CREATIVE_GENERAL_ACTIVE_RESOURCE_UNVERIFIED"));
         }
+        if (
+          contextDraft.activeResourceRef !== null &&
+          contextDraft.activeResourceRef.kind !== "project_file"
+        ) {
+          return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
+        }
         const verified = await input.verifyCreativeGeneralActiveResource(
           contextDraft.activeResourceRef
         );
@@ -1721,7 +1729,7 @@ function createDesktopVersionGroupServices(input: {
         await notifyProjectFilesChanged(
           input.notifyProjectFilesChanged,
           "agent-change-set-apply",
-          versionGroupRelativePaths(applied.value)
+          applied.value
         );
         return ok(asJsonObject(applied.value));
       },
@@ -1757,11 +1765,13 @@ function createDesktopVersionGroupServices(input: {
         if (!accepted) {
           return err(versionGroupFailure(undone.value));
         }
-        await notifyProjectFilesChanged(
-          input.notifyProjectFilesChanged,
-          "agent-run-undo",
-          versionGroupRelativePaths(undone.value)
-        );
+        if (undone.value.transactionStatus === "applied") {
+          await notifyProjectFilesChanged(
+            input.notifyProjectFilesChanged,
+            "agent-run-undo",
+            undone.value
+          );
+        }
         return ok(asJsonObject(undone.value));
       },
       async readRollbackReview({ runId }) {
@@ -1803,13 +1813,14 @@ function versionGroupRelativePaths(group: VersionGroup): readonly string[] {
 async function notifyProjectFilesChanged(
   notify: DesktopAgentRunSessionOptions["notifyProjectFilesChanged"],
   reason: "agent-change-set-apply" | "agent-run-undo",
-  relativePaths: readonly string[]
+  group: VersionGroup
 ): Promise<void> {
+  const relativePaths = versionGroupRelativePaths(group);
   if (notify === undefined || relativePaths.length === 0) {
     return;
   }
   try {
-    await notify({ reason, relativePaths });
+    await notify({ reason, versionGroupId: group.versionGroupId, relativePaths });
   } catch {
     // The Version Group already committed; search invalidation is retried by later project reads.
   }
@@ -2288,6 +2299,12 @@ async function resolveStartFromDraft(
     if (input.verifyCreativeGeneralActiveResource === undefined) {
       return err(runtimeError("AGENT_CREATIVE_GENERAL_ACTIVE_RESOURCE_UNVERIFIED"));
     }
+    if (
+      contextDraft.activeResourceRef !== null &&
+      contextDraft.activeResourceRef.kind !== "project_file"
+    ) {
+      return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
+    }
     const verified = await input.verifyCreativeGeneralActiveResource(
       contextDraft.activeResourceRef
     );
@@ -2353,7 +2370,7 @@ function mergeWorkspaceProjectContextSources(
   ];
 }
 
-/** Read manual refs followed by the active file, freezing each body from Main-owned storage. */
+/** Read manual refs followed by the active resource, freezing each body from Main-owned storage. */
 async function resolveContextDraftSources(
   refs: readonly ContextDraftRef[],
   input: {
@@ -2368,7 +2385,7 @@ async function resolveContextDraftSources(
     readonly projectId?: string;
     readonly workspaceKind: DesktopAgentRunSessionOptions["workspaceKind"];
     readonly contextMode: "standalone_chat" | "writing" | "general_file";
-    readonly activeResourceRef?: Extract<ContextDraftRef, { readonly kind: "project_file" }> | null;
+    readonly activeResourceRef?: ContextDraftActiveResourceRef | null;
   }
 ): Promise<Result<AgentContextSourceInput[], UnifiedError>> {
   const sources: AgentContextSourceInput[] = [];
@@ -2441,12 +2458,33 @@ async function resolveContextDraftSources(
     }
   }
   if (activeResourceRef !== null) {
-    const activeSource = await resolveActiveCreativeProjectFileSource(activeResourceRef, input);
+    const activeSource =
+      activeResourceRef.kind === "story_bible"
+        ? await resolveStoryBibleContextSource(activeResourceRef, input)
+        : await resolveActiveCreativeProjectFileSource(activeResourceRef, input);
     if (!activeSource.ok) return err(activeSource.error);
     // The current file must stay in the dynamic prompt suffix after the request and manual refs.
     sources.push(activeSource.value);
   }
   return ok(sources);
+}
+
+async function resolveStoryBibleContextSource(
+  ref: Extract<ContextDraftRef, { readonly kind: "story_bible" }>,
+  input: { readonly storyBible?: StoryBibleFileRepository }
+): Promise<Result<AgentContextSourceInput, UnifiedError>> {
+  if (input.storyBible === undefined) {
+    return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
+  }
+  const asset = await findStoryBibleAsset(input.storyBible, ref.assetId);
+  if (!asset.ok) return err(asset.error);
+  return ok({
+    refId: ref.refId,
+    sourceKind: "disk_file",
+    assetId: ref.assetId,
+    content: JSON.stringify(asset.value),
+    dirty: false
+  });
 }
 
 async function resolveActiveCreativeProjectFileSource(

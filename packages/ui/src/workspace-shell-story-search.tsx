@@ -362,9 +362,29 @@ export function StoryBibleEditorView({ editor }: { readonly editor: StoryBibleEd
       ) : null}
 
       {editor.externalUpdate.status === "available" ? (
-        <p className="ns-story-external-update" role="status">
-          {editor.externalUpdate.message}
-        </p>
+        <div className="ns-story-external-update">
+          <span role="status">{editor.externalUpdate.message}</span>
+          <div className="ns-story-external-update-actions">
+            <button
+              aria-label="重新加载外部更新"
+              className="ns-icon-text-button"
+              onClick={editor.onExternalUpdateReload}
+              type="button"
+            >
+              <RotateCcw aria-hidden="true" size={14} />
+              重新加载
+            </button>
+            <button
+              aria-label="继续编辑当前草稿"
+              className="ns-icon-text-button"
+              onClick={editor.onExternalUpdateContinue}
+              type="button"
+            >
+              <Pencil aria-hidden="true" size={14} />
+              继续编辑
+            </button>
+          </div>
+        </div>
       ) : null}
 
       {editor.consistency === undefined || editor.consistency.issues.length === 0 ? null : (

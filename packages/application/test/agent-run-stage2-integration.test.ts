@@ -550,7 +550,7 @@ describe("AgentRunSession Stage 2 integration", () => {
                 status: "recovery_required",
                 failedHooks: ["markRecoveryClean"]
               },
-              writes: []
+              writes: [{ relativePath: "notes/outline.md" }]
             }
           };
         },
@@ -596,6 +596,8 @@ describe("AgentRunSession Stage 2 integration", () => {
       ).value.events.find((event) => event.type === "write_applied")
     ).toMatchObject({
       detail: {
+        versionGroupId: "versions_stage2",
+        relativePaths: ["notes/outline.md"],
         synchronizationStatus: "recovery_required",
         synchronizationFailedHooks: ["markRecoveryClean"]
       }
@@ -887,7 +889,8 @@ describe("AgentRunSession Stage 2 integration", () => {
               undoMetadata: {
                 runId: "run_stage2_undo",
                 undoOfVersionGroupIds: ["versions_stage2_undo"]
-              }
+              },
+              writes: [{ relativePath: "notes/outline.md" }]
             }
           };
         }
@@ -940,6 +943,8 @@ describe("AgentRunSession Stage 2 integration", () => {
       {
         type: "run_undone",
         detail: {
+          versionGroupId: "versions_stage2_undo",
+          relativePaths: ["notes/outline.md"],
           versionGroup: {
             versionGroupId: "versions_stage2_undo",
             transactionStatus: "applied",

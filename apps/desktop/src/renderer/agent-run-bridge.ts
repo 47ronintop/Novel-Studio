@@ -13,6 +13,7 @@ import type {
   ChangeSetOperation,
   ContextBudgetSnapshot,
   ContextDraft,
+  ContextDraftActiveResourceRef,
   ContextDraftRef,
   PermissionSummary,
   PlanExecutionRecord,
@@ -74,8 +75,8 @@ export interface AgentRunBridgeContext {
   readonly workspaceKind?: "creativeProject" | "engineeringWorkspace";
   /** Context mode derived from the active workspace surface. */
   readonly surfaceContextMode?: Extract<AgentContextMode, "writing" | "general_file">;
-  /** The creative file currently open in the editor; manual refs remain separate. */
-  readonly activeResourceRef?: Extract<ContextDraftRef, { readonly kind: "project_file" }> | null;
+  /** The Story Bible detail or creative file currently open; manual refs remain separate. */
+  readonly activeResourceRef?: ContextDraftActiveResourceRef | null;
   /** UI dirty guard. Main still re-reads saved content and never accepts renderer content. */
   readonly beforeStart?: () => boolean | Promise<boolean>;
   readonly conversationId?: string;
@@ -126,6 +127,14 @@ export interface AgentRunBridge {
   decideToolApproval(decision: "approve" | "reject"): Promise<AgentRunPanelProps>;
   undoRun(): Promise<AgentRunPanelProps>;
   subscribe(listener: () => void): () => void;
+  subscribeProjectFilesChanged(listener: (event: AgentProjectFilesChangedEvent) => void): () => void;
+}
+
+export interface AgentProjectFilesChangedEvent {
+  readonly projectId: string;
+  readonly reason: "agent-change-set-apply" | "agent-run-undo";
+  readonly versionGroupId: string;
+  readonly relativePaths: readonly string[];
 }
 
 interface BridgeState {
@@ -208,6 +217,9 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     conventionsDisabled: false
   };
   const listeners = new Set<() => void>();
+  const projectFilesChangedListeners = new Set<
+    (event: AgentProjectFilesChangedEvent) => void
+  >();
   let approvalInFlight: Promise<AgentRunPanelProps> | undefined;
   let toolApprovalInFlight: Promise<AgentRunPanelProps> | undefined;
   let selectionInFlight: Promise<AgentRunPanelProps> | undefined;
@@ -226,7 +238,12 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   const stage5BApi = api.agentRuns as unknown as OptionalStage5BApi;
 
   api.agentRuns.onEvent((event) => {
-    if (context === undefined || !sameAgentScope(context.scope, scopeForRunEvent(event))) return;
+    const eventScope = scopeForRunEvent(event);
+    if (context === undefined || !sameAgentScope(context.scope, eventScope)) return;
+    const projectFilesChanged = projectFilesChangedFromEvent(event, eventScope);
+    if (projectFilesChanged !== undefined) {
+      for (const listener of projectFilesChangedListeners) listener(projectFilesChanged);
+    }
     if (state.snapshot !== undefined && state.snapshot.runId !== event.runId) return;
     const nextSnapshot =
       state.snapshot === undefined
@@ -303,7 +320,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         notify();
         return toProps();
       }
-    } else if (context?.activeResourceRef != null && context.fileEditor?.dirty === true) {
+    } else if (
+      context?.activeResourceRef?.kind === "project_file" &&
+      context.fileEditor?.dirty === true
+    ) {
       state = {
         ...state,
         errorMessage: "当前项目文件尚未保存。请先保存或放弃修改，再启动 Agent。"
@@ -1284,7 +1304,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     if (
       updateContextDraft === undefined ||
       state.contextDraft === undefined ||
-      sameProjectFileRef(state.contextDraft.activeResourceRef, requested)
+      sameActiveResourceRef(state.contextDraft.activeResourceRef, requested)
     ) {
       return;
     }
@@ -1294,7 +1314,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       const token = draftToken;
       if (ctx?.conversationId === undefined || draft === undefined) return;
       const ref = ctx.activeResourceRef ?? null;
-      if (sameProjectFileRef(draft.activeResourceRef, ref)) return;
+      if (sameActiveResourceRef(draft.activeResourceRef, ref)) return;
       const result = await updateContextDraft({
         ...scopeIdentity(ctx.scope),
         conversationId: ctx.conversationId,
@@ -2039,7 +2059,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     syncContext(nextContextInput) {
       const nextContext = resolveAgentRunBridgeContext(nextContextInput);
       const previousSettings = context?.settings;
-      const activeResourceChanged = !sameProjectFileRef(
+      const activeResourceChanged = !sameActiveResourceRef(
         context?.activeResourceRef ?? null,
         nextContext.activeResourceRef ?? null
       );
@@ -2226,6 +2246,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    },
+    subscribeProjectFilesChanged(listener) {
+      projectFilesChangedListeners.add(listener);
+      return () => projectFilesChangedListeners.delete(listener);
     }
   };
 
@@ -2299,12 +2323,30 @@ function resolveAgentRunBridgeContext(input: AgentRunBridgeContext): ResolvedAge
   if (input.workspaceKind !== undefined && input.workspaceKind !== scope.workspaceKind) {
     throw new Error("Agent context scope and workspaceKind do not match.");
   }
+  const activeResourceRef = activeResourceForSurface(
+    input.activeResourceRef,
+    input.surfaceContextMode
+  );
   return {
     ...input,
+    ...(activeResourceRef === undefined ? {} : { activeResourceRef }),
     scope,
     projectId: scope.workspaceId,
     workspaceKind: scope.workspaceKind
   };
+}
+
+function activeResourceForSurface(
+  ref: ContextDraftActiveResourceRef | null | undefined,
+  contextMode: Extract<AgentContextMode, "writing" | "general_file"> | undefined
+): ContextDraftActiveResourceRef | null | undefined {
+  if (ref === undefined || ref === null || contextMode === undefined) return ref;
+  return (
+    (contextMode === "writing" && ref.kind === "story_bible") ||
+    (contextMode === "general_file" && ref.kind === "project_file")
+  )
+    ? ref
+    : null;
 }
 
 function resolveScopeInput(
@@ -2341,6 +2383,35 @@ function scopeForRunEvent(event: AgentRunEvent): AgentContextScope | undefined {
   } catch {
     return undefined;
   }
+}
+
+function projectFilesChangedFromEvent(
+  event: AgentRunEvent,
+  scope: AgentContextScope | undefined
+): AgentProjectFilesChangedEvent | undefined {
+  if (
+    scope?.kind !== "workspace" ||
+    (event.type !== "write_applied" && event.type !== "run_undone")
+  ) {
+    return undefined;
+  }
+  const versionGroupId = event.detail?.["versionGroupId"];
+  const relativePaths = event.detail?.["relativePaths"];
+  if (
+    typeof versionGroupId !== "string" ||
+    !Array.isArray(relativePaths) ||
+    !relativePaths.every((relativePath): relativePath is string => typeof relativePath === "string")
+  ) {
+    return undefined;
+  }
+  const uniquePaths = [...new Set(relativePaths)];
+  if (uniquePaths.length === 0) return undefined;
+  return {
+    projectId: scope.workspaceId,
+    reason: event.type === "write_applied" ? "agent-change-set-apply" : "agent-run-undo",
+    versionGroupId,
+    relativePaths: uniquePaths
+  };
 }
 
 function sameAgentScope(
@@ -2727,15 +2798,21 @@ function desiredWorkspaceContextMode(
     : context.surfaceContextMode;
 }
 
-function sameProjectFileRef(
-  left: Extract<ContextDraftRef, { readonly kind: "project_file" }> | null,
-  right: Extract<ContextDraftRef, { readonly kind: "project_file" }> | null
+function sameActiveResourceRef(
+  left: ContextDraftActiveResourceRef | null,
+  right: ContextDraftActiveResourceRef | null
 ): boolean {
+  if (left === null || right === null) return left === right;
+  if (left.refId !== right.refId || left.label !== right.label) {
+    return false;
+  }
+  if (left.kind === "story_bible") {
+    return right.kind === "story_bible" && left.assetId === right.assetId;
+  }
   return (
-    left?.refId === right?.refId &&
-    left?.relativePath === right?.relativePath &&
-    left?.label === right?.label &&
-    left?.expectedChecksum === right?.expectedChecksum
+    right.kind === "project_file" &&
+    left.relativePath === right.relativePath &&
+    left.expectedChecksum === right.expectedChecksum
   );
 }
 
@@ -2841,6 +2918,9 @@ function availableReferenceRefs(
   if (context?.scope !== undefined && isStandaloneScope(context.scope)) return [];
   if (contextDraft === undefined) return [];
   const present = new Set(contextDraft.refs.map((ref) => ref.refId));
+  if (context?.activeResourceRef !== null && context?.activeResourceRef !== undefined) {
+    present.add(context.activeResourceRef.refId);
+  }
   const candidates: ContextDraftRef[] = [];
   if (context?.activeChapterId !== undefined && context.chapterEditor !== undefined) {
     candidates.push({
@@ -2882,6 +2962,9 @@ function suggestedStoryBibleReferenceRefs(
     return [];
   }
   const present = new Set(contextDraft.refs.map((ref) => ref.refId));
+  if (context.activeResourceRef !== null && context.activeResourceRef !== undefined) {
+    present.add(context.activeResourceRef.refId);
+  }
   return findStoryBibleMentionSuggestions({
     snapshot: context.storyBibleSnapshotBinding.snapshot,
     userRequest,

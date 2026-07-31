@@ -6984,14 +6984,26 @@ textarea:focus-visible,
 }
 
 .ns-story-external-update {
+  align-items: center;
   background: color-mix(in srgb, var(--ns-info) 9%, transparent);
   border-left: 3px solid var(--ns-info);
   color: var(--ns-ink);
+  display: flex;
   font-size: 12px;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
   line-height: 1.5;
   margin: 0;
   overflow-wrap: anywhere;
   padding: 8px 10px;
+}
+
+.ns-story-external-update-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  margin-left: auto;
 }
 
 .ns-story-consistency {

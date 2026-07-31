@@ -157,7 +157,62 @@ describe("Context Draft value object", () => {
     expect(updated.ok).toBe(true);
     if (!updated.ok) return;
     expect(updated.value.checksum).not.toBe(first.value.checksum);
-    expect(updated.value.activeResourceRef?.expectedChecksum).toBe("b".repeat(64));
+    expect(updated.value.activeResourceRef).toMatchObject({
+      kind: "project_file",
+      expectedChecksum: "b".repeat(64)
+    });
+  });
+
+  test("binds one active Story Bible resource in writing mode", () => {
+    const active = {
+      kind: "story_bible" as const,
+      refId: "story_bible:chr_hero",
+      assetId: "chr_hero",
+      label: "主角"
+    };
+    const result = applyContextDraftMutation(
+      baseDraft({ refs: [chapterRef] }),
+      { kind: "set_active_resource", ref: active },
+      "2026-07-16T00:01:00.000Z"
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: { refs: [chapterRef], activeResourceRef: active }
+    });
+  });
+
+  test("rejects active resources that do not match the context mode", () => {
+    expect(
+      applyContextDraftMutation(
+        baseDraft(),
+        {
+          kind: "set_active_resource",
+          ref: {
+            kind: "project_file",
+            refId: "file:notes/current.md",
+            relativePath: "notes/current.md",
+            label: "当前文件"
+          }
+        },
+        "2026-07-16T00:01:00.000Z"
+      )
+    ).toMatchObject({ ok: false, error: { code: "CONTEXT_DRAFT_ACTIVE_RESOURCE_MODE_INVALID" } });
+    expect(
+      applyContextDraftMutation(
+        baseDraft({ contextMode: "general_file" }),
+        {
+          kind: "set_active_resource",
+          ref: {
+            kind: "story_bible",
+            refId: "story_bible:chr_hero",
+            assetId: "chr_hero",
+            label: "主角"
+          }
+        },
+        "2026-07-16T00:01:00.000Z"
+      )
+    ).toMatchObject({ ok: false, error: { code: "CONTEXT_DRAFT_REF_MODE_INVALID" } });
   });
 
   test("rejects a malformed expected checksum on a project-file ref", () => {

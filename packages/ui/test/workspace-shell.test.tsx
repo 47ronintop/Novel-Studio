@@ -1781,6 +1781,49 @@ describe("WorkspaceShell", () => {
     expect(html).not.toContain('aria-label="故事圣经编辑器"');
   });
 
+  test("offers reload and continue actions without hiding a dirty Story Bible draft", () => {
+    const application = createDesktopApplication();
+    const actions: string[] = [];
+    const tree = WorkspaceShell({
+      shellState: { ...application.getShellState(), activeActivity: "storyBible" },
+      commands: application.listCommands(),
+      commandPaletteOpen: false,
+      storyBibleEditor: createStoryBibleEditorProps({
+        viewMode: "detail",
+        dirty: true,
+        externalUpdate: {
+          status: "available",
+          message: "故事资料已由 Agent 更新。当前草稿未被覆盖。",
+          affectedEntryIds: ["chr_hero"],
+          versionGroupId: "vg_apply_01"
+        },
+        draft: {
+          kind: "character",
+          assetType: "character",
+          id: "chr_hero",
+          title: "本地草稿",
+          status: "active",
+          summary: "仍在编辑",
+          aliases: [],
+          relatedEntityIds: [],
+          details: {}
+        },
+        onExternalUpdateReload: () => actions.push("reload"),
+        onExternalUpdateContinue: () => actions.push("continue")
+      })
+    });
+
+    findElementByAriaLabel(tree, "重新加载外部更新")?.props.onClick?.();
+    findElementByAriaLabel(tree, "继续编辑当前草稿")?.props.onClick?.();
+    const html = renderToStaticMarkup(tree);
+
+    expect(actions).toEqual(["reload", "continue"]);
+    expect(html).toContain("故事资料已由 Agent 更新。当前草稿未被覆盖。");
+    expect(html).toContain("本地草稿");
+    expect(html).toContain("重新加载");
+    expect(html).toContain("继续编辑");
+  });
+
   test("renders character identity and summary columns without expanding the category surface", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
@@ -3732,6 +3775,8 @@ function createStoryBibleEditorProps(
     onNewDraft: () => undefined,
     onCancelDraft: () => undefined,
     onSave: () => undefined,
+    onExternalUpdateReload: () => undefined,
+    onExternalUpdateContinue: () => undefined,
     onForeshadowAnalysisOpen: () => undefined,
     onForeshadowAnalysisChapterToggle: () => undefined,
     onForeshadowAnalysisStart: () => undefined,

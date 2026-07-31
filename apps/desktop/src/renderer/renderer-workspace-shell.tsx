@@ -117,6 +117,8 @@ export interface RendererWorkspaceShellProps {
     WorkspaceShellProps["onOpenEngineeringWorkspace"]
   >;
   readonly onSaveStoryBibleDraft: (chapterIds: readonly string[]) => void;
+  readonly onStoryBibleExternalUpdateReload: StoryBibleEditorProps["onExternalUpdateReload"];
+  readonly onStoryBibleExternalUpdateContinue: StoryBibleEditorProps["onExternalUpdateContinue"];
   readonly onForeshadowAnalysisOpen: StoryBibleEditorProps["onForeshadowAnalysisOpen"];
   readonly onForeshadowAnalysisChapterToggle: StoryBibleEditorProps["onForeshadowAnalysisChapterToggle"];
   readonly onForeshadowAnalysisStart: StoryBibleEditorProps["onForeshadowAnalysisStart"];
@@ -213,7 +215,9 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
             ? {}
             : { currentChapterId: storyBibleCurrentChapterId }),
           onSave: () =>
-            props.onSaveStoryBibleDraft(storyBibleChapterOptions.map((chapter) => chapter.id))
+            props.onSaveStoryBibleDraft(storyBibleChapterOptions.map((chapter) => chapter.id)),
+          onExternalUpdateReload: props.onStoryBibleExternalUpdateReload,
+          onExternalUpdateContinue: props.onStoryBibleExternalUpdateContinue
         } satisfies StoryBibleEditorProps);
   const creativeNavigator =
     props.shellState.workspaceContext.kind === "creativeProject" &&

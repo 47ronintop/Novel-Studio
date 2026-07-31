@@ -112,6 +112,7 @@ export {
 } from "./context-draft.js";
 export type {
   AgentContextRange,
+  ContextDraftActiveResourceRef,
   ContextDraft,
   ContextDraftV10,
   ContextDraftV11,

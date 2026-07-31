@@ -834,7 +834,7 @@ export function createApplicationIpcHandlers(
       if (parsed.contextMode === "general_file") {
         const verified = await verifyCreativeGeneralProof(
           parsed,
-          parsed.activeResourceRef === null || parsed.activeResourceRef === undefined
+          parsed.activeResourceRef?.kind !== "project_file"
             ? undefined
             : parsed.activeResourceRef
         );
@@ -875,11 +875,10 @@ export function createApplicationIpcHandlers(
       const draftSession = currentAgentRunDraftSession();
       if (parsed === undefined || draftSession === undefined) return agentRunUnavailable();
       if (parsed.mutation.kind === "set_active_resource") {
-        const verified = await verifyCreativeGeneralProof(
-          parsed,
-          parsed.mutation.ref === null ? undefined : parsed.mutation.ref
-        );
-        if (verified !== undefined && !verified.ok) return verified;
+        if (parsed.mutation.ref?.kind === "project_file") {
+          const verified = await verifyCreativeGeneralProof(parsed, parsed.mutation.ref);
+          if (verified !== undefined && !verified.ok) return verified;
+        }
         if (parsed.mutation.ref === null)
           options.creativeGeneralActiveResourceProof?.clearResource();
       }
@@ -1449,7 +1448,8 @@ function toSyncStartDraftCommand(value: unknown): SyncStartDraftCommand | undefi
     !Array.isArray(value["contextRefs"]) ||
     (value["activeResourceRef"] !== undefined &&
       value["activeResourceRef"] !== null &&
-      !isProjectFileContextRef(value["activeResourceRef"]))
+      !isActiveResourceContextRef(value["activeResourceRef"])) ||
+    !activeResourceMatchesContextMode(value["activeResourceRef"], value["contextMode"])
   ) {
     return undefined;
   }
@@ -1484,7 +1484,14 @@ function toReadAgentRunDraftCommand(value: unknown): ReadAgentRunDraftCommand | 
       initialize["writePolicy"] !== "user_preapproved_run") ||
     (initialize["writePolicyAcknowledged"] !== undefined &&
       typeof initialize["writePolicyAcknowledged"] !== "boolean") ||
-    (initialize["contextRefs"] !== undefined && !Array.isArray(initialize["contextRefs"]))
+    (initialize["contextRefs"] !== undefined && !Array.isArray(initialize["contextRefs"])) ||
+    (initialize["activeResourceRef"] !== undefined &&
+      initialize["activeResourceRef"] !== null &&
+      !isActiveResourceContextRef(initialize["activeResourceRef"])) ||
+    !activeResourceMatchesContextMode(
+      initialize["activeResourceRef"],
+      initialize["contextMode"]
+    )
   ) {
     return undefined;
   }
@@ -1663,7 +1670,7 @@ function isContextDraftMutation(value: unknown): boolean {
       );
     case "set_active_resource":
       return (
-        (value["ref"] === null || isProjectFileContextRef(value["ref"])) &&
+        (value["ref"] === null || isActiveResourceContextRef(value["ref"])) &&
         hasOnlyKeys(value, ["kind", "ref"])
       );
     default:
@@ -1722,6 +1729,30 @@ function isProjectFileContextRef(value: unknown): boolean {
     (value["expectedChecksum"] === undefined ||
       (typeof value["expectedChecksum"] === "string" &&
         /^[a-f0-9]{64}$/u.test(value["expectedChecksum"])))
+  );
+}
+
+function isStoryBibleContextRef(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["kind", "refId", "assetId", "label"]) &&
+    value["kind"] === "story_bible" &&
+    isNonEmptyString(value["assetId"]) &&
+    value["refId"] === `story_bible:${value["assetId"]}` &&
+    isNonEmptyString(value["label"])
+  );
+}
+
+function isActiveResourceContextRef(value: unknown): boolean {
+  return isProjectFileContextRef(value) || isStoryBibleContextRef(value);
+}
+
+function activeResourceMatchesContextMode(value: unknown, contextMode: unknown): boolean {
+  return (
+    value === undefined ||
+    value === null ||
+    (contextMode === "writing" && isStoryBibleContextRef(value)) ||
+    (contextMode === "general_file" && isProjectFileContextRef(value))
   );
 }
 

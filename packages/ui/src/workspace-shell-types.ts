@@ -891,6 +891,8 @@ export interface StoryBibleEditorProps {
   readonly onNewDraft: (assetType?: StoryBibleWorldAssetType) => void;
   readonly onCancelDraft: () => void;
   readonly onSave: () => void;
+  readonly onExternalUpdateReload: () => void;
+  readonly onExternalUpdateContinue: () => void;
   readonly onForeshadowAnalysisOpen: () => void;
   readonly onForeshadowAnalysisChapterToggle: (chapterId: string) => void;
   readonly onForeshadowAnalysisStart: () => void;

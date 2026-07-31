@@ -363,6 +363,12 @@ describe("Story Bible bridge", () => {
       viewMode: "detail",
       dirty: false
     });
+    expect(bridge.getActiveResourceRef()).toEqual({
+      kind: "story_bible",
+      refId: "story_bible:chr_hero",
+      assetId: "chr_hero",
+      label: "Hero"
+    });
     expect(() => bridge.updateDraft("world", { title: "Wrong kind" })).toThrowError(
       /active character draft/u
     );
@@ -374,7 +380,9 @@ describe("Story Bible bridge", () => {
 
     bridge.updateDraft("character", { title: "Local edit" });
     expect(bridge.getEditorProps().dirty).toBe(true);
+    expect(bridge.getActiveResourceRef()).toMatchObject({ label: "Hero" });
     expect(bridge.cancelDraft()).toMatchObject({ viewMode: "list", dirty: false });
+    expect(bridge.getActiveResourceRef()).toBeNull();
     expect(bridge.beginCreate("foreshadow")).toMatchObject({
       activeKind: "foreshadow",
       viewMode: "detail",
@@ -384,6 +392,221 @@ describe("Story Bible bridge", () => {
         assetType: "foreshadow",
         details: { trackingStatus: "planned", origin: "manual" }
       }
+    });
+  });
+
+  test("reloads and selects the only Story Bible asset changed by an Agent apply once", async () => {
+    const baseApi = createApi([]);
+    let currentSnapshot = snapshot;
+    const load = vi.fn(async () => ok(currentSnapshot));
+    const bridge = createStoryBibleBridge({
+      ...baseApi,
+      storyBible: { ...baseApi.storyBible, load }
+    });
+    await bridge.load("workspace-01");
+    load.mockClear();
+    const createdForeshadow = {
+      schemaVersion: "1.0" as const,
+      id: "fsh_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      type: "foreshadow" as const,
+      title: "Agent planted clue",
+      status: "active" as const,
+      summary: "A newly tracked clue.",
+      details: { trackingStatus: "planned" as const, origin: "ai-confirmed" as const },
+      createdAt: "2026-07-31T00:00:00.000Z",
+      updatedAt: "2026-07-31T00:00:00.000Z"
+    };
+    currentSnapshot = {
+      ...snapshot,
+      foreshadows: [...snapshot.foreshadows, createdForeshadow]
+    };
+    const change = {
+      projectId: "workspace-01",
+      reason: "agent-change-set-apply" as const,
+      versionGroupId: "vg_apply_01",
+      relativePaths: [`foreshadows/${createdForeshadow.id}.json`]
+    };
+
+    const editor = await bridge.handleExternalUpdate(change);
+    await bridge.handleExternalUpdate(change);
+
+    expect(load).toHaveBeenCalledOnce();
+    expect(editor).toMatchObject({
+      activeKind: "foreshadow",
+      viewMode: "detail",
+      dirty: false,
+      draft: { id: createdForeshadow.id, title: "Agent planted clue" },
+      externalUpdate: { status: "none" }
+    });
+  });
+
+  test("ignores an older external refresh failure after a newer refresh succeeds", async () => {
+    const baseApi = createApi([]);
+    let rejectOlderRefresh: ((reason?: unknown) => void) | undefined;
+    let loadCount = 0;
+    const load = vi.fn(() => {
+      loadCount += 1;
+      if (loadCount === 2) {
+        return new Promise<ReturnType<typeof ok<StoryBibleSnapshot>>>((_, reject) => {
+          rejectOlderRefresh = reject;
+        });
+      }
+      return Promise.resolve(ok(snapshot));
+    });
+    const bridge = createStoryBibleBridge({
+      ...baseApi,
+      storyBible: { ...baseApi.storyBible, load }
+    });
+    await bridge.load("workspace-01");
+
+    const olderRefresh = bridge.handleExternalUpdate({
+      projectId: "workspace-01",
+      reason: "agent-change-set-apply",
+      versionGroupId: "vg_apply_older",
+      relativePaths: ["characters/chr_hero.json"]
+    });
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+    const latest = await bridge.handleExternalUpdate({
+      projectId: "workspace-01",
+      reason: "agent-change-set-apply",
+      versionGroupId: "vg_apply_latest",
+      relativePaths: ["characters/chr_hero.json"]
+    });
+    rejectOlderRefresh?.(new Error("stale load failed"));
+    await olderRefresh;
+
+    expect(latest).toMatchObject({
+      status: "idle",
+      viewMode: "detail",
+      draft: { id: "chr_hero" },
+      externalUpdate: { status: "none" }
+    });
+    expect(bridge.getEditorProps()).toMatchObject({
+      status: "idle",
+      draft: { id: "chr_hero" },
+      externalUpdate: { status: "none" }
+    });
+  });
+
+  test("returns to the category list when undo removes the open Story Bible asset", async () => {
+    const baseApi = createApi([]);
+    let currentSnapshot = snapshot;
+    const bridge = createStoryBibleBridge({
+      ...baseApi,
+      storyBible: {
+        ...baseApi.storyBible,
+        load: async () => ok(currentSnapshot)
+      }
+    });
+    await bridge.load("workspace-01");
+    bridge.selectEntry("chr_hero");
+    currentSnapshot = { ...snapshot, characters: [] };
+
+    const editor = await bridge.handleExternalUpdate({
+      projectId: "workspace-01",
+      reason: "agent-run-undo",
+      versionGroupId: "vg_undo_01",
+      relativePaths: ["characters/chr_hero.json"]
+    });
+
+    expect(editor).toMatchObject({
+      activeKind: "character",
+      viewMode: "list",
+      dirty: false,
+      externalUpdate: { status: "none" }
+    });
+    expect(bridge.getActiveResourceRef()).toBeNull();
+  });
+
+  test("preserves a dirty draft across Agent updates and rejects a stale continued save", async () => {
+    const baseApi = createApi([]);
+    let currentSnapshot = snapshot;
+    const load = vi.fn(async () => ok(currentSnapshot));
+    const saveAsset = vi.fn<NovelStudioApi["storyBible"]["saveAsset"]>(async (asset) => ok(asset));
+    const bridge = createStoryBibleBridge({
+      ...baseApi,
+      storyBible: { ...baseApi.storyBible, load, saveAsset }
+    });
+    await bridge.load("workspace-01");
+    bridge.selectEntry("chr_hero");
+    bridge.updateDraft("character", { title: "Local hero" });
+    load.mockClear();
+    const originalHero = snapshot.characters[0];
+    if (originalHero === undefined) throw new Error("Expected a character fixture.");
+    currentSnapshot = {
+      ...snapshot,
+      characters: [
+        {
+          ...originalHero,
+          title: "Agent hero",
+          futureRootField: { enabled: false },
+          updatedAt: "2026-07-31T00:00:00.000Z"
+        }
+      ]
+    };
+
+    const pending = await bridge.handleExternalUpdate({
+      projectId: "workspace-01",
+      reason: "agent-change-set-apply",
+      versionGroupId: "vg_apply_dirty",
+      relativePaths: ["characters/chr_hero.json"]
+    });
+
+    expect(load).not.toHaveBeenCalled();
+    expect(pending).toMatchObject({
+      dirty: true,
+      draft: { id: "chr_hero", title: "Local hero" },
+      externalUpdate: {
+        status: "available",
+        affectedEntryIds: ["chr_hero"],
+        versionGroupId: "vg_apply_dirty"
+      }
+    });
+    expect(bridge.cancelDraft()).toMatchObject({
+      viewMode: "list",
+      dirty: false,
+      externalUpdate: { status: "available" }
+    });
+    expect(bridge.selectEntry("chr_hero")).toMatchObject({
+      viewMode: "detail",
+      dirty: false,
+      draft: { title: "Hero" },
+      externalUpdate: { status: "available" }
+    });
+    bridge.updateDraft("character", { title: "Local after discard" });
+
+    const conflicted = await bridge.saveDraft();
+
+    expect(saveAsset).not.toHaveBeenCalled();
+    expect(conflicted).toMatchObject({
+      status: "error",
+      dirty: true,
+      draft: { title: "Local after discard" },
+      externalUpdate: { status: "available" },
+      feedback: {
+        kind: "error",
+        message: "该资料已由 Agent 更新，当前草稿与最新版本冲突。请重新加载后再编辑。"
+      }
+    });
+    expect(bridge.getSnapshot().characters[0]).toMatchObject({
+      title: "Agent hero",
+      futureRootField: { enabled: false }
+    });
+    expect(bridge.continueExternalUpdate()).toMatchObject({
+      dirty: true,
+      externalUpdate: { status: "none" }
+    });
+    expect(bridge.updateDraft("character", { summary: "Continue local editing" })).toMatchObject({
+      dirty: true,
+      externalUpdate: { status: "none" }
+    });
+
+    const reloaded = await bridge.reloadExternalUpdate();
+    expect(reloaded).toMatchObject({
+      viewMode: "detail",
+      dirty: false,
+      draft: { id: "chr_hero", title: "Agent hero" },
+      externalUpdate: { status: "none" }
     });
   });
 

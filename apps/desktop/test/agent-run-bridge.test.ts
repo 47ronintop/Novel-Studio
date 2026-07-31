@@ -2507,6 +2507,182 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     });
   });
 
+  test("binds a Story Bible detail as the writing active resource while retaining the chapter ref", async () => {
+    const { api } = createDraftApi();
+    let preparedCommand: Record<string, unknown> | undefined;
+    const originalPrepareStart = api.agentRuns.prepareStart;
+    api.agentRuns.prepareStart = async (command) => {
+      preparedCommand = command as Record<string, unknown>;
+      return originalPrepareStart(command);
+    };
+    const bridge = createAgentRunBridge(api);
+    const activeResourceRef = {
+      kind: "story_bible" as const,
+      refId: "story_bible:chr_hero",
+      assetId: "chr_hero",
+      label: "主角"
+    };
+
+    bridge.syncContext({
+      projectId: "project-01",
+      workspaceKind: "creativeProject",
+      conversationId: "conversation-01",
+      surfaceContextMode: "writing",
+      activeResourceRef,
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.references).toBeDefined());
+    await vi.waitFor(async () => {
+      const current = await api.agentRuns.readRunDraft?.({
+        projectId: "project-01",
+        scope: workspaceScope("project-01"),
+        conversationId: "conversation-01",
+        initialize: {
+          modelProfileId: "profile-01",
+          operationMode: "planning",
+          contextMode: "writing",
+          writePolicy: "write_before_confirmation",
+          contextRefs: []
+        }
+      } as never);
+      expect(current).toMatchObject({
+        ok: true,
+        value: {
+          contextDraft: {
+            refs: [expect.objectContaining({ refId: "chapter:chapter-01" })],
+            activeResourceRef
+          }
+        }
+      });
+    });
+
+    await bridge.send("补充主角设定");
+
+    expect(preparedCommand).toMatchObject({
+      contextMode: "writing",
+      contextRefs: [expect.objectContaining({ refId: "chapter:chapter-01" })],
+      activeResourceRef
+    });
+
+    bridge.syncContext({
+      projectId: "project-01",
+      workspaceKind: "creativeProject",
+      conversationId: "conversation-01",
+      surfaceContextMode: "writing",
+      activeResourceRef: null,
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+    await vi.waitFor(async () => {
+      const current = await api.agentRuns.readRunDraft?.({
+        projectId: "project-01",
+        scope: workspaceScope("project-01"),
+        conversationId: "conversation-01",
+        initialize: {
+          modelProfileId: "profile-01",
+          operationMode: "planning",
+          contextMode: "writing",
+          writePolicy: "write_before_confirmation",
+          contextRefs: []
+        }
+      } as never);
+      expect(current).toMatchObject({
+        ok: true,
+        value: {
+          contextDraft: {
+            refs: [expect.objectContaining({ refId: "chapter:chapter-01" })],
+            activeResourceRef: null
+          }
+        }
+      });
+    });
+  });
+
+  test("drops a Story Bible active resource outside the writing surface", async () => {
+    const { api } = createDraftApi();
+    let preparedCommand: Record<string, unknown> | undefined;
+    const originalPrepareStart = api.agentRuns.prepareStart;
+    api.agentRuns.prepareStart = async (command) => {
+      preparedCommand = command as Record<string, unknown>;
+      return originalPrepareStart(command);
+    };
+    const bridge = createAgentRunBridge(api);
+
+    bridge.syncContext({
+      projectId: "project-01",
+      workspaceKind: "creativeProject",
+      conversationId: "conversation-01",
+      surfaceContextMode: "general_file",
+      activeResourceRef: {
+        kind: "story_bible",
+        refId: "story_bible:chr_hero",
+        assetId: "chr_hero",
+        label: "主角"
+      },
+      settings: draftSettings
+    });
+
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.model).toBeDefined());
+    await bridge.send("检查项目文件界面");
+
+    expect(preparedCommand).toMatchObject({
+      contextMode: "general_file",
+      activeResourceRef: null
+    });
+  });
+
+  test("publishes only committed apply and undo file changes to renderer consumers", () => {
+    const { api, emitEvent } = createDraftApi();
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      workspaceKind: "creativeProject",
+      conversationId: "conversation-01",
+      surfaceContextMode: "writing",
+      settings: draftSettings
+    });
+    const changes: Parameters<Parameters<typeof bridge.subscribeProjectFilesChanged>[0]>[0][] = [];
+    bridge.subscribeProjectFilesChanged((change) => changes.push(change));
+
+    emitEvent(
+      event(2, "write_applied", {
+        versionGroupId: "vg_apply",
+        relativePaths: ["foreshadows/fsh_01.json", "foreshadows/fsh_01.json"]
+      })
+    );
+    emitEvent(
+      event(3, "run_undo_review_required", {
+        versionGroupId: "vg_review",
+        relativePaths: ["foreshadows/fsh_01.json"]
+      })
+    );
+    emitEvent(
+      event(4, "run_undone", {
+        versionGroupId: "vg_undo",
+        relativePaths: ["foreshadows/fsh_01.json"]
+      })
+    );
+
+    expect(changes).toEqual([
+      {
+        projectId: "project-01",
+        reason: "agent-change-set-apply",
+        versionGroupId: "vg_apply",
+        relativePaths: ["foreshadows/fsh_01.json"]
+      },
+      {
+        projectId: "project-01",
+        reason: "agent-run-undo",
+        versionGroupId: "vg_undo",
+        relativePaths: ["foreshadows/fsh_01.json"]
+      }
+    ]);
+  });
+
   test("does not prepare a run when the dirty creative-file guard cancels", async () => {
     const { api } = createDraftApi();
     const beforeStart = vi.fn(async () => false);

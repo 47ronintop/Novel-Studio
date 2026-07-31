@@ -112,6 +112,8 @@ export function useAgentRunWorkspaceEffects(input: {
   } = input;
   const scope = resolveWorkspaceScope(suppliedScope, projectId, workspaceKind);
   const scopeKey = scope === undefined ? undefined : agentContextScopeKey(scope);
+  const activeResourceKey =
+    activeResourceRef === undefined ? undefined : JSON.stringify(activeResourceRef);
 
   useLayoutEffect(() => {
     if (agentRunBridge === undefined || scope === undefined) {
@@ -145,7 +147,7 @@ export function useAgentRunWorkspaceEffects(input: {
     conversationId,
     fileEditor,
     storyBibleSnapshotBinding,
-    activeResourceRef,
+    activeResourceKey,
     beforeStart,
     onAgentRunChange,
     scopeKey,

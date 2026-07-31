@@ -1342,6 +1342,22 @@ describe("Agent Run IPC", () => {
       expectedDraftRevision: 1,
       mutation: { kind: "remove_ref", refId: "chapter:ch-01" }
     });
+    await handlers["application:agent-run:update-context-draft"]?.({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      commandId: "cmd-02-story",
+      contextDraftId: "context-01",
+      expectedDraftRevision: 2,
+      mutation: {
+        kind: "set_active_resource",
+        ref: {
+          kind: "story_bible",
+          refId: "story_bible:chr_hero",
+          assetId: "chr_hero",
+          label: "主角"
+        }
+      }
+    });
     await handlers["application:agent-run:refresh-context-draft"]?.({
       projectId: "project-01",
       conversationId: "conversation-01",
@@ -1423,6 +1439,7 @@ describe("Agent Run IPC", () => {
       "read-run-draft:conversation-01",
       "update-run-draft:set_model",
       "update-context-draft:remove_ref",
+      "update-context-draft:set_active_resource",
       "refresh-context-draft:context-01",
       "preview-budget:cmd-04",
       "compact:manual",

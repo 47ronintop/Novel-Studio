@@ -46,6 +46,11 @@ export type ContextDraftRef =
       readonly range: AgentContextRange;
     };
 
+export type ContextDraftActiveResourceRef = Extract<
+  ContextDraftRef,
+  { readonly kind: "project_file" | "story_bible" }
+>;
+
 export interface ContextDraftV10 {
   readonly schemaVersion: "1.0";
   readonly contextDraftId: string;
@@ -65,7 +70,7 @@ export interface ContextDraftV11 extends Omit<
   readonly schemaVersion: "1.1";
   readonly scope: AgentContextScope;
   readonly contextMode: AgentContextMode;
-  readonly activeResourceRef: Extract<ContextDraftRef, { readonly kind: "project_file" }> | null;
+  readonly activeResourceRef: ContextDraftActiveResourceRef | null;
 }
 
 export type ContextDraft = ContextDraftV11;
@@ -79,7 +84,7 @@ export type ContextDraftMutation =
     }
   | {
       readonly kind: "set_active_resource";
-      readonly ref: Extract<ContextDraftRef, { readonly kind: "project_file" }> | null;
+      readonly ref: ContextDraftActiveResourceRef | null;
     };
 
 export interface CreateContextDraftInput {
@@ -88,7 +93,7 @@ export interface CreateContextDraftInput {
   readonly scope: AgentContextScope;
   readonly contextMode: AgentContextMode;
   readonly refs?: readonly ContextDraftRef[];
-  readonly activeResourceRef?: Extract<ContextDraftRef, { readonly kind: "project_file" }> | null;
+  readonly activeResourceRef?: ContextDraftActiveResourceRef | null;
   readonly updatedAt: string;
 }
 
@@ -101,7 +106,10 @@ export function createContextDraft(input: CreateContextDraftInput): ContextDraft
     contextMode: input.contextMode,
     revision: 1,
     refs: input.scope.kind === "standalone" ? [] : (input.refs ?? []),
-    activeResourceRef: input.scope.kind === "standalone" ? null : (input.activeResourceRef ?? null),
+    activeResourceRef:
+      input.scope.kind === "standalone"
+        ? null
+        : activeResourceForMode(input.activeResourceRef ?? null, input.contextMode),
     updatedAt: input.updatedAt
   });
 }
@@ -152,6 +160,14 @@ export function applyContextDraftMutation(
       if (mutation.ref !== null) {
         const rejection = validateRef(mutation.ref, draft.contextMode);
         if (rejection !== undefined) return err(rejection);
+        if (!activeResourceMatchesMode(mutation.ref, draft.contextMode)) {
+          return err(
+            contextDraftError(
+              "CONTEXT_DRAFT_ACTIVE_RESOURCE_MODE_INVALID",
+              "The active resource does not match the selected context mode."
+            )
+          );
+        }
       }
       return ok(nextRevision(draft, [...draft.refs], updatedAt, mutation.ref));
     }
@@ -184,7 +200,7 @@ export function setContextDraftMode(
     contextMode,
     revision: draft.revision + 1,
     refs,
-    activeResourceRef: contextMode === "writing" ? null : draft.activeResourceRef,
+    activeResourceRef: activeResourceForMode(draft.activeResourceRef, contextMode),
     updatedAt
   });
 }
@@ -249,6 +265,23 @@ function validateRef(
 
 function isExpectedChecksum(value: string): boolean {
   return /^[a-f0-9]{64}$/u.test(value);
+}
+
+function activeResourceMatchesMode(
+  ref: ContextDraftActiveResourceRef,
+  contextMode: AgentContextMode
+): boolean {
+  return (
+    (contextMode === "writing" && ref.kind === "story_bible") ||
+    (contextMode === "general_file" && ref.kind === "project_file")
+  );
+}
+
+function activeResourceForMode(
+  ref: ContextDraftActiveResourceRef | null,
+  contextMode: AgentContextMode
+): ContextDraftActiveResourceRef | null {
+  return ref !== null && activeResourceMatchesMode(ref, contextMode) ? ref : null;
 }
 
 function nextRevision(

@@ -616,6 +616,108 @@ describe("desktop Agent Run runtime", () => {
     expect(firstRoundMessages.at(-1)?.content).toContain("Current active file body.");
   });
 
+  test("reads the active Story Bible asset into the writing prompt suffix", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-active-story-"));
+    roots.push(projectRoot);
+    const storyBible = new StoryBibleFileRepository({ projectRoot });
+    expect(
+      await storyBible.saveStoryAsset({
+        schemaVersion: "1.0",
+        id: "chr_active",
+        type: "character",
+        title: "Active Hero",
+        status: "active",
+        summary: "The currently open character.",
+        details: { privateMarker: "ACTIVE_STORY_DETAIL_MARKER" },
+        createdAt: "2026-07-31T00:00:00.000Z",
+        updatedAt: "2026-07-31T00:00:00.000Z"
+      })
+    ).toMatchObject({ ok: true });
+    const roundMessages: Array<readonly { readonly role: string; readonly content: string }[]> = [];
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      createRunId: () => "run-active-story-suffix",
+      resolveModelStartFacts: async () => ({
+        profileId: "profile-active-story",
+        provider: "demo",
+        modelName: "active-story-model",
+        capabilities: {
+          streaming: true,
+          toolCalling: true,
+          structuredArguments: true,
+          contextWindow: 128000
+        },
+        requiredContextTokens: 8000,
+        reasoningStrength: { status: "hidden", reason: "test model" }
+      }),
+      modelDriver: {
+        async *streamRound(input) {
+          roundMessages.push(input.messages);
+          yield runtimeToolCall("finish-active-story-suffix", "finish", { summary: "Finished." });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+    const conversation = await runtime.agentConversationSession.createConversation({
+      projectId: "project-01",
+      commandId: "create-active-story-conversation"
+    });
+    expect(conversation).toMatchObject({ ok: true });
+    if (!conversation.ok) return;
+    const prepared = await runtime.agentRunDraftSession.syncStartDraft({
+      projectId: "project-01",
+      conversationId: conversation.value.conversationId,
+      commandId: "prepare-active-story-run",
+      userRequest: "Use the open character setting.",
+      operationMode: "execution",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      modelProfileId: "profile-active-story",
+      contextRefs: [],
+      activeResourceRef: {
+        kind: "story_bible",
+        refId: "story_bible:chr_active",
+        assetId: "chr_active",
+        label: "Active Hero"
+      }
+    });
+    expect(prepared).toMatchObject({ ok: true });
+    if (!prepared.ok) return;
+
+    expect(
+      await runtime.agentRunSession.startAgentRun({
+        projectId: "project-01",
+        conversationId: conversation.value.conversationId,
+        commandId: "start-active-story-run",
+        expectedRunRevision: 0,
+        runDraftId: prepared.value.runDraft.runDraftId,
+        runDraftRevision: prepared.value.runDraft.revision,
+        runDraftChecksum: prepared.value.runDraft.checksum
+      })
+    ).toMatchObject({ ok: true });
+    await vi.waitFor(async () => {
+      expect(await runtime.agentRunSession.readAgentRun("run-active-story-suffix")).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+
+    const firstRoundMessages = roundMessages[0] ?? [];
+    const requestIndex = firstRoundMessages.findIndex(
+      (message) => message.role === "user" && message.content === "Use the open character setting."
+    );
+    const activeIndex = firstRoundMessages.findIndex((message) =>
+      message.content.includes("ACTIVE_STORY_DETAIL_MARKER")
+    );
+    expect(requestIndex).toBeGreaterThanOrEqual(0);
+    expect(activeIndex).toBeGreaterThan(requestIndex);
+    expect(firstRoundMessages.at(-1)?.content).toContain("ACTIVE_STORY_DETAIL_MARKER");
+  });
+
   test("fails closed when an active creative file changes after its checksum is captured", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-active-file-stale-"));
     roots.push(projectRoot);
@@ -1707,8 +1809,11 @@ describe("desktop Agent Run runtime", () => {
     const lockOwnerId = "desktop-agent-trusted-text-test";
     const lock = new ProjectLockFileRepository({ projectRoot, ownerId: lockOwnerId });
     expect((await lock.acquireProjectLock()).ok).toBe(true);
-    const projectChanges: { readonly reason: string; readonly relativePaths: readonly string[] }[] =
-      [];
+    const projectChanges: {
+      readonly reason: string;
+      readonly versionGroupId: string;
+      readonly relativePaths: readonly string[];
+    }[] = [];
     let round = 0;
     const session = createDesktopRuntime({
       workspaceKind: "creativeProject",
@@ -1720,6 +1825,7 @@ describe("desktop Agent Run runtime", () => {
       createRunId: () => "run-desktop-text-validation",
       notifyProjectFilesChanged: async (input: {
         readonly reason: string;
+        readonly versionGroupId: string;
         readonly relativePaths: readonly string[];
       }) => {
         projectChanges.push(input);
@@ -1825,7 +1931,11 @@ describe("desktop Agent Run runtime", () => {
     });
     expect(await readFile(notesPath, "utf8")).toBe("Revised notes.\n");
     expect(projectChanges).toEqual([
-      { reason: "agent-change-set-apply", relativePaths: ["notes.txt"] }
+      {
+        reason: "agent-change-set-apply",
+        versionGroupId: expect.any(String),
+        relativePaths: ["notes.txt"]
+      }
     ]);
 
     const completed = (await session.readAgentRun("run-desktop-text-validation")) as {
@@ -1840,8 +1950,16 @@ describe("desktop Agent Run runtime", () => {
     expect(undone).toMatchObject({ ok: true, value: { status: "completed" } });
     expect(await readFile(notesPath, "utf8")).toBe(notes);
     expect(projectChanges).toEqual([
-      { reason: "agent-change-set-apply", relativePaths: ["notes.txt"] },
-      { reason: "agent-run-undo", relativePaths: ["notes.txt"] }
+      {
+        reason: "agent-change-set-apply",
+        versionGroupId: expect.any(String),
+        relativePaths: ["notes.txt"]
+      },
+      {
+        reason: "agent-run-undo",
+        versionGroupId: expect.any(String),
+        relativePaths: ["notes.txt"]
+      }
     ]);
   });
 

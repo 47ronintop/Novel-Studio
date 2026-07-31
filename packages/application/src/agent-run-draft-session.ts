@@ -16,6 +16,7 @@ import {
   type AgentRunDraftMutation,
   type AgentWritePolicy,
   type ContextDraft,
+  type ContextDraftActiveResourceRef,
   type ContextDraftMutation,
   type ContextDraftRef
 } from "@novel-studio/agent-engine";
@@ -47,7 +48,7 @@ export interface AgentRunDraftInitialization {
   readonly writePolicy: AgentWritePolicy;
   readonly writePolicyAcknowledged?: boolean;
   readonly contextRefs?: readonly ContextDraftRef[];
-  readonly activeResourceRef?: Extract<ContextDraftRef, { readonly kind: "project_file" }> | null;
+  readonly activeResourceRef?: ContextDraftActiveResourceRef | null;
 }
 
 export interface ReadAgentRunDraftCommand {
@@ -116,7 +117,7 @@ export interface SyncStartDraftCommand {
   readonly modelName?: string;
   readonly reasoningEffort?: AgentReasoningEffort;
   readonly contextRefs: readonly ContextDraftRef[];
-  readonly activeResourceRef?: Extract<ContextDraftRef, { readonly kind: "project_file" }> | null;
+  readonly activeResourceRef?: ContextDraftActiveResourceRef | null;
 }
 
 export interface AgentRunDraftView {
@@ -491,14 +492,20 @@ function syncToIntent(
 }
 
 function sameActiveResource(
-  left: Extract<ContextDraftRef, { readonly kind: "project_file" }> | null,
-  right: Extract<ContextDraftRef, { readonly kind: "project_file" }> | null
+  left: ContextDraftActiveResourceRef | null,
+  right: ContextDraftActiveResourceRef | null
 ): boolean {
+  if (left === null || right === null) return left === right;
+  if (left.refId !== right.refId || left.label !== right.label) {
+    return false;
+  }
+  if (left.kind === "story_bible") {
+    return right.kind === "story_bible" && left.assetId === right.assetId;
+  }
   return (
-    left?.refId === right?.refId &&
-    left?.relativePath === right?.relativePath &&
-    left?.label === right?.label &&
-    left?.expectedChecksum === right?.expectedChecksum
+    right.kind === "project_file" &&
+    left.relativePath === right.relativePath &&
+    left.expectedChecksum === right.expectedChecksum
   );
 }
 
