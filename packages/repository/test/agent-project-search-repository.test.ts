@@ -352,9 +352,11 @@ describe("AgentProjectSearchRepository — creative project files", () => {
     const root = await makeProjectRoot();
     await mkdir(join(root, "notes"), { recursive: true });
     await mkdir(join(root, "chapters"), { recursive: true });
+    await mkdir(join(root, "foreshadows"), { recursive: true });
     await writeFile(join(root, "notes", "visible.md"), "creative search marker", "utf8");
     await writeFile(join(root, "settings.json"), "creative search marker", "utf8");
     await writeFile(join(root, "chapters", "managed.md"), "creative search marker", "utf8");
+    await writeFile(join(root, "foreshadows", "managed.json"), "creative search marker", "utf8");
     await writeFile(join(root, "notes", "unsupported.ts"), "creative search marker", "utf8");
 
     const repo = new AgentProjectSearchRepository({

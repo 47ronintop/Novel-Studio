@@ -18,6 +18,8 @@ import {
   buildAgentSystemPrompt,
   materializeAgentConversationContext,
   materializeAgentPrompt,
+  isStoryBibleAssetType,
+  storyBibleAssetRelativePath,
   AGENT_COMPACTION_SUMMARY_TEMPLATE_VERSION,
   preflightAgentModelCapabilities,
   readResolvedContextBudgetUsageLimits,
@@ -51,6 +53,7 @@ import {
   type AgentUsageTimeFacts,
   type AgentUsageSession,
   type AgentVersionGroupExecutor,
+  type StoryBibleAsset,
   type ProjectConventionsReader,
   type WorkspaceOutlineDependencyManifest,
   type WorkspaceOutlineReader,
@@ -1525,7 +1528,12 @@ function createDesktopChangeSetSession(input: {
           try {
             parsed = JSON.parse(candidate.candidateContent);
           } catch {
-            return ok({});
+            return ok({
+              schema: {
+                status: "invalid" as const,
+                message: `Candidate is not valid JSON for the ${schemaName} schema.`
+              }
+            });
           }
           const validation = await validateWithSchema(schemaName, parsed);
           return ok({
@@ -1569,6 +1577,7 @@ function schemaNameForProjectText(relativePath: string): string | undefined {
   const fixed = fixedPaths[relativePath];
   if (fixed !== undefined) return fixed;
   if (/^(characters|world)\/[^/]+\.json$/u.test(relativePath)) return "story-asset";
+  if (/^foreshadows\/[^/]+\.json$/u.test(relativePath)) return "foreshadow";
   if (/^memories\/(long-term|style|summary)\/[^/]+\.json$/u.test(relativePath)) {
     return "memory";
   }
@@ -2873,14 +2882,18 @@ function toolCall(toolCallId: string, name: string, argumentsValue: JsonObject) 
   };
 }
 
-async function findStoryBibleAsset(repository: StoryBibleFileRepository, assetId: string) {
+async function findStoryBibleAsset(
+  repository: StoryBibleFileRepository,
+  assetId: string
+): Promise<Result<StoryBibleAsset, UnifiedError>> {
   const snapshot = await repository.readStoryBible();
   if (!snapshot.ok) return snapshot;
-  const assets = [
+  const assets: StoryBibleAsset[] = [
     ...snapshot.value.characters,
     ...snapshot.value.worldAssets,
     ...(snapshot.value.outline === undefined ? [] : [snapshot.value.outline]),
-    ...(snapshot.value.timeline === undefined ? [] : [snapshot.value.timeline])
+    ...(snapshot.value.timeline === undefined ? [] : [snapshot.value.timeline]),
+    ...snapshot.value.foreshadows
   ];
   const asset = assets.find((candidate) => candidate.id === assetId);
   return asset === undefined
@@ -2901,30 +2914,19 @@ function resolveStoryBibleAssetRelativePath(asset: {
   readonly id: string;
   readonly type: string;
 }): Result<string, UnifiedError> {
-  switch (asset.type) {
-    case "character":
-      return ok(`characters/${asset.id}.json`);
-    case "world.location":
-    case "world.faction":
-    case "world.rule":
-    case "world.glossary":
-      return ok(`world/${asset.id}.json`);
-    case "outline":
-      return ok("outline/outline.json");
-    case "timeline.events":
-      return ok("timeline/events.json");
-    default:
-      return err(
-        createUnifiedError({
-          code: "AGENT_STORY_BIBLE_ASSET_TYPE_INVALID",
-          category: "ValidationError",
-          message: "The Story Bible asset type is not editable.",
-          recoverability: "user-action",
-          suggestedAction: "Refresh the Story Bible and choose a supported asset.",
-          traceId: "desktop-agent-run-runtime"
-        })
-      );
+  if (isStoryBibleAssetType(asset.type)) {
+    return ok(storyBibleAssetRelativePath(asset.type, asset.id));
   }
+  return err(
+    createUnifiedError({
+      code: "AGENT_STORY_BIBLE_ASSET_TYPE_INVALID",
+      category: "ValidationError",
+      message: "The Story Bible asset type is not editable.",
+      recoverability: "user-action",
+      suggestedAction: "Refresh the Story Bible and choose a supported asset.",
+      traceId: "desktop-agent-run-runtime"
+    })
+  );
 }
 
 function invalidToolArguments(name: string) {

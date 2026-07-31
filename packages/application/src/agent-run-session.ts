@@ -721,7 +721,7 @@ export interface CreateAgentRunSessionOptions {
   readonly dataEgressPolicy?: AgentNetworkPolicy["dataEgressPolicy"];
   /** Phase A: search executor. When absent, search tools return UNAVAILABLE. */
   readonly searchToolExecutor?: AgentSearchToolExecutor;
-  /** Main-owned policy for general-file paths; renderer/model input cannot replace it. */
+  /** Main-owned policy for generic creative-project file paths; renderer/model input cannot replace it. */
   readonly generalFilePathPolicy?: (
     path: string,
     kind: "file" | "directory"
@@ -3730,7 +3730,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     }
     const dispatchName = invocation.value.name;
     const dispatchArguments = invocation.value.arguments;
-    const profileGuard = validateGeneralFileInvocation(
+    const profileGuard = validateProjectResourceInvocation(
       snapshot.contextMode,
       dispatchName,
       dispatchArguments,
@@ -7851,21 +7851,22 @@ function adaptToolInvocation(
   return ok({ name: toolName, arguments: argumentsValue });
 }
 
-function validateGeneralFileInvocation(
+function validateProjectResourceInvocation(
   contextMode: AgentContextMode,
   toolName: string,
   argumentsValue: JsonObject,
   pathPolicy:
     ((path: string, kind: "file" | "directory") => Result<string, UnifiedError>) | undefined
 ): Result<void, UnifiedError> {
-  if (contextMode !== "general_file") return ok(undefined);
+  const isGeneralFile = contextMode === "general_file";
   if (
-    toolName === "read_chapter" ||
-    toolName === "read_story_bible" ||
-    toolName === "propose_chapter_write" ||
-    toolName === "propose_story_bible_edit" ||
-    toolName === "propose_chapter_create" ||
-    toolName === "propose_story_bible_write"
+    isGeneralFile &&
+    (toolName === "read_chapter" ||
+      toolName === "read_story_bible" ||
+      toolName === "propose_chapter_write" ||
+      toolName === "propose_story_bible_edit" ||
+      toolName === "propose_chapter_create" ||
+      toolName === "propose_story_bible_write")
   ) {
     return err(
       applicationError(
@@ -7877,7 +7878,7 @@ function validateGeneralFileInvocation(
   if (toolName === "find_project_references") {
     const stableRef = readString(argumentsValue, "stableRef");
     const resource = stableRef === undefined ? undefined : parseResourceRef(stableRef);
-    if (resource?.kind !== "file") {
+    if (isGeneralFile && resource?.kind !== "file") {
       return err(
         applicationError(
           "AGENT_CONTEXT_PROFILE_TOOL_REJECTED",
@@ -7885,7 +7886,9 @@ function validateGeneralFileInvocation(
         )
       );
     }
-    return validateGeneralFilePath(resource.value, "file", pathPolicy);
+    return resource?.kind === "file"
+      ? validateGeneralFilePath(resource.value, "file", pathPolicy)
+      : ok(undefined);
   }
   const paths: { readonly path: string | undefined; readonly kind: "file" | "directory" }[] = [];
   if (toolName === "list_project_entries") {

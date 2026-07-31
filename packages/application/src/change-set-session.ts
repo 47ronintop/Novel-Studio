@@ -399,6 +399,26 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
             "Refresh context and create a new checkpoint proposal."
           );
         }
+        if (input.operation.kind === "create_file") {
+          const validation = await options.port.validateCandidate({
+            runId: input.runId,
+            projectId: input.projectId,
+            relativePath: input.operation.relativePath,
+            assetType: "text",
+            candidateContent: input.operation.content
+          });
+          if (!validation.ok) return validation;
+          const invalidCheck = [validation.value.schema, validation.value.asset].find(
+            (check) => check?.status === "invalid"
+          );
+          if (invalidCheck !== undefined) {
+            return failure(
+              "CHANGE_SET_OPERATION_INVALID",
+              invalidCheck.message ?? "The proposed file content failed project validation.",
+              "Fix the proposed file content and retry."
+            );
+          }
+        }
         const writePolicy =
           isDestructiveOperation(input.operation) || input.writePolicy !== "user_preapproved_run"
             ? "write_before_confirmation"

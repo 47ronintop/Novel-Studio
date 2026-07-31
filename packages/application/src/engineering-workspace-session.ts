@@ -114,6 +114,7 @@ const MANAGED_DIRECTORIES = new Set([
   "world",
   "outline",
   "timeline",
+  "foreshadows",
   "memories",
   "prompts",
   "agents",

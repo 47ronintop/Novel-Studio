@@ -801,6 +801,8 @@ export {
 } from "./agent-search-tool-session.js";
 export {
   createAgentFileOperationSession,
+  isStoryBibleAssetType,
+  storyBibleAssetRelativePath,
   type AgentFileOperationSession,
   type FileOperationSessionOptions
 } from "./agent-file-operation-session.js";

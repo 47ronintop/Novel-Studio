@@ -54,6 +54,7 @@ const DEFAULT_MANAGED_PATH_SEGMENTS = [
   "world",
   "outline",
   "timeline",
+  "foreshadows",
   "memories",
   "prompts",
   "agents",

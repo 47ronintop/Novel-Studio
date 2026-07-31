@@ -10,6 +10,8 @@ import { randomUUID } from "node:crypto";
 
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
+import type { StoryBibleAssetType } from "./story-bible-session.js";
+
 const WINDOWS_RESERVED_NAMES = new Set([
   "CON",
   "PRN",
@@ -368,16 +370,7 @@ export function createAgentFileOperationSession(
     },
 
     proposeStoryBibleWrite(input) {
-      const validAssetTypes = [
-        "character",
-        "world.location",
-        "world.faction",
-        "world.rule",
-        "world.glossary",
-        "outline",
-        "timeline.events"
-      ];
-      if (!validAssetTypes.includes(input.assetType))
+      if (!isStoryBibleAssetType(input.assetType))
         return err(
           operationError("FILE_OP_ASSET_TYPE_INVALID", `Unknown asset type: ${input.assetType}`)
         );
@@ -439,12 +432,32 @@ export function createAgentFileOperationSession(
   };
 }
 
-function storyBibleAssetRelativePath(assetType: string, assetId: string): string | undefined {
-  if (assetType === "character") return `characters/${assetId}.json`;
-  if (assetType.startsWith("world.")) return `world/${assetId}.json`;
-  if (assetType === "outline") return "outline/outline.json";
-  if (assetType === "timeline.events") return "timeline/events.json";
-  return undefined;
+const STORY_BIBLE_ASSET_PATH_RESOLVERS = {
+  character: (assetId: string) => `characters/${assetId}.json`,
+  "world.location": (assetId: string) => `world/${assetId}.json`,
+  "world.faction": (assetId: string) => `world/${assetId}.json`,
+  "world.rule": (assetId: string) => `world/${assetId}.json`,
+  "world.glossary": (assetId: string) => `world/${assetId}.json`,
+  outline: () => "outline/outline.json",
+  "timeline.events": () => "timeline/events.json",
+  foreshadow: (assetId: string) => `foreshadows/${assetId}.json`
+} satisfies Readonly<Record<StoryBibleAssetType, (assetId: string) => string>>;
+
+export function isStoryBibleAssetType(value: string): value is StoryBibleAssetType {
+  return Object.hasOwn(STORY_BIBLE_ASSET_PATH_RESOLVERS, value);
+}
+
+export function storyBibleAssetRelativePath(
+  assetType: StoryBibleAssetType,
+  assetId: string
+): string;
+export function storyBibleAssetRelativePath(assetType: string, assetId: string): string | undefined;
+export function storyBibleAssetRelativePath(
+  assetType: string,
+  assetId: string
+): string | undefined {
+  if (!isStoryBibleAssetType(assetType)) return undefined;
+  return STORY_BIBLE_ASSET_PATH_RESOLVERS[assetType](assetId);
 }
 
 function formatCreatedChapter(

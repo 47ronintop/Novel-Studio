@@ -427,7 +427,12 @@ describe("WorkspaceOutlineIndexRepository", () => {
       "notes/brief.md"
     ]);
     expect(first.value.entries.map((entry) => entry.relativePath)).not.toEqual(
-      expect.arrayContaining(["chapters", "chapters/secret.md"])
+      expect.arrayContaining([
+        "chapters",
+        "chapters/secret.md",
+        "foreshadows",
+        "foreshadows/clue.json"
+      ])
     );
     expect(first.value.visibleNodeChecksum).toBe(second.value.visibleNodeChecksum);
     expect(JSON.stringify(first.value)).not.toContain("secret chapter body");
@@ -551,6 +556,22 @@ function creativeSnapshot(nodeRevision: string): CreativeProjectFileTreeSnapshot
             nodeRevision,
             content: "secret chapter body"
           } as never
+        ]
+      },
+      {
+        id: "node:foreshadows",
+        name: "foreshadows",
+        kind: "directory",
+        path: "foreshadows",
+        nodeRevision,
+        children: [
+          {
+            id: "node:clue",
+            name: "clue.json",
+            kind: "file",
+            path: "foreshadows/clue.json",
+            nodeRevision
+          }
         ]
       }
     ],

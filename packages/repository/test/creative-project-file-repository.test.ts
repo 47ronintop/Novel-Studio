@@ -35,6 +35,10 @@ describe("CreativeProjectFileRepository", () => {
       ok: false,
       error: { code: "CREATIVE_PROJECT_FILE_PATH_REJECTED" }
     });
+    expect(normalizeCreativeProjectFilePath("foreshadows/clue.json", "file")).toMatchObject({
+      ok: false,
+      error: { code: "CREATIVE_PROJECT_FILE_PATH_REJECTED" }
+    });
     expect(normalizeCreativeProjectFilePath("notes/../outside.md", "file")).toMatchObject({
       ok: false,
       error: { code: "CREATIVE_PROJECT_FILE_PATH_REJECTED" }
@@ -48,17 +52,30 @@ describe("CreativeProjectFileRepository", () => {
       ok: false,
       error: { code: "CREATIVE_PROJECT_FILE_POLICY_VERSION_UNSUPPORTED" }
     });
+    expect(
+      normalizeCreativeProjectFilePolicy({
+        ...DEFAULT_CREATIVE_PROJECT_FILE_POLICY,
+        managedPathSegments: DEFAULT_CREATIVE_PROJECT_FILE_POLICY.managedPathSegments.filter(
+          (segment) => segment !== "foreshadows"
+        )
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { code: "CREATIVE_PROJECT_FILE_POLICY_INVALID" }
+    });
   });
 
   test("builds a versioned safe tree without roots, body text, or managed paths", async () => {
     const root = await createRoot();
     await mkdir(join(root, "research", "nested"), { recursive: true });
     await mkdir(join(root, "chapters"), { recursive: true });
+    await mkdir(join(root, "foreshadows"), { recursive: true });
     await mkdir(join(root, ".git"), { recursive: true });
     await mkdir(join(root, "scripts"), { recursive: true });
     await writeFile(join(root, "research", "brief.md"), "brief body\n", "utf8");
     await writeFile(join(root, "research", "nested", "facts.csv"), "name,value\n", "utf8");
     await writeFile(join(root, "chapters", "ch_01.md"), "managed\n", "utf8");
+    await writeFile(join(root, "foreshadows", "clue.json"), "{}\n", "utf8");
     await writeFile(join(root, "project.json"), "{}\n", "utf8");
     await writeFile(join(root, ".git", "config"), "managed\n", "utf8");
     await writeFile(join(root, "scripts", "tool.ts"), "export {};\n", "utf8");
@@ -83,6 +100,8 @@ describe("CreativeProjectFileRepository", () => {
       expect.arrayContaining([
         "chapters",
         "chapters/ch_01.md",
+        "foreshadows",
+        "foreshadows/clue.json",
         "project.json",
         ".git",
         "scripts/tool.ts"

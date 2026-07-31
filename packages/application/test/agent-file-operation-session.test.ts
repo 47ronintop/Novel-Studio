@@ -1,6 +1,9 @@
 import { describe, expect, test } from "vitest";
 
-import { createAgentFileOperationSession } from "../src/agent-file-operation-session.js";
+import {
+  createAgentFileOperationSession,
+  storyBibleAssetRelativePath
+} from "../src/agent-file-operation-session.js";
 
 const validChecksum = "a".repeat(64);
 
@@ -199,6 +202,49 @@ describe("AgentFileOperationSession", () => {
     expect(result.value.operation.kind).toBe("create_file");
     if (result.value.operation.kind !== "create_file") return;
     expect(result.value.operation.relativePath).toBe("characters/char-01.json");
+  });
+
+  test("proposeStoryBibleWrite maps foreshadows to their managed collection", () => {
+    const session = createAgentFileOperationSession();
+    const assetId = `fsh_${"a".repeat(32)}`;
+    const timestamp = "2026-07-31T00:00:00.000Z";
+    const result = session.proposeStoryBibleWrite({
+      toolCallId: "call-foreshadow",
+      assetType: "foreshadow",
+      content: JSON.stringify({
+        schemaVersion: "1.0",
+        id: assetId,
+        type: "foreshadow",
+        title: "Sealed archive",
+        status: "active",
+        summary: "The archive remains sealed.",
+        details: { trackingStatus: "planned", origin: "manual" },
+        createdAt: timestamp,
+        updatedAt: timestamp
+      })
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.value.operation.kind !== "create_file") return;
+    expect(result.value.operation.relativePath).toBe(`foreshadows/${assetId}.json`);
+  });
+
+  test.each([
+    ["character", "characters/asset.json"],
+    ["world.location", "world/asset.json"],
+    ["world.faction", "world/asset.json"],
+    ["world.rule", "world/asset.json"],
+    ["world.glossary", "world/asset.json"],
+    ["outline", "outline/outline.json"],
+    ["timeline.events", "timeline/events.json"],
+    ["foreshadow", "foreshadows/asset.json"]
+  ])("maps the %s Story Bible type without a fallback", (assetType, expectedPath) => {
+    expect(storyBibleAssetRelativePath(assetType, "asset")).toBe(expectedPath);
+  });
+
+  test("rejects non-asset path types in the shared resolver", () => {
+    expect(storyBibleAssetRelativePath("world.unknown", "asset")).toBeUndefined();
+    expect(storyBibleAssetRelativePath("memory.long-term", "asset")).toBeUndefined();
   });
 
   test("proposeStoryBibleWrite rejects invalid JSON", () => {

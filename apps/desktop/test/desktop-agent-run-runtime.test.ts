@@ -833,6 +833,179 @@ describe("desktop Agent Run runtime", () => {
     });
   });
 
+  test("stages foreshadow edits at the managed path with foreshadow schema validation", async () => {
+    const projectRoot = await mkdtemp(
+      join(tmpdir(), "novel-studio-desktop-agent-foreshadow-edit-")
+    );
+    roots.push(projectRoot);
+    const repository = new StoryBibleFileRepository({ projectRoot });
+    const timestamp = "2026-07-30T00:00:00.000Z";
+    const assetId = `fsh_${"a".repeat(32)}`;
+    expect(
+      await repository.saveStoryAsset({
+        schemaVersion: "1.0",
+        id: assetId,
+        type: "foreshadow",
+        title: "Sealed archive",
+        status: "active",
+        summary: "The archive remains sealed.",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        details: { trackingStatus: "planned", origin: "manual" }
+      })
+    ).toMatchObject({ ok: true });
+    const relativePath = `foreshadows/${assetId}.json`;
+    const assetPath = join(projectRoot, "foreshadows", `${assetId}.json`);
+    const content = await readFile(assetPath, "utf8");
+    const summary = "The archive remains sealed.";
+    const summaryStart = content.indexOf(summary);
+    expect(summaryStart).toBeGreaterThanOrEqual(0);
+    let round = 0;
+    const session = createDesktopRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      activeChapterId: "chapter-unused",
+      createRunId: () => "run-desktop-foreshadow-edit",
+      modelDriver: {
+        async *streamRound() {
+          round += 1;
+          if (round === 1) {
+            yield runtimeToolCall("edit-foreshadow", "edit_text", {
+              ref: `story_bible:${assetId}`,
+              baseHash: sha256(content),
+              range: {
+                unit: "character",
+                start: summaryStart,
+                end: summaryStart + summary.length
+              },
+              replacement: "The archive key has surfaced."
+            });
+          } else {
+            yield runtimeToolCall("finish-foreshadow-edit", "finish", { summary: "Finished." });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+
+    await session.startAgentRun(executionCommand());
+
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run-desktop-foreshadow-edit")).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: { status: "awaiting_write_approval" },
+          changeSet: {
+            files: [
+              {
+                relativePath,
+                validation: { schema: { status: "valid" } }
+              }
+            ]
+          }
+        }
+      });
+    });
+    expect(await readFile(assetPath, "utf8")).toBe(content);
+  });
+
+  test("validates v2 foreshadow creation before persisting its Change Set", async () => {
+    const projectRoot = await mkdtemp(
+      join(tmpdir(), "novel-studio-desktop-agent-foreshadow-create-")
+    );
+    roots.push(projectRoot);
+    const assetId = `fsh_${"c".repeat(32)}`;
+    const timestamp = "2026-07-31T00:00:00.000Z";
+    const invalidContent = JSON.stringify({ id: assetId, type: "foreshadow" });
+    const validContent = `${JSON.stringify(
+      {
+        schemaVersion: "1.0",
+        id: assetId,
+        type: "foreshadow",
+        title: "Sealed archive",
+        status: "active",
+        summary: "The archive remains sealed.",
+        details: { trackingStatus: "planned", origin: "manual" },
+        createdAt: timestamp,
+        updatedAt: timestamp
+      },
+      null,
+      2
+    )}\n`;
+    const lockOwnerId = "desktop-agent-foreshadow-create-test";
+    const lock = new ProjectLockFileRepository({ projectRoot, ownerId: lockOwnerId });
+    expect(await lock.acquireProjectLock()).toMatchObject({ ok: true });
+    let round = 0;
+    const session = createDesktopRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      activeChapterId: "chapter-unused",
+      projectLockOwnerId: lockOwnerId,
+      createRunId: () => "run-desktop-foreshadow-create",
+      featureFlags: createAgentFeatureFlags({
+        phaseB_fileLifecycleEnabled: true,
+        revision: "desktop-foreshadow-create-test"
+      }),
+      modelDriver: {
+        async *streamRound() {
+          round += 1;
+          if (round === 1) {
+            yield runtimeToolCall("create-invalid-foreshadow", "create_resource", {
+              kind: "story_bible",
+              assetType: "foreshadow",
+              content: invalidContent
+            });
+          } else if (round === 2) {
+            yield runtimeToolCall("create-valid-foreshadow", "create_resource", {
+              kind: "story_bible",
+              assetType: "foreshadow",
+              content: validContent
+            });
+          } else {
+            yield runtimeToolCall("finish-foreshadow-create", "finish", { summary: "Finished." });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+
+    await session.startAgentRun(executionCommand("writing"));
+
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run-desktop-foreshadow-create")).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: { status: "awaiting_write_approval", contextMode: "writing" },
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_failed",
+              detail: expect.objectContaining({
+                toolCallId: "create-invalid-foreshadow",
+                code: "CHANGE_SET_OPERATION_INVALID"
+              })
+            })
+          ]),
+          changeSet: {
+            operations: [
+              expect.objectContaining({
+                kind: "create_file",
+                relativePath: `foreshadows/${assetId}.json`,
+                content: validContent
+              })
+            ]
+          }
+        }
+      });
+    });
+    await expect(
+      readFile(join(projectRoot, "foreshadows", `${assetId}.json`), "utf8")
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   test("rejects memory IDs as Story Bible edit targets without touching the timeline", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-agent-memory-edit-"));
     roots.push(projectRoot);
@@ -1903,11 +2076,151 @@ describe("desktop Agent Run runtime", () => {
     expect(await readFile(settingsPath, "utf8")).toBe(settings);
   });
 
+  test.each([
+    {
+      label: "edit",
+      toolName: "edit_text",
+      argumentsFor: (assetId: string, content: string) => ({
+        ref: `file:foreshadows/${assetId}.json`,
+        baseHash: sha256(content),
+        range: { unit: "character", start: 0, end: content.length },
+        replacement: content
+      })
+    },
+    {
+      label: "create",
+      toolName: "create_resource",
+      argumentsFor: (assetId: string) => ({
+        kind: "file",
+        path: `foreshadows/${assetId}-new.json`,
+        content: "{}\n"
+      })
+    },
+    {
+      label: "move",
+      toolName: "manage_path",
+      argumentsFor: (assetId: string, content: string) => ({
+        operation: "move_file",
+        sourceRef: `file:foreshadows/${assetId}.json`,
+        targetPath: "notes/moved.json",
+        baseHash: sha256(content)
+      })
+    },
+    {
+      label: "delete",
+      toolName: "manage_path",
+      argumentsFor: (assetId: string, content: string) => ({
+        operation: "delete_file",
+        ref: `file:foreshadows/${assetId}.json`,
+        baseHash: sha256(content)
+      })
+    },
+    {
+      label: "create directory",
+      toolName: "manage_path",
+      argumentsFor: () => ({
+        operation: "create_directory",
+        path: "foreshadows/nested"
+      })
+    }
+  ])("rejects writing generic file $label operations on managed foreshadows", async (input) => {
+    const projectRoot = await mkdtemp(
+      join(tmpdir(), `novel-studio-desktop-writing-managed-${input.label.replace(" ", "-")}-`)
+    );
+    roots.push(projectRoot);
+    const repository = new StoryBibleFileRepository({ projectRoot });
+    const timestamp = "2026-07-30T00:00:00.000Z";
+    const assetId = `fsh_${"b".repeat(32)}`;
+    expect(
+      await repository.saveStoryAsset({
+        schemaVersion: "1.0",
+        id: assetId,
+        type: "foreshadow",
+        title: "Managed clue",
+        status: "active",
+        summary: "This clue must stay managed.",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        details: { trackingStatus: "planned", origin: "manual" }
+      })
+    ).toMatchObject({ ok: true });
+    const assetPath = join(projectRoot, "foreshadows", `${assetId}.json`);
+    const content = await readFile(assetPath, "utf8");
+    const runId = `run-desktop-writing-managed-${input.label.replace(" ", "-")}`;
+    const lockOwnerId = `${runId}-lock`;
+    const lock = new ProjectLockFileRepository({ projectRoot, ownerId: lockOwnerId });
+    expect(await lock.acquireProjectLock()).toMatchObject({ ok: true });
+    let round = 0;
+    const session = createDesktopRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      activeChapterId: "chapter-unused",
+      projectLockOwnerId: lockOwnerId,
+      createRunId: () => runId,
+      featureFlags: createAgentFeatureFlags({
+        phaseB_fileLifecycleEnabled: true,
+        revision: `${runId}-features`
+      }),
+      modelDriver: {
+        async *streamRound() {
+          round += 1;
+          if (round === 1) {
+            yield runtimeToolCall(
+              `managed-${input.label.replace(" ", "-")}`,
+              input.toolName,
+              input.argumentsFor(assetId, content)
+            );
+          } else {
+            yield runtimeToolCall(`finish-managed-${input.label.replace(" ", "-")}`, "finish", {
+              summary: "Managed generic path rejected."
+            });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+
+    await session.startAgentRun(executionCommand("writing"));
+
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun(runId)).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: { status: "completed", contextMode: "writing" },
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_failed",
+              detail: expect.objectContaining({
+                toolCallId: `managed-${input.label.replace(" ", "-")}`,
+                code: "CREATIVE_PROJECT_FILE_PATH_REJECTED"
+              })
+            })
+          ])
+        }
+      });
+    });
+    const rejected = await session.readAgentRun(runId);
+    expect(rejected).not.toMatchObject({ value: { changeSet: expect.anything() } });
+    expect(await readFile(assetPath, "utf8")).toBe(content);
+    await expect(
+      readFile(join(projectRoot, "foreshadows", `${assetId}-new.json`), "utf8")
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(projectRoot, "notes", "moved.json"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT"
+    });
+    await expect(readdir(join(projectRoot, "foreshadows", "nested"))).rejects.toMatchObject({
+      code: "ENOENT"
+    });
+  });
+
   test("rejects managed creative reads and directory lists before repository execution", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-managed-reads-"));
     roots.push(projectRoot);
     await mkdir(join(projectRoot, "chapters"), { recursive: true });
-    await writeFile(join(projectRoot, "settings.json"), "managed secret\n", "utf8");
+    await mkdir(join(projectRoot, "foreshadows"), { recursive: true });
+    await writeFile(join(projectRoot, "foreshadows", "clue.json"), "managed clue\n", "utf8");
     let round = 0;
     const session = createDesktopRuntime({
       workspaceKind: "creativeProject",
@@ -1920,8 +2233,8 @@ describe("desktop Agent Run runtime", () => {
         async *streamRound(input) {
           round += 1;
           if (round === 1) {
-            yield runtimeToolCall("read-managed-settings", "read_resource", {
-              ref: "file:settings.json"
+            yield runtimeToolCall("read-managed-foreshadow", "read_resource", {
+              ref: "file:foreshadows/clue.json"
             });
             yield runtimeToolCall("list-managed-chapters", "list_project_entries", {
               path: "chapters"
@@ -1932,7 +2245,7 @@ describe("desktop Agent Run runtime", () => {
               .map((message) => message.content)
               .join("\n");
             expect(toolPayload).toContain("CREATIVE_PROJECT_FILE_PATH_REJECTED");
-            expect(toolPayload).not.toContain("managed secret");
+            expect(toolPayload).not.toContain("managed clue");
             yield runtimeToolCall("finish-managed-reads", "finish", { summary: "Rejected." });
           }
           yield { type: "round_completed", finishReason: "tool_calls" };
@@ -1951,7 +2264,7 @@ describe("desktop Agent Run runtime", () => {
             expect.objectContaining({
               type: "tool_failed",
               detail: expect.objectContaining({
-                toolCallId: "read-managed-settings",
+                toolCallId: "read-managed-foreshadow",
                 code: "CREATIVE_PROJECT_FILE_PATH_REJECTED"
               })
             }),

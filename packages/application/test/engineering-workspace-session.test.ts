@@ -424,6 +424,7 @@ describe("EngineeringWorkspaceSession", () => {
       "world/item.md",
       "outline/item.md",
       "timeline/item.md",
+      "foreshadows/item.json",
       "memories/item.md",
       "prompts/item.md",
       "agents/item.md",

@@ -170,6 +170,68 @@ describe("Change Set application session", () => {
     });
   });
 
+  test("rejects invalid create-file candidates before persisting an operations Change Set", async () => {
+    const persisted: ChangeSet[] = [];
+    const validateCandidate = vi.fn(
+      async ({ candidateContent }: ChangeSetCandidateValidationPortInput) => ({
+        ok: true as const,
+        value: {
+          schema:
+            candidateContent === "invalid"
+              ? { status: "invalid" as const, message: "foreshadow schema mismatch" }
+              : { status: "valid" as const }
+        }
+      })
+    );
+    const session = createChangeSetSession({
+      port: {
+        ...targetPort({ chapter: () => "unused", file: () => "unused", persisted }),
+        validateCandidate
+      },
+      createChangeSetId: () => "change-set-create-validation",
+      now: () => "2026-07-31T00:00:00.000Z"
+    });
+
+    const rejected = await session.proposeOperation({
+      ...proposalBinding(),
+      toolCallId: "tool-invalid-foreshadow",
+      operation: {
+        kind: "create_file",
+        operationId: "create-invalid-foreshadow",
+        relativePath: "foreshadows/fsh_invalid.json",
+        content: "invalid",
+        toolCallIdempotencyKey: "tool-invalid-foreshadow"
+      }
+    });
+    const accepted = await session.proposeOperation({
+      ...proposalBinding(),
+      toolCallId: "tool-valid-foreshadow",
+      operation: {
+        kind: "create_file",
+        operationId: "create-valid-foreshadow",
+        relativePath: "foreshadows/fsh_valid.json",
+        content: "valid",
+        toolCallIdempotencyKey: "tool-valid-foreshadow"
+      }
+    });
+
+    expect(rejected).toMatchObject({
+      ok: false,
+      error: { code: "CHANGE_SET_OPERATION_INVALID", message: "foreshadow schema mismatch" }
+    });
+    expect(expectOk(accepted)).toMatchObject({
+      revision: 1,
+      operations: [
+        expect.objectContaining({
+          kind: "create_file",
+          relativePath: "foreshadows/fsh_valid.json"
+        })
+      ]
+    });
+    expect(validateCandidate).toHaveBeenCalledTimes(2);
+    expect(persisted).toHaveLength(1);
+  });
+
   test.each([
     ["absolute path", "C:/outside.md", false, true, sha256("alpha"), "AGENT_PATH_REJECTED"],
     ["dirty target", "notes/outline.md", true, true, sha256("alpha"), "CHANGE_SET_DIRTY_TARGET"],
