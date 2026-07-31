@@ -34,13 +34,13 @@
 
 涉及：`packages/schemas`、Application/Repository Story Bible 类型。
 
-- [ ] 保持 `story-asset.schema.json` v1.0 不变，新增 `foreshadow.schema.json` v1.0。
-- [ ] 在 Application/Repository 的 Story Bible 资产联合类型中增加 `foreshadow`，并按 type 选择对应 schema。
-- [ ] Foreshadow schema 要求公共资产外壳和 `details.trackingStatus`，允许保留未知用户字段。
-- [ ] 校验伏笔章节 ID、来源引用、SHA-256 哈希和 `paid-off` 的实际回收章节。
-- [ ] 定义共享的伏笔详情、来源引用和跟踪状态 TypeScript 类型，避免 UI、Application、Repository 各自声明不同枚举。
-- [ ] 定义证据规范化 helper：Unicode NFC、CRLF/CR 转 LF、首尾 trim 后计算 UTF-8 SHA-256；读取时校验，写入和 AI 候选确认时复用。
-- [ ] 现有资产读写继续保留未知根字段和未知 `details` 字段，不因本功能升级 schemaVersion。
+- [x] 保持 `story-asset.schema.json` v1.0 不变，新增 `foreshadow.schema.json` v1.0。
+- [x] 在 Application/Repository 的 Story Bible 资产联合类型中增加 `foreshadow`，并按 type 选择对应 schema。
+- [x] Foreshadow schema 要求公共资产外壳和 `details.trackingStatus`，允许保留未知用户字段。
+- [x] 校验伏笔章节 ID、来源引用、SHA-256 哈希和 `paid-off` 的实际回收章节。
+- [x] 定义共享的伏笔详情、来源引用和跟踪状态 TypeScript 类型，避免 UI、Application、Repository 各自声明不同枚举。
+- [x] 定义证据规范化 helper：Unicode NFC、CRLF/CR 转 LF、首尾 trim 后计算 UTF-8 SHA-256；读取时校验，写入和 AI 候选确认时复用。
+- [x] 现有资产读写继续保留未知根字段和未知 `details` 字段，不因本功能升级 schemaVersion。
 
 测试：
 
@@ -50,12 +50,12 @@
 
 ### A2. Repository 与 Snapshot
 
-- [ ] `StoryBibleFileRepository` 只读取直接子文件 `foreshadows/<id>.json`；集合使用固定 `zh-CN` 排序器并以 ID 作为同名兜底，不接受嵌套路径作为伏笔资产。
-- [ ] `saveStoryAsset` 将 `foreshadow` 仅写入 `foreshadows/<id>.json`，继续使用原子写。
-- [ ] `StoryBibleSnapshot` 增加 `foreshadows`，保留 `memories`。
-- [ ] 为 `StoryBibleSessionOptions` 增加 `Pick<ChapterCatalogRepositoryPort, "listChapters">` 等价的只读窄接口；不得注入 `createChapter`，生产组合注入项目章节 catalog，测试使用 in-memory port。
-- [ ] 一致性检查通过 catalog 识别失效章节引用、重复 `chapterId + excerptHash` 和已回收缺失实际章节；重复问题只报一次。
-- [ ] `latestUpdatedAt`、摘要计数和项目 outline index 纳入伏笔，memory 行为不变。
+- [x] `StoryBibleFileRepository` 只读取直接子文件 `foreshadows/<id>.json`；集合使用固定 `zh-CN` 排序器并以 ID 作为同名兜底，不接受嵌套路径作为伏笔资产。
+- [x] `saveStoryAsset` 将 `foreshadow` 仅写入 `foreshadows/<id>.json`，继续使用原子写。
+- [x] `StoryBibleSnapshot` 增加 `foreshadows`，保留 `memories`。
+- [x] 为 `StoryBibleSessionOptions` 增加 `Pick<ChapterCatalogRepositoryPort, "listChapters">` 等价的只读窄接口；不得注入 `createChapter`，生产组合注入项目章节 catalog，测试使用 in-memory port。
+- [x] 一致性检查通过 catalog 识别失效章节引用、重复 `chapterId + excerptHash` 和已回收缺失实际章节；重复问题只报一次。
+- [x] `latestUpdatedAt`、摘要计数和项目 outline index 纳入伏笔，memory 行为不变。
 
 测试：
 
@@ -66,21 +66,21 @@
 
 ### A3. 搜索与 Context
 
-- [ ] 搜索类型增加 `story.foreshadow`，索引标题、摘要、证据和备注。
-- [ ] `search-index.schema.json` 和 `ProjectSearchIndex` 保持 `schemaVersion=1.0`，只扩展 entry type enum；不得为新增枚举值迁移或批量改写旧缓存。
-- [ ] 搜索结果点击打开伏笔详情。
-- [ ] active 且未放弃的伏笔映射为 `goal` candidate，source entity type 为 `foreshadow`；不扩展 Context Engine 公共 ref 枚举。
-- [ ] memories 继续构建 candidate 并保留 `memory` 搜索类型；搜索/Context 类型不得与不含 memory 的 UI kind 合并。
+- [x] 搜索类型增加 `story.foreshadow`，索引标题、摘要、证据和备注。
+- [x] `search-index.schema.json` 和 `ProjectSearchIndex` 保持 `schemaVersion=1.0`，只扩展 entry type enum；不得为新增枚举值迁移或批量改写旧缓存。
+- [x] 搜索结果点击打开伏笔详情。
+- [x] active 且未放弃的伏笔映射为 `goal` candidate，source entity type 为 `foreshadow`；不扩展 Context Engine 公共 ref 枚举。
+- [x] memories 继续构建 candidate 并保留 `memory` 搜索类型；搜索/Context 类型不得与不含 memory 的 UI kind 合并。
 
 ### A4. 搜索索引失效所有权
 
-- [ ] DesktopApplication 在项目激活时创建并持有唯一的项目级 `ProjectSearchSession`，切换或关闭项目时释放；不再由每次 search/rebuild 调用临时创建 session。
-- [ ] Session 增加 `invalidate(reason)`、`clean | dirty` 状态和共享的 in-flight rebuild promise；dirty 状态下的并发查询只触发一次重建。invalidation 必须串行排在正在执行的 rebuild 之后，并在后续查询前完成，旧 rebuild 不得在失效后重新发布缓存。
-- [ ] `ProjectSearchRepositoryPort.invalidate()` 清空内存 snapshot，并仅移除可重建的 `cache/indexes/search.json`；文件不存在时幂等成功，失败时 Session 保持 dirty 并返回可诊断警告，不得删除或改写任何源文件，也不得把已经成功的 Story Bible 写入反报为失败。
-- [ ] 手动 Story Bible 保存和 AI 候选确认写入成功后由 Application 置 dirty；失败写入不得置 dirty。
-- [ ] Agent Change Set apply 或 undo 成功后，只有受影响路径属于受管 Story Bible 时置 dirty；reject、失败 apply 和失败 undo 不得触发失效。
-- [ ] Renderer 只消费刷新结果，不保存搜索 dirty flag，也不直接删除或改写索引文件。
-- [ ] 测试覆盖持久 session 生命周期、并发查询只重建一次、rebuild 期间发生 invalidation、invalidate 后缓存文件消失、重启不读取旧缓存，以及失败/reject 不触发失效。
+- [x] DesktopApplication 在项目激活时创建并持有唯一的项目级 `ProjectSearchSession`，切换或关闭项目时释放；不再由每次 search/rebuild 调用临时创建 session。
+- [x] Session 增加 `invalidate(reason)`、`clean | dirty` 状态和共享的 in-flight rebuild promise；dirty 状态下的并发查询只触发一次重建。invalidation 必须串行排在正在执行的 rebuild 之后，并在后续查询前完成，旧 rebuild 不得在失效后重新发布缓存。
+- [x] `ProjectSearchRepositoryPort.invalidate()` 清空内存 snapshot，并仅移除可重建的 `cache/indexes/search.json`；文件不存在时幂等成功，失败时 Session 保持 dirty 并返回可诊断警告，不得删除或改写任何源文件，也不得把已经成功的 Story Bible 写入反报为失败。
+- [x] 手动 Story Bible 保存和 AI 候选确认写入成功后由 Application 置 dirty；失败写入不得置 dirty。
+- [x] Agent Change Set apply 或 undo 成功后，只有受影响路径属于受管 Story Bible 时置 dirty；reject、失败 apply 和失败 undo 不得触发失效。
+- [x] Renderer 只消费刷新结果，不保存搜索 dirty flag，也不直接删除或改写索引文件。
+- [x] 测试覆盖持久 session 生命周期、并发查询只重建一次、rebuild 期间发生 invalidation、invalidate 后缓存文件消失、重启不读取旧缓存，以及失败/reject 不触发失效。
 
 定向验证：
 
@@ -94,40 +94,40 @@ npm exec vitest -- packages/schemas/test/schema-contract.test.ts packages/reposi
 
 涉及：`packages/ui/src/workspace-shell-types.ts`、Renderer Story Bible bridge。
 
-- [ ] `StoryBibleEditorKind` 固定为 `character | world | outline | foreshadow | timeline`。
-- [ ] 从作者 UI DTO 移除 memory entry；不得删除 Application snapshot 中的 memories。
-- [ ] 明确类型分叉：`StoryBibleEditorKind` 不含 memory；`ProjectSearchEntryType` 保留 memory 并增加 `story.foreshadow`；`searchResultTypeLabel("memory")` 和 memory Context 映射不得被顺手删除。
-- [ ] Application consistency ref 可继续包含 memory，但 Renderer 的 Story Bible consistency DTO 不得把它强转为 UI kind；memory-backed issue 不进入故事资料的可导航问题列表。
-- [ ] Entry DTO 增加底层 asset type、结构化 details、别名、关联 ID 和时间戳。
-- [ ] Editor DTO 接收只含 ID、标题、order、状态的章节选项和当前章节 ID，不向 UI Story Bible 层传递章节正文。
-- [ ] Draft 使用可辨识联合类型，分类字段由类型约束；`onDraftChange`/Bridge patch 与当前 kind 绑定，运行时拒绝修改 kind 或混入其他分类字段；保存时合并原始资产并保留所有未知字段。
-- [ ] Bridge 增加 `viewMode: list | detail`、`dirty`、分类筛选和外部更新状态。
-- [ ] 新建集合资产使用可注入身份工厂生成 32 位小写十六进制 ID；前缀固定为 `chr_ | loc_ | fac_ | rule_ | term_ | fsh_`，移除标题 slug 作为 ID 的逻辑，旧 ID 不变。
-- [ ] `selectKind` 打开列表，`selectEntry` 打开详情，保存后保持当前详情，新建取消后回列表。
-- [ ] 同步清理 `story-bible-bridge.ts`、`CreativeWorkspaceNavigator` 和 `StoryBibleEditorView` 中的 memory 分支、选项和文案；搜索结果中的 memory 分支保持不变。
+- [x] `StoryBibleEditorKind` 固定为 `character | world | outline | foreshadow | timeline`。
+- [x] 从作者 UI DTO 移除 memory entry；不得删除 Application snapshot 中的 memories。
+- [x] 明确类型分叉：`StoryBibleEditorKind` 不含 memory；`ProjectSearchEntryType` 保留 memory 并增加 `story.foreshadow`；`searchResultTypeLabel("memory")` 和 memory Context 映射不得被顺手删除。
+- [x] Application consistency ref 可继续包含 memory，但 Renderer 的 Story Bible consistency DTO 不得把它强转为 UI kind；memory-backed issue 不进入故事资料的可导航问题列表。
+- [x] Entry DTO 增加底层 asset type、结构化 details、别名、关联 ID 和时间戳。
+- [x] Editor DTO 接收只含 ID、标题、order、状态的章节选项和当前章节 ID，不向 UI Story Bible 层传递章节正文。
+- [x] Draft 使用可辨识联合类型，分类字段由类型约束；`onDraftChange`/Bridge patch 与当前 kind 绑定，运行时拒绝修改 kind 或混入其他分类字段；保存时合并原始资产并保留所有未知字段。
+- [x] Bridge 增加 `viewMode: list | detail`、`dirty`、分类筛选和外部更新状态。
+- [x] 新建集合资产使用可注入身份工厂生成 32 位小写十六进制 ID；前缀固定为 `chr_ | loc_ | fac_ | rule_ | term_ | fsh_`，移除标题 slug 作为 ID 的逻辑，旧 ID 不变。
+- [x] `selectKind` 打开列表，`selectEntry` 打开详情，保存后保持当前详情，新建取消后回列表。
+- [x] 同步清理 `story-bible-bridge.ts`、`CreativeWorkspaceNavigator` 和 `StoryBibleEditorView` 中的 memory 分支、选项和文案；搜索结果中的 memory 分支保持不变。
 
 ### B2. 精简左侧导航
 
-- [ ] `CreativeWorkspaceNavigator` 只渲染五个类目和计数。
-- [ ] 删除左侧当前分类条目列表和重复的新建区域。
-- [ ] 保留现有“写作 / 故事资料 / 项目文件”标签、键盘导航和搜索状态隔离。
-- [ ] 记忆不出现在故事资料分类、计数和筛选占位文案中。
+- [x] `CreativeWorkspaceNavigator` 只渲染五个类目和计数。
+- [x] 删除左侧当前分类条目列表和重复的新建区域。
+- [x] 保留现有“写作 / 故事资料 / 项目文件”标签、键盘导航和搜索状态隔离。
+- [x] 记忆不出现在故事资料分类、计数和筛选占位文案中。
 
 ### B3. 主区列表到详情
 
-- [ ] 用单一 Story Bible 标题栏承载返回、标题、搜索、筛选和新建。
-- [ ] 分类处于 list 模式时渲染分类主视图；detail 模式时渲染结构化表单。
-- [ ] 移除主区现有五类 tabs 和重复条目 aside。
-- [ ] 保存失败保留 draft；有未保存修改时返回列表需要“保存 / 放弃 / 取消”守门。
-- [ ] 采用现有图标库和表单组件；不创建卡片墙或嵌套卡片。
-- [ ] Activity Bar 的 Story Bible 入口恢复当前资料视图；时间线入口设置 `kind=timeline, viewMode=list`，事件点击进入 `timeline/detail`，返回时回到时间线列表，不沿用人物等旧状态。
+- [x] 用单一 Story Bible 标题栏承载返回、标题、搜索、筛选和新建。
+- [x] 分类处于 list 模式时渲染分类主视图；detail 模式时渲染结构化表单。
+- [x] 移除主区现有五类 tabs 和重复条目 aside。
+- [x] 保存失败保留 draft；有未保存修改时返回列表需要“保存 / 放弃 / 取消”守门。
+- [x] 采用现有图标库和表单组件；不创建卡片墙或嵌套卡片。
+- [x] Activity Bar 的 Story Bible 入口恢复当前资料视图；时间线入口设置 `kind=timeline, viewMode=list`，事件点击进入 `timeline/detail`，返回时回到时间线列表，不沿用人物等旧状态。
 
 ### B4. 样式与响应式实现
 
-- [ ] 在 `packages/ui/src/styles.css` 重构现有 `ns-story-*` 规则，并补齐紧凑列表、伏笔列、大纲卷章树、详情表单和外部更新提示；移除被新结构替代的旧 tabs/aside 规则。
-- [ ] 复用现有颜色、间距、焦点和三主题变量，不复制一套 Story Bible 专用主题值。
-- [ ] 优先复用现有 1279/900/760 等断点：宽屏完整列，中等宽度隐藏次要列，窄屏使用堆叠行和单列详情；1440×900、1024×900、720×640 是验收视口而不是必须新增的 media query。
-- [ ] 为表格列、列表行、图标按钮和详情布局提供稳定尺寸约束，动态状态和长中文标题不得引发布局跳动或横向溢出。
+- [x] 在 `packages/ui/src/styles.css` 重构现有 `ns-story-*` 规则，并补齐紧凑列表、伏笔列、大纲卷章树、详情表单和外部更新提示；移除被新结构替代的旧 tabs/aside 规则。
+- [x] 复用现有颜色、间距、焦点和三主题变量，不复制一套 Story Bible 专用主题值。
+- [x] 优先复用现有 1279/900/760 等断点：宽屏完整列，中等宽度隐藏次要列，窄屏使用堆叠行和单列详情；1440×900、1024×900、720×640 是验收视口而不是必须新增的 media query。
+- [x] 为表格列、列表行、图标按钮和详情布局提供稳定尺寸约束，动态状态和长中文标题不得引发布局跳动或横向溢出。
 
 定向验证：
 
